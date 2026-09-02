@@ -115,6 +115,7 @@ describe("GitHub review selection", () => {
       item(2, "head-2", false),
       item(3, "head-3", true, true, { authorLogin: "someone-else" }),
     ];
+
     expect(
       selectReview({
         mode: "auto",
@@ -259,6 +260,7 @@ describe("GitHub review selection", () => {
     const injected = item(1, "head-1", false, true, {
       body: `${reviewMarker(true, true)}\nmodel text\n${reviewMarker(false, true)}`,
     });
+
     expect(
       selectReview({
         mode: "auto",
@@ -274,6 +276,7 @@ describe("GitHub review selection", () => {
     const history = Array.from({ length: 20 }, (_, index) =>
       item(index + 1, `head-${String(index + 1)}`, true),
     );
+
     expect(
       selectReview({
         mode: "auto",

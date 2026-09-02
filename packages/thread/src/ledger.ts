@@ -55,6 +55,7 @@ export type OwnershipToken = typeof OwnershipToken.Type;
 export const QueueSequence = Schema.Natural.pipe(
   Schema.brand("@effect-agent/thread/QueueSequence"),
 );
+
 export type QueueSequence = typeof QueueSequence.Type;
 
 /**
@@ -88,6 +89,7 @@ export const SubmissionState = Schema.Literals([
   "terminalizing",
   "settled",
 ]);
+
 export type SubmissionState = typeof SubmissionState.Type;
 
 /**
@@ -241,6 +243,7 @@ export const AdmissionResolution = Schema.Union([
   AdmissionAdmitted,
   AdmissionIndeterminate,
 ]);
+
 export type AdmissionResolution = typeof AdmissionResolution.Type;
 
 export class ClaimRequest extends Schema.Class<ClaimRequest>("@effect-agent/thread/ClaimRequest")({
@@ -377,6 +380,7 @@ export const settlementFailureFromRecord = (
   record: RecordEnvelope,
 ): SettlementFailureDiagnostic | undefined => {
   const payload = record.payload;
+
   return payload._tag === "SubmissionSettled" && payload.outcome === "failed"
     ? payload.result
     : undefined;
@@ -483,6 +487,7 @@ export const SuspensionReason = Schema.Union([
   ApprovalPendingSuspension,
   WaitingForChildSuspension,
 ]);
+
 export type SuspensionReason = typeof SuspensionReason.Type;
 
 /**
@@ -689,6 +694,7 @@ export const UnknownResolution = Schema.Union([
   ResolutionSafeToRetry,
   ResolutionAbortSubmission,
 ]);
+
 export type UnknownResolution = typeof UnknownResolution.Type;
 
 /**

@@ -69,16 +69,20 @@ const ACTION_NETWORK_SETTLE_MILLIS = 2_000;
 const ACTION_POST_STATE_MILLIS = 250;
 const MAX_OBSERVED_CONTROLS = 64;
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
+
 const BoundedHostText = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_HOST_TEXT_LENGTH),
 );
+
 const BoundedRemoteText = Schema.String.check(Schema.isMaxLength(MAX_TEXT_LENGTH));
+
 const TextObservation = Schema.Union([
   Schema.Struct({ _tag: Schema.Literal("Text"), text: BoundedRemoteText }),
   Schema.Struct({ _tag: Schema.Literal("MissingElement") }),
   Schema.Struct({ _tag: Schema.Literal("OverLimit"), observed: Schema.Natural }),
 ]);
+
 const ActionTargetState = Schema.Struct({
   matchCount: Schema.Natural,
   invalidSelector: Schema.optionalKey(Schema.Boolean),
@@ -92,6 +96,7 @@ const ActionTargetState = Schema.Struct({
   valid: Schema.optionalKey(Schema.Boolean),
   formValid: Schema.optionalKey(Schema.Boolean),
 });
+
 const ActionNetworkState = Schema.Struct({
   total: Schema.Natural,
   status2xx: Schema.Natural,
@@ -102,12 +107,14 @@ const ActionNetworkState = Schema.Struct({
   pending: Schema.Natural,
   settleTimedOut: Schema.Boolean,
 });
+
 const ActionObservation = Schema.Struct({
   before: ActionTargetState,
   after: Schema.optionalKey(ActionTargetState),
   afterUnavailable: Schema.Boolean,
   network: ActionNetworkState,
 });
+
 const PageObservation = Schema.fromJsonString(
   Schema.Struct({
     pageText: BoundedRemoteText,
@@ -128,6 +135,7 @@ const PageObservation = Schema.fromJsonString(
     ).check(Schema.isMaxLength(MAX_OBSERVED_CONTROLS)),
   }),
 );
+
 const PngBytes = Schema.Uint8Array.check(
   Schema.isMaxLength(MAX_SCREENSHOT_BYTES),
   Schema.makeFilter(
@@ -144,6 +152,7 @@ const PngBytes = Schema.Uint8Array.check(
     { title: "PNG bytes" },
   ),
 );
+
 const BrowserRunSessionId = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(256),
@@ -151,12 +160,14 @@ const BrowserRunSessionId = Schema.String.check(
     title: "a Browser Run session identifier",
   }),
 );
+
 const LiveViewUrl = Schema.String.check(
   Schema.isMaxLength(MAX_HOST_TEXT_LENGTH),
   Schema.makeFilter(
     (value) => {
       try {
         const url = new URL(value);
+
         return (
           url.protocol === "https:" &&
           url.host === "live.browser.run" &&
@@ -173,11 +184,14 @@ const LiveViewUrl = Schema.String.check(
     { title: "a Cloudflare Live View HTTPS URL" },
   ),
 );
+
 const LiveViewObservation = Schema.Struct({ devtoolsFrontendUrl: LiveViewUrl });
 const HandoffObservation = Schema.Struct({ handoffId: BoundedHostText });
+
 const HandoffDuration = Schema.Natural.check(
   Schema.isLessThanOrEqualTo(MAX_HANDOFF_TIMEOUT_MILLIS),
 );
+
 const HandoffStateObservation = Schema.Union([
   Schema.Struct({
     active: Schema.Literal(true),
@@ -353,8 +367,10 @@ export class BrowserRunInteractiveBinding extends Context.Service<
     return Layer.effect(BrowserRunInteractiveBinding)(
       Effect.gen(function* () {
         const lifecycle = yield* BrowserRunSessionLifecycle;
+
         const viewport =
           options.viewport === undefined ? undefined : yield* decodeViewport(options.viewport);
+
         return {
           launch: async (keepAliveMillis: number) =>
             makeProductionBrowser(
@@ -418,6 +434,7 @@ const makeProductionRequest = (request: HTTPRequest): BrowserRunInteractiveReque
 const makeProductionCdpSession = (session: CDPSession): BrowserRunInteractiveCdpSession => ({
   send: async (command, parameters) => {
     const send = Reflect.get(session, "send");
+
     return await Reflect.apply(send, session, [command, parameters]);
   },
   detach: () => session.detach(),
@@ -436,6 +453,7 @@ const readActionTarget = (page: Page, selector: string): Promise<unknown> =>
   page.evaluate((requestedSelector) => {
     const pageDocument = Reflect.get(globalThis, "document");
     let matches;
+
     try {
       matches = Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
         requestedSelector,
@@ -449,14 +467,17 @@ const readActionTarget = (page: Page, selector: string): Promise<unknown> =>
     if (typeof matches !== "object" || matches === null) throw new Error("Invalid query result");
     const matchCount = Math.min(10_000, Reflect.get(matches, "length"));
     const element = Reflect.get(matches, 0);
+
     if (element === undefined) return { matchCount };
 
     const associated = Reflect.get(element, "control") ?? element;
     const tagName = String(Reflect.get(associated, "tagName") ?? "").toLowerCase();
     const inputType = String(Reflect.get(associated, "type") ?? "").toLowerCase();
+
     const role = String(
       Reflect.apply(Reflect.get(element, "getAttribute"), element, ["role"]) ?? "",
     ).toLowerCase();
+
     const kind =
       tagName === "button" || role === "button"
         ? "button"
@@ -471,23 +492,30 @@ const readActionTarget = (page: Page, selector: string): Promise<unknown> =>
                 : tagName === "a"
                   ? "link"
                   : "other";
+
     const checked = Reflect.get(associated, "checked");
+
     const selected =
       tagName === "select"
         ? Reflect.get(associated, "selectedIndex") >= 0
         : Reflect.get(associated, "selected");
+
     const disabled = Reflect.get(associated, "disabled");
     const required = Reflect.get(associated, "required");
     const validity = Reflect.get(associated, "validity");
     const form = Reflect.get(associated, "form");
+
     const formMatches =
       form === null || form === undefined ? undefined : Reflect.get(form, "matches");
+
     const ariaChecked = Reflect.apply(Reflect.get(element, "getAttribute"), element, [
       "aria-checked",
     ]);
+
     const ariaDisabled = Reflect.apply(Reflect.get(element, "getAttribute"), element, [
       "aria-disabled",
     ]);
+
     const ariaSelected = Reflect.apply(Reflect.get(element, "getAttribute"), element, [
       "aria-selected",
     ]);
@@ -523,6 +551,7 @@ const boundedBestEffort = async <A>(
   millis: number,
 ): Promise<A | undefined> => {
   let timer: ReturnType<typeof setTimeout> | number | undefined;
+
   try {
     return await Promise.race([
       promise.catch(() => undefined),
@@ -556,17 +585,21 @@ const makeActionRequestTracker = (page: Page, signal: AbortSignal) => {
 
   const relevant = (request: HTTPRequest) => {
     const resourceType = request.resourceType();
+
     return resourceType === "fetch" || resourceType === "xhr";
   };
+
   const onRequest = (request: HTTPRequest) => {
     if (!relevant(request)) return;
     pending.add(request);
     total++;
     lastChange = performance.now();
   };
+
   const onFinished = (request: HTTPRequest) => {
     if (!pending.delete(request)) return;
     let status: number | undefined;
+
     try {
       status = request.response()?.status();
     } catch {
@@ -580,11 +613,13 @@ const makeActionRequestTracker = (page: Page, signal: AbortSignal) => {
     }
     lastChange = performance.now();
   };
+
   const onFailed = (request: HTTPRequest) => {
     if (!pending.delete(request)) return;
     failed++;
     lastChange = performance.now();
   };
+
   const close = () => {
     if (closed) return;
     closed = true;
@@ -610,8 +645,10 @@ const makeActionRequestTracker = (page: Page, signal: AbortSignal) => {
   const wait = async () => {
     const startedAt = performance.now();
     let settleTimedOut = false;
+
     while (!closed) {
       const now = performance.now();
+
       if (pending.size === 0 && now - lastChange >= ACTION_NETWORK_QUIET_MILLIS) break;
       if (now - startedAt >= ACTION_NETWORK_SETTLE_MILLIS) {
         settleTimedOut = true;
@@ -623,6 +660,7 @@ const makeActionRequestTracker = (page: Page, signal: AbortSignal) => {
       });
       wake = undefined;
     }
+
     return {
       total,
       status2xx,
@@ -659,13 +697,16 @@ const runObservedPageAction = async (
   action: (element: NonNullable<Awaited<ReturnType<Page["$"]>>>) => Promise<void>,
 ): Promise<unknown> => {
   if (signal.aborted) throw new BrowserRunActionUndispatched(0);
+
   const before = Schema.decodeUnknownSync(ActionTargetState)(
     await readActionTarget(page, selector),
   );
+
   if (before.matchCount !== 1 || before.invalidSelector === true) {
     throw new BrowserRunActionUndispatched(before.matchCount);
   }
   const matches = await page.$$(selector);
+
   if (matches.length !== 1 || matches[0] === undefined) {
     await disposeActionHandles(matches);
     throw new BrowserRunActionUndispatched(Math.min(10_000, matches.length));
@@ -678,9 +719,11 @@ const runObservedPageAction = async (
   let tracker: ReturnType<typeof makeActionRequestTracker> | undefined;
   let disposing: Promise<void> | undefined;
   const dispose = () => (disposing ??= disposeActionHandles(matches));
+
   const onAbort = () => {
     void dispose();
   };
+
   signal.addEventListener("abort", onAbort, { once: true });
   try {
     tracker = makeActionRequestTracker(page, signal);
@@ -692,6 +735,7 @@ const runObservedPageAction = async (
     tracker.markActionSettled();
     const network = await tracker.wait();
     const after = signal.aborted ? undefined : await readActionTargetAfter(page, selector);
+
     return {
       before,
       ...(after === undefined ? {} : { after }),
@@ -707,17 +751,20 @@ const runObservedPageAction = async (
 
 const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
   const listeners = new Map<BrowserRunInteractiveRequestListener, (request: HTTPRequest) => void>();
+
   return {
     close: () => page.close(),
     setBypassServiceWorker: (enabled) => page.setBypassServiceWorker(enabled),
     setRequestInterception: (enabled) => page.setRequestInterception(enabled),
     onRequest: (listener) => {
       const sdkListener = (request: HTTPRequest) => listener(makeProductionRequest(request));
+
       listeners.set(listener, sdkListener);
       page.on("request", sdkListener);
     },
     offRequest: (listener) => {
       const sdkListener = listeners.get(listener);
+
       if (sdkListener !== undefined) {
         page.off("request", sdkListener);
         listeners.delete(listener);
@@ -732,48 +779,60 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
         await page.evaluate(
           (requestedSelector, maximum, maximumControls) => {
             const pageDocument = Reflect.get(globalThis, "document");
+
             const matches =
               requestedSelector === undefined
                 ? undefined
                 : Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
                     requestedSelector,
                   ]);
+
             const selectorMatchCount =
               matches === undefined || matches === null
                 ? 1
                 : Math.min(10_000, Reflect.get(matches, "length"));
+
             const element =
               matches === undefined || matches === null
                 ? Reflect.get(pageDocument, "body")
                 : Reflect.get(matches, 0);
+
             if (element === null) return { _tag: "MissingElement" };
             if (element === undefined) return { _tag: "MissingElement" };
             const innerText = Reflect.get(element, "innerText");
             const textContent = Reflect.get(element, "textContent");
+
             const pageText =
               typeof innerText === "string"
                 ? innerText
                 : typeof textContent === "string"
                   ? textContent
                   : "";
+
             const primaryControlSelector =
               'input,select,textarea,label,button,[role="checkbox"],[role="radio"],[role="option"],[role="switch"],[role="tab"],[role="button"]';
+
             const optionSelector = "select option";
             const secondaryControlSelector = "a[href]";
             const controlSelector = `${primaryControlSelector},${optionSelector},${secondaryControlSelector}`;
+
             const selectorFor = (candidate: object) => {
               const parts: Array<string> = [];
               let current: object | null = candidate;
+
               while (current !== null && current !== undefined) {
                 const tagName = String(Reflect.get(current, "tagName") ?? "").toLowerCase();
+
                 if (tagName === "") break;
                 const parent: object | null = Reflect.get(current, "parentElement");
+
                 if (parent === null) {
                   parts.push(tagName);
                   break;
                 }
                 let sibling = Reflect.get(current, "previousElementSibling");
                 let index = 1;
+
                 while (sibling !== null && sibling !== undefined) {
                   if (String(Reflect.get(sibling, "tagName") ?? "").toLowerCase() === tagName)
                     index++;
@@ -782,14 +841,19 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
                 parts.push(`${tagName}:nth-of-type(${index})`);
                 current = parent;
               }
+
               return parts.reverse().join(" > ");
             };
+
             const visible = (candidate: object) => {
               const hidden = Reflect.get(candidate, "hidden");
+
               const ariaHidden = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
                 "aria-hidden",
               ]);
+
               const rects = Reflect.apply(Reflect.get(candidate, "getClientRects"), candidate, []);
+
               return (
                 hidden !== true &&
                 ariaHidden !== "true" &&
@@ -798,17 +862,22 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
                 Reflect.get(rects, "length") > 0
               );
             };
+
             const candidates: Array<object> = [];
             let controlsTruncated = false;
+
             const consider = (candidate: object) => {
               const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
+
               // Collapsed native options have no client rects. Their owning
               // select determines visibility; observe text/selection, never value.
               const visibilityTarget =
                 tagName === "option"
                   ? Reflect.apply(Reflect.get(candidate, "closest"), candidate, ["select"])
                   : candidate;
+
               const actionable = tagName !== "label" || Reflect.get(candidate, "control") !== null;
+
               if (
                 !actionable ||
                 typeof visibilityTarget !== "object" ||
@@ -819,47 +888,60 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
               candidates.push(candidate);
               if (candidates.length > maximumControls) controlsTruncated = true;
             };
+
             const elementMatches = Reflect.get(element, "matches");
+
             if (
               typeof elementMatches === "function" &&
               Reflect.apply(elementMatches, element, [controlSelector])
             ) {
               consider(element);
             }
+
             const considerSelector = (candidateSelector: string) => {
               const descendants = Reflect.apply(Reflect.get(element, "querySelectorAll"), element, [
                 candidateSelector,
               ]);
+
               if (typeof descendants !== "object" || descendants === null) return;
               const descendantCount = Reflect.get(descendants, "length");
+
               for (let index = 0; index < descendantCount && !controlsTruncated; index++) {
                 consider(Reflect.get(descendants, index));
               }
             };
+
             considerSelector(primaryControlSelector);
             if (!controlsTruncated) considerSelector(optionSelector);
             if (!controlsTruncated) considerSelector(secondaryControlSelector);
+
             const controls = candidates.slice(0, maximumControls).map((candidate) => {
               const associated = Reflect.get(candidate, "control") ?? candidate;
               const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
               const inputType = String(Reflect.get(associated, "type") ?? "").toLowerCase();
+
               const role = String(
                 Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, ["role"]) ?? "",
               ).toLowerCase();
+
               const ariaLabel = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
                 "aria-label",
               ]);
+
               const candidateText =
                 tagName === "textarea" || tagName === "input" || tagName === "select"
                   ? undefined
                   : Reflect.get(candidate, tagName === "option" ? "label" : "innerText");
+
               const associatedLabels = Reflect.get(associated, "labels");
+
               const associatedLabel =
                 associatedLabels !== undefined &&
                 associatedLabels !== null &&
                 Reflect.get(associatedLabels, "length") > 0
                   ? Reflect.get(Reflect.get(associatedLabels, 0), "innerText")
                   : undefined;
+
               const label = String(
                 typeof ariaLabel === "string" && ariaLabel !== ""
                   ? ariaLabel
@@ -870,25 +952,32 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
                 .replace(/\s+/g, " ")
                 .trim()
                 .slice(0, 200);
+
               const checked = Reflect.get(associated, "checked");
+
               const selected =
                 tagName === "select"
                   ? Reflect.get(associated, "selectedIndex") >= 0
                   : Reflect.get(associated, "selected");
+
               const disabled = Reflect.get(associated, "disabled");
               const required = Reflect.get(associated, "required");
               const validity = Reflect.get(associated, "validity");
               const form = Reflect.get(associated, "form");
+
               const formMatches =
                 form === null || form === undefined ? undefined : Reflect.get(form, "matches");
+
               const ariaChecked = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
                 "aria-checked",
               ]);
+
               const ariaSelected = Reflect.apply(
                 Reflect.get(candidate, "getAttribute"),
                 candidate,
                 ["aria-selected"],
               );
+
               const ariaDisabled = Reflect.apply(
                 Reflect.get(candidate, "getAttribute"),
                 candidate,
@@ -930,6 +1019,7 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
                   : {}),
               };
             });
+
             // JSON is the bounded wire representation of this existing text result.
             // eslint-disable-next-line no-restricted-properties
             const text = JSON.stringify({
@@ -938,7 +1028,9 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
               controls,
               controlsTruncated,
             });
+
             const observed = new TextEncoder().encode(text).byteLength;
+
             return observed > maximum ? { _tag: "OverLimit", observed } : { _tag: "Text", text };
           },
           selector,
@@ -946,7 +1038,9 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
           MAX_OBSERVED_CONTROLS,
         ),
       );
+
       if (observation._tag === "Text") Schema.decodeUnknownSync(PageObservation)(observation.text);
+
       return observation;
     },
     fill: (selector, value, signal, onDispatch) =>
@@ -955,8 +1049,10 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
           // Bypass instance setters so React can detect the change when events fire.
           let prototype = Reflect.getPrototypeOf(element);
           let setValue: ((value: string) => void) | undefined;
+
           while (prototype !== null) {
             const setter = Reflect.getOwnPropertyDescriptor(prototype, "value")?.set;
+
             if (typeof setter === "function") {
               setValue = setter;
               break;
@@ -967,9 +1063,11 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
             throw new Error("The selector did not resolve to a fillable field");
           }
           const focus = Reflect.get(element, "focus");
+
           if (typeof focus === "function") Reflect.apply(focus, element, []);
           Reflect.apply(setValue, element, [nextValue]);
           const dispatchEvent = Reflect.get(element, "dispatchEvent");
+
           if (typeof dispatchEvent === "function") {
             Reflect.apply(dispatchEvent, element, [new Event("input", { bubbles: true })]);
             Reflect.apply(dispatchEvent, element, [new Event("change", { bubbles: true })]);
@@ -985,6 +1083,7 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
       page.evaluate(
         (x, y) => {
           const scrollBy = Reflect.get(globalThis, "scrollBy");
+
           Reflect.apply(scrollBy, globalThis, [{ left: x, top: y, behavior: "instant" }]);
         },
         deltaX,
@@ -1056,6 +1155,7 @@ const expiredError = (): InteractiveBrowserExpiredError =>
 
 const causeText = (cause: unknown): string => {
   if (cause instanceof Error) return cause.message.slice(0, 8_000);
+
   return String(cause).slice(0, 8_000);
 };
 
@@ -1076,6 +1176,7 @@ const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(functio
   const decoded = yield* Schema.decodeUnknownEffect(InteractiveBrowserPolicy)(input).pipe(
     Effect.mapError(() => policyError("The interactive browser policy is malformed")),
   );
+
   if (decoded.network._tag === "PublicWeb") {
     return yield* InteractiveBrowserUnsupportedError.make({
       implementation: browserRunInteractiveImplementation,
@@ -1084,6 +1185,7 @@ const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(functio
         "Cloudflare Browser Run cannot enforce the PublicWeb network policy for all session traffic",
     });
   }
+
   return Object.freeze({
     network:
       decoded.network._tag === "ExactHosts"
@@ -1102,6 +1204,7 @@ const hostAllowed = (policy: InteractiveBrowserPolicySnapshot, value: string): b
   if (policy.network._tag === "Unrestricted") return true;
   try {
     const url = new URL(value);
+
     return (
       url.protocol === "https:" &&
       url.username === "" &&
@@ -1122,6 +1225,7 @@ const closeLateAcquisition = async <A>(
   close: (acquired: A) => Promise<void>,
 ): Promise<A> => {
   const acquired = await acquire();
+
   if (!signal.aborted) return acquired;
 
   // The SDK does not accept AbortSignal. If an acquisition settles after Effect
@@ -1152,6 +1256,7 @@ const deadlineError = Effect.fn("BrowserRunInteractive.deadlineError")(function*
   startedAt: number,
 ) {
   const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+
   return yield* InteractiveBrowserLimitError.make({
     implementation: browserRunInteractiveImplementation,
     limit: "elapsed",
@@ -1170,7 +1275,9 @@ const withinDeadline = Effect.fn("BrowserRunInteractive.withinDeadline")(functio
   const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
   const elapsed = Math.max(0, now - startedAt);
   const remaining = policy.maxElapsedMillis - elapsed;
+
   if (remaining <= 0) return yield* deadlineError(policy, startedAt);
+
   return yield* effect.pipe(
     Effect.timeoutOrElse({
       duration: Duration.millis(remaining),
@@ -1193,6 +1300,7 @@ const stateFailure = (state: HandleState): BrowserFailure | undefined => {
   if (state.closed.value || state.disconnected.value || state.uncertain.value) {
     return expiredError();
   }
+
   return undefined;
 };
 
@@ -1226,6 +1334,7 @@ class BrowserRunRemoteFailure {
 const awaitPendingRequests = (state: HandleState): Effect.Effect<void> =>
   Effect.suspend(() => {
     const pending = [...state.pendingRequests];
+
     return pending.length === 0
       ? Effect.void
       : Effect.promise(() => Promise.all(pending)).pipe(
@@ -1242,6 +1351,7 @@ const decodeNavigationResult = Effect.fn("BrowserRunInteractive.decodeNavigation
     try: page.url,
     catch: (cause) => protocolError("Reading the browser navigation URL failed", cause),
   });
+
   const result = yield* Schema.decodeUnknownEffect(BrowserNavigationResult)({
     url,
   }).pipe(
@@ -1249,9 +1359,11 @@ const decodeNavigationResult = Effect.fn("BrowserRunInteractive.decodeNavigation
       protocolError("The browser returned a malformed navigation URL", cause),
     ),
   );
+
   if (!hostAllowed(policy, result.url)) {
     return yield* policyError("The browser returned an off-policy page URL");
   }
+
   return result;
 });
 
@@ -1263,12 +1375,15 @@ const decodeActionResult = Effect.fn("BrowserRunInteractive.decodeActionResult")
     try: page.url,
     catch: (cause) => protocolError("Reading the browser page URL failed", cause),
   });
+
   const result = yield* Schema.decodeUnknownEffect(BrowserActionResult)({ url }).pipe(
     Effect.mapError((cause) => protocolError("The browser returned a malformed page URL", cause)),
   );
+
   if (!hostAllowed(policy, result.url)) {
     return yield* policyError("The browser returned an off-policy page URL");
   }
+
   return result;
 });
 
@@ -1279,6 +1394,7 @@ const makeRequestListener =
   ): BrowserRunInteractiveRequestListener =>
   (request) => {
     let allowed = false;
+
     try {
       allowed = hostAllowed(policy, request.url());
     } catch {
@@ -1289,12 +1405,15 @@ const makeRequestListener =
     }
 
     let settlement: Promise<void>;
+
     try {
       settlement = allowed ? request.continue() : request.abort();
     } catch {
       state.violation.value = protocolError("Resolving an intercepted browser request failed");
+
       return;
     }
+
     const observed = settlement
       .catch(() => {
         state.violation.value = protocolError("Resolving an intercepted browser request failed");
@@ -1302,6 +1421,7 @@ const makeRequestListener =
       .finally(() => {
         state.pendingRequests.delete(observed);
       });
+
     state.pendingRequests.add(observed);
   };
 
@@ -1325,6 +1445,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           failure,
         ): Effect.Effect<never, InteractiveBrowserActionError | InteractiveBrowserExpiredError> => {
           const cause = failure.cause;
+
           if (cause instanceof BrowserRunActionUndispatched) {
             return Effect.logInfo("Browser interactive action was not dispatched").pipe(
               Effect.annotateLogs({
@@ -1336,8 +1457,10 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           }
           if (state.disconnected.value || isRemoteClosure(cause)) {
             state.disconnected.value = true;
+
             return Effect.fail(expiredError());
           }
+
           return Effect.fail(actionError(operation, cause));
         },
       ),
@@ -1350,10 +1473,12 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
     Effect.suspend(() => {
       let dispatched = false;
       let pending: Promise<unknown> | undefined;
+
       return remote(operation, (signal) => {
         pending = evaluate(signal, () => {
           dispatched = true;
         });
+
         return pending;
       }).pipe(
         Effect.onInterrupt(() =>
@@ -1369,6 +1494,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
               }),
             );
             const completion = pending;
+
             if (completion !== undefined) {
               yield* Effect.promise(() => boundedBestEffort(completion, 500));
             }
@@ -1455,6 +1581,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
       .withPermitsIfAvailable(1)(
         Effect.gen(function* () {
           const unavailable = stateFailure(state);
+
           if (unavailable !== undefined) return yield* unavailable;
           yield* preflight;
 
@@ -1464,6 +1591,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
                 ? [{ allowed: false, observed: count + 1 }, count]
                 : [{ allowed: true, observed: count + 1 }, count + 1],
             );
+
             if (!admitted.allowed) {
               return yield* InteractiveBrowserLimitError.make({
                 implementation: browserRunInteractiveImplementation,
@@ -1478,17 +1606,20 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           const completed = effect.pipe(
             Effect.catch((error) => {
               const failure = stateFailure(state);
+
               return Effect.fail(failure ?? error);
             }),
             Effect.flatMap((result) =>
               awaitPendingRequests(state).pipe(
                 Effect.flatMap(() => {
                   const failure = stateFailure(state);
+
                   return failure === undefined ? Effect.succeed(result) : Effect.fail(failure);
                 }),
               ),
             ),
           );
+
           return yield* withinDeadline(completed, policy, startedAt, () => {
             state.uncertain.value = true;
           }).pipe(
@@ -1502,12 +1633,14 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
                 return Effect.fail(error);
               }
               const failure = stateFailure(state);
+
               if (
                 Schema.is(InteractiveBrowserActionError)(error) &&
                 !isBrowserRunUndispatchedActionError(error)
               ) {
                 state.uncertain.value = true;
               }
+
               return Effect.fail(failure ?? error);
             }),
           );
@@ -1531,6 +1664,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
       run(
         Effect.gen(function* () {
           yield* remote("navigate", () => page.goto(request.url));
+
           return yield* decodeNavigationResult(page, policy);
         }),
         Effect.suspend(() =>
@@ -1545,11 +1679,13 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           const raw = yield* remote("read-text", () =>
             page.readText(request.selector, policy.maxReturnedBytes),
           );
+
           const observation = yield* Schema.decodeUnknownEffect(TextObservation)(raw).pipe(
             Effect.mapError((cause) =>
               protocolError("The browser returned a malformed text observation", cause),
             ),
           );
+
           if (observation._tag === "MissingElement") {
             return yield* actionError("read-text");
           }
@@ -1563,6 +1699,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
             });
           }
           const observed = new TextEncoder().encode(observation.text).byteLength;
+
           if (observed > policy.maxReturnedBytes) {
             return yield* InteractiveBrowserLimitError.make({
               implementation: browserRunInteractiveImplementation,
@@ -1572,6 +1709,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
               message: "The browser returned-text limit was reached",
             });
           }
+
           return yield* Schema.decodeUnknownEffect(BrowserTextResult)({
             text: observation.text,
           }).pipe(
@@ -1587,7 +1725,9 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           const observation = yield* observedAction("fill", (signal, onDispatch) =>
             page.fill(request.selector, request.value, signal, onDispatch),
           ).pipe(Effect.flatMap(decodeActionObservation));
+
           yield* logActionObservation("fill", observation);
+
           return yield* decodeActionResult(page, policy);
         }),
       ),
@@ -1597,7 +1737,9 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           const observation = yield* observedAction("click", (signal, onDispatch) =>
             page.click(request.selector, signal, onDispatch),
           ).pipe(Effect.flatMap(decodeActionObservation));
+
           yield* logActionObservation("click", observation);
+
           return yield* decodeActionResult(page, policy);
         }),
       ),
@@ -1608,11 +1750,13 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           run(
             Effect.gen(function* () {
               const raw = yield* remote("screenshot", () => page.screenshot(decoded.fullPage));
+
               const bytes = yield* Schema.decodeUnknownEffect(PngBytes)(raw).pipe(
                 Effect.mapError(() =>
                   protocolError("The browser returned a malformed PNG screenshot"),
                 ),
               );
+
               if (bytes.length > policy.maxReturnedBytes) {
                 return yield* InteractiveBrowserLimitError.make({
                   implementation: browserRunInteractiveImplementation,
@@ -1622,6 +1766,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
                   message: "The browser screenshot byte limit was reached",
                 });
               }
+
               return yield* Schema.decodeUnknownEffect(PageScreenshotResult)({
                 implementation: browserRunInteractiveImplementation,
                 mediaType: "image/png",
@@ -1650,6 +1795,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
       ),
     close,
   };
+
   return { handle, run };
 });
 
@@ -1658,6 +1804,7 @@ const remainingMillis = Effect.fn("BrowserRunInteractive.remainingMillis")(funct
   startedAt: number,
 ) {
   const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+
   return Math.max(0, policy.maxElapsedMillis - Math.max(0, now - startedAt));
 });
 
@@ -1720,6 +1867,7 @@ const cdpCommand = <A>(
           ),
         { interruptible: true },
       );
+
       const raw = yield* Effect.tryPromise({
         try: () => cdp.send(command, parameters),
         catch: (cause) =>
@@ -1727,6 +1875,7 @@ const cdpCommand = <A>(
             ? expiredError()
             : protocolError("The Cloudflare browser control command failed", cause),
       });
+
       return yield* Schema.decodeUnknownEffect(output)(raw).pipe(
         Effect.mapError(() => protocolError(malformedMessage)),
       );
@@ -1737,11 +1886,13 @@ const makeHostService = (
   binding: BrowserRunInteractiveBinding["Service"],
 ): BrowserRunInteractiveHost["Service"] => {
   const closeSession = binding.closeSession;
+
   const terminate = Effect.fn("BrowserRunInteractiveHost.terminate")(function* (
     sessionId: Redacted.Redacted<string>,
     entries: ReadonlyArray<CloseEntry>,
   ) {
     const deadline = (yield* Clock.currentTimeMillis) + 10_000;
+
     yield* closeSession(sessionId).pipe(
       Effect.interruptible,
       Effect.timeoutOrElse({
@@ -1750,6 +1901,7 @@ const makeHostService = (
       }),
     );
     const remaining = deadline - (yield* Clock.currentTimeMillis);
+
     if (remaining <= 0)
       return yield* Effect.logWarning(
         "Local browser teardown skipped after confirmed termination deadline",
@@ -1768,6 +1920,7 @@ const makeHostService = (
       ),
     );
   });
+
   const closeAcquired = Effect.fn("BrowserRunInteractiveHost.closeAcquired")(function* (
     browser: BrowserRunInteractiveBrowser,
   ) {
@@ -1781,15 +1934,18 @@ const makeHostService = (
         closeWithWarning(browser.close, "Closing an unidentified browser failed"),
       ),
     );
+
     yield* terminate(Redacted.make(sessionId), [
       closeEntry(browser.close, "Closing the local browser connection failed"),
     ]);
   });
+
   const open = Effect.fn("BrowserRunInteractiveHost.open")(function* (
     policy: InteractiveBrowserPolicy,
   ): Effect.fn.Return<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope> {
     const fixedPolicy = yield* snapshotPolicy(policy);
     const startedAt = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+
     const state: HandleState = {
       closed: { value: false },
       disconnected: { value: false },
@@ -1797,10 +1953,13 @@ const makeHostService = (
       violation: { value: undefined },
       pendingRequests: new Set(),
     };
+
     const lifecycle = {
       managedTeardownInstalled: false,
     };
+
     const closers: Array<CloseEntry> = [];
+
     const releaseBeforeManaged = (entry: CloseEntry): Effect.Effect<void> =>
       Effect.suspend(() =>
         lifecycle.managedTeardownInstalled
@@ -1830,6 +1989,7 @@ const makeHostService = (
       ),
       (acquired) => {
         state.disconnected.value = true;
+
         return lifecycle.managedTeardownInstalled
           ? Effect.void
           : closeAcquired(acquired).pipe(
@@ -1838,11 +1998,13 @@ const makeHostService = (
       },
       { interruptible: true },
     );
+
     closers.push(closeEntry(browser.close, "Closing the interactive browser failed"));
 
     const disconnected = () => {
       state.disconnected.value = true;
     };
+
     yield* Effect.acquireRelease(
       Effect.try({
         try: () => browser.onDisconnected(disconnected),
@@ -1862,12 +2024,15 @@ const makeHostService = (
         "Removing the browser disconnect listener failed",
       ),
     );
+
     const connected = yield* Effect.try({
       try: browser.isConnected,
       catch: (cause) => protocolError("Reading the Browser Run connection state failed", cause),
     });
+
     if (!connected) {
       state.disconnected.value = true;
+
       return yield* expiredError();
     }
 
@@ -1901,7 +2066,9 @@ const makeHostService = (
         ),
       { interruptible: true },
     );
+
     closers.push(closeEntry(context.close, "Closing the interactive browser context failed"));
+
     const page = yield* Effect.acquireRelease(
       withinDeadline(
         Effect.tryPromise({
@@ -1921,6 +2088,7 @@ const makeHostService = (
         ),
       { interruptible: true },
     );
+
     closers.push(closeEntry(page.close, "Closing the interactive browser page failed"));
 
     yield* withinDeadline(
@@ -1933,6 +2101,7 @@ const makeHostService = (
     );
 
     const requestListener = makeRequestListener(fixedPolicy, state);
+
     yield* Effect.acquireRelease(
       Effect.try({
         try: () => page.onRequest(requestListener),
@@ -1964,11 +2133,13 @@ const makeHostService = (
 
     yield* withinDeadline(awaitPendingRequests(state), fixedPolicy, startedAt);
     const setupFailure = stateFailure(state);
+
     if (setupFailure !== undefined) return yield* setupFailure;
 
     const teardown = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const cached = yield* Effect.cached(terminate(Redacted.make(sessionIdValue), closers));
+
         lifecycle.managedTeardownInstalled = true;
         yield* Effect.addFinalizer(() =>
           Effect.uninterruptible(
@@ -1981,6 +2152,7 @@ const makeHostService = (
             ),
           ),
         );
+
         return cached;
       }),
     );
@@ -1994,6 +2166,7 @@ const makeHostService = (
 
     const runtime = yield* makeHandle(page, fixedPolicy, startedAt, state, close);
     const currentPagePreflight = decodeActionResult(page, fixedPolicy).pipe(Effect.asVoid);
+
     const requestFitsSession = (requestedMillis: number): Effect.Effect<void, BrowserFailure> =>
       remainingMillis(fixedPolicy, startedAt).pipe(
         Effect.flatMap((remaining) =>
@@ -2017,8 +2190,10 @@ const makeHostService = (
                 catch: (cause) => {
                   if (state.disconnected.value || isRemoteClosure(cause)) {
                     state.disconnected.value = true;
+
                     return expiredError();
                   }
+
                   return protocolError("Resizing the browser viewport failed", cause);
                 },
               }),
@@ -2143,6 +2318,7 @@ export const browserRunInteractiveLayer = (): Layer.Layer<
     Effect.gen(function* () {
       const binding = yield* BrowserRunInteractiveBinding;
       const host = makeHostService(binding);
+
       return InteractiveBrowser.of({
         open: (policy) => host.open(policy).pipe(Effect.map((session) => session.handle)),
       });

@@ -94,10 +94,12 @@ const decodeTurnId = Schema.decodeSync(TurnId);
 const identifiers = Layer.effect(IdGenerator)(
   Effect.gen(function* () {
     const counter = yield* Ref.make(0);
+
     const next = <A>(decode: (value: string) => A, prefix: string) =>
       Ref.updateAndGet(counter, (value) => value + 1).pipe(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
+
     return {
       nextThreadId: next(decodeThreadId, "thread"),
       nextRunId: next(decodeRunId, "run"),
@@ -155,6 +157,7 @@ const delegatingModel = (
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: () =>
@@ -267,10 +270,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -312,6 +317,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
   it.effect("captures the child input projector's service without exposing host input", () =>
     Effect.gen(function* () {
       const promptRef = yield* Ref.make<unknown>(undefined);
+
       const target = Agent.make("projected-child", {
         input: Schema.Struct({ question: Schema.String, hostOnly: Schema.String }),
         output: ChildOutput,
@@ -321,6 +327,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: Toolkit.empty,
         policy: childPolicy,
       });
+
       const delegation = Subagent.define("delegate_projected", {
         description: "Answer a public question.",
         target,
@@ -332,10 +339,12 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         projectResult: (output) => Effect.succeed({ summary: output.answer }),
         policy: researchPolicy,
       });
+
       const child = Agent.withModel(
         target,
         answeringModel("projected-child-model", '{"answer":"child-answer"}', promptRef),
       );
+
       const parent = Agent.withModel(
         Agent.make("projecting-parent", {
           input: Schema.String,
@@ -351,6 +360,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"done"}',
         ),
       );
+
       const childLayer = SubagentRuntime.layer(delegation, child, { mapChildFailure }).pipe(
         Layer.provide(
           Layer.succeed(ChildInputRenderer, {
@@ -358,9 +368,12 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           }),
         ),
       );
+
       const result = yield* AgentRuntime.run(parent, "start").pipe(Effect.provide(childLayer));
+
       expect(result.output).toEqual({ report: "done" });
       const prompt = JSON.stringify(yield* Ref.get(promptRef));
+
       expect(prompt).toContain("Rendered: public question");
       expect(prompt).not.toContain("CHILD-HOST-ONLY-SENTINEL");
     }),
@@ -369,10 +382,12 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
   it.effect("joins one attached child through explicit projections", () =>
     Effect.gen(function* () {
       const promptRef = yield* Ref.make<unknown>(undefined);
+
       const childBinding = Agent.withModel(
         childDefinition,
         answeringModel("child-success", '{"answer":"child-answer"}', promptRef),
       );
+
       const parent = Agent.withModel(
         coordinatorDefinition,
         delegatingModel(
@@ -382,6 +397,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"done"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-success");
 
       const detached = yield* AgentRuntime.start(
@@ -391,6 +407,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           runId,
         },
       ).pipe(Effect.provide(researchLayer(childBinding)));
+
       const result = yield* detached.await;
       const events = yield* detached.events;
 
@@ -403,6 +420,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       ]);
 
       const joined = findEvent(events, "SubagentJoined");
+
       expect(joined).toMatchObject({
         delegationId: "delegate_research",
         targetAgentId: "research-child",
@@ -414,6 +432,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       expect(joined?.childRunId).not.toBe(runId);
       expect(joined?.childThreadId).not.toBe(result.threadId);
       const requested = findEvent(events, "SubagentRequested");
+
       expect(requested?.childRunId).toBe(joined?.childRunId);
       expect(findEvent(events, "SubagentCompleted")).toMatchObject({ turns: 1 });
 
@@ -425,15 +444,18 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       // Child isolation (SUB-006/015): the child prompt contains only the
       // projected input, never the parent transcript.
       const childPrompt = JSON.stringify(yield* Ref.get(promptRef));
+
       expect(childPrompt).toContain("research:paris");
       expect(childPrompt).not.toContain("parent-secret-mission");
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expect(snapshot.caps).toEqual(delegationCapsFromPolicy(researchPolicy));
       expect(snapshot.totalChildInvocations).toBe(1);
       expect(snapshot.reservations).toHaveLength(1);
       const view = snapshot.reservations[0];
+
       expectSettledOnce(view);
       // The child ran one model turn, observed through the wired budget hook.
       expect(view?.observedConsumed.turns).toBe(1);
@@ -447,6 +469,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         childDefinition,
         answeringModel("child-invalid-output", "not-json"),
       );
+
       const parent = Agent.withModel(
         coordinatorDefinition,
         delegatingModel(
@@ -456,23 +479,28 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-mapped-failure");
 
       const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(researchLayer(childBinding)),
       );
+
       const exit = yield* Effect.exit(detached.await);
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(ResearchDelegationFailed);
       expect(failure).toMatchObject({ childErrorTag: "AgentOutputError" });
 
       const events = yield* detached.events;
+
       expect(findEvent(events, "SubagentFailed")).toMatchObject({ errorTag: "AgentOutputError" });
       expect(findEvent(events, "SubagentCompleted")).toBeUndefined();
       expect(findEvent(events, "SubagentJoined")).toBeUndefined();
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expectSettledOnce(snapshot.reservations[0]);
     }),
   );
@@ -486,6 +514,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         childDefinition,
         answeringModel("grandchild", '{"answer":"leaf"}'),
       );
+
       const midDefinition = Agent.make("midlevel", {
         input: ChildInput,
         output: ChildOutput,
@@ -493,6 +522,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: Toolkit.make(researchDelegation.tool),
         policy: childPolicy,
       });
+
       const midBinding = Agent.withModel(
         midDefinition,
         delegatingModel(
@@ -506,6 +536,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const capturedDenial = yield* Ref.make<unknown>(undefined);
       const capturedMidRunId = yield* Ref.make<RunId>(decodeRunId("mid-run-unset"));
       const dependencies = yield* Effect.context<SubagentReservations | IdGenerator>();
+
       const midDelegationLayer = Layer.provide(
         researchLayer(grandchildBinding),
         Layer.succeedContext(dependencies),
@@ -517,11 +548,14 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       })
         .addDependency(AgentSpawner)
         .addDependency(IdGenerator);
+
       const spawnTools = Toolkit.make(SpawnMid);
+
       const spawnToolLayer = spawnTools.toLayer({
         spawn_mid: () =>
           Effect.gen(function* () {
             const spawner = yield* AgentSpawner;
+
             const mid = yield* spawner.spawn(
               midBinding,
               { question: "root" },
@@ -530,14 +564,17 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
                 parentToolCallId: outerCallId,
               },
             );
+
             yield* Ref.set(capturedMidRunId, mid.runId);
             const exit = yield* Effect.exit(mid.await);
+
             if (Exit.isFailure(exit)) {
               yield* Ref.set(
                 capturedDenial,
                 Option.getOrUndefined(Cause.findErrorOption(exit.cause)),
               );
             }
+
             return { acknowledged: true };
           }).pipe(Effect.provide(midDelegationLayer), Effect.scoped),
       });
@@ -549,6 +586,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: spawnTools,
         policy: childPolicy,
       });
+
       const outer = Agent.withModel(
         outerDefinition,
         delegatingModel(
@@ -560,9 +598,11 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       );
 
       const result = yield* AgentRuntime.run(outer, {}).pipe(Effect.provide(spawnToolLayer));
+
       expect(result.output).toEqual({ ok: true });
 
       const denial = yield* Ref.get(capturedDenial);
+
       expect(denial).toBeInstanceOf(SubagentPrestartDenied);
       expect(denial).toMatchObject({
         reason: "nested-delegation",
@@ -574,6 +614,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const reservations = yield* SubagentReservations;
       const midRunId = yield* Ref.get(capturedMidRunId);
       const snapshotExit = yield* Effect.exit(reservations.parentSnapshot(midRunId));
+
       expect(failureFrom(snapshotExit)._tag).toBe("SubagentParentBudgetUnknown");
     }),
   );
@@ -596,6 +637,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           maxDuration: "10 seconds",
         }),
       });
+
       const soloParentDefinition = Agent.make("coordinator-solo", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -608,10 +650,12 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const childBinding = Agent.withModel(
         childDefinition,
         answeringModel("solo-child", '{"answer":"one"}'),
       );
+
       const parent = Agent.withModel(
         soloParentDefinition,
         delegatingModel(
@@ -624,18 +668,22 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-max-children");
 
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(SubagentRuntime.layer(soloDelegation, childBinding, { mapChildFailure })),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentBudgetExhausted);
       expect(failure).toMatchObject({ dimension: "total-child-invocations" });
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       // The denied second invocation never reserved; the first settled once.
       expect(snapshot.totalChildInvocations).toBe(1);
       expect(snapshot.reservations).toHaveLength(1);
@@ -661,6 +709,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           maxDuration: "10 seconds",
         }),
       });
+
       const parallelParentDefinition = Agent.make("coordinator-parallel", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -673,6 +722,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const maxActive = yield* Ref.make(0);
       const latch = yield* Deferred.make<void>();
       const firstStarted = yield* Deferred.make<void>();
+
       const gatedModel = Model.make(
         "scripted",
         "gated-child",
@@ -684,9 +734,11 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
               Stream.unwrap(
                 Effect.gen(function* () {
                   const current = yield* Ref.updateAndGet(active, (count) => count + 1);
+
                   yield* Ref.update(maxActive, (previous) => Math.max(previous, current));
                   yield* Deferred.succeed(firstStarted, undefined);
                   yield* Deferred.await(latch);
+
                   return Stream.fromIterable<Response.StreamPartEncoded>(
                     finalParts('{"answer":"done"}'),
                   ).pipe(Stream.ensuring(Ref.update(active, (count) => count - 1)));
@@ -695,7 +747,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           }),
         ),
       );
+
       const childBinding = Agent.withModel(childDefinition, gatedModel);
+
       const parent = Agent.withModel(
         parallelParentDefinition,
         delegatingModel(
@@ -708,6 +762,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"both"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-concurrency");
 
       const fiber = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
@@ -718,16 +773,19 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         Effect.exit,
         Effect.forkChild,
       );
+
       yield* Deferred.await(firstStarted);
       // The second child is queued on the concurrency gate, not executing.
       expect(yield* Ref.get(active)).toBe(1);
       yield* Deferred.succeed(latch, undefined);
       const exit = yield* Fiber.join(fiber);
+
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(yield* Ref.get(maxActive)).toBe(1);
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expect(snapshot.totalChildInvocations).toBe(2);
       expect(snapshot.reservations).toHaveLength(2);
       for (const view of snapshot.reservations) {
@@ -740,6 +798,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
     Effect.gen(function* () {
       const modelStarted = yield* Deferred.make<void>();
       const modelReleased = yield* Deferred.make<void>();
+
       const blockingModel = Model.make(
         "scripted",
         "blocking-child",
@@ -757,7 +816,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           ),
         ),
       );
+
       const childBinding = Agent.withModel(childDefinition, blockingModel);
+
       const parent = Agent.withModel(
         coordinatorDefinition,
         delegatingModel(
@@ -767,6 +828,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-interrupted");
 
       const fiber = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
@@ -775,6 +837,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         Effect.exit,
         Effect.forkChild,
       );
+
       yield* Deferred.await(modelStarted);
       yield* Fiber.interrupt(fiber);
       // Interruption reached the child Run and its model Layer finalizer.
@@ -783,6 +846,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
       const view = snapshot.reservations[0];
+
       expectSettledOnce(view);
       // The wall clock never advanced, so the honest duration observation is
       // zero and the full duration allocation returns; turns were never
@@ -799,7 +863,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const boomTools = Toolkit.make(Boom);
+
       const boomChildDefinition = Agent.make("boom-child", {
         input: ChildInput,
         output: ChildOutput,
@@ -807,6 +873,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: boomTools,
         policy: childPolicy,
       });
+
       const boomDelegation = Subagent.define("delegate_boom", {
         description: "Delegation whose child dies.",
         target: boomChildDefinition,
@@ -817,6 +884,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         projectResult: (output) => Effect.succeed({ summary: output.answer }),
         policy: researchPolicy,
       });
+
       const boomParentDefinition = Agent.make("coordinator-boom", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -824,9 +892,11 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: Toolkit.make(boomDelegation.tool),
         policy: parentPolicy,
       });
+
       const boomToolLayer = boomTools.toLayer({
         boom_tool: () => Effect.die(new Error("boom-defect")),
       });
+
       const childBinding = Agent.withModel(
         boomChildDefinition,
         delegatingModel(
@@ -836,6 +906,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"answer":"x"}',
         ),
       );
+
       const parent = Agent.withModel(
         boomParentDefinition,
         delegatingModel(
@@ -845,6 +916,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-defect");
 
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
@@ -856,6 +928,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         ),
         Effect.exit,
       );
+
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
         // The defect was not coerced into an expected Tool failure.
@@ -864,6 +937,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expectSettledOnce(snapshot.reservations[0]);
     }),
   );
@@ -886,6 +960,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           maxDuration: "5 seconds",
         }),
       });
+
       const slowParentDefinition = Agent.make("coordinator-slow", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -893,7 +968,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: Toolkit.make(slowDelegation.tool),
         policy: parentPolicy,
       });
+
       const modelStarted = yield* Deferred.make<void>();
+
       const blockingModel = Model.make(
         "scripted",
         "slow-child",
@@ -908,7 +985,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           }),
         ),
       );
+
       const childBinding = Agent.withModel(childDefinition, blockingModel);
+
       const parent = Agent.withModel(
         slowParentDefinition,
         delegatingModel(
@@ -918,6 +997,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-duration");
 
       const fiber = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
@@ -926,16 +1006,19 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         Effect.exit,
         Effect.forkChild,
       );
+
       yield* Deferred.await(modelStarted);
       yield* TestClock.adjust("5 seconds");
       const exit = yield* Fiber.join(fiber);
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentBudgetExhausted);
       expect(failure).toMatchObject({ dimension: "duration", limitValue: 5_000 });
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
       const view = snapshot.reservations[0];
+
       expectSettledOnce(view);
       expect(view?.observedConsumed.durationMillis).toBe(5_000);
       expect(view?.released.durationMillis).toBe(0);
@@ -947,6 +1030,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const BoundedFindings = Schema.Struct({
         summary: Schema.String.check(Schema.isMaxLength(8)),
       });
+
       const boundedDelegation = Subagent.define("delegate_bounded", {
         description: "Delegation with a bounded result Schema.",
         target: childDefinition,
@@ -957,6 +1041,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         projectResult: (output) => Effect.succeed({ summary: `oversized:${output.answer}` }),
         policy: researchPolicy,
       });
+
       const boundedParentDefinition = Agent.make("coordinator-bounded", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -964,10 +1049,12 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: Toolkit.make(boundedDelegation.tool),
         policy: parentPolicy,
       });
+
       const childBinding = Agent.withModel(
         childDefinition,
         answeringModel("bounded-child", '{"answer":"secret-child-answer"}'),
       );
+
       const parent = Agent.withModel(
         boundedParentDefinition,
         delegatingModel(
@@ -977,13 +1064,16 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-projection");
 
       const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(SubagentRuntime.layer(boundedDelegation, childBinding, { mapChildFailure })),
       );
+
       const exit = yield* Effect.exit(detached.await);
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentProjectionFailure);
       expect(failure).toMatchObject({ stage: "result" });
       // Fail closed: the raw child value never enters the failure message.
@@ -992,12 +1082,14 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       }
 
       const events = yield* detached.events;
+
       // The child itself completed; the join never happened.
       expect(findEvent(events, "SubagentCompleted")).toBeDefined();
       expect(findEvent(events, "SubagentJoined")).toBeUndefined();
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expectSettledOnce(snapshot.reservations[0]);
     }),
   );
@@ -1008,7 +1100,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const probeTools = Toolkit.make(Probe);
+
       const probeChildDefinition = Agent.make("probe-child", {
         input: ChildInput,
         output: ChildOutput,
@@ -1016,6 +1110,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: probeTools,
         policy: childPolicy,
       });
+
       const restrictedDelegation = Subagent.define("delegate_restricted", {
         description: "Delegation with an empty grant ceiling.",
         target: probeChildDefinition,
@@ -1027,6 +1122,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         policy: researchPolicy,
         grant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
       });
+
       const restrictedParentDefinition = Agent.make("coordinator-restricted", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -1034,13 +1130,16 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: Toolkit.make(restrictedDelegation.tool),
         policy: parentPolicy,
       });
+
       const probeToolLayer = probeTools.toLayer({
         probe_docs: () => Effect.succeed("probed"),
       });
+
       const childBinding = Agent.withModel(
         probeChildDefinition,
         answeringModel("probe-child-model", '{"answer":"never-runs"}'),
       );
+
       const parent = Agent.withModel(
         restrictedParentDefinition,
         delegatingModel(
@@ -1050,6 +1149,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-grant");
 
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
@@ -1061,12 +1161,15 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         ),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentPrestartDenied);
       expect(failure).toMatchObject({ reason: "grant-violation" });
 
       const reservations = yield* SubagentReservations;
       const snapshotExit = yield* Effect.exit(reservations.parentSnapshot(runId));
+
       expect(failureFrom(snapshotExit)._tag).toBe("SubagentParentBudgetUnknown");
     }),
   );
@@ -1077,6 +1180,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         childDefinition,
         answeringModel("capped-child", '{"answer":"never-runs"}'),
       );
+
       const parent = Agent.withModel(
         coordinatorDefinition,
         delegatingModel(
@@ -1086,6 +1190,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-capped");
 
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
@@ -1097,7 +1202,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         ),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentBudgetExhausted);
       expect(failure).toMatchObject({ dimension: "concurrent-children" });
 
@@ -1106,6 +1213,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
       const view = snapshot.reservations[0];
+
       expectSettledOnce(view);
       expect(view?.released).toEqual(view?.allocated);
     }),
@@ -1118,10 +1226,13 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const probeTools = Toolkit.make(Probe);
+
         const probeToolLayer = probeTools.toLayer({
           probe_docs: () => Effect.succeed("probed"),
         });
+
         // maxTurns 1 with a Tool-declaring first response breaches the Turn
         // limit; the default onExhaustion "final-answer" grants one tool-less
         // grace call that answers with the partial output (RUN-025).
@@ -1137,7 +1248,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const childPrompts = yield* Ref.make<ReadonlyArray<unknown>>([]);
+
         const scripts: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>> = [
           [
             {
@@ -1151,6 +1264,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           ],
           finalParts('{"answer":"partial"}'),
         ];
+
         const childModel = Model.make(
           "scripted",
           "exhausted-child-model",
@@ -1158,6 +1272,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
             LanguageModel.LanguageModel,
             Effect.gen(function* () {
               const request = yield* Ref.make(0);
+
               return yield* LanguageModel.make({
                 generateText: () => Effect.succeed([]),
                 streamText: (options) =>
@@ -1173,7 +1288,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
             }),
           ),
         );
+
         const projectedOutputs = yield* Ref.make<ReadonlyArray<{ readonly answer: string }>>([]);
+
         const partialDelegation = Subagent.define("delegate_partial", {
           description: "Delegation whose child exhausts its Turn budget.",
           target: exhaustedChildDefinition,
@@ -1187,6 +1304,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
             ),
           policy: researchPolicy,
         });
+
         const partialParentDefinition = Agent.make("coordinator-partial", {
           input: Schema.Struct({ mission: Schema.String }),
           output: Schema.Struct({ report: Schema.String }),
@@ -1194,7 +1312,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           toolkit: Toolkit.make(partialDelegation.tool),
           policy: parentPolicy,
         });
+
         const childBinding = Agent.withModel(exhaustedChildDefinition, childModel);
+
         const parent = Agent.withModel(
           partialParentDefinition,
           delegatingModel(
@@ -1204,6 +1324,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
             '{"report":"done"}',
           ),
         );
+
         const runId = decodeRunId("parent-run-partial");
 
         const detached = yield* AgentRuntime.start(
@@ -1218,6 +1339,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
             ),
           ),
         );
+
         const result = yield* detached.await;
         const events = yield* detached.events;
 
@@ -1249,13 +1371,16 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         // the run-status message), and child isolation held for the
         // exhausted path too.
         const prompts = yield* Ref.get(childPrompts);
+
         expect(prompts).toHaveLength(2);
         const gracePrompt = JSON.stringify(prompts[1]);
+
         expect(gracePrompt).toContain("<run-status>turn 2/1");
         expect(gracePrompt).not.toContain("parent-secret-mission");
 
         const reservations = yield* SubagentReservations;
         const snapshot = yield* reservations.parentSnapshot(runId);
+
         expectSettledOnce(snapshot.reservations[0]);
       }),
   );
@@ -1266,10 +1391,13 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const probeTools = Toolkit.make(Probe);
+
       const probeToolLayer = probeTools.toLayer({
         probe_docs: () => Effect.succeed("probed"),
       });
+
       const failingChildDefinition = Agent.make("fail-fast-child", {
         input: ChildInput,
         output: ChildOutput,
@@ -1283,6 +1411,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           onExhaustion: "fail",
         }),
       });
+
       const failFastDelegation = Subagent.define("delegate_fail_fast", {
         description: "Delegation whose child keeps the legacy fail-fast contract.",
         target: failingChildDefinition,
@@ -1293,6 +1422,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         projectResult: (output) => Effect.succeed({ summary: `finding:${output.answer}` }),
         policy: researchPolicy,
       });
+
       const failFastParentDefinition = Agent.make("coordinator-fail-fast", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -1300,6 +1430,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         toolkit: Toolkit.make(failFastDelegation.tool),
         policy: parentPolicy,
       });
+
       const childBinding = Agent.withModel(
         failingChildDefinition,
         delegatingModel(
@@ -1309,6 +1440,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"answer":"unreached"}',
         ),
       );
+
       const parent = Agent.withModel(
         failFastParentDefinition,
         delegatingModel(
@@ -1318,6 +1450,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           '{"report":"unreached"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-fail-fast");
 
       const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
@@ -1328,12 +1461,15 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           ),
         ),
       );
+
       const exit = yield* Effect.exit(detached.await);
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(ResearchDelegationFailed);
       expect(failure).toMatchObject({ childErrorTag: "AgentPolicyError" });
 
       const events = yield* detached.events;
+
       expect(findEvent(events, "SubagentFailed")).toMatchObject({
         errorTag: "AgentPolicyError",
       });
@@ -1342,6 +1478,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expectSettledOnce(snapshot.reservations[0]);
     }),
   );
@@ -1463,6 +1600,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       const invocations = yield* Ref.make(0);
       const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
       const child = durableChildIdentity("assemble");
+
       const subagent = scriptedDurableHook({
         establish: () => ({
           _tag: "settled",
@@ -1481,6 +1619,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
 
       expect(result.output).toEqual({ report: "done" });
       const requests = yield* Ref.get(establishes);
+
       expect(requests).toHaveLength(1);
       // Everything the coordinator digests into `SubagentRequested` is
       // assembled from construction-fixed values plus the projected, encoded
@@ -1524,6 +1663,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(AgentChildPending);
       if (!(failure instanceof AgentChildPending)) {
         throw new Error("Expected AgentChildPending");
@@ -1540,6 +1680,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       expect(yield* Ref.get(invocations)).toBe(0);
 
       const observed = yield* Ref.get(events);
+
       expect(subagentTags(observed)).toEqual(["SubagentRequested", "SubagentStarted"]);
       // The waiting call is not a Tool failure: it stays open and the Run
       // suspends after the batch instead of failing.
@@ -1552,6 +1693,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       // coordinator's fenced ledger reservation.
       const reservations = yield* SubagentReservations;
       const snapshotExit = yield* Effect.exit(reservations.parentSnapshot(runId));
+
       expect(failureFrom(snapshotExit)._tag).toBe("SubagentParentBudgetUnknown");
     }),
   );
@@ -1563,6 +1705,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         const invocations = yield* Ref.make(0);
         const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
         const child = durableChildIdentity("join");
+
         const subagent = scriptedDurableHook({
           establish: () => ({
             _tag: "settled",
@@ -1578,6 +1721,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
           { mission: "m" },
           { runId: decodeRunId("parent-run-durable-join"), subagent },
         ).pipe(Effect.provide(durableResearchLayer(invocations)));
+
         const result = yield* detached.await;
         const events = yield* detached.events;
 
@@ -1609,6 +1753,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       const invocations = yield* Ref.make(0);
       const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
       const child = durableChildIdentity("escape");
+
       const subagent = scriptedDurableHook({
         establish: () => ({
           _tag: "settled",
@@ -1626,6 +1771,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentProjectionFailure);
       expect(failure).toMatchObject({ stage: "result" });
       // Fail closed: the raw settled value never enters the failure message.
@@ -1635,6 +1781,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       // The deterministic projection failure still joins the call durably,
       // as failure data, so the canonical Tool settlement exists.
       const recordedJoins = yield* Ref.get(joins);
+
       expect(recordedJoins).toHaveLength(1);
       expect(recordedJoins[0]).toMatchObject({
         toolCallId: "call-1",
@@ -1653,6 +1800,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       const invocations = yield* Ref.make(0);
       const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
       const child = durableChildIdentity("failed");
+
       const subagent = scriptedDurableHook({
         establish: () => ({
           _tag: "settled",
@@ -1670,6 +1818,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentExecutionFailure);
       expect(failure).toMatchObject({
         classification: "child-failed",
@@ -1683,12 +1832,14 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       });
 
       const recordedJoins = yield* Ref.get(joins);
+
       expect(recordedJoins).toHaveLength(1);
       expect(recordedJoins[0]).toMatchObject({ toolCallId: "call-1", isFailure: true });
       // The joined failure is exactly the bounded Schema projection: a
       // classification, child references, and tag/message — no Cause, stack,
       // or raw child payload key can exist on it.
       const encodedFailure = recordedJoins[0]?.encodedResult as Record<string, unknown>;
+
       expect(Object.keys(encodedFailure).sort()).toEqual([
         "_tag",
         "childRunId",
@@ -1710,14 +1861,17 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         Effect.gen(function* () {
           const invocations = yield* Ref.make(0);
           const child = durableChildIdentity(suffix);
+
           const subagent = scriptedDurableHook({
             establish: () => ({ _tag: "settled", ...child, outcome, encodedResult }),
           });
+
           const exit = yield* AgentRuntime.run(
             durableParent(`parent-durable-${suffix}`, suffix),
             { mission: "m" },
             { runId: decodeRunId(`parent-run-durable-${suffix}`), subagent },
           ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
+
           return failureFrom(exit);
         });
 
@@ -1725,6 +1879,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         errorTag: "SubagentInterrupted",
         message: "durable abort propagated",
       });
+
       expect(aborted).toBeInstanceOf(SubagentExecutionFailure);
       expect(aborted).toMatchObject({ classification: "child-aborted" });
 
@@ -1735,6 +1890,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         errorTag: "ChildCompatibilityFailure",
         message: "stored child Binding digest unavailable",
       });
+
       expect(compatibility).toBeInstanceOf(SubagentExecutionFailure);
       expect(compatibility).toMatchObject({
         classification: "child-compatibility",
@@ -1747,6 +1903,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
     Effect.gen(function* () {
       const invocations = yield* Ref.make(0);
       const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
+
       const subagent = scriptedDurableHook({
         establish: () => ({
           _tag: "denied",
@@ -1763,6 +1920,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentExecutionFailure);
       expect(failure).toMatchObject({
         classification: "establishment-denied",
@@ -1778,10 +1936,12 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       const invocations = yield* Ref.make(0);
       const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
       const child = durableChildIdentity("undeclared");
+
       const subagent = scriptedDurableHook({
         establish: () => ({ _tag: "waiting", ...child }),
         establishes,
       });
+
       // The Layer was built WITHOUT SubagentRuntimeOptions.durable.
       const undeclaredLayer = SubagentRuntime.layer(
         researchDelegation,
@@ -1796,6 +1956,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       ).pipe(Effect.provide(undeclaredLayer), Effect.scoped, Effect.exit);
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentExecutionFailure);
       expect(failure).toMatchObject({ classification: "declaration-unavailable" });
       // Fail closed before any establishment: no digests were invented.
@@ -1808,6 +1969,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
     Effect.gen(function* () {
       const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
       const child = durableChildIdentity("revoked");
+
       const subagent = scriptedDurableHook({
         establish: () => ({ _tag: "waiting", ...child }),
         establishes,
@@ -1820,7 +1982,9 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const probeTools = Toolkit.make(Probe);
+
       const probeChildDefinition = Agent.make("probe-durable-child", {
         input: ChildInput,
         output: ChildOutput,
@@ -1828,6 +1992,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         toolkit: probeTools,
         policy: childPolicy,
       });
+
       const revokedDelegation = Subagent.define("delegate_revoked_durable", {
         description: "Durable delegation with a revoked grant ceiling.",
         target: probeChildDefinition,
@@ -1839,6 +2004,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         policy: researchPolicy,
         grant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
       });
+
       const revokedParentDefinition = Agent.make("coordinator-revoked-durable", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -1846,13 +2012,16 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         toolkit: Toolkit.make(revokedDelegation.tool),
         policy: parentPolicy,
       });
+
       const probeToolLayer = probeTools.toLayer({
         probe_docs: () => Effect.succeed("probed"),
       });
+
       const childBinding = Agent.withModel(
         probeChildDefinition,
         answeringModel("probe-durable-model", '{"answer":"never-runs"}'),
       );
+
       const revokedLayer = SubagentRuntime.layer(revokedDelegation, childBinding, {
         mapChildFailure,
         durable: { targetDigests: durableDigests },
@@ -1866,6 +2035,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         calls: [{ id: "call-1", name: "delegate_revoked_durable", params: { topic: "revoked" } }],
         settled: [],
       };
+
       const parent = Agent.withModel(
         revokedParentDefinition,
         answeringModel("parent-durable-revoked", '{"report":"unreached"}'),
@@ -1899,6 +2069,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentPrestartDenied);
       expect(failure).toMatchObject({ reason: "grant-violation" });
       // Preflight denied the resumed action BEFORE any establishment replay.
@@ -1920,6 +2091,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         { mission: "m" },
         { runId },
       ).pipe(Effect.provide(durableResearchLayer(invocations)));
+
       const result = yield* detached.await;
       const events = yield* detached.events;
 
@@ -1935,6 +2107,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       // ...and the S1 in-memory reservation lifecycle settled exactly once.
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expect(snapshot.totalChildInvocations).toBe(1);
       expectSettledOnce(snapshot.reservations[0]);
     }),
@@ -1965,6 +2138,7 @@ describe("Subagent.define", () => {
       toolkit: Toolkit.make(researchDelegation.tool),
       policy: childPolicy,
     });
+
     expect(() =>
       Subagent.define("delegate_nested", {
         description: "Nested delegation.",
@@ -1991,6 +2165,7 @@ describe("Subagent.define", () => {
 
   it("derives caps and allocation from the delegation policy", () => {
     const caps = delegationCapsFromPolicy(researchPolicy);
+
     expect(caps).toMatchObject({
       maxTotalChildInvocations: 2,
       maxConcurrentChildren: 2,
@@ -2000,6 +2175,7 @@ describe("Subagent.define", () => {
     });
     expect(caps.maxInputTokens).toBeUndefined();
     const allocation = delegationAllocationFromPolicy(researchPolicy);
+
     expect(allocation).toMatchObject({
       turns: 4,
       toolCalls: 4,
@@ -2050,6 +2226,7 @@ const SearchDocs = Tool.make("search_docs", {
   failure: SearchFailure,
   dependencies: [ChildCatalog],
 });
+
 const typedChildTools = Toolkit.make(SearchDocs);
 
 const typedChildDefinition = Agent.make("typed-child", {
@@ -2069,6 +2246,7 @@ const typedModel = Model.make(
     LanguageModel.LanguageModel,
     Effect.gen(function* () {
       yield* ChildModelConfig;
+
       return yield* LanguageModel.make({
         generateText: () => Effect.succeed([]),
         streamText: () => Stream.empty,
@@ -2086,11 +2264,13 @@ const typedDelegation = Subagent.define("delegate_typed", {
   prepareInput: ({ topic }) =>
     Effect.gen(function* () {
       const directory = yield* PrepareDirectory;
+
       return { question: `${directory.prefix}:${topic}` };
     }),
   projectResult: (output) =>
     Effect.gen(function* () {
       const stamper = yield* ProjectStamper;
+
       return { summary: `${stamper.stamp}:${output.answer}` };
     }),
   policy: researchPolicy,
@@ -2107,10 +2287,12 @@ const typedParentDefinition = Agent.make("typed-parent", {
   toolkit: Toolkit.make(typedDelegation.tool),
   policy: parentPolicy,
 });
+
 const typedParent = Agent.withModel(
   typedParentDefinition,
   answeringModel("typed-parent-model", '{"report":"typed"}'),
 );
+
 const typedProgram = AgentRuntime.run(typedParent, { mission: "m" }).pipe(
   Effect.provide(typedLayer),
 );
@@ -2376,6 +2558,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
         childDefinition,
         answeringModel("contained-child-invalid", "not-json"),
       );
+
       const runId = decodeRunId("parent-run-contained-failure");
 
       const detached = yield* AgentRuntime.start(
@@ -2383,6 +2566,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
         { mission: "m" },
         { runId },
       ).pipe(Effect.provide(containedLayer(childBinding)));
+
       const result = yield* detached.await;
       const events = yield* detached.events;
 
@@ -2402,6 +2586,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
 
       const reservations = yield* SubagentReservations;
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expectSettledOnce(snapshot.reservations[0]);
     }),
   );
@@ -2428,6 +2613,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
           maxDuration: "10 seconds",
         }),
       });
+
       const tightCoordinator = Agent.make("contained-tight-coordinator", {
         input: Schema.Struct({ mission: Schema.String }),
         output: Schema.Struct({ report: Schema.String }),
@@ -2441,10 +2627,12 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const childBinding = Agent.withModel(
         childDefinition,
         answeringModel("contained-tight-child", '{"answer":"one"}'),
       );
+
       const parent = Agent.withModel(
         tightCoordinator,
         delegatingModel(
@@ -2457,16 +2645,19 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
           '{"report":"partial"}',
         ),
       );
+
       const runId = decodeRunId("parent-run-contained-tight");
 
       const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(SubagentRuntime.layer(tightDelegation, childBinding, { mapChildFailure })),
       );
+
       const result = yield* detached.await;
       const events = yield* detached.events;
 
       expect(result.output).toEqual({ report: "partial" });
       const succeeded = events.filter((event) => event._tag === "ToolCallSucceeded");
+
       expect(succeeded).toHaveLength(2);
       expect(succeeded[0]).toMatchObject({ result: { summary: "finding:one" } });
       expect(succeeded[1]).toMatchObject({
@@ -2498,9 +2689,11 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
       // Containment must NEVER encode the engine-owned waiting signal as a
       // model-visible result: the call stays open and the Run suspends.
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(AgentChildPending);
       expect(yield* Ref.get(invocations)).toBe(0);
       const observed = yield* Ref.get(events);
+
       expect(observed.some((event) => event._tag === "ToolCallSucceeded")).toBe(false);
       expect(observed.some((event) => event._tag === "ToolCallFailed")).toBe(false);
       expect(observed.at(-1)?._tag).toBe("RunSuspended");
@@ -2512,6 +2705,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
       const invocations = yield* Ref.make(0);
       const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
       const child = durableChildIdentity("contained-failed");
+
       const subagent = scriptedDurableHook({
         establish: () => ({
           _tag: "settled",
@@ -2537,6 +2731,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
       // batch continues with — a NON-failure result carrying the bounded
       // failure projection.
       const recordedJoins = yield* Ref.get(joins);
+
       expect(recordedJoins).toHaveLength(1);
       expect(recordedJoins[0]).toMatchObject({
         toolCallId: "call-1",
@@ -2593,6 +2788,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
     const containedHandlerErrorProof: ContainedHandlerErrorProof = true;
     const containedSuccessProof: ContainedSuccessProof = true;
     const errorModeUnchangedProof: ErrorModeUnchangedProof = true;
+
     expect([
       containedHandlerErrorProof,
       containedSuccessProof,
@@ -2612,6 +2808,7 @@ const ProbeDoc = Tool.make("probe_doc", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.String,
 });
+
 const probeToolkit = Toolkit.make(ProbeDoc);
 
 const probingChildDefinition = Agent.make("probing-child", {
@@ -2646,15 +2843,18 @@ const probingChildModel = (
         generateText: () => Effect.succeed([]),
         streamText: (request) => {
           const promptJson = JSON.stringify(request.prompt);
+
           const script = scripts.find((candidate) =>
             promptJson.includes(`research:${candidate.topic}`),
           );
+
           if (script === undefined) {
             return Stream.die(new Error("The child prompt names no scripted topic"));
           }
           if (promptJson.includes(`probe-${script.topic}-1`)) {
             return Stream.fromIterable(finalParts(script.answer));
           }
+
           return Stream.fromIterable<Response.StreamPartEncoded>([
             ...Array.from({ length: script.declares }, (_, index): Response.StreamPartEncoded => ({
               type: "tool-call",
@@ -2721,6 +2921,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
         { onExhaustion: "final-answer" as const, maxToolCalls: 20 },
       ]) {
         const starts = yield* Ref.make(0);
+
         const delegation = Subagent.define("delegate_defaults", {
           target: Agent.make("defaults-child", {
             input: ChildInput,
@@ -2731,6 +2932,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
           }),
           failureMode: "return",
         });
+
         const parent = Agent.make("defaults-parent", {
           input: Schema.String,
           output: Schema.String,
@@ -2738,9 +2940,11 @@ layer(TestServices)("derived subagent declarations", (it) => {
           toolkit: Toolkit.make(delegation.tool),
           policy: { maxTurns: 3, maxToolCalls: 1, toolConcurrency: 1, onExhaustion: "fail" },
         });
+
         const model = probingChildModel([
           { topic: "defaults", declares: 2, answer: '{"answer":"partial"}' },
         ]);
+
         const childLayer = SubagentRuntime.layer(delegation, model).pipe(
           Layer.provide(
             probeToolkit.toLayer({
@@ -2748,6 +2952,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
             }),
           ),
         );
+
         const handle = yield* AgentRuntime.start(parent, "start").pipe(
           Effect.provide([
             childLayer,
@@ -2759,8 +2964,10 @@ layer(TestServices)("derived subagent declarations", (it) => {
             ),
           ]),
         );
+
         const completed = yield* handle.await;
         const result = findEvent(yield* handle.events, "ToolCallSucceeded");
+
         expect(result).toMatchObject({
           result:
             overrides === undefined
@@ -2775,6 +2982,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
         expect(yield* Ref.get(starts)).toBe(0);
         const reservations = yield* SubagentReservations;
         const snapshot = yield* reservations.parentSnapshot(completed.runId);
+
         expect(snapshot.totalChildInvocations).toBe(1);
         expectSettledOnce(snapshot.reservations[0]);
       }
@@ -2786,25 +2994,31 @@ layer(TestServices)("derived subagent declarations", (it) => {
     () =>
       Effect.gen(function* () {
         const input = Schema.Struct({ amount: Schema.NumberFromString });
+
         const target = Agent.make("transformed-child", {
           input,
           output: ChildOutput,
           instructions: ({ amount }) => `Amount ${amount + 1}`,
           toolkit: Toolkit.empty,
         });
+
         const delegation = Subagent.define("delegate_transformed", { target });
+
         const projected = Subagent.define("delegate_projected_result", {
           target,
           success: Schema.String,
           projectResult: (output) => Effect.succeed(output.answer),
         });
+
         const prompt = yield* Ref.make<unknown>(undefined);
+
         const parent = Agent.make("transformed-parent", {
           input: Schema.String,
           output: Schema.String,
           instructions: "Delegate.",
           toolkit: Toolkit.make(delegation.tool),
         });
+
         const handle = yield* AgentRuntime.start(parent, "start").pipe(
           Effect.provide([
             SubagentRuntime.layer(
@@ -2819,6 +3033,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
             ),
           ]),
         );
+
         yield* handle.await;
         expect(findEvent(yield* handle.events, "ToolCallSucceeded")).toMatchObject({
           result: { output: { answer: "ok" }, budgetExhausted: false },
@@ -2831,6 +3046,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
             { amount: 41 },
           ),
         ).toBe("public");
+
         const proofs: [
           Assert<Equal<Tool.Parameters<typeof delegation.tool>, { readonly amount: number }>>,
           Assert<
@@ -2840,6 +3056,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
             >
           >,
         ] = [true, true];
+
         expect(proofs).toEqual([true, true]);
       }),
   );
@@ -2847,6 +3064,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
   it("rejects a binding for a different target before acquiring resources", () => {
     const delegation = Subagent.define("delegate_identity", { target: childDefinition });
     const other = { ...childDefinition };
+
     expect(() =>
       SubagentRuntime.layer(
         delegation,
@@ -2865,28 +3083,35 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
   }) =>
     Effect.gen(function* () {
       const probeStarts = yield* Ref.make(0);
+
       const childBinding = Agent.withModel(
         probingChildDefinition,
         probingChildModel(options.childScripts),
       );
+
       const parent = Agent.withModel(
         allowanceCoordinator,
         delegatingModel(options.name, "delegate_allowance", options.calls, '{"report":"done"}'),
       );
+
       const probeLayer = probeToolkit.toLayer({
         probe_doc: ({ ref }) =>
           Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
       });
+
       const runtimeLayer = SubagentRuntime.layer(allowanceDelegation, childBinding, {
         mapChildFailure,
       }).pipe(Layer.provide(probeLayer));
+
       const detached = yield* AgentRuntime.start(
         parent,
         { mission: "m" },
         { runId: decodeRunId(options.runId) },
       ).pipe(Effect.provide(runtimeLayer));
+
       const result = yield* detached.await;
       const events = yield* detached.events;
+
       return { result, events, probeStarts: yield* Ref.get(probeStarts) };
     });
 
@@ -2938,6 +3163,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
     () =>
       Effect.gen(function* () {
         const probeStarts = yield* Ref.make(0);
+
         const childBinding = Agent.withModel(
           probingChildDefinition,
           probingChildModel([
@@ -2945,6 +3171,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             { topic: "grant-4", declares: 2, answer: '{"answer":"complete"}' },
           ]),
         );
+
         // Sequential, content-keyed coordinator: the granting call is
         // declared ONLY after the partial result is visible in the prompt —
         // the grant is a reaction to observed exhaustion, never preplanned.
@@ -2957,6 +3184,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
               generateText: () => Effect.succeed([]),
               streamText: (request) => {
                 const promptJson = JSON.stringify(request.prompt);
+
                 if (promptJson.includes("finding:complete")) {
                   return Stream.fromIterable(finalParts('{"report":"done"}'));
                 }
@@ -2972,6 +3200,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
                     { type: "finish", reason: "tool-calls", usage },
                   ]);
                 }
+
                 return Stream.fromIterable<Response.StreamPartEncoded>([
                   {
                     type: "tool-call",
@@ -2986,11 +3215,14 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             }),
           ),
         );
+
         const parent = Agent.withModel(allowanceCoordinator, parentModel);
+
         const probeLayer = probeToolkit.toLayer({
           probe_doc: ({ ref }) =>
             Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
         });
+
         const runtimeLayer = SubagentRuntime.layer(allowanceDelegation, childBinding, {
           mapChildFailure,
         }).pipe(Layer.provide(probeLayer));
@@ -3000,6 +3232,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
           { mission: "m" },
           { runId: decodeRunId("parent-run-allowance-sequential") },
         ).pipe(Effect.provide(runtimeLayer));
+
         const result = yield* detached.await;
         const events = yield* detached.events;
 
@@ -3009,6 +3242,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
         expect(result.output).toEqual({ report: "done" });
         expect(yield* Ref.get(probeStarts)).toBe(2);
         const succeeded = events.filter((event) => event._tag === "ToolCallSucceeded");
+
         expect(succeeded.map((event) => event.result)).toEqual([
           { summary: "partial:draft" },
           { summary: "finding:complete" },
@@ -3034,6 +3268,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
           policy: allowancePolicy,
           toolCallAllowance: { default: Number.NaN },
         });
+
         const brokenCoordinator = Agent.make("allowance-broken-coordinator", {
           input: Schema.Struct({ mission: Schema.String }),
           output: Schema.Struct({ report: Schema.String }),
@@ -3046,12 +3281,15 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             toolConcurrency: 2,
           }),
         });
+
         const probeStarts = yield* Ref.make(0);
+
         const childBinding = Agent.withModel(
           probingChildDefinition,
           // Declares 5: above the slice ceiling of 4, below the Definition's 8.
           probingChildModel([{ topic: "small", declares: 5, answer: '{"answer":"sliced"}' }]),
         );
+
         const parent = Agent.withModel(
           brokenCoordinator,
           delegatingModel(
@@ -3061,10 +3299,12 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             '{"report":"done"}',
           ),
         );
+
         const probeLayer = probeToolkit.toLayer({
           probe_doc: ({ ref }) =>
             Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
         });
+
         const runtimeLayer = SubagentRuntime.layer(brokenDefaultDelegation, childBinding, {
           mapChildFailure,
         }).pipe(Layer.provide(probeLayer));
@@ -3074,6 +3314,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
           { mission: "m" },
           { runId: decodeRunId("parent-run-allowance-broken") },
         ).pipe(Effect.provide(runtimeLayer));
+
         const result = yield* detached.await;
 
         // A broken default clamps to the SLICE (4): the batch of 5 is
@@ -3109,9 +3350,11 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
       Effect.gen(function* () {
         const invocations = yield* Ref.make(0);
         const child = durableChildIdentity("allowance-durable");
+
         const subagent = scriptedDurableHook({
           establish: (request) => {
             expect(request.toolCallAllowance).toBe(1);
+
             return {
               _tag: "settled",
               ...child,
@@ -3121,6 +3364,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             };
           },
         });
+
         const parent = Agent.withModel(
           allowanceCoordinator,
           delegatingModel(
@@ -3130,9 +3374,11 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             '{"report":"done"}',
           ),
         );
+
         const probeLayer = probeToolkit.toLayer({
           probe_doc: () => Effect.succeed("unused"),
         });
+
         const runtimeLayer = SubagentRuntime.layer(
           allowanceDelegation,
           countingProbingChildBinding(invocations),
@@ -3144,6 +3390,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
           { mission: "m" },
           { runId: decodeRunId("parent-run-allowance-durable"), subagent },
         ).pipe(Effect.provide(runtimeLayer));
+
         const result = yield* detached.await;
         const events = yield* detached.events;
 

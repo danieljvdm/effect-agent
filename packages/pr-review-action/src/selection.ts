@@ -49,6 +49,7 @@ export type ReviewSelection =
 
 const ATTEMPT_MARKER_PATTERN =
   /(?:^|\n)<!-- effect-agent-review:v(2|3) automatic=(true|false) completed=(true|false) -->\s*$/;
+
 const PAUSE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-review-pause:v1 limit=([0-9]+) -->\s*$/;
 
 export const reviewMarker = (automatic: boolean, completed = true): string =>
@@ -69,6 +70,7 @@ const markerKind = (
   | { readonly _tag: "pause"; readonly automaticReviewLimit: string }
   | undefined => {
   const attempt = ATTEMPT_MARKER_PATTERN.exec(body);
+
   if (attempt !== null) {
     return {
       _tag: "attempt",
@@ -78,6 +80,7 @@ const markerKind = (
     };
   }
   const pause = PAUSE_MARKER_PATTERN.exec(body);
+
   return pause === null ? undefined : { _tag: "pause", automaticReviewLimit: pause[1] ?? "" };
 };
 
@@ -86,9 +89,11 @@ const trustedHistory = (input: {
   readonly history: ReadonlyArray<ReviewHistoryItem>;
 }) => {
   const author = input.reviewAuthor.toLowerCase();
+
   return input.history
     .flatMap((item) => {
       const marker = markerKind(item.body);
+
       return marker !== undefined &&
         item.authorType === "Bot" &&
         item.authorLogin.toLowerCase() === author &&
@@ -98,6 +103,7 @@ const trustedHistory = (input: {
     })
     .sort((left, right) => {
       const byTime = (left.item.submittedAt ?? "").localeCompare(right.item.submittedAt ?? "");
+
       return byTime === 0 ? left.item.id - right.item.id : byTime;
     });
 };
@@ -125,10 +131,13 @@ export const selectReview = (input: {
   readonly history: ReadonlyArray<ReviewHistoryItem>;
 }): ReviewSelection => {
   const trusted = trustedHistory(input);
+
   const attempts = trusted.flatMap(({ item, marker }) =>
     marker._tag === "attempt" ? [{ item, marker }] : [],
   );
+
   const automaticAttempts = attempts.filter(({ marker }) => marker.automatic).length;
+
   const automaticReviewsRemaining = Math.max(
     0,
     input.automaticReviewLimit - automaticAttempts - (input.mode === "auto" ? 1 : 0),
@@ -146,6 +155,7 @@ export const selectReview = (input: {
   }
 
   const currentHeadAttempts = attempts.filter(({ item }) => item.commitId === input.currentHead);
+
   if (currentHeadAttempts.some(({ marker }) => marker.version === 3 && marker.completed)) {
     return { _tag: "skip", reason: "head-already-reviewed" };
   }
@@ -157,12 +167,15 @@ export const selectReview = (input: {
     if (input.automaticReviewLimit === 0) {
       return { _tag: "skip", reason: "automatic-reviews-paused" };
     }
+
     const pausePublished = trusted.some(
       ({ marker }) =>
         marker._tag === "pause" &&
         marker.automaticReviewLimit === String(input.automaticReviewLimit),
     );
+
     if (pausePublished) return { _tag: "skip", reason: "automatic-reviews-paused" };
+
     return {
       _tag: "pause",
       reason: "automatic-reviews-paused",
@@ -177,10 +190,12 @@ export const selectReview = (input: {
   const latest = attempts
     .filter(({ marker }) => marker.version === 3 && marker.completed)
     .at(-1)?.item;
+
   if (latest?.commitId === undefined) {
     if (input.mode === "incremental") {
       return { _tag: "skip", reason: "incremental-baseline-unavailable" };
     }
+
     return {
       _tag: "review",
       scope: "full",

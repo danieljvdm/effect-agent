@@ -33,11 +33,14 @@ const Input = Schema.Struct({ text: Schema.String });
 const agent = { definition: { id: Schema.decodeSync(AgentId)("schedule-test"), input: Input } };
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
+
 const scope = {
   owner: { tenantId: "tenant", ownerId: "owner" },
   principal: Schema.decodeSync(Principal)("manager"),
 };
+
 const deliveryPrincipal = Schema.decodeSync(Principal)("delivery");
+
 const options = (
   id: string,
   timing: ScheduleTimingRequest = { _tag: "At", atMillis: 0 },
@@ -49,10 +52,12 @@ const options = (
   deliveryPrincipal,
   definitions,
 });
+
 const keyOf = (request: ScheduleCreateOptions) => ({
   owner: request.scope.owner,
   scheduleId: request.scheduleId,
 });
+
 const receiptFor = (envelope: ScheduledEnvelope): Receipt =>
   Receipt.make({
     threadId: envelope.threadId,
@@ -60,10 +65,12 @@ const receiptFor = (envelope: ScheduledEnvelope): Receipt =>
     submissionId: Schema.decodeSync(SubmissionId)(`submission:${envelope.occurrenceId}`),
     queueSequence: Schema.decodeSync(QueueSequence)(1),
   });
+
 const allow: ScheduleAuthorizer["Service"] = {
   manage: () => Effect.void,
   prepare: () => Effect.succeed({ policyId: "test-policy", decisionId: "allowed" }),
 };
+
 const layer = (
   submit: ScheduledInputAdmission["Service"]["submit"] = (envelope) =>
     Effect.succeed(receiptFor(envelope)),
@@ -86,13 +93,16 @@ const layer = (
 describe("Scheduling public recovery contract", () => {
   it.effect("management cannot acquire driver authority or reveal persistence fields", () => {
     let revoked = false;
+
     return Effect.gen(function* () {
       const scheduler = yield* Scheduling;
       const request = options("private-input");
       const created = yield* scheduler.create(agent, { text: "private-sentinel" }, request);
+
       yield* (yield* ScheduleDriver).process(keyOf(request));
       const snapshot = yield* scheduler.get(scope, request.scheduleId);
       const page = yield* scheduler.list(scope);
+
       for (const value of [created, snapshot, ...page.items]) {
         expect(value).not.toHaveProperty("creationFingerprint");
         expect(value).not.toHaveProperty("version");
@@ -129,15 +139,19 @@ describe("Scheduling public recovery contract", () => {
       const scheduler = yield* Scheduling;
       const store = yield* ScheduleStore;
       const request = options("resume-replay", { _tag: "Interval", everyMillis: 60_000 });
+
       yield* scheduler.create(agent, { text: "tick" }, request);
       yield* scheduler.pause(scope, request.scheduleId, 1);
       yield* scheduler.resume(scope, request.scheduleId, 1);
       const before = yield* store.get(keyOf(request));
+
       yield* TestClock.adjust(60_000);
       const resumed = yield* scheduler.resume(scope, request.scheduleId, 1);
+
       expect(resumed.nextAtMillis).toBe(60_000);
       expect(yield* store.get(keyOf(request))).toEqual(before);
       const delivered = yield* (yield* ScheduleDriver).process(keyOf(request));
+
       expect(delivered.lastReceipt?.intendedAtMillis).toBe(60_000);
       expect((yield* scheduler.resume(scope, request.scheduleId, 2).pipe(Effect.flip))._tag).toBe(
         "ScheduleConflict",
@@ -149,6 +163,7 @@ describe("Scheduling public recovery contract", () => {
     Effect.gen(function* () {
       const scheduler = yield* Scheduling;
       const request = options("fast-interval", { _tag: "Interval", everyMillis: 100 });
+
       yield* scheduler.create(agent, { text: "tick" }, request);
       yield* TestClock.adjust(100);
       expect(
@@ -168,10 +183,12 @@ describe("Scheduling public recovery contract", () => {
   for (const failure of ["storage", "defect", "decode"] as const) {
     it.effect(`a ${failure} failure cannot starve later schedules with a one-record page`, () => {
       let broken = true;
+
       const wrapped = Layer.effect(
         ScheduleStore,
         Effect.gen(function* () {
           const store = yield* ScheduleStore;
+
           return ScheduleStore.of({
             ...store,
             get: (key) =>
@@ -181,9 +198,11 @@ describe("Scheduling public recovery contract", () => {
           });
         }),
       ).pipe(Layer.provide(MemoryScheduleStoreLive));
+
       return Effect.gen(function* () {
         const scheduler = yield* Scheduling;
         const driver = yield* ScheduleDriver;
+
         broken = false;
         yield* scheduler.create(agent, { text: "first" }, options("a-failing"));
         yield* scheduler.create(agent, { text: "second" }, options("b-healthy"));
@@ -217,15 +236,19 @@ describe("Scheduling public recovery contract", () => {
 
   it.effect("delivers the spring-gap occurrence through ordinary admission", () => {
     const submitted: Array<number> = [];
+
     return Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse("2026-03-07T12:00:00Z"));
       const scheduler = yield* Scheduling;
+
       const request = options("spring-forward", {
         _tag: "Cron",
         expression: "30 2 * * *",
         timeZone: "America/New_York",
       });
+
       const created = yield* scheduler.create(agent, { text: "spring" }, request);
+
       expect(created.nextAtMillis).toBe(Date.parse("2026-03-08T07:30:00Z"));
       yield* TestClock.setTime(Date.parse("2026-03-08T07:30:00Z"));
       yield* (yield* ScheduleDriver).runDue();
@@ -240,6 +263,7 @@ describe("Scheduling public recovery contract", () => {
         layer((envelope) =>
           Effect.sync(() => {
             submitted.push(envelope.intendedAtMillis);
+
             return receiptFor(envelope);
           }),
         ),
@@ -269,6 +293,7 @@ describe("Scheduling public recovery contract", () => {
 
   it.effect("an authorization outage keeps the firing active for a later preparation", () => {
     let unavailable = true;
+
     const authorizer: ScheduleAuthorizer["Service"] = {
       manage: allow.manage,
       prepare: () =>
@@ -278,29 +303,36 @@ describe("Scheduling public recovery contract", () => {
             )
           : Effect.succeed({ policyId: "policy", decisionId: "available" }),
     };
+
     return Effect.gen(function* () {
       const scheduler = yield* Scheduling;
       const request = options("authorization-outage");
+
       yield* scheduler.create(agent, { text: "work" }, request);
       const failure = yield* (yield* ScheduleDriver).process(keyOf(request)).pipe(Effect.flip);
+
       expect(failure).toMatchObject({ _tag: "ScheduleStorageError", reason: "unavailable" });
       const unchanged = yield* scheduler.get(scope, request.scheduleId);
+
       expect(unchanged.state).toBe("active");
       expect(unchanged.pending).toBeNull();
       expect(unchanged.nextAtMillis).toBe(0);
       expect(unchanged.lastRefusal).toBeNull();
       unavailable = false;
       const delivered = yield* (yield* ScheduleDriver).process(keyOf(request));
+
       expect(delivered.lastReceipt?.intendedAtMillis).toBe(0);
     }).pipe(Effect.provide(layer(undefined, authorizer)));
   });
 
   it.effect("coalesces cron downtime at the exact boundary and skips paused firings", () => {
     const intended: Array<number> = [];
+
     return Effect.gen(function* () {
       const scheduler = yield* Scheduling;
       const request = options("cron", { _tag: "Cron", expression: "* * * * *" });
       const created = yield* scheduler.create(agent, { text: "tick" }, request);
+
       expect(created.configuration.timing).toEqual({
         _tag: "Cron",
         expression: "* * * * *",
@@ -308,6 +340,7 @@ describe("Scheduling public recovery contract", () => {
       });
       yield* TestClock.adjust(180_000);
       const first = yield* (yield* ScheduleDriver).process(keyOf(request));
+
       expect(first.lastReceipt?.intendedAtMillis).toBe(180_000);
       expect(first.nextAtMillis).toBe(240_000);
       expect(first.lastSkippedRange).toEqual({ fromMillis: 60_000, toMillis: 180_000 });
@@ -315,6 +348,7 @@ describe("Scheduling public recovery contract", () => {
       yield* TestClock.adjust(150_000);
       expect(yield* (yield* ScheduleDriver).runDue()).toEqual({ processed: 0, failed: 0 });
       const resumed = yield* scheduler.resume(scope, request.scheduleId, 1);
+
       expect(resumed.nextAtMillis).toBe(360_000);
       expect(resumed.lastSkippedRange).toEqual({ fromMillis: 240_000, toMillis: 360_000 });
       yield* TestClock.adjust(30_000);
@@ -329,6 +363,7 @@ describe("Scheduling public recovery contract", () => {
         layer((envelope) =>
           Effect.sync(() => {
             intended.push(envelope.intendedAtMillis);
+
             return receiptFor(envelope);
           }),
         ),
@@ -341,22 +376,30 @@ describe("Scheduling public recovery contract", () => {
       const scheduler = yield* Scheduling;
       const request = options("quota");
       const input = { text: "original" };
+
       yield* scheduler.create(agent, input, request);
       input.text = "mutated";
       const first = yield* scheduler.get(scope, request.scheduleId);
+
       expect(first.configuration).not.toHaveProperty("input");
       const store = yield* ScheduleStore;
+
       expect((yield* store.get(keyOf(request)))?.configuration.input).toEqual({ text: "original" });
+
       const capacity = yield* scheduler
         .create(agent, { text: "new" }, options("excess"))
         .pipe(Effect.flip);
+
       expect(capacity._tag).toBe("ScheduleCapacityError");
       const otherScope = { ...scope, owner: { ...scope.owner, ownerId: "other" } };
+
       yield* scheduler.create(agent, { text: "other" }, { ...request, scope: otherScope });
       const page = yield* scheduler.list(scope);
+
       expect(page.items.map((record) => record.scheduleId)).toEqual([request.scheduleId]);
       expect(JSON.stringify(page)).not.toContain("original");
       expect(page.next).toBeNull();
+
       const oversized = yield* scheduler
         .create(
           agent,
@@ -367,6 +410,7 @@ describe("Scheduling public recovery contract", () => {
           },
         )
         .pipe(Effect.flip);
+
       expect(oversized._tag).toBe("ScheduleValidationError");
     }).pipe(
       Effect.provide(
@@ -382,8 +426,10 @@ describe("Scheduling public recovery contract", () => {
         const scheduler = yield* Scheduling;
         const request = options("replay", { _tag: "After", delayMillis: 10_000 });
         const created = yield* scheduler.create(agent, { text: "original" }, request);
+
         expect(created.nextAtMillis).toBe(10_000);
         yield* TestClock.adjust(2_000);
+
         const edited = yield* scheduler.update(
           agent,
           { text: "edited" },
@@ -393,15 +439,19 @@ describe("Scheduling public recovery contract", () => {
             timing: { _tag: "After", delayMillis: 30_000 },
           },
         );
+
         yield* TestClock.adjust(4_000);
         const replay = yield* scheduler.create(agent, { text: "original" }, request);
+
         expect(replay.configuration).toEqual(edited.configuration);
         expect(replay.nextAtMillis).toBe(32_000);
         expect(replay.createdAtMillis).toBe(0);
         expect(replay.configurationRevision).toBe(2);
+
         const conflict = yield* scheduler
           .create(agent, { text: "different" }, request)
           .pipe(Effect.flip);
+
         expect(conflict._tag).toBe("ScheduleConflict");
       }).pipe(Effect.provide(layer())),
   );
@@ -413,30 +463,39 @@ describe("Scheduling public recovery contract", () => {
       const submitted: Array<ScheduledEnvelope> = [];
       let preparationCount = 0;
       let revoked = false;
+
       const submit: ScheduledInputAdmission["Service"]["submit"] = Effect.fn(function* (envelope) {
         submitted.push(envelope);
         const existing = admitted.get(envelope.admissionKey);
+
         if (existing !== undefined) return existing;
         admitted.set(envelope.admissionKey, receiptFor(envelope));
+
         return yield* ScheduledInputRetryable.make({ reason: "ambiguous" });
       });
+
       const authorizer: ScheduleAuthorizer["Service"] = {
         manage: allow.manage,
         prepare: () => {
           preparationCount += 1;
+
           return revoked
             ? Effect.fail(ScheduleAuthorizationError.make({ code: "revoked" }))
             : Effect.succeed({ policyId: "test-policy", decisionId: "allowed" });
         },
       };
+
       return Effect.gen(function* () {
         const scheduler = yield* Scheduling;
         const request = options("lost-reply");
+
         yield* scheduler.create(agent, { text: "frozen" }, request);
         const pending = yield* (yield* ScheduleDriver).process(keyOf(request));
+
         expect(pending.pending?.retry.lastFailure).toBe("ambiguous");
         expect(pending.pending?.retry.nextAttemptAtMillis).toBe(1_000);
         const envelope = pending.pending?.envelope;
+
         const updated = yield* scheduler.update(
           agent,
           { text: "replacement" },
@@ -450,12 +509,14 @@ describe("Scheduling public recovery contract", () => {
             timing: { _tag: "At", atMillis: 50_000 },
           },
         );
+
         expect(updated.pending?.occurrenceId).toBe(envelope?.occurrenceId);
         expect((yield* (yield* ScheduleStore).get(keyOf(request)))?.pending?.envelope).toEqual(
           envelope,
         );
         yield* scheduler.pause(scope, request.scheduleId, 2);
         const cancelled = yield* scheduler.cancel(scope, request.scheduleId, 2);
+
         expect(cancelled.pending?.occurrenceId).toBe(envelope?.occurrenceId);
         expect((yield* (yield* ScheduleStore).get(keyOf(request)))?.pending?.envelope).toEqual(
           envelope,
@@ -463,6 +524,7 @@ describe("Scheduling public recovery contract", () => {
         revoked = true;
         yield* TestClock.adjust(1_000);
         const recovered = yield* (yield* ScheduleDriver).process(keyOf(request));
+
         expect(recovered.state).toBe("cancelled");
         expect(recovered.pending).toBeNull();
         expect(recovered.nextAtMillis).toBeNull();
@@ -477,15 +539,20 @@ describe("Scheduling public recovery contract", () => {
 
   it.effect("duplicate due passes converge on one occurrence per schedule", () => {
     const admitted = new Map<string, Receipt>();
+
     const submit: ScheduledInputAdmission["Service"]["submit"] = Effect.fn(function* (envelope) {
       yield* Effect.yieldNow;
       const receipt = admitted.get(envelope.admissionKey) ?? receiptFor(envelope);
+
       admitted.set(envelope.admissionKey, receipt);
+
       return receipt;
     });
+
     return Effect.gen(function* () {
       const scheduler = yield* Scheduling;
       const requests = [options("duplicate-a"), options("duplicate-b")];
+
       yield* Effect.forEach(requests, (request) =>
         scheduler.create(agent, { text: "work" }, request),
       );
@@ -493,6 +560,7 @@ describe("Scheduling public recovery contract", () => {
         concurrency: "unbounded",
       });
       const snapshots = yield* scheduler.list(scope);
+
       expect(snapshots.items.map((record) => record.pending)).toEqual([null, null]);
       expect(snapshots.items.every((record) => record.lastReceipt !== null)).toBe(true);
       expect(admitted.size).toBe(2);
@@ -508,13 +576,17 @@ describe("Scheduling public recovery contract", () => {
           threadId: Schema.decodeSync(ThreadId)("wrong-thread"),
         }),
       );
+
     return Effect.gen(function* () {
       const scheduler = yield* Scheduling;
       const request = options("wrong-receipt");
+
       yield* scheduler.create(agent, { text: "work" }, request);
       const failure = yield* (yield* ScheduleDriver).process(keyOf(request)).pipe(Effect.flip);
+
       expect(failure).toMatchObject({ _tag: "ScheduleStorageError", reason: "corrupt" });
       const current = yield* scheduler.get(scope, request.scheduleId);
+
       expect(current.pending).not.toBeNull();
       expect((yield* (yield* ScheduleStore).get(keyOf(request)))?.pending?.envelope.input).toEqual({
         text: "work",
@@ -526,29 +598,36 @@ describe("Scheduling public recovery contract", () => {
   it.effect("persists storage backoff when completing an admitted occurrence is unavailable", () =>
     Effect.gen(function* () {
       let failCompletion = true;
+
       const wrappedStore = Layer.effect(
         ScheduleStore,
         Effect.gen(function* () {
           const store = yield* ScheduleStore;
+
           return ScheduleStore.of({
             ...store,
             change: (key, change) => {
               if (change._tag === "Complete" && failCompletion) {
                 failCompletion = false;
+
                 return Effect.fail(
                   ScheduleStorageError.make({ operation: "complete", reason: "unavailable" }),
                 );
               }
+
               return store.change(key, change);
             },
           });
         }),
       ).pipe(Layer.provide(MemoryScheduleStoreLive));
+
       yield* Effect.gen(function* () {
         const scheduler = yield* Scheduling;
         const request = options("completion-storage-backoff");
+
         yield* scheduler.create(agent, { text: "work" }, request);
         const pending = yield* (yield* ScheduleDriver).process(keyOf(request));
+
         expect(pending.pending?.retry).toMatchObject({
           attempts: 1,
           nextAttemptAtMillis: 1_000,
@@ -557,6 +636,7 @@ describe("Scheduling public recovery contract", () => {
         expect(pending.lastReceipt).toBeNull();
         yield* TestClock.adjust(1_000);
         const completed = yield* (yield* ScheduleDriver).process(keyOf(request));
+
         expect(completed.pending).toBeNull();
         expect(completed.lastReceipt).not.toBeNull();
       }).pipe(Effect.provide(layer(undefined, allow, defaultSchedulingLimits, wrappedStore)));
@@ -568,10 +648,12 @@ describe("Scheduling public recovery contract", () => {
       let corruptReads = false;
       const preparations = yield* Ref.make(0);
       const submissions = yield* Ref.make(0);
+
       const wrappedStore = Layer.effect(
         ScheduleStore,
         Effect.gen(function* () {
           const store = yield* ScheduleStore;
+
           return ScheduleStore.of({
             ...store,
             get: (key) =>
@@ -591,6 +673,7 @@ describe("Scheduling public recovery contract", () => {
           });
         }),
       ).pipe(Layer.provide(MemoryScheduleStoreLive));
+
       const authorizer: ScheduleAuthorizer["Service"] = {
         manage: allow.manage,
         prepare: (request) =>
@@ -598,14 +681,18 @@ describe("Scheduling public recovery contract", () => {
             Effect.as({ policyId: "policy", decisionId: `decision-${request.occurrenceId}` }),
           ),
       };
+
       const submit: ScheduledInputAdmission["Service"]["submit"] = (envelope) =>
         Ref.update(submissions, (count) => count + 1).pipe(Effect.as(receiptFor(envelope)));
+
       yield* Effect.gen(function* () {
         const scheduler = yield* Scheduling;
         const request = options("corrupt-current-input");
+
         yield* scheduler.create(agent, { text: "original" }, request);
         corruptReads = true;
         const failure = yield* (yield* ScheduleDriver).process(keyOf(request)).pipe(Effect.flip);
+
         expect(failure).toMatchObject({ _tag: "ScheduleStorageError", reason: "corrupt" });
         expect(yield* Ref.get(preparations)).toBe(0);
         expect(yield* Ref.get(submissions)).toBe(0);
@@ -616,31 +703,41 @@ describe("Scheduling public recovery contract", () => {
   it.effect("does not expose rejected Agent input through errors or spans", () => {
     const sentinel = "schedule-input-secret-sentinel";
     const spans: Array<Tracer.NativeSpan> = [];
+
     const tracer = Tracer.make({
       span(options) {
         const span = new Tracer.NativeSpan(options);
+
         spans.push(span);
+
         return span;
       },
     });
+
     const SecretInput = Schema.String.check(Schema.isMinLength(128));
+
     const secretAgent = {
       definition: { id: Schema.decodeSync(AgentId)("schedule-secret-test"), input: SecretInput },
     };
+
     return Effect.gen(function* () {
       const scheduler = yield* Scheduling;
+
       const failure = yield* scheduler
         .create(secretAgent, sentinel, options("redacted-input"))
         .pipe(Effect.flip);
+
       expect(failure).toMatchObject({
         _tag: "ScheduleValidationError",
         message: "Unable to encode Agent input",
       });
+
       const spanFailures = spans.flatMap((span) =>
         span.status._tag === "Ended" && Exit.isFailure(span.status.exit)
           ? [Cause.pretty(span.status.exit.cause)]
           : [],
       );
+
       expect([failure.message, ...spanFailures].join("\n")).not.toContain(sentinel);
     }).pipe(Effect.provide(layer()), Effect.provideService(Tracer.Tracer, tracer));
   });
@@ -648,10 +745,12 @@ describe("Scheduling public recovery contract", () => {
   it.effect("denies an update before reading whether the schedule exists", () =>
     Effect.gen(function* () {
       const reads = yield* Ref.make(0);
+
       const observedStore = Layer.effect(
         ScheduleStore,
         Effect.gen(function* () {
           const store = yield* ScheduleStore;
+
           return ScheduleStore.of({
             ...store,
             get: (key) =>
@@ -659,12 +758,15 @@ describe("Scheduling public recovery contract", () => {
           });
         }),
       ).pipe(Layer.provide(MemoryScheduleStoreLive));
+
       const authorizer: ScheduleAuthorizer["Service"] = {
         ...allow,
         manage: () => Effect.fail(ScheduleAuthorizationError.make({ code: "unauthorized" })),
       };
+
       yield* Effect.gen(function* () {
         const scheduler = yield* Scheduling;
+
         const failure = yield* scheduler
           .update(
             agent,
@@ -675,6 +777,7 @@ describe("Scheduling public recovery contract", () => {
             },
           )
           .pipe(Effect.flip);
+
         expect(failure._tag).toBe("ScheduleAuthorizationError");
         expect(yield* Ref.get(reads)).toBe(0);
       }).pipe(Effect.provide(layer(undefined, authorizer, defaultSchedulingLimits, observedStore)));
@@ -687,24 +790,31 @@ describe("Scheduling public recovery contract", () => {
       const releaseFirst = yield* Deferred.make<void>();
       const active = yield* Ref.make(0);
       const maximum = yield* Ref.make(0);
+
       const submit: ScheduledInputAdmission["Service"]["submit"] = Effect.fn(function* (envelope) {
         const count = yield* Ref.updateAndGet(active, (value) => value + 1);
+
         yield* Ref.update(maximum, (value) => Math.max(value, count));
         yield* Deferred.succeed(firstEntered, undefined);
         yield* Deferred.await(releaseFirst).pipe(
           Effect.ensuring(Ref.update(active, (value) => value - 1)),
         );
+
         return receiptFor(envelope);
       });
+
       yield* Effect.gen(function* () {
         const scheduler = yield* Scheduling;
         const a = options("bounded-a");
         const b = options("bounded-b");
+
         yield* scheduler.create(agent, { text: "a" }, a);
         yield* scheduler.create(agent, { text: "b" }, b);
         const first = yield* (yield* ScheduleDriver).process(keyOf(a)).pipe(Effect.forkScoped);
+
         yield* Deferred.await(firstEntered);
         const second = yield* (yield* ScheduleDriver).process(keyOf(b)).pipe(Effect.forkScoped);
+
         yield* Effect.yieldNow;
         expect(yield* Ref.get(active)).toBe(1);
         yield* Deferred.succeed(releaseFirst, undefined);
@@ -722,6 +832,7 @@ describe("Scheduling public recovery contract", () => {
 
   it.effect("resumes a never-prepared overdue one-shot but cannot revive a refused one", () => {
     let authorized = false;
+
     const authorizer: ScheduleAuthorizer["Service"] = {
       manage: allow.manage,
       prepare: () =>
@@ -729,25 +840,32 @@ describe("Scheduling public recovery contract", () => {
           ? Effect.succeed({ policyId: "policy", decisionId: "allowed" })
           : Effect.fail(ScheduleAuthorizationError.make({ code: "revoked" })),
     };
+
     return Effect.gen(function* () {
       const scheduler = yield* Scheduling;
       const request = options("one-shot-refusal");
+
       yield* scheduler.create(agent, { text: "work" }, request);
       const denied = yield* (yield* ScheduleDriver).process(keyOf(request));
+
       expect(denied.state).toBe("paused");
       expect(denied.pending).toBeNull();
       expect(denied.nextAtMillis).toBe(0);
       authorized = true;
       yield* TestClock.adjust(5_000);
       const resumed = yield* scheduler.resume(scope, request.scheduleId, 1);
+
       expect(resumed.nextAtMillis).toBe(0);
       const refused = yield* (yield* ScheduleDriver).process(keyOf(request));
+
       expect(refused.lastRefusal?.phase).toBe("admission");
       expect(refused.pending).toBeNull();
       expect(refused.state).toBe("paused");
       const secondResume = yield* scheduler.resume(scope, request.scheduleId, 1);
+
       expect(secondResume.nextAtMillis).toBeNull();
       expect(yield* (yield* ScheduleDriver).runDue()).toEqual({ processed: 0, failed: 0 });
+
       const updated = yield* scheduler.update(
         agent,
         { text: "changed" },
@@ -757,6 +875,7 @@ describe("Scheduling public recovery contract", () => {
           timing: { _tag: "At", atMillis: 6_000 },
         },
       );
+
       expect(updated.state).toBe("active");
       expect(updated.nextAtMillis).toBe(6_000);
     }).pipe(
@@ -770,6 +889,7 @@ describe("Scheduling public recovery contract", () => {
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       let behavior: "timeout" | "interruption" | "defect" | "success" = "timeout";
+
       const submit: ScheduledInputAdmission["Service"]["submit"] = Effect.fn(function* (envelope) {
         yield* Deferred.succeed(entered, undefined);
         switch (behavior) {
@@ -782,23 +902,31 @@ describe("Scheduling public recovery contract", () => {
             return receiptFor(envelope);
         }
       });
+
       yield* Effect.gen(function* () {
         const scheduler = yield* Scheduling;
         const request = options("failure-paths");
+
         yield* scheduler.create(agent, { text: "work" }, request);
+
         const timed = yield* (yield* ScheduleDriver)
           .process(keyOf(request))
           .pipe(Effect.forkScoped);
+
         yield* Deferred.await(entered);
         yield* TestClock.adjust(100);
         const pending = yield* Fiber.join(timed);
+
         expect(pending.pending?.retry.lastFailure).toBe("timeout");
         const envelope = pending.pending?.envelope;
+
         yield* TestClock.adjust(1_000);
         behavior = "interruption";
+
         const interrupted = yield* (yield* ScheduleDriver)
           .process(keyOf(request))
           .pipe(Effect.forkScoped);
+
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(interrupted);
         expect((yield* (yield* ScheduleStore).get(keyOf(request)))?.pending?.envelope).toEqual(
@@ -806,12 +934,14 @@ describe("Scheduling public recovery contract", () => {
         );
         behavior = "defect";
         const defect = yield* (yield* ScheduleDriver).process(keyOf(request)).pipe(Effect.exit);
+
         expect(defect._tag).toBe("Failure");
         expect((yield* (yield* ScheduleStore).get(keyOf(request)))?.pending?.envelope).toEqual(
           envelope,
         );
         behavior = "success";
         const completed = yield* (yield* ScheduleDriver).process(keyOf(request));
+
         expect(completed.pending).toBeNull();
         expect(completed.lastReceipt?.occurrenceId).toBe(envelope?.occurrenceId);
       }).pipe(

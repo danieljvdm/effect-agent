@@ -80,11 +80,13 @@ const testOnlyExternalReason = (specifier: string): string | undefined => {
   if (specifier === TEST_ONLY_PACKAGE || specifier.startsWith(`${TEST_ONLY_PACKAGE}/`)) {
     return "imports @effect-agent/testing";
   }
+
   return undefined;
 };
 
 const testOnlyModuleReason = (sourcePath: string): string | undefined => {
   const normalized = sourcePath.replaceAll("\\", "/");
+
   if (normalized.includes("/packages/testing/")) {
     return "bundles the @effect-agent/testing package";
   }
@@ -97,6 +99,7 @@ const testOnlyModuleReason = (sourcePath: string): string | undefined => {
   if (/\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(normalized)) {
     return "bundles a test module";
   }
+
   return undefined;
 };
 
@@ -117,6 +120,7 @@ const readProductionEntryPoints = Effect.fn("packagePurity.readProductionEntryPo
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const packagesRoot = path.join(repositoryRoot, "packages");
+
   const packageDirectories = yield* fs.readDirectory(packagesRoot).pipe(
     Effect.mapError(
       (cause) =>
@@ -126,12 +130,14 @@ const readProductionEntryPoints = Effect.fn("packagePurity.readProductionEntryPo
         }),
     ),
   );
+
   const entries: Array<ProductionEntryPoint> = [];
   const manifestViolations: Array<string> = [];
 
   for (const directory of packageDirectories.sort()) {
     const relativeDirectory = `packages/${directory}`;
     const manifestPath = path.join(repositoryRoot, relativeDirectory, "package.json");
+
     const manifestText = yield* fs.readFileString(manifestPath).pipe(
       Effect.mapError(
         (cause) =>
@@ -141,6 +147,7 @@ const readProductionEntryPoints = Effect.fn("packagePurity.readProductionEntryPo
           }),
       ),
     );
+
     const manifest = yield* decodeManifest(manifestText).pipe(
       Effect.mapError(
         (cause) =>
@@ -226,12 +233,15 @@ const auditEntryPoint = Effect.fn("packagePurity.auditEntryPoint")(function* (
   }
 
   const violations: Array<PurityViolation> = [];
+
   for (const [sourcePath, input] of Object.entries(result.metafile.inputs)) {
     const moduleReason = testOnlyModuleReason(sourcePath);
+
     if (moduleReason !== undefined) violations.push({ reason: moduleReason, target: sourcePath });
     for (const imported of input.imports) {
       if (!imported.external) continue;
       const externalReason = testOnlyExternalReason(imported.path);
+
       if (externalReason !== undefined) {
         violations.push({ reason: externalReason, target: `external:${imported.path}` });
       }
@@ -254,18 +264,23 @@ const dependencyPath = (audit: EntryPointAudit, target: string): ReadonlyArray<s
   const entryInput = Object.values(audit.metafile.outputs).find(
     (output) => output.entryPoint !== undefined,
   )?.entryPoint;
+
   if (entryInput === undefined)
     return [audit.entryPoint.sourcePath, target.replace("external:", "")];
 
   const pending = [entryInput];
   const parent = new Map<string, string | undefined>([[entryInput, undefined]]);
+
   while (pending.length > 0) {
     const current = pending.shift();
+
     if (current === undefined || current === target) break;
     const input = audit.metafile.inputs[current];
+
     if (input === undefined) continue;
     for (const imported of input.imports) {
       const next = imported.external ? `external:${imported.path}` : imported.path;
+
       if (parent.has(next)) continue;
       parent.set(next, current);
       pending.push(next);
@@ -275,15 +290,18 @@ const dependencyPath = (audit: EntryPointAudit, target: string): ReadonlyArray<s
   if (!parent.has(target)) return [entryInput, target.replace("external:", "")];
   const path: Array<string> = [];
   let current: string | undefined = target;
+
   while (current !== undefined) {
     path.push(current.replace("external:", ""));
     current = parent.get(current);
   }
+
   return path.reverse();
 };
 
 const formatViolation = (audit: EntryPointAudit, violation: PurityViolation): string => {
   const path = dependencyPath(audit, violation.target);
+
   return [
     `${audit.entryPoint.displayName} (${audit.entryPoint.sourcePath}) ${violation.reason}.`,
     "Dependency path:",
@@ -296,20 +314,24 @@ const program = Effect.gen(function* () {
   const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
   const repositoryRoot = path.resolve(path.dirname(scriptPath), "..");
   const entryPoints = yield* readProductionEntryPoints(repositoryRoot);
+
   const audits = yield* Effect.forEach(
     entryPoints,
     (entryPoint) => auditEntryPoint(repositoryRoot, entryPoint),
     { concurrency: 4 },
   );
+
   const violationDetails = audits.flatMap((audit) =>
     audit.violations.map((violation) => formatViolation(audit, violation)),
   );
+
   if (violationDetails.length > 0) {
     return yield* new PackagePurityViolation({ details: violationDetails });
   }
 
   const moduleCount = audits.reduce((total, audit) => total + audit.moduleCount, 0);
   const bytes = audits.reduce((total, audit) => total + audit.bytes, 0);
+
   yield* Console.log(
     `Package purity check passed: ${audits.length} production entrypoints, ${moduleCount} bundled modules, ${bytes} bytes; no test-only dependency path found.`,
   );

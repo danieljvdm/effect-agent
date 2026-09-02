@@ -65,6 +65,7 @@ const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
     options.sources,
     Layer.succeed(SubscriptionAuthorizer)(options.authorizer),
   );
+
   return NodeSubscriptions.layer().pipe(Layer.provideMerge(dependencies));
 };
 
@@ -119,6 +120,7 @@ export const githubWorkflowSubscriptionRuntimeLayer = (options: {
     repository: options.repository,
     token: options.githubToken,
   }).pipe(Layer.provide(NodeHttpClient.layerUndici));
+
   const sources = Layer.merge(
     Layer.effect(
       EventSources,
@@ -141,11 +143,14 @@ export const githubWorkflowSubscriptionRuntimeLayer = (options: {
       }).pipe(Effect.map((binding) => ({ bindings: [binding] }))),
     ),
   );
+
   const subscriptions = subscriptionRuntimeFromSourcesLayer({ ...options, sources });
+
   const verifier = webCryptoGitHubWebhookSignatureVerifierLayer(
     options.webhookSecret,
     globalThis.crypto.subtle,
   );
+
   return Layer.merge(subscriptions, verifier);
 };
 
@@ -169,6 +174,7 @@ export const registerGitHubWorkflowCompletion = Effect.fn(
   readonly definitions: SubscribeOptions["definitions"];
 }) {
   const subscriptions = yield* Subscriptions;
+
   return yield* subscriptions.subscribe(options.scope, {
     subscriptionId: options.subscriptionId,
     source: GitHubWorkflowRunSourceVersion,
@@ -205,5 +211,6 @@ export const registerAndAccept = Effect.fn("Example.registerAndAccept")(function
   const intake = yield* SubscriptionIntake;
   const registered = yield* subscriptions.subscribe(scope, options);
   const acknowledgement = yield* intake.accept(event.principal, options.source, event.payload);
+
   return { registered, acknowledgement };
 });

@@ -95,8 +95,10 @@ const withdraw = (operationId: string, expectedRevision: string) =>
   });
 
 const storedJsonCodeUnitLimit = 16 * 1024 * 1024;
+
 const boundaryObservers = Array.from({ length: 128 }, (_, index) => {
   const prefix = `observer-${String(index).padStart(3, "0")}-`;
+
   return `${prefix}${"x".repeat(1_024 - prefix.length)}`;
 });
 
@@ -148,9 +150,11 @@ const withTemporaryDatabase = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-memory-sqlite-",
       });
+
       return yield* use(`${directory}/memory.sqlite`);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -158,6 +162,7 @@ const withTemporaryDatabase = <A, E>(
 const readCurrent = (filename: string) =>
   Effect.gen(function* () {
     const reader = yield* MemoryReader;
+
     return yield* reader.get(key);
   }).pipe(Effect.provide(readerLayer(filename)));
 
@@ -170,6 +175,7 @@ describe("SQLite memory store", () => {
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
           const defaults = yield* SqlMemoryLimits;
+
           const bounded = storeLayer(filename).pipe(
             Layer.provide(
               Layer.succeed(SqlMemoryLimits, {
@@ -178,17 +184,21 @@ describe("SQLite memory store", () => {
               }),
             ),
           );
+
           const first = put("first", null, "x".repeat(4_096));
           const secondKey = MemoryKey.make({ namespace: key.namespace, id: "source-2" });
+
           // Corrections add receipts but not documents. Each byte-limited write fits alone.
           const rejected =
             limit === "maxReceipts"
               ? put("second", "1", "correction")
               : putFor(secondKey, "second", null, "x".repeat(4_096));
+
           yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
             const reader = yield* MemoryReader;
             const stored = yield* writer.change(first);
+
             expect(yield* writer.change(rejected).pipe(Effect.flip)).toEqual(
               MemoryStorageError.make({
                 operation: "memory storage limit",
@@ -209,6 +219,7 @@ describe("SQLite memory store", () => {
             const writer = yield* MemoryWriter;
             const reader = yield* MemoryReader;
             const retried = yield* writer.change(rejected);
+
             expect(retried.generation).toBe(limit === "maxReceipts" ? 2 : 1);
             expect(yield* reader.get(rejected.key)).toEqual(retried);
           }).pipe(Effect.provide(storeLayer(filename)));
@@ -226,6 +237,7 @@ describe("SQLite memory store", () => {
           const users = MemoryNamespace.define({ name: "app/users", version: 1, identity });
           const other = MemoryNamespace.define({ name: "app/other", version: 1, identity });
           const newer = MemoryNamespace.define({ name: "app/users", version: 2, identity });
+
           const namespaces = [
             users.make({ tenantId: "a", userId: "one" }),
             users.make({ tenantId: "a", userId: "two" }),
@@ -233,6 +245,7 @@ describe("SQLite memory store", () => {
             other.make({ tenantId: "a", userId: "one" }),
             newer.make({ tenantId: "a", userId: "one" }),
           ];
+
           for (const [index, namespace] of namespaces.entries()) {
             const command = putFor(
               MemoryKey.make({ namespace, id: "shared-source" }),
@@ -240,7 +253,9 @@ describe("SQLite memory store", () => {
               null,
               `source-${index}`,
             );
+
             const write = Effect.flatMap(MemoryWriter, (writer) => writer.change(command));
+
             if (index === 0) {
               expect(
                 yield* write.pipe(
@@ -256,22 +271,28 @@ describe("SQLite memory store", () => {
               ).toMatchObject({ point: "memory:change:after" });
             } else yield* write.pipe(Effect.provide(storeLayer(filename)));
           }
+
           const reconstructed = MemoryNamespace.define({
             name: "app/users",
             version: 1,
             identity: Schema.Struct({ userId: Schema.String, tenantId: Schema.String }),
           });
+
           const first = reconstructed.make({ userId: "one", tenantId: "a" });
+
           expect(first).not.toBe(namespaces[0]);
           expect(first.address).toBe(namespaces[0].address);
           yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
             const reader = yield* MemoryReader;
+
             for (const [index, namespace] of [first, ...namespaces.slice(1)].entries()) {
               const memoryKey = MemoryKey.make({ namespace, id: "shared-source" });
+
               const receipt = yield* writer.change(
                 putFor(memoryKey, "shared-operation", null, `source-${index}`),
               );
+
               expect(receipt.generation).toBe(1);
               expect(yield* reader.get(memoryKey)).toEqual(receipt);
               if (receipt._tag === "ActiveMemoryDocument")
@@ -283,6 +304,7 @@ describe("SQLite memory store", () => {
               ).toMatchObject({ _tag: "MemoryOperationConflict" });
             }
             const firstKey = MemoryKey.make({ namespace: first, id: "shared-source" });
+
             yield* writer.change(
               MemoryWrite.make({
                 _tag: "Withdraw",
@@ -302,9 +324,11 @@ describe("SQLite memory store", () => {
                 (yield* reader.get(MemoryKey.make({ namespace, id: "shared-source" })))?._tag,
               ).toBe("ActiveMemoryDocument");
           }).pipe(Effect.provide(storeLayer(filename)));
+
           const tombstone = yield* Effect.flatMap(MemoryReader, (reader) =>
             reader.get(MemoryKey.make({ namespace: first, id: "shared-source" })),
           ).pipe(Effect.provide(readerLayer(filename)));
+
           expect(tombstone?._tag).toBe("WithdrawnMemoryDocument");
         }),
       ),
@@ -317,13 +341,16 @@ describe("SQLite memory store", () => {
         expect(yield* readCurrent(filename).pipe(Effect.flip)).toEqual(
           MemoryStorageError.make({ operation: "open memory reader", reason: "unavailable" }),
         );
+
         const tables = yield* runRaw(
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             return yield* sql`SELECT name FROM sqlite_master WHERE type = 'table'`;
           }),
         );
+
         expect(tables).toEqual([]);
         yield* Effect.void.pipe(Effect.provide(storeLayer(filename)));
         expect(yield* readCurrent(filename)).toBeNull();
@@ -331,6 +358,7 @@ describe("SQLite memory store", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`UPDATE effect_agent_memory_metadata SET version = 999`;
           }),
         );
@@ -346,17 +374,20 @@ describe("SQLite memory store", () => {
       Effect.gen(function* () {
         const command = boundaryPut("boundary-roundtrip", 126);
         const commandLength = JSON.stringify({ version: 1, value: command }).length;
+
         expect(commandLength).toBeGreaterThan(storedJsonCodeUnitLimit - 512 * 1024);
         expect(commandLength).toBeLessThanOrEqual(storedJsonCodeUnitLimit);
 
         const stored = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(command);
         }).pipe(Effect.provide(storeLayer(filename)));
 
         yield* Effect.gen(function* () {
           const reader = yield* MemoryReader;
           const writer = yield* MemoryWriter;
+
           expect(yield* reader.get(key)).toEqual(stored);
           expect(yield* writer.change(command)).toEqual(stored);
         }).pipe(Effect.provide(storeLayer(filename)));
@@ -368,6 +399,7 @@ describe("SQLite memory store", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const command = boundaryPut("boundary-rejected", 128);
+
         expect(JSON.stringify({ version: 1, value: command }).length).toBeGreaterThan(
           storedJsonCodeUnitLimit,
         );
@@ -375,6 +407,7 @@ describe("SQLite memory store", () => {
         yield* Effect.gen(function* () {
           const reader = yield* MemoryReader;
           const writer = yield* MemoryWriter;
+
           expect(yield* writer.change(command).pipe(Effect.flip)).toEqual(
             MemoryStorageError.make({
               operation: "change memory document",
@@ -394,26 +427,34 @@ describe("SQLite memory store", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const firstPut = put("put-1", null, "prefers tea", [MemoryScope.make("profile")]);
+
         const correction = put("put-2", "1", "prefers coffee", [
           MemoryScope.make("private"),
           MemoryScope.make("profile"),
         ]);
+
         const withdrawal = withdraw("withdraw-1", "2");
 
         const initial = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
           const reader = yield* MemoryReader;
+
           yield* TestClock.setTime(1_000);
           const first = yield* writer.change(firstPut);
+
           yield* TestClock.setTime(2_000);
           const corrected = yield* writer.change(correction);
           const replayed = yield* writer.change(firstPut);
+
           expect(replayed).toEqual(first);
           expect(yield* reader.get(key)).toEqual(corrected);
+
           const divergent = yield* writer
             .change(put("put-1", null, "different command", [MemoryScope.make("profile")]))
             .pipe(Effect.flip);
+
           expect(divergent).toEqual(MemoryOperationConflict.make({ key, operationId: "put-1" }));
+
           return { first, corrected };
         }).pipe(Effect.provide(storeLayer(filename)));
 
@@ -430,15 +471,20 @@ describe("SQLite memory store", () => {
         const withdrawn = yield* Effect.gen(function* () {
           const reader = yield* MemoryReader;
           const writer = yield* MemoryWriter;
+
           expect(yield* reader.get(key)).toEqual(initial.corrected);
           yield* TestClock.setTime(3_000);
           const tombstone = yield* writer.change(withdrawal);
+
           expect(yield* writer.change(correction)).toEqual(initial.corrected);
           expect(yield* reader.get(key)).toEqual(tombstone);
+
           const delayed = yield* writer
             .change(put("delayed-put", "2", "stale resurrection"))
             .pipe(Effect.flip);
+
           expect(delayed).toEqual(MemoryWithdrawn.make({ key, revision: "3" }));
+
           return tombstone;
         }).pipe(Effect.provide(storeLayer(filename)));
 
@@ -455,21 +501,26 @@ describe("SQLite memory store", () => {
       Effect.gen(function* () {
         yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           yield* writer.change(put("seed", null, "seed"));
         }).pipe(Effect.provide(storeLayer(filename)));
 
         const edit = (command: MemoryWrite) =>
           Effect.gen(function* () {
             const writer = yield* MemoryWriter;
+
             return yield* writer.change(command);
           }).pipe(Effect.provide(storeLayer(filename)), Effect.result);
+
         const outcomes = yield* Effect.all(
           [put("race-a", "1", "edit a"), put("race-b", "1", "edit b")].map(edit),
           { concurrency: "unbounded" },
         );
+
         expect(outcomes.filter(Result.isSuccess)).toHaveLength(1);
         expect(outcomes.filter(Result.isFailure)).toHaveLength(1);
         const failure = outcomes.find(Result.isFailure);
+
         expect(failure?.failure).toEqual(
           MemoryConflict.make({ key, expectedRevision: "1", actualRevision: "2" }),
         );
@@ -484,11 +535,13 @@ describe("SQLite memory store", () => {
         const otherKey = MemoryKey.make({ namespace: TestNamespace.make("tenant-b"), id: key.id });
         const firstCommand = putFor(key, "shared-operation", null, "tenant a");
         const secondCommand = putFor(otherKey, "shared-operation", null, "tenant b");
+
         yield* Effect.gen(function* () {
           const reader = yield* MemoryReader;
           const writer = yield* MemoryWriter;
           const first = yield* writer.change(firstCommand);
           const second = yield* writer.change(secondCommand);
+
           expect(first.key).toEqual(key);
           expect(second.key).toEqual(otherKey);
           expect(second).not.toEqual(first);
@@ -510,8 +563,10 @@ describe("SQLite memory store", () => {
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
           const command = put(`operation-${point}`, null, point);
+
           const failed = yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
+
             return yield* writer.change(command);
           }).pipe(
             Effect.provide(
@@ -523,12 +578,16 @@ describe("SQLite memory store", () => {
             ),
             Effect.flip,
           );
+
           expect(failed).toEqual(MemoryMutationFailure.make({ point }));
           expect(yield* readCurrent(filename)).toBeNull();
+
           const recovered = yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
+
             return yield* writer.change(command);
           }).pipe(Effect.provide(storeLayer(filename)));
+
           expect(recovered.generation).toBe(1);
         }),
       ),
@@ -541,11 +600,15 @@ describe("SQLite memory store", () => {
         Effect.gen(function* () {
           const active = yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
+
             return yield* writer.change(put("withdraw-seed", null, "still active"));
           }).pipe(Effect.provide(storeLayer(filename)));
+
           const command = withdraw(`withdraw-${point}`, "1");
+
           const failed = yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
+
             return yield* writer.change(command);
           }).pipe(
             Effect.provide(
@@ -557,12 +620,16 @@ describe("SQLite memory store", () => {
             ),
             Effect.flip,
           );
+
           expect(failed).toEqual(MemoryMutationFailure.make({ point }));
           expect(yield* readCurrent(filename)).toEqual(active);
+
           const recovered = yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
+
             return yield* writer.change(command);
           }).pipe(Effect.provide(storeLayer(filename)));
+
           expect(recovered._tag).toBe("WithdrawnMemoryDocument");
           expect(recovered.generation).toBe(2);
         }),
@@ -574,9 +641,12 @@ describe("SQLite memory store", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const command = put("lost-ack", null, "committed once");
+
         yield* TestClock.setTime(10_000);
+
         const failure = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(command);
         }).pipe(
           Effect.provide(
@@ -588,13 +658,18 @@ describe("SQLite memory store", () => {
           ),
           Effect.flip,
         );
+
         expect(failure).toEqual(MemoryMutationFailure.make({ point: "memory:change:after" }));
         const committed = yield* readCurrent(filename);
+
         yield* TestClock.setTime(20_000);
+
         const replayed = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(command);
         }).pipe(Effect.provide(storeLayer(filename)));
+
         expect(replayed).toEqual(committed);
         expect(replayed.modifiedAt).toBe(10_000);
       }),
@@ -606,12 +681,16 @@ describe("SQLite memory store", () => {
       Effect.gen(function* () {
         yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           yield* writer.change(put("withdraw-lost-ack-seed", null, "active"));
         }).pipe(Effect.provide(storeLayer(filename)));
         const command = withdraw("withdraw-lost-ack", "1");
+
         yield* TestClock.setTime(30_000);
+
         const failure = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(command);
         }).pipe(
           Effect.provide(
@@ -623,8 +702,10 @@ describe("SQLite memory store", () => {
           ),
           Effect.flip,
         );
+
         expect(failure).toEqual(MemoryMutationFailure.make({ point: "memory:change:after" }));
         const committed = yield* readCurrent(filename);
+
         expect(committed?._tag).toBe("WithdrawnMemoryDocument");
         expect(committed?.modifiedAt).toBe(30_000);
 
@@ -632,10 +713,13 @@ describe("SQLite memory store", () => {
         yield* Effect.gen(function* () {
           const reader = yield* MemoryReader;
           const writer = yield* MemoryWriter;
+
           expect(yield* writer.change(command)).toEqual(committed);
+
           const delayed = yield* writer
             .change(put("withdraw-delayed-put", "1", "stale resurrection"))
             .pipe(Effect.flip);
+
           expect(delayed).toEqual(MemoryWithdrawn.make({ key, revision: "2" }));
           expect(yield* reader.get(key)).toEqual(committed);
         }).pipe(Effect.provide(storeLayer(filename)));
@@ -657,13 +741,16 @@ describe("SQLite memory store", () => {
             ),
             Effect.exit,
           );
+
           expect(Exit.isFailure(opened)).toBe(true);
           yield* Effect.void.pipe(Effect.provide(storeLayer(filename)));
           expect(yield* readCurrent(filename)).toBeNull();
+
           const names = yield* runRaw(
             filename,
             Effect.gen(function* () {
               const sql = yield* SqlClientService.SqlClient;
+
               return yield* sql<{ name: string }>`
                 SELECT name FROM sqlite_master
                 WHERE type = 'table' AND name LIKE 'effect_agent_%'
@@ -671,6 +758,7 @@ describe("SQLite memory store", () => {
               `;
             }),
           );
+
           expect(names.map((row) => row.name)).toEqual([
             "effect_agent_memory_documents_v1",
             "effect_agent_memory_metadata",
@@ -686,6 +774,7 @@ describe("SQLite memory store", () => {
       Effect.gen(function* () {
         const defectExit = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(put("defect", null, "defect"));
         }).pipe(
           Effect.provide(
@@ -695,13 +784,16 @@ describe("SQLite memory store", () => {
           ),
           Effect.exit,
         );
+
         expect(Exit.isFailure(defectExit) && Cause.hasDies(defectExit.cause)).toBe(true);
         expect(yield* readCurrent(filename)).toBeNull();
 
         const timeoutFile = `${filename}-timeout`;
         const timeoutReached = yield* Deferred.make<void>();
+
         const timeoutFiber = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(put("timeout", null, "timeout"));
         }).pipe(
           Effect.provide(
@@ -714,6 +806,7 @@ describe("SQLite memory store", () => {
           Effect.timeout("1 second"),
           Effect.forkChild,
         );
+
         yield* Deferred.await(timeoutReached);
         yield* TestClock.adjust("1 second");
         expect(Exit.isFailure(yield* Fiber.await(timeoutFiber))).toBe(true);
@@ -721,8 +814,10 @@ describe("SQLite memory store", () => {
 
         const interruptedFile = `${filename}-interrupted`;
         const interruptionReached = yield* Deferred.make<void>();
+
         const interruptedFiber = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(put("interrupted", null, "interrupted"));
         }).pipe(
           Effect.provide(
@@ -736,9 +831,11 @@ describe("SQLite memory store", () => {
           ),
           Effect.forkChild,
         );
+
         yield* Deferred.await(interruptionReached);
         yield* Fiber.interrupt(interruptedFiber);
         const interruptedExit = yield* Fiber.await(interruptedFiber);
+
         expect(Exit.isFailure(interruptedExit) && Cause.hasInterrupts(interruptedExit.cause)).toBe(
           true,
         );
@@ -751,8 +848,10 @@ describe("SQLite memory store", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const command = put("stored-row", null, "stored row");
+
         yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           yield* writer.change(command);
         }).pipe(Effect.provide(storeLayer(filename)));
 
@@ -760,6 +859,7 @@ describe("SQLite memory store", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`
               UPDATE effect_agent_memory_documents_v1
               SET document_json = '{"version":999}'
@@ -768,20 +868,24 @@ describe("SQLite memory store", () => {
           }),
         );
         const incompatible = yield* readCurrent(filename).pipe(Effect.flip);
+
         expect(incompatible._tag).toBe("MemoryStorageError");
         if (incompatible._tag === "MemoryStorageError") {
           expect(incompatible.reason).toBe("incompatible");
         }
 
         const receiptFile = `${filename}-receipt`;
+
         yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           yield* writer.change(command);
         }).pipe(Effect.provide(storeLayer(receiptFile)));
         yield* runRaw(
           receiptFile,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`
               UPDATE effect_agent_memory_receipts_v1
               SET result_json = '{"version":2,"value":null}'
@@ -789,10 +893,13 @@ describe("SQLite memory store", () => {
             `;
           }),
         );
+
         const corruptReceipt = yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           return yield* writer.change(command);
         }).pipe(Effect.provide(storeLayer(receiptFile)), Effect.flip);
+
         expect(corruptReceipt._tag).toBe("MemoryStorageError");
         if (corruptReceipt._tag === "MemoryStorageError") {
           expect(corruptReceipt.reason).toBe("corrupt");
@@ -805,12 +912,16 @@ describe("SQLite memory store", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const created = put("forged-created", null, "created", [MemoryScope.make("created-scope")]);
+
         const corrected = put("forged-corrected", "1", "corrected", [
           MemoryScope.make("corrected-scope"),
         ]);
+
         const withdrawn = withdraw("forged-withdrawn", "2");
+
         yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;
+
           yield* writer.change(created);
           yield* writer.change(corrected);
           yield* writer.change(withdrawn);
@@ -819,6 +930,7 @@ describe("SQLite memory store", () => {
         const replayFailure = (command: MemoryWrite) =>
           Effect.gen(function* () {
             const writer = yield* MemoryWriter;
+
             return yield* writer.change(command);
           }).pipe(Effect.provide(storeLayer(filename)), Effect.flip);
 
@@ -826,6 +938,7 @@ describe("SQLite memory store", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             return yield* sql<{ operation_id: string; result_json: string }>`
               SELECT operation_id, result_json
               FROM effect_agent_memory_receipts_v1
@@ -834,10 +947,13 @@ describe("SQLite memory store", () => {
             `;
           }),
         );
+
         const resultFor = (operationId: string) =>
           receiptResults.find((row) => row.operation_id === operationId)?.result_json;
+
         const createdResult = resultFor(created.operationId);
         const withdrawnResult = resultFor(withdrawn.operationId);
+
         expect(createdResult).toBeDefined();
         expect(withdrawnResult).toBeDefined();
         if (createdResult === undefined || withdrawnResult === undefined) return;
@@ -851,6 +967,7 @@ describe("SQLite memory store", () => {
             filename,
             Effect.gen(function* () {
               const sql = yield* SqlClientService.SqlClient;
+
               yield* sql`
                 UPDATE effect_agent_memory_receipts_v1
                 SET result_json = replace(${createdResult}, ${original}, ${replacement})
@@ -867,6 +984,7 @@ describe("SQLite memory store", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`
               UPDATE effect_agent_memory_receipts_v1
               SET result_json = ${createdResult}
@@ -882,6 +1000,7 @@ describe("SQLite memory store", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`
               UPDATE effect_agent_memory_receipts_v1
               SET result_json = ${createdResult}
@@ -897,6 +1016,7 @@ describe("SQLite memory store", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`
               UPDATE effect_agent_memory_receipts_v1
               SET result_json = replace(

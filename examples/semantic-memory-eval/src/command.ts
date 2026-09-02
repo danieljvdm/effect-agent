@@ -8,18 +8,22 @@ const cachePath = Flag.directory("cache").pipe(
   Flag.withDefault("/tmp/effect-agent-semantic-model"),
   Flag.withDescription("Transformers.js model cache directory."),
 );
+
 const output = Flag.file("output").pipe(
   Flag.withDefault("/tmp/kom18-evaluation.json"),
   Flag.withDescription("Destination for the single schema-encoded JSON report."),
 );
+
 const offline = Flag.boolean("offline").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Require the exact pinned model revision to exist in the local cache."),
 );
+
 const environment = Flag.string("environment").pipe(
   Flag.withDefault("unspecified"),
   Flag.withDescription("Reproducibility descriptor recorded verbatim in the report."),
 );
+
 const gitRevision = Flag.string("git-revision").pipe(
   Flag.withDefault("working-tree"),
   Flag.withDescription("Git revision descriptor recorded verbatim in the report."),
@@ -35,8 +39,10 @@ export const command = Command.make(
       gitRevision: options.gitRevision,
       offline: options.offline,
     });
+
     const json = yield* Schema.encodeEffect(Schema.fromJsonString(EvaluationReport))(report);
     const fs = yield* FileSystem.FileSystem;
+
     yield* fs.writeFileString(options.output, `${json}\n`);
     yield* Console.log(json);
   }),

@@ -79,8 +79,10 @@ interface BatchRun {
 /** Group the export's records into their atomic append runs (batches append contiguously). */
 const batchRunsOf = (records: ReadonlyArray<CanonicalRecordEnvelope>): Array<BatchRun> => {
   const runs: Array<BatchRun> = [];
+
   for (const envelope of records) {
     const current = runs.at(-1);
+
     if (current !== undefined && current.batchId === envelope.batchId) {
       current.records.push(envelope.record);
       runs[runs.length - 1] = { ...current, lastSequence: envelope.sequence };
@@ -92,6 +94,7 @@ const batchRunsOf = (records: ReadonlyArray<CanonicalRecordEnvelope>): Array<Bat
       lastSequence: envelope.sequence,
     });
   }
+
   return runs;
 };
 
@@ -133,11 +136,13 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   // 1. schema-round-trip
   {
     let failure: string | undefined;
+
     for (const envelope of records) {
       const roundTrip = yield* encodeEnvelope(envelope).pipe(
         Effect.flatMap(decodeEnvelope),
         Effect.exit,
       );
+
       if (roundTrip._tag === "Failure") {
         failure = `record ${envelope.record.recordId} does not round-trip its Schema`;
         break;
@@ -154,6 +159,7 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   {
     const seen = new Set<string>();
     const duplicates = new Set<string>();
+
     for (const envelope of records) {
       if (seen.has(envelope.record.recordId)) duplicates.add(envelope.record.recordId);
       seen.add(envelope.record.recordId);
@@ -172,6 +178,7 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   // 3. sequence-contiguity
   {
     let contiguityFailure: string | undefined;
+
     for (const [index, envelope] of records.entries()) {
       if (envelope.sequence !== index + 1) {
         contiguityFailure = `sequence ${envelope.sequence} at position ${index} (expected ${index + 1})`;
@@ -190,6 +197,7 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
 
   // 4. digest-chain (+ collect per-sequence chain digests for checkpoint binding)
   const chainDigestAtSequence = new Map<number, string>();
+
   if (input.batchProducers === undefined) {
     checks.push(
       check(
@@ -201,21 +209,26 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   } else {
     let chain = EMPTY_TAIL_DIGEST;
     let chainFailure: string | undefined;
+
     for (const run of batchRunsOf(records)) {
       const producerId = input.batchProducers.get(run.batchId);
+
       if (producerId === undefined) {
         chainFailure = `no producer identity supplied for batch ${run.batchId}`;
         break;
       }
       const [first, ...rest] = run.records;
+
       if (first === undefined) {
         chainFailure = `batch ${run.batchId} grouped zero records`;
         break;
       }
+
       const digest = yield* digestCanonicalBatch(
         chain,
         CanonicalBatch.make({ batchId: run.batchId, producerId, records: [first, ...rest] }),
       ).pipe(Effect.exit);
+
       if (digest._tag === "Failure") {
         chainFailure = `batch ${run.batchId} could not be re-digested`;
         break;
@@ -237,6 +250,7 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   const ordered = [...input.submissions].sort(
     (left, right) => left.queueSequence - right.queueSequence,
   );
+
   const recordIds = records.map((envelope) => envelope.record.recordId);
 
   // 5a. fifo-input-order
@@ -245,9 +259,11 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
     const expectedSet = new Set<string>(expectedInputs);
     const inputOrder = recordIds.filter((recordId) => expectedSet.has(recordId));
     const expectedPresent = expectedInputs.filter((expected) => inputOrder.includes(expected));
+
     const matches =
       inputOrder.length === expectedPresent.length &&
       inputOrder.every((recordId, index) => recordId === expectedPresent[index]);
+
     checks.push(
       matches
         ? check("fifo-input-order", "passed")
@@ -266,8 +282,10 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   {
     const recordIdSet = new Set<string>(recordIds);
     const abortedNeverRun = new Set<string>();
+
     for (const envelope of records) {
       const payload = envelope.record.payload;
+
       if (
         payload._tag === "SubmissionSettled" &&
         payload.outcome === "aborted" &&
@@ -276,17 +294,22 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
         abortedNeverRun.add(payload.submissionId);
       }
     }
+
     const expectedSettlements = ordered
       .filter((row) => !abortedNeverRun.has(row.submissionId))
       .map((row) => submissionSettlementRecordId(row.submissionId));
+
     const expectedSet = new Set<string>(expectedSettlements);
     const settlementOrder = recordIds.filter((recordId) => expectedSet.has(recordId));
+
     const expectedPresent = expectedSettlements.filter((expected) =>
       settlementOrder.includes(expected),
     );
+
     const matches =
       settlementOrder.length === expectedPresent.length &&
       settlementOrder.every((recordId, index) => recordId === expectedPresent[index]);
+
     checks.push(
       matches
         ? check("fifo-settlement-order", "passed")
@@ -301,15 +324,18 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   // 6 + 7. terminal-uniqueness and ledger-canonical-agreement
   {
     const settlementsBySubmission = new Map<string, Array<CanonicalRecordEnvelope>>();
+
     for (const envelope of records) {
       if (envelope.record.payload._tag !== "SubmissionSettled") continue;
       const submissionId = envelope.record.payload.submissionId;
       const existing = settlementsBySubmission.get(submissionId) ?? [];
+
       existing.push(envelope);
       settlementsBySubmission.set(submissionId, existing);
     }
     let uniquenessFailure: string | undefined;
     let agreementFailure: string | undefined;
+
     for (const [submissionId, settlements] of settlementsBySubmission) {
       if (settlements.length > 1) {
         uniquenessFailure = `submission ${submissionId} has ${settlements.length} canonical terminal records`;
@@ -318,6 +344,7 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
     for (const row of ordered) {
       const settlements = settlementsBySubmission.get(row.submissionId) ?? [];
       const canonical = settlements[0]?.record.payload;
+
       if (row.state === "settled") {
         if (settlements.length !== 1) {
           uniquenessFailure ??= `settled submission ${row.submissionId} has ${settlements.length} canonical terminal records (expected exactly 1)`;
@@ -370,6 +397,7 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
     );
   } else {
     const bound = chainDigestAtSequence.get(input.checkpoint.throughSequence);
+
     checks.push(
       bound === input.checkpoint.tailDigest
         ? check("checkpoint-binding", "passed")
@@ -384,6 +412,7 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   // 9. all-settled (convergence mode)
   if (input.requireAllSettled === true) {
     const nonterminal = ordered.filter((row) => row.state !== "settled");
+
     checks.push(
       nonterminal.length === 0 && ordered.length > 0
         ? check("all-settled", "passed")

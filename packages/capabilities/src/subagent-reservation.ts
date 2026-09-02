@@ -20,6 +20,7 @@ const Natural = Schema.Natural;
 export const BudgetReservationId = Schema.NonEmptyString.pipe(
   Schema.brand("@effect-agent/capabilities/BudgetReservationId"),
 );
+
 export type BudgetReservationId = typeof BudgetReservationId.Type;
 
 const decodeBudgetReservationId = Schema.decodeSync(BudgetReservationId);
@@ -45,6 +46,7 @@ export const SubagentBudgetDimension = Schema.Literals([
   "cost",
   "result-bytes",
 ]);
+
 export type SubagentBudgetDimension = typeof SubagentBudgetDimension.Type;
 
 const AmountFields = SubagentReservationAmounts.fields;
@@ -75,6 +77,7 @@ export const SubagentReservationStatus = Schema.Literals([
   "releasePending",
   "released",
 ]);
+
 export type SubagentReservationStatus = typeof SubagentReservationStatus.Type;
 
 /** All-or-nothing allocation request for one Subagent Invocation. */
@@ -348,12 +351,15 @@ const sameAmounts = (a: Amounts, b: Amounts): boolean =>
 
 const optionalAmounts = (partial: PartialAmounts): { [K in ReservableDimensionKey]?: number } => {
   const out: { [K in ReservableDimensionKey]?: number } = {};
+
   for (const spec of dimensionSpecs) {
     const value = partial[spec.key];
+
     if (value !== undefined) {
       out[spec.key] = value;
     }
   }
+
   return out;
 };
 
@@ -378,11 +384,13 @@ const parentView = (
   parent: ParentBudgetState,
 ): SubagentParentBudgetView => {
   const reservations: Array<SubagentReservationView> = [];
+
   for (const [reservationId, reservation] of ledger.reservations) {
     if (reservation.parentRunId === parent.parentRunId) {
       reservations.push(reservationView(reservationId, reservation));
     }
   }
+
   return SubagentParentBudgetView.make({
     parentRunId: parent.parentRunId,
     caps: parent.caps,
@@ -408,18 +416,22 @@ const registerTransition = (
   ReservationLedger,
 ] => {
   const existing = ledger.parents.get(parentRunId);
+
   if (existing !== undefined) {
     return sameCaps(existing.caps, caps)
       ? [ok(parentView(ledger, existing)), ledger]
       : [fail(SubagentParentBudgetConflict.make({ parentRunId })), ledger];
   }
   const available: { [K in ReservableDimensionKey]?: number } = {};
+
   for (const spec of dimensionSpecs) {
     const cap = spec.cap(caps);
+
     if (cap !== undefined) {
       available[spec.key] = cap;
     }
   }
+
   const parent: ParentBudgetState = {
     parentRunId,
     caps,
@@ -428,10 +440,12 @@ const registerTransition = (
     available,
     cumulativeOverrun: zeroAmounts,
   };
+
   const next: ReservationLedger = {
     parents: new Map(ledger.parents).set(parentRunId, parent),
     reservations: ledger.reservations,
   };
+
   return [ok(parentView(next, parent)), next];
 };
 
@@ -446,11 +460,13 @@ const reserveTransition = (
   ReservationLedger,
 ] => {
   const parent = ledger.parents.get(request.parentRunId);
+
   if (parent === undefined) {
     return [fail(SubagentParentBudgetUnknown.make({ parentRunId: request.parentRunId })), ledger];
   }
   const reservationId = makeBudgetReservationId(request.parentRunId, request.parentToolCallId);
   const existing = ledger.reservations.get(reservationId);
+
   if (existing !== undefined) {
     return sameAmounts(existing.allocated, request.allocation)
       ? [ok(reservationView(reservationId, existing)), ledger]
@@ -466,6 +482,7 @@ const reserveTransition = (
         ];
   }
   const maxInvocations = parent.caps.maxTotalChildInvocations;
+
   if (maxInvocations !== undefined && parent.totalChildInvocations + 1 > maxInvocations) {
     return [
       fail(
@@ -481,6 +498,7 @@ const reserveTransition = (
   }
   for (const spec of dimensionSpecs) {
     const cap = spec.cap(parent.caps);
+
     if (cap === undefined) {
       continue;
     }
@@ -488,6 +506,7 @@ const reserveTransition = (
     // headroom without mutating `available`.
     const headroom = (parent.available[spec.key] ?? 0) - parent.cumulativeOverrun[spec.key];
     const requested = request.allocation[spec.key];
+
     if (requested > headroom) {
       return [
         fail(
@@ -502,15 +521,19 @@ const reserveTransition = (
       ];
     }
   }
+
   const nextAvailable: { [K in ReservableDimensionKey]?: number } = {
     ...parent.available,
   };
+
   for (const spec of dimensionSpecs) {
     const available = parent.available[spec.key];
+
     if (available !== undefined) {
       nextAvailable[spec.key] = available - request.allocation[spec.key];
     }
   }
+
   const reservation: ReservationState = {
     parentRunId: request.parentRunId,
     parentToolCallId: request.parentToolCallId,
@@ -522,6 +545,7 @@ const reserveTransition = (
     releasable: zeroAmounts,
     released: zeroAmounts,
   };
+
   const next: ReservationLedger = {
     parents: new Map(ledger.parents).set(request.parentRunId, {
       ...parent,
@@ -530,6 +554,7 @@ const reserveTransition = (
     }),
     reservations: new Map(ledger.reservations).set(reservationId, reservation),
   };
+
   return [ok(reservationView(reservationId, reservation)), next];
 };
 
@@ -542,41 +567,51 @@ const observeTransition = (
   ReservationLedger,
 ] => {
   const reservation = ledger.reservations.get(reservationId);
+
   if (reservation === undefined) {
     return [fail(SubagentReservationUnknown.make({ reservationId })), ledger];
   }
   const parent = ledger.parents.get(reservation.parentRunId);
+
   if (parent === undefined) {
     return [corruptParent(reservation.parentRunId), ledger];
   }
   const observed: { [K in ReservableDimensionKey]?: number } = { ...reservation.observed };
   const covered: Record<ReservableDimensionKey, number> = { ...reservation.covered };
   const overrun: Record<ReservableDimensionKey, number> = { ...reservation.overrun };
+
   const cumulativeOverrun: Record<ReservableDimensionKey, number> = {
     ...parent.cumulativeOverrun,
   };
+
   for (const spec of dimensionSpecs) {
     const delta = usage[spec.key];
+
     if (delta === undefined) {
       continue;
     }
     observed[spec.key] = (observed[spec.key] ?? 0) + delta;
+
     // Once settlement began the accounting decision is frozen, so late or
     // corrected usage is pure overrun and cannot silently create budget.
     const coverable =
       reservation.status === "reserved"
         ? Math.min(delta, reservation.allocated[spec.key] - covered[spec.key])
         : 0;
+
     covered[spec.key] += coverable;
     const overrunDelta = delta - coverable;
+
     overrun[spec.key] += overrunDelta;
     cumulativeOverrun[spec.key] += overrunDelta;
   }
   const nextReservation: ReservationState = { ...reservation, observed, covered, overrun };
+
   const next: ReservationLedger = {
     parents: new Map(ledger.parents).set(parent.parentRunId, { ...parent, cumulativeOverrun }),
     reservations: new Map(ledger.reservations).set(reservationId, nextReservation),
   };
+
   return [ok(reservationView(reservationId, nextReservation)), next];
 };
 
@@ -588,6 +623,7 @@ const freezeSettlement = (reservation: ReservationState): ReservationState => {
   const observed: { [K in ReservableDimensionKey]?: number } = { ...reservation.observed };
   const covered: Record<ReservableDimensionKey, number> = { ...reservation.covered };
   const releasable: Record<ReservableDimensionKey, number> = { ...zeroAmounts };
+
   for (const spec of dimensionSpecs) {
     if (observed[spec.key] === undefined) {
       observed[spec.key] = reservation.allocated[spec.key];
@@ -595,6 +631,7 @@ const freezeSettlement = (reservation: ReservationState): ReservationState => {
     }
     releasable[spec.key] = reservation.allocated[spec.key] - covered[spec.key];
   }
+
   return { ...reservation, status: "releasePending", observed, covered, releasable };
 };
 
@@ -606,6 +643,7 @@ const beginReleaseTransition = (
   ReservationLedger,
 ] => {
   const reservation = ledger.reservations.get(reservationId);
+
   if (reservation === undefined) {
     return [fail(SubagentReservationUnknown.make({ reservationId })), ledger];
   }
@@ -613,10 +651,12 @@ const beginReleaseTransition = (
     return [ok(reservationView(reservationId, reservation)), ledger];
   }
   const frozen = freezeSettlement(reservation);
+
   const next: ReservationLedger = {
     parents: ledger.parents,
     reservations: new Map(ledger.reservations).set(reservationId, frozen),
   };
+
   return [ok(reservationView(reservationId, frozen)), next];
 };
 
@@ -628,6 +668,7 @@ const releaseTransition = (
   ReservationLedger,
 ] => {
   const reservation = ledger.reservations.get(reservationId);
+
   if (reservation === undefined) {
     return [fail(SubagentReservationUnknown.make({ reservationId })), ledger];
   }
@@ -635,18 +676,22 @@ const releaseTransition = (
     return [ok(reservationView(reservationId, reservation)), ledger];
   }
   const parent = ledger.parents.get(reservation.parentRunId);
+
   if (parent === undefined) {
     return [corruptParent(reservation.parentRunId), ledger];
   }
   const frozen = reservation.status === "reserved" ? freezeSettlement(reservation) : reservation;
   const nextAvailable: { [K in ReservableDimensionKey]?: number } = { ...parent.available };
+
   for (const spec of dimensionSpecs) {
     const available = parent.available[spec.key];
+
     if (available !== undefined) {
       nextAvailable[spec.key] = available + frozen.releasable[spec.key];
     }
   }
   const settled: ReservationState = { ...frozen, status: "released", released: frozen.releasable };
+
   const next: ReservationLedger = {
     parents: new Map(ledger.parents).set(parent.parentRunId, {
       ...parent,
@@ -654,6 +699,7 @@ const releaseTransition = (
     }),
     reservations: new Map(ledger.reservations).set(reservationId, settled),
   };
+
   return [ok(reservationView(reservationId, settled)), next];
 };
 
@@ -665,6 +711,7 @@ const retireParentTransition = (
     return [ok(undefined), ledger];
   }
   let openReservations = 0;
+
   for (const reservation of ledger.reservations.values()) {
     if (reservation.parentRunId === parentRunId && reservation.status !== "released") {
       openReservations += 1;
@@ -674,13 +721,16 @@ const retireParentTransition = (
     return [fail(SubagentParentBudgetActive.make({ parentRunId, openReservations })), ledger];
   }
   const parents = new Map(ledger.parents);
+
   parents.delete(parentRunId);
   const reservations = new Map(ledger.reservations);
+
   for (const [reservationId, reservation] of reservations) {
     if (reservation.parentRunId === parentRunId) {
       reservations.delete(reservationId);
     }
   }
+
   return [ok(undefined), { parents, reservations }];
 };
 
@@ -695,6 +745,7 @@ export const SubagentReservationsMemoryLive: Layer.Layer<SubagentReservations> =
       parents: new Map(),
       reservations: new Map(),
     });
+
     return SubagentReservations.of({
       registerParent: Effect.fn("SubagentReservations.registerParent")(
         function* (parentRunId, caps) {
@@ -702,41 +753,49 @@ export const SubagentReservationsMemoryLive: Layer.Layer<SubagentReservations> =
             caps.maxConcurrentChildren !== undefined && caps.maxConcurrentChildren > 0
               ? yield* Semaphore.make(caps.maxConcurrentChildren)
               : undefined;
+
           const result = yield* Ref.modify(state, (ledger) =>
             registerTransition(ledger, parentRunId, caps, gate),
           );
+
           return yield* resolve(result);
         },
       ),
       reserve: Effect.fn("SubagentReservations.reserve")(function* (request) {
         const result = yield* Ref.modify(state, (ledger) => reserveTransition(ledger, request));
+
         return yield* resolve(result);
       }),
       observe: Effect.fn("SubagentReservations.observe")(function* (reservationId, usage) {
         const result = yield* Ref.modify(state, (ledger) =>
           observeTransition(ledger, reservationId, usage),
         );
+
         return yield* resolve(result);
       }),
       beginRelease: Effect.fn("SubagentReservations.beginRelease")(function* (reservationId) {
         const result = yield* Ref.modify(state, (ledger) =>
           beginReleaseTransition(ledger, reservationId),
         );
+
         return yield* resolve(result);
       }),
       release: Effect.fn("SubagentReservations.release")(function* (reservationId) {
         const result = yield* Ref.modify(state, (ledger) =>
           releaseTransition(ledger, reservationId),
         );
+
         return yield* resolve(result);
       }),
       acquireChildSlot: Effect.fn("SubagentReservations.acquireChildSlot")(function* (parentRunId) {
         const ledger = yield* Ref.get(state);
         const parent = ledger.parents.get(parentRunId);
+
         if (parent === undefined) {
           return yield* SubagentParentBudgetUnknown.make({ parentRunId });
         }
         const cap = parent.caps.maxConcurrentChildren;
+
         if (cap === undefined) {
           return;
         }
@@ -749,6 +808,7 @@ export const SubagentReservationsMemoryLive: Layer.Layer<SubagentReservations> =
           });
         }
         const gate = parent.gate;
+
         yield* Effect.acquireRelease(
           gate.take(1),
           (permits) => gate.release(permits).pipe(Effect.asVoid),
@@ -759,14 +819,17 @@ export const SubagentReservationsMemoryLive: Layer.Layer<SubagentReservations> =
         const result = yield* Ref.modify(state, (ledger) =>
           retireParentTransition(ledger, parentRunId),
         );
+
         return yield* resolve(result);
       }),
       parentSnapshot: Effect.fn("SubagentReservations.parentSnapshot")(function* (parentRunId) {
         const ledger = yield* Ref.get(state);
         const parent = ledger.parents.get(parentRunId);
+
         if (parent === undefined) {
           return yield* SubagentParentBudgetUnknown.make({ parentRunId });
         }
+
         return parentView(ledger, parent);
       }),
     });

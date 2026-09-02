@@ -130,6 +130,7 @@ export const makeOfflineAuditorModel = (
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
     const decide = (promptJson: string): ReadonlyArray<Response.StreamPartEncoded> => {
       if (promptJson.includes(OFFLINE_WRITE_CALL_ID)) {
         return finalParts(
@@ -151,6 +152,7 @@ export const makeOfflineAuditorModel = (
           providerExecuted: false,
         });
       }
+
       return toolTurn({
         type: "tool-call",
         id: OFFLINE_AUDIT_CALL_ID,
@@ -159,6 +161,7 @@ export const makeOfflineAuditorModel = (
         providerExecuted: false,
       });
     };
+
     const model = Model.make(
       "scripted",
       "evidence-auditor-offline",
@@ -171,13 +174,16 @@ export const makeOfflineAuditorModel = (
               Effect.gen(function* () {
                 yield* Ref.update(calls, (value) => value + 1);
                 const promptJson = JSON.stringify(request.prompt);
+
                 yield* Ref.update(prompts, (previous) => [...previous, promptJson]);
+
                 return Stream.fromIterable(decide(promptJson));
               }),
             ),
         }),
       ),
     );
+
     return { model, calls: Ref.get(calls), prompts: Ref.get(prompts) };
   });
 

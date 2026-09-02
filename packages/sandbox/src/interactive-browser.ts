@@ -19,6 +19,7 @@ export const InteractiveBrowserTargetUrl = Schema.NonEmptyString.check(
       if (typeof browserUrl !== "function") return false;
       try {
         const url: unknown = Reflect.construct(browserUrl, [value]);
+
         return (
           typeof url === "object" &&
           url !== null &&
@@ -34,6 +35,7 @@ export const InteractiveBrowserTargetUrl = Schema.NonEmptyString.check(
     { title: "an absolute HTTP or HTTPS URL without embedded credentials" },
   ),
 );
+
 export type InteractiveBrowserTargetUrl = typeof InteractiveBrowserTargetUrl.Type;
 
 /** Canonical HTTPS host authority, optionally carrying a non-default port. */
@@ -44,6 +46,7 @@ export const InteractiveBrowserHost = Schema.NonEmptyString.check(
       if (typeof browserUrl !== "function" || value.includes("*")) return false;
       try {
         const url: unknown = Reflect.construct(browserUrl, [`https://${value}/`]);
+
         return (
           typeof url === "object" &&
           url !== null &&
@@ -59,6 +62,7 @@ export const InteractiveBrowserHost = Schema.NonEmptyString.check(
     { title: "a canonical credential-free HTTPS host authority" },
   ),
 );
+
 export type InteractiveBrowserHost = typeof InteractiveBrowserHost.Type;
 
 /**
@@ -79,6 +83,7 @@ export const InteractiveBrowserNetworkPolicy = Schema.Union([
   Schema.TaggedStruct("PublicWeb", {}),
   Schema.TaggedStruct("Unrestricted", {}),
 ]).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
+
 export type InteractiveBrowserNetworkPolicy = typeof InteractiveBrowserNetworkPolicy.Type;
 
 export class InteractiveBrowserPolicy extends Schema.Class<InteractiveBrowserPolicy>(
@@ -95,20 +100,25 @@ export class InteractiveBrowserPolicy extends Schema.Class<InteractiveBrowserPol
 export class BrowserNavigateRequest extends Schema.Class<BrowserNavigateRequest>(
   "BrowserNavigateRequest",
 )({ url: InteractiveBrowserTargetUrl }) {}
+
 export class BrowserReadTextRequest extends Schema.Class<BrowserReadTextRequest>(
   "BrowserReadTextRequest",
 )({ selector: Schema.optionalKey(Selector) }) {}
+
 export class BrowserFillRequest extends Schema.Class<BrowserFillRequest>("BrowserFillRequest")({
   selector: Selector,
   value: FieldValue,
 }) {}
+
 export class BrowserClickRequest extends Schema.Class<BrowserClickRequest>("BrowserClickRequest")({
   selector: Selector,
 }) {}
+
 /** Capture the current page without navigating or opening another browser. */
 export class BrowserScreenshotRequest extends Schema.Class<BrowserScreenshotRequest>(
   "BrowserScreenshotRequest",
 )({ fullPage: Schema.Boolean }) {}
+
 /** Scroll the current viewport by signed CSS pixel deltas. */
 export class BrowserScrollRequest extends Schema.Class<BrowserScrollRequest>(
   "BrowserScrollRequest",
@@ -116,12 +126,15 @@ export class BrowserScrollRequest extends Schema.Class<BrowserScrollRequest>(
   deltaX: ScrollDelta,
   deltaY: ScrollDelta,
 }) {}
+
 export class BrowserNavigationResult extends Schema.Class<BrowserNavigationResult>(
   "BrowserNavigationResult",
 )({ url: InteractiveBrowserTargetUrl }) {}
+
 export class BrowserTextResult extends Schema.Class<BrowserTextResult>("BrowserTextResult")({
   text: BoundedText,
 }) {}
+
 /** Post-action URL observation; no provider session state crosses this boundary. */
 export class BrowserActionResult extends Schema.Class<BrowserActionResult>("BrowserActionResult")({
   url: InteractiveBrowserTargetUrl,
@@ -131,18 +144,22 @@ export class InteractiveBrowserPolicyDeniedError extends Schema.TaggedError<Inte
   "InteractiveBrowserPolicyDeniedError",
   { implementation: SandboxImplementation, message: BoundedMessage },
 ) {}
+
 export class InteractiveBrowserBusyError extends Schema.TaggedError<InteractiveBrowserBusyError>()(
   "InteractiveBrowserBusyError",
   { implementation: SandboxImplementation, message: BoundedMessage },
 ) {}
+
 export class InteractiveBrowserCapacityError extends Schema.TaggedError<InteractiveBrowserCapacityError>()(
   "InteractiveBrowserCapacityError",
   { implementation: SandboxImplementation, message: BoundedMessage },
 ) {}
+
 export class InteractiveBrowserExpiredError extends Schema.TaggedError<InteractiveBrowserExpiredError>()(
   "InteractiveBrowserExpiredError",
   { implementation: SandboxImplementation, message: BoundedMessage },
 ) {}
+
 export class InteractiveBrowserActionError extends Schema.TaggedError<InteractiveBrowserActionError>()(
   "InteractiveBrowserActionError",
   {
@@ -160,6 +177,7 @@ export class InteractiveBrowserActionError extends Schema.TaggedError<Interactiv
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
+
 export class InteractiveBrowserProtocolError extends Schema.TaggedError<InteractiveBrowserProtocolError>()(
   "InteractiveBrowserProtocolError",
   {
@@ -168,6 +186,7 @@ export class InteractiveBrowserProtocolError extends Schema.TaggedError<Interact
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
+
 export class InteractiveBrowserLimitError extends Schema.TaggedError<InteractiveBrowserLimitError>()(
   "InteractiveBrowserLimitError",
   {
@@ -178,6 +197,7 @@ export class InteractiveBrowserLimitError extends Schema.TaggedError<Interactive
     message: BoundedMessage,
   },
 ) {}
+
 export class InteractiveBrowserUnsupportedError extends Schema.TaggedError<InteractiveBrowserUnsupportedError>()(
   "InteractiveBrowserUnsupportedError",
   {
@@ -194,6 +214,7 @@ export class InteractiveBrowserUnsupportedError extends Schema.TaggedError<Inter
     message: BoundedMessage,
   },
 ) {}
+
 export const InteractiveBrowserError = Schema.Union([
   InteractiveBrowserPolicyDeniedError,
   InteractiveBrowserBusyError,
@@ -204,6 +225,7 @@ export const InteractiveBrowserError = Schema.Union([
   InteractiveBrowserLimitError,
   InteractiveBrowserUnsupportedError,
 ]);
+
 export type InteractiveBrowserError = typeof InteractiveBrowserError.Type;
 
 /** A live handle is intentionally not a Schema value and cannot cross persistence/transport boundaries. */

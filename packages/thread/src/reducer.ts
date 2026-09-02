@@ -107,16 +107,20 @@ const upsertSubagentInvocation = (
   payload: SubagentRequested | SubagentStarted | SubagentJoined,
 ): ReadonlyArray<SubagentInvocationState> => {
   const existing = invocations.find((invocation) => invocation.toolCallId === payload.toolCallId);
+
   const requested =
     existing?.requested ?? (payload._tag === "SubagentRequested" ? payload : undefined);
+
   const started = existing?.started ?? (payload._tag === "SubagentStarted" ? payload : undefined);
   const joined = existing?.joined ?? (payload._tag === "SubagentJoined" ? payload : undefined);
+
   const next = SubagentInvocationState.make({
     toolCallId: payload.toolCallId,
     ...(requested === undefined ? {} : { requested }),
     ...(started === undefined ? {} : { started }),
     ...(joined === undefined ? {} : { joined }),
   });
+
   return existing === undefined
     ? [...invocations, next]
     : invocations.map((invocation) =>
@@ -131,30 +135,37 @@ export const reduceThreadRecord = (
   tailDigest: Digest = projection.tailDigest,
 ): ThreadProjection => {
   const payload = envelope.record.payload;
+
   const inputs =
     payload._tag === "UserInputRecorded"
       ? [...projection.inputs, payload.input]
       : projection.inputs;
+
   const modelOutputs =
     payload._tag === "ModelCompleted"
       ? [...projection.modelOutputs, payload.output]
       : projection.modelOutputs;
+
   const completedRuns =
     payload._tag === "RunCompleted"
       ? [...projection.completedRuns, payload.runId]
       : projection.completedRuns;
+
   const failedRuns =
     payload._tag === "RunFailed"
       ? [...projection.failedRuns, payload.runId]
       : projection.failedRuns;
+
   const settlements =
     payload._tag === "SubmissionSettled"
       ? [...projection.settlements, payload]
       : projection.settlements;
+
   const abortRequests =
     payload._tag === "AbortRequested"
       ? [...projection.abortRequests, payload]
       : projection.abortRequests;
+
   // `ToolCallPrepared` opens a call; `ToolCallSettled` (results batch or late settle) and
   // `ToolCallResolved` (DUR-017) close it. `ToolCallUnknown` does NOT close it: the call stays
   // open until an authorized resolution or a recovered result arrives.
@@ -174,20 +185,24 @@ export const reduceThreadRecord = (
       : payload._tag === "ToolCallSettled" || payload._tag === "ToolCallResolved"
         ? projection.openToolCalls.filter((call) => call.toolCallId !== payload.toolCallId)
         : projection.openToolCalls;
+
   const unknownToolCalls =
     payload._tag === "ToolCallUnknown"
       ? [...projection.unknownToolCalls, payload]
       : projection.unknownToolCalls;
+
   const approvals =
     payload._tag === "ToolApprovalRequested" || payload._tag === "ToolApprovalDecided"
       ? [...projection.approvals, payload]
       : projection.approvals;
+
   const subagentInvocations =
     payload._tag === "SubagentRequested" ||
     payload._tag === "SubagentStarted" ||
     payload._tag === "SubagentJoined"
       ? upsertSubagentInvocation(projection.subagentInvocations, payload)
       : projection.subagentInvocations;
+
   // The child-side lineage is immutable (SUB-004): the first canonical record wins forever.
   const parentLink =
     projection.parentLink ?? (payload._tag === "SubagentLineageRecorded" ? payload : undefined);
@@ -228,8 +243,10 @@ export const replayThreadFromCheckpoint = (
   tailDigest: Digest = checkpoint.tailDigest,
 ): ThreadProjection => {
   let projection = checkpoint;
+
   for (const record of records) {
     projection = reduceThreadRecord(projection, record, tailDigest);
   }
+
   return projection;
 };

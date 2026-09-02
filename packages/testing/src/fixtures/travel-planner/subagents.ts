@@ -50,6 +50,7 @@ export const LookupDestination = Tool.make("lookup_destination", {
 });
 
 export const DestinationResearcherToolkit = Toolkit.make(LookupDestination);
+
 export const DestinationResearcherToolkitLayer = DestinationResearcherToolkit.toLayer({
   lookup_destination: (query) => Effect.flatMap(DestinationGuide, (guide) => guide.lookup(query)),
 });
@@ -111,6 +112,7 @@ export const destinationLookup = (
   query: DestinationQuery,
 ): Effect.Effect<DestinationFacts, DestinationGuideUnavailable> => {
   const facts = guideFacts.get(query.destination);
+
   return facts === undefined
     ? Effect.fail(
         DestinationGuideUnavailable.make({
@@ -123,15 +125,18 @@ export const destinationLookup = (
 
 const requireDestinationFacts = (destination: string): DestinationFacts => {
   const facts = guideFacts.get(destination);
+
   if (facts === undefined) {
     throw new Error(`No deterministic guide entry exists for destination ${destination}`);
   }
+
   return facts;
 };
 
 /** The report the scripted researcher writes after consulting the guide. */
 export const destinationReportFor = (destination: string): DestinationReport => {
   const facts = requireDestinationFacts(destination);
+
   return DestinationReport.make({
     destination: facts.destination,
     highlights: facts.highlights,
@@ -146,7 +151,9 @@ export const DestinationGuideLayer = Layer.effect(
   DestinationGuide,
   Effect.gen(function* () {
     const lifecycle = yield* CatalogLifecycle;
+
     yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
+
     return DestinationGuide.of({ lookup: destinationLookup });
   }),
 );
@@ -223,7 +230,9 @@ export const destinationResearchDelegation = Subagent.define("delegate_destinati
   prepareInput: (request) =>
     Effect.gen(function* () {
       const gate = yield* ResearchDispatchGate;
+
       yield* gate.awaitDispatch(request.destination);
+
       return DestinationBrief.make({
         destination: request.destination,
         focus: `research:${request.focus}`,
@@ -460,19 +469,23 @@ export const makeDestinationResearcherModel = (destinations: ReadonlyArray<strin
     const lifecycle = yield* CatalogLifecycle;
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
     const gates = new Map<string, ResearcherGates>();
+
     for (const destination of destinations) {
       gates.set(destination, {
         started: yield* Deferred.make<void>(),
         release: yield* Deferred.make<void>(),
       });
     }
+
     const gatesFor = (destination: string): Effect.Effect<ResearcherGates> =>
       Effect.suspend(() => {
         const entry = gates.get(destination);
+
         return entry === undefined
           ? Effect.die(new Error(`No researcher gates exist for destination ${destination}`))
           : Effect.succeed(entry);
       });
+
     const controls: DestinationResearcherControls = {
       awaitStarted: (destination) =>
         gatesFor(destination).pipe(Effect.flatMap((entry) => Deferred.await(entry.started))),
@@ -483,6 +496,7 @@ export const makeDestinationResearcherModel = (destinations: ReadonlyArray<strin
         ),
       prompts: Ref.get(prompts),
     };
+
     const model = Model.make(
       "scripted",
       "destination-researcher-scripted",
@@ -491,15 +505,18 @@ export const makeDestinationResearcherModel = (destinations: ReadonlyArray<strin
         Effect.gen(function* () {
           yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: (options) =>
               Stream.unwrap(
                 Effect.gen(function* () {
                   const promptJson = JSON.stringify(options.prompt.content);
+
                   const destination = destinations.find((candidate) =>
                     promptJson.includes(candidate),
                   );
+
                   if (destination === undefined) {
                     return yield* Effect.die(
                       new Error("The researcher prompt names no scripted destination"),
@@ -507,12 +524,15 @@ export const makeDestinationResearcherModel = (destinations: ReadonlyArray<strin
                   }
                   const entry = yield* gatesFor(destination);
                   const index = yield* Ref.getAndUpdate(turn, (value) => value + 1);
+
                   if (index === 0) {
                     yield* Ref.update(prompts, (previous) => [...previous, promptJson]);
                     yield* Deferred.succeed(entry.started, undefined);
+
                     return Stream.fromIterable(researcherLookupParts(destination));
                   }
                   yield* Deferred.await(entry.release);
+
                   return Stream.fromIterable(researcherReportParts(destination));
                 }),
               ),
@@ -520,5 +540,6 @@ export const makeDestinationResearcherModel = (destinations: ReadonlyArray<strin
         }),
       ),
     );
+
     return { controls, model };
   });

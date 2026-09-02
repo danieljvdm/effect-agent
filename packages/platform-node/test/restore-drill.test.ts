@@ -96,6 +96,7 @@ const drainPlanner = (thread: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
     const agent = Agent.withModel(plannerDefinition, model);
+
     return yield* runtime.processThread(agent, decodeThreadId(thread));
   });
 
@@ -104,6 +105,7 @@ const drainBook = (site: CrashSite, thread: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(FRESH_ANSWER));
     const agent = Agent.withModel(bookDefinition, model);
+
     return yield* runtime
       .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookTools)));
@@ -126,12 +128,14 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const runtime = yield* DurableAgentRuntime;
                 const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
                 const agent = Agent.withModel(plannerDefinition, model);
+
                 yield* runtime.submit(
                   agent,
                   { question: "settle before the backup" },
                   crashSubmitOptions(SETTLED_LANE, SETTLED_KEY),
                 );
                 const settlements = yield* drainPlanner(SETTLED_LANE);
+
                 expect(settlements[0]?.outcome).toBe("completed");
               }),
             );
@@ -151,6 +155,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               leaseMillis: CHILD_LEASE_MS,
               supplierDir: site.supplier,
             });
+
             expectKilled(killed);
             yield* waitOutChildLease;
             expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
@@ -160,6 +165,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             // database (the drill's stand-in for an online backup bookmark).
             // ---------------------------------------------------------------
             const backupDb = `${site.db}.backup`;
+
             copyDatabase(site.db, backupDb);
 
             // ---------------------------------------------------------------
@@ -175,9 +181,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const ledger = yield* SubmissionLedger;
                 const host = yield* NodeDurableHost;
                 const snapshot = yield* lookupByKey(UNCERTAIN_LANE, UNCERTAIN_KEY);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("MarkUnknown");
                 expect(report?.disposition).toBe("unknown");
 
@@ -202,6 +210,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     producerId: POST_BACKUP_PRODUCER,
                   }),
                 );
+
                 expect(Option.isSome(claim)).toBe(true);
                 if (Option.isNone(claim)) throw new Error("Expected a post-backup claim");
                 yield* ledger.releaseOwnership(
@@ -212,18 +221,21 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
 
                 const settlements = yield* drainBook(site, UNCERTAIN_LANE);
+
                 expect(settlements[0]?.outcome).toBe("completed");
                 // The recovered result was applied WITHOUT re-executing the booking.
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
 
                 const postModel = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
                 const postAgent = Agent.withModel(plannerDefinition, postModel);
+
                 yield* runtime.submit(
                   postAgent,
                   { question: "admitted after the backup" },
                   crashSubmitOptions(POST_BACKUP_LANE, POST_BACKUP_KEY),
                 );
                 const postSettlements = yield* drainPlanner(POST_BACKUP_LANE);
+
                 expect(postSettlements[0]?.outcome).toBe("completed");
 
                 return claim.value.ownershipToken;
@@ -235,6 +247,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             // documented restore semantics.
             // ---------------------------------------------------------------
             const restoredDb = `${site.db}.restored`;
+
             copyDatabase(backupDb, restoredDb);
             yield* withHost(
               restoredDb,
@@ -247,6 +260,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // (1) Pre-backup history survived intact.
                 const settledLane = yield* runtime.verify(decodeThreadId(SETTLED_LANE));
+
                 expect(settledLane.ok).toBe(true);
 
                 // (3) The post-backup outcome is GONE; the external effect is not: startup
@@ -255,15 +269,19 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("MarkUnknown");
                 expect(report?.disposition).toBe("unknown");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
                 const obligations = yield* runtime.scanObligations(
                   ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }),
                 );
+
                 const entry = obligations.entries.find(
                   (candidate) => candidate.submissionId === snapshot.submissionId,
                 );
+
                 expect(entry?.blockedOn).toBe("unknown");
 
                 // (2) The post-backup epoch from the ORIGINAL timeline is fenced: its token
@@ -276,6 +294,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     }),
                   ),
                 );
+
                 expect(["OwnershipLost", "FenceRejected", "LedgerError"]).toContain(
                   failureTag(renewExit),
                 );
@@ -290,6 +309,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       .idempotencyKey,
                   }),
                 );
+
                 expect(Option.isNone(postBackupRow)).toBe(true);
 
                 // The restored lane completes through the SAME authorized DUR-017 path, from
@@ -307,18 +327,22 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   }),
                 );
                 const settlements = yield* drainBook(site, UNCERTAIN_LANE);
+
                 expect(settlements[0]?.outcome).toBe("completed");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
                 // The restored lane's canonical history carries the full prepared → resolved →
                 // settled trail and passes the shared integrity checks.
                 const verifyReport = yield* runtime.verify(decodeThreadId(UNCERTAIN_LANE));
+
                 expect(
                   verifyReport.ok,
                   `restored integrity report: ${JSON.stringify(verifyReport.checks)}`,
                 ).toBe(true);
+
                 const recordIds = (yield* readLog(UNCERTAIN_LANE)).map(
                   (envelope) => envelope.record.recordId,
                 );
+
                 expect(recordIds).toContain(
                   toolCallPreparedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
                 );
@@ -335,6 +359,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const original = yield* lookupByKey(POST_BACKUP_LANE, POST_BACKUP_KEY);
+
                 expect(original.state).toBe("settled");
               }),
             );

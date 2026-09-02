@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
 
-import type { DemoApprovalPending } from "./operational-contracts";
 import {
+  type DemoApprovalPending,
   type DemoOperationalEvent,
   DemoRunFailure,
   ResolveRunApprovalRequest,
@@ -22,9 +22,11 @@ describe("Phase 2 operational runtime", () => {
   it.effect("extends one official thread across consecutive Runs", () =>
     Effect.gen(function* () {
       const runtime = yield* DemoInteractiveRuntime;
+
       const first = yield* runtime
         .start(StartOperationalRunRequest.make({ scenario: "guided" }))
         .pipe(Stream.runCollect);
+
       const second = yield* runtime
         .start(StartOperationalRunRequest.make({ scenario: "guided" }))
         .pipe(Stream.runCollect);
@@ -42,9 +44,11 @@ describe("Phase 2 operational runtime", () => {
   it.effect("shows deterministic parallel work, safe input seams, and bounded adapters", () =>
     Effect.gen(function* () {
       const runtime = yield* DemoInteractiveRuntime;
+
       const collected = yield* runtime
         .start(StartOperationalRunRequest.make({ scenario: "guided" }))
         .pipe(Stream.runCollect);
+
       const events = Array.from(collected);
       const batch = events.find((event) => event._tag === "DemoToolBatchCommitted");
 
@@ -88,6 +92,7 @@ describe("Phase 2 operational runtime", () => {
       const runtime = yield* DemoInteractiveRuntime;
       const pending = yield* Deferred.make<DemoApprovalPending>();
       const observed = yield* Ref.make<ReadonlyArray<DemoOperationalEvent>>([]);
+
       const fiber = yield* runtime
         .start(StartOperationalRunRequest.make({ scenario: "hold" }))
         .pipe(
@@ -103,7 +108,9 @@ describe("Phase 2 operational runtime", () => {
           Stream.runDrain,
           Effect.forkChild,
         );
+
       const request = yield* Deferred.await(pending);
+
       yield* runtime.resolveApproval(
         ResolveRunApprovalRequest.make({
           handle: request.handle,
@@ -113,6 +120,7 @@ describe("Phase 2 operational runtime", () => {
       );
       const exit = yield* Fiber.await(fiber);
       const events = yield* Ref.get(observed);
+
       const starts = events
         .filter((event) => event._tag === "DemoHoldHandlerState")
         .map((event) => event.starts);
@@ -127,6 +135,7 @@ describe("Phase 2 operational runtime", () => {
     Effect.gen(function* () {
       const runtime = yield* DemoInteractiveRuntime;
       const observed = yield* Ref.make<ReadonlyArray<DemoOperationalEvent>>([]);
+
       const exit = yield* runtime
         .start(StartOperationalRunRequest.make({ scenario: "tool-defect" }))
         .pipe(
@@ -134,10 +143,12 @@ describe("Phase 2 operational runtime", () => {
           Stream.runDrain,
           Effect.exit,
         );
+
       const events = yield* Ref.get(observed);
 
       expect(Exit.isFailure(exit)).toBe(true);
       const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+
       expect(Schema.is(DemoRunFailure)(failure)).toBe(true);
       if (Schema.is(DemoRunFailure)(failure)) {
         expect(failure.errorTag).toBe("DemoRunError");
@@ -146,6 +157,7 @@ describe("Phase 2 operational runtime", () => {
       expect(events.some((event) => event._tag === "DemoRunOpened")).toBe(true);
 
       const reopened = yield* Ref.make<ReadonlyArray<DemoOperationalEvent>>([]);
+
       const secondExit = yield* runtime
         .start(StartOperationalRunRequest.make({ scenario: "tool-defect" }))
         .pipe(
@@ -153,10 +165,12 @@ describe("Phase 2 operational runtime", () => {
           Stream.runDrain,
           Effect.exit,
         );
+
       const reopenedEvents = yield* Ref.get(reopened);
 
       expect(Exit.isFailure(secondExit)).toBe(true);
       const secondFailure = Exit.isFailure(secondExit) ? Cause.squash(secondExit.cause) : undefined;
+
       if (Schema.is(DemoRunFailure)(secondFailure)) {
         expect(secondFailure.errorTag).not.toBe("DemoRunAlreadyActive");
       }
@@ -168,6 +182,7 @@ describe("Phase 2 operational runtime", () => {
     Effect.gen(function* () {
       const runtime = yield* DemoInteractiveRuntime;
       const observed = yield* Ref.make<ReadonlyArray<DemoOperationalEvent>>([]);
+
       const exit = yield* runtime
         .start(StartOperationalRunRequest.make({ scenario: "budget-cost" }))
         .pipe(
@@ -175,6 +190,7 @@ describe("Phase 2 operational runtime", () => {
           Stream.runDrain,
           Effect.exit,
         );
+
       const events = yield* Ref.get(observed);
       const rejected = events.find((event) => event._tag === "DemoBudgetRejected");
 

@@ -85,11 +85,14 @@ export const waitUntil = <A>(
 ): Effect.Effect<A> =>
   Effect.gen(function* () {
     const rounds = Math.ceil(timeoutMillis / POLL_INTERVAL_MS);
+
     for (let round = 0; round < rounds; round++) {
       const result = yield* poll;
+
       if (Option.isSome(result)) return result.value;
       yield* Effect.sleep(Duration.millis(POLL_INTERVAL_MS));
     }
+
     return yield* Effect.die(new Error(`Timed out waiting for ${label()}`));
   });
 
@@ -136,6 +139,7 @@ const childEnv = (options: ChildOptions): Record<string, string> => {
     [CrashEnv.thread]: options.thread,
     [CrashEnv.idempotencyKey]: options.key,
   };
+
   if (options.killAt !== undefined) env[CrashEnv.killAt] = options.killAt;
   if (options.killAtStorage !== undefined) env[CrashEnv.killAtStorage] = options.killAtStorage;
   if (options.blockAt !== undefined) env[CrashEnv.blockAt] = options.blockAt;
@@ -157,6 +161,7 @@ const childEnv = (options: ChildOptions): Record<string, string> => {
   if (options.projectReleaseFile !== undefined) {
     env[CrashEnv.projectReleaseFile] = options.projectReleaseFile;
   }
+
   return env;
 };
 
@@ -171,9 +176,11 @@ export const startWorker = (
         env: { ...process.env, ...childEnv(options) },
         stdio: ["ignore", "pipe", "pipe"],
       });
+
       let stdout = "";
       let stderr = "";
       let exited: WorkerExit | undefined;
+
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
@@ -185,6 +192,7 @@ export const startWorker = (
       child.once("exit", (code, signal) => {
         exited = { code, signal };
       });
+
       const handle: WorkerHandle = {
         stdoutText: () => stdout,
         stderrText: () => stderr,
@@ -197,6 +205,7 @@ export const startWorker = (
           20_000,
         ),
       };
+
       return handle;
     }),
     (handle) => Effect.sync(() => handle.kill()),
@@ -213,6 +222,7 @@ export const runWorkerToExit = (options: ChildOptions): Effect.Effect<WorkerResu
     Effect.gen(function* () {
       const handle = yield* startWorker(options);
       const exit = yield* handle.awaitExit;
+
       return { exit, stdout: handle.stdoutText(), stderr: handle.stderrText() };
     }),
   );
@@ -224,6 +234,7 @@ export const childMessages = (stdout: string): ReadonlyArray<ChildMessage> =>
     .flatMap((line) => {
       try {
         const parsed: unknown = JSON.parse(line);
+
         return Option.match(decodeChildMessageOption(parsed), {
           onNone: () => [],
           onSome: (message) => [message],
@@ -287,9 +298,11 @@ export const withCrashSite = <A, E, R>(use: (site: CrashSite) => Effect.Effect<A
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
+
       const directory = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "effect-agent-crash-",
       });
+
       return yield* use({
         db: `${directory}/crash.sqlite`,
         marker: `${directory}/marker`,
@@ -303,9 +316,11 @@ export const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
   const error: unknown = failure.value;
+
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -314,6 +329,7 @@ export const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 export const readLog = (thread: string) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(
       store.read(
         ThreadRead.make({
@@ -336,6 +352,7 @@ export const payloadsOf = (
 export const lookupByKey = (thread: string, key: string) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
+
     const snapshot = yield* ledger.lookup(
       SubmissionLookupByKey.make({
         threadId: decodeThreadId(thread),
@@ -343,8 +360,10 @@ export const lookupByKey = (thread: string, key: string) =>
         idempotencyKey: crashSubmitOptions(thread, key).idempotencyKey,
       }),
     );
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error(`Expected an accepted Submission for ${key}`);
+
     return snapshot.value;
   });
 
@@ -352,8 +371,10 @@ export const lookupState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value.state;
   });
 
@@ -381,22 +402,27 @@ const assertSupplierHonesty = (
   supplier: SupplierExpectation,
 ): void => {
   const produced = supplierValues(supplier.site.supplier);
+
   const requireProduced = (value: string, label: string): void => {
     expect(
       produced.has(value),
       `${label} "${value}" is absent from the supplier store — a fabricated result`,
     ).toBe(true);
   };
+
   for (const envelope of records) {
     const payload = envelope.record.payload;
+
     if (payload._tag === "ToolCallSettled" && !payload.isFailure) {
       if (payload.toolName === "book") {
         const result = decodeBookResult(payload.result);
+
         expect(Option.isSome(result)).toBe(true);
         if (Option.isSome(result)) requireProduced(result.value.confirmation, "book result");
       }
       if (payload.toolName === "itinerary") {
         const result = decodeItineraryResult(payload.result);
+
         expect(Option.isSome(result)).toBe(true);
         if (Option.isSome(result)) {
           for (const part of result.value.state.split("+")) {
@@ -407,6 +433,7 @@ const assertSupplierHonesty = (
     }
     if (payload._tag === "ToolStepSettled") {
       const output = decodeStepOutput(payload.output);
+
       expect(Option.isSome(output)).toBe(true);
       if (Option.isSome(output)) requireProduced(output.value, "step output");
     }
@@ -430,35 +457,45 @@ export const assertConvergence = (
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshots: Array<SubmissionSnapshot> = [];
+
     for (const submissionId of submissionIds) {
       const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
       // No accepted Submission disappears (Accepted-work Contract).
       expect(Option.isSome(snapshot)).toBe(true);
       if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
       expect(snapshot.value.state).toBe("settled");
       snapshots.push(snapshot.value);
     }
+
     const ordered = [...snapshots].sort(
       (left, right) => Number(left.queueSequence) - Number(right.queueSequence),
     );
+
     const records = yield* readLog(thread);
     const recordIds = records.map((envelope) => envelope.record.recordId);
+
     expect(new Set(recordIds).size).toBe(recordIds.length);
     for (const snapshot of ordered) {
       const settled = records.filter(
         (envelope) =>
           envelope.record.recordId === submissionSettlementRecordId(snapshot.submissionId),
       );
+
       expect(settled).toHaveLength(1);
       expect(settled[0]?.record.payload._tag).toBe("SubmissionSettled");
     }
+
     const expectedInputs = ordered.map((snapshot) =>
       submissionInputRecordId(snapshot.submissionId),
     );
+
     const inputOrder = recordIds.filter((recordId) =>
       expectedInputs.some((expected) => expected === recordId),
     );
+
     expect(inputOrder).toEqual(expectedInputs.filter((expected) => inputOrder.includes(expected)));
+
     // P7 §7(c) exemption: an ABORTED settlement for never-run work (no canonical
     // `input:{sid}` record) settles immediately by design — without waiting for the head —
     // so it is excluded from the FIFO settlement comparison. DUR-004 bounds EXECUTION order,
@@ -471,12 +508,15 @@ export const assertConvergence = (
           envelope.record.payload._tag === "SubmissionSettled" &&
           envelope.record.payload.outcome === "aborted",
       );
+
     const expectedSettlements = ordered
       .filter((snapshot) => !abortedNeverRan(snapshot))
       .map((snapshot) => submissionSettlementRecordId(snapshot.submissionId));
+
     const settlementOrder = recordIds.filter((recordId) =>
       expectedSettlements.some((expected) => expected === recordId),
     );
+
     expect(settlementOrder).toEqual(expectedSettlements);
     if (supplier !== undefined) assertSupplierHonesty(records, supplier);
   });

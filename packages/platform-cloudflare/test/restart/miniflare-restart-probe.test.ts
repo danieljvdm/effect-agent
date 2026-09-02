@@ -88,15 +88,18 @@ describe("Miniflare persist-dir restart lane (WP0 probe 4)", () => {
 
   it("persists DO storage across dispose/reopen and re-delivers the overdue alarm without an incoming request", async () => {
     const persistDirectory = await mkdtemp(join(tmpdir(), "wp0-miniflare-probe-"));
+
     cleanups.push(() => rm(persistDirectory, { recursive: true, force: true }));
 
     // Node-side listener the alarm handler pings, so alarm re-delivery is
     // observable without ever sending the Durable Object a request.
     const alarmPings: Array<number> = [];
+
     const server = createServer((_request, response) => {
       alarmPings.push(Date.now());
       response.writeHead(204).end();
     });
+
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     cleanups.push(() => new Promise((resolve) => server.close(() => resolve())));
     const alarmReportUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/alarm-fired`;
@@ -105,6 +108,7 @@ describe("Miniflare persist-dir restart lane (WP0 probe 4)", () => {
     // the alarm can fire.
     const first = openRuntime(persistDirectory, alarmReportUrl);
     const prepared = await first.dispatchFetch("http://placeholder/prepare?alarmDelayMs=120000");
+
     expect(await prepared.json()).toEqual({ prepared: true });
     await first.dispose();
     expect(alarmPings).toHaveLength(0);
@@ -113,11 +117,13 @@ describe("Miniflare persist-dir restart lane (WP0 probe 4)", () => {
     // deadline? No — the alarm was armed 120s out so it is NOT overdue yet;
     // first verify storage and the alarm schedule survived the restart.
     const second = openRuntime(persistDirectory, alarmReportUrl);
+
     const report = (await (await second.dispatchFetch("http://placeholder/report")).json()) as {
       persisted: string | null;
       scheduledAlarm: number | null;
       alarmFiredAt: number | null;
     };
+
     expect(report.persisted).toBe("before-restart");
     expect(report.scheduledAlarm).not.toBeNull();
     expect(report.alarmFiredAt).toBeNull();
@@ -127,19 +133,23 @@ describe("Miniflare persist-dir restart lane (WP0 probe 4)", () => {
     // wait for the ping with no DO request in between.
     const third = openRuntime(persistDirectory, alarmReportUrl);
     const preparedAt = Date.now();
+
     await third.dispatchFetch("http://placeholder/prepare?alarmDelayMs=1500");
     await third.dispose();
     const disposedAt = Date.now();
+
     // Guard the probe's own timing assumption: dispose must complete before
     // the alarm deadline, or the re-delivery evidence below is inconclusive.
     expect(disposedAt - preparedAt).toBeLessThan(1500);
 
     const fourth = openRuntime(persistDirectory, alarmReportUrl);
+
     await fourth.ready;
     cleanups.push(() => fourth.dispose());
     const reopenedAt = Date.now();
 
     const deadline = Date.now() + 15_000;
+
     while (alarmPings.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }

@@ -6,6 +6,7 @@ export const Route = createFileRoute("/api/rpc")({
     handlers: {
       POST: async ({ request }) => {
         const { demoRunRpcWebHandler } = await import("@/demo/run-rpc.server");
+
         return demoRunRpcWebHandler.handler(request);
       },
     },

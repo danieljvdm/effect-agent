@@ -53,9 +53,11 @@ import {
 export const docsResearcherDeploymentId = Schema.decodeSync(DeploymentId)(
   "docs-researcher-p7-deployment",
 );
+
 export const docsResearcherProducerId = Schema.decodeSync(ProducerId)(
   "docs-researcher-p7-producer",
 );
+
 export const docsResearcherPrincipal = Schema.decodeSync(Principal)("docs-researcher-p7-principal");
 
 const digestOf = (pair: string) => Schema.decodeSync(Digest)(pair.repeat(32));
@@ -154,6 +156,7 @@ const makeCountingModel = (
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
     const model = Model.make(
       "scripted",
       name,
@@ -166,13 +169,16 @@ const makeCountingModel = (
               Effect.gen(function* () {
                 yield* Ref.update(calls, (value) => value + 1);
                 const promptJson = JSON.stringify(request.prompt);
+
                 yield* Ref.update(prompts, (previous) => [...previous, promptJson]);
+
                 return Stream.fromIterable(yield* decide(promptJson));
               }),
             ),
         }),
       ),
     );
+
     return { model, calls: Ref.get(calls), prompts: Ref.get(prompts) };
   });
 
@@ -217,12 +223,15 @@ export const makeDocsResearcherHarness = (options?: DocsResearcherHarnessOptions
     const discovery = yield* Effect.scoped(
       Effect.gen(function* () {
         const connection = yield* connectMcp(docsMcpRequest);
+
         yield* assertDiscoveryMatchesAuthoredToolkit(connection);
+
         return connection.discovery;
       }),
     ).pipe(Effect.provide(docsMcpConnectorLayer));
 
     const fetchCounts = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+
     const libraryLayer = Layer.succeed(
       DocumentLibrary,
       DocumentLibrary.of({
@@ -232,14 +241,17 @@ export const makeDocsResearcherHarness = (options?: DocsResearcherHarnessOptions
           ).pipe(Effect.andThen(researchDocumentLookup(query))),
       }),
     );
+
     const childToolkitLayer = docContentToolkitLayer.pipe(Layer.provideMerge(libraryLayer));
 
     const childModel = yield* makeCountingModel("doc-summarizer-p7", (promptJson) =>
       Effect.suspend(() => {
         const documentId = documentIds.find((candidate) => promptJson.includes(candidate));
+
         if (documentId === undefined) {
           return Effect.die(new Error("The summarizer prompt names no corpus document"));
         }
+
         return Effect.succeed(
           promptJson.includes(fetchCallId(documentId))
             ? summaryParts(documentId)
@@ -247,9 +259,11 @@ export const makeDocsResearcherHarness = (options?: DocsResearcherHarnessOptions
         );
       }),
     );
+
     const childBinding = Agent.withModel(DocSummarizer, childModel.model);
 
     const firstCallId = summarizeCallId(documentIds[0] ?? "durability-notes");
+
     const parentModel = yield* makeCountingModel("docs-researcher-p7", (promptJson) =>
       Effect.succeed(
         promptJson.includes(firstCallId)
@@ -257,6 +271,7 @@ export const makeDocsResearcherHarness = (options?: DocsResearcherHarnessOptions
           : summaryDelegationParts(documentIds),
       ),
     );
+
     const parentBinding = Agent.withModel(DocsResearcher, parentModel.model);
 
     const delegationLayer = docsSummaryHandlersLayer(childBinding).pipe(
@@ -273,6 +288,7 @@ export const makeDocsResearcherHarness = (options?: DocsResearcherHarnessOptions
       parentBinding,
       docsCoordinatorDigests,
     ).pipe(Effect.provide(delegationLayer));
+
     const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       docsSummarizerDigests,
@@ -288,6 +304,7 @@ export const makeDocsResearcherHarness = (options?: DocsResearcherHarnessOptions
       fetchInvocations: (documentId) =>
         Ref.get(fetchCounts).pipe(Effect.map((current) => current.get(documentId) ?? 0)),
     };
+
     return harness;
   });
 
@@ -302,9 +319,11 @@ const encodeResearchDocument = Schema.encodeEffect(ResearchDocument);
 export const redactedDocumentPreview = Effect.fn("DocsResearcher.redactedDocumentPreview")(
   function* (documentId: string): Effect.fn.Return<RedactedPreview, RedactionError, Redactor> {
     const redactor = yield* Redactor;
+
     const encoded = yield* encodeResearchDocument(researchDocumentFor(documentId)).pipe(
       Effect.orDie,
     );
+
     return yield* redactor.redact(encoded);
   },
 );

@@ -28,6 +28,7 @@ const aiError = (method: string, cause: unknown) =>
   });
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).length;
+
 const elapsedMillis = (started: bigint, finished: bigint): number =>
   Number(finished - started) / 1_000_000;
 
@@ -69,7 +70,9 @@ export const makeNativeEmbeddingLayer = Effect.fn("makeNativeEmbeddingLayer")(fu
     inputs: 0,
     textBytes: 0,
   });
+
   const semaphore = yield* Semaphore.make(1);
+
   const layer = Layer.effect(
     EmbeddingModel.EmbeddingModel,
     Effect.acquireRelease(
@@ -77,10 +80,12 @@ export const makeNativeEmbeddingLayer = Effect.fn("makeNativeEmbeddingLayer")(fu
         const started = yield* Clock.monotonicTimeNanos;
         const extractor = yield* load(options);
         const finished = yield* Clock.monotonicTimeNanos;
+
         yield* Ref.update(telemetry, (current) => ({
           ...current,
           modelStartupMillis: elapsedMillis(started, finished),
         }));
+
         return extractor;
       }),
       (extractor) => semaphore.withPermits(1)(dispose(extractor)),
@@ -98,6 +103,7 @@ export const makeNativeEmbeddingLayer = Effect.fn("makeNativeEmbeddingLayer")(fu
                 textBytes:
                   current.textBytes + inputs.reduce((total, input) => total + byteLength(input), 0),
               }));
+
               const results = yield* semaphore.withPermits(1)(
                 Effect.acquireUseRelease(
                   Effect.uninterruptible(
@@ -121,6 +127,7 @@ export const makeNativeEmbeddingLayer = Effect.fn("makeNativeEmbeddingLayer")(fu
                         );
                       }
                       const data = tensor.data;
+
                       return Array.from({ length: inputs.length }, (_, row) =>
                         Array.from(data.subarray(row * 384, (row + 1) * 384)),
                       );
@@ -128,11 +135,13 @@ export const makeNativeEmbeddingLayer = Effect.fn("makeNativeEmbeddingLayer")(fu
                   (tensor) => Effect.sync(() => tensor.dispose()).pipe(Effect.orDie),
                 ),
               );
+
               return { results, usage: { inputTokens: undefined } };
             }),
         }),
       ),
     ),
   );
+
   return { layer, snapshot: Ref.get(telemetry) } as const;
 });

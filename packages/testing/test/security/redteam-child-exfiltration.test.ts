@@ -74,9 +74,11 @@ const withTemporaryDirectory = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-redteam-exfiltration-",
       });
+
       return yield* use(directory);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -84,6 +86,7 @@ const withTemporaryDirectory = <A, E>(
 const submitMission = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     return yield* runtime.submit(
       docsResearcherSubmitAgent,
       researchMissionRequest,
@@ -94,12 +97,14 @@ const submitMission = (thread: string, key: string) =>
 const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     return yield* runtime.processThreadResolved(threadId, bindings);
   });
 
 const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
@@ -116,10 +121,12 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const harness = yield* makeDocsResearcherHarness().pipe(Effect.provide(NodeCrypto.layer));
+
           yield* Effect.gen(function* () {
             const receipt = yield* submitMission("redteam-exfiltration", "redteam-exfil-1");
             const documents = researchCorpusDocumentIds;
             const parentRunId = runIdForSubmission(receipt.submissionId);
+
             const childThreads = documents.map((documentId) =>
               childThreadIdFor(receipt.submissionId, decodeToolCallId(summarizeCallId(documentId))),
             );
@@ -128,17 +135,21 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             yield* drive(harness.bindings, receipt.threadId);
             for (const childThreadId of childThreads) {
               const settlements = yield* drive(harness.bindings, childThreadId);
+
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
             const settlements = yield* drive(harness.bindings, receipt.threadId);
+
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
             // The child DID read the secret: each child log holds the fetched body verbatim.
             for (const [index, childThreadId] of childThreads.entries()) {
               const documentId = documents[index] ?? "";
+
               const childLogJson = JSON.stringify(
                 (yield* readLog(childThreadId)).map((envelope) => envelope.record.payload),
               );
+
               expect(childLogJson).toContain(docsDocumentBodySecret);
               expect(childLogJson).toContain(documentBodyPhrase(documentId));
             }
@@ -146,9 +157,11 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             // The parent NEVER saw it: no body secret, no raw body phrase, not in the log, not
             // in any coordinator prompt, and not in the final settlement result.
             const parentLog = yield* readLog(receipt.threadId);
+
             const parentLogJson = JSON.stringify(
               parentLog.map((envelope) => envelope.record.payload),
             );
+
             expect(parentLogJson).not.toContain(docsDocumentBodySecret);
             for (const prompt of yield* harness.parentPrompts) {
               expect(prompt).not.toContain(docsDocumentBodySecret);
@@ -165,6 +178,7 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
                   envelope.record.recordId ===
                   `tool-settled:${parentRunId}:1:${summarizeCallId(documentId)}`,
               )?.record.payload;
+
               expect(
                 joinSettle?._tag === "ToolCallSettled" ? joinSettle.result : undefined,
               ).toEqual({
@@ -179,6 +193,7 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
               const childLogJson = JSON.stringify(
                 (yield* readLog(childThreadId)).map((envelope) => envelope.record.payload),
               );
+
               expect(childLogJson).not.toContain(docsMissionConfidentialMarker);
               expect(childLogJson).not.toContain(docsCoordinatorConfidentialMarker);
             }
@@ -218,15 +233,19 @@ describe("S2-D5 the durable failure projection cannot smuggle a raw Cause or unb
           childPayload: { apiKey: SECRET },
           stack: `Error: ${SECRET}`,
         };
+
         const decoded = yield* decodeExecutionFailure(attackerShaped);
+
         // Only the declared, bounded fields survive; no channel exists for the smuggled data.
         expect(decoded.errorTag).toBe("DocumentSummaryFailed");
         expect(Object.keys(decoded)).not.toContain("cause");
         expect(Object.keys(decoded)).not.toContain("childPayload");
         expect(Object.keys(decoded)).not.toContain("stack");
+
         const reEncoded = JSON.stringify(
           yield* Schema.encodeEffect(SubagentExecutionFailure)(decoded),
         );
+
         expect(reEncoded).not.toContain(SECRET);
       }),
   );
@@ -241,6 +260,7 @@ describe("S2-D5 the durable failure projection cannot smuggle a raw Cause or unb
           errorTag: `${SECRET}-${"x".repeat(512)}`,
         }),
       );
+
       expect(oversizedTag._tag).toBe("SchemaError");
 
       // message is bounded at 4096 bytes; the same fail-closed rejection applies.
@@ -250,6 +270,7 @@ describe("S2-D5 the durable failure projection cannot smuggle a raw Cause or unb
           message: `${SECRET} ${"y".repeat(8192)}`,
         }),
       );
+
       expect(oversizedMessage._tag).toBe("SchemaError");
     }),
   );
@@ -259,6 +280,7 @@ describe("S2-D5 the durable failure projection cannot smuggle a raw Cause or unb
     () =>
       Effect.gen(function* () {
         const redactor = yield* Redactor;
+
         // A secret-bearing child failure + progress payload as it would appear in an event/span.
         const childEventPayload = {
           _tag: "ToolCallFailed",
@@ -266,7 +288,9 @@ describe("S2-D5 the durable failure projection cannot smuggle a raw Cause or unb
           message: `internal note: ${SECRET}`,
           progress: { note: SECRET, fetchedBody: `amber-ledger-passage ${SECRET}` },
         };
+
         const preview = yield* redactor.redact(childEventPayload);
+
         expect(preview).not.toContain(SECRET);
         expect(preview).not.toContain("amber-ledger-passage");
         // Shape survives for the reviewer; scalars become type markers.

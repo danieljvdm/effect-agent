@@ -20,10 +20,13 @@ export const repositoryLayer = (snapshot: EvalRepositorySnapshot | undefined) =>
         input: Parameters<ReviewRepository["Service"]["readFile"]>[0],
       ) {
         const { path, revision } = input;
+
         const file = snapshot?.files.find(
           (candidate) => candidate.path === path && candidate.revision === revision,
         );
+
         if (file === undefined) return yield* missing(path, revision);
+
         return yield* ReviewSource.fromText(input, file.content);
       }),
       findFiles: ({ query, revision }) => {
@@ -34,6 +37,7 @@ export const repositoryLayer = (snapshot: EvalRepositorySnapshot | undefined) =>
               .map((file) => file.path),
           ),
         ].sort();
+
         return Effect.succeed(
           ReviewFileList.make({ paths: paths.slice(0, 100), truncated: paths.length > 100 }),
         );

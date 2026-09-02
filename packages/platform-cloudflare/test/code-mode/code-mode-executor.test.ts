@@ -56,7 +56,9 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
       external: ["cloudflare:*", "node:*"],
       logLevel: "silent",
     });
+
     const output = bundled.outputFiles[0];
+
     if (output === undefined) {
       throw new Error("esbuild produced no worker bundle");
     }
@@ -74,12 +76,14 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
   it("passes the shared executor conformance suite and isolated-only enforcement cases in workerd", async () => {
     const response = await runtime.dispatchFetch("http://placeholder/run");
     const payload = (await response.json()) as { readonly failures: ReadonlyArray<string> };
+
     expect(response.ok).toBe(true);
     expect(payload.failures).toEqual([]);
   }, 120_000);
 
   it("host calls inherit the pass Scope and stay off the guest RPC fiber", async () => {
     const response = await runtime.dispatchFetch("http://placeholder/host-call-pass-scope");
+
     expect(response.ok).toBe(true);
     expect(await response.json()).toMatchObject({
       tag: "success",
@@ -92,6 +96,7 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
   // https://github.com/reve-ai/kommunikasie/actions/runs/32483559567
   it("keeps host-call settlement inside each owning Durable Object context", async () => {
     const response = await runtime.dispatchFetch("http://placeholder/durable-object-host-call");
+
     expect(response.ok).toBe(true);
     expect(await response.json()).toMatchObject({
       outcomes: [
@@ -103,6 +108,7 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
 
   it("keeps RPC finalizers total for hostile disposal hooks", async () => {
     const response = await runtime.dispatchFetch("http://placeholder/total-disposal");
+
     expect(response.ok).toBe(true);
     expect(await response.json()).toEqual({ tag: "success" });
   });

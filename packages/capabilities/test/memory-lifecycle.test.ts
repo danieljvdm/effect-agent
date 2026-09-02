@@ -34,10 +34,12 @@ const TestNamespace = MemoryNamespace.define({
 });
 
 const key = MemoryKey.make({ namespace: TestNamespace.make("team-a"), id: "queue-discussion" });
+
 const access = MemoryAccess.make({
   namespace: TestNamespace.make("team-a"),
   scope: MemoryScope.make("participating-channels"),
 });
+
 const document = ActiveMemoryDocument.make({
   version: 1,
   key,
@@ -63,13 +65,16 @@ const document = ActiveMemoryDocument.make({
     extractedAt: 25,
   }),
 });
+
 const candidate = MemoryPassage.make({
   version: 1,
   source: document.source,
   passageId: "claim",
   content: document.content,
 });
+
 const candidates: MemoryLookup = { _tag: "Found", passages: [candidate] };
+
 const limits = MemoryRecallLimits.make({
   maxSources: 4,
   maxItems: 8,
@@ -97,6 +102,7 @@ describe("authoritative memory validation", () => {
         access,
         MemoryAccess.make({ ...access, namespace: TestNamespace.make("team-b") }),
       ];
+
       const lookup: MemoryLookup = {
         _tag: "Found",
         passages: [
@@ -108,6 +114,7 @@ describe("authoritative memory validation", () => {
           }),
         ],
       };
+
       for (const projectText of [document.content.text, "Different project preference"]) {
         const current = accesses.map((bound, index) =>
           ActiveMemoryDocument.make({
@@ -120,6 +127,7 @@ describe("authoritative memory validation", () => {
             },
           }),
         );
+
         const result = yield* Memory.recall(
           accesses.map((bound, index) => ({
             id: `reader-${index}`,
@@ -135,6 +143,7 @@ describe("authoritative memory validation", () => {
           })),
           limits,
         );
+
         expect(result.passages.map((passage) => passage.authority)).toEqual(
           accesses.map((bound) => bound.namespace.address),
         );
@@ -161,7 +170,9 @@ describe("authoritative memory validation", () => {
           content: { ...document.content, text: `🌊 ${"history ".repeat(1_000)}` },
         }),
       );
+
       const selected = [documents[0]!, documents[1]!, documents[0]!, documents[2]!];
+
       const excerpts = selected.map((current, index) =>
         MemoryPassage.make({
           ...candidate,
@@ -171,17 +182,22 @@ describe("authoritative memory validation", () => {
           content: { ...current.content, text: "🌊" },
         }),
       );
+
       const bytes = (passage: MemoryPassage) =>
         new TextEncoder().encode(JSON.stringify(passage)).byteLength;
+
       const maxInputBytes = excerpts.reduce((total, passage) => total + bytes(passage), 0);
       const reads: Array<string> = [];
+
       const reader = MemoryReader.fromAdapter({
         get: (requested) =>
           Effect.sync(() => {
             reads.push(requested.id);
+
             return documents.find((current) => current.key.id === requested.id) ?? null;
           }),
       });
+
       expect(
         yield* revalidateMemoryLookup({ _tag: "Found", passages: excerpts }, access, {
           maxInputBytes,
@@ -201,10 +217,12 @@ describe("authoritative memory validation", () => {
       });
       expect(reads).toEqual(["a", "b"]);
       reads.length = 0;
+
       const stale = MemoryPassage.make({
         ...excerpts[0]!,
         source: { ...excerpts[0]!.source, revision: "old" },
       });
+
       expect(
         yield* revalidateMemoryLookup({ _tag: "Found", passages: [stale] }, access, {
           maxInputBytes,
@@ -236,12 +254,14 @@ describe("authoritative memory validation", () => {
             text: "Dan retracts the queue proposal. The approach is unresolved.",
           },
         });
+
         const result = yield* recall().pipe(
           Effect.provideService(
             MemoryReader,
             MemoryReader.fromAdapter({ get: () => Effect.succeed(corrected) }),
           ),
         );
+
         expect(result.passages).toHaveLength(1);
         expect(result.passages[0]).toMatchObject({
           source: { revision: "2" },
@@ -272,6 +292,7 @@ describe("authoritative memory validation", () => {
           modifiedAt: 100,
           reason: "withdrawn by the source owner",
         });
+
         for (const current of [
           withdrawn,
           ActiveMemoryDocument.make({ ...document, scopes: [] }),
@@ -283,13 +304,16 @@ describe("authoritative memory validation", () => {
               MemoryReader.fromAdapter({ get: () => Effect.succeed(current) }),
             ),
           );
+
           expect(result.passages).toEqual([]);
           expect(result.outcomes[0]?.status).toBe("NoMatch");
         }
+
         const leaked = ActiveMemoryDocument.make({
           ...document,
           key: { ...key, namespace: TestNamespace.make("other-tenant") },
         });
+
         const error = yield* recall().pipe(
           Effect.provideService(
             MemoryReader,
@@ -297,6 +321,7 @@ describe("authoritative memory validation", () => {
           ),
           Effect.flip,
         );
+
         expect(error).toMatchObject({ _tag: "MemoryStorageError", reason: "corrupt" });
       }),
   );
@@ -306,12 +331,14 @@ describe("authoritative memory validation", () => {
     () =>
       Effect.gen(function* () {
         const reads = yield* Ref.make(0);
+
         const reader = MemoryReader.fromAdapter({
           get: () =>
             Ref.getAndUpdate(reads, (n) => n + 1).pipe(
               Effect.map((n) => (n === 0 ? document : null)),
             ),
         });
+
         const forged = MemoryPassage.make({
           ...candidate,
           content: {
@@ -320,13 +347,16 @@ describe("authoritative memory validation", () => {
             attributions: [{ ...candidate.content.attributions[0], speaker: "Adam" }],
           },
         });
+
         const first = yield* recall({ _tag: "Found", passages: [forged, forged] }).pipe(
           Effect.provideService(MemoryReader, reader),
         );
+
         expect(first.passages).toHaveLength(1);
         expect(first.passages[0]?.content).toEqual(document.content);
         expect(yield* Ref.get(reads)).toBe(1);
         const second = yield* recall().pipe(Effect.provideService(MemoryReader, reader));
+
         expect(second.passages).toEqual([]);
         expect(yield* Ref.get(reads)).toBe(2);
       }),
@@ -335,6 +365,7 @@ describe("authoritative memory validation", () => {
   it.effect("does not turn expected reader failure or defects into a missing source", () =>
     Effect.gen(function* () {
       const failure = MemoryStorageError.make({ operation: "read", reason: "unavailable" });
+
       expect(
         yield* recall().pipe(
           Effect.provideService(
@@ -344,6 +375,7 @@ describe("authoritative memory validation", () => {
           Effect.flip,
         ),
       ).toEqual(failure);
+
       const defect = yield* recall().pipe(
         Effect.provideService(
           MemoryReader,
@@ -351,6 +383,7 @@ describe("authoritative memory validation", () => {
         ),
         Effect.exit,
       );
+
       expect(Exit.isFailure(defect)).toBe(true);
       if (Exit.isFailure(defect)) expect(Cause.pretty(defect.cause)).toContain("reader defect");
     }),
@@ -359,8 +392,10 @@ describe("authoritative memory validation", () => {
   it.effect("bounds validation time and releases a reader on timeout and interruption", () =>
     Effect.gen(function* () {
       const releases = yield* Ref.make(0);
+
       for (const mode of ["timeout", "interruption"] as const) {
         const started = yield* Deferred.make<void>();
+
         const layer = Layer.effect(
           MemoryReader,
           Effect.acquireRelease(
@@ -372,6 +407,7 @@ describe("authoritative memory validation", () => {
             () => Ref.update(releases, (n) => n + 1),
           ),
         );
+
         const fiber = yield* Memory.recall(
           [
             {
@@ -382,6 +418,7 @@ describe("authoritative memory validation", () => {
           ],
           limits,
         ).pipe(Effect.forkChild);
+
         yield* Deferred.await(started);
         if (mode === "timeout") {
           yield* TestClock.adjust(100);

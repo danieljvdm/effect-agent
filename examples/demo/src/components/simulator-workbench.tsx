@@ -171,9 +171,11 @@ export function SimulatorWorkbench() {
   const [selectedEventIndex, setSelectedEventIndex] = useState<number | null>(null);
 
   const active = state.status === "running" || state.status === "suspended";
+
   const selectedEvent =
     (selectedEventIndex === null ? undefined : state.events[selectedEventIndex]) ??
     state.events.at(-1);
+
   const runEvents = useMemo(() => state.events.filter(isRunEvent), [state.events]);
   const toolTraces = useMemo(() => projectToolTraces(runEvents), [runEvents]);
   const commands = state.events.filter((event) => event._tag === "DemoCommandStateChanged");
@@ -181,26 +183,32 @@ export function SimulatorWorkbench() {
   const latestContext = contextEvents.at(-1);
   const latestBudget = state.events.filter((event) => event._tag === "DemoBudgetChanged").at(-1);
   const budgetRejected = state.events.filter((event) => event._tag === "DemoBudgetRejected").at(-1);
+
   const committedBatch = state.events
     .filter((event) => event._tag === "DemoToolBatchCommitted")
     .at(-1);
+
   const mcp = state.events.filter((event) => event._tag === "DemoMcpConnected").at(-1);
   const sandboxEvents = state.events.filter((event) => event._tag === "DemoSandboxObserved");
   const sandboxStarted = sandboxEvents.find((event) => event.event._tag === "SandboxStarted");
   const sandboxOutput = sandboxEvents.find((event) => event.event._tag === "SandboxOutput");
   const sandboxExited = sandboxEvents.find((event) => event.event._tag === "SandboxExited");
   const holdState = state.events.filter((event) => event._tag === "DemoHoldHandlerState").at(-1);
+
   const settlements = new Set(
     state.events
       .filter((event) => event._tag === "DemoApprovalSettled")
       .map((event) => event.requestId),
   );
+
   const pendingApproval = state.events
     .filter((event) => event._tag === "DemoApprovalPending")
     .find((event) => !settlements.has(event.request.requestId));
+
   const declaredTools = runEvents.filter((event) => event._tag === "ToolCallDeclared");
   const completedTools = runEvents.filter((event) => event._tag === "ToolCallSucceeded");
   const itinerary = state.output?.itineraries[0];
+
   const budgetMeters =
     latestBudget === undefined
       ? []
@@ -407,9 +415,11 @@ export function SimulatorWorkbench() {
                         const trace = toolTraces.find(
                           (candidate) => candidate.toolCallId === declared.toolCallId,
                         );
+
                         const completionIndex = completedTools.findIndex(
                           (completed) => completed.toolCallId === declared.toolCallId,
                         );
+
                         return (
                           <div
                             className="relative overflow-hidden rounded-md border border-slate-200 bg-slate-50 p-3"

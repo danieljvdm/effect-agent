@@ -44,6 +44,7 @@ describe("Sandbox schemas", () => {
       isolation: "unisolated",
       identity: "local-process",
     });
+
     const event = {
       _tag: "SandboxOutput",
       eventVersion: 1,
@@ -52,6 +53,7 @@ describe("Sandbox schemas", () => {
       text: "warning",
       bytes: 7,
     } as const;
+
     const failure = SandboxExitError.make({
       implementation,
       exitCode: 2,
@@ -66,6 +68,7 @@ describe("Sandbox schemas", () => {
 
   it("rejects oversized untrusted collections and diagnostics at the Schema boundary", () => {
     const oversizedArgs = Array.from({ length: 257 }, () => "argument");
+
     expect(() =>
       Schema.decodeSync(SandboxRequest)({
         runtime: { kind: "unisolated-process", identity: "node" },
@@ -88,11 +91,13 @@ describe("Sandbox schemas", () => {
       isolation: "isolated",
       identity: "test-sandbox",
     });
+
     const resourceUse = SandboxResourceUse.make({
       wallTime: Duration.millis(1),
       stdoutBytes: 0,
       stderrBytes: 0,
     });
+
     expect(() =>
       SandboxExited.make({
         eventVersion: 1,

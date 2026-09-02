@@ -22,6 +22,7 @@ const authorizer = Layer.effect(
   Effect.gen(function* () {
     const owner = yield* MemoryOwnerIdentity;
     const namespace = yield* Projects.restore(owner.namespace.address);
+
     return {
       authorize: (request) =>
         request.principal === `tenant:${namespace.identity.tenantId}` &&
@@ -43,6 +44,7 @@ export const correctProjectMemory = Effect.fn("example.correctProjectMemory")(fu
     MemoryAccess.make({ namespace, scope: MemoryScope.make("project") }),
     yield* Schema.decodeUnknownEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
   );
+
   return yield* client.change(write);
 });
 
@@ -56,5 +58,6 @@ export const recallProjectMemory = Effect.fn("example.recallProjectMemory")(func
     MemoryAccess.make({ namespace, scope: MemoryScope.make("project") }),
     yield* Schema.decodeUnknownEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
   );
+
   return yield* memory.recall(candidates, limits);
 });

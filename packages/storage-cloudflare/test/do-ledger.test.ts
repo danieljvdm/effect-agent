@@ -99,6 +99,7 @@ describe("DoSubmissionLedger", () => {
         expect(Exit.isFailure(opened)).toBe(true);
         if (Exit.isFailure(opened)) {
           const failure = Cause.findErrorOption(opened.cause);
+
           expect(Option.isSome(failure)).toBe(true);
           if (Option.isSome(failure)) {
             expect(isDoStorageError(failure.value)).toBe(true);
@@ -107,11 +108,13 @@ describe("DoSubmissionLedger", () => {
             }
           }
         }
+
         const tables = storage.sql
           .exec<{ name: string }>(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'effect_agent_%'",
           )
           .toArray();
+
         expect(tables).toEqual([]);
       }),
     ));
@@ -121,22 +124,28 @@ describe("DoSubmissionLedger", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const lane = thread("thread-do-semantic-json");
+
         const admitted = yield* ledger.admit(
           yield* admission("thread-do-semantic-json", "semantic-json-key", {
             work: "semantic JSON",
           }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+
         const claim = yield* ledger.claim(
           ClaimRequest.make({ threadId: lane, producerId: TEST_PRODUCER }),
         );
+
         if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
 
         const allocation = { turns: 4, toolCalls: 8 };
         const reorderedAllocation = { toolCalls: 8, turns: 4 };
         const allocationDigest = yield* digestJson(allocation);
+
         expect(yield* digestJson(reorderedAllocation)).toBe(allocationDigest);
         const reservationId = id(ChildReservationId, "child-reservation:do-semantic-json");
+
         const reservationFields = {
           reservationId,
           parentSubmissionId: admitted.submissionId,
@@ -144,24 +153,29 @@ describe("DoSubmissionLedger", () => {
           ownershipToken: claim.value.ownershipToken,
           allocationDigest,
         };
+
         yield* ledger.reserveChildBudget(
           ChildBudgetReservationRequest.make({ ...reservationFields, allocation }),
         );
+
         const replayed = yield* ledger.reserveChildBudget(
           ChildBudgetReservationRequest.make({
             ...reservationFields,
             allocation: reorderedAllocation,
           }),
         );
+
         expect(replayed.replayed).toBe(true);
 
         const accounting = {
           consumed: { turns: 1, toolCalls: 2 },
           released: { turns: 3, toolCalls: 6 },
         };
+
         yield* ledger.beginChildBudgetRelease(
           BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
         );
+
         const replayedFreeze = yield* ledger.beginChildBudgetRelease(
           BeginChildBudgetReleaseRequest.make({
             reservationId,
@@ -171,9 +185,11 @@ describe("DoSubmissionLedger", () => {
             },
           }),
         );
+
         expect(replayedFreeze.status).toBe("releasePending");
 
         const resolutionCall = toolCall("call-do-semantic-resolution");
+
         yield* ledger.markUnknown(
           MarkUnknownRequest.make({
             submissionId: admitted.submissionId,
@@ -181,6 +197,7 @@ describe("DoSubmissionLedger", () => {
             reason: "semantic JSON replay",
           }),
         );
+
         const firstResolution = yield* ledger.recordUnknownResolution(
           UnknownResolutionCommand.make({
             submissionId: admitted.submissionId,
@@ -193,6 +210,7 @@ describe("DoSubmissionLedger", () => {
             }),
           }),
         );
+
         const replayedResolution = yield* ledger.recordUnknownResolution(
           UnknownResolutionCommand.make({
             submissionId: admitted.submissionId,
@@ -205,6 +223,7 @@ describe("DoSubmissionLedger", () => {
             }),
           }),
         );
+
         expect(replayedResolution.resolvedAt).toEqual(firstResolution.resolvedAt);
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     ));
@@ -218,10 +237,12 @@ describe("DoSubmissionLedger", () => {
     const lane = "thread-eviction-reread";
 
     const first = threadStub(objectName);
+
     const outcome = await runInDurableObject(first, (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const ledger = yield* SubmissionLedger;
+
           return yield* ledger.admit(yield* admission(lane, "eviction-key", { city: "Kyoto" }));
         }).pipe(
           Effect.provide([
@@ -240,6 +261,7 @@ describe("DoSubmissionLedger", () => {
       () => "returned" as const,
       () => "evicted" as const,
     );
+
     // The armed hit fired AFTER the admission transaction committed and killed the
     // incarnation before the caller could observe the result.
     expect(outcome).toBe("evicted");
@@ -248,14 +270,17 @@ describe("DoSubmissionLedger", () => {
     // client retry replays the identical identities (DUR-001), and the nonterminal scan —
     // recovery's admission-independent worklist — sees the accepted obligation.
     const second = threadStub(objectName);
+
     const reread = await runInDurableObject(second, (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const ledger = yield* SubmissionLedger;
           const capabilities = yield* ledger.capabilities;
+
           const replayed = yield* ledger.admit(
             yield* admission(lane, "eviction-key", { city: "Kyoto" }),
           );
+
           const byKey = yield* ledger.lookup(
             SubmissionLookupByKey.make({
               threadId: thread(lane),
@@ -263,11 +288,14 @@ describe("DoSubmissionLedger", () => {
               idempotencyKey: id(IdempotencyKey, "eviction-key"),
             }),
           );
+
           const nonterminal = yield* ledger.scanNonterminal.pipe(Stream.runCollect);
+
           return { capabilities, replayed, byKey, nonterminal: [...nonterminal] };
         }).pipe(Effect.provide([ledgerLayer({ storage: state.storage }), BrowserCrypto.layer])),
       ),
     );
+
     expect(reread.capabilities.durability).toBe("durable-cloudflare");
     expect(reread.replayed.replayed).toBe(true);
     expect(Option.isSome(reread.byKey)).toBe(true);
@@ -285,13 +313,16 @@ describe("DoSubmissionLedger", () => {
     withThreadStorage("wp1-ledger-routable-ids", (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const admitted = yield* ledger.admit(
           yield* admission("thread-routable", "routable-key", { work: "route" }),
         );
+
         // D-P6-5: `{uuidv7}:{threadId}`, split at the FIRST ":" — the tail is the
         // owning Thread, which may itself contain colons. Opaque to every consumer;
         // parsed only by this adapter's routing layer (WP2).
         const separator = admitted.submissionId.indexOf(":");
+
         expect(separator).toBeGreaterThan(0);
         expect(admitted.submissionId.slice(separator + 1)).toBe("thread-routable");
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
@@ -310,9 +341,11 @@ describe("DoSubmissionLedger", () => {
             }),
           )
           .pipe(Effect.exit);
+
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
+
           expect(error).toBeInstanceOf(LedgerError);
           if (isLedgerError(error)) {
             expect(error.cause).toBeInstanceOf(DoValueBoundExceeded);
@@ -328,6 +361,7 @@ describe("DoSubmissionLedger", () => {
         const rows = yield* sql<Record<string, unknown>>`
           SELECT submission_id FROM effect_agent_submissions
         `;
+
         expect(rows).toEqual([]);
       }).pipe(
         Effect.provide(

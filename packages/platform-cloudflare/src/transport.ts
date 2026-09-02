@@ -23,6 +23,7 @@ export const threadPortTransportLayer: Layer.Layer<
 > = Layer.effect(ThreadPortTransport)(
   Effect.gen(function* () {
     const { namespace } = yield* ThreadObjectNamespace;
+
     return ThreadPortTransport.of({
       call: (threadId, request) =>
         Effect.tryPromise({

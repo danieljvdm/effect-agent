@@ -13,11 +13,13 @@ import {
 const MAX_SUITE_BYTES = 64n * 1_024n * 1_024n;
 const decodeSuiteJson = Schema.decodeUnknownEffect(Schema.fromJsonString(EvalSuite));
 const encodeRequestJson = Schema.encodeEffect(Schema.fromJsonString(ReviewRequest));
+
 const encodeRepositoryJson = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Struct({ version: Schema.Literal(1), files: Schema.Array(EvalRepositoryFile) }),
   ),
 );
+
 const encodeObservationJson = Schema.encodeEffect(Schema.fromJsonString(EvalObservation));
 
 const dataError = (
@@ -40,6 +42,7 @@ export const digestReviewRequest = Effect.fn("PrReviewEval.digestReviewRequest")
       dataError("encode request", "ReviewRequest failed to encode as canonical JSON", { cause }),
     ),
   );
+
   return yield* digestText(encoded);
 });
 
@@ -55,6 +58,7 @@ export const digestRepositorySnapshot = Effect.fn("PrReviewEval.digestRepository
         }),
       ),
     );
+
     return yield* digestText(encoded);
   },
 );
@@ -63,10 +67,13 @@ export const digestText = Effect.fn("PrReviewEval.digestText")(function* (text: 
   const bytes = yield* Effect.fromResult(Encoding.decodeHex(Encoding.encodeHex(text))).pipe(
     Effect.mapError((cause) => dataError("encode text", "UTF-8 encoding failed", { cause })),
   );
+
   const crypto = yield* Crypto.Crypto;
+
   const digest = yield* crypto
     .digest("SHA-256", bytes)
     .pipe(Effect.mapError((cause) => dataError("digest text", "SHA-256 failed", { cause })));
+
   return yield* Schema.decodeUnknownEffect(EvalInputDigest)(Encoding.encodeHex(digest)).pipe(
     Effect.mapError((cause) =>
       dataError("digest text", "SHA-256 returned an invalid digest", { cause }),
@@ -81,6 +88,7 @@ export const validateEvalSuite = Effect.fn("PrReviewEval.validateEvalSuite")(fun
     suite.cases,
     Effect.fn("PrReviewEval.validateCaseDigest")(function* (evalCase) {
       const actual = yield* digestReviewRequest(evalCase.request);
+
       if (actual !== evalCase.inputDigest) {
         return yield* dataError(
           "validate case digest",
@@ -89,6 +97,7 @@ export const validateEvalSuite = Effect.fn("PrReviewEval.validateEvalSuite")(fun
       }
       if (evalCase.repository !== undefined) {
         const repositoryDigest = yield* digestRepositorySnapshot(evalCase.repository);
+
         if (repositoryDigest !== evalCase.repository.digest) {
           return yield* dataError(
             "validate repository digest",
@@ -99,11 +108,13 @@ export const validateEvalSuite = Effect.fn("PrReviewEval.validateEvalSuite")(fun
     }),
     { discard: true },
   );
+
   return suite;
 });
 
 export const loadEvalSuite = Effect.fn("PrReviewEval.loadEvalSuite")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
+
   const info = yield* fs
     .stat(path)
     .pipe(
@@ -111,6 +122,7 @@ export const loadEvalSuite = Effect.fn("PrReviewEval.loadEvalSuite")(function* (
         dataError("read suite", `Could not inspect eval suite at ${path}`, { path, cause }),
       ),
     );
+
   if (info.type !== "File") {
     return yield* dataError("read suite", "Eval suite path is not a regular file", { path });
   }
@@ -121,6 +133,7 @@ export const loadEvalSuite = Effect.fn("PrReviewEval.loadEvalSuite")(function* (
       { path },
     );
   }
+
   const contents = yield* fs
     .readFileString(path)
     .pipe(
@@ -128,11 +141,13 @@ export const loadEvalSuite = Effect.fn("PrReviewEval.loadEvalSuite")(function* (
         dataError("read suite", `Could not read eval suite at ${path}`, { path, cause }),
       ),
     );
+
   const suite = yield* decodeSuiteJson(contents).pipe(
     Effect.mapError((cause) =>
       dataError("decode suite", `Eval suite at ${path} is invalid`, { path, cause }),
     ),
   );
+
   return yield* validateEvalSuite(suite);
 });
 
@@ -141,6 +156,7 @@ export const writeObservations = Effect.fn("PrReviewEval.writeObservations")(fun
   observations: Stream.Stream<EvalObservation, E, R>,
 ) {
   const fs = yield* FileSystem.FileSystem;
+
   const file = yield* fs.open(output, { flag: "wx", mode: 0o600 }).pipe(
     Effect.mapError((cause) =>
       dataError("open observations", `Could not create new eval observations at ${output}`, {
@@ -149,7 +165,9 @@ export const writeObservations = Effect.fn("PrReviewEval.writeObservations")(fun
       }),
     ),
   );
+
   const encoder = new TextEncoder();
+
   return yield* observations.pipe(
     Stream.runFoldEffect(
       () => 0,
@@ -162,6 +180,7 @@ export const writeObservations = Effect.fn("PrReviewEval.writeObservations")(fun
             dataError("encode observations", "Eval observation failed to encode", { cause }),
           ),
         );
+
         yield* file.writeAll(encoder.encode(`${line}\n`)).pipe(
           Effect.andThen(file.sync),
           Effect.uninterruptible,
@@ -172,6 +191,7 @@ export const writeObservations = Effect.fn("PrReviewEval.writeObservations")(fun
             }),
           ),
         );
+
         return count + 1;
       }),
     ),
@@ -182,6 +202,7 @@ export const decodeObservationLines = Effect.fn("PrReviewEval.decodeObservationL
   contents: string,
 ) {
   const lines = contents.split("\n").filter((line) => line.trim().length > 0);
+
   return yield* Effect.forEach(lines, (line, index) =>
     Schema.decodeUnknownEffect(Schema.fromJsonString(EvalObservation))(line).pipe(
       Effect.mapError((cause) =>

@@ -39,6 +39,7 @@ describe("Cloudflare Agent registrations", () => {
     const second = dynamicStub(secondThread);
 
     const firstProbe = await first.bindingSourceProbe();
+
     expect(await first.bindingSourceProbe()).toEqual(firstProbe);
     expect(firstProbe).toMatchObject({
       evaluationCount: 1,
@@ -49,6 +50,7 @@ describe("Cloudflare Agent registrations", () => {
     });
 
     const secondProbe = await second.bindingSourceProbe();
+
     expect(secondProbe).toMatchObject({
       evaluationCount: 1,
       threadId: secondThread,
@@ -62,6 +64,7 @@ describe("Cloudflare Agent registrations", () => {
       CloudflareThreadClient.use((client) =>
         Effect.gen(function* () {
           const definitions = yield* digestDefinitions(registrationDefinitions);
+
           return yield* client.submit(
             { definition: plannerDefinition },
             { question: "plan", ref: firstThread },
@@ -71,13 +74,16 @@ describe("Cloudflare Agent registrations", () => {
       ).pipe(Effect.provide(BrowserCrypto.layer)),
       "DYNAMIC_BINDINGS",
     );
+
     await drainAlarmsUntil(firstThread, allSettled(firstThread, "DYNAMIC_BINDINGS"), {
       namespace: "DYNAMIC_BINDINGS",
     });
+
     const settlement = await runClient(
       CloudflareThreadClient.use((client) => client.awaitSettlement(receipt)),
       "DYNAMIC_BINDINGS",
     );
+
     expect(settlement.outcome).toBe("completed");
     expect(await first.bindingSourceProbe()).toEqual(firstProbe);
   });
@@ -86,16 +92,20 @@ describe("Cloudflare Agent registrations", () => {
     const registrations = Layer.unwrap(
       Effect.gen(function* () {
         const config = yield* ApplicationConfig;
+
         yield* WorkerEnvironment;
         yield* DurableObjectState.DurableObjectState;
         yield* ThreadObjectIdentity;
         yield* Crypto.Crypto;
         yield* Effect.scope;
         if (!config.enabled) return yield* BindingSetupError.make({});
+
         return ThreadObject.layer([]);
       }),
     );
+
     const runtime = registrations.pipe(Layer.provide(ThreadObject.layerConfig(options)));
+
     expectTypeOf<Layer.Error<typeof runtime>>().toEqualTypeOf<
       BindingSetupError | ThreadObject.InitializationError
     >();
@@ -108,11 +118,14 @@ describe("Cloudflare Agent registrations", () => {
     >();
 
     const objectOptions = { ...options, namespaceBinding: "THREADS" };
+
     type FactoryLayer = Parameters<typeof ThreadObject.make>[0];
     expectTypeOf<typeof registrations>().not.toExtend<FactoryLayer>();
+
     const provided = registrations.pipe(
       Layer.provide(Layer.succeed(ApplicationConfig, { enabled: true })),
     );
+
     ThreadObject.make(provided, objectOptions);
     expectTypeOf<typeof Effect.void>().not.toExtend<FactoryLayer>();
     expectTypeOf<typeof Layer.empty>().not.toExtend<FactoryLayer>();
@@ -130,24 +143,30 @@ describe("Cloudflare Agent registrations", () => {
       Effect.runPromise(
         Effect.gen(function* () {
           const lifecycle: Array<string> = [];
+
           const application = Layer.effect(
             ApplicationConfig,
             Effect.gen(function* () {
               const identity = yield* ThreadObjectIdentity;
+
               yield* Crypto.Crypto;
               expect(identity.threadId).toBe("registration-scope");
+
               return yield* Effect.acquireRelease(
                 Effect.sync(() => {
                   lifecycle.push("acquired");
+
                   return { enabled: true };
                 }),
                 () => Effect.sync(() => lifecycle.push("released")),
               );
             }),
           );
+
           const runtime = Layer.unwrap(
             Effect.map(ApplicationConfig, (config) => {
               expect(config.enabled).toBe(true);
+
               return ThreadObject.layer([]);
             }),
           ).pipe(
@@ -158,6 +177,7 @@ describe("Cloudflare Agent registrations", () => {
               ThreadObjectNamespace.layer(env.THREADS),
             ]),
           );
+
           yield* Effect.gen(function* () {
             yield* Layer.build(runtime);
             expect(lifecycle).toEqual(["acquired"]);
@@ -175,6 +195,7 @@ describe("Cloudflare Agent registrations", () => {
           Effect.gen(function* () {
             const lifecycle: Array<string> = [];
             const failure = BindingSetupError.make({});
+
             const application = Layer.effect(
               ApplicationConfig,
               Effect.gen(function* () {
@@ -185,9 +206,11 @@ describe("Cloudflare Agent registrations", () => {
                 if (kind === "failure") return yield* failure;
                 if (kind === "defect") return yield* Effect.die("registration defect");
                 if (kind === "timeout") return yield* Effect.never.pipe(Effect.timeout("0 millis"));
+
                 return yield* Effect.interrupt;
               }),
             );
+
             const runtime = Layer.unwrap(Effect.as(ApplicationConfig, ThreadObject.layer([]))).pipe(
               Layer.provide(application),
               Layer.provide(ThreadObject.layerConfig(options)),
@@ -196,7 +219,9 @@ describe("Cloudflare Agent registrations", () => {
                 ThreadObjectNamespace.layer(env.THREADS),
               ]),
             );
+
             const exit = yield* Layer.build(runtime).pipe(Effect.scoped, Effect.exit);
+
             if (kind === "failure") expect(exit).toEqual(Exit.fail(failure));
             else if (kind === "defect") expect(exit).toEqual(Exit.die("registration defect"));
             else if (kind === "timeout")

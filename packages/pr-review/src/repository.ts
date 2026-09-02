@@ -33,21 +33,26 @@ export class ReviewSource extends Schema.Class<ReviewSource>(
     const request = yield* Schema.decodeUnknownEffect(ReadFileInput)(input).pipe(
       Effect.mapError(() => ReviewContextError.make({ message: "Invalid source range." })),
     );
+
     const lines = text.length === 0 ? [] : text.split("\n");
+
     if (lines.at(-1) === "") lines.pop();
     if (request.startLine > Math.max(1, lines.length)) {
       return yield* ReviewContextError.make({
         message: `startLine ${String(request.startLine)} exceeds the file's ${String(lines.length)} lines.`,
       });
     }
+
     const content = lines
       .slice(request.startLine - 1, request.startLine - 1 + request.lineCount)
       .join("\n");
+
     if (content.length > 20_000) {
       return yield* ReviewContextError.make({
         message: "The requested line range exceeds 20,000 characters; request fewer lines.",
       });
     }
+
     return ReviewSource.make({
       path: request.path,
       revision: request.revision,
@@ -105,6 +110,7 @@ export const reviewToolkit = Toolkit.make(
 export const reviewToolkitLayer = reviewToolkit.toLayer(
   Effect.gen(function* () {
     const repository = yield* ReviewRepository;
+
     return reviewToolkit.of({ read_file: repository.readFile, find_files: repository.findFiles });
   }),
 );

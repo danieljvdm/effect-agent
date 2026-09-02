@@ -102,6 +102,7 @@ const scriptedModel = (firstTurn: ReadonlyArray<Response.StreamPartEncoded>, fin
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: () =>
@@ -125,10 +126,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -179,12 +182,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
     it.effect(`composes independent host services through ephemeral hooks: ${outcome}`, () => {
       const seen: Array<string> = [];
+
       const tools = Toolkit.make(
         Tool.make("book", {
           parameters: Schema.Struct({}),
           success: Schema.String,
         }),
       );
+
       const model = scriptedModel(
         [
           { type: "tool-call", id: "book-1", name: "book", params: {}, providerExecuted: false },
@@ -192,6 +197,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         '"done"',
       );
+
       const agent = Agent.withModel(
         Agent.make("independent-services", {
           input: Schema.String,
@@ -202,23 +208,30 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         }),
         model,
       );
+
       const program = Effect.gen(function* () {
         const authorization = yield* RunToolAuthorization;
+
         return yield* AgentRuntime.run(agent, "book", {
           toolAuthorization: authorization,
         });
       });
+
       const preparationRequired: RunContextPreparation extends Effect.Services<typeof program>
         ? true
         : false = false;
+
       const authorizationRequired: RunToolAuthorization extends Effect.Services<typeof program>
         ? true
         : false = true;
+
       const preparationError: RunContextPreparationError extends Effect.Error<typeof program>
         ? true
         : false = true;
+
       return Effect.gen(function* () {
         const result = yield* program.pipe(Effect.exit);
+
         if (outcome === "allowed") {
           expect(Exit.isSuccess(result)).toBe(true);
           expect(seen).toEqual(["prepare", "authorize", "handler", "prepare"]);
@@ -251,6 +264,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
                         message: "unavailable",
                       });
                     }
+
                     return { prompt: Prompt.fromMessages(source.content) };
                   }),
               },
@@ -259,6 +273,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
               authorize: () =>
                 Effect.sync(() => {
                   seen.push("authorize");
+
                   return outcome === "denied"
                     ? { _tag: "denied" as const, reason: "revoked" }
                     : { _tag: "allowed" as const };
@@ -268,6 +283,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
               book: () =>
                 Effect.sync(() => {
                   seen.push("handler");
+
                   return "booked";
                 }),
             }),
@@ -286,13 +302,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const Delegated = Tool.make("research", {
           parameters: Schema.Struct({}),
           success: Schema.String,
         })
           .annotate(DelegationTool, true)
           .annotate(ToolExecutionClass, "readonly");
+
         const toolkit = Toolkit.make(Ordinary, Delegated);
+
         const definition = Agent.make("classification", {
           input: Schema.String,
           output: Schema.String,
@@ -300,12 +319,15 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           toolkit,
           policy: policy({ maxTurns: 3 }),
         });
+
         const calls = [
           { id: "ordinary", name: "delegate_fake", params: {} },
           { id: "delegated", name: "research", params: {} },
         ];
+
         for (const resumed of [false, true]) {
           const classifications: Array<string> = [];
+
           const model = scriptedModel(
             resumed
               ? finalParts('"done"')
@@ -319,6 +341,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
                 ],
             '"done"',
           );
+
           yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
             ...(resumed
               ? {
@@ -355,12 +378,15 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
       const commits = yield* Ref.make<ReadonlyArray<RunTurnResponseCommit>>([]);
+
       const Book = Tool.make("book", {
         parameters: Schema.Struct({ ref: Schema.String }),
         success: Schema.String,
         needsApproval: true,
       });
+
       const tools = Toolkit.make(Book);
+
       const definition = Agent.make("commit-response-ordering", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -368,6 +394,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = scriptedModel(
         [
           {
@@ -381,6 +408,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         '{"answer":"booked"}',
       );
+
       const toolLayer = tools.toLayer({
         book: () => Ref.update(marks, (all) => [...all, "handler"]).pipe(Effect.as("booked")),
       });
@@ -406,6 +434,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         "handler",
       ]);
       const committed = yield* Ref.get(commits);
+
       expect(committed).toHaveLength(1);
       expect(committed[0]).toMatchObject({
         turn: 1,
@@ -419,10 +448,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           },
         ],
       });
+
       const assistantCall = committed[0].responseMessages.content
         .filter((message) => message.role === "assistant")
         .flatMap((message) => message.content)
         .find((part) => part.type === "tool-call");
+
       expect(assistantCall).toBeDefined();
       if (assistantCall === undefined || assistantCall.type !== "tool-call") {
         throw new Error("Expected the committed response to carry the tool-call part");
@@ -441,6 +472,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         const marks = yield* Ref.make<ReadonlyArray<string>>([]);
         const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
         const mutationChecks = yield* Ref.make<ReadonlyArray<string>>([]);
+
         const HostedLookup = Tool.providerDefined({
           id: "test.hosted_lookup",
           customName: "HostedLookup",
@@ -448,11 +480,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           parameters: Schema.Struct({ query: Schema.String }),
           success: Schema.Struct({ status: Schema.String }),
         })(undefined);
+
         const Read = Tool.make("read", {
           parameters: Schema.Struct({ path: Schema.String }),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(HostedLookup, Read);
+
         const definition = Agent.make("staged-provider-before-mutations", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -460,6 +495,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           toolkit: tools,
           policy: policy({ maxToolCalls: 2 }),
         });
+
         const model = scriptedModel(
           [
             {
@@ -488,14 +524,17 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           ],
           '{"answer":"complete"}',
         );
+
         const assertStagedEventsObserved = (mutation: string) =>
           Effect.gen(function* () {
             const events = yield* Ref.get(observed);
+
             const providerSequence = events.filter(
               (event) =>
                 ("toolCallId" in event && event.toolCallId === "hosted-before-mutation") ||
                 (event._tag === "TurnCompleted" && event.turn === 1),
             );
+
             expect(providerSequence).toMatchObject([
               {
                 _tag: "ToolCallDeclared",
@@ -513,11 +552,13 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
               { _tag: "TurnCompleted", turn: 1, finishReason: "tool-calls" },
             ]);
             const providerSequences = providerSequence.map(({ sequence }) => sequence);
+
             expect(providerSequences).toEqual(
               [...providerSequences].sort((left, right) => left - right),
             );
             yield* Ref.update(mutationChecks, (all) => [...all, mutation]);
           });
+
         const durability: RunDurabilityHook = {
           commitResponse: () =>
             assertStagedEventsObserved("commit-response").pipe(
@@ -532,6 +573,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             ),
           step: inertStepHook,
         };
+
         let modelConsumptions = 0;
 
         const events = yield* AgentRuntime.stream(
@@ -543,6 +585,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
               guard: (effect) => effect,
               consume: () => {
                 modelConsumptions += 1;
+
                 return assertStagedEventsObserved(`consume:${modelConsumptions}`).pipe(
                   Effect.andThen(Ref.update(marks, (all) => [...all, "consume"])),
                 );
@@ -581,12 +624,15 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
       const authorizationRequests = yield* Ref.make<ReadonlyArray<RunToolAuthorizationRequest>>([]);
+
       const Book = Tool.make("book", {
         parameters: Schema.Struct({ ref: Schema.String }),
         success: Schema.String,
         needsApproval: true,
       });
+
       const tools = Toolkit.make(Book);
+
       const definition = Agent.make("prepare-ordering", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -594,6 +640,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = scriptedModel(
         [
           {
@@ -614,6 +661,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         '{"answer":"booked"}',
       );
+
       const toolLayer = tools.toLayer({
         book: (params, context) =>
           Ref.update(marks, (all) => [...all, `handler:${context.toolCallId}`]).pipe(
@@ -645,6 +693,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       ).pipe(Effect.provide(toolLayer), Effect.scoped);
 
       const observed = yield* Ref.get(marks);
+
       expect(observed.slice(0, 6)).toEqual([
         "commit-response",
         "approval:book-1",
@@ -656,6 +705,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       expect(observed.slice(6).sort()).toEqual(["handler:book-1", "handler:book-2"]);
 
       const requests = yield* Ref.get(authorizationRequests);
+
       expect(requests).toHaveLength(2);
       expect(
         requests.map(({ threadId, runId, turnId, turn, input, call }) => ({
@@ -702,12 +752,15 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   it.effect("a denied approval prevents prepareToolCalls entirely", () =>
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const Book = Tool.make("book", {
         parameters: Schema.Struct({ ref: Schema.String }),
         success: Schema.String,
         needsApproval: true,
       });
+
       const tools = Toolkit.make(Book);
+
       const definition = Agent.make("denied-no-prepare", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -715,6 +768,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = scriptedModel(
         [
           {
@@ -728,6 +782,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = tools.toLayer({
         book: () => Ref.update(marks, (all) => [...all, "handler"]).pipe(Effect.as("booked")),
       });
@@ -745,6 +800,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
 
       expect(failureFrom(exit)).toBeInstanceOf(AgentApprovalDenied);
       const observed = yield* Ref.get(marks);
+
       expect(observed).toEqual(["commit-response"]);
     }),
   );
@@ -753,15 +809,19 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
       const commits = yield* Ref.make<ReadonlyArray<RunTurnResponseCommit>>([]);
+
       const Search = Tool.make("search", {
         parameters: Schema.Struct({ query: Schema.String }),
         success: Schema.String,
       }).annotate(ToolExecutionClass, "readonly");
+
       const Book = Tool.make("book", {
         parameters: Schema.Struct({ ref: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Search, Book);
+
       const definition = Agent.make("readonly-skip", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -769,10 +829,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy({ maxTurns: 3, maxToolCalls: 3 }),
       });
+
       const toolLayer = tools.toLayer({
         search: () => Effect.succeed("found"),
         book: () => Effect.succeed("booked"),
       });
+
       const durability = markingDurability(marks, commits);
 
       // An all-readonly batch commits its response early but skips the
@@ -799,6 +861,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       ).pipe(Effect.provide(toolLayer), Effect.scoped);
       expect(yield* Ref.get(marks)).toEqual(["commit-response"]);
       const readonlyCommit = (yield* Ref.get(commits))[0];
+
       expect(readonlyCommit.calls.map((call) => call.executionClass)).toEqual(["readonly"]);
 
       // A mixed batch prepares only the non-readonly calls.
@@ -833,6 +896,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       ).pipe(Effect.provide(toolLayer), Effect.scoped);
       expect(yield* Ref.get(marks)).toEqual(["commit-response", "prepare:book-1"]);
       const mixedCommit = (yield* Ref.get(commits))[0];
+
       expect(mixedCommit.calls.map((call) => [call.toolCallId, call.executionClass])).toEqual([
         ["search-2", "readonly"],
         ["book-1", "uncertain"],
@@ -849,11 +913,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
         let modelCalls = 0;
         let secondRequestPrompt: Prompt.Prompt | undefined;
+
         const Lookup = Tool.make("lookup", {
           parameters: Schema.Struct({ key: Schema.String }),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(Lookup);
+
         const definition = Agent.make("resume-open-calls", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -861,6 +928,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           toolkit: tools,
           policy: policy(),
         });
+
         const model = Model.make(
           "scripted",
           "resume-final",
@@ -871,25 +939,31 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
               streamText: (request) => {
                 modelCalls += 1;
                 secondRequestPrompt = request.prompt;
+
                 return Stream.fromIterable(finalParts('{"answer":"resumed"}'));
               },
             }),
           ),
         );
+
         const toolLayer = tools.toLayer({
           lookup: ({ key }) =>
             Ref.update(handled, (all) => [...all, key]).pipe(Effect.as(`handled-${key}`)),
         });
+
         let settledIteratorReads = 0;
+
         const settled: RunTurnResume["settled"] = [
           { id: "call-a", result: "recorded-a", isFailure: false },
         ];
+
         Object.defineProperty(settled, Symbol.iterator, {
           get: () => {
             settledIteratorReads += 1;
             throw new Error("settled iterator must not run");
           },
         });
+
         const resume: RunTurnResume = {
           turn: 1,
           turnId: resumeTurnId,
@@ -934,9 +1008,11 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         // Only the open call executed; the settled call was injected.
         expect(yield* Ref.get(handled)).toEqual(["b"]);
         expect(settledIteratorReads).toBe(0);
+
         const started = (yield* Ref.get(events)).filter(
           (event) => event._tag === "ToolCallStarted",
         );
+
         expect(started.map((event) => event.toolCallId)).toEqual(["call-b"]);
         // The prepared batch replays with the identical full descriptor list;
         // the resumed Turn's response never re-commits.
@@ -947,15 +1023,19 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         if (secondRequestPrompt === undefined) {
           throw new Error("Expected the follow-up model request to be captured");
         }
+
         const assistantCalls = secondRequestPrompt.content
           .filter((message) => message.role === "assistant")
           .flatMap((message) => message.content)
           .filter((part) => part.type === "tool-call");
+
         expect(assistantCalls.map((part) => part.id)).toEqual(["call-a", "call-b"]);
+
         const toolResults = secondRequestPrompt.content
           .filter((message) => message.role === "tool")
           .flatMap((message) => message.content)
           .filter((part) => part.type === "tool-result");
+
         expect(toolResults.map((part) => [part.id, part.result])).toEqual([
           ["call-a", "recorded-a"],
           ["call-b", "handled-b"],
@@ -968,11 +1048,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
       let handlerStarts = 0;
       let modelCalls = 0;
+
       const Lookup = Tool.make("lookup", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Lookup);
+
       const definition = Agent.make("resume-invalid-result", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -980,6 +1063,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = Model.make(
         "scripted",
         "resume-invalid-result",
@@ -989,19 +1073,24 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: () => {
               modelCalls += 1;
+
               return Stream.fromIterable(finalParts('{"answer":"unreachable"}'));
             },
           }),
         ),
       );
+
       const toolLayer = tools.toLayer({
         lookup: () =>
           Effect.sync(() => {
             handlerStarts += 1;
+
             return "unexpected";
           }),
       });
+
       const cyclic: Record<string, Schema.Json> = {};
+
       cyclic.self = cyclic;
       const invalidResults: ReadonlyArray<Schema.Json> = [Number.NaN, cyclic];
 
@@ -1015,6 +1104,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           ],
           settled: [{ id: "call-settled", result, isFailure: false }],
         };
+
         const exit = yield* AgentRuntime.run(
           Agent.withModel(definition, model),
           { question: "resume" },
@@ -1024,24 +1114,30 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             durability: markingDurability(marks),
           },
         ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+
         const failure = failureFrom(exit);
+
         expect(failure).toBeInstanceOf(ModelProtocolError);
         expect((failure as ModelProtocolError).message).toContain("bounded canonical JSON");
       }
 
       let accessorReads = 0;
+
       const accessorSettled: RunTurnResume["settled"][number] = {
         id: "call-settled",
         result: "small",
         isFailure: false,
       };
+
       Object.defineProperty(accessorSettled, "result", {
         enumerable: true,
         get: () => {
           accessorReads += 1;
+
           return "small";
         },
       });
+
       const accessorResume: RunTurnResume = {
         turn: 1,
         turnId: resumeTurnId,
@@ -1051,6 +1147,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         settled: [accessorSettled],
       };
+
       const accessorExit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
@@ -1060,7 +1157,9 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           durability: markingDurability(marks),
         },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+
       const accessorFailure = failureFrom(accessorExit);
+
       expect(accessorFailure).toBeInstanceOf(ModelProtocolError);
       if (accessorFailure instanceof ModelProtocolError) {
         expect(accessorFailure.message).toContain("invalid settled Tool Call");
@@ -1068,18 +1167,21 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       expect(accessorReads).toBe(0);
 
       let collectionAccessorReads = 0;
+
       const collectionAccessorResume: RunTurnResume = {
         turn: 1,
         turnId: resumeTurnId,
         calls: [{ id: "call-open", name: "lookup", params: { key: "b" } }],
         settled: [],
       };
+
       Object.defineProperty(collectionAccessorResume, "settled", {
         get: () => {
           collectionAccessorReads += 1;
           throw new Error("settled collection accessor must not run");
         },
       });
+
       const collectionAccessorExit = yield* AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "resume" },
@@ -1089,7 +1191,9 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           durability: markingDurability(marks),
         },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+
       const collectionAccessorFailure = failureFrom(collectionAccessorExit);
+
       expect(collectionAccessorFailure).toBeInstanceOf(ModelProtocolError);
       if (collectionAccessorFailure instanceof ModelProtocolError) {
         expect(collectionAccessorFailure.message).toContain("invalid settled Tool Call collection");
@@ -1106,15 +1210,19 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     Effect.gen(function* () {
       const handlerStarts = yield* Ref.make(0);
       let modelCalls = 0;
+
       const DelegateLookup = Tool.make("delegate_lookup", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
       });
+
       const DelegateOther = Tool.make("delegate_other", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(DelegateLookup, DelegateOther);
+
       const definition = Agent.make("expired-forged-cleanup", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1122,6 +1230,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = Model.make(
         "scripted",
         "expired-resume",
@@ -1131,17 +1240,20 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: () => {
               modelCalls += 1;
+
               return Stream.fromIterable(finalParts('{"answer":"unreachable"}'));
             },
           }),
         ),
       );
+
       const toolLayer = tools.toLayer({
         delegate_lookup: () =>
           Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("unexpected")),
         delegate_other: () =>
           Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("unexpected")),
       });
+
       const exactForgedResume: RunTurnResume & {
         readonly settledChildJoinCallIdsPastDeadline: ReadonlyArray<string>;
       } = {
@@ -1151,6 +1263,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         settled: [],
         settledChildJoinCallIdsPastDeadline: ["call-open"],
       };
+
       const partialForgedResume: RunTurnResume & {
         readonly settledChildJoinCallIdsPastDeadline: ReadonlyArray<string>;
       } = {
@@ -1163,11 +1276,13 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         settled: [],
         settledChildJoinCallIdsPastDeadline: ["call-open-a"],
       };
+
       const now = yield* Clock.currentTimeMillis;
       const durationDeadline = DateTime.toUtc(DateTime.makeUnsafe(now - 1));
 
       for (const resume of [exactForgedResume, partialForgedResume]) {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
         const exit = yield* AgentRuntime.stream(
           Agent.withModel(definition, model),
           { question: "resume" },
@@ -1182,6 +1297,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         const failure = failureFrom(exit);
         const observed = yield* Ref.get(events);
 
@@ -1202,11 +1318,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const handlerFinalized = yield* Deferred.make<void>();
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       let modelCalls = 0;
+
       const DelegateLookup = Tool.make("delegate_lookup", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(DelegateLookup);
+
       const definition = Agent.make("cleanup-deadline", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1214,6 +1333,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy({ maxDuration: "5 seconds" }),
       });
+
       const model = Model.make(
         "scripted",
         "cleanup-deadline",
@@ -1223,11 +1343,13 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: () => {
               modelCalls += 1;
+
               return Stream.fromIterable(finalParts('{"answer":"too late"}'));
             },
           }),
         ),
       );
+
       const toolLayer = tools.toLayer({
         delegate_lookup: () =>
           Deferred.succeed(handlerStarted, undefined).pipe(
@@ -1235,6 +1357,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             Effect.ensuring(Deferred.succeed(handlerFinalized, undefined)),
           ),
       });
+
       const resume: RunTurnResume & {
         readonly settledChildJoinCallIdsPastDeadline: ReadonlyArray<string>;
       } = {
@@ -1244,7 +1367,9 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         settled: [],
         settledChildJoinCallIdsPastDeadline: ["call-child"],
       };
+
       const now = yield* Clock.currentTimeMillis;
+
       const durationDeadline = DateTime.addDuration(
         DateTime.toUtc(DateTime.makeUnsafe(now)),
         "5 seconds",
@@ -1260,6 +1385,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         Effect.provide(toolLayer),
         Effect.forkChild,
       );
+
       yield* Deferred.await(handlerStarted);
       yield* TestClock.adjust("5 seconds");
       const exit = yield* Fiber.await(fiber);
@@ -1281,11 +1407,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
       let handlerStarted = false;
       let modelCalls = 0;
+
       const Lookup = Tool.make("lookup", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Lookup);
+
       const definition = Agent.make("resume-truncated-arguments", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1293,6 +1422,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = Model.make(
         "scripted",
         "resume-truncated",
@@ -1302,18 +1432,22 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: () => {
               modelCalls += 1;
+
               return Stream.fromIterable(finalParts('{"answer":"unreachable"}'));
             },
           }),
         ),
       );
+
       const toolLayer = tools.toLayer({
         lookup: () =>
           Effect.sync(() => {
             handlerStarted = true;
+
             return "unexpected";
           }),
       });
+
       const resume: RunTurnResume = {
         turn: 1,
         turnId: resumeTurnId,
@@ -1326,6 +1460,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         { question: "resume" },
         { resume, resumeUsage: oneCallResumeUsage, durability: markingDurability(marks) },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+
       const failure = failureFrom(exit);
 
       expect(failure).toBeInstanceOf(ModelProtocolError);
@@ -1339,13 +1474,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   it.effect("DurableStep pass-through executes once without a hook", () =>
     Effect.gen(function* () {
       let bodyRuns = 0;
+
       const Work = Tool.make("work", {
         parameters: Schema.Struct({}),
         success: Schema.String,
         failure: DurableStepError,
         dependencies: [DurableStep],
       });
+
       const tools = Toolkit.make(Work);
+
       const definition = Agent.make("step-pass-through", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1353,6 +1491,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = scriptedModel(
         [
           { type: "tool-call", id: "work-1", name: "work", params: {}, providerExecuted: false },
@@ -1360,15 +1499,18 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         '{"answer":"worked"}',
       );
+
       const toolLayer = tools.toLayer({
         work: () =>
           Effect.gen(function* () {
             const step = yield* DurableStep;
+
             return yield* step.do(
               "compute",
               Schema.String,
               Effect.sync(() => {
                 bodyRuns += 1;
+
                 return "computed";
               }),
             );
@@ -1389,10 +1531,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const store = new Map<string, unknown>();
       let bodyRuns = 0;
       let commits = 0;
+
       const recordingStepHook: RunStepHook = {
         lookup: (key) =>
           Effect.sync(() => {
             const hit = store.get(`${key.toolCallId}:${key.stepName}`);
+
             return hit === undefined ? Option.none() : Option.some({ encodedOutput: hit });
           }),
         commit: (key, encodedOutput) =>
@@ -1401,6 +1545,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             store.set(`${key.toolCallId}:${key.stepName}`, encodedOutput);
           }),
       };
+
       const durability: RunDurabilityHook = {
         commitResponse: () => Effect.void,
         // Required by the durability protocol; this harness exercises neither seam.
@@ -1409,13 +1554,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         prepareToolCalls: () => Effect.void,
         step: recordingStepHook,
       };
+
       const Stamp = Tool.make("stamp", {
         parameters: Schema.Struct({}),
         success: Schema.String,
         failure: DurableStepError,
         dependencies: [DurableStep],
       });
+
       const tools = Toolkit.make(Stamp);
+
       const definition = Agent.make("step-replay", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1423,10 +1571,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const toolLayer = tools.toLayer({
         stamp: () =>
           Effect.gen(function* () {
             const step = yield* DurableStep;
+
             // The output Schema is the canonical codec: the recorded value is
             // the encoded ISO string, the replayed value a decoded DateTime.
             const at = yield* step.do(
@@ -1434,12 +1584,15 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
               Schema.DateTimeUtcFromString,
               Effect.sync(() => {
                 bodyRuns += 1;
+
                 return DateTime.makeUnsafe(1755000000000);
               }),
             );
+
             return DateTime.formatIso(at);
           }),
       });
+
       const makeModel = () =>
         scriptedModel(
           [
@@ -1460,6 +1613,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         { question: "stamp" },
         { durability },
       ).pipe(Effect.provide(toolLayer), Effect.scoped);
+
       expect(bodyRuns).toBe(1);
       expect(commits).toBe(1);
       expect(typeof store.get("stamp-1:issue")).toBe("string");
@@ -1481,13 +1635,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   it.effect("fails a duplicate Step name within one Tool Call as a typed identity conflict", () =>
     Effect.gen(function* () {
       let bodyRuns = 0;
+
       const Work = Tool.make("work", {
         parameters: Schema.Struct({}),
         success: Schema.String,
         failure: DurableStepError,
         dependencies: [DurableStep],
       });
+
       const tools = Toolkit.make(Work);
+
       const definition = Agent.make("step-duplicate-name", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1495,6 +1652,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = scriptedModel(
         [
           { type: "tool-call", id: "work-1", name: "work", params: {}, providerExecuted: false },
@@ -1502,6 +1660,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         '{"answer":"unreachable"}',
       );
+
       const durability: RunDurabilityHook = {
         commitResponse: () => Effect.void,
         // Required by the durability protocol; this harness exercises neither seam.
@@ -1510,15 +1669,20 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         prepareToolCalls: () => Effect.void,
         step: inertStepHook,
       };
+
       const toolLayer = tools.toLayer({
         work: () =>
           Effect.gen(function* () {
             const step = yield* DurableStep;
+
             const run = Effect.sync(() => {
               bodyRuns += 1;
+
               return "computed";
             });
+
             yield* step.do("same", Schema.String, run);
+
             return yield* step.do("same", Schema.String, run);
           }),
       });
@@ -1528,6 +1692,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         { question: "work" },
         { durability },
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+
       const failure = failureFrom(exit);
 
       expect(failure).toBeInstanceOf(DurableStepError);
@@ -1541,10 +1706,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const store = new Map<string, unknown>();
       let bodyRuns = 0;
       let commits = 0;
+
       const recordingStepHook: RunStepHook = {
         lookup: (key) =>
           Effect.sync(() => {
             const hit = store.get(`${key.toolCallId}:${key.stepName}`);
+
             return hit === undefined ? Option.none() : Option.some({ encodedOutput: hit });
           }),
         commit: (key, encodedOutput) =>
@@ -1553,6 +1720,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             store.set(`${key.toolCallId}:${key.stepName}`, encodedOutput);
           }),
       };
+
       const durability: RunDurabilityHook = {
         commitResponse: () => Effect.void,
         // Required by the durability protocol; this harness exercises neither seam.
@@ -1561,13 +1729,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         prepareToolCalls: () => Effect.void,
         step: recordingStepHook,
       };
+
       const Flaky = Tool.make("flaky", {
         parameters: Schema.Struct({}),
         success: Schema.String,
         failure: Schema.Union([DurableStepError, FlakyFailure]),
         dependencies: [DurableStep],
       });
+
       const tools = Toolkit.make(Flaky);
+
       const definition = Agent.make("step-success-only", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1575,15 +1746,18 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const toolLayer = tools.toLayer({
         flaky: () =>
           Effect.gen(function* () {
             const step = yield* DurableStep;
+
             return yield* step.do(
               "attempt",
               Schema.String,
               Effect.suspend(() => {
                 bodyRuns += 1;
+
                 return bodyRuns === 1
                   ? Effect.fail(FlakyFailure.make({ message: "first attempt fails" }))
                   : Effect.succeed("second attempt");
@@ -1591,6 +1765,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             );
           }),
       });
+
       const makeModel = () =>
         scriptedModel(
           [
@@ -1637,14 +1812,18 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       let bodyRuns = 0;
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const reported: Array<string> = [];
+
       const reporter = ErrorReporter.make(({ error }) => {
         reported.push(error.message);
       });
+
       const hookFailure = HookFailure.make({ message: "lookup boom" });
+
       const failingStepHook: RunStepHook<HookFailure> = {
         lookup: () => Effect.fail(hookFailure),
         commit: () => Effect.void,
       };
+
       const durability: RunDurabilityHook<HookFailure> = {
         commitResponse: () => Effect.void,
         // Required by the durability protocol; this harness exercises neither seam.
@@ -1653,13 +1832,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         prepareToolCalls: () => Effect.void,
         step: failingStepHook,
       };
+
       const Work = Tool.make("work", {
         parameters: Schema.Struct({}),
         success: Schema.String,
         failure: DurableStepError,
         dependencies: [DurableStep],
       });
+
       const tools = Toolkit.make(Work);
+
       const definition = Agent.make("step-hook-failure", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -1667,6 +1849,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         toolkit: tools,
         policy: policy(),
       });
+
       const model = scriptedModel(
         [
           { type: "tool-call", id: "work-1", name: "work", params: {}, providerExecuted: false },
@@ -1674,15 +1857,18 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = tools.toLayer({
         work: () =>
           Effect.gen(function* () {
             const step = yield* DurableStep;
+
             return yield* step.do(
               "compute",
               Schema.String,
               Effect.sync(() => {
                 bodyRuns += 1;
+
                 return "computed";
               }),
             );
@@ -1701,6 +1887,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -1719,7 +1906,9 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       parameters: Schema.Struct({}),
       success: Schema.String,
     });
+
     const tools = Toolkit.make(Empty);
+
     const definition = Agent.make("durability-hook-types", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -1727,10 +1916,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       toolkit: tools,
       policy: policy(),
     });
+
     const durability: RunDurabilityHook<HookFailure, TypedHookService> = {
       commitResponse: () =>
         Effect.gen(function* () {
           yield* TypedHookService;
+
           return yield* HookFailure.make({ message: "commit failed" });
         }),
       // Required by the durability protocol; this harness exercises neither seam.
@@ -1742,11 +1933,13 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         commit: () => Effect.void,
       },
     };
+
     const program = AgentRuntime.run(
       Agent.withModel(definition, scriptedModel([], '{"answer":"typed"}')),
       { question: "typed" },
       { durability },
     );
+
     const authorizationProgram = AgentRuntime.run(
       Agent.withModel(definition, scriptedModel([], '{"answer":"typed"}')),
       { question: "typed" },
@@ -1755,11 +1948,13 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           authorize: () =>
             Effect.gen(function* () {
               yield* TypedHookService;
+
               return yield* HookFailure.make({ message: "authorization failed" });
             }),
         },
       },
     );
+
     const reservationProgram = AgentRuntime.run(
       Agent.withModel(definition, scriptedModel([], '{"answer":"typed"}')),
       { question: "typed" },
@@ -1773,11 +1968,13 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           reservePolicyUsage: () =>
             Effect.gen(function* () {
               yield* TypedHookService;
+
               return yield* HookFailure.make({ message: "reservation failed" });
             }),
         },
       },
     );
+
     type ErrorProof = HookFailure extends Effect.Error<typeof program> ? true : false;
     type RequirementsProof =
       TypedHookService extends Effect.Services<typeof program> ? true : false;
@@ -1787,14 +1984,17 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       TypedHookService extends Effect.Services<typeof authorizationProgram> ? true : false;
     const errorProof: ErrorProof = true;
     const requirementsProof: RequirementsProof = true;
+
     const reservationErrorProof: HookFailure extends Effect.Error<typeof reservationProgram>
       ? true
       : false = true;
+
     const reservationRequirementsProof: TypedHookService extends Effect.Services<
       typeof reservationProgram
     >
       ? true
       : false = true;
+
     const authorizationErrorProof: AuthorizationErrorProof = true;
     const authorizationRequirementsProof: AuthorizationRequirementsProof = true;
 
@@ -1804,6 +2004,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     expect(reservationRequirementsProof).toBe(true);
     expect(authorizationErrorProof).toBe(true);
     expect(authorizationRequirementsProof).toBe(true);
+
     return Effect.void;
   });
 
@@ -1811,13 +2012,17 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     const body: Effect.Effect<DateTime.Utc, FlakyFailure, TypedHookService> = Effect.gen(
       function* () {
         yield* TypedHookService;
+
         return yield* FlakyFailure.make({ message: "body" });
       },
     );
+
     const program = Effect.gen(function* () {
       const step = yield* DurableStep;
+
       return yield* step.do("typed", Schema.DateTimeUtcFromString, body);
     });
+
     type StepErrorProof = DurableStepError extends Effect.Error<typeof program> ? true : false;
     type BodyErrorProof = FlakyFailure extends Effect.Error<typeof program> ? true : false;
     type BodyServicesProof =
@@ -1832,6 +2037,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     expect(bodyErrorProof).toBe(true);
     expect(bodyServicesProof).toBe(true);
     expect(stepServiceProof).toBe(true);
+
     return Effect.void;
   });
 });

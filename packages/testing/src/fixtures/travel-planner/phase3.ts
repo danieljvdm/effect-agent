@@ -35,9 +35,11 @@ export const phase3TravelPlannerProfile = TravelPlannerPersistenceProfile.make({
 });
 
 export const phase3TravelPlannerThreadId = Schema.decodeSync(ThreadId)("travel-planner-p3-thread");
+
 export const phase3TravelPlannerProducerId = Schema.decodeSync(ProducerId)(
   "travel-planner-p3-producer",
 );
+
 export const phase3TravelPlannerRunId = Schema.decodeSync(RunId)("travel-planner-p3-run");
 
 const deploymentId = Schema.decodeSync(DeploymentId)("travel-planner-p3-scripted");
@@ -126,6 +128,7 @@ export const travelPlanFromProjection = (
   projection: ThreadProjection,
 ): Effect.Effect<TravelPlan, TravelPlannerProjectionError> => {
   const output = projection.modelOutputs.at(-1);
+
   if (output === undefined) {
     return Effect.fail(
       TravelPlannerProjectionError.make({
@@ -133,6 +136,7 @@ export const travelPlanFromProjection = (
       }),
     );
   }
+
   return Schema.decodeUnknownEffect(TravelPlan)(output).pipe(
     Effect.mapError((error) => TravelPlannerProjectionError.make({ message: error.message })),
   );

@@ -73,14 +73,17 @@ const layer = Layer.effect(
   ThreadHistory,
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     const load = Effect.fn("PersistentHistory.load")(function* (threadId: ThreadId) {
       const exported = yield* store
         .export(ThreadExportRequest.make({ threadId }))
         .pipe(Effect.mapError((cause) => storageError(threadId, cause)));
+
       return yield* promptFromCanonicalRecords(exported.records).pipe(
         Effect.mapError((cause) => historyError(threadId, "encoding", cause.message, cause)),
       );
     });
+
     const open = Effect.fn("PersistentHistory.open")(function* ({
       threadId,
       runId,
@@ -90,18 +93,22 @@ const layer = Layer.effect(
     }): Effect.fn.Return<ThreadHistoryRun, ThreadHistoryError> {
       const error = (reason: ThreadHistoryError["reason"], message: string, cause?: unknown) =>
         historyError(threadId, reason, message, cause);
+
       const persisted = (value: unknown) =>
         Schema.decodeUnknownEffect(PersistedJson)(value).pipe(
           Effect.mapError((cause) =>
             error("limit", "Run data exceeds canonical persistence bounds", cause),
           ),
         );
+
       yield* store
         .materialize(ThreadMaterialization.make({ threadId, producerEpoch: HISTORY_EPOCH }))
         .pipe(Effect.mapError((cause) => storageError(threadId, cause)));
+
       const base = yield* store
         .export(ThreadExportRequest.make({ threadId }))
         .pipe(Effect.mapError((cause) => storageError(threadId, cause)));
+
       if (base.records.length + 3 > MAX_THREAD_EXPORT_RECORDS) {
         return yield* error(
           "limit",
@@ -122,10 +129,13 @@ const layer = Layer.effect(
           "This Thread belongs to durable accepted work; use a separate history Thread",
         );
       }
+
       const prompt = yield* promptFromCanonicalRecords(base.records).pipe(
         Effect.mapError((cause) => error("encoding", cause.message, cause)),
       );
+
       const createdAt = yield* DateTime.now;
+
       const record = (id: string, payload: RecordEnvelope["payload"], timestamp = createdAt) =>
         RecordEnvelope.make({
           recordId: recordId(id),
@@ -135,8 +145,10 @@ const layer = Layer.effect(
           createdAt: timestamp,
           payload,
         });
+
       let input: RecordEnvelope | undefined;
       let messages: PersistedJson | undefined;
+
       return {
         prompt,
         stageInput: Effect.fn("PersistentHistory.stageInput")(function* (encodedInput: unknown) {
@@ -164,16 +176,20 @@ const layer = Layer.effect(
             return yield* error("encoding", "Run completed without its encoded input and history");
           }
           const output = yield* persisted(completion.output);
+
           const runDisposition =
             completion.runDisposition === undefined
               ? undefined
               : yield* persisted(completion.runDisposition);
+
           const completedAt = yield* DateTime.now;
+
           const modelCompleted = yield* ModelCompleted.makeEffect({ runId, output, messages }).pipe(
             Effect.mapError((cause) =>
               error("encoding", "Run history is not a canonical Prompt", cause),
             ),
           );
+
           yield* store
             .append(
               FencedAppendRequest.make({
@@ -210,6 +226,7 @@ const layer = Layer.effect(
         }),
       };
     });
+
     return ThreadHistory.of({ load, open });
   }),
 );

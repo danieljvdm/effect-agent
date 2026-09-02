@@ -80,6 +80,7 @@ const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => 
 const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.StreamPartEncoded>) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
+
     const model = Model.make(
       "scripted",
       "idor-sweep",
@@ -96,6 +97,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
         }),
       ),
     );
+
     return { model };
   });
 
@@ -148,14 +150,17 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
     const owned = decodeThreadId(OWNED_THREAD);
     const seen = yield* Ref.make<ReadonlyArray<OperationAuthorizationRequest>>([]);
     const foreignSubmissions = yield* Ref.make<ReadonlySet<string>>(new Set());
+
     const service: OperationAuthorizerService = {
       authorize: (request) =>
         Effect.gen(function* () {
           yield* Ref.update(seen, (all) => [...all, request]);
           const deniedSubmissions = yield* Ref.get(foreignSubmissions);
           const foreignThread = request.threadId !== undefined && request.threadId !== owned;
+
           const foreignSubmission =
             request.submissionId !== undefined && deniedSubmissions.has(request.submissionId);
+
           if (foreignThread || foreignSubmission) {
             return yield* OperationDenied.make({
               operation: request.operation,
@@ -166,6 +171,7 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
           }
         }),
     };
+
     return Context.make(OperationAuthorizer, service).pipe(
       Context.add(
         AuthorizerControl,
@@ -195,8 +201,10 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
   const error: unknown = failure.value;
+
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -208,13 +216,17 @@ const runSettledLane = (thread: string, key: string) =>
     const runtime = yield* DurableAgentRuntime;
     const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
     const agent = Agent.withModel(plainDefinition, scripted.model);
+
     const receipt = yield* runtime.submit(
       agent,
       { question: "answer" },
       submitOptions(thread, key),
     );
+
     const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
     expect(settlements[0]?.outcome).toBe("completed");
+
     return receipt;
   });
 
@@ -238,12 +250,15 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
 
         // --- Foreign target: every targeted operation is denied BEFORE any read/write. ---
         const explainForeign = yield* Effect.exit(runtime.explain(foreignReceipt.submissionId));
+
         expect(failureTag(explainForeign)).toBe("OperationDenied");
 
         const explainConvForeign = yield* Effect.exit(runtime.explainThread(foreignThreadId));
+
         expect(failureTag(explainConvForeign)).toBe("OperationDenied");
 
         const verifyForeign = yield* Effect.exit(runtime.verify(foreignThreadId));
+
         expect(failureTag(verifyForeign)).toBe("OperationDenied");
 
         const retryForeign = yield* Effect.exit(
@@ -255,14 +270,17 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
             }),
           ),
         );
+
         expect(failureTag(retryForeign)).toBe("OperationDenied");
 
         const wakeForeign = yield* Effect.exit(runtime.wake(foreignThreadId));
+
         expect(failureTag(wakeForeign)).toBe("OperationDenied");
 
         const observeForeign = yield* Effect.exit(
           Stream.runCollect(runtime.observe(foreignReceipt)),
         );
+
         expect(failureTag(observeForeign)).toBe("OperationDenied");
 
         const resolveUnknownForeign = yield* Effect.exit(
@@ -276,6 +294,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
             }),
           ),
         );
+
         expect(failureTag(resolveUnknownForeign)).toBe("OperationDenied");
 
         const resolveApprovalForeign = yield* Effect.exit(
@@ -289,16 +308,20 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
             }),
           ),
         );
+
         expect(failureTag(resolveApprovalForeign)).toBe("OperationDenied");
 
         // --- Own target: the caller's own Thread is permitted (default-behavior allow). ---
         const explainOwn = yield* runtime.explain(ownReceipt.submissionId);
+
         expect(explainOwn.submission.submissionId).toBe(ownReceipt.submissionId);
 
         const explainConvOwn = yield* runtime.explainThread(ownThreadId);
+
         expect(explainConvOwn).toEqual([]); // settled lane: no nonterminal explanations
 
         const verifyOwn = yield* runtime.verify(ownThreadId);
+
         expect(verifyOwn.ok).toBe(true);
 
         yield* runtime.wake(ownThreadId);
@@ -306,6 +329,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         const observeOwn = yield* Stream.runCollect(
           runtime.observe(ownReceipt).pipe(Stream.take(1)),
         );
+
         expect(observeOwn.length).toBeGreaterThan(0);
 
         // scanObligations carries no Thread target, so a tenant-scoped host allows it and
@@ -314,10 +338,12 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         const obligations = yield* runtime.scanObligations(
           ObligationThresholds.make({ agingSeconds: 60, overdueSeconds: 600 }),
         );
+
         expect(obligations.entries).toEqual([]);
 
         // Every targeted operation reached the authorization seam (proof the sweep is not bypassed).
         const operations = new Set((yield* control.requests).map((request) => request.operation));
+
         const expectedOperations: ReadonlyArray<AuthorizedOperation> = [
           "explain",
           "verify",
@@ -328,6 +354,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
           "resolveApproval",
           "scanObligations",
         ];
+
         for (const operation of expectedOperations) {
           expect(operations.has(operation)).toBe(true);
         }

@@ -141,6 +141,7 @@ export const reviewPublicationFailure = (input: {
   if (input.unresolvedChangeRequests > 0) {
     return UnresolvedChangeRequests.make({ count: input.unresolvedChangeRequests });
   }
+
   return undefined;
 };
 
@@ -148,8 +149,10 @@ const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
   entries: ReadonlyArray<readonly [string, string | number]>,
 ) {
   const outputPath = yield* Config.string("GITHUB_OUTPUT").pipe(Config.withDefault(""));
+
   if (outputPath.length === 0) return;
   const fs = yield* FileSystem.FileSystem;
+
   yield* fs.writeFileString(
     outputPath,
     `${entries.map(([key, value]) => `${key}=${String(value)}`).join("\n")}\n`,
@@ -176,6 +179,7 @@ export const publishHeadBoundReview = Effect.fn("publishHeadBoundReview")(functi
         yield* Console.log(
           `PR review publication stopped: inspected ${failure.inspectedHead}, current head ${failure.currentHead}. Recording an incomplete attempt on the inspected commit only.`,
         );
+
         const reviewUrl = yield* staleAttempt.publish({
           commitId: failure.inspectedHead,
           body: withReviewMarker(
@@ -189,6 +193,7 @@ export const publishHeadBoundReview = Effect.fn("publishHeadBoundReview")(functi
             false,
           ),
         });
+
         yield* writeOutputs([
           ["skipped", "false"],
           ["reason", "stale-review-head"],
@@ -226,18 +231,22 @@ const skip = Effect.fn("skipReview")(function* (
 
 const matchesIgnore = (path: string, rawPattern: string): boolean => {
   const pattern = rawPattern.trim().replace(/^\.\//, "");
+
   if (pattern.length === 0) return false;
   if (path === pattern) return true;
   if (pattern.endsWith("/**")) {
     const prefix = pattern.slice(0, -3).replace(/\/$/, "");
+
     return path === prefix || path.startsWith(`${prefix}/`);
   }
   if (pattern.startsWith("**/")) {
     const suffix = pattern.slice(3);
+
     return suffix.startsWith("*.")
       ? path.endsWith(suffix.slice(1))
       : path === suffix || path.endsWith(`/${suffix}`);
   }
+
   return false;
 };
 
@@ -256,8 +265,10 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
 }) {
   const metadata = new Map(input.files.map((file) => [file.path, file] as const));
   const activeRenames = new Map<string, ChangedFile>();
+
   for (const file of input.files) {
     const previousPath = file.previousPath;
+
     if (
       file.status === "renamed" &&
       previousPath !== undefined &&
@@ -277,9 +288,11 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     }
   }
   const candidates = new Map<string, { readonly file: ChangedFile; readonly basePath: string }>();
+
   for (const changedPath of [...new Set(input.changedPaths)].sort()) {
     const renamed = activeRenames.get(changedPath);
     const path = renamed?.path ?? changedPath;
+
     const file =
       renamed ??
       metadata.get(path) ??
@@ -290,6 +303,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
         deletions: 0,
         patch: undefined,
       } satisfies ChangedFile);
+
     candidates.set(path, { file, basePath: renamed?.previousPath ?? path });
   }
 
@@ -298,6 +312,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   const ignoredPaths: Array<string> = [];
   const exclusions: Array<ReviewExclusion> = [];
   const unavailablePaths = new Set<string>();
+
   const exclude = (
     paths: Array<string>,
     file: ChangedFile,
@@ -312,8 +327,10 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       unavailablePaths.add(file.path).add(basePath);
     }
   };
+
   let admittedPaths = 0;
   let hydratedSourceBytes = 0;
+
   for (const { file, basePath } of [...candidates.values()].sort(
     (left, right) =>
       Number(documentationPath(left.file.path)) - Number(documentationPath(right.file.path)) ||
@@ -323,6 +340,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       (path) =>
         isBinaryAssetPath(path) || input.ignore.some((pattern) => matchesIgnore(path, pattern)),
     );
+
     if (ignored) {
       exclude(ignoredPaths, file, basePath);
       continue;
@@ -339,6 +357,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     admittedPaths += 1;
     const beforeEntry = input.base.entry(basePath);
     const afterEntry = input.head.entry(file.path);
+
     if (
       (beforeEntry !== undefined &&
         (beforeEntry.type !== "blob" || beforeEntry.mode === "120000")) ||
@@ -347,10 +366,13 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       exclude(unreviewedPaths, file, basePath, "unsupported-entry");
       continue;
     }
+
     const sourceSizesKnown =
       (beforeEntry === undefined || beforeEntry.size !== undefined) &&
       (afterEntry === undefined || afterEntry.size !== undefined);
+
     const estimatedSourceBytes = (beforeEntry?.size ?? 0) + (afterEntry?.size ?? 0);
+
     if (
       hydratedSourceBytes >= MAX_HYDRATED_SOURCE_BYTES ||
       (sourceSizesKnown && hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES)
@@ -358,6 +380,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       exclude(unreviewedPaths, file, basePath, "source-limit");
       continue;
     }
+
     const contents = yield* Effect.all(
       {
         before:
@@ -375,6 +398,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       },
       { concurrency: 2 },
     ).pipe(Effect.result);
+
     if (Result.isFailure(contents)) {
       hydratedSourceBytes += estimatedSourceBytes;
       exclude(unreviewedPaths, file, basePath, "source-read-failed");
@@ -405,6 +429,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       exclude(unreviewedPaths, file, basePath, "source-limit");
       continue;
     }
+
     const patch =
       basePath === file.path &&
       !beforeBinary &&
@@ -427,6 +452,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
             before,
             after,
           });
+
     const exactPatch =
       patch !== undefined && basePath !== file.path && !beforeBinary && !afterBinary
         ? [
@@ -436,6 +462,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
             patch,
           ].join("\n")
         : patch;
+
     if (
       path.length > 512 ||
       exactPatch === undefined ||
@@ -456,6 +483,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     }
     changes.push(ReviewChange.make({ path, patch: exactPatch }));
   }
+
   return { changes, unreviewedPaths, ignoredPaths, unavailablePaths, exclusions };
 });
 
@@ -473,10 +501,12 @@ export const makeReviewRepository = (input: {
   readonly unavailablePaths: ReadonlySet<string>;
 }): ReviewRepository["Service"] => {
   const snapshot = (revision: "base" | "head") => (revision === "base" ? input.base : input.head);
+
   const outsideScope = (path: string) =>
     isBinaryAssetPath(path) ||
     input.unavailablePaths.has(path) ||
     input.ignore.some((pattern) => matchesIgnore(path, pattern));
+
   const isReadableEntry = (entry: ReturnType<RepositorySnapshot["entry"]>) =>
     entry?.type === "blob" && entry.mode !== "120000";
 
@@ -487,11 +517,13 @@ export const makeReviewRepository = (input: {
       );
     }
     const selected = snapshot(request.revision);
+
     if (!isReadableEntry(selected.entry(request.path))) {
       return yield* reviewContextFailure(
         "Text source is unavailable for the requested path and revision.",
       );
     }
+
     const content = yield* selected
       .readTextFile(request.path)
       .pipe(
@@ -501,11 +533,13 @@ export const makeReviewRepository = (input: {
           ),
         ),
       );
+
     return yield* ReviewSource.fromText(request, content);
   });
 
   const findFiles = (request: ReviewFindFilesInput) => {
     const selected = snapshot(request.revision);
+
     const matches = selected.paths
       .filter(
         (path) =>
@@ -515,6 +549,7 @@ export const makeReviewRepository = (input: {
           path.includes(request.query),
       )
       .sort();
+
     return Effect.succeed(
       ReviewFileList.make({ paths: matches.slice(0, 100), truncated: matches.length > 100 }),
     );
@@ -531,14 +566,17 @@ const reanchorToFullPullRequest = (
   report: ReviewReport,
 ): ReviewReport => {
   const patches = new Map(files.map((file) => [file.path, file.patch] as const));
+
   return ReviewReport.make({
     summary: report.summary,
     findings: report.findings.flatMap((finding) => {
       const patch = patches.get(finding.path);
+
       const line =
         finding.line !== undefined && patch !== undefined && isCommentableLine(patch, finding.line)
           ? finding.line
           : undefined;
+
       return [
         ReviewFinding.make({
           path: finding.path,
@@ -556,53 +594,69 @@ const reanchorToFullPullRequest = (
 export const reviewActionProgram = Effect.gen(function* () {
   const presentation = yield* ReviewPresentation;
   const repository = yield* Config.nonEmptyString("GITHUB_REPOSITORY");
+
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     return yield* ActionConfigurationError.make({
       message: `Invalid GITHUB_REPOSITORY: ${repository}`,
     });
   }
+
   const pullRequestNumber = yield* Config.schema(
     Schema.Int.check(Schema.isGreaterThan(0)),
     "PR_REVIEW_PULL_REQUEST",
   );
+
   const token = yield* Config.redacted("GITHUB_TOKEN");
+
   const reviewAuthor = yield* Config.nonEmptyString("PR_REVIEW_AUTHOR").pipe(
     Config.withDefault("github-actions[bot]"),
   );
+
   const configuredMode = yield* Config.literals(
     ["auto", "incremental", "full"],
     "PR_REVIEW_MODE",
   ).pipe(Config.withDefault("auto"));
+
   const command = yield* Config.string("PR_REVIEW_COMMAND").pipe(Config.withDefault(""));
   const mode = command.trim().length === 0 ? configuredMode : reviewModeFromCommand(command);
+
   if (mode === undefined) {
     return yield* skip("unsupported-review-command");
   }
+
   const commentId = yield* Config.schema(Schema.Natural, "PR_REVIEW_COMMENT_ID").pipe(
     Config.withDefault(0),
   );
+
   if (command.trim().length > 0 && commentId === 0) {
     return yield* ActionConfigurationError.make({
       message: "comment-id is required for a manual review command",
     });
   }
+
   const automaticReviewLimit = yield* Config.schema(
     Schema.Natural,
     "PR_REVIEW_AUTOMATIC_LIMIT",
   ).pipe(Config.withDefault(2));
+
   const expectedHead = yield* Config.string("PR_REVIEW_EXPECTED_HEAD").pipe(Config.withDefault(""));
+
   const modelName = yield* Config.nonEmptyString("PR_REVIEW_MODEL").pipe(
     Config.withDefault("gpt-5.6-sol"),
   );
+
   const effort = yield* Config.literals(
     ["low", "medium", "high", "xhigh"],
     "PR_REVIEW_EFFORT",
   ).pipe(Config.withDefault("xhigh"));
+
   const guidanceFile = yield* Config.string("PR_REVIEW_GUIDANCE_FILE").pipe(Config.withDefault(""));
+
   const ignore = (yield* Config.string("PR_REVIEW_IGNORE").pipe(Config.withDefault("")))
     .split(",")
     .map((pattern) => pattern.trim())
     .filter((pattern) => pattern.length > 0);
+
   const apiUrl = yield* Config.nonEmptyString("GITHUB_API_URL").pipe(
     Config.withDefault("https://api.github.com"),
   );
@@ -613,8 +667,10 @@ export const reviewActionProgram = Effect.gen(function* () {
     token,
     apiUrl,
   });
+
   if (commentId > 0) yield* github.acknowledgeComment(commentId);
   const pull = yield* github.getPullRequest;
+
   if (pull.draft) return yield* skip("draft-pull-request");
   if (expectedHead.length > 0 && pull.headRevision !== expectedHead) {
     return yield* skip("stale-event-head");
@@ -622,6 +678,7 @@ export const reviewActionProgram = Effect.gen(function* () {
 
   const history = yield* github.listReviews;
   let unresolvedChangeRequests = unresolvedChangeRequestCount({ reviewAuthor, history });
+
   const selection = selectReview({
     mode,
     currentHead: pull.headRevision,
@@ -629,6 +686,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     automaticReviewLimit,
     history,
   });
+
   if (selection._tag === "skip") {
     yield* skip(selection.reason, undefined, unresolvedChangeRequests);
     if (selection.reason === "head-review-incomplete") {
@@ -637,6 +695,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     if (unresolvedChangeRequests > 0) {
       return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
     }
+
     return;
   }
   if (selection._tag === "pause") {
@@ -655,23 +714,29 @@ export const reviewActionProgram = Effect.gen(function* () {
       ),
       comments: [],
     });
+
     yield* skip(selection.reason, reviewUrl, unresolvedChangeRequests);
     if (unresolvedChangeRequests > 0) {
       return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
     }
+
     return;
   }
 
   let scope = selection.scope;
+
   const attemptExit = yield* Effect.gen(function* () {
     const fullFiles = yield* github.listFiles;
     const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
+
     let reviewBase =
       scope === "incremental" && selection.baseRevision !== undefined
         ? selection.baseRevision
         : currentMergeBase;
+
     if (scope === "incremental") {
       const priorMergeBase = yield* github.getMergeBase(pull.baseRevision, reviewBase);
+
       if (priorMergeBase !== currentMergeBase) {
         if (!selection.automatic) {
           return yield* IncrementalScopeUnavailable.make({
@@ -685,6 +750,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       }
     }
     const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
+
     const surface = yield* hydrateExactChanges({
       files: fullFiles,
       changedPaths: comparison.changedPaths,
@@ -692,13 +758,16 @@ export const reviewActionProgram = Effect.gen(function* () {
       head: comparison.head,
       ignore,
     });
+
     const reviewRepository = makeReviewRepository({
       base: comparison.base,
       head: comparison.head,
       ignore,
       unavailablePaths: surface.unavailablePaths,
     });
+
     const fs = yield* FileSystem.FileSystem;
+
     const guidance =
       guidanceFile.length === 0
         ? undefined
@@ -706,6 +775,7 @@ export const reviewActionProgram = Effect.gen(function* () {
 
     if (surface.changes.length === 0) {
       const resolutions: ReadonlyArray<ReviewResolution> = [];
+
       return {
         resolutions,
         followUps: [],
@@ -746,6 +816,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       model: modelName,
       cacheKey: `pr-review-v2:${pull.headRevision}`,
     });
+
     const reviewer = makeReviewer({
       model: OpenAiLanguageModel.model(modelName, {
         max_output_tokens: 32_000,
@@ -758,6 +829,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       costControl: provider.costControl,
       ...(guidance === undefined ? {} : { guidance }),
     });
+
     const result = yield* reviewer
       .review(
         ReviewRequest.make({
@@ -790,11 +862,14 @@ export const reviewActionProgram = Effect.gen(function* () {
           ),
         ),
       );
+
     const pending = new Set(result.pendingPaths ?? []);
+
     surface.unreviewedPaths.push(...pending);
     surface.exclusions.push(
       ...[...pending].map((path) => ReviewExclusion.make({ path, reason: "review-stopped" })),
     );
+
     return {
       resolutions: result.resolutions ?? [],
       followUps,
@@ -815,11 +890,13 @@ export const reviewActionProgram = Effect.gen(function* () {
       report: reanchorToFullPullRequest(fullFiles, result.report),
     };
   }).pipe(Effect.exit);
+
   if (Exit.isFailure(attemptExit)) {
     const failureSummary = attemptExit.cause.reasons
       .flatMap((reason) => {
         if (!Cause.isFailReason(reason)) return [];
         const failure = reason.error;
+
         switch (failure._tag) {
           case "BudgetExceeded":
             return [
@@ -836,6 +913,7 @@ export const reviewActionProgram = Effect.gen(function* () {
         }
       })
       .at(0);
+
     yield* Console.error(
       `PR review attempt failed${failureSummary === undefined ? "" : `: ${failureSummary}`}`,
     );
@@ -844,6 +922,7 @@ export const reviewActionProgram = Effect.gen(function* () {
         Cause.isFailReason(reason) ? [reason.error._tag] : [reason._tag],
       ),
     });
+
     const reviewUrl = yield* publishHeadBoundReview(
       github.publishReview({
         commitId: pull.headRevision,
@@ -860,6 +939,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       }),
       { publish: github.publishAttemptMarker, automatic: selection.automatic, failureSummary },
     ).pipe(Effect.catchTag("StaleReviewHead", () => Effect.failCause(attemptExit.cause)));
+
     yield* writeOutputs([
       ["skipped", "false"],
       ["reason", "review-failed"],
@@ -867,8 +947,10 @@ export const reviewActionProgram = Effect.gen(function* () {
       ["unresolved-change-requests", unresolvedChangeRequests],
       ["review-url", reviewUrl],
     ]);
+
     return yield* Effect.failCause(attemptExit.cause);
   }
+
   const {
     surface,
     modelTurns,
@@ -885,9 +967,11 @@ export const reviewActionProgram = Effect.gen(function* () {
     resolutions,
     followUps,
   } = attemptExit.value;
+
   const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
 
   const pricing = reviewModelPricing(modelName);
+
   const estimatedCost: ReviewCostEstimate | undefined =
     estimatedCostMicrousd === undefined || pricing === undefined
       ? undefined
@@ -898,15 +982,18 @@ export const reviewActionProgram = Effect.gen(function* () {
         };
 
   const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
+
   // Only positive verification from a complete, nonblocking pass can retire prior feedback.
   // Dismissals retain the inspected commit and evidence even if later publication fails.
   if (complete && blocking === 0 && resolutions.length > 0) {
     const owned = selectUnresolvedChangeRequests({ reviewAuthor, history });
+
     yield* publishHeadBoundReview(
       Effect.gen(function* () {
         for (const resolution of resolutions) {
           const review = owned.find(({ id }) => String(id) === resolution.id);
           const followUp = followUps.find(({ id }) => id === resolution.id);
+
           if (review === undefined || followUp === undefined) {
             return yield* GitHubApiFailure.make({
               operation: "dismiss review",
@@ -929,6 +1016,7 @@ export const reviewActionProgram = Effect.gen(function* () {
           reviewAuthor,
           history: yield* github.listReviews,
         });
+
         return "";
       }).pipe(
         Effect.tapErrorTag("GitHubApiFailure", () =>
@@ -949,6 +1037,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       { publish: github.publishAttemptMarker, automatic: selection.automatic },
     );
   }
+
   const body = withReviewMarker(
     presentation.renderReview({
       report,
@@ -975,6 +1064,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     selection.automatic,
     complete,
   );
+
   const reviewUrl = yield* publishHeadBoundReview(
     github.publishReview({
       commitId: pull.headRevision,
@@ -994,6 +1084,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     }),
     { publish: github.publishAttemptMarker, automatic: selection.automatic },
   );
+
   yield* writeOutputs([
     ["skipped", "false"],
     [
@@ -1024,6 +1115,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       reason: exclusion.reason,
     });
   }
+
   const publicationFailure = reviewPublicationFailure({
     blockingFindings: blocking,
     unreviewedPaths: surface.unreviewedPaths.length,
@@ -1031,5 +1123,6 @@ export const reviewActionProgram = Effect.gen(function* () {
     exhausted,
     incomplete,
   });
+
   if (publicationFailure !== undefined) return yield* publicationFailure;
 });

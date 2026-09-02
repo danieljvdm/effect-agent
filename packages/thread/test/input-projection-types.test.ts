@@ -137,17 +137,21 @@ const proveWorkerRequirements = (
   const process = runtime.processThread(agent, threadId);
   const worker = runtime.runWorker(agent);
   const registered = DurableWorkerBinding.make(agent, digests);
+
   const execution = AgentRuntime.run(
     agent,
     { question: "hello", hostOnly: "private" },
     { threadId },
   );
+
   const retained = execution.pipe(Effect.provide(PersistentHistory.layer));
+
   const events = AgentRuntime.stream(
     agent,
     { question: "hello", hostOnly: "private" },
     { threadId },
   );
+
   const detached = AgentRuntime.start(
     agent,
     { question: "hello", hostOnly: "private" },
@@ -178,6 +182,7 @@ const proveWorkerRequirements = (
     Equal<Effect.Error<typeof retained>, AgentRuntimeFailure<typeof agent>>
   >;
   type HistoryOutputProof = Assert<Equal<Effect.Success<typeof retained>["output"], string>>;
+
   const proofs: readonly [
     ProcessProof,
     WorkerProof,
@@ -191,6 +196,7 @@ const proveWorkerRequirements = (
     HistoryFailureProof,
     HistoryOutputProof,
   ] = [true, true, true, true, true, true, true, true, true, true, true];
+
   return proofs;
 };
 
@@ -208,6 +214,7 @@ const proveRegistrationRequirements = (
 ) => {
   const first = Agent.withModel(definition, firstModel);
   const second = Agent.withModel(secondDefinition, secondModel);
+
   const compiled = compileRegistrations([
     {
       agent: definition,
@@ -223,7 +230,9 @@ const proveRegistrationRequirements = (
       }),
     },
   ]);
+
   const empty = compileRegistrations([]);
+
   const rejectedMixedModel = compileRegistrations([
     // @ts-expect-error An existing Binding cannot also select a different model.
     {
@@ -232,13 +241,17 @@ const proveRegistrationRequirements = (
       definitions: DefinitionDigestInput.make({ agent: "mixed", model: "mixed", tools: [] }),
     },
   ]);
+
   void rejectedMixedModel;
+
   const identityOnly = {
     agentId: first.definition.id,
     attempt: () => Effect.never,
   };
+
   // @ts-expect-error Exact registrations require a definition digest triple.
   const rejectedIdentityOnly: ResolvedBinding = identityOnly;
+
   void rejectedIdentityOnly;
 
   type Services = Effect.Services<typeof compiled>;
@@ -259,6 +272,7 @@ const proveRegistrationRequirements = (
   type SecondTool = Assert<Equal<Extract<Services, AuditDependency>, AuditDependency>>;
   type Failure = Assert<Equal<Effect.Error<typeof compiled>, DigestError>>;
   type Empty = Assert<Equal<Effect.Services<typeof empty>, Crypto.Crypto>>;
+
   const proofs: readonly [
     CompleteUnion,
     FirstModel,
@@ -270,6 +284,7 @@ const proveRegistrationRequirements = (
     Failure,
     Empty,
   ] = [true, true, true, true, true, true, true, true, true];
+
   return proofs;
 };
 

@@ -153,6 +153,7 @@ const capture = <A extends ExecutableAgentBinding>(
       // collected. TypeScript cannot instantiate the higher-rank RuntimeBinding parameters
       // from the intentionally erased public shape, so specialize the driver back to A here.
       const run = driver as unknown as CapturedAttempt<A>;
+
       return run(agent, threadId, claim).pipe(Effect.provide(context)) as Effect.Effect<
         Option.Option<Settlement>,
         DurableWorkerFailure
@@ -186,6 +187,7 @@ export const resolveWorkerBinding = (
   digests: DefinitionDigests,
 ): Effect.Effect<ResolvedBinding, DurableBindingFailure> => {
   const registered = bindings.filter((binding) => binding.agentId === agentId);
+
   if (registered.length === 0) {
     return Effect.fail(
       BindingUnavailable.make({
@@ -195,6 +197,7 @@ export const resolveWorkerBinding = (
     );
   }
   const exact = registered.find((binding) => definitionDigestsEqual(binding.digests, digests));
+
   if (exact === undefined) {
     return Effect.fail(
       BindingDigestMismatch.make({
@@ -203,6 +206,7 @@ export const resolveWorkerBinding = (
       }),
     );
   }
+
   return Effect.succeed(exact);
 };
 
@@ -258,5 +262,6 @@ export const compileRegistrations = <const Entries extends ReadonlyArray<AgentRe
     DigestError,
     Crypto.Crypto | RegistrationRequirements<Entries>
   >;
+
   return Effect.forEach(entries, compileEntry);
 };

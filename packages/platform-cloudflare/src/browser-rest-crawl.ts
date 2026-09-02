@@ -47,6 +47,7 @@ const BoundedJobId = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const BoundedCursorString = Schema.NonEmptyString.check(Schema.isMaxLength(MAX_CURSOR_LENGTH));
 // The generated API response Schema says string; the current product example returns a number.
 const ProviderCursor = Schema.Union([BoundedCursorString, Schema.Natural]);
+
 const ProviderJobStatus = Schema.Literals([
   "running",
   "completed",
@@ -55,6 +56,7 @@ const ProviderJobStatus = Schema.Literals([
   "cancelled_due_to_timeout",
   "cancelled_due_to_limits",
 ]);
+
 const ProviderResult = Schema.Struct({
   id: BoundedJobId,
   status: ProviderJobStatus,
@@ -65,14 +67,17 @@ const ProviderResult = Schema.Struct({
   records: Schema.Array(PageCrawlRecord).check(Schema.isMaxLength(MAX_RECORDS_PER_RESPONSE)),
   cursor: Schema.optionalKey(ProviderCursor),
 });
+
 const CreateEnvelope = Schema.Struct({
   success: Schema.Literal(true),
   result: BoundedJobId,
 });
+
 const ResultEnvelope = Schema.Struct({
   success: Schema.Literal(true),
   result: ProviderResult,
 });
+
 const DeleteEnvelope = Schema.Struct({
   success: Schema.Literal(true),
   result: Schema.Struct({
@@ -91,8 +96,10 @@ const boundedDiagnostic = (message: string): string => message.slice(0, MAX_DIAG
 
 const privateCause = (value: unknown, apiToken: Redacted.Redacted<string>): Error | undefined => {
   const raw = boundedDiagnostic(String(value));
+
   if (raw.length === 0) return undefined;
   const token = Redacted.value(apiToken);
+
   return new Error(token.length === 0 ? raw : raw.replaceAll(token, "[REDACTED]"));
 };
 
@@ -116,6 +123,7 @@ const limitError = (
         : limit === "total-bytes"
           ? request.limits.maxTotalBytes
           : request.limits.deadlineMillis;
+
   return PageCrawlLimitError.make({
     implementation: browserRestCrawlImplementation,
     limit,
@@ -129,15 +137,19 @@ const retryAfterMillis = (
   headers: Readonly<Record<string, string | undefined>>,
 ): number | undefined => {
   const seconds = Number(headers["retry-after"]);
+
   if (!Number.isSafeInteger(seconds) || seconds < 0) return undefined;
   const millis = seconds * 1_000;
+
   return Number.isSafeInteger(millis) ? millis : undefined;
 };
 
 const isJsonResponse = (headers: Readonly<Record<string, string | undefined>>): boolean => {
   const contentType = headers["content-type"];
+
   if (contentType === undefined) return false;
   const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+
   return mediaType === "application/json" || mediaType?.endsWith("+json") === true;
 };
 
@@ -153,6 +165,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCrawl.readBoundedResponse")(fu
   maximum: number,
 ): Effect.fn.Return<string, PageCrawlProtocolError> {
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
+
   const state = yield* Stream.runFoldEffect<
     Uint8Array,
     HttpClientError.HttpClientError,
@@ -165,6 +178,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCrawl.readBoundedResponse")(fu
     () => ({ observed: 0, text: "" }),
     (current, chunk) => {
       const observed = current.observed + chunk.byteLength;
+
       if (observed > maximum) {
         return Effect.fail(
           protocolError(
@@ -172,6 +186,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCrawl.readBoundedResponse")(fu
           ),
         );
       }
+
       return Effect.try({
         try: () => ({ observed, text: current.text + decoder.decode(chunk, { stream: true }) }),
         catch: (cause) => protocolError("Decoding the Browser Run crawl response failed", cause),
@@ -184,6 +199,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCrawl.readBoundedResponse")(fu
         : protocolError("Reading the Browser Run crawl response failed", cause),
     ),
   );
+
   return yield* Effect.try({
     try: () => state.text + decoder.decode(),
     catch: (cause) => protocolError("Decoding the Browser Run crawl response failed", cause),
@@ -195,6 +211,7 @@ const deadlineFailure = Effect.fn("BrowserRestCrawl.deadlineFailure")(function* 
   startedAt: number,
 ) {
   const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+
   return yield* limitError(request, "deadline", Math.max(0, now - startedAt));
 });
 
@@ -206,7 +223,9 @@ const withinDeadline = Effect.fn("BrowserRestCrawl.withinDeadline")(function* <A
   const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
   const elapsed = Math.max(0, now - startedAt);
   const remaining = request.limits.deadlineMillis - elapsed;
+
   if (remaining <= 0) return yield* limitError(request, "deadline", elapsed);
+
   return yield* effect.pipe(
     Effect.timeoutOrElse({
       duration: Duration.millis(remaining),
@@ -221,6 +240,7 @@ const checkDeadline = Effect.fn("BrowserRestCrawl.checkDeadline")(function* (
 ) {
   const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
   const elapsed = Math.max(0, now - startedAt);
+
   if (elapsed >= request.limits.deadlineMillis) {
     return yield* limitError(request, "deadline", elapsed);
   }
@@ -254,6 +274,7 @@ const makeCrawl =
           const authorized = HttpClientRequest.bearerToken(request, options.apiToken).pipe(
             HttpClientRequest.acceptJson,
           );
+
           const response = yield* client
             .execute(authorized)
             .pipe(
@@ -264,9 +285,12 @@ const makeCrawl =
                 ),
               ),
             );
+
           const bodyText = yield* readBoundedResponse(response, maximum);
+
           if (response.status === 429) {
             const reason = isQuotaMessage(bodyText) ? "quota" : "rate";
+
             return yield* PageCrawlRateLimitedError.make({
               implementation: browserRestCrawlImplementation,
               reason,
@@ -294,6 +318,7 @@ const makeCrawl =
               privateCause(bodyText, options.apiToken),
             );
           }
+
           return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(bodyText).pipe(
             Effect.mapError((cause) =>
               protocolError(
@@ -322,11 +347,13 @@ const makeCrawl =
               protocolError("Encoding the Browser Run crawl request failed", cause),
             ),
           );
+
           const created = yield* withinDeadline(
             executeJson(requestWithBody, CreateEnvelope, MAX_CONTROL_RESPONSE_BYTES),
             input,
             startedAt,
           );
+
           return created.result;
         });
 
@@ -344,6 +371,7 @@ const makeCrawl =
                 ).pipe(
                   Effect.flatMap((shouldCancel) => {
                     if (!shouldCancel) return Effect.void;
+
                     const cancellation = executeJson(
                       HttpClientRequest.delete(endpoint(options, id)),
                       DeleteEnvelope,
@@ -355,6 +383,7 @@ const makeCrawl =
                           : protocolError("Browser Run cancelled a different crawl job"),
                       ),
                     );
+
                     return cancellation.pipe(
                       Effect.timeoutOrElse({
                         duration: CANCEL_TIMEOUT,
@@ -373,6 +402,7 @@ const makeCrawl =
                     ),
                   ),
                 );
+
                 return { id, state } as const;
               }),
             ),
@@ -384,19 +414,23 @@ const makeCrawl =
           statusOnly: boolean,
         ) {
           let request = HttpClientRequest.get(endpoint(options, job.id));
+
           if (statusOnly) request = HttpClientRequest.setUrlParam(request, "limit", "1");
           if (Option.isSome(cursor)) {
             request = HttpClientRequest.setUrlParam(request, "cursor", cursor.value);
           }
+
           // `limit=1` still permits one complete record, so poll GETs use the bounded result cap.
           const envelope = yield* withinDeadline(
             executeJson(request, ResultEnvelope, MAX_RESULTS_RESPONSE_BYTES),
             input,
             startedAt,
           );
+
           if (envelope.result.id !== job.id) {
             return yield* protocolError("Browser Run returned a different crawl job identity");
           }
+
           return envelope.result;
         });
 
@@ -412,6 +446,7 @@ const makeCrawl =
             ),
           ).pipe(Effect.tap(() => Ref.set(job.state, "terminal"))),
         );
+
         if (terminal.status === "running") {
           return yield* protocolError("Browser Run polling stopped before a terminal status");
         }
@@ -428,6 +463,7 @@ const makeCrawl =
           (state) =>
             Effect.gen(function* () {
               const result = yield* fetchResult(state.cursor, false);
+
               if (result.status !== "completed") {
                 return yield* protocolError(
                   "Browser Run changed crawl status during result pagination",
@@ -437,12 +473,14 @@ const makeCrawl =
                 return [result.records, Option.none()] as const;
               }
               const cursor = normalizedCursor(result.cursor);
+
               if (state.seen.includes(cursor)) {
                 return yield* protocolError("Browser Run repeated a crawl result cursor");
               }
               if (state.seen.length >= input.limits.maxPages) {
                 return yield* protocolError("Browser Run returned too many crawl result cursors");
               }
+
               return [
                 result.records,
                 Option.some({ cursor: Option.some(cursor), seen: [...state.seen, cursor] }),
@@ -458,6 +496,7 @@ const makeCrawl =
               Effect.gen(function* () {
                 yield* checkDeadline(input, startedAt);
                 const pages = state.pages + 1;
+
                 if (pages > input.limits.maxPages) {
                   return yield* limitError(input, "pages", pages);
                 }
@@ -467,17 +506,21 @@ const makeCrawl =
                 if (record.metadata !== undefined && !sameHost(startHost, record.metadata.url)) {
                   return yield* protocolError("Browser Run returned off-host crawl metadata");
                 }
+
                 const pageBytes =
                   record.markdown === undefined
                     ? 0
                     : new TextEncoder().encode(record.markdown).byteLength;
+
                 if (pageBytes > input.limits.maxPageBytes) {
                   return yield* limitError(input, "page-bytes", pageBytes);
                 }
                 const totalBytes = state.totalBytes + pageBytes;
+
                 if (totalBytes > input.limits.maxTotalBytes) {
                   return yield* limitError(input, "total-bytes", totalBytes);
                 }
+
                 return [{ pages, totalBytes }, [record]] as const;
               }),
           ),

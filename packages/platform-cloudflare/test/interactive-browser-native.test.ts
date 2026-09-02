@@ -21,13 +21,16 @@ import {
 } from "../src/interactive-browser.ts";
 
 const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
+
 vi.mock("@cloudflare/puppeteer", () => ({ default: sdk }));
 
 class NativeProbeError extends Schema.TaggedError<NativeProbeError>()("NativeProbeError", {
   cause: Schema.Defect(),
 }) {}
+
 const sdkCall = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: (cause) => new NativeProbeError({ cause }) });
+
 const Observation = Schema.fromJsonString(
   Schema.Struct({
     pageText: Schema.String,
@@ -54,8 +57,10 @@ it.live(
   (context) =>
     Effect.gen(function* () {
       const executable = yield* Config.option(Config.string("BROWSER_TEST_EXECUTABLE"));
+
       if (Option.isNone(executable)) return context.skip();
       let cartRequests = 0;
+
       const html = `<!doctype html><html><body>
     <nav>${Array.from({ length: 80 }, (_, i) => `<a href="#nav${i}">Navigation ${i}</a>`).join("")}</nav>
     <form id="cart">
@@ -71,6 +76,7 @@ it.live(
       // Node HTTP is isolated to this scoped test fixture, with all connection and
       // timer ownership here. Production browser code stays platform-independent.
       const timers = new Set<ReturnType<typeof setTimeout>>();
+
       const server = yield* Effect.acquireRelease(
         sdkCall(
           () =>
@@ -78,16 +84,19 @@ it.live(
               const server = createServer((request, response) => {
                 if (request.url === "/cart") {
                   cartRequests++;
+
                   const timer = setTimeout(() => {
                     timers.delete(timer);
                     response.writeHead(200, { "content-type": "application/json" }).end("{}");
                   }, 150);
+
                   timers.add(timer);
                 } else {
                   response.setHeader("content-type", "text/html");
                   response.end(html);
                 }
               });
+
               server.once("error", reject);
               server.listen(0, "127.0.0.1", () => resolve(server));
             }),
@@ -102,16 +111,21 @@ it.live(
               }),
           ),
       );
+
       const address = server.address();
+
       if (address === null || typeof address === "string")
         return yield* Effect.die("Missing local server address");
       const url = `http://127.0.0.1:${address.port}`;
+
       const browser = yield* Effect.acquireRelease(
         sdkCall(() => nativePuppeteer.launch({ executablePath: executable.value, headless: true })),
         (browser) => Effect.promise(() => browser.close()),
       );
+
       const page = yield* sdkCall(() => browser.newPage());
       const requestListenerBaseline = page.listenerCount("request");
+
       sdk.launch.mockResolvedValue({
         createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
         sessionId: () => "native-probe",
@@ -120,10 +134,13 @@ it.live(
         off: () => {},
         close: async () => {},
       });
+
       const unused = async (): Promise<Response> => {
         throw new Error("No Cloudflare requests");
       };
+
       const logs: Array<ReturnType<typeof Logger.formatStructured.log>> = [];
+
       const layer = browserRunInteractiveLayer().pipe(
         Layer.provide(
           BrowserRunInteractiveBinding.layer({
@@ -133,6 +150,7 @@ it.live(
           ),
         ),
       );
+
       yield* Effect.gen(function* () {
         const handle = yield* (yield* InteractiveBrowser).open(
           InteractiveBrowserPolicy.make({
@@ -142,14 +160,17 @@ it.live(
             maxReturnedBytes: 256 * 1024,
           }),
         );
+
         yield* handle.navigate(BrowserNavigateRequest.make({ url }));
         const read = handle.readText(BrowserReadTextRequest.make({}));
         const initial = yield* read;
         const observed = yield* Schema.decodeUnknownEffect(Observation)(initial.text);
+
         expect(observed.controlsTruncated).toBe(true);
         expect(observed.controls).toHaveLength(64);
         const size = observed.controls.find((c) => c.label === "12oz");
         const cart = observed.controls.find((c) => c.label === "Add to Cart");
+
         expect(size).toMatchObject({
           kind: "label:radio",
           checked: false,
@@ -194,6 +215,7 @@ it.live(
           BrowserFillRequest.make({ selector: "#roast", value: "private-roast-value" }),
         );
         const selected = yield* Schema.decodeUnknownEffect(Observation)((yield* read).text);
+
         expect(selected.controls.find((c) => c.label === "12oz")).toMatchObject({
           checked: true,
           formValid: true,

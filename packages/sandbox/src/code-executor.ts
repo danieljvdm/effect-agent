@@ -16,6 +16,7 @@ const BoundedMessage = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC
 const BoundedLogs = Schema.Array(BoundedLogLine).check(Schema.isMaxLength(4_096));
 const BoundedSourceText = Schema.String.check(Schema.isMaxLength(4 * 1024 * 1024));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
+
 const FinitePositiveDuration = Schema.Duration.pipe(
   Schema.refine(
     (duration): duration is Duration.Duration =>
@@ -23,6 +24,7 @@ const FinitePositiveDuration = Schema.Duration.pipe(
     { expected: "a finite positive duration" },
   ),
 );
+
 const FiniteNonNegativeDuration = Schema.Duration.pipe(
   Schema.refine(
     (duration): duration is Duration.Duration =>
@@ -96,6 +98,7 @@ export const JsIdentifier = Schema.NonEmptyString.check(
     expected: "a JavaScript identifier that is not a reserved word",
   }),
 );
+
 export type JsIdentifier = typeof JsIdentifier.Type;
 
 /** One callable namespace exposed to the generated program as a typed global. */
@@ -320,6 +323,7 @@ export const CodeExecutionError = Schema.Union([
   CodeExecutionProtocolError,
   CodeExecutorTerminatedError,
 ]);
+
 export type CodeExecutionError = typeof CodeExecutionError.Type;
 
 /**

@@ -18,6 +18,7 @@ describe("Durable Object ScheduleStore conformance", () => {
         withScheduleStorage(`schedule-store-${objectCounter++}`, (storage) =>
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             const transaction = DoScheduleTransaction.of({
               run: (body) =>
                 sql.withTransaction(body(() => Effect.void)).pipe(
@@ -29,10 +30,12 @@ describe("Durable Object ScheduleStore conformance", () => {
                   ),
                 ),
             });
+
             const dependencies = Layer.merge(
               Layer.succeed(SqlClientService.SqlClient)(sql),
               Layer.succeed(DoScheduleTransaction)(transaction),
             );
+
             yield* testCase.run.pipe(
               Effect.provide(scheduleStoreLayer.pipe(Layer.provide(dependencies))),
             );
@@ -47,6 +50,7 @@ describe("Durable Object ScheduleStore conformance", () => {
       withScheduleStorage("schedule-store-unsupported-version", (storage) =>
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
+
           yield* sql`
             CREATE TABLE effect_agent_schedule_store_state (
               singleton INTEGER PRIMARY KEY NOT NULL,
@@ -76,14 +80,17 @@ describe("Durable Object ScheduleStore conformance", () => {
                 ),
               ),
           });
+
           const dependencies = Layer.merge(
             Layer.succeed(SqlClientService.SqlClient)(sql),
             Layer.succeed(DoScheduleTransaction)(transaction),
           );
+
           const failure = yield* ScheduleStore.pipe(
             Effect.provide(scheduleStoreLayer.pipe(Layer.provide(dependencies))),
             Effect.flip,
           );
+
           expect(failure).toMatchObject({
             _tag: "ScheduleStorageError",
             reason: "corrupt",
@@ -94,6 +101,7 @@ describe("Durable Object ScheduleStore conformance", () => {
             SELECT storage_version, alarm_generation
             FROM effect_agent_schedule_store_state
           `;
+
           expect(state).toEqual([{ storage_version: 1, alarm_generation: 7 }]);
         }).pipe(Effect.provide(SqliteClient.layer({ storage }))),
       ),

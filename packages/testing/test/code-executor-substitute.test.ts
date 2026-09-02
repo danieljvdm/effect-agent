@@ -42,6 +42,7 @@ const unusedHost = CodeExecutionHost.of({
 const execute = (req: CodeExecutionRequest) =>
   Effect.gen(function* () {
     const executor = yield* CodeExecutor;
+
     return yield* executor.execute(req).pipe(Effect.provideService(CodeExecutionHost, unusedHost));
   }).pipe(Effect.scoped);
 
@@ -63,6 +64,7 @@ layer(inProcessCodeExecutorLayer, { excludeTestServices: true })(
             limits: CodeExecutionLimits.make({ ...limits, cpuMillis: 100 }),
           }),
         ).pipe(Effect.flip);
+
         expect(error._tag).toBe("CodeExecutorUnsupportedError");
         if (error._tag === "CodeExecutorUnsupportedError") {
           expect(error.feature).toBe("cpu-limit");
@@ -79,6 +81,7 @@ layer(inProcessCodeExecutorLayer, { excludeTestServices: true })(
               "async () => ({ fetch: typeof fetch, process: typeof process, require: typeof require })",
             ),
           );
+
           expect(result.value).toEqual({
             fetch: "undefined",
             process: "undefined",
@@ -93,6 +96,7 @@ layer(inProcessCodeExecutorLayer, { excludeTestServices: true })(
         const result = yield* execute(
           request("async () => { console.log('a', { b: 1 }, [2, 3]); return null; }"),
         );
+
         expect(result.logs).toEqual(['a {"b":1} [2,3]']);
         expect(result.resourceUse.logBytes).toBeGreaterThan(0);
         expect(result.resourceUse.hostCalls).toBe(0);

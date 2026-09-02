@@ -8,6 +8,7 @@ import { ChatInput } from "./general-chat";
 export const DemoRunHandle = Schema.NonEmptyString.pipe(
   Schema.brand("@effect-agent/example-demo/DemoRunHandle"),
 );
+
 export type DemoRunHandle = typeof DemoRunHandle.Type;
 
 export const DemoScenario = Schema.Literals([
@@ -19,6 +20,7 @@ export const DemoScenario = Schema.Literals([
   "budget-duration",
   "tool-defect",
 ]);
+
 export type DemoScenario = typeof DemoScenario.Type;
 
 export const DemoOpenAiModel = Schema.Literals(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
@@ -32,6 +34,7 @@ export const DemoReasoningEffort = Schema.Literals([
   "high",
   "xhigh",
 ]);
+
 export type DemoReasoningEffort = typeof DemoReasoningEffort.Type;
 
 /** Browser-selected model settings for the live research travel agent. */
@@ -231,4 +234,5 @@ export const DemoOperationalEvent = Schema.Union([
   DemoMcpConnected,
   DemoSandboxObserved,
 ]);
+
 export type DemoOperationalEvent = typeof DemoOperationalEvent.Type;

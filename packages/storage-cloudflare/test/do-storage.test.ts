@@ -101,12 +101,15 @@ describe("DoThreadStore", () => {
     ]) {
       it(conformanceCase.name, () => {
         const spanNames: Array<string> = [];
+
         const tracer = Tracer.make({
           span(options) {
             spanNames.push(options.name);
+
             return new Tracer.NativeSpan(options);
           },
         });
+
         return withThreadStorage(`wp1-store:${conformanceCase.name}`, (storage) =>
           conformanceCase.run.pipe(
             Effect.provide(layer({ storage, observationPollInterval: 1 })),
@@ -156,6 +159,7 @@ describe("DoThreadStore", () => {
         expect(Exit.isFailure(opened)).toBe(true);
         if (Exit.isFailure(opened)) {
           const failure = Cause.findErrorOption(opened.cause);
+
           expect(Option.isSome(failure)).toBe(true);
           if (Option.isSome(failure)) {
             expect(isDoStorageError(failure.value)).toBe(true);
@@ -164,11 +168,13 @@ describe("DoThreadStore", () => {
             }
           }
         }
+
         const tables = storage.sql
           .exec<{ name: string }>(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'effect_agent_%'",
           )
           .toArray();
+
         expect(tables).toEqual([]);
       }),
     ));
@@ -177,6 +183,7 @@ describe("DoThreadStore", () => {
     withThreadStorage("wp1-store-unsupported-version", (storage) =>
       Effect.gen(function* () {
         const previousVersion = CurrentDoStorageVersion - 1;
+
         storage.sql.exec(`
           CREATE TABLE effect_agent_meta (
             key TEXT PRIMARY KEY NOT NULL,
@@ -195,9 +202,11 @@ describe("DoThreadStore", () => {
           Effect.provide(layer({ storage, observationPollInterval: 1 })),
           Effect.exit,
         );
+
         expect(Exit.isFailure(opened)).toBe(true);
         if (Exit.isFailure(opened)) {
           const failure = Cause.findErrorOption(opened.cause);
+
           expect(Option.isSome(failure)).toBe(true);
           if (Option.isSome(failure)) {
             expect(isDoStorageCompatibilityError(failure.value)).toBe(true);
@@ -214,6 +223,7 @@ describe("DoThreadStore", () => {
         const rows = storage.sql
           .exec<{ thread_id: string }>("SELECT thread_id FROM effect_agent_threads")
           .toArray();
+
         expect(rows).toEqual([{ thread_id: "retained-thread" }]);
       }),
     ));
@@ -248,9 +258,11 @@ describe("DoThreadStore", () => {
             }),
           )
           .pipe(Effect.exit);
+
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
+
           expect(error).toBeInstanceOf(ThreadStoreError);
           if (isThreadStoreError(error)) {
             expect(error.cause).toBeInstanceOf(DoValueBoundExceeded);
@@ -266,10 +278,13 @@ describe("DoThreadStore", () => {
         const batchRows = yield* sql<Record<string, unknown>>`
           SELECT batch_id FROM effect_agent_canonical_batches
         `;
+
         expect(batchRows).toEqual([]);
+
         const recordRows = yield* sql<Record<string, unknown>>`
           SELECT record_id FROM effect_agent_canonical_records
         `;
+
         expect(recordRows).toEqual([]);
       }).pipe(
         Effect.provide(

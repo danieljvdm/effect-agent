@@ -13,11 +13,13 @@ export const Projects = MemoryNamespace.define({
   version: 1,
   identity: Schema.String,
 });
+
 export const BenchmarkCase = Schema.Literals(["1", "4", "8", "16", "duplicates"]);
 export type BenchmarkCase = typeof BenchmarkCase.Type;
 export const cases = BenchmarkCase.literals;
 export const memoryScope = MemoryScope.make("benchmark");
 export const sourceCount = (name: BenchmarkCase) => (name === "duplicates" ? 16 : Number(name));
+
 export const limits = MemoryRecallLimits.make({
   maxSources: 16,
   maxItems: 128,
@@ -56,7 +58,9 @@ export const candidates = (name: BenchmarkCase): MemoryLookup => ({
   _tag: "Found",
   passages: Array.from({ length: name === "duplicates" ? 128 : sourceCount(name) }, (_, i) => {
     const write = command(name, i % sourceCount(name));
+
     if (write._tag !== "Put") throw new Error("Expected seed Put");
+
     return MemoryPassage.make({
       version: 1,
       source: { id: write.key.id, locator: write.locator, revision: "1" },
@@ -79,4 +83,5 @@ export const Sample = Schema.Struct({
   status: Schema.Literals(["ok", "timeout", "error"]),
   errorTag: Schema.NullOr(Schema.String),
 });
+
 export type Sample = typeof Sample.Type;

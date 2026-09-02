@@ -20,7 +20,9 @@ it.effect("uses a credential-preserving redirect policy supported by the Worker 
     Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
       // The real workerd Request constructor rejects unsupported fetch options.
       const request = new Request(input, init);
+
       expect(request.redirect).toBe("manual");
+
       return new Response('{"status":"closed"}', {
         headers: { "content-type": "application/json" },
       });
@@ -77,15 +79,18 @@ it.effect(
         { responses: [[200, "broken"]], terminal: false, requests: 1 },
       ] as const) {
         const calls: Array<string> = [];
+
         const client = HttpClient.make((request, url) =>
           Effect.sync(() => {
             const response = scenario.responses[calls.length];
+
             calls.push(request.method);
             expect(url.origin).toBe("https://api.cloudflare.com");
             expect(url.pathname).toBe(
               `/client/v4/accounts/${accountId}/browser-rendering/devtools/${request.method === "DELETE" ? "browser" : "session"}/${sessionId}`,
             );
             if (response === undefined) throw new Error("Exceeded cleanup request budget");
+
             return HttpClientResponse.fromWeb(
               request,
               new Response(response[1], {
@@ -95,6 +100,7 @@ it.effect(
             );
           }),
         );
+
         const result = yield* Effect.gen(function* () {
           return yield* (yield* BrowserRunSessionLifecycle).close(Redacted.make(sessionId));
         }).pipe(
@@ -107,6 +113,7 @@ it.effect(
           Effect.provideService(HttpClient.HttpClient, client),
           Effect.exit,
         );
+
         expect(result._tag === "Success").toBe(scenario.terminal);
         expect(calls.length).toBe(scenario.requests);
         expect(calls.filter((method) => method === "DELETE")).toHaveLength(1);

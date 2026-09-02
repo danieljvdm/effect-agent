@@ -87,6 +87,7 @@ const admin = CliCommand.make("durable-admin").pipe(
 const withRuntime = <A, E>(effect: Effect.Effect<A, E, DurableAgentRuntime>) =>
   Effect.gen(function* () {
     const { database: filename } = yield* admin;
+
     return yield* effect.pipe(Effect.provide(runtimeLayerFor(filename)));
   });
 
@@ -114,23 +115,28 @@ const explainCommand = CliCommand.make(
     withRuntime(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         if (submission._tag === "Some") {
           const submissionId = yield* decodeSubmissionId(submission.value);
           const explanation = yield* runtime.explain(submissionId);
+
           return yield* printExplanation(explanation, asJson);
         }
         if (thread._tag === "Some") {
           const threadId = yield* decodeThreadId(thread.value);
           const explanations = yield* runtime.explainThread(threadId);
+
           if (explanations.length === 0) {
             return yield* Console.log(`No nonterminal Submissions on thread ${threadId}.`);
           }
+
           return yield* Effect.forEach(
             explanations,
             (explanation) => printExplanation(explanation, asJson),
             { discard: true },
           );
         }
+
         return yield* MissingSelector.make({
           message: "Pass --submission <id> or --thread <id>.",
         });
@@ -165,6 +171,7 @@ const verifyCommand = CliCommand.make(
         const runtime = yield* DurableAgentRuntime;
         const threadId = yield* decodeThreadId(thread);
         const report = yield* runtime.verify(threadId);
+
         yield* Effect.forEach(renderReport(report), (line) => Console.log(line), {
           discard: true,
         });
@@ -206,6 +213,7 @@ const retryCommand = CliCommand.make(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const submissionId = yield* decodeSubmissionId(submission);
+
         const command = yield* Schema.decodeUnknownEffect(RetryCommand)({
           submissionId,
           author,
@@ -215,7 +223,9 @@ const retryCommand = CliCommand.make(
             InvalidIdentifier.make({ kind: "RetryCommand", value: `${author}/${reason}` }),
           ),
         );
+
         const report = yield* runtime.retry(command);
+
         yield* Console.log(renderRetry(report));
       }),
     ),
@@ -236,6 +246,7 @@ const wakeCommand = CliCommand.make(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const threadId = yield* decodeThreadId(thread);
+
         yield* runtime.wake(threadId);
         yield* Console.log(
           `Wake hint sent for ${threadId} (droppable by contract; workers' ledger scans stay authoritative).`,
@@ -268,6 +279,7 @@ const obligationsCommand = CliCommand.make(
     withRuntime(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const thresholds = yield* Schema.decodeUnknownEffect(ObligationThresholds)({
           agingSeconds,
           overdueSeconds,
@@ -279,7 +291,9 @@ const obligationsCommand = CliCommand.make(
             }),
           ),
         );
+
         const report = yield* runtime.scanObligations(thresholds);
+
         yield* Effect.forEach(renderObligations(report), (line) => Console.log(line), {
           discard: true,
         });

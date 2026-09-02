@@ -47,6 +47,7 @@ describe("addressed review verification", () => {
     () =>
       Effect.gen(function* () {
         const paths = yield* Ref.make<ReadonlyArray<string>>([]);
+
         const client = HttpClient.make((request, url) =>
           Ref.update(paths, (current) => [...current, url.pathname]).pipe(
             Effect.as(
@@ -78,17 +79,21 @@ describe("addressed review verification", () => {
             ),
           ),
         );
+
         const github = yield* makeGitHubClient({
           repository,
           pullRequest: 12,
           token: Redacted.make("token"),
         }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
         const input = {
           reviewAuthor: priorReview.authorLogin,
           history: [priorReview, { ...priorReview, id: 99, authorLogin: "someone-else" }],
           changedPaths: new Set(["src/fixed.ts"]),
         };
+
         const followUps = yield* github.loadReviewFollowUps({ ...input, scope: "incremental" });
+
         expect(followUps).toHaveLength(1);
         expect(followUps[0]?.id).toBe("42");
         expect(followUps[0]?.description).toContain("Second blocker");
@@ -114,9 +119,12 @@ describe("addressed review verification", () => {
     () =>
       Effect.gen(function* () {
         const pages: Array<string | null> = [];
+
         const client = HttpClient.make((request, url) => {
           const page = url.searchParams.get("page");
+
           pages.push(page);
+
           return Effect.succeed(
             HttpClientResponse.fromWeb(
               request,
@@ -135,11 +143,13 @@ describe("addressed review verification", () => {
             ),
           );
         });
+
         const github = yield* makeGitHubClient({
           repository,
           pullRequest: 12,
           token: Redacted.make("token"),
         }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
         expect(
           yield* github.loadReviewFollowUps({
             reviewAuthor: priorReview.authorLogin,
@@ -164,6 +174,7 @@ describe("addressed review verification", () => {
   ] as const)("dismisses only an unchanged owned review on the inspected head: %s", (mode) =>
     Effect.gen(function* () {
       const writes: Array<string> = [];
+
       const client = HttpClient.make((request, url) => {
         if (url.pathname.endsWith("/comments"))
           return Effect.succeed(
@@ -188,11 +199,14 @@ describe("addressed review verification", () => {
         if (request.method === "PUT") {
           const encoded =
             request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
+
           const body = Schema.decodeUnknownSync(
             Schema.fromJsonString(Schema.Struct({ message: Schema.String })),
           )(encoded);
+
           writes.push(body.message);
         }
+
         const body =
           request.method === "PUT"
             ? { id: mode === "wrong-response" ? 99 : 42, state: "DISMISSED" }
@@ -211,6 +225,7 @@ describe("addressed review verification", () => {
                   base: { sha: baseRevision },
                   head: { sha: mode === "stale" ? "new-head" : headRevision },
                 };
+
         return Effect.succeed(
           HttpClientResponse.fromWeb(
             request,
@@ -220,11 +235,13 @@ describe("addressed review verification", () => {
           ),
         );
       });
+
       const github = yield* makeGitHubClient({
         repository,
         pullRequest: 12,
         token: Redacted.make("token"),
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
       const result = yield* github
         .dismissReview({
           review: mode === "untrusted" ? { ...priorReview, authorType: "User" } : priorReview,
@@ -234,6 +251,7 @@ describe("addressed review verification", () => {
           evidence: "All candidate retention is now bounded.",
         })
         .pipe(Effect.exit);
+
       expect(Exit.isSuccess(result)).toBe(mode === "success" || mode === "dismissed");
       expect(writes).toHaveLength(["success", "denied", "wrong-response"].includes(mode) ? 1 : 0);
       if (mode === "success") expect(writes[0]).toContain(headRevision);
@@ -245,6 +263,7 @@ describe("addressed review verification", () => {
       const checking = yield* Deferred.make<void>();
       let writes = 0;
       let finalized = false;
+
       const client = HttpClient.make((request, url) => {
         if (request.method === "PUT") writes += 1;
         if (url.pathname.endsWith("/comments"))
@@ -256,6 +275,7 @@ describe("addressed review verification", () => {
               new globalThis.Response(JSON.stringify(priorReviewWire)),
             ),
           );
+
         return Deferred.succeed(checking, undefined).pipe(
           Effect.andThen(Effect.never),
           Effect.ensuring(
@@ -265,11 +285,13 @@ describe("addressed review verification", () => {
           ),
         );
       });
+
       const github = yield* makeGitHubClient({
         repository,
         pullRequest: 12,
         token: Redacted.make("token"),
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
       const fiber = yield* github
         .dismissReview({
           review: priorReview,
@@ -279,6 +301,7 @@ describe("addressed review verification", () => {
           evidence: "Verified fix",
         })
         .pipe(Effect.forkChild);
+
       yield* Deferred.await(checking);
       yield* Fiber.interrupt(fiber);
       expect(writes).toBe(0);
@@ -306,8 +329,10 @@ it.effect("PRR-009 publishes twenty-four blocking findings at the review field b
         body: "B".repeat(2_000),
       }),
     );
+
     const published = yield* Ref.make<ReadonlyArray<string>>([]);
     const reviewUrl = "https://github.test/reve-ai/example/pull/12#pullrequestreview-1";
+
     const client = HttpClient.make((request, url) =>
       Ref.update(published, (requests) => [...requests, `${request.method} ${url.pathname}`]).pipe(
         Effect.as(
@@ -336,6 +361,7 @@ it.effect("PRR-009 publishes twenty-four blocking findings at the review field b
         ),
       ),
     );
+
     const github = yield* makeGitHubClient({
       repository,
       pullRequest: 12,
@@ -360,6 +386,7 @@ it.effect("PRR-009 publishes twenty-four blocking findings at the review field b
       outputTokens: 4,
       headRevision,
     });
+
     const result = yield* github.publishReview({
       commitId: headRevision,
       event: "REQUEST_CHANGES",
@@ -387,6 +414,7 @@ it.effect("refuses publication after the pull-request head moves", () =>
   Effect.gen(function* () {
     const requests = yield* Ref.make<ReadonlyArray<string>>([]);
     const movedHead = "9".repeat(40);
+
     const client = HttpClient.make((request, url) =>
       Ref.update(requests, (current) => [...current, `${request.method} ${url.pathname}`]).pipe(
         Effect.as(
@@ -408,6 +436,7 @@ it.effect("refuses publication after the pull-request head moves", () =>
         ),
       ),
     );
+
     const github = yield* makeGitHubClient({
       repository,
       pullRequest: 12,
@@ -454,6 +483,7 @@ it.effect("retains GitHub's exact previous filename for declared renames", () =>
         ),
       ),
     );
+
     const github = yield* makeGitHubClient({
       repository,
       pullRequest: 12,
@@ -475,6 +505,7 @@ describe("GitHub tree comparison", () => {
   it.effect("PRR-008 compares exact contents after rewritten history", () =>
     Effect.gen(function* () {
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const client = HttpClient.make((request, url) => {
         const body = url.pathname.endsWith(`/git/commits/${baseRevision}`)
           ? { sha: baseRevision, tree: { sha: baseTree } }
@@ -509,6 +540,7 @@ describe("GitHub tree comparison", () => {
                     entry("src/was-directory", "0".repeat(40)),
                   ],
                 };
+
         return Ref.update(requests, (current) => [...current, url.href]).pipe(
           Effect.as(
             HttpClientResponse.fromWeb(
@@ -521,6 +553,7 @@ describe("GitHub tree comparison", () => {
           ),
         );
       });
+
       const github = yield* makeGitHubClient({
         repository,
         pullRequest: 12,
@@ -558,6 +591,7 @@ describe("GitHub tree comparison", () => {
                 truncated: url.pathname.endsWith(headTree),
                 tree: [],
               };
+
         return Effect.succeed(
           HttpClientResponse.fromWeb(
             request,
@@ -568,6 +602,7 @@ describe("GitHub tree comparison", () => {
           ),
         );
       });
+
       const github = yield* makeGitHubClient({
         repository,
         pullRequest: 12,
@@ -587,6 +622,7 @@ describe("GitHub tree comparison", () => {
       const path = "src/changed.ts";
       const baseBlob = "a".repeat(40);
       const headBlob = "b".repeat(40);
+
       const client = HttpClient.make((request, url) => {
         const body = url.pathname.endsWith(`/git/commits/${baseRevision}`)
           ? { sha: baseRevision, tree: { sha: baseTree } }
@@ -602,6 +638,7 @@ describe("GitHub tree comparison", () => {
                     encoding: "base64",
                     content: Encoding.encodeBase64("head"),
                   };
+
         return Effect.succeed(
           HttpClientResponse.fromWeb(
             request,
@@ -612,12 +649,14 @@ describe("GitHub tree comparison", () => {
           ),
         );
       });
+
       const github = yield* makeGitHubClient({
         repository,
         pullRequest: 12,
         token: Redacted.make("github-token"),
         apiUrl: "https://api.github.test",
       }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
       const comparison = yield* github.compareTrees(baseRevision, headRevision);
 
       const failure = yield* comparison.head.readTextFile(path).pipe(Effect.flip);

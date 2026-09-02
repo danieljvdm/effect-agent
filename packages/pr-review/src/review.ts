@@ -80,6 +80,7 @@ export const ReviewCategory = Schema.Literals([
   "maintainability",
   "docs",
 ]);
+
 export type ReviewCategory = typeof ReviewCategory.Type;
 
 /** One actionable defect. `line` is a RIGHT-side line in the supplied patch. */
@@ -243,6 +244,7 @@ class ReviewSubmission extends Schema.Class<ReviewSubmission>(
  */
 const formatRequest = (request: ReviewRequest): string => {
   const { changes, ...metadata } = request;
+
   return [
     JSON.stringify(metadata),
     ...changes.map(({ path, patch }) => `Changed file: ${JSON.stringify(path)}\n${patch}`),
@@ -307,8 +309,10 @@ const reviewCompletion = Toolkit.make(
 const commentableLines = (patch: string): ReadonlySet<number> => {
   const lines = new Set<number>();
   let right: number | undefined;
+
   for (const text of patch.split("\n")) {
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
+
     if (hunk !== null) {
       right = Number(hunk[1]);
       continue;
@@ -320,6 +324,7 @@ const commentableLines = (patch: string): ReadonlySet<number> => {
       right += 1;
     }
   }
+
   return lines;
 };
 
@@ -335,10 +340,12 @@ export interface ReviewerOptions<Provider, ModelProvides, ModelRequires> {
 
 const reviewSummary = (request: ReviewRequest, findings: ReadonlyArray<ReviewFinding>): string => {
   const blocking = findings.filter((finding) => finding.severity === "blocking").length;
+
   const summary =
     findings.length === 0
       ? "No concrete defects found in the supplied change."
       : `Reported ${findings.length} finding(s), including ${blocking} blocking finding(s).`;
+
   return `${summary}${request.scope === "incremental" ? " Earlier findings remain open unless explicitly verified as addressed; an incremental review does not establish that merging is safe." : ""}${request.unreviewedPaths.length > 0 ? " Coverage is incomplete because some changed paths were excluded from review input." : ""}`;
 };
 
@@ -348,6 +355,7 @@ const validatedResolutions = Effect.fn("validatedResolutions")(function* (
 ) {
   const allowed = new Set((request.followUps ?? []).map(({ id }) => id));
   const seen = new Set<string>();
+
   for (const { id } of resolutions) {
     if (!allowed.has(id) || seen.has(id)) {
       return yield* ReviewVerificationError.make({
@@ -356,6 +364,7 @@ const validatedResolutions = Effect.fn("validatedResolutions")(function* (
     }
     seen.add(id);
   }
+
   return resolutions;
 });
 
@@ -364,6 +373,7 @@ const batchChanges = (changes: ReadonlyArray<ReviewChange>): Array<Array<ReviewC
   const batches: Array<Array<ReviewChange>> = [];
   let batch: Array<ReviewChange> = [];
   let chars = 0;
+
   for (const change of changes) {
     if (batch.length > 0 && chars + change.patch.length > MAX_REVIEW_PATCH_CHARS) {
       batches.push(batch);
@@ -374,6 +384,7 @@ const batchChanges = (changes: ReadonlyArray<ReviewChange>): Array<Array<ReviewC
     chars += change.patch.length;
   }
   if (batch.length > 0 || batches.length === 0) batches.push(batch);
+
   return batches;
 };
 
@@ -385,17 +396,21 @@ const validatedFindings = Effect.fn("validatedFindings")(function* (
   const patches = new Map(request.changes.map((change) => [change.path, change.patch] as const));
   const seen = new Set<string>();
   const findings: Array<ReviewFinding> = [];
+
   for (const finding of submitted) {
     const patch = patches.get(finding.path);
+
     if (patch === undefined) {
       return yield* ReviewVerificationError.make({
         message: "A finding must identify its causative changed path",
       });
     }
+
     const line =
       finding.line !== undefined && isCommentableLine(patch, finding.line)
         ? finding.line
         : undefined;
+
     const sanitized = ReviewFinding.make({
       path: finding.path,
       ...(line === undefined ? {} : { line }),
@@ -404,11 +419,14 @@ const validatedFindings = Effect.fn("validatedFindings")(function* (
       title: finding.title,
       body: finding.body,
     });
+
     const key = JSON.stringify(sanitized);
+
     if (seen.has(key)) continue;
     seen.add(key);
     findings.push(sanitized);
   }
+
   return ReviewReport.make({
     summary: reviewSummary(request, findings),
     findings,
@@ -420,6 +438,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
   options: ReviewerOptions<Provider, ModelProvides, ModelRequires>,
 ) => {
   const policy = reviewPolicy(options.costControl !== undefined);
+
   const reviewer = Agent.withModel(
     Agent.make("pr-review", {
       input: ReviewRequest,
@@ -438,6 +457,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
     }),
     options.model,
   );
+
   const review = Effect.fn("Reviewer.review")(
     function* (request: ReviewRequest) {
       // The Stop Policy owns limits and finalization; this ledger only records usage and cost.
@@ -446,27 +466,35 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const recorded = yield* Ref.make<ReadonlyArray<ReviewFinding>>([]);
       const startedAt = yield* DateTime.now;
       const deadline = DateTime.add(startedAt, { minutes: 5 });
+
       const recordingLayer = (batch: ReviewRequest) =>
         reviewRecording.toLayer({
           record_finding: Effect.fn("Reviewer.recordFinding")(function* (finding) {
             const report = yield* validatedFindings(batch, [finding]);
+
             const accepted = yield* Ref.modify(recorded, (current) => {
               const additions = report.findings.filter(
                 (entry) =>
                   !current.some((prior) => JSON.stringify(prior) === JSON.stringify(entry)),
               );
+
               if (current.length + additions.length > 24) return [false, current] as const;
+
               return [true, [...current, ...additions]] as const;
             });
+
             if (!accepted)
               return yield* ReviewVerificationError.make({
                 message:
                   "The review already contains 24 recorded findings; submit those findings now.",
               });
+
             return null;
           }),
         });
+
       const accounting = toRunBudgetHook(budget);
+
       const runOptions = {
         runStartedAt: startedAt,
         durationDeadline: deadline,
@@ -477,6 +505,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             yield* Ref.update(modelCalls, (count) => count + delta.modelCalls);
             if (delta.modelCalls === 0 || options.costControl !== undefined) return;
             const totals = yield* budget.snapshot;
+
             yield* Effect.logInfo("Review model usage", {
               inputTokens: delta.inputTokens,
               outputTokens: delta.outputTokens,
@@ -492,61 +521,78 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           ? {}
           : { estimateCostMicrousd: options.estimateCostMicrousd }),
       };
+
       const runBatch = Effect.fn("Reviewer.reviewBatch")(function* (batch: ReviewRequest) {
         const totals = yield* budget.snapshot;
         const usedTurns = yield* Ref.get(modelCalls);
+
         const priorCost =
           options.costControl === undefined ? undefined : yield* options.costControl.snapshot;
+
         const result = yield* AgentRuntime.run(reviewer, batch, {
           ...runOptions,
           turnAllowance: policy.maxTurns - usedTurns,
           toolCallAllowance: policy.maxToolCalls - totals.toolCalls,
         }).pipe(Effect.provide(recordingLayer(batch)), Effect.result);
+
         const saved = yield* Ref.get(recorded);
+
         const cost =
           options.costControl === undefined ? undefined : yield* options.costControl.snapshot;
+
         const inputLimitExceeded =
           cost?.inputLimitExceeded === true ||
           (Result.isFailure(result) && result.failure._tag === "ContextBudgetError");
+
         const preserveAttempt =
           inputLimitExceeded ||
           cost?.stopped === true ||
           (cost?.modelCalls ?? 0) > 0 ||
           saved.length > 0;
+
         if (Result.isFailure(result) && !preserveAttempt) {
           return yield* result.failure;
         }
+
         const submitted = Result.isSuccess(result)
           ? yield* Effect.gen(function* () {
               const report = yield* validatedFindings(batch, result.success.output.findings);
+
               yield* validatedResolutions(batch, result.success.output.resolutions ?? []);
+
               return report;
             }).pipe(Effect.result)
           : Result.succeed(
               ReviewReport.make({ summary: "Research stopped before completion.", findings: [] }),
             );
+
         if (Result.isFailure(submitted) && !preserveAttempt) return yield* submitted.failure;
+
         const failure = Result.isFailure(result)
           ? result.failure
           : Result.isFailure(submitted)
             ? submitted.failure
             : undefined;
+
         if (failure !== undefined)
           yield* Effect.logWarning("Review stopped before completion", {
             failureType: failure._tag,
           });
         const combined = [...saved];
+
         if (Result.isSuccess(submitted)) {
           for (const finding of submitted.success.findings) {
             if (!combined.some((prior) => JSON.stringify(prior) === JSON.stringify(finding)))
               combined.push(finding);
           }
         }
+
         const incomplete =
           Result.isFailure(result) ||
           Result.isFailure(submitted) ||
           combined.length > 24 ||
           result.success.output.incomplete === true;
+
         const exhausted: ReviewOutcome["exhausted"] = inputLimitExceeded
           ? "tokens"
           : cost?.stopped === true
@@ -554,7 +600,9 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             : Result.isSuccess(result)
               ? result.success.exhausted
               : undefined;
+
         yield* Ref.set(recorded, combined.slice(0, 24));
+
         return {
           incomplete,
           exhausted,
@@ -568,18 +616,22 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             (cost?.modelCalls ?? 0) > (priorCost?.modelCalls ?? 0),
         };
       });
+
       // Uncapped hosts retain one run and its cumulative token policy. Capped
       // hosts share their existing ledger across fresh contexts without resetting
       // the review's turn, tool, deadline, finding, or spending allowances.
       const batches =
         options.costControl === undefined ? [request.changes] : batchChanges(request.changes);
+
       let incomplete = false;
       let exhausted: ReviewOutcome["exhausted"];
       let protocolError = false;
       let supplied = 0;
       let resolutions: ReadonlyArray<ReviewResolution> = [];
+
       for (const [index, changes] of batches.entries()) {
         const totals = yield* budget.snapshot;
+
         if (
           (yield* Ref.get(modelCalls)) >= policy.maxTurns ||
           totals.toolCalls >= policy.maxToolCalls
@@ -588,6 +640,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           incomplete = true;
           break;
         }
+
         // Verify prior blockers once, in the final batch under the same spending limit.
         const batch = yield* runBatch(
           ReviewRequest.make({
@@ -596,6 +649,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             followUps: index === batches.length - 1 ? (request.followUps ?? []) : [],
           }),
         );
+
         if (batch.attempted) supplied += changes.length;
         incomplete = batch.incomplete;
         exhausted = batch.exhausted;
@@ -605,6 +659,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       }
       const combined = yield* Ref.get(recorded);
       const pendingPaths = request.changes.slice(supplied).map((change) => change.path);
+
       const report = ReviewReport.make({
         findings: combined.slice(0, 24),
         summary:
@@ -614,11 +669,14 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
               ? `${protocolError ? "The review stopped after a model protocol error." : "The investigation did not complete."} Recorded findings are preserved; the remaining change has not been verified.`
               : reviewSummary(request, combined),
       });
+
       // Diagnostics deliberately contain counts only, never source or model-authored prose.
       yield* Effect.logDebug("Review completed", { findingCount: report.findings.length });
       const usage = yield* budget.snapshot;
+
       const cost =
         options.costControl === undefined ? undefined : yield* options.costControl.snapshot;
+
       return ReviewOutcome.make({
         report,
         ...(!incomplete &&
@@ -658,5 +716,6 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
     ]),
     Effect.scoped,
   );
+
   return { review } as const;
 };

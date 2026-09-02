@@ -20,6 +20,7 @@ describe("Cloudflare foreign failure boundaries", () => {
         },
       },
     });
+
     const hostileProxy = new Proxy(
       {},
       {

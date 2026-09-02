@@ -11,6 +11,7 @@ import { DurableObject } from "cloudflare:workers";
 export class ProbeDurableObject extends DurableObject {
   override async alarm(): Promise<void> {
     const fires = ((await this.ctx.storage.get<number>("wp0:alarm-fires")) ?? 0) + 1;
+
     await this.ctx.storage.put("wp0:alarm-fires", fires);
   }
 }

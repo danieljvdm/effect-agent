@@ -94,6 +94,7 @@ export class PortTransportError extends Schema.TaggedError<PortTransportError>()
 const safeTransportDiagnostic = (cause: unknown): string => {
   try {
     const message = cause instanceof Error ? cause.message : cause;
+
     return boundPortDiagnostic(typeof message === "string" ? message : String(message));
   } catch {
     return "[unavailable transport diagnostic]";
@@ -104,6 +105,7 @@ const transportRetryableSignal = (cause: unknown): boolean | undefined => {
   if (!Predicate.isObjectKeyword(cause)) return undefined;
   try {
     const signal = Reflect.get(cause, "retryable");
+
     return typeof signal === "boolean" ? signal : undefined;
   } catch {
     return undefined;
@@ -116,6 +118,7 @@ const transportRetryableSignal = (cause: unknown): boolean | undefined => {
  */
 export const portTransportFailure = (target: string, cause: unknown): PortTransportError => {
   const retryable = transportRetryableSignal(cause);
+
   return PortTransportError.make({
     target,
     message: safeTransportDiagnostic(cause),
@@ -185,10 +188,13 @@ const routableSubmissionTarget = (
       });
     }
     const separator = submissionId.indexOf(":");
+
     if (separator === -1) return LOCAL;
     if (!UUID_HEAD_PATTERN.test(submissionId.slice(0, separator))) return LOCAL;
     const tail = submissionId.slice(separator + 1);
+
     if (tail === localThreadId) return LOCAL;
+
     return yield* decodeThreadId(tail).pipe(
       Effect.map((threadId): RouteTarget => ({ _tag: "foreign", threadId })),
       Effect.orElseSucceed(() => LOCAL),
@@ -232,7 +238,9 @@ const makeTransportCall = (transport: ThreadPortTransport["Service"]) =>
         }),
       ),
     );
+
     const raw = yield* transport.call(target, encoded);
+
     return yield* decodePortResponse(raw).pipe(
       Effect.mapError((error) =>
         PortProtocolError.make({
@@ -278,14 +286,17 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
   ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | LedgerError> => {
     const isExpectedResult = Schema.is(resultSchema);
     const isExpectedFailure = Schema.is(failureSchema);
+
     return transportCall(target, call).pipe(
       Effect.mapError(routeFailure(operation, target)),
       Effect.flatMap(
         (response): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | LedgerError> => {
           if (response._tag === "PortFailed") {
             const failure = response.failure;
+
             if (isExpectedFailure(failure)) return Effect.fail(failure);
             if (failure._tag === "LedgerError") return Effect.fail(failure);
+
             return Effect.fail(
               LedgerError.make({
                 operation,
@@ -298,6 +309,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             );
           }
           const result = response.result;
+
           if (!isExpectedResult(result)) {
             return Effect.fail(
               LedgerError.make({
@@ -308,6 +320,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
               }),
             );
           }
+
           return Effect.succeed(result);
         },
       ),
@@ -337,6 +350,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
       Effect.flatMap((response) => {
         if (response._tag === "PortFailed") {
           if (response.failure._tag === "LedgerError") return Effect.fail(response.failure);
+
           return Effect.succeed(
             AdmissionIndeterminate.make({
               reason: boundPortDiagnostic(
@@ -356,6 +370,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             }),
           );
         }
+
         return Effect.succeed(response.result.resolution);
       }),
       Effect.catchTags({
@@ -408,18 +423,24 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     snapshot: RecoverySnapshot,
   ): Effect.fn.Return<RecoverySnapshot, LedgerError> {
     const operation = "ledger load recovery snapshot";
+
     const attachments = new Map(
       snapshot.childAttachments.map((attachment) => [attachment.childSubmissionId, attachment]),
     );
+
     let enriched = false;
+
     for (const reservation of snapshot.childReservations) {
       const childSubmissionId = reservation.childSubmissionId;
+
       if (childSubmissionId === undefined || attachments.has(childSubmissionId)) continue;
       const target = yield* submissionTarget(operation, childSubmissionId);
+
       // A local or opaque child identity was already answered authoritatively by the local
       // facet; absence there means the child admission never committed.
       if (target._tag !== "foreign") continue;
       const child = yield* foreignLookupById(operation, target.threadId, childSubmissionId);
+
       if (Option.isNone(child)) continue;
       attachments.set(
         childSubmissionId,
@@ -437,11 +458,14 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     if (!enriched) return snapshot;
     // Rebuild in reservation (parent Tool Call) order, the order the local facet documents.
     const ordered: Array<ChildAttachmentSnapshot> = [];
+
     for (const reservation of snapshot.childReservations) {
       if (reservation.childSubmissionId === undefined) continue;
       const attachment = attachments.get(reservation.childSubmissionId);
+
       if (attachment !== undefined) ordered.push(attachment);
     }
+
     return RecoverySnapshot.make({ ...snapshot, childAttachments: ordered });
   });
 
@@ -708,6 +732,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
   ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ThreadStoreError> => {
     const isExpectedResult = Schema.is(resultSchema);
     const isExpectedFailure = Schema.is(failureSchema);
+
     return transportCall(target, call).pipe(
       Effect.mapError(routeFailure(operation, target)),
       Effect.flatMap(
@@ -716,8 +741,10 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
         ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ThreadStoreError> => {
           if (response._tag === "PortFailed") {
             const failure = response.failure;
+
             if (isExpectedFailure(failure)) return Effect.fail(failure);
             if (failure._tag === "ThreadStoreError") return Effect.fail(failure);
+
             return Effect.fail(
               ThreadStoreError.make({
                 operation,
@@ -730,6 +757,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             );
           }
           const result = response.result;
+
           if (!isExpectedResult(result)) {
             return Effect.fail(
               ThreadStoreError.make({
@@ -740,6 +768,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
               }),
             );
           }
+
           return Effect.succeed(result);
         },
       ),
@@ -885,6 +914,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
   switch (request._tag) {
     case "LedgerAdmit": {
       const ledger = yield* SubmissionLedger;
+
       return yield* capture(
         ledger
           .admit(request.request)
@@ -893,12 +923,14 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "LedgerMarkReady": {
       const ledger = yield* SubmissionLedger;
+
       return yield* capture(
         ledger.markReady(request.request).pipe(Effect.map(() => LedgerMarkReadyResult.make({}))),
       );
     }
     case "LedgerLookup": {
       const ledger = yield* SubmissionLedger;
+
       return yield* capture(
         ledger
           .lookup(request.request)
@@ -913,6 +945,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "LedgerResolveAdmission": {
       const ledger = yield* SubmissionLedger;
+
       return yield* capture(
         ledger
           .resolveAdmission(request.request)
@@ -921,6 +954,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "LedgerRequestAbort": {
       const ledger = yield* SubmissionLedger;
+
       return yield* capture(
         ledger
           .requestAbort(request.request)
@@ -929,6 +963,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "LedgerRecordChildSettled": {
       const ledger = yield* SubmissionLedger;
+
       return yield* capture(
         ledger
           .recordChildSettled(request.request)
@@ -937,12 +972,14 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "StoreMaterialize": {
       const store = yield* ThreadStore;
+
       return yield* capture(
         store.materialize(request.request).pipe(Effect.map(() => StoreMaterializeResult.make({}))),
       );
     }
     case "StoreAppend": {
       const store = yield* ThreadStore;
+
       return yield* capture(
         store
           .append(request.request)
@@ -951,6 +988,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "StoreReadPage": {
       const store = yield* ThreadStore;
+
       return yield* capture(
         store.read(request.request).pipe(
           Stream.runCollect,
@@ -960,6 +998,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "StoreInspectTail": {
       const store = yield* ThreadStore;
+
       return yield* capture(
         store
           .inspectTail(request.request)
@@ -968,6 +1007,7 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "StoreExport": {
       const store = yield* ThreadStore;
+
       return yield* capture(
         store
           .export(request.request)
@@ -1010,6 +1050,7 @@ export const handleEncodedPortRequest = Effect.fn("DoPortRouting.handleEncodedPo
         ),
       ),
     );
+
     return yield* encodePortResponse(response).pipe(
       Effect.catch((error) =>
         Effect.succeed(

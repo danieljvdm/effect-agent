@@ -52,5 +52,6 @@ export const registerThenAccept = Effect.fn("Example.registerThenAccept")(functi
   const intake = yield* SubscriptionIntake;
   const registered = yield* subscriptions.subscribe(scope, options);
   const acknowledgement = yield* intake.accept(event.principal, options.source, event.payload);
+
   return { registered, acknowledgement };
 });

@@ -73,38 +73,47 @@ const baseClass = ThreadObject.make(
 export class TravelPlannerRestartObject extends baseClass {
   override async alarm(): Promise<void> {
     alarmDeliveries += 1;
+
     return super.alarm();
   }
   override async submitEncoded(encoded: unknown): Promise<unknown> {
     clientEntries.push("submit");
+
     return super.submitEncoded(encoded);
   }
   override async awaitSettlementEncoded(encoded: unknown): Promise<unknown> {
     clientEntries.push("awaitSettlement");
+
     return super.awaitSettlementEncoded(encoded);
   }
   override async observePage(encoded: unknown): Promise<unknown> {
     clientEntries.push("observePage");
+
     return super.observePage(encoded);
   }
   override async abortEncoded(encoded: unknown): Promise<unknown> {
     clientEntries.push("abort");
+
     return super.abortEncoded(encoded);
   }
   override async resolveApprovalEncoded(encoded: unknown): Promise<unknown> {
     clientEntries.push("resolveApproval");
+
     return super.resolveApprovalEncoded(encoded);
   }
   override async resolveUnknownEncoded(encoded: unknown): Promise<unknown> {
     clientEntries.push("resolveUnknown");
+
     return super.resolveUnknownEncoded(encoded);
   }
   override async portCall(encoded: unknown): Promise<unknown> {
     clientEntries.push("portCall");
+
     return super.portCall(encoded);
   }
   override async wake(): Promise<void> {
     clientEntries.push("wake");
+
     return super.wake();
   }
 }
@@ -124,6 +133,7 @@ const ArmRequest = Schema.Union([
     count: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
 ]);
+
 const decodeArmRequest = Schema.decodeUnknownSync(ArmRequest);
 
 const SubmitRequest = Schema.Struct({ thread: Schema.String, key: Schema.String });
@@ -159,10 +169,12 @@ const runClient = <A, E>(
 export default {
   async fetch(request: Request, env: Cloudflare.Env): Promise<Response> {
     const url = new URL(request.url);
+
     try {
       switch (url.pathname) {
         case "/arm": {
           const arm = decodeArmRequest(await request.json());
+
           if (arm._tag === "runtime") {
             armRuntimeEviction(
               arm.thread,
@@ -174,10 +186,12 @@ export default {
               ...Array.from({ length: arm.count }, () => arm.location),
             );
           }
+
           return Response.json({ armed: arm.count });
         }
         case "/armed": {
           const thread = url.searchParams.get("thread") ?? "";
+
           return Response.json({ remaining: armedEvictionsRemaining(thread) });
         }
         case "/introspect": {
@@ -185,10 +199,12 @@ export default {
         }
         case "/submit": {
           const submit = decodeSubmitRequest(await request.json());
+
           const receipt = await runClient(
             env,
             Effect.gen(function* () {
               const client = yield* CloudflareThreadClient;
+
               return yield* client.submit(
                 { definition: TravelPlannerPhase4 },
                 phase1Trip,
@@ -199,29 +215,36 @@ export default {
               );
             }),
           );
+
           return Response.json({ receipt: encodeReceipt(receipt) });
         }
         case "/await": {
           const body = decodeAwaitRequest(await request.json());
           const receipt = decodeReceipt(body.receipt);
+
           const settlement = await runClient(
             env,
             Effect.gen(function* () {
               const client = yield* CloudflareThreadClient;
+
               return yield* client.awaitSettlement(receipt);
             }),
           );
+
           return Response.json({ outcome: settlement.outcome });
         }
         case "/records": {
           const body = decodeRecordsRequest(await request.json());
+
           const records: ReadonlyArray<CanonicalRecordEnvelope> = await runClient(
             env,
             Effect.gen(function* () {
               const client = yield* CloudflareThreadClient;
+
               return yield* client.readAll(decodeThreadId(body.thread));
             }),
           );
+
           return Response.json({
             tags: records.map((envelope) => envelope.record.payload._tag),
           });

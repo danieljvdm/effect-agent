@@ -22,6 +22,7 @@ describe("Durable Object SubscriptionStore conformance", () => {
         withScheduleStorage(`subscription-store-${objectCounter++}`, (storage) =>
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             const transaction = DoSubscriptionTransaction.of({
               run: (body) =>
                 sql
@@ -32,10 +33,12 @@ describe("Durable Object SubscriptionStore conformance", () => {
                     ),
                   ),
             });
+
             const dependencies = Layer.merge(
               Layer.succeed(SqlClientService.SqlClient)(sql),
               Layer.succeed(DoSubscriptionTransaction)(transaction),
             );
+
             yield* testCase.run.pipe(
               Effect.provide(
                 doSubscriptionStoreLayer(subscriptionConformancePartition).pipe(
@@ -54,6 +57,7 @@ describe("Durable Object SubscriptionStore conformance", () => {
       withScheduleStorage("subscription-store-unsupported-version", (storage) =>
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
+
           yield* sql`
             CREATE TABLE effect_agent_subscription_store_state (
               singleton INTEGER PRIMARY KEY NOT NULL,
@@ -85,10 +89,12 @@ describe("Durable Object SubscriptionStore conformance", () => {
                   ),
                 ),
           });
+
           const dependencies = Layer.merge(
             Layer.succeed(SqlClientService.SqlClient)(sql),
             Layer.succeed(DoSubscriptionTransaction)(transaction),
           );
+
           const failure = yield* SubscriptionStore.pipe(
             Effect.provide(
               doSubscriptionStoreLayer(subscriptionConformancePartition).pipe(
@@ -97,6 +103,7 @@ describe("Durable Object SubscriptionStore conformance", () => {
             ),
             Effect.flip,
           );
+
           expect(failure).toMatchObject({
             _tag: "SubscriptionError",
             reason: "corrupt",
@@ -107,6 +114,7 @@ describe("Durable Object SubscriptionStore conformance", () => {
             SELECT storage_version, alarm_generation
             FROM effect_agent_subscription_store_state
           `;
+
           expect(state).toEqual([{ storage_version: 1, alarm_generation: 9 }]);
         }).pipe(Effect.provide(Layer.merge(SqliteClient.layer({ storage }), TestClock.layer()))),
       ),

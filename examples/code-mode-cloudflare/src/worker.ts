@@ -84,8 +84,10 @@ type DemoBinding = typeof scriptedAgent;
 const programSourceOf = (parameters: unknown): string | undefined => {
   if (typeof parameters === "object" && parameters !== null && "code" in parameters) {
     const code = (parameters as Record<string, unknown>).code;
+
     return typeof code === "string" ? code : undefined;
   }
+
   return undefined;
 };
 
@@ -95,8 +97,10 @@ const successOutcomeOf = (
 ): { readonly result: unknown; readonly logs: ReadonlyArray<unknown> } => {
   if (typeof value === "object" && value !== null) {
     const record = value as Record<string, unknown>;
+
     return { result: record.result, logs: Array.isArray(record.logs) ? record.logs : [] };
   }
+
   return { result: undefined, logs: [] };
 };
 
@@ -120,6 +124,7 @@ const runBound = (
     ThreadHistory.layerTransient,
     RunContextPreparationPassthrough,
   );
+
   return Effect.gen(function* () {
     // Stream the Run and correlate each `run_javascript` call's declared
     // program with the SAME call's success BY tool-call id, so the reported
@@ -131,6 +136,7 @@ const runBound = (
     const successes = new Map<string, { result: unknown; logs: ReadonlyArray<unknown> }>();
     let answer = "";
     let completed = false;
+
     // Expected Run failures become defects at this HTTP boundary: `runPromise`
     // rejects and the fetch handler answers 500 instead of fabricating a 200.
     yield* AgentRuntime.stream(agent, { question }).pipe(
@@ -145,6 +151,7 @@ const runBound = (
           if (event._tag === "RunCompleted") {
             completed = true;
             const output = event.output as { readonly answer?: unknown };
+
             if (typeof output.answer === "string") {
               answer = output.answer;
             }
@@ -167,9 +174,12 @@ const runBound = (
     // calls. `used` and `calls` stay honest either way; ambiguous runs simply
     // do not attach a single program/result to the answer.
     const successIds = [...successes.keys()];
+
     const soleId =
       successIds.length === 1 && declaredPrograms.has(successIds[0]) ? successIds[0] : undefined;
+
     const executed = soleId === undefined ? undefined : successes.get(soleId);
+
     return {
       answer,
       codeMode: {
@@ -202,12 +212,14 @@ const runAsk = (
     );
   }
   const agent = probe === "write" ? scriptedWriteProbeAgent : scriptedAgent;
+
   return runBound(env, agent, question, tenant, "scripted");
 };
 
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
+
     if (url.pathname !== "/ask") {
       return new Response(
         "POST /ask { question } — Code Mode over a SQLite Durable Object warehouse",
@@ -220,6 +232,7 @@ export default {
     const liveMode = env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0;
     const authToken = env.DEMO_AUTH_TOKEN;
     const hasAuthToken = authToken !== undefined && authToken.length > 0;
+
     // Fail CLOSED on the paid path: if the live model is enabled but no shared
     // secret is configured, refuse rather than serve paid inference to
     // anonymous callers. The offline scripted default needs no secret.
@@ -234,8 +247,10 @@ export default {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
     let question = "Which customers have more than $10,000 in revenue?";
+
     try {
       const body = (await request.json()) as { readonly question?: unknown };
+
       if (typeof body.question === "string" && body.question.trim().length > 0) {
         // Bound the question so an oversized body cannot drive an unbounded prompt.
         question = body.question.slice(0, 2_000);
@@ -246,6 +261,7 @@ export default {
     // The tenant addresses a Durable Object, so reject anything that is not a
     // short, safe identifier rather than minting an arbitrary Object.
     const tenant = url.searchParams.get("tenant") ?? "acme";
+
     if (!isValidTenant(tenant)) {
       return Response.json({ error: "tenant must match /^[a-z0-9-]{1,32}$/" }, { status: 400 });
     }
@@ -253,6 +269,7 @@ export default {
       const result = await Effect.runPromise(
         runAsk(env, question, tenant, url.searchParams.get("probe")),
       );
+
       return Response.json(result);
     } catch (cause) {
       return Response.json(

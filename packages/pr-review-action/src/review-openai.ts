@@ -67,11 +67,13 @@ export const estimateGpt56CostMicrousd = (
   usage: Response.Usage,
 ): number | undefined => {
   const pricing = reviewModelPricing(model);
+
   if (pricing === undefined) return undefined;
   const read = usage.inputTokens.cacheRead ?? 0;
   const total = usage.inputTokens.total ?? (usage.inputTokens.uncached ?? 0) + read;
   const uncached = Math.max(0, total - read);
   const write = Math.min(uncached, usage.inputTokens.cacheWrite ?? 0);
+
   return Math.ceil(
     ((uncached - write) * pricing.input +
       read * pricing.read +
@@ -91,14 +93,17 @@ export const reviewCostEstimator =
     });
 
 const CacheBreakpoint = Schema.Struct({ mode: Schema.Literal("explicit") });
+
 const CacheOptions = Schema.Struct({
   mode: Schema.Literal("explicit"),
   ttl: Schema.Literal("30m"),
 });
+
 const InputTokenCount = Schema.Struct({
   object: Schema.Literal("response.input_tokens"),
   input_tokens: Schema.Natural,
 });
+
 const ChargedUsage = Schema.Struct({
   input_tokens: Schema.Natural,
   output_tokens: Schema.Natural,
@@ -123,6 +128,7 @@ const breakpoint = CacheBreakpoint.make({ mode: "explicit" });
 const cacheContent = (content: string | ReadonlyArray<OpenAiSchema.InputContent>, mark = true) => {
   const parts =
     typeof content === "string" ? [{ type: "input_text" as const, text: content }] : content;
+
   return parts.map((part, index) =>
     mark && index === parts.length - 1 ? { ...part, prompt_cache_breakpoint: breakpoint } : part,
   );
@@ -148,9 +154,11 @@ export const withReviewPromptCache = (payload: Payload, key: string) => ({
                 : item.content.length === 1 && item.content[0]?.type === "input_text"
                   ? item.content[0].text
                   : "";
+
             if (item.role === "user" && text.startsWith("<run-status>")) {
               return item;
             }
+
             return { ...item, content: cacheContent(item.content) };
           }
           if (item.type === "function_call_output") {
@@ -161,6 +169,7 @@ export const withReviewPromptCache = (payload: Payload, key: string) => ({
               output: cacheContent(item.output, items[index + 1]?.type !== "function_call_output"),
             };
           }
+
           return item;
         }),
 });
@@ -203,9 +212,11 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   readonly cacheKey: string;
 }) {
   const pricing = reviewModelPricing(options.model);
+
   if (pricing === undefined) {
     return yield* admissionError("The review model has no verified standard-tier price.");
   }
+
   const state = yield* Ref.make<Spending>({
     stopped: false,
     inputLimitExceeded: false,
@@ -218,10 +229,13 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     output: 0,
     cost: 0,
   });
+
   const admissions = yield* Semaphore.make(1);
   const close = Ref.update(state, (current) => ({ ...current, closed: true }));
+
   const refuse = (message: string) =>
     close.pipe(Effect.andThen(Effect.fail(admissionError(message))));
+
   const countAttempt = Effect.fn("ReviewOpenAi.countAttempt")(function* (payload: Payload) {
     // This endpoint does no inference. Count the exact outgoing token-affecting
     // fields, without truncation or mutable server-side conversation.
@@ -237,17 +251,22 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         truncation: "disabled",
       }),
     });
+
     return (yield* HttpClientResponse.schemaBodyJson(InputTokenCount)(response)).input_tokens;
   }, Effect.timeout("10 seconds"));
+
   const transientCountFailure = (error: Effect.Error<ReturnType<typeof countAttempt>>): boolean =>
     error._tag === "TimeoutError" ||
     (HttpClientError.isHttpClientError(error) &&
       (error.reason._tag === "TransportError" ||
         [408, 429, 500, 502, 503, 504].includes(error.response?.status ?? 0)));
+
   const count = Effect.fn("ReviewOpenAi.count")(function* (payload: Payload) {
     let attempt = 0;
+
     return yield* Effect.suspend(() => {
       attempt += 1;
+
       return countAttempt(payload).pipe(
         Effect.tapError((error) =>
           Effect.logWarning("Review preflight failed", {
@@ -263,8 +282,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       );
     }).pipe(Effect.retry({ times: 1, while: transientCountFailure }));
   });
+
   const admit = Effect.fn("ReviewOpenAi.admit")(function* (original: Payload) {
     const now = yield* Clock.currentTimeMillis;
+
     if (
       now >= PRICING_VALID_UNTIL ||
       original.model !== options.model ||
@@ -282,8 +303,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       return yield* refuse("The review request is outside the verified pricing contract.");
     }
     const before = yield* Ref.get(state);
+
     if (before.closed) return yield* refuse("Review spending admission has already stopped.");
     const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
+
     // Outgoing-only host feedback. Count these exact bytes before reserving or
     // dispatching; withReviewPromptCache leaves run-status outside the cache.
     // The output allowance is determined after this count, so do not advertise
@@ -294,6 +317,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(2)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
       "</run-status>",
     ].join("\n");
+
     const payload: Payload = withReviewPromptCache(
       {
         ...original,
@@ -307,9 +331,11 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       },
       options.cacheKey,
     );
+
     const inputTokens = yield* count(payload).pipe(
       Effect.catch(() => refuse("Unable to count the review input before paid inference.")),
     );
+
     if (inputTokens > MAX_INPUT_TOKENS) {
       yield* Ref.update(state, (current) => ({ ...current, inputLimitExceeded: true }));
       yield* Effect.logInfo("Review input-token limit reached before dispatch", {
@@ -317,13 +343,16 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         inputTokens,
         inputTokenLimit: MAX_INPUT_TOKENS,
       });
+
       return yield* refuse("The counted review input exceeds the 128,000-token price boundary.");
     }
     const requestedOutputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
+
     const outputTokens = Math.min(
       requestedOutputTokens,
       Math.floor((balance * 100 - inputTokens * pricing.write) / pricing.output),
     );
+
     if (outputTokens < 16) {
       yield* Ref.update(state, (current) => ({ ...current, stopped: true }));
       yield* Effect.logInfo("Review spending limit reached before dispatch", {
@@ -335,12 +364,14 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         ),
         costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
       });
+
       return yield* refuse("No paid request fits; deliver recorded findings without inference.");
     }
     // A smaller output allowance still permits research. Only a refused request or a
     // response truncated by this cost limit stops the review; tool choice stays native.
     const outputLimitedByCost = outputTokens < requestedOutputTokens;
     const microusd = Math.ceil((inputTokens * pricing.write + outputTokens * pricing.output) / 100);
+
     const reservation: Reservation = {
       id: before.modelCalls + 1,
       inputTokens,
@@ -348,7 +379,9 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       microusd,
       outputLimitedByCost,
     };
+
     const current = yield* Ref.get(state);
+
     if (
       current.closed ||
       current.cost + reservedCost(current) + microusd > REVIEW_COST_LIMIT_MICROUSD
@@ -374,6 +407,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       serviceTier: "default",
       pricingVersion: PRICING_VERSION,
     });
+
     return { payload: { ...payload, max_output_tokens: outputTokens }, reservation };
   }, admissions.withPermit);
 
@@ -386,7 +420,9 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         refuse("Provider usage is missing or invalid; retain its full reservation."),
       ),
     );
+
     const canonicalModel = options.model === "gpt-5.6" ? "gpt-5.6-sol" : options.model;
+
     if (
       !(
         response.model === options.model ||
@@ -402,6 +438,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const read = usage.input_tokens_details.cached_tokens;
     const write = usage.input_tokens_details.cache_write_tokens;
     const ordinary = usage.input_tokens - read - write;
+
     const cost = Math.ceil(
       (ordinary * pricing.input +
         read * pricing.read +
@@ -409,13 +446,17 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         usage.output_tokens * pricing.output) /
         100,
     );
+
     const outputLimitReached =
       reservation.outputLimitedByCost &&
       response.incomplete_details?.reason === "max_output_tokens";
+
     const updated = yield* Ref.modify(state, (current) => {
       if (!current.pending.has(reservation.id)) return [false, current] as const;
       const pending = new Map(current.pending);
+
       pending.delete(reservation.id);
+
       return [
         true,
         {
@@ -431,8 +472,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         },
       ] as const;
     });
+
     if (!updated) return;
     const totals = yield* Ref.get(state);
+
     yield* Effect.logInfo("Review model usage", {
       modelCall: reservation.id,
       functionCalls: response.output.filter((item) => item.type === "function_call").length,
@@ -471,15 +514,19 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       }),
     ),
   };
+
   const client = OpenAiClient.OpenAiClient.of({
     ...options.client,
     createResponse: Effect.fn("ReviewOpenAi.createResponse")(
       function* (original) {
         const { payload, reservation } = yield* admit(original);
+
         const result = yield* options.client
           .createResponse(payload)
           .pipe(Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")));
+
         yield* settle(reservation, result[0]);
+
         return result;
       },
       Effect.onExit((exit) => (Exit.isFailure(exit) ? close : Effect.void)),
@@ -487,9 +534,11 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     createResponseStream: Effect.fn("ReviewOpenAi.createResponseStream")(
       function* (original) {
         const { payload, reservation } = yield* admit(original);
+
         const [response, stream] = yield* options.client
           .createResponseStream(payload)
           .pipe(Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")));
+
         return [
           response,
           stream.pipe(
@@ -500,6 +549,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
                 event.type !== "response.failed"
               )
                 return Effect.void;
+
               return Schema.decodeUnknownEffect(OpenAiSchema.Response)(event.response).pipe(
                 Effect.mapError(() =>
                   admissionError("Invalid provider completion; retain its reservation."),
@@ -521,5 +571,6 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       Effect.onExit((exit) => (Exit.isFailure(exit) ? close : Effect.void)),
     ),
   });
+
   return { client, costControl };
 });

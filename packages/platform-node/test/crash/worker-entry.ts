@@ -117,12 +117,15 @@ const idempotencyKey = env.EFFECT_AGENT_KEY;
  */
 const killGateSatisfied = (): boolean => {
   const gate = env.EFFECT_AGENT_KILL_REQUIRES_SUPPLIER;
+
   if (gate === undefined) return true;
   const dir = env.EFFECT_AGENT_SUPPLIER_DIR;
+
   if (dir === undefined) throw new Error("A supplier kill gate requires EFFECT_AGENT_SUPPLIER_DIR");
   const separator = gate.indexOf(":");
   const op = gate.slice(0, separator);
   const key = gate.slice(separator + 1);
+
   return supplierCount(dir, op, key) >= 1;
 };
 
@@ -140,9 +143,11 @@ const killIfGated: Effect.Effect<void> = Effect.suspend(() =>
  */
 const blockAndHang: Effect.Effect<never> = Effect.suspend(() => {
   const marker = env.EFFECT_AGENT_MARKER_FILE;
+
   if (marker === undefined)
     throw new Error("EFFECT_AGENT_BLOCK_AT requires EFFECT_AGENT_MARKER_FILE");
   fs.writeFileSync(marker, "1");
+
   return Effect.never;
 });
 
@@ -156,6 +161,7 @@ const runtimeKill: DurableRuntimeFailpointHandler | undefined =
         if (env.EFFECT_AGENT_BLOCK_AT !== undefined && location === env.EFFECT_AGENT_BLOCK_AT) {
           return blockAndHang;
         }
+
         return Effect.void;
       };
 
@@ -197,6 +203,7 @@ const awaitFile = (path: string): Effect.Effect<void> =>
 
 const requireEnv = (value: string | undefined, name: string): string => {
   if (value === undefined) throw new Error(`Scenario requires ${name}.`);
+
   return value;
 };
 
@@ -225,12 +232,15 @@ const submitPlannerQuestion = (key: string, question: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
     const agent = Agent.withModel(plannerDefinition, model);
+
     const receipt: Receipt = yield* runtime.submit(
       agent,
       { question },
       crashSubmitOptions(env.EFFECT_AGENT_THREAD, key),
     );
+
     yield* emit({ kind: "receipt", key, receipt });
+
     return receipt;
   });
 
@@ -244,6 +254,7 @@ const lookupSubmission: Effect.Effect<SubmissionSnapshot, never, SubmissionLedge
   function* () {
     const ledger = yield* SubmissionLedger;
     const options = crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey);
+
     const snapshot = yield* ledger
       .lookup(
         SubmissionLookupByKey.make({
@@ -253,9 +264,11 @@ const lookupSubmission: Effect.Effect<SubmissionSnapshot, never, SubmissionLedge
         }),
       )
       .pipe(Effect.orDie);
+
     if (Option.isNone(snapshot)) {
       return yield* Effect.die(new Error(`No accepted Submission exists for ${idempotencyKey}`));
     }
+
     return snapshot.value;
   },
 );
@@ -271,6 +284,7 @@ const requireSupplierDir = (): string =>
  */
 const makeSubagentBindings = Effect.gen(function* () {
   const supplierDir = requireSupplierDir();
+
   const childBlock =
     env.EFFECT_AGENT_CHILD_BLOCK_FILE === undefined
       ? undefined
@@ -278,6 +292,7 @@ const makeSubagentBindings = Effect.gen(function* () {
           markerFile: env.EFFECT_AGENT_CHILD_BLOCK_FILE,
           releaseFile: env.EFFECT_AGENT_CHILD_RELEASE_FILE,
         };
+
   const projectionGate =
     env.EFFECT_AGENT_PROJECT_MARKER_FILE === undefined
       ? undefined
@@ -288,6 +303,7 @@ const makeSubagentBindings = Effect.gen(function* () {
             "EFFECT_AGENT_PROJECT_RELEASE_FILE",
           ),
         };
+
   return yield* makeCrashSubagentBindings({
     supplierDir,
     parentScript: "delegate-then-final",
@@ -299,30 +315,37 @@ const makeSubagentBindings = Effect.gen(function* () {
 const driveResolved = (bindings: ReadonlyArray<ResolvedBinding>, thread: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     return yield* runtime.processThreadResolved(thread, bindings);
   });
 
 const submitCoordinator = (key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     const receipt: Receipt = yield* runtime.submit(
       coordinatorSubmitSlice,
       { mission: CRASH_QUESTION },
       crashSubmitOptions(env.EFFECT_AGENT_THREAD, key),
     );
+
     yield* emit({ kind: "receipt", key, receipt });
+
     return receipt;
   });
 
 const scenario = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
+
   switch (env.EFFECT_AGENT_SCENARIO) {
     case "submit": {
       yield* submitPlanner(idempotencyKey);
+
       return;
     }
     case "abort-ready": {
       const receipt = yield* submitPlanner(idempotencyKey);
+
       yield* runtime.abort(
         AbortCommand.make({
           submissionId: receipt.submissionId,
@@ -330,6 +353,7 @@ const scenario = Effect.gen(function* () {
           reason: "crash harness abort",
         }),
       );
+
       return;
     }
     case "abort-queued": {
@@ -338,6 +362,7 @@ const scenario = Effect.gen(function* () {
       // aborted non-head immediately — without waiting for the head to settle first.
       yield* submitPlanner(`${idempotencyKey}-head`);
       const queued = yield* submitPlanner(`${idempotencyKey}-queued`);
+
       yield* runtime.abort(
         AbortCommand.make({
           submissionId: queued.submissionId,
@@ -345,13 +370,16 @@ const scenario = Effect.gen(function* () {
           reason: "crash harness queued abort",
         }),
       );
+
       return;
     }
     case "run": {
       yield* submitPlanner(idempotencyKey);
       const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
       const agent = Agent.withModel(plannerDefinition, model);
+
       yield* emitSettlements(yield* runtime.processThread(agent, threadId));
+
       return;
     }
     case "run-two": {
@@ -359,7 +387,9 @@ const scenario = Effect.gen(function* () {
       yield* submitPlanner(`${idempotencyKey}-2`);
       const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
       const agent = Agent.withModel(plannerDefinition, model);
+
       yield* emitSettlements(yield* runtime.processThread(agent, threadId));
+
       return;
     }
     case "run-blocked": {
@@ -367,104 +397,132 @@ const scenario = Effect.gen(function* () {
       const releaseFile = requireEnv(env.EFFECT_AGENT_RELEASE_FILE, "EFFECT_AGENT_RELEASE_FILE");
       const model = yield* makeScriptedStreamModel(blockedSearchScript(markerFile, releaseFile));
       const agent = Agent.withModel(searchDefinition, model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: CRASH_QUESTION },
         crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey),
       );
+
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(yield* runtime.processThread(agent, threadId));
+
       return;
     }
     case "abort-active": {
       const markerFile = requireEnv(env.EFFECT_AGENT_MARKER_FILE, "EFFECT_AGENT_MARKER_FILE");
       const model = yield* makeScriptedStreamModel(blockedForeverScript(markerFile));
       const agent = Agent.withModel(plannerDefinition, model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: CRASH_QUESTION },
         crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey),
       );
+
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(yield* runtime.processThread(agent, threadId));
+
       return;
     }
     case "run-uncertain": {
       const dir = requireSupplierDir();
+
       const model = yield* makeScriptedModel((call) =>
         call === 0 ? bookToolCallParts : finalParts(CHILD_ANSWER),
       );
+
       const agent = Agent.withModel(bookDefinition, model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: CRASH_QUESTION },
         crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey),
       );
+
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
+
       const toolLayer =
         env.EFFECT_AGENT_MARKER_FILE === undefined
           ? makeBookToolLayer(dir, bookTools)
           : makeBlockedBookToolLayer(dir, bookTools, env.EFFECT_AGENT_MARKER_FILE);
+
       yield* emitSettlements(
         yield* runtime.processThread(agent, threadId).pipe(Effect.provide(toolLayer)),
       );
+
       return;
     }
     case "run-idempotent": {
       const dir = requireSupplierDir();
+
       const model = yield* makeScriptedModel((call) =>
         call === 0 ? bookToolCallParts : finalParts(CHILD_ANSWER),
       );
+
       const agent = Agent.withModel(bookIdempotentDefinition, model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: CRASH_QUESTION },
         crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey),
       );
+
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(
         yield* runtime
           .processThread(agent, threadId)
           .pipe(Effect.provide(makeBookToolLayer(dir, bookIdempotentTools))),
       );
+
       return;
     }
     case "suspend-approval": {
       const dir = requireSupplierDir();
+
       const model = yield* makeScriptedModel((call) =>
         call === 0 ? bookToolCallParts : finalParts(CHILD_ANSWER),
       );
+
       const agent = Agent.withModel(approvalDefinition, model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: CRASH_QUESTION },
         crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey),
       );
+
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(
         yield* runtime
           .processThread(agent, threadId)
           .pipe(Effect.provide(makeBookToolLayer(dir, approvalTools))),
       );
+
       return;
     }
     case "run-steps": {
       const dir = requireSupplierDir();
+
       const model = yield* makeScriptedModel((call) =>
         call === 0 ? itineraryToolCallParts : finalParts(CHILD_ANSWER),
       );
+
       const agent = Agent.withModel(itineraryDefinition, model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: CRASH_QUESTION },
         crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey),
       );
+
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(
         yield* runtime
           .processThread(agent, threadId)
           .pipe(Effect.provide(makeItineraryToolLayer(dir))),
       );
+
       return;
     }
     case "run-join": {
@@ -472,19 +530,24 @@ const scenario = Effect.gen(function* () {
       // coverage of the queued text from canonical records alone.
       yield* submitPlanner(`${idempotencyKey}-1`);
       yield* submitPlannerQuestion(`${idempotencyKey}-2`, JOIN_QUESTION);
+
       const model =
         env.EFFECT_AGENT_MARKER_FILE === undefined
           ? yield* makeScriptedModel(() => finalParts(CHILD_ANSWER))
           : // The model blocks AFTER the pre-Turn join drain claimed, appended, and marked the
             // queued input joined — SIGKILL then leaves `joined` + a nonterminal host.
             yield* makeScriptedStreamModel(blockedForeverScript(env.EFFECT_AGENT_MARKER_FILE));
+
       const agent = Agent.withModel(plannerDefinition, model);
+
       yield* emitSettlements(yield* runtime.processThread(agent, threadId));
+
       return;
     }
     case "resolve-approval": {
       const decision = requireEnv(env.EFFECT_AGENT_DECISION, "EFFECT_AGENT_DECISION");
       const submission = yield* lookupSubmission;
+
       const intent = yield* runtime.resolveApproval(
         ApprovalDecisionCommand.make({
           submissionId: submission.submissionId,
@@ -494,11 +557,14 @@ const scenario = Effect.gen(function* () {
           reason: "crash-harness decision from a second process",
         }),
       );
+
       yield* emit({ kind: "resolved", value: intent.decision });
+
       return;
     }
     case "resolve-unknown": {
       const submission = yield* lookupSubmission;
+
       const intent = yield* runtime.resolveUnknown(
         UnknownResolutionCommand.make({
           submissionId: submission.submissionId,
@@ -508,7 +574,9 @@ const scenario = Effect.gen(function* () {
           resolution: ResolutionNeverHappened.make(),
         }),
       );
+
       yield* emit({ kind: "resolved", value: intent.resolution._tag });
+
       return;
     }
     case "subagent-run": {
@@ -516,14 +584,18 @@ const scenario = Effect.gen(function* () {
       // Bindings; armed kill/block failpoints land at exactly one durable step of that flow.
       const bindings = yield* makeSubagentBindings;
       const receipt = yield* submitCoordinator(idempotencyKey);
+
       const childThread = childThreadIdFor(
         receipt.submissionId,
         decodeToolCallId(DELEGATE_CALL_ID),
       );
+
       const establishment = yield* driveResolved(bindings, threadId);
       const child = yield* driveResolved(bindings, childThread);
       const join = yield* driveResolved(bindings, threadId);
+
       yield* emitSettlements([...establishment, ...child, ...join]);
+
       return;
     }
     case "subagent-child": {
@@ -532,12 +604,15 @@ const scenario = Effect.gen(function* () {
       const bindings = yield* makeSubagentBindings;
       const parent = yield* lookupSubmission;
       const childThread = childThreadIdFor(parent.submissionId, decodeToolCallId(DELEGATE_CALL_ID));
+
       yield* emitSettlements(yield* driveResolved(bindings, childThread));
+
       return;
     }
     case "subagent-abort": {
       const bindings = yield* makeSubagentBindings;
       const receipt = yield* submitCoordinator(idempotencyKey);
+
       yield* driveResolved(bindings, threadId);
       yield* runtime.abort(
         AbortCommand.make({
@@ -547,6 +622,7 @@ const scenario = Effect.gen(function* () {
         }),
       );
       yield* emit({ kind: "resolved", value: "aborted" });
+
       return;
     }
     case "subagent-recover": {
@@ -555,9 +631,11 @@ const scenario = Effect.gen(function* () {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const host = yield* NodeDurableHost;
+
           yield* emit({ kind: "resolved", value: String(host.startupRecovery.length) });
         }).pipe(Effect.provide(NodeDurableHost.layer())),
       );
+
       return;
     }
   }
@@ -576,12 +654,14 @@ const exit = await Effect.runPromiseExit(
 
 if (Exit.isFailure(exit)) {
   const failure = Cause.findErrorOption(exit.cause);
+
   const tag = Option.isSome(failure)
     ? Option.match(decodeErrorTag(failure.value), {
         onNone: () => "UnknownError",
         onSome: ({ _tag }) => _tag,
       })
     : "Defect";
+
   if (isFencedFailure(tag)) {
     await Effect.runPromise(emit({ kind: "worker-failure", tag }));
     process.exitCode = FENCED_EXIT_CODE;

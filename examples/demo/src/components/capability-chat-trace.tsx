@@ -40,9 +40,11 @@ const latestByCommand = (events: ReadonlyArray<DemoOperationalEvent>) => {
     string,
     Extract<DemoOperationalEvent, { readonly _tag: "DemoCommandStateChanged" }>
   >();
+
   for (const event of events) {
     if (event._tag === "DemoCommandStateChanged") commands.set(event.commandId, event);
   }
+
   return Array.from(commands.values());
 };
 
@@ -61,6 +63,7 @@ const readableToolOrder = (
       const declaration = events.find(
         (event) => event._tag === "ToolCallDeclared" && event.toolCallId === id,
       );
+
       return declaration?._tag === "ToolCallDeclared"
         ? (toolLabels[declaration.toolName] ?? declaration.toolName).replace(/ing /, "")
         : id;
@@ -87,6 +90,7 @@ export function CapabilityChatTrace({
   const commands = useMemo(() => latestByCommand(events), [events]);
   const batch = events.findLast((event) => event._tag === "DemoToolBatchCommitted");
   const approval = events.findLast((event) => event._tag === "DemoApprovalPending");
+
   const approvalSettlement =
     approval?._tag === "DemoApprovalPending"
       ? events.findLast(
@@ -94,17 +98,23 @@ export function CapabilityChatTrace({
             event._tag === "DemoApprovalSettled" && event.requestId === approval.request.requestId,
         )
       : undefined;
+
   const rejection = events.findLast((event) => event._tag === "DemoBudgetRejected");
+
   const context = events.findLast(
     (event) => event._tag === "DemoContextPrepared" && event.compacted,
   );
+
   const mcp = events.findLast((event) => event._tag === "DemoMcpConnected");
+
   const sandboxStarted = events.findLast(
     (event) => event._tag === "DemoSandboxObserved" && event.event._tag === "SandboxStarted",
   );
+
   const sandboxExited = events.findLast(
     (event) => event._tag === "DemoSandboxObserved" && event.event._tag === "SandboxExited",
   );
+
   const active = status === "running" && message.content.length === 0;
 
   return (
