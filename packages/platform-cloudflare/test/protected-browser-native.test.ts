@@ -13,10 +13,15 @@ import {
   ProtectedBrowserClick,
   UseCredential,
 } from "@effect-agent/sandbox";
+import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, it } from "@effect/vitest";
-import { Config, Effect, Layer, Option, Redacted, Schema } from "effect";
+import { Clock, Config, Effect, Layer, Option, Redacted, Schema } from "effect";
+import { TestClock } from "effect/testing";
 
-import { makeProtectedNativeTransport } from "../src/protected-browser-native.ts";
+import {
+  makeProtectedNativeTransport,
+  ProtectedNativeSession,
+} from "../src/protected-browser-native.ts";
 import {
   BrowserRunProtectedTransport,
   browserRunProtectedLayer,
@@ -125,11 +130,14 @@ it.live(
           Effect.catch(() => Effect.succeed("unconfirmed" as const)),
         ),
       );
-      const driver = makeProtectedNativeTransport(
-        browser as unknown as Browser,
-        page as unknown as Page,
-        policy,
-        terminate,
+      const nativeClock = yield* TestClock.make();
+      const driver = yield* makeProtectedNativeTransport(policy).pipe(
+        Effect.provideService(Clock.Clock, nativeClock),
+        Effect.provideService(ProtectedNativeSession, {
+          browser: browser as unknown as Browser,
+          page: page as unknown as Page,
+          close: terminate,
+        }),
       );
       const layer = browserRunProtectedLayer().pipe(
         Layer.provide(
@@ -140,6 +148,18 @@ it.live(
       let phase = "open";
       yield* Effect.gen(function* () {
         const handle = yield* (yield* ProtectedBrowser).open(policy);
+        phase = "native-reference-expiry";
+        yield* handle.navigate(ProtectedBrowserNavigate.make({ url: "https://alpha.test/login" }));
+        const initial = yield* handle.observe;
+        const expiring = initial.controls.find((control) => control.role === "password")!;
+        yield* nativeClock.adjust("60 seconds");
+        expect(
+          yield* handle
+            .listCredentialOffers(
+              ListCredentialOffers.make({ kind: "login", target: expiring.ref }),
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "stale-reference", dispatch: "not-dispatched" });
         phase = "standalone-fields";
         yield* handle.navigate(
           ProtectedBrowserNavigate.make({ url: "https://alpha.test/standalone" }),
@@ -231,7 +251,7 @@ it.live(
             if (Option.isSome(observed)) text = observed.value.text;
           }
           expect(page.url()).toBe(`https://${host}/dashboard`);
-          const liveContext = yield* native(() => driver.context());
+          const liveContext = yield* driver.context;
           expect(liveContext).toMatchObject({ topOrigin: `https://${host}` });
           expect(text).toContain("Private dashboard");
           expect(text).not.toContain(secret);
@@ -320,6 +340,6 @@ it.live(
         Effect.scoped,
         Effect.provide(layer),
       );
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped, Effect.provide(BrowserCrypto.layer)),
   { timeout: 30_000 },
 );

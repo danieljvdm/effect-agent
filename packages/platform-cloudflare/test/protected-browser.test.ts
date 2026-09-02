@@ -15,16 +15,21 @@ import {
   UseCredential,
   type CredentialFieldRole,
 } from "@effect-agent/sandbox";
-import { expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { expect, expectTypeOf, it } from "@effect/vitest";
+import { type Crypto, Deferred, Effect, Fiber, Layer, Redacted, Schema, type Scope } from "effect";
 import { TestClock } from "effect/testing";
 
 import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
+import type {
+  makeProtectedNativeTransport,
+  ProtectedNativeSession,
+} from "../src/protected-browser-native.ts";
 import {
   BrowserRunProtectedTransport,
   browserRunProtectedLayer,
-  ProtectedTargetChanged,
-  ProtectedNeedsAttention,
+  ProtectedTransportError,
+  ProtectedBrowserDispatch,
   type ProtectedBrowserTransport,
 } from "../src/protected-browser-policy.ts";
 import { browserRunProtectedBindingLayer } from "../src/protected-browser.ts";
@@ -75,36 +80,42 @@ const fixture = (kind: "login" | "card" = "login") => {
   const controls = [...roles, "submit" as const].map((role) =>
     ProtectedBrowserControl.make({ ref: crypto.randomUUID(), target, role, label: role }),
   );
-  const getTarget = (ref: string) => {
-    const found = controls.find((control) => control.ref === ref);
-    if (stale || disposed || !found) throw new ProtectedTargetChanged();
-    return found;
-  };
+  const getTarget = (ref: string) =>
+    Effect.suspend(() => {
+      const found = controls.find((control) => control.ref === ref);
+      return stale || disposed || !found
+        ? Effect.fail(new ProtectedTransportError({ reason: "stale-reference" }))
+        : Effect.succeed(found);
+    });
   const context = {
     document: crypto.randomUUID(),
     topOrigin: target.topOrigin,
     frameOrigins: [target.frameOrigin],
   };
   const driver: ProtectedBrowserTransport = {
-    context: async () => context,
-    discover: async () => {
+    context: Effect.succeed(context),
+    discover: Effect.sync(() => {
       reads++;
       return { ...context, text: "account dashboard", controls, truncated: false };
-    },
-    target: async (ref) => getTarget(ref),
-    navigate: async (url) => {
-      await navigateOverride?.(url);
-    },
-    click: async (ref, signal) => {
-      if (attention) throw new ProtectedNeedsAttention();
-      await clickOverride?.(ref, signal);
-    },
-    fill: async (ref, role, value, signal, dispatch) => {
-      getTarget(ref);
-      if (fillOverride) return await fillOverride(ref, role, value, signal, dispatch);
-      dispatch();
+    }),
+    target: getTarget,
+    navigate: (url) => Effect.suspend(() => navigateOverride?.(url) ?? Effect.void),
+    click: (ref) =>
+      Effect.suspend(() =>
+        attention
+          ? Effect.fail(new ProtectedTransportError({ reason: "needs-attention" }))
+          : (clickOverride?.(ref) ?? Effect.void),
+      ),
+    fill: Effect.fn(function* (
+      ref: string,
+      role: typeof CredentialFieldRole.Type,
+      value: Redacted.Redacted<string>,
+    ) {
+      yield* getTarget(ref);
+      if (fillOverride) return yield* fillOverride(ref, role, value);
+      yield* (yield* ProtectedBrowserDispatch).mark;
       filled.push(Redacted.value(value));
-    },
+    }),
     invalidate: () => {
       disposed = true;
     },
@@ -167,6 +178,7 @@ const fixture = (kind: "login" | "card" = "login") => {
       }),
     ),
     Layer.provideMerge(Layer.succeed(BrowserCredentialAccess)(access)),
+    Layer.provide(BrowserCrypto.layer),
   );
   const open = Effect.gen(function* () {
     return yield* (yield* ProtectedBrowser).open(policy);
@@ -239,6 +251,27 @@ const proposal = (
     return UseCredential.make({ offer: offers[0]!.ref, fields: f.fields });
   });
 
+it("keeps session, crypto, scope, and dispatch authority in the requirement channel", () => {
+  expectTypeOf<Effect.Services<ReturnType<typeof makeProtectedNativeTransport>>>().toEqualTypeOf<
+    ProtectedNativeSession | Crypto.Crypto | Scope.Scope
+  >();
+  expectTypeOf<Layer.Services<ReturnType<typeof browserRunProtectedLayer>>>().toEqualTypeOf<
+    BrowserRunProtectedTransport | Crypto.Crypto
+  >();
+  expectTypeOf<Layer.Services<ReturnType<typeof browserRunProtectedBindingLayer>>>().toEqualTypeOf<
+    BrowserRunSessionLifecycle | Crypto.Crypto
+  >();
+  expectTypeOf<
+    Effect.Services<ReturnType<ProtectedBrowserTransport["fill"]>>
+  >().toEqualTypeOf<ProtectedBrowserDispatch>();
+  expectTypeOf<
+    Effect.Error<ReturnType<ProtectedBrowserTransport["target"]>>
+  >().toEqualTypeOf<ProtectedTransportError>();
+  expectTypeOf<
+    Effect.Success<ReturnType<ProtectedBrowserTransport["target"]>>
+  >().toEqualTypeOf<ProtectedBrowserControl>();
+});
+
 it.effect(
   "explicitly disables recording on acquisition and closes that exact session when attachment fails",
   () =>
@@ -261,6 +294,7 @@ it.effect(
         Effect.scoped,
         Effect.provide(
           browserRunProtectedBindingLayer({ browser }).pipe(
+            Layer.provide(BrowserCrypto.layer),
             Layer.provide(
               Layer.succeed(BrowserRunSessionLifecycle)({
                 close: (id) =>
@@ -332,11 +366,12 @@ it.effect.each([
   });
   f.controls.push(link);
   let dispatched = 0;
-  const mutate = async () => {
-    dispatched++;
-    if (mode === "reply-lost") throw new Error(password);
-    f.blockObservations();
-  };
+  const mutate = () =>
+    Effect.gen(function* () {
+      dispatched++;
+      if (mode === "reply-lost") return yield* new ProtectedTransportError({ reason: "provider" });
+      f.blockObservations();
+    });
   if (action === "navigate") f.setNavigate(mutate);
   else f.setClick(mutate);
   return Effect.gen(function* () {
@@ -562,10 +597,12 @@ it.effect.each(["failure", "defect", "partial", "cleanup"] as const)(
     if (mode === "defect") f.setResolve(() => Effect.die(new Error(password)));
     if (mode === "partial" || mode === "cleanup") {
       let calls = 0;
-      f.setFill(async (_ref, _role, _value, _signal, dispatch) => {
-        dispatch();
-        if (++calls === 2) throw new Error(password);
-      });
+      f.setFill(() =>
+        Effect.gen(function* () {
+          yield* (yield* ProtectedBrowserDispatch).mark;
+          if (++calls === 2) return yield* Effect.die(new Error(password));
+        }),
+      );
       if (mode === "cleanup") f.setCleanup("unconfirmed");
     }
     return Effect.gen(function* () {
@@ -624,15 +661,14 @@ it.effect.each(["interrupt", "timeout"] as const)(
     return Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       let writes = 0;
-      f.setFill(async (_ref, _role, _value, signal, dispatch) => {
-        dispatch();
-        writes++;
-        await Effect.runPromise(Deferred.succeed(entered, undefined));
-        await new Promise<void>((resolve) => {
-          if (signal.aborted) resolve();
-          else signal.addEventListener("abort", () => resolve(), { once: true });
-        });
-      });
+      f.setFill(() =>
+        Effect.gen(function* () {
+          yield* (yield* ProtectedBrowserDispatch).mark;
+          writes++;
+          yield* Deferred.succeed(entered, undefined);
+          yield* Effect.never;
+        }),
+      );
       const handle = yield* f.open;
       const request = yield* proposal(f, handle);
       const fiber = yield* Effect.forkChild(handle.useCredential(request));

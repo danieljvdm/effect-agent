@@ -28,6 +28,7 @@ import {
 import {
   Clock,
   Context,
+  Crypto,
   Effect,
   Layer,
   Option,
@@ -37,23 +38,29 @@ import {
   type Scope,
 } from "effect";
 
-export class ProtectedTargetChanged extends Error {}
-export class ProtectedNeedsAttention extends Error {}
-export class ProtectedUnsupported extends Error {}
-/** Internal SDK boundary. Implementations must never send page/provider diagnostics to a logger. */
+export class ProtectedTransportError extends Schema.TaggedError<ProtectedTransportError>()(
+  "ProtectedTransportError",
+  { reason: Schema.Literals(["stale-reference", "needs-attention", "unsupported", "provider"]) },
+) {}
+
+/** Per-write evidence authority, provided by the policy immediately around a transport fill. */
+export class ProtectedBrowserDispatch extends Context.Service<
+  ProtectedBrowserDispatch,
+  { readonly mark: Effect.Effect<void> }
+>()("@effect-agent/platform-cloudflare/ProtectedBrowserDispatch") {}
+
+/** Decoded adapter boundary. SDK exceptions and page diagnostics never cross this port. */
 export interface ProtectedBrowserTransport {
-  readonly context: () => Promise<unknown>;
-  readonly discover: () => Promise<unknown>;
-  readonly target: (ref: string) => Promise<unknown>;
-  readonly navigate: (url: string) => Promise<void>;
-  readonly click: (ref: string, signal: AbortSignal) => Promise<void>;
+  readonly context: Effect.Effect<typeof ProtectedPageContext.Type, ProtectedTransportError>;
+  readonly discover: Effect.Effect<typeof ProtectedDiscovery.Type, ProtectedTransportError>;
+  readonly target: (ref: string) => Effect.Effect<ProtectedBrowserControl, ProtectedTransportError>;
+  readonly navigate: (url: string) => Effect.Effect<void, ProtectedTransportError>;
+  readonly click: (ref: string) => Effect.Effect<void, ProtectedTransportError>;
   readonly fill: (
     ref: string,
     role: typeof CredentialFieldRole.Type,
     value: Redacted.Redacted<string>,
-    signal: AbortSignal,
-    dispatch: () => void,
-  ) => Promise<void>;
+  ) => Effect.Effect<void, ProtectedTransportError, ProtectedBrowserDispatch>;
   /** Invalidates local references synchronously before bounded exact-session cleanup. */
   readonly invalidate: () => void;
   readonly close: Effect.Effect<typeof ProtectedCleanup.Type>;
@@ -128,6 +135,7 @@ export const browserRunProtectedLayer = () =>
   Layer.effect(ProtectedBrowser)(
     Effect.gen(function* () {
       const transport = yield* BrowserRunProtectedTransport;
+      const crypto = yield* Crypto.Crypto;
       const open = Effect.fn("ProtectedBrowser.open")(function* (
         input: InteractiveBrowserPolicy,
       ): Effect.fn.Return<
@@ -205,39 +213,12 @@ export const browserRunProtectedLayer = () =>
             ),
           ),
         );
-        const remote = <A>(f: (signal: AbortSignal) => Promise<A>) =>
-          Effect.tryPromise({
-            // Attach the rejection handler immediately, before Effect's scheduler resumes. In workerd
-            // a foreign rejected Promise can otherwise reach unhandled-rejection diagnostics first.
-            try: async (signal) => {
-              try {
-                return { ok: true as const, value: await f(signal) };
-              } catch (cause) {
-                return {
-                  ok: false as const,
-                  reason:
-                    cause instanceof ProtectedTargetChanged
-                      ? ("stale-reference" as const)
-                      : cause instanceof ProtectedNeedsAttention
-                        ? ("needs-attention" as const)
-                        : cause instanceof ProtectedUnsupported
-                          ? ("unsupported" as const)
-                          : ("provider" as const),
-                };
-              }
-            },
-            catch: () => fail("provider"),
-          }).pipe(
-            Effect.flatMap((result) =>
-              result.ok ? Effect.succeed(result.value) : Effect.fail(fail(result.reason)),
-            ),
-          );
+        const remote = <A, R>(effect: Effect.Effect<A, ProtectedTransportError, R>) =>
+          effect.pipe(Effect.mapError((error) => fail(error.reason)));
         const decode = <A>(schema: Schema.Codec<A>, value: unknown) =>
           Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => fail("provider")));
         const caller = access.caller.pipe(Effect.mapError((error) => fail(error.reason)));
-        const pageContext = remote(() => driver.context()).pipe(
-          Effect.flatMap((raw) => decode(ProtectedPageContext, raw)),
-        );
+        const pageContext = remote(driver.context);
         const permitObservation = Effect.gen(function* () {
           const context = yield* pageContext;
           if (exposures.length > 0) {
@@ -251,10 +232,7 @@ export const browserRunProtectedLayer = () =>
           }
           return context;
         });
-        const target = (ref: string) =>
-          remote(() => driver.target(ref)).pipe(
-            Effect.flatMap((raw) => decode(ProtectedBrowserControl, raw)),
-          );
+        const target = (ref: string) => remote(driver.target(ref));
         const bounded = <A>(result: A) => {
           const bytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
           return bytes <= policy.maxReturnedBytes
@@ -353,7 +331,7 @@ export const browserRunProtectedLayer = () =>
                 if (exposures.length > 0) yield* permitObservation;
                 offers.clear();
                 dispatch = "possibly-dispatched";
-                yield* remote(() => driver.navigate(decoded.url));
+                yield* remote(driver.navigate(decoded.url));
                 dispatch = "dispatched";
                 yield* permitObservation;
               }),
@@ -361,8 +339,7 @@ export const browserRunProtectedLayer = () =>
           observe: run(
             Effect.gen(function* () {
               const before = yield* permitObservation;
-              const raw = yield* remote(() => driver.discover());
-              const result = yield* decode(ProtectedDiscovery, raw);
+              const result = yield* remote(driver.discover);
               const after = yield* permitObservation;
               if (before.document !== after.document || result.document !== after.document)
                 return yield* fail("stale-reference");
@@ -386,7 +363,7 @@ export const browserRunProtectedLayer = () =>
                 if (control.role !== "link" && control.role !== "button")
                   return yield* fail("unsupported");
                 dispatch = "possibly-dispatched";
-                yield* remote((signal) => driver.click(decoded.ref, signal));
+                yield* remote(driver.click(decoded.ref));
                 dispatch = "dispatched";
                 yield* permitObservation;
               }),
@@ -415,7 +392,9 @@ export const browserRunProtectedLayer = () =>
                 const pending: typeof offers = new Map();
                 for (const candidate of candidates) {
                   const metadata = yield* decode(CredentialOfferMetadata, candidate.metadata);
-                  const ref = crypto.randomUUID();
+                  const ref = yield* crypto.randomUUIDv4.pipe(
+                    Effect.mapError(() => fail("provider")),
+                  );
                   pending.set(ref, {
                     caller: principal,
                     key: candidate.key,
@@ -503,11 +482,13 @@ export const browserRunProtectedLayer = () =>
                   const value = secretFor(material, field.role);
                   if (value === undefined) return yield* fail("missing-credential");
                   observation = "protected";
-                  yield* remote((signal) =>
-                    driver.fill(field.ref, field.role, value, signal, () => {
-                      dispatch = "possibly-dispatched";
-                      if (!exposures.some((target) => sameTarget(target, offer.target)))
-                        exposures.push(offer.target);
+                  yield* remote(driver.fill(field.ref, field.role, value)).pipe(
+                    Effect.provideService(ProtectedBrowserDispatch, {
+                      mark: Effect.sync(() => {
+                        dispatch = "possibly-dispatched";
+                        if (!exposures.some((target) => sameTarget(target, offer.target)))
+                          exposures.push(offer.target);
+                      }),
                     }),
                   );
                   dispatch = "dispatched";
@@ -519,7 +500,7 @@ export const browserRunProtectedLayer = () =>
                   yield* authorize;
                   const ref = decoded.submit;
                   dispatch = "possibly-dispatched";
-                  yield* remote((signal) => driver.click(ref, signal)).pipe(
+                  yield* remote(driver.click(ref)).pipe(
                     Effect.catch((error) => {
                       if (error.reason === "needs-attention") dispatch = "dispatched";
                       return Effect.fail(error);

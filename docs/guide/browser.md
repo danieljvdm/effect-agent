@@ -443,6 +443,14 @@ Only use recipients the host is willing to trust with the material.
 
 ### Lifetime, evidence, and recovery
 
+`browserRunProtectedLayer()` requires the transport and `Crypto.Crypto`;
+`browserRunProtectedBindingLayer({ browser })` requires `BrowserRunSessionLifecycle` and
+`Crypto.Crypto`. Supply `BrowserCrypto.layer` from `@effect/platform-browser` at the Worker
+composition root. Time comes from Effect's `Clock`, including native field-reference expiry.
+The native adapter acquires its browser/page and cleanup authority from one scoped private
+`ProtectedNativeSession`. Its typed Effect transport decodes SDK output before returning it to
+the policy, and each credential write requires the policy's `ProtectedBrowserDispatch` service.
+
 Build `ProtectedBrowserSession.layer(policy)` once around an execution and provide it to native
 Effect AI Toolkit handlers. Its lazy `get` shares one handle across successive Tool calls. Do not
 scope each Tool separately or put caller/vault/session state in a process or Durable Object singleton.

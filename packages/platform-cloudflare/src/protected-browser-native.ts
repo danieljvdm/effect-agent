@@ -12,14 +12,15 @@ import {
   ProtectedBrowserError,
   type InteractiveBrowserPolicy,
 } from "@effect-agent/sandbox";
-import { Effect, Layer, Redacted, Schema, type Scope } from "effect";
+import { Clock, Context, Crypto, Effect, Layer, Redacted, Schema, type Scope } from "effect";
 
 import { BrowserRunSessionLifecycle } from "./browser-session-lifecycle.ts";
 import {
   BrowserRunProtectedTransport,
-  ProtectedTargetChanged,
-  ProtectedNeedsAttention,
-  ProtectedUnsupported,
+  ProtectedBrowserDispatch,
+  ProtectedTransportError,
+  ProtectedDiscovery,
+  ProtectedPageContext,
   type ProtectedBrowserTransport,
 } from "./protected-browser-policy.ts";
 
@@ -134,33 +135,77 @@ interface ControlState {
   readonly expires: number;
 }
 
-/** Host-private production transport, exported for native-browser conformance tests. */
-export const makeProtectedNativeTransport = (
-  browser: Browser,
-  page: Page,
+/** One host-private acquired session. The SDK handles and exact-session cleanup have one owner. */
+export class ProtectedNativeSession extends Context.Service<
+  ProtectedNativeSession,
+  {
+    readonly browser: Browser;
+    readonly page: Page;
+    readonly close: Effect.Effect<"confirmed" | "unconfirmed">;
+  }
+>()("@effect-agent/platform-cloudflare/ProtectedNativeSession") {}
+
+const transportError = (reason: ProtectedTransportError["reason"]) =>
+  new ProtectedTransportError({ reason });
+const decode = <A>(schema: Schema.Codec<A>, value: unknown) =>
+  Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => transportError("provider")));
+// Attach rejection handling inside the SDK callback before workerd can report foreign diagnostics.
+const remote = <A>(run: (signal: AbortSignal) => Promise<A>) =>
+  Effect.tryPromise({
+    try: async (signal) => {
+      try {
+        return { ok: true as const, value: await run(signal) };
+      } catch {
+        return { ok: false as const };
+      }
+    },
+    catch: () => transportError("provider"),
+  }).pipe(
+    Effect.flatMap((result) =>
+      result.ok ? Effect.succeed(result.value) : Effect.fail(transportError("provider")),
+    ),
+  );
+
+/** Host-private scoped transport. Session capabilities are requirements; policy is per-pass data. */
+export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.make")(function* (
   policy: InteractiveBrowserPolicy,
-  terminate: Effect.Effect<"confirmed" | "unconfirmed">,
-): ProtectedBrowserTransport => {
+): Effect.fn.Return<
+  ProtectedBrowserTransport,
+  never,
+  ProtectedNativeSession | Crypto.Crypto | Scope.Scope
+> {
+  const session = yield* ProtectedNativeSession;
+  const { browser, page } = session;
+  const crypto = yield* Crypto.Crypto;
+  const clock = yield* Clock.Clock;
+  const uuid = crypto.randomUUIDv4.pipe(Effect.mapError(() => transportError("provider")));
   let closed = false;
   let violation = false;
-  let documentRef = crypto.randomUUID();
+  let documentRef: string | undefined;
   const frames = new Map<Frame, FrameState>();
   const controls = new Map<string, ControlState>();
-  const origin = (value: string) => {
-    const url = new URL(value);
-    if (url.username || url.password) throw new ProtectedTargetChanged();
-    if (!Schema.is(CredentialOrigin)(url.origin)) throw new ProtectedUnsupported();
-    const result = url.origin;
-    if (policy.network._tag === "ExactHosts" && !policy.network.allowedHosts.includes(url.host))
-      throw new ProtectedTargetChanged();
-    return result;
-  };
-  const check = () => {
-    if (closed || violation || !browser.isConnected()) throw new ProtectedTargetChanged();
-  };
+  const origin = (value: string) =>
+    Effect.try({
+      try: () => {
+        const url = new URL(value);
+        if (url.username || url.password) throw transportError("stale-reference");
+        if (!Schema.is(CredentialOrigin)(url.origin)) throw transportError("unsupported");
+        if (policy.network._tag === "ExactHosts" && !policy.network.allowedHosts.includes(url.host))
+          throw transportError("stale-reference");
+        return url.origin;
+      },
+      catch: (cause) =>
+        Schema.is(ProtectedTransportError)(cause) ? cause : transportError("provider"),
+    });
+  const check = Effect.suspend(() =>
+    closed || violation || !browser.isConnected()
+      ? Effect.fail(transportError("stale-reference"))
+      : Effect.void,
+  );
   const clear = () => {
     controls.clear();
-    documentRef = crypto.randomUUID();
+    // Browser event callbacks only invalidate. The next Effect operation allocates the new identity.
+    documentRef = undefined;
   };
   const onNavigated = () => {
     clear();
@@ -171,94 +216,117 @@ export const makeProtectedNativeTransport = (
     violation = true;
     clear();
   };
-  page.on("framenavigated", onNavigated);
-  page.on("framedetached", onNavigated);
-  browser.on("targetcreated", onTarget);
   const invalidate = () => {
     closed = true;
     clear();
   };
-  const context = async () => {
-    check();
+  const context = Effect.gen(function* () {
+    yield* check;
     const list = page.frames();
-    if (list.length > 16) throw new ProtectedUnsupported();
-    const topOrigin = origin(page.url());
-    const frameOrigins = list.map((frame) => origin(frame.url()));
-    return { document: documentRef, topOrigin, frameOrigins };
-  };
-  const isCurrent = async (state: FrameState) => {
+    if (list.length > 16) return yield* transportError("unsupported");
+    const topOrigin = yield* origin(page.url());
+    const frameOrigins = yield* Effect.forEach(list, (frame) => origin(frame.url()));
+    if (documentRef === undefined) documentRef = yield* uuid;
+    return yield* decode(ProtectedPageContext, { document: documentRef, topOrigin, frameOrigins });
+  });
+  const isCurrent = Effect.fn("ProtectedNativeTransport.isCurrent")(function* (state: FrameState) {
     if (state.frame.detached) return false;
-    return await state.handle.evaluate((held) => {
-      if (typeof held !== "object" || held === null) return false;
-      return Reflect.get(held, "doc") === Reflect.get(globalThis, "document");
-    });
-  };
-  const get = async (ref: string) => {
-    check();
+    return yield* remote(() =>
+      state.handle.evaluate((held) => {
+        if (typeof held !== "object" || held === null) return false;
+        return Reflect.get(held, "doc") === Reflect.get(globalThis, "document");
+      }),
+    );
+  });
+  const get = Effect.fn("ProtectedNativeTransport.get")(function* (ref: string) {
+    yield* check;
     const state = controls.get(ref);
-    if (!state || state.expires < Date.now() || !(await isCurrent(state.frame)))
-      throw new ProtectedTargetChanged();
-    const current = await state.frame.handle.evaluate((held, index) => {
-      if (typeof held !== "object" || held === null) return null;
-      return Reflect.apply(Reflect.get(held, "validate"), held, [index]);
-    }, state.index);
-    const description = Schema.decodeUnknownSync(Schema.NullOr(Description))(current);
-    if (description === null) throw new ProtectedTargetChanged();
-    const ctx = await context();
+    if (
+      !state ||
+      state.expires <= (yield* clock.currentTimeMillis) ||
+      !(yield* isCurrent(state.frame))
+    )
+      return yield* transportError("stale-reference");
+    const current = yield* remote(() =>
+      state.frame.handle.evaluate((held, index) => {
+        if (typeof held !== "object" || held === null) return null;
+        return Reflect.apply(Reflect.get(held, "validate"), held, [index]);
+      }, state.index),
+    );
+    const description = yield* decode(Schema.NullOr(Description), current);
+    if (description === null) return yield* transportError("stale-reference");
+    const ctx = yield* context;
     if (
       ctx.topOrigin !== state.control.target.topOrigin ||
-      origin(state.frame.frame.url()) !== state.control.target.frameOrigin ||
-      origin(description.action) !== state.control.target.recipientOrigin ||
+      (yield* origin(state.frame.frame.url())) !== state.control.target.frameOrigin ||
+      (yield* origin(description.action)) !== state.control.target.recipientOrigin ||
       description.role !== state.control.role
     )
-      throw new ProtectedTargetChanged();
+      return yield* transportError("stale-reference");
     return state;
-  };
+  });
+  const close = yield* Effect.cached(
+    Effect.gen(function* () {
+      invalidate();
+      return yield* session.close;
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          page.off("framenavigated", onNavigated);
+          page.off("framedetached", onNavigated);
+          browser.off("targetcreated", onTarget);
+          // Handles die with the exact session. Do not block remote termination on local disposal.
+          frames.clear();
+        }),
+      ),
+    ),
+  );
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      page.on("framenavigated", onNavigated);
+      page.on("framedetached", onNavigated);
+      browser.on("targetcreated", onTarget);
+    }),
+    () => close,
+  );
   return {
     context,
     invalidate,
-    close: Effect.gen(function* () {
-      invalidate();
-      const result = yield* terminate;
-      page.off("framenavigated", onNavigated);
-      page.off("framedetached", onNavigated);
-      browser.off("targetcreated", onTarget);
-      // Handles die with the exact session. Do not block remote termination on local disposal.
-      frames.clear();
-      return result;
-    }),
-    navigate: async (url) => {
-      check();
-      origin(url);
+    close,
+    navigate: Effect.fn("ProtectedNativeTransport.navigate")(function* (url) {
+      yield* check;
+      yield* origin(url);
       clear();
-      await page.goto(url, { waitUntil: "load" });
-      await context();
-    },
-    target: async (ref) => (await get(ref)).control,
-    discover: async () => {
-      const before = await context();
+      yield* remote(() => page.goto(url, { waitUntil: "load" }));
+      yield* context;
+    }),
+    target: (ref) => get(ref).pipe(Effect.map((state) => state.control)),
+    discover: Effect.gen(function* () {
+      const before = yield* context;
       controls.clear();
-      for (const state of frames.values()) await state.handle.dispose();
+      for (const state of frames.values()) yield* remote(() => state.handle.dispose());
       frames.clear();
       const discovered: Array<ProtectedBrowserControl> = [];
       let text = "";
       let truncated = false;
       for (const frame of page.frames()) {
-        if (typeof frame.isolatedRealm !== "function") throw new ProtectedUnsupported();
-        const handle = await frame.isolatedRealm().evaluateHandle(inspectFrame);
+        if (typeof frame.isolatedRealm !== "function") return yield* transportError("unsupported");
+        const handle = yield* remote(() => frame.isolatedRealm().evaluateHandle(inspectFrame));
         const state: FrameState = {
           frame,
           handle,
-          ref: crypto.randomUUID(),
-          document: crypto.randomUUID(),
+          ref: yield* uuid,
+          document: yield* uuid,
           forms: new Map(),
         };
         frames.set(frame, state);
-        const raw = await handle.evaluate((held) => {
-          if (typeof held !== "object" || held === null) return null;
-          return Reflect.get(held, "original");
-        });
-        const descriptions = Schema.decodeUnknownSync(Descriptions)(raw);
+        const raw = yield* remote(() =>
+          handle.evaluate((held) => {
+            if (typeof held !== "object" || held === null) return null;
+            return Reflect.get(held, "original");
+          }),
+        );
+        const descriptions = yield* decode(Descriptions, raw);
         for (let index = 0; index < descriptions.length; index++) {
           const desc = descriptions[index];
           if (!desc) continue;
@@ -268,74 +336,86 @@ export const makeProtectedNativeTransport = (
           }
           let form = state.forms.get(desc.formIndex);
           if (form === undefined) {
-            form = crypto.randomUUID();
+            form = yield* uuid;
             state.forms.set(desc.formIndex, form);
           }
           // Unsupported destinations/controls are not offered as credential targets.
-          let recipientOrigin: string;
-          try {
-            recipientOrigin = origin(desc.action);
-          } catch {
-            continue;
-          }
+          const recipient = yield* origin(desc.action).pipe(Effect.result);
+          if (recipient._tag === "Failure") continue;
           const control = ProtectedBrowserControl.make({
-            ref: crypto.randomUUID(),
+            ref: yield* uuid,
             role: desc.role,
             label: desc.label,
             target: CredentialTarget.make({
               topOrigin: before.topOrigin,
-              frameOrigin: origin(frame.url()),
-              recipientOrigin,
+              frameOrigin: yield* origin(frame.url()),
+              recipientOrigin: recipient.success,
               document: state.document,
               frame: state.ref,
               form,
             }),
           });
-          controls.set(control.ref, { frame: state, index, control, expires: Date.now() + 60_000 });
+          controls.set(control.ref, {
+            frame: state,
+            index,
+            control,
+            expires: (yield* clock.currentTimeMillis) + 60_000,
+          });
           discovered.push(control);
         }
-        const rawText = await handle.evaluate((held) => {
-          if (typeof held !== "object" || held === null) return null;
-          return Reflect.apply(Reflect.get(held, "text"), held, []);
-        });
-        text += Schema.decodeUnknownSync(Schema.String)(rawText);
+        const rawText = yield* remote(() =>
+          handle.evaluate((held) => {
+            if (typeof held !== "object" || held === null) return null;
+            return Reflect.apply(Reflect.get(held, "text"), held, []);
+          }),
+        );
+        text += yield* decode(Schema.String.check(Schema.isMaxLength(65536)), rawText);
         if (text.length > 65536) {
           text = text.slice(0, 65536);
           truncated = true;
         }
       }
-      if ((await context()).document !== before.document) throw new ProtectedTargetChanged();
-      return { ...before, text, controls: discovered, truncated };
-    },
-    fill: async (ref, role, value, signal, dispatch) => {
-      const state = await get(ref);
-      if (signal.aborted) throw new ProtectedTargetChanged();
+      if ((yield* context).document !== before.document)
+        return yield* transportError("stale-reference");
+      return yield* decode(ProtectedDiscovery, {
+        ...before,
+        text,
+        controls: discovered,
+        truncated,
+      });
+    }),
+    fill: Effect.fn("ProtectedNativeTransport.fill")(function* (ref, role, value) {
+      const dispatch = yield* ProtectedBrowserDispatch;
+      const state = yield* get(ref);
       // CDP dispatch may mutate before its reply is lost, so uncertainty starts here.
-      dispatch();
-      const filled = await state.frame.handle.evaluate(
-        (held, index, expectedRole, secret) => {
-          if (typeof held !== "object" || held === null) return false;
-          return Reflect.apply(Reflect.get(held, "fill"), held, [index, expectedRole, secret]);
-        },
-        state.index,
-        role,
-        Redacted.value(value),
+      yield* dispatch.mark;
+      const filled = yield* remote(() =>
+        state.frame.handle.evaluate(
+          (held, index, expectedRole, secret) => {
+            if (typeof held !== "object" || held === null) return false;
+            return Reflect.apply(Reflect.get(held, "fill"), held, [index, expectedRole, secret]);
+          },
+          state.index,
+          role,
+          Redacted.value(value),
+        ),
       );
-      if (filled === "unsupported") throw new ProtectedUnsupported();
-      if (filled !== true) throw new ProtectedTargetChanged();
-    },
-    click: async (ref, signal) => {
-      const state = await get(ref);
-      if (signal.aborted) throw new ProtectedTargetChanged();
-      const clicked = await state.frame.handle.evaluate((held, index) => {
-        if (typeof held !== "object" || held === null) return false;
-        return Reflect.apply(Reflect.get(held, "click"), held, [index]);
-      }, state.index);
-      if (clicked === "needs-attention") throw new ProtectedNeedsAttention();
-      if (clicked !== true) throw new ProtectedTargetChanged();
-    },
+      if (filled === "unsupported") return yield* transportError("unsupported");
+      if (filled !== true) return yield* transportError("stale-reference");
+    }),
+    click: Effect.fn("ProtectedNativeTransport.click")(function* (ref) {
+      const state = yield* get(ref);
+      const clicked = yield* remote(() =>
+        state.frame.handle.evaluate((held, index) => {
+          if (typeof held !== "object" || held === null) return false;
+          return Reflect.apply(Reflect.get(held, "click"), held, [index]);
+        }, state.index),
+      );
+      if (clicked === "needs-attention") return yield* transportError("needs-attention");
+      if (clicked !== true) return yield* transportError("stale-reference");
+    }),
   };
-};
+}, Effect.withTracerEnabled(false));
 
 /**
  * Acquires through BROWSER with recording=false explicitly on the wire. The trusted provider's
@@ -348,6 +428,7 @@ export const browserRunProtectedBindingLayer = (options: {
   Layer.effect(BrowserRunProtectedTransport)(
     Effect.gen(function* () {
       const lifecycle = yield* BrowserRunSessionLifecycle;
+      const crypto = yield* Crypto.Crypto;
       const open = Effect.fn("BrowserRunProtectedTransport.open")(function* (
         policy: InteractiveBrowserPolicy,
       ): Effect.fn.Return<ProtectedBrowserTransport, ProtectedBrowserError, Scope.Scope> {
@@ -363,6 +444,9 @@ export const browserRunProtectedBindingLayer = (options: {
         let browser: Browser | undefined;
         let driver: ProtectedBrowserTransport | undefined;
         let invalid = false;
+        // SDK acquisition may finish after interruption. Its late-reply callback must await cleanup,
+        // using this pass's clock rather than starting an Effect runtime with default services.
+        const runCleanup = Effect.runPromiseWith(Context.make(Clock.Clock, yield* Clock.Clock));
         const terminate = Effect.gen(function* () {
           invalid = true;
           driver?.invalidate();
@@ -419,14 +503,14 @@ export const browserRunProtectedBindingLayer = (options: {
               Schema.decodeUnknownSync(Schema.String.check(Schema.isUUID()))(acquired.sessionId),
             );
             if (!recordingDisabled || signal.aborted || invalid) {
-              await Effect.runPromise(terminate);
-              throw new ProtectedTargetChanged();
+              await runCleanup(terminate);
+              throw transportError("stale-reference");
             }
             // Initial attachment only. No recovery/reconnection path exists.
             browser = await puppeteer.connect(options.browser, acquired.sessionId);
             if (signal.aborted || invalid) {
-              await Effect.runPromise(terminate);
-              throw new ProtectedTargetChanged();
+              await runCleanup(terminate);
+              throw transportError("stale-reference");
             }
             const context = await browser.createBrowserContext();
             const page = await context.newPage();
@@ -453,11 +537,10 @@ export const browserRunProtectedBindingLayer = (options: {
               });
             });
             if (signal.aborted || invalid) {
-              await Effect.runPromise(terminate);
-              throw new ProtectedTargetChanged();
+              await runCleanup(terminate);
+              throw transportError("stale-reference");
             }
-            driver = makeProtectedNativeTransport(browser, page, policy, close);
-            return driver;
+            return ProtectedNativeSession.of({ browser, page, close });
           },
           catch: failure,
         }).pipe(
@@ -474,7 +557,11 @@ export const browserRunProtectedBindingLayer = (options: {
             ),
           ),
         );
-        return acquired;
+        driver = yield* makeProtectedNativeTransport(policy).pipe(
+          Effect.provideService(ProtectedNativeSession, acquired),
+          Effect.provideService(Crypto.Crypto, crypto),
+        );
+        return driver;
       }, Effect.withTracerEnabled(false));
       return { open };
     }),

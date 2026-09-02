@@ -28,6 +28,7 @@ import {
   PageScreenshotRequest,
   PageUrlTarget,
 } from "@effect-agent/sandbox";
+import { BrowserCrypto } from "@effect/platform-browser";
 import {
   Config,
   ConfigProvider,
@@ -348,7 +349,7 @@ const runProof = Effect.gen(function* () {
 });
 
 export default Worker.make(
-  proofLayer,
+  proofLayer.pipe(Layer.provideMerge(BrowserCrypto.layer)),
   Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
     return yield* new URL(request.url).pathname.startsWith("/protected/")
