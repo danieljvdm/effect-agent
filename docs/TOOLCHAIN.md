@@ -271,3 +271,11 @@ Tests are reused only when task inputs match, never solely because paths did not
 
 The pre-commit hook runs `vp check --fix` on staged JavaScript and TypeScript.
 CI runs the full gate, including package type checks and Action bundle freshness.
+
+Action bundles use the catalog-pinned esbuild and stay committed so SHA-pinned Actions
+run without an install step. `vp run action:build --check` rebuilds in a temporary
+directory and compares the JavaScript byte-for-byte. No input-hash manifests are
+committed: unrelated lockfile, package metadata, and tree-shaken source edits do not
+require bundle updates. If shared framework or Action code changes the output, run
+`vp run action:build` and commit the affected bundles. Resolve source conflicts first,
+then rebuild rather than hand-merging generated JavaScript.

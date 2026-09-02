@@ -10,6 +10,10 @@ owns the source and tests. The public
 and transport-neutral.
 
 Rebuild the committed bundle with `vp run action:build`.
+`vp run action:build --check` compares a fresh esbuild bundle byte-for-byte without
+changing tracked files. Only changes that affect the emitted JavaScript require a
+bundle update, including changes in shared framework dependencies. After resolving
+source conflicts, rebuild the bundle instead of hand-merging generated JavaScript.
 
 ## Review behavior
 
