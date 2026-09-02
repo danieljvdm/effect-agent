@@ -45534,9 +45534,9 @@ var utf8 = (value4) => {
   return bytes2;
 };
 var toolkitOutputSchema = (tool) => {
-  if (exports_Tool.isDynamic(tool)) {
-    return exports_Option.getOrUndefined(exports_Context.getOption(tool.annotations, McpToolOutputSchema));
-  }
+  const discovered = exports_Context.getOption(tool.annotations, McpToolOutputSchema);
+  if (exports_Option.isSome(discovered))
+    return exports_Option.getOrUndefined(discovered.value);
   const derived = flattenTopLevelRef(exports_Tool.getJsonSchemaFromSchema(tool.successSchema));
   return derived.type === "object" ? derived : undefined;
 };
@@ -52689,9 +52689,7 @@ var makeMcpTool = (tool, trustToolAnnotations) => {
   const title = tool.title ?? tool.annotations?.title;
   if (title !== undefined)
     dynamic2 = dynamic2.annotate(exports_Tool.Title, title);
-  if (tool.outputSchema !== undefined) {
-    dynamic2 = dynamic2.annotate(McpToolOutputSchema, tool.outputSchema);
-  }
+  dynamic2 = dynamic2.annotate(McpToolOutputSchema, exports_Option.fromNullishOr(tool.outputSchema));
   if (tool.annotations !== undefined) {
     dynamic2 = dynamic2.annotate(exports_Tool.Readonly, tool.annotations.readOnlyHint).annotate(exports_Tool.Destructive, tool.annotations.destructiveHint).annotate(exports_Tool.Idempotent, tool.annotations.idempotentHint).annotate(exports_Tool.OpenWorld, tool.annotations.openWorldHint);
   }
