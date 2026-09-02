@@ -260,10 +260,14 @@ const reviewRecording = Toolkit.make(
     .annotate(Tool.Readonly, true),
 );
 
+const MAX_REVIEW_TOOL_CALLS = 64;
+
 const reviewPolicy = (costAdmitted: boolean) =>
   AgentPolicy.make({
-    maxTurns: 8,
-    maxToolCalls: 64,
+    // Capped hosts already admit each paid request. Allow serial research to use
+    // the tool allowance instead of stopping after eight affordable batches.
+    maxTurns: costAdmitted ? MAX_REVIEW_TOOL_CALLS : 8,
+    maxToolCalls: MAX_REVIEW_TOOL_CALLS,
     maxDuration: "5 minutes",
     toolConcurrency: 4,
     repeatedFailureLimit: 0,
@@ -408,6 +412,7 @@ const validatedFindings = Effect.fn("validatedFindings")(function* (
 export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
   options: ReviewerOptions<Provider, ModelProvides, ModelRequires>,
 ) => {
+  const policy = reviewPolicy(options.costControl !== undefined);
   const reviewer = Agent.withModel(
     Agent.make("pr-review", {
       input: ReviewRequest,
@@ -420,7 +425,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         required: true,
         project: ({ parameters }) => parameters,
       },
-      policy: reviewPolicy(options.costControl !== undefined),
+      policy,
       description: "Review every admitted change and report concrete defects.",
       metadata: { deploymentClass: "E", surface: "read-only" },
     }),
@@ -487,8 +492,8 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           options.costControl === undefined ? undefined : yield* options.costControl.snapshot;
         const result = yield* AgentRuntime.run(reviewer, batch, {
           ...runOptions,
-          turnAllowance: 8 - usedTurns,
-          toolCallAllowance: 64 - totals.toolCalls,
+          turnAllowance: policy.maxTurns - usedTurns,
+          toolCallAllowance: policy.maxToolCalls - totals.toolCalls,
         }).pipe(Effect.provide(recordingLayer(batch)), Effect.result);
         const saved = yield* Ref.get(recorded);
         const cost =
@@ -561,8 +566,11 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       let resolutions: ReadonlyArray<ReviewResolution> = [];
       for (const [index, changes] of batches.entries()) {
         const totals = yield* budget.snapshot;
-        if ((yield* Ref.get(modelCalls)) >= 8 || totals.toolCalls >= 64) {
-          exhausted = totals.toolCalls >= 64 ? "tool-calls" : "turns";
+        if (
+          (yield* Ref.get(modelCalls)) >= policy.maxTurns ||
+          totals.toolCalls >= policy.maxToolCalls
+        ) {
+          exhausted = totals.toolCalls >= policy.maxToolCalls ? "tool-calls" : "turns";
           incomplete = true;
           break;
         }
