@@ -352,7 +352,9 @@ export const browserRunProtectedLayer = () =>
                   return yield* fail("denied");
                 if (exposures.length > 0) yield* permitObservation;
                 offers.clear();
+                dispatch = "possibly-dispatched";
                 yield* remote(() => driver.navigate(decoded.url));
+                dispatch = "dispatched";
                 yield* permitObservation;
               }),
             ),
@@ -383,7 +385,9 @@ export const browserRunProtectedLayer = () =>
                 // Credential submission goes through useCredential, never a generic click.
                 if (control.role !== "link" && control.role !== "button")
                   return yield* fail("unsupported");
+                dispatch = "possibly-dispatched";
                 yield* remote((signal) => driver.click(decoded.ref, signal));
+                dispatch = "dispatched";
                 yield* permitObservation;
               }),
             ),

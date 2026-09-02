@@ -8,7 +8,9 @@ import {
   ListCredentialOffers,
   LoginCredential,
   ProtectedBrowser,
+  ProtectedBrowserClick,
   ProtectedBrowserControl,
+  ProtectedBrowserNavigate,
   ProtectedBrowserSession,
   UseCredential,
   type CredentialFieldRole,
@@ -55,6 +57,8 @@ const fixture = (kind: "login" | "card" = "login") => {
   let cleanup: "confirmed" | "unconfirmed" = "confirmed";
   let resolveOverride: BrowserCredentialAccess["Service"]["resolve"] | undefined;
   let fillOverride: ProtectedBrowserTransport["fill"] | undefined;
+  let navigateOverride: ProtectedBrowserTransport["navigate"] | undefined;
+  let clickOverride: ProtectedBrowserTransport["click"] | undefined;
   const target = CredentialTarget.make({
     topOrigin: "https://shop.test",
     frameOrigin: kind === "card" ? "https://pay.test" : "https://shop.test",
@@ -87,9 +91,12 @@ const fixture = (kind: "login" | "card" = "login") => {
       return { ...context, text: "account dashboard", controls, truncated: false };
     },
     target: async (ref) => getTarget(ref),
-    navigate: async () => {},
-    click: async () => {
+    navigate: async (url) => {
+      await navigateOverride?.(url);
+    },
+    click: async (ref, signal) => {
       if (attention) throw new ProtectedNeedsAttention();
+      await clickOverride?.(ref, signal);
     },
     fill: async (ref, role, value, signal, dispatch) => {
       getTarget(ref);
@@ -197,6 +204,12 @@ const fixture = (kind: "login" | "card" = "login") => {
     setFill: (value: typeof fillOverride) => {
       fillOverride = value;
     },
+    setNavigate: (value: typeof navigateOverride) => {
+      navigateOverride = value;
+    },
+    setClick: (value: typeof clickOverride) => {
+      clickOverride = value;
+    },
     needAttention: () => {
       attention = true;
     },
@@ -299,6 +312,65 @@ it.effect.each(["login", "card"] as const)(
     }).pipe(Effect.scoped, Effect.provide(f.layer));
   },
 );
+
+it.effect.each([
+  { action: "navigate", mode: "observation-denied" },
+  { action: "click", mode: "observation-denied" },
+  { action: "navigate", mode: "reply-lost" },
+  { action: "click", mode: "reply-lost" },
+] as const)("preserves $action dispatch and closes after $mode", ({ action, mode }) => {
+  const f = fixture();
+  const link = ProtectedBrowserControl.make({
+    ...f.controls[0]!,
+    ref: crypto.randomUUID(),
+    role: "link",
+  });
+  f.controls.push(link);
+  let dispatched = 0;
+  const mutate = async () => {
+    dispatched++;
+    if (mode === "reply-lost") throw new Error(password);
+    f.blockObservations();
+  };
+  if (action === "navigate") f.setNavigate(mutate);
+  else f.setClick(mutate);
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+    yield* handle.useCredential(yield* proposal(f, handle));
+
+    const refused = yield* (
+      action === "navigate"
+        ? handle.navigate(ProtectedBrowserNavigate.make({ url: "https://evil.test" }))
+        : handle.click(ProtectedBrowserClick.make({ ref: f.fields[0]!.ref }))
+    ).pipe(Effect.flip);
+    expect(refused).toMatchObject({
+      reason: action === "navigate" ? "denied" : "unsupported",
+      dispatch: "not-dispatched",
+      cleanup: "not-requested",
+    });
+    expect(dispatched).toBe(0);
+
+    const execute =
+      action === "navigate"
+        ? handle.navigate(ProtectedBrowserNavigate.make({ url: "https://shop.test/account" }))
+        : handle.click(ProtectedBrowserClick.make({ ref: link.ref }));
+    const error = yield* execute.pipe(Effect.flip);
+    expect(error).toMatchObject({
+      reason: mode === "reply-lost" ? "outcome-unknown" : "observation-blocked",
+      dispatch: mode === "reply-lost" ? "possibly-dispatched" : "dispatched",
+      milestone: "none",
+      observation: "closed",
+      cleanup: "confirmed",
+    });
+    expect(JSON.stringify(error)).not.toContain(password);
+    expect(f.stats().closed).toBe(1);
+    expect(yield* execute.pipe(Effect.flip)).toMatchObject({
+      reason: "closed",
+      dispatch: "not-dispatched",
+    });
+    expect(dispatched).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
 
 it.effect.each([
   "caller",
