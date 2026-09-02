@@ -170,6 +170,7 @@ const isMutatingPortRequest = (request: PortRequest): boolean => {
       return false;
   }
   request satisfies never;
+
   return false;
 };
 
@@ -233,9 +234,11 @@ const gateAdmissionLimits = Effect.fn("ThreadObject.gateAdmissionLimits")(functi
       idempotencyKey: request.idempotencyKey,
     }),
   );
+
   if (Option.isSome(existing)) return;
 
   const inputBytes = utf8Bytes(request.inputPayload);
+
   if (inputBytes > config.limits.maxInputBytes) {
     return yield* AdmissionLimitExceeded.make({
       limit: "input-bytes",
@@ -246,6 +249,7 @@ const gateAdmissionLimits = Effect.fn("ThreadObject.gateAdmissionLimits")(functi
 
   // One Thread per Object (durability §5): the local scan IS this lane's queue.
   const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+
   if (nonterminal.length >= config.limits.maxQueueDepthPerLane) {
     return yield* AdmissionLimitExceeded.make({
       limit: "queue-depth",
@@ -255,6 +259,7 @@ const gateAdmissionLimits = Effect.fn("ThreadObject.gateAdmissionLimits")(functi
   }
 
   const databaseBytes = yield* Effect.sync(() => ctx.storage.sql.databaseSize);
+
   if (databaseBytes > config.limits.maxDatabaseBytes) {
     return yield* AdmissionLimitExceeded.make({
       limit: "database-bytes",
@@ -285,7 +290,9 @@ const submitEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoin
         const identity = yield* ThreadObjectIdentity;
         const maintenance = yield* ThreadMaintenance;
         const runtime = yield* DurableAgentRuntime;
+
         yield* gateAdmissionLimits(request);
+
         // Alarm invariant: the generation + alarm commit BEFORE the admission, and maintenance
         // cannot acknowledge that generation until this mutation leaves its public RPC seam.
         const receipt = yield* maintenance.withMutation(
@@ -296,6 +303,7 @@ const submitEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoin
             definitions: request.definitions,
           }),
         );
+
         return SubmitSucceeded.make({ receipt });
       }),
     ),
@@ -312,6 +320,7 @@ const awaitSettlementEndpoint = (
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const settlement = yield* runtime.awaitSettlement(receipt);
+
         return SettlementReached.make({ settlement });
       }),
     ),
@@ -327,15 +336,18 @@ const awaitProgressEndpoint = (encoded: unknown): Effect.Effect<unknown, never, 
         const identity = yield* ThreadObjectIdentity;
         const runtime = yield* DurableAgentRuntime;
         const registry = yield* ProgressWaitRegistry;
+
         yield* Effect.scoped(
           Effect.gen(function* () {
             const cancelled = yield* registry.subscribe(request.waiterId);
+
             yield* Effect.raceFirst(
               runtime.awaitProgress(identity.threadId, request.afterSequence),
               cancelled,
             );
           }),
         );
+
         return ProgressObserved.make();
       }),
     ),
@@ -351,7 +363,9 @@ const cancelProgressEndpoint = (
     Effect.flatMap((request) =>
       Effect.gen(function* () {
         const registry = yield* ProgressWaitRegistry;
+
         yield* registry.cancel(request.waiterId);
+
         return ProgressCancelled.make();
       }),
     ),
@@ -369,12 +383,14 @@ const observePageEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
         // The same fail-closed authorization seam the runtime's `observe` consults (P7 WP1);
         // the default reference preserves the possession behavior.
         const authorizer = yield* OperationAuthorizer;
+
         yield* authorizer.authorize(
           OperationAuthorizationRequest.make({
             operation: "observe",
             threadId: identity.threadId,
           }),
         );
+
         const records = yield* Stream.runCollect(
           store.read(
             ThreadRead.make({
@@ -386,6 +402,7 @@ const observePageEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
             }),
           ),
         );
+
         return ObservedPage.make({ records: [...records] });
       }),
     ),
@@ -401,6 +418,7 @@ const abortEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
         const maintenance = yield* ThreadMaintenance;
         const runtime = yield* DurableAgentRuntime;
         const intent = yield* maintenance.withMutation(runtime.abort(command));
+
         return AbortRecorded.make({ intent });
       }),
     ),
@@ -418,6 +436,7 @@ const resolveApprovalEndpoint = (
         const maintenance = yield* ThreadMaintenance;
         const runtime = yield* DurableAgentRuntime;
         const intent = yield* maintenance.withMutation(runtime.resolveApproval(command));
+
         return ApprovalRecorded.make({ intent });
       }),
     ),
@@ -435,6 +454,7 @@ const resolveUnknownEndpoint = (
         const maintenance = yield* ThreadMaintenance;
         const runtime = yield* DurableAgentRuntime;
         const intent = yield* maintenance.withMutation(runtime.resolveUnknown(command));
+
         return UnknownResolutionRecorded.make({ intent });
       }),
     ),
@@ -479,6 +499,7 @@ export const AdminFailure = Schema.Union([
   DurableAlarmError,
   HostProtocolError,
 ]);
+
 export type AdminFailure = typeof AdminFailure.Type;
 
 export class ExplainedRecovery extends Schema.TaggedClass<ExplainedRecovery>(
@@ -520,6 +541,7 @@ export const AdminResponse = Schema.Union([
   ObligationsScanned,
   AdminFailed,
 ]);
+
 export type AdminResponse = typeof AdminResponse.Type;
 
 export const decodeAdminExplainRequest = Schema.decodeUnknownEffect(AdminExplainRequest);
@@ -559,10 +581,12 @@ const explainEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoi
       Effect.gen(function* () {
         const identity = yield* ThreadObjectIdentity;
         const runtime = yield* DurableAgentRuntime;
+
         const explanations =
           request.submissionId === undefined
             ? yield* runtime.explainThread(identity.threadId)
             : [yield* runtime.explain(request.submissionId)];
+
         return ExplainedRecovery.make({ explanations });
       }),
     ),
@@ -578,6 +602,7 @@ const verifyEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoin
         const identity = yield* ThreadObjectIdentity;
         const runtime = yield* DurableAgentRuntime;
         const report = yield* runtime.verify(identity.threadId);
+
         return VerifiedIntegrity.make({ report });
       }),
     ),
@@ -594,6 +619,7 @@ const retryEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
         const runtime = yield* DurableAgentRuntime;
         // Retry may repair durable state, so its generation + alarm commit before the mutation.
         const report = yield* maintenance.withMutation(runtime.retry(command));
+
         return RetryExecuted.make({ report });
       }),
     ),
@@ -608,6 +634,7 @@ const obligationsEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const report = yield* runtime.scanObligations(thresholds);
+
         return ObligationsScanned.make({ report });
       }),
     ),
@@ -627,21 +654,25 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
     const ports = yield* ThreadObjectPorts;
     const maintenance = yield* ThreadMaintenance;
     const alarm = yield* DurableAlarmService;
+
     const decoded = yield* decodePortRequest(encoded).pipe(
       Effect.map((request) => ({ _tag: "success" as const, request })),
       Effect.catch((error) => Effect.succeed({ _tag: "failure" as const, message: error.message })),
     );
+
     if (decoded._tag === "failure") {
       return encodedPortProtocolFailure(
         `The port request could not be decoded: ${decoded.message}`,
       );
     }
     const mutating = isMutatingPortRequest(decoded.request);
+
     const handled = yield* (
       mutating
         ? maintenance.withMutation(ports.handle(decoded.request))
         : ports.handle(decoded.request)
     ).pipe(Effect.exit);
+
     if (handled._tag === "Failure") {
       // Without the committed generation/alarm the invariant cannot be promised; refuse before
       // the port mutation runs. `ports.handle` itself is total, so this is the maintenance error.
@@ -649,6 +680,7 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
         "The owner Object could not arm its maintenance alarm before the mutation.",
       );
     }
+
     const response = yield* encodePortResponse(handled.value).pipe(
       Effect.catch((error) =>
         Effect.succeed(
@@ -656,6 +688,7 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
         ),
       ),
     );
+
     if (mutating) {
       // Prompt processing hint; the pre-armed alarm already guarantees convergence.
       yield* alarm.scheduleNow.pipe(
@@ -664,12 +697,14 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
         ),
       );
     }
+
     return response;
   });
 
 const wakeEndpoint: Effect.Effect<void, never, EndpointServices> = Effect.gen(function* () {
   const identity = yield* ThreadObjectIdentity;
   const wake = yield* WakeScheduler;
+
   // Route the remote hint through this incarnation's scheduler so scoped progress waiters and
   // the alarm receive the same hint. Delivery remains droppable; canonical storage is authority.
   yield* wake.notify(identity.threadId);
@@ -678,6 +713,7 @@ const wakeEndpoint: Effect.Effect<void, never, EndpointServices> = Effect.gen(fu
 const alarmEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices> = Effect.gen(
   function* () {
     const maintenance = yield* ThreadMaintenance;
+
     // Typed pass failures propagate: the rejected promise makes workerd retry the alarm
     // (at-least-once delivery), and the dirty generation retains a committed slot meanwhile.
     yield* maintenance.pass;
@@ -690,6 +726,7 @@ const gateEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices
     // check + configuration decode (DEPLOY-008 fails typed here, before any mutation), then
     // the defensive local ensure-alarm half of the invariant. LOCAL-ONLY by construction.
     const maintenance = yield* ThreadMaintenance;
+
     yield* maintenance.ensureAlarm;
   },
 );
@@ -711,19 +748,23 @@ const effectCfPlatformLayer = (
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
       const env = yield* WorkerEnvironment;
+
       return DurableObjectContext.of({ ctx: state.raw, env });
     }),
   );
+
   const namespace = Layer.effect(ThreadObjectNamespace)(
     Effect.gen(function* () {
       const env = yield* WorkerEnvironment;
       const binding = yield* threadNamespaceFromEnv(env, namespaceBinding);
+
       return ThreadObjectNamespace.of({
         namespace: binding,
         ...(rpcTracing === true ? { rpcTracing: namespaceBinding } : {}),
       });
     }),
   );
+
   return Layer.merge(context, namespace);
 };
 
@@ -795,10 +836,13 @@ export const make = <
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
       const scope = yield* Effect.scope;
+
       return yield* state.blockConcurrencyWhile(
         Effect.gen(function* () {
           const services = yield* Layer.buildWithScope(application, scope);
+
           yield* gateEndpoint.pipe(Effect.provide(services));
+
           return services;
         }),
       );

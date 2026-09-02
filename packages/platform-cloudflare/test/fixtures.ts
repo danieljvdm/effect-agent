@@ -59,6 +59,7 @@ import type {
 
 const armedStorageEvictions = new Map<string, Array<DoStorageFailpointLocation>>();
 const armedRuntimeEvictions = new Map<string, Array<DurableRuntimeFailpointLocation>>();
+
 /** Typed (thrown, NOT abort) pass failures for the workerd alarm-retry row. */
 export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocation>();
 
@@ -75,6 +76,7 @@ export const armStorageEviction = (
   ...locations: ReadonlyArray<DoStorageFailpointLocation>
 ): void => {
   const queue = armedStorageEvictions.get(thread) ?? [];
+
   queue.push(...locations);
   armedStorageEvictions.set(thread, queue);
 };
@@ -84,6 +86,7 @@ export const armRuntimeEviction = (
   ...locations: ReadonlyArray<DurableRuntimeFailpointLocation>
 ): void => {
   const queue = armedRuntimeEvictions.get(thread) ?? [];
+
   queue.push(...locations);
   armedRuntimeEvictions.set(thread, queue);
 };
@@ -99,12 +102,15 @@ export const storageEvictionFailpoint = (ctx: DurableObjectState): DoStorageFail
     isArmed: (location) =>
       Effect.sync(() => {
         const name = ctx.id.name;
+
         if (name === undefined) return false;
         const queue = armedStorageEvictions.get(name);
+
         if (queue === undefined || queue[0] !== location) return false;
         // Consume BEFORE the abort: the next incarnation must run past this location.
         queue.shift();
         if (queue.length === 0) armedStorageEvictions.delete(name);
+
         return true;
       }),
     evict: () => {
@@ -118,15 +124,19 @@ export const runtimeEvictionFailpoint =
   (location) =>
     Effect.suspend(() => {
       const name = ctx.id.name;
+
       if (name === undefined) return Effect.void;
       if (armedRuntimeFailures.get(name) === location) {
         armedRuntimeFailures.delete(name);
+
         return Effect.fail(DurableRuntimeFailpointError.make({ location }));
       }
       const queue = armedRuntimeEvictions.get(name);
+
       if (queue !== undefined && queue[0] === location) {
         queue.shift();
         if (queue.length === 0) armedRuntimeEvictions.delete(name);
+
         return Effect.sync((): never => {
           ctx.abort("armed runtime eviction failpoint");
           // `ctx.abort()` never returns; this defensive throw keeps the guarantee even if a
@@ -134,6 +144,7 @@ export const runtimeEvictionFailpoint =
           throw new Error(`Durable Object eviction did not interrupt execution at ${location}.`);
         });
       }
+
       return Effect.void;
     });
 
@@ -167,6 +178,7 @@ export const armMaintenancePause = (
     const key = maintenancePauseKey(thread, location);
     let resolveReached!: () => void;
     let resolveReleased!: () => void;
+
     maintenancePauseGates.set(key, {
       reached: new Promise<void>((resolve) => {
         resolveReached = resolve;
@@ -186,9 +198,11 @@ export const awaitMaintenancePause = (
   location: ThreadMaintenanceFailpointLocation,
 ): Promise<void> => {
   const gate = maintenancePauseGates.get(maintenancePauseKey(thread, location));
+
   if (gate === undefined) {
     return Promise.reject(new Error(`Maintenance pause ${location} is not armed for ${thread}.`));
   }
+
   return gate.reached;
 };
 
@@ -200,6 +214,7 @@ export const releaseMaintenancePause = (
     for (const [key, gate] of maintenancePauseGates) {
       if (key.startsWith(`${thread}:`) && gate.reachedFlag) gate.resolveReleased();
     }
+
     return;
   }
   maintenancePauseGates.get(maintenancePauseKey(thread, location))?.resolveReleased();
@@ -210,13 +225,16 @@ export const maintenanceRaceFailpoint =
   (location) =>
     Effect.gen(function* () {
       const thread = ctx.id.name;
+
       if (thread === undefined) return;
       const queue = maintenancePauses.get(thread);
+
       if (queue?.[0] !== location) return;
       queue.shift();
       if (queue.length === 0) maintenancePauses.delete(thread);
       const key = maintenancePauseKey(thread, location);
       const gate = maintenancePauseGates.get(key);
+
       if (gate === undefined) return;
       gate.reachedFlag = true;
       gate.resolveReached();
@@ -264,10 +282,12 @@ export const recordSupplierCall = (op: string, key: string, value: string): void
 /** Exact per-operation invocation counts for one `ref` — the honesty-claim currency. */
 export const supplierCountsFor = (ref: string): Record<string, number> => {
   const counts: Record<string, number> = {};
+
   for (const record of supplierLog) {
     if (record.key !== ref) continue;
     counts[record.op] = (counts[record.op] ?? 0) + 1;
   }
+
   return counts;
 };
 
@@ -284,6 +304,7 @@ export const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
 export const TEST_PRINCIPAL = Schema.decodeSync(Principal)("principal-cf-eviction");
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
+
 export const TEST_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 
 export const DEPLOYMENT_ID = "cf-test-deployment";
@@ -302,7 +323,30 @@ interface SchedulePauseGate {
 }
 
 const schedulePauseGates = new Map<string, SchedulePauseGate>();
+const scheduleIdleWaiters = new Map<string, () => void>();
+
+/** Observe native alarm completion without racing it with a manually invoked handler. */
+export const observeScheduleIdle = (owner: ScheduleOwner): Promise<void> =>
+  new Promise((resolve) => scheduleIdleWaiters.set(scheduleOwnerKey(owner), resolve));
+
+export const notifyScheduleAlarmCompleted = (ctx: DurableObjectState): void => {
+  const name = ctx.id.name;
+
+  if (name === undefined || !scheduleIdleWaiters.has(name)) return;
+  if (
+    ctx.storage.sql.exec("SELECT storage_id FROM effect_cf_scheduled_alarms LIMIT 1").toArray()
+      .length !== 0
+  ) {
+    return;
+  }
+  const resolve = scheduleIdleWaiters.get(name);
+
+  scheduleIdleWaiters.delete(name);
+  resolve?.();
+};
+
 const scheduleEvictions = new Map<string, string>();
+
 interface ScheduleAuthorizationFailureHold {
   held: boolean;
   failureCount: number;
@@ -320,6 +364,7 @@ const ScheduleAlarmCountRow = Schema.Struct({ alarm_count: Schema.Natural });
 const makeSchedulePauseGate = (): SchedulePauseGate => {
   let signalReached!: () => void;
   let release!: () => void;
+
   return {
     reached: new Promise<void>((resolve) => {
       signalReached = resolve;
@@ -335,7 +380,9 @@ const makeSchedulePauseGate = (): SchedulePauseGate => {
 export const armScheduleAdmissionPause = (owner: ScheduleOwner) => {
   const key = scheduleOwnerKey(owner);
   const gate = makeSchedulePauseGate();
+
   schedulePauseGates.set(key, gate);
+
   return {
     reached: gate.reached,
     release: () => {
@@ -358,15 +405,19 @@ export const observedCommittedPrepareBeforeEviction = (owner: ScheduleOwner): bo
 
 export const holdScheduleAuthorizationFailures = (owner: ScheduleOwner) => {
   const key = scheduleOwnerKey(owner);
+
   const hold: ScheduleAuthorizationFailureHold = {
     held: true,
     failureCount: 0,
     waiters: [],
   };
+
   scheduleAuthorizationFailureHolds.set(key, hold);
+
   return {
     reached: (minimum: number): Promise<number> => {
       if (hold.failureCount >= minimum) return Promise.resolve(hold.failureCount);
+
       return new Promise((resolve) => hold.waiters.push({ minimum, resolve }));
     },
     release: (): void => {
@@ -379,6 +430,7 @@ export const holdScheduleAuthorizationFailures = (owner: ScheduleOwner) => {
 export const armScheduleFailure = (owner: ScheduleOwner, point: string): void => {
   const key = scheduleOwnerKey(owner);
   const queue = scheduleFailures.get(key) ?? [];
+
   queue.push(point);
   scheduleFailures.set(key, queue);
 };
@@ -387,24 +439,31 @@ export const scheduleFailpoint = (ctx: DurableObjectState) => ({
   hit: (point: string) =>
     Effect.suspend(() => {
       const name = ctx.id.name;
+
       if (name === undefined) return Effect.void;
       if (scheduleEvictions.get(name) === point) {
         scheduleEvictions.delete(name);
+
         return Effect.sync((): never => {
           if (point === "schedule:prepare:after") {
             const rows = ctx.storage.sql
               .exec("SELECT record_json FROM effect_agent_schedules")
               .toArray();
+
             const decodedRows = Schema.decodeUnknownSync(Schema.Array(ScheduleRecordJsonRow))(rows);
+
             const record = Schema.decodeUnknownSync(Schema.fromJsonString(ScheduleRecord))(
               decodedRows[0]?.record_json,
             );
+
             const alarmRows = ctx.storage.sql
               .exec("SELECT COUNT(*) AS alarm_count FROM effect_cf_scheduled_alarms")
               .toArray();
+
             const alarmCount = Schema.decodeUnknownSync(Schema.Array(ScheduleAlarmCountRow))(
               alarmRows,
             )[0]?.alarm_count;
+
             if (record.pending !== null && alarmCount === 1) {
               schedulePrepareEvictionEvidence.add(name);
             }
@@ -414,15 +473,19 @@ export const scheduleFailpoint = (ctx: DurableObjectState) => ({
         });
       }
       const failures = scheduleFailures.get(name);
+
       if (failures?.[0] === point) {
         failures.shift();
         if (failures.length === 0) scheduleFailures.delete(name);
+
         return Effect.fail(ScheduleFailpointError.make({ point }));
       }
       if (point !== "schedule:admission:after") return Effect.void;
       const gate = schedulePauseGates.get(name);
+
       if (gate === undefined) return Effect.void;
       gate.signalReached();
+
       return Effect.promise(() => gate.released);
     }),
 });
@@ -438,7 +501,9 @@ const schedulePolicyResources = new Map<
 
 export const observeSchedulePolicyResources = (owner: ScheduleOwner) => {
   const probe = { acquired: 0, released: 0, fail: false };
+
   schedulePolicyResources.set(scheduleOwnerKey(owner), probe);
+
   return probe;
 };
 
@@ -448,6 +513,7 @@ export const scheduleAuthorizer = (owner: ScheduleOwner) => {
     Effect.scoped(
       Effect.gen(function* () {
         const probe = schedulePolicyResources.get(scheduleOwnerKey(owner));
+
         if (probe === undefined) return yield* operation;
         yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -463,22 +529,27 @@ export const scheduleAuthorizer = (owner: ScheduleOwner) => {
             operation: "test scoped Schedule policy",
             reason: "unavailable",
           });
+
         return yield* operation;
       }),
     );
+
   return {
     manage: () => scoped(Effect.void),
     prepare: () =>
       Effect.suspend(() => {
         const key = scheduleOwnerKey(owner);
         const hold = scheduleAuthorizationFailureHolds.get(key);
+
         if (hold?.held === true) {
           hold.failureCount += 1;
           const pending = hold.waiters.splice(0);
+
           for (const waiter of pending) {
             if (hold.failureCount >= waiter.minimum) waiter.resolve(hold.failureCount);
             else hold.waiters.push(waiter);
           }
+
           return Effect.fail(
             ScheduleStorageError.make({
               operation: "test Schedule authorization",
@@ -486,6 +557,7 @@ export const scheduleAuthorizer = (owner: ScheduleOwner) => {
             }),
           );
         }
+
         return Effect.succeed({ policyId: "cf-test-policy", decisionId: "cf-test-allow" });
       }).pipe(scoped),
   };
@@ -550,6 +622,7 @@ const contextCompactorLayer = (threadId: string) =>
             acquisitions: probe.acquisitions + 1,
           })),
         );
+
         return ContextCompactor.of({
           estimate: (messages) =>
             messages.some((message) => message.role === "assistant")
@@ -569,12 +642,14 @@ const contextCompactorLayer = (threadId: string) =>
                   })),
                 );
                 const sourceText = JSON.stringify(request.source);
+
                 if (sourceText.includes(COMPACTION_FAILURE_MARKER)) {
                   return yield* CompactionError.make({
                     message: "Context compaction refused",
                     cause: "the host compactor refused this context",
                   });
                 }
+
                 return {
                   kind: "summarize" as const,
                   through:
@@ -602,6 +677,7 @@ export const makeContextCompactorRunContextLayer = (threadId: string) =>
   contextCompactorRunContextLayer.pipe(Layer.provide(contextCompactorLayer(threadId)));
 
 const contextAuthorizationProbes = new Map<string, { acquisitions: number; calls: number }>();
+
 export const contextAuthorizationProbe = (threadId: string) =>
   contextAuthorizationProbes.get(threadId);
 
@@ -611,12 +687,15 @@ export const makeContextAuthorizationLayer = (threadId: string) =>
     RunToolAuthorization,
     Effect.sync(() => {
       const probe = contextAuthorizationProbes.get(threadId) ?? { acquisitions: 0, calls: 0 };
+
       probe.acquisitions += 1;
       contextAuthorizationProbes.set(threadId, probe);
+
       return RunToolAuthorization.of({
         authorize: () =>
           Effect.sync(() => {
             probe.calls += 1;
+
             return { _tag: "denied" as const, reason: "host denied Tool execution" };
           }),
       });
@@ -680,6 +759,7 @@ const itineraryToolCallParts = (ref: string): ReadonlyArray<Response.StreamPartE
 /** Extract the Thread-unique `ref` the instructions embed as `[ref:...]`. */
 const refFromPrompt = (promptJson: string): string => {
   const match = /\[ref:([^\]]+)\]/.exec(promptJson);
+
   return match?.[1] ?? "unknown-ref";
 };
 
@@ -744,7 +824,9 @@ const SearchTool = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
   success: Schema.Struct({ available: Schema.Boolean }),
 }).annotate(ToolExecutionClass, "readonly");
+
 const searchTools = Toolkit.make(SearchTool);
+
 export const searchToolLayer = searchTools.toLayer({
   search: () => Effect.succeed({ available: true }),
 });
@@ -762,15 +844,19 @@ const BookTool = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 });
+
 export const bookTools = Toolkit.make(BookTool);
 /** Lose the RPC reply after the external action, without claiming a safe-to-retry failure. */
 export const lostBookReplies = new Set<string>();
+
 export const bookToolLayer = bookTools.toLayer({
   book: ({ ref }) =>
     Effect.gen(function* () {
       const confirmation = `confirmed-${ref}`;
+
       recordSupplierCall("book", ref, confirmation);
       if (lostBookReplies.delete(ref)) return yield* Effect.die("external reply lost");
+
       return { confirmation };
     }),
 });
@@ -789,12 +875,16 @@ const BookApprovalTool = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
   needsApproval: true,
 });
+
 const approvalTools = Toolkit.make(BookApprovalTool);
+
 export const approvalToolLayer = approvalTools.toLayer({
   book: ({ ref }) =>
     Effect.sync(() => {
       const confirmation = `confirmed-${ref}`;
+
       recordSupplierCall("book", ref, confirmation);
+
       return { confirmation };
     }),
 });
@@ -814,30 +904,39 @@ const ItineraryTool = Tool.make("itinerary", {
   failure: DurableStepError,
   dependencies: [DurableStep],
 });
+
 const itineraryTools = Toolkit.make(ItineraryTool);
+
 export const itineraryToolLayer = itineraryTools.toLayer({
   itinerary: ({ ref }) =>
     Effect.gen(function* () {
       yield* Effect.sync(() => recordSupplierCall("itinerary-enter", ref, `enter-${ref}`));
       const step = yield* DurableStep;
+
       const flight = yield* step.do(
         "reserve-flight",
         Schema.String,
         Effect.sync(() => {
           const value = `flight-${ref}`;
+
           recordSupplierCall("reserve-flight", ref, value);
+
           return value;
         }),
       );
+
       const lodging = yield* step.do(
         "reserve-lodging",
         Schema.String,
         Effect.sync(() => {
           const value = `lodging-${ref}`;
+
           recordSupplierCall("reserve-lodging", ref, value);
+
           return value;
         }),
       );
+
       return { state: `${flight}+${lodging}` };
     }),
 });
@@ -942,30 +1041,37 @@ export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = E
       Agent.withModel(plannerDefinition, plannerModel),
       TEST_DIGESTS,
     );
+
     const contextCompactor: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(contextCompactorDefinition, contextCompactorModel),
       TEST_DIGESTS,
     );
+
     const search: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(searchDefinition, searchModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(searchToolLayer));
+
     const book: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(bookDefinition, bookModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(bookToolLayer));
+
     const approval: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(approvalDefinition, approvalModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(approvalToolLayer));
+
     const itinerary: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(itineraryDefinition, itineraryModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(itineraryToolLayer));
+
     const join: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(joinDefinition, joinModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(searchToolLayer));
+
     return [planner, contextCompactor, search, book, approval, itinerary, join];
   },
 );

@@ -156,6 +156,7 @@ export const HostFailure = Schema.Union([
   OperationDenied,
   HostProtocolError,
 ]);
+
 export type HostFailure = typeof HostFailure.Type;
 
 export class SubmitSucceeded extends Schema.TaggedClass<SubmitSucceeded>(
@@ -222,6 +223,7 @@ export const HostResponse = Schema.Union([
   UnknownResolutionRecorded,
   HostFailed,
 ]);
+
 export type HostResponse = typeof HostResponse.Type;
 
 // ---------------------------------------------------------------------------
@@ -266,18 +268,21 @@ const ClientSubmitHostFailure = Schema.Union([
   DurableAlarmError,
   HostProtocolError,
 ]);
+
 const ClientAwaitHostFailure = Schema.Union([
   LedgerError,
   SettlementConflict,
   OperationDenied,
   HostProtocolError,
 ]);
+
 const ClientObserveHostFailure = Schema.Union([
   ThreadStoreError,
   ThreadNotMaterialized,
   OperationDenied,
   HostProtocolError,
 ]);
+
 const ClientAbortHostFailure = Schema.Union([
   OperationDenied,
   LedgerError,
@@ -287,6 +292,7 @@ const ClientAbortHostFailure = Schema.Union([
   DurableAlarmError,
   HostProtocolError,
 ]);
+
 const ClientApprovalHostFailure = Schema.Union([
   LedgerError,
   SettlementConflict,
@@ -295,6 +301,7 @@ const ClientApprovalHostFailure = Schema.Union([
   DurableAlarmError,
   HostProtocolError,
 ]);
+
 const ClientUnknownHostFailure = Schema.Union([
   LedgerError,
   SettlementConflict,
@@ -420,9 +427,11 @@ export class CloudflareThreadClient extends Context.Service<
           // Empty arguments preserve native arity. Passing `undefined` still adds an argument.
           const traceArgs =
             rpcTracing === undefined ? [] : yield* RpcTracing.withRpcTraceContext([]);
+
           const raw = yield* Effect.tryPromise({
             try: () => {
               const stub = namespace.get(namespace.idFromName(threadId));
+
               return stub[hostRpcMethods[operation]](encoded, ...traceArgs);
             },
             catch: (cause) =>
@@ -438,6 +447,7 @@ export class CloudflareThreadClient extends Context.Service<
                 ...cloudflareFailureSignals(cause),
               }),
           });
+
           return yield* decodeHostResponse(raw).pipe(
             Effect.mapError((error): HostProtocolError =>
               HostProtocolError.make({
@@ -464,11 +474,13 @@ export class CloudflareThreadClient extends Context.Service<
       ) => {
         const isExpectedResult = Schema.is(resultSchema);
         const isExpectedFailure = Schema.is(failureSchema);
+
         return (
           response: HostResponse,
         ): Effect.Effect<ResultSchema["Type"], FailureSchema["Type"] | ThreadClientError> => {
           if (response._tag === "HostFailed") {
             const failure = response.failure;
+
             return isExpectedFailure(failure)
               ? Effect.fail(failure)
               : Effect.fail(outOfContract(threadId, operation, `failure ${failure._tag}`));
@@ -476,6 +488,7 @@ export class CloudflareThreadClient extends Context.Service<
           if (!isExpectedResult(response)) {
             return Effect.fail(outOfContract(threadId, operation, `result ${response._tag}`));
           }
+
           return Effect.succeed(response);
         };
       };
@@ -494,6 +507,7 @@ export class CloudflareThreadClient extends Context.Service<
               : { afterSequence: options.afterSequence }),
             limit: options?.limit ?? 256,
           });
+
           const encoded = yield* encodeObservePageRequest(request).pipe(
             Effect.mapError((error) =>
               HostProtocolError.make({
@@ -501,13 +515,16 @@ export class CloudflareThreadClient extends Context.Service<
               }),
             ),
           );
+
           const response = yield* call(threadId, "observePage", encoded);
+
           const page = yield* expect(
             threadId,
             "observePage",
             ObservedPage,
             ClientObserveHostFailure,
           )(response);
+
           return page.records;
         });
 
@@ -533,6 +550,7 @@ export class CloudflareThreadClient extends Context.Service<
                 AgentInputError.make({ message: `Unable to encode Agent input: ${cause.message}` }),
               ),
             );
+
             const inputPayload = yield* Schema.decodeUnknownEffect(PersistedJson)(
               encodedInput,
             ).pipe(
@@ -542,6 +560,7 @@ export class CloudflareThreadClient extends Context.Service<
                 }),
               ),
             );
+
             const request = SubmitRequest.make({
               agentId: agent.definition.id,
               principal: options.principal,
@@ -549,6 +568,7 @@ export class CloudflareThreadClient extends Context.Service<
               definitions: options.definitions,
               inputPayload,
             });
+
             const encoded = yield* encodeSubmitRequest(request).pipe(
               Effect.mapError((error) =>
                 HostProtocolError.make({
@@ -556,13 +576,16 @@ export class CloudflareThreadClient extends Context.Service<
                 }),
               ),
             );
+
             const response = yield* call(options.threadId, "submit", encoded);
+
             const succeeded = yield* expect(
               options.threadId,
               "submit",
               SubmitSucceeded,
               ClientSubmitHostFailure,
             )(response);
+
             return succeeded.receipt;
           }),
 
@@ -575,13 +598,16 @@ export class CloudflareThreadClient extends Context.Service<
                 }),
               ),
             );
+
             const response = yield* call(receipt.threadId, "awaitSettlement", encoded);
+
             const settled = yield* expect(
               receipt.threadId,
               "awaitSettlement",
               SettlementReached,
               ClientAwaitHostFailure,
             )(response);
+
             return settled.settlement;
           }),
 
@@ -596,7 +622,9 @@ export class CloudflareThreadClient extends Context.Service<
                 }),
               ),
             );
+
             const request = AwaitProgressRequest.make({ afterSequence, waiterId });
+
             const encoded = yield* encodeAwaitProgressRequest(request).pipe(
               Effect.mapError((error) =>
                 HostProtocolError.make({
@@ -631,10 +659,13 @@ export class CloudflareThreadClient extends Context.Service<
           Effect.gen(function* () {
             const all: Array<CanonicalRecordEnvelope> = [];
             let after: CanonicalSequence | undefined;
+
             for (;;) {
               const page = yield* readPage(threadId, { afterSequence: after, limit: 1_024 });
+
               all.push(...page);
               const last = page.at(-1);
+
               if (page.length < 1_024 || last === undefined) return all;
               after = last.sequence;
             }
@@ -649,13 +680,16 @@ export class CloudflareThreadClient extends Context.Service<
                 }),
               ),
             );
+
             const response = yield* call(threadId, "abort", encoded);
+
             const recorded = yield* expect(
               threadId,
               "abort",
               AbortRecorded,
               ClientAbortHostFailure,
             )(response);
+
             return recorded.intent;
           }),
 
@@ -668,13 +702,16 @@ export class CloudflareThreadClient extends Context.Service<
                 }),
               ),
             );
+
             const response = yield* call(threadId, "resolveApproval", encoded);
+
             const recorded = yield* expect(
               threadId,
               "resolveApproval",
               ApprovalRecorded,
               ClientApprovalHostFailure,
             )(response);
+
             return recorded.intent;
           }),
 
@@ -689,13 +726,16 @@ export class CloudflareThreadClient extends Context.Service<
                 }),
               ),
             );
+
             const response = yield* call(threadId, "resolveUnknown", encoded);
+
             const recorded = yield* expect(
               threadId,
               "resolveUnknown",
               UnknownResolutionRecorded,
               ClientUnknownHostFailure,
             )(response);
+
             return recorded.intent;
           }),
       });

@@ -72,6 +72,7 @@ const record = (
 const pendingRecord = (name: string): ScheduleRecord => {
   const base = record(name);
   const occurrenceId = Schema.decodeSync(Digest)("e".repeat(64));
+
   return {
     ...base,
     nextAtMillis: null,
@@ -132,7 +133,9 @@ const creationReplay = conformanceCase(
     Effect.gen(function* () {
       const store = yield* ScheduleStore;
       const original = record("creation-replay");
+
       yield* store.insert(original, 10);
+
       const edited = yield* store.change(key("creation-replay"), {
         _tag: "Update",
         expectedRevision: 1,
@@ -143,7 +146,9 @@ const creationReplay = conformanceCase(
         nextAtMillis: 200,
         nowMillis: 10,
       });
+
       const replayed = yield* store.insert(original, 10);
+
       yield* ensure(replayed.version === edited.version, "creation replay returned stale state");
       yield* ensure(
         replayed.configurationRevision === 2,
@@ -162,13 +167,16 @@ const staleCompletion = conformanceCase(
     Effect.gen(function* () {
       const store = yield* ScheduleStore;
       const original = pendingRecord("stale-completion");
+
       yield* store.insert(original, 10);
+
       const stale = yield* store.change(key("stale-completion"), {
         _tag: "Complete",
         occurrenceId: Schema.decodeSync(Digest)("f".repeat(64)),
         receipt,
         nowMillis: 130,
       });
+
       yield* ensure(stale.version === original.version, "stale completion changed the version");
       yield* ensure(stale.pending !== null, "stale completion cleared pending work");
       yield* ensure(stale.lastReceipt === null, "stale completion changed bounded status");
@@ -184,6 +192,7 @@ const staleCompletion = conformanceCase(
         },
         nowMillis: 200,
       });
+
       const regressed = yield* store.change(key("stale-completion"), {
         _tag: "Retry",
         occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
@@ -195,6 +204,7 @@ const staleCompletion = conformanceCase(
         },
         nowMillis: 210,
       });
+
       yield* ensure(regressed.version === advanced.version, "retry regression changed the version");
       yield* ensure(
         regressed.pending?.retry.nextAttemptAtMillis === 500,
@@ -209,6 +219,7 @@ const isolationAndCloning = conformanceCase(
     Effect.gen(function* () {
       const store = yield* ScheduleStore;
       const mutableInput = { value: "before" };
+
       yield* store.insert(record("z-page", mutableInput), 10);
       mutableInput.value = "after";
       yield* store.insert(record("a-page"), 10);
@@ -216,6 +227,7 @@ const isolationAndCloning = conformanceCase(
       yield* store.insert(record("foreign", { value: "foreign" }, "other-owner"), 10);
 
       const page = yield* store.list({ owner: key("ignored").owner, limit: 2 });
+
       yield* ensure(page.items.length === 2, "owner page returned the wrong item count");
       yield* ensure(page.items[0]?.scheduleId === id("a-page"), "owner page order is unstable");
       yield* ensure(page.next === id("pending-first"), "owner page cursor is not its last item");
@@ -225,11 +237,13 @@ const isolationAndCloning = conformanceCase(
       );
 
       const stored = yield* store.get(key("z-page"));
+
       yield* ensure(
         JSON.stringify(stored?.configuration.input) === JSON.stringify({ value: "before" }),
         "caller mutation changed the authoritative stored input",
       );
       const due = yield* store.due(150, 10, key("ignored").owner);
+
       yield* ensure(
         due[0]?.scheduleId === id("a-page") || due[0]?.scheduleId === id("z-page"),
         "due ordering did not use the earliest deadline",
@@ -246,18 +260,23 @@ const ownerCapacity = conformanceCase(
   (ensure) =>
     Effect.gen(function* () {
       const store = yield* ScheduleStore;
+
       yield* store.insert(record("capacity-one", { value: 1 }, "capacity-owner"), 1);
+
       const attempted = yield* store
         .insert(record("capacity-two", { value: 2 }, "capacity-owner"), 1)
         .pipe(Effect.result);
+
       yield* ensure(
         Result.isFailure(attempted) && attempted.failure instanceof ScheduleCapacityError,
         "owner capacity did not fail with ScheduleCapacityError",
       );
+
       const other = yield* store.insert(
         record("capacity-other", { value: 3 }, "capacity-other"),
         1,
       );
+
       yield* ensure(other.scheduleId === id("capacity-other"), "capacity leaked across owners");
     }),
 );
@@ -268,7 +287,9 @@ const retainedEvidence = conformanceCase(
     Effect.gen(function* () {
       const store = yield* ScheduleStore;
       const original = pendingRecord("capacity-retained");
+
       yield* store.insert(original, 1);
+
       const paused = yield* store.change(original, {
         _tag: "Control",
         expectedRevision: 1,
@@ -278,6 +299,7 @@ const retainedEvidence = conformanceCase(
         nowMillis: 120,
         skippedRange: null,
       });
+
       const cancelled = yield* store.change(original, {
         _tag: "Control",
         expectedRevision: 1,
@@ -287,29 +309,35 @@ const retainedEvidence = conformanceCase(
         nowMillis: 130,
         skippedRange: null,
       });
+
       const blocked = yield* store.insert(record("capacity-next"), 1).pipe(Effect.result);
+
       yield* ensure(
         Result.isFailure(blocked) && blocked.failure._tag === "ScheduleCapacityError",
         "cancellation released unresolved pending capacity",
       );
+
       const completed = yield* store.change(original, {
         _tag: "Complete",
         occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
         receipt,
         nowMillis: 140,
       });
+
       yield* ensure(
         completed.pending === null && cancelled.pending !== null,
         "completion did not clear pending work",
       );
       yield* store.insert(record("capacity-next"), 1);
       const replay = yield* store.insert(original, 1);
+
       yield* ensure(
         replay.version === completed.version && replay.state === "cancelled",
         "terminal replay lost its creation evidence",
       );
 
       const second = record("capacity-next");
+
       const pausedSecond = yield* store.change(second, {
         _tag: "Control",
         expectedRevision: 1,
@@ -319,7 +347,9 @@ const retainedEvidence = conformanceCase(
         nowMillis: 150,
         skippedRange: null,
       });
+
       const pausedCapacity = yield* store.insert(record("capacity-third"), 1).pipe(Effect.result);
+
       yield* ensure(
         Result.isFailure(pausedCapacity) && pausedCapacity.failure._tag === "ScheduleCapacityError",
         "paused future work did not reserve capacity",
@@ -334,14 +364,18 @@ const retainedEvidence = conformanceCase(
         skippedRange: null,
       });
       const admitted = pendingRecord("capacity-completed");
+
       yield* store.insert(admitted, 1);
+
       const settled = yield* store.change(admitted, {
         _tag: "Complete",
         occurrenceId: admitted.pending?.envelope.occurrenceId ?? digest,
         receipt,
         nowMillis: 170,
       });
+
       yield* store.insert(record("capacity-third"), 1);
+
       const reactivated = yield* store
         .change(
           admitted,
@@ -355,6 +389,7 @@ const retainedEvidence = conformanceCase(
           1,
         )
         .pipe(Effect.result);
+
       yield* ensure(
         Result.isFailure(reactivated) && reactivated.failure._tag === "ScheduleCapacityError",
         "reactivation exceeded operational capacity",
@@ -371,10 +406,12 @@ const duePagination = conformanceCase(
   (ensure) =>
     Effect.gen(function* () {
       const store = yield* ScheduleStore;
+
       for (const name of ["due-a", "due-b", "due-c"]) yield* store.insert(record(name), 10);
       const first = yield* store.due(100, 1);
       const second = yield* store.due(100, 1, undefined, first[0]);
       const third = yield* store.due(100, 1, undefined, second[0]);
+
       yield* ensure(
         first[0]?.scheduleId === id("due-a") &&
           second[0]?.scheduleId === id("due-b") &&
@@ -395,7 +432,9 @@ const transitionFencing = conformanceCase(
       const store = yield* ScheduleStore;
 
       const prepareOriginal = record("stale-prepare");
+
       yield* store.insert(prepareOriginal, 10);
+
       const edited = yield* store.change(key("stale-prepare"), {
         _tag: "Update",
         expectedRevision: 1,
@@ -407,13 +446,16 @@ const transitionFencing = conformanceCase(
         nextAtMillis: 200,
         nowMillis: 10,
       });
+
       const staleEnvelope = pendingRecord("stale-prepare").pending?.envelope;
+
       if (staleEnvelope === undefined) {
         return yield* ScheduleStoreConformanceViolation.make({
           caseName: "fences stale preparation and control while preserving frozen pending work",
           message: "fixture did not contain a pending envelope",
         });
       }
+
       const stalePrepare = yield* store
         .change(key("stale-prepare"), {
           _tag: "Prepare",
@@ -425,6 +467,7 @@ const transitionFencing = conformanceCase(
           nowMillis: 110,
         })
         .pipe(Effect.result);
+
       yield* ensure(
         Result.isFailure(stalePrepare) && stalePrepare.failure._tag === "ScheduleConflict",
         "stale preparation did not conflict",
@@ -435,8 +478,10 @@ const transitionFencing = conformanceCase(
       );
 
       const frozen = pendingRecord("pending-update");
+
       yield* store.insert(frozen, 10);
       const frozenEnvelope = JSON.stringify(frozen.pending?.envelope);
+
       const updatedPending = yield* store.change(key("pending-update"), {
         _tag: "Update",
         expectedRevision: 1,
@@ -448,26 +493,31 @@ const transitionFencing = conformanceCase(
         nextAtMillis: 300,
         nowMillis: 20,
       });
+
       yield* ensure(
         JSON.stringify(updatedPending.pending?.envelope) === frozenEnvelope,
         "configuration update changed the frozen pending envelope",
       );
 
       const completedOriginal = pendingRecord("stale-control");
+
       yield* store.insert(completedOriginal, 10);
       const occurrenceId = completedOriginal.pending?.envelope.occurrenceId;
+
       if (occurrenceId === undefined) {
         return yield* ScheduleStoreConformanceViolation.make({
           caseName: "fences stale preparation and control while preserving frozen pending work",
           message: "fixture did not contain an occurrence identifier",
         });
       }
+
       const completed = yield* store.change(key("stale-control"), {
         _tag: "Complete",
         occurrenceId,
         receipt,
         nowMillis: 130,
       });
+
       const staleControl = yield* store
         .change(key("stale-control"), {
           _tag: "Control",
@@ -479,11 +529,13 @@ const transitionFencing = conformanceCase(
           skippedRange: null,
         })
         .pipe(Effect.result);
+
       yield* ensure(
         Result.isFailure(staleControl) && staleControl.failure._tag === "ScheduleConflict",
         "stale control did not conflict",
       );
       const afterControl = yield* store.get(key("stale-control"));
+
       yield* ensure(
         afterControl?.nextAtMillis === null,
         "stale control revived a completed one-shot",

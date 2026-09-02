@@ -180,6 +180,12 @@ delegation, and depth that established it.
 A Subagent Invocation whose terminal outcome must be joined into its parent Tool Call before that
 Tool Call settles. Detachment is a separate future capability.
 
+**MCP Server**
+An external Model Context Protocol server reached through an application-configured transport.
+Its discovered tools become dynamic Effect AI Tools that forward `tools/call`; they remain ordinary
+Tools for approval, authorization, and durability, and their advertised hints are untrusted unless
+the transport opts in.
+
 **Sandbox**  
 A scoped capability set for filesystem, process, and optional network operations. It is not a
 generic bag of provider SDK methods.

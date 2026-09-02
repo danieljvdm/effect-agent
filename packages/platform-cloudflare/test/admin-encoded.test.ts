@@ -20,6 +20,7 @@ const submitPlanner = (thread: string, key: string) =>
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.submit(
         { definition: plannerDefinition },
         { question: "explain the settled lane", ref: thread },
@@ -35,21 +36,25 @@ const submitPlanner = (thread: string, key: string) =>
  */
 const callAdmin = async (invoke: () => unknown): Promise<ThreadObject.AdminResponse> => {
   const raw: unknown = await Promise.resolve(invoke());
+
   return Effect.runPromise(ThreadObject.decodeAdminResponse(raw));
 };
 
 describe("P7 admin encoded entry points (DC)", () => {
   it("preserves settlement and abort authorization denials through the RPC client", async () => {
     const receipt = await submitPlanner(lane(), "deny-target");
+
     const operations = await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         const awaited = yield* client.awaitSettlement(receipt).pipe(
           Effect.match({
             onSuccess: () => "unexpected success",
             onFailure: (error) => error._tag,
           }),
         );
+
         const aborted = yield* client
           .abort(
             receipt.threadId,
@@ -65,25 +70,30 @@ describe("P7 admin encoded entry points (DC)", () => {
               onFailure: (error) => error._tag,
             }),
           );
+
         return [awaited, aborted];
       }),
       "DENIED",
     );
+
     expect(operations).toEqual(["OperationDenied", "OperationDenied"]);
   });
   it("explainEncoded answers typed explanations for one Submission and for the lane", async () => {
     const thread = lane();
     const receipt = await submitPlanner(thread, "admin-explain");
+
     await drainAlarmsUntil(thread, allSettled(thread));
     const stub = stubFor(thread);
 
     const explained = await callAdmin(() =>
       stub.explainEncoded({ submissionId: receipt.submissionId }),
     );
+
     expect(explained._tag).toBe("ExplainedRecovery");
     if (explained._tag === "ExplainedRecovery") {
       expect(explained.explanations).toHaveLength(1);
       const explanation = explained.explanations[0];
+
       expect(explanation?.submission.submissionId).toBe(receipt.submissionId);
       expect(explanation?.decision._tag).toBe("NoAction");
       expect(explanation?.disposition).toBe("none");
@@ -92,6 +102,7 @@ describe("P7 admin encoded entry points (DC)", () => {
 
     // The lane form explains nonterminal members only: a settled lane owes nothing.
     const laneExplained = await callAdmin(() => stub.explainEncoded({}));
+
     expect(laneExplained._tag).toBe("ExplainedRecovery");
     if (laneExplained._tag === "ExplainedRecovery") {
       expect(laneExplained.explanations).toEqual([]);
@@ -100,15 +111,18 @@ describe("P7 admin encoded entry points (DC)", () => {
 
   it("verifyEncoded answers the typed integrity report with honest digest-chain scoping", async () => {
     const thread = lane();
+
     await submitPlanner(thread, "admin-verify");
     await drainAlarmsUntil(thread, allSettled(thread));
 
     const verified = await callAdmin(() => stubFor(thread).verifyEncoded({}));
+
     expect(verified._tag).toBe("VerifiedIntegrity");
     if (verified._tag === "VerifiedIntegrity") {
       expect(verified.report.ok).toBe(true);
       expect(verified.report.submissionCount).toBe(1);
       const byName = new Map(verified.report.checks.map((check) => [check.name, check]));
+
       expect(byName.get("record-identity")?.status).toBe("passed");
       expect(byName.get("fifo-settlement-order")?.status).toBe("passed");
       expect(byName.get("ledger-canonical-agreement")?.status).toBe("passed");
@@ -121,6 +135,7 @@ describe("P7 admin encoded entry points (DC)", () => {
   it("retryEncoded refuses settled work typed and answers protocol anomalies typed", async () => {
     const thread = lane();
     const receipt = await submitPlanner(thread, "admin-retry");
+
     await drainAlarmsUntil(thread, allSettled(thread));
     const stub = stubFor(thread);
 
@@ -131,6 +146,7 @@ describe("P7 admin encoded entry points (DC)", () => {
         reason: "re-drive settled work over the wire",
       }),
     );
+
     expect(refused._tag).toBe("AdminFailed");
     if (refused._tag === "AdminFailed") {
       expect(refused.failure._tag).toBe("RetryRefused");
@@ -142,6 +158,7 @@ describe("P7 admin encoded entry points (DC)", () => {
 
     // A malformed envelope never throws across the RPC boundary: it answers typed.
     const anomaly = await callAdmin(() => stub.retryEncoded({ nope: true }));
+
     expect(anomaly._tag).toBe("AdminFailed");
     if (anomaly._tag === "AdminFailed") {
       expect(anomaly.failure._tag).toBe("HostProtocolError");
@@ -150,12 +167,14 @@ describe("P7 admin encoded entry points (DC)", () => {
 
   it("obligationsEncoded answers the typed obligation report", async () => {
     const thread = lane();
+
     await submitPlanner(thread, "admin-obligations");
     await drainAlarmsUntil(thread, allSettled(thread));
 
     const scanned = await callAdmin(() =>
       stubFor(thread).obligationsEncoded({ agingSeconds: 60, overdueSeconds: 600 }),
     );
+
     expect(scanned._tag).toBe("ObligationsScanned");
     if (scanned._tag === "ObligationsScanned") {
       // The settled lane owes nothing; the thresholds round-trip through the report.

@@ -110,8 +110,10 @@ export class WarehouseDb extends Context.Service<
 const stripLiteralsAndComments = (sql: string): string => {
   let output = "";
   let index = 0;
+
   while (index < sql.length) {
     const char = sql[index];
+
     if (char === "'") {
       index += 1;
       while (index < sql.length) {
@@ -145,6 +147,7 @@ const stripLiteralsAndComments = (sql: string): string => {
     output += char;
     index += 1;
   }
+
   return output;
 };
 
@@ -153,6 +156,7 @@ const deniedKeywords = /\b(pragma|attach|detach|vacuum|load_extension)\b/i;
 const scanSql = (sql: string): WarehouseQueryDenied | undefined => {
   const stripped = stripLiteralsAndComments(sql);
   const semicolon = stripped.indexOf(";");
+
   if (semicolon !== -1 && stripped.slice(semicolon + 1).trim().length > 0) {
     return WarehouseQueryDenied.make({
       reason: "multi-statement",
@@ -160,31 +164,38 @@ const scanSql = (sql: string): WarehouseQueryDenied | undefined => {
     });
   }
   const denied = deniedKeywords.exec(stripped);
+
   if (denied !== null) {
     return WarehouseQueryDenied.make({
       reason: "denied-keyword",
       message: `${denied[1].toUpperCase()} is not available through the read-only warehouse`,
     });
   }
+
   return undefined;
 };
 
 /** Non-cryptographic FNV-1a 64-bit digest for audit correlation of SQL text. */
 const queryDigest = (sql: string): string => {
   let hash = 0xcbf29ce484222325n;
+
   for (let index = 0; index < sql.length; index += 1) {
     hash ^= BigInt(sql.charCodeAt(index));
     hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
   }
+
   return hash.toString(16).padStart(16, "0");
 };
 
 const utf8ByteLength = (value: string): number => {
   let total = 0;
+
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
+
     total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
   }
+
   return total;
 };
 
@@ -197,6 +208,7 @@ const decodeRow = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema
  */
 const isWriteDenial = (error: SqlError): boolean => {
   const cause = error.reason.cause;
+
   return (
     Predicate.isObject(cause) &&
     "errcode" in cause &&
@@ -207,10 +219,12 @@ const isWriteDenial = (error: SqlError): boolean => {
 
 const sqlFailureMessage = (error: SqlError): string => {
   const cause = error.reason.cause;
+
   const detail =
     Predicate.isObject(cause) && "errstr" in cause && typeof cause.errstr === "string"
       ? `: ${cause.errstr}`
       : "";
+
   return `${error.reason.message ?? "SQL execution failed"}${detail}`.slice(0, 2_000);
 };
 
@@ -255,6 +269,7 @@ export const warehouseDbLayer = (
         created_at TEXT NOT NULL
       )`;
       const tenantRows = options.seed.filter((row) => row.tenant === options.tenant);
+
       for (const row of tenantRows) {
         yield* sql`INSERT INTO invoice_summary ${sql.insert({
           customer: row.customer,
@@ -271,9 +286,11 @@ export const warehouseDbLayer = (
         parameters: ReadonlyArray<string | number | boolean | null>,
       ) {
         const denied = scanSql(text);
+
         if (denied !== undefined) {
           return yield* denied;
         }
+
         const rawRows = yield* sql
           .unsafe<Record<string, unknown>>(text, [...parameters])
           .withoutTransform.pipe(
@@ -290,21 +307,25 @@ export const warehouseDbLayer = (
               ),
             ),
           );
+
         const rows: Array<Record<string, Schema.Json>> = [];
         let truncated = false;
         let usedBytes = 0;
+
         for (const raw of rawRows) {
           if (rows.length >= limits.maxRows) {
             truncated = true;
             break;
           }
           const decoded = decodeRow(raw);
+
           if (Option.isNone(decoded)) {
             return yield* WarehouseQueryFailed.make({
               message: "A result row contained a value outside the JSON surface",
             });
           }
           const bytes = utf8ByteLength(JSON.stringify(decoded.value));
+
           if (usedBytes + bytes > limits.maxResultBytes) {
             truncated = true;
             break;
@@ -313,12 +334,14 @@ export const warehouseDbLayer = (
           rows.push(decoded.value);
         }
         const columns = rows.length === 0 ? [] : Object.keys(rows[0]);
+
         const success = WarehouseQuerySuccess.make({
           columns,
           rows,
           rowCount: rows.length,
           truncated,
         });
+
         // Structural audit metadata: digest and shape only — never SQL text,
         // parameter values, or row contents (SEC-015, spec §11).
         yield* Effect.logDebug("warehouse query settled").pipe(
@@ -329,6 +352,7 @@ export const warehouseDbLayer = (
             truncated: success.truncated,
           }),
         );
+
         return success;
       });
 
@@ -360,6 +384,7 @@ export const warehouseToolkit = Toolkit.make(warehouseQueryTool);
 export const warehouseHandlersLayer = warehouseToolkit.toLayer(
   Effect.gen(function* () {
     const db = yield* WarehouseDb;
+
     return {
       query_warehouse: ({
         sql,

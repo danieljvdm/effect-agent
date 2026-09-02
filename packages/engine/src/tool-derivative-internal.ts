@@ -16,6 +16,7 @@ export const deliverToolFailure = (
 const reportDerivativeCause = <E>(cause: Cause.Cause<E>): Effect.Effect<void> => {
   const reportableReasons: Array<Cause.Reason<E>> = [];
   const interruptionReasons: Array<Cause.Interrupt> = [];
+
   for (const reason of cause.reasons) {
     if (Cause.isInterruptReason(reason)) interruptionReasons.push(reason);
     else reportableReasons.push(reason);
@@ -25,12 +26,14 @@ const reportDerivativeCause = <E>(cause: Cause.Cause<E>): Effect.Effect<void> =>
     reportableReasons.length === 0
       ? Effect.succeed(Exit.succeed(undefined))
       : Effect.exit(ErrorReporter.report(Cause.fromReasons(reportableReasons)));
+
   return Effect.flatMap(reportExit, (exit) => {
     if (Exit.isFailure(exit)) {
       for (const reason of exit.cause.reasons) {
         if (Cause.isInterruptReason(reason)) interruptionReasons.push(reason);
       }
     }
+
     return interruptionReasons.length === 0
       ? Effect.void
       : Effect.failCause(Cause.fromReasons<never>(interruptionReasons));
@@ -55,9 +58,11 @@ export const emitThenAfter = <A, E, R, E2, R2>(
     Effect.sync(() => {
       let firstPull = true;
       let afterPhase: "unarmed" | "pending" | "running" | "completed" = "unarmed";
+
       const runAfter = Effect.suspend((): Effect.Effect<void, E2, R2> => {
         if (afterPhase !== "pending") return Effect.void;
         afterPhase = "running";
+
         return after.pipe(
           Effect.onExit(() =>
             Effect.sync(() => {
@@ -66,18 +71,22 @@ export const emitThenAfter = <A, E, R, E2, R2>(
           ),
         );
       });
+
       const pull = Effect.suspend(
         (): Effect.Effect<readonly [A], E | E2 | Cause.Done<void>, R | R2> => {
           if (firstPull) {
             return Effect.map(event, (value) => {
               firstPull = false;
               afterPhase = "pending";
+
               return [value] as const;
             });
           }
+
           return Effect.andThen(runAfter, Cause.done());
         },
       );
+
       return Stream.fromPull(Effect.succeed(pull)).pipe(
         Stream.ensuring(
           // A typed `after` failure remains visible to an ordinary second pull. Cleanup owns
@@ -87,6 +96,7 @@ export const emitThenAfter = <A, E, R, E2, R2>(
           Effect.exit(Effect.interruptible(runAfter)).pipe(
             Effect.flatMap((exit) => {
               if (Exit.isSuccess(exit)) return Effect.void;
+
               return reportDerivativeCause(exit.cause);
             }),
           ),

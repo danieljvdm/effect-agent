@@ -229,36 +229,45 @@ const HarnessCompleted = Schema.TaggedStruct("completed", {
   logBytes: Schema.Natural,
   resultBytes: Schema.Natural,
 });
+
 const HarnessSourceInvalid = Schema.TaggedStruct("source-invalid", {
   message: Schema.String,
 });
+
 const HarnessNotAFunction = Schema.TaggedStruct("source-not-a-function", {
   actual: Schema.String,
 });
+
 const HarnessProgramFailed = Schema.TaggedStruct("program-failed", {
   reason: Schema.Literals(["threw", "rejected", "non-json-result"]),
   thrown: Schema.Json,
   message: Schema.String,
   logs: BoundedLogs,
 });
+
 const HarnessLogLimit = Schema.TaggedStruct("log-limit", {
   observed: Schema.Natural,
   logs: BoundedLogs,
 });
+
 const HarnessArgumentLimit = Schema.TaggedStruct("argument-limit", {
   observed: Schema.Natural,
   logs: BoundedLogs,
 });
+
 const HarnessResultLimit = Schema.TaggedStruct("result-limit", {
   observed: Schema.Natural,
   logs: BoundedLogs,
 });
+
 const HarnessHostCallLimit = Schema.TaggedStruct("host-call-limit", {
   logs: BoundedLogs,
 });
+
 const HarnessProtocol = Schema.TaggedStruct("protocol", {
   message: Schema.String,
 });
+
 const HarnessOutcome = Schema.Union([
   HarnessCompleted,
   HarnessSourceInvalid,
@@ -321,6 +330,7 @@ export const disposeRpcHandle = (handle: unknown): Effect.Effect<void> =>
       if ((typeof handle !== "object" && typeof handle !== "function") || handle === null) return;
       if (!(Symbol.dispose in handle)) return;
       const dispose = Reflect.get(handle, Symbol.dispose);
+
       if (typeof dispose === "function") {
         Reflect.apply(dispose, handle, []);
       }
@@ -353,6 +363,7 @@ const encodeHostResultPayload = (
   try {
     const payload = outcome._tag === "CodeHostCallSuccess" ? outcome.value : outcome.error;
     const encodedPayload = encodeJsonPayload(payload);
+
     return {
       encodedPayload,
       resultBytes: utf8ByteLength(encodedPayload),
@@ -364,10 +375,13 @@ const encodeHostResultPayload = (
 
 const utf8ByteLength = (value: string): number => {
   let total = 0;
+
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
+
     total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
   }
+
   return total;
 };
 
@@ -411,6 +425,7 @@ const makeExecute = (
       });
     }
     const sourceBytes = utf8ByteLength(request.source);
+
     if (sourceBytes > request.limits.maxSourceBytes) {
       return yield* CodeSourceError.make({
         implementation: dynamicWorkerImplementation,
@@ -433,22 +448,28 @@ const makeExecute = (
     // immediately. The Clock service remains the authority, so tests and hosts can replace it.
     const startedAt = clock.monotonicTimeNanosUnsafe();
     const passDeadline = startedAt + Duration.toNanosUnsafe(request.limits.maxWallTime);
+
     const remainingPassWallTime = (): Duration.Duration => {
       const now = clock.monotonicTimeNanosUnsafe();
+
       return Duration.nanos(passDeadline > now ? passDeadline - now : 0n);
     };
+
     let issuedHostCalls = 0;
     let passOpen = true;
     const queuedHostCalls: Array<QueuedHostCall> = [];
     let passFailure: HostDispatchError | undefined;
+
     const failPass = (error: HostDispatchError): void => {
       if (passFailure === undefined) passFailure = error;
     };
+
     const rejectQueuedHostCalls = (reason: Error): void => {
       for (const queued of queuedHostCalls.splice(0)) {
         queued.reject(reason);
       }
     };
+
     const queue = yield* Queue.unbounded<HostWork>();
 
     const deliverHostOutcome = (
@@ -457,15 +478,19 @@ const makeExecute = (
     ): Effect.Effect<void, CodeExecutionProtocolError | CodeOutputLimitError> =>
       Effect.gen(function* () {
         const decoded = decodeHostCallResult(outcome);
+
         if (Option.isNone(decoded)) {
           const error = CodeExecutionProtocolError.make({
             implementation: dynamicWorkerImplementation,
             message: "The execution host returned a value outside the CodeHostCallResult schema",
           });
+
           failPass(error);
+
           return yield* error;
         }
         const encoded = encodeHostResultPayload(decoded.value);
+
         if (encoded === undefined || encoded.resultBytes > request.limits.maxHostCallResultBytes) {
           const error = CodeOutputLimitError.make({
             implementation: dynamicWorkerImplementation,
@@ -474,16 +499,21 @@ const makeExecute = (
             observed: encoded?.resultBytes ?? 0,
             logs: [],
           });
+
           failPass(error);
+
           return yield* error;
         }
         const normalizedPayload = decodeJsonPayload(encoded.encodedPayload);
+
         if (Option.isNone(normalizedPayload)) {
           const error = CodeExecutionProtocolError.make({
             implementation: dynamicWorkerImplementation,
             message: "The execution host returned a result that could not cross the JSON boundary",
           });
+
           failPass(error);
+
           return yield* error;
         }
         queued.resolve(
@@ -499,16 +529,20 @@ const makeExecute = (
     const serveHostCalls = Effect.gen(function* () {
       while (true) {
         const work = yield* Queue.take(queue);
+
         if (work._tag === "limit") {
           const error = CodeHostCallLimitError.make({
             implementation: dynamicWorkerImplementation,
             limit: request.limits.maxHostCalls,
             logs: [],
           });
+
           failPass(error);
+
           return yield* error;
         }
         const queued = work.queued;
+
         yield* host.call(queued.call).pipe(
           Effect.timeoutOrElse({
             duration: remainingPassWallTime(),
@@ -519,7 +553,9 @@ const makeExecute = (
                 maxWallTime: request.limits.maxWallTime,
                 logs: [],
               });
+
               failPass(error);
+
               return error;
             },
           }),
@@ -533,6 +569,7 @@ const makeExecute = (
         );
       }
     });
+
     const server = yield* serveHostCalls.pipe(Effect.forkScoped);
 
     const dispatch = (hostCall: unknown): Promise<unknown> => {
@@ -546,16 +583,21 @@ const makeExecute = (
           limit: request.limits.maxHostCalls,
           logs: [],
         });
+
         failPass(error);
         Queue.offerUnsafe(queue, { _tag: "limit" });
+
         return Promise.reject(new Error("host-call limit exceeded"));
       }
       const decoded = decodeHostCall(hostCall);
+
       if (Option.isNone(decoded)) {
         return Promise.reject(new TypeError("host calls must match the CodeHostCall schema"));
       }
+
       return new Promise((resolve, reject) => {
         const queued = { call: decoded.value, resolve, reject };
+
         queuedHostCalls.push(queued);
         Queue.offerUnsafe(queue, { _tag: "call", queued });
       });
@@ -565,6 +607,7 @@ const makeExecute = (
       passOpen = false;
       rejectQueuedHostCalls(new Error("Code Mode pass is closing"));
     });
+
     yield* Effect.addFinalizer(() => closeAdmission.pipe(Effect.andThen(Fiber.interrupt(server))));
 
     // No `allowExperimental`: the runtime only accepts it when the CALLING
@@ -608,6 +651,7 @@ const makeExecute = (
         try: () => options.loader.load(workerCode),
         catch: (cause) => {
           const text = safeCauseMessage(cause, "The Worker Loader failed without a diagnostic");
+
           // Blame the program's source ONLY on a genuine compile diagnostic;
           // any other load rejection is an infrastructure start failure, not
           // the model's fault (see classifyWorkerFailure for the same split).
@@ -618,6 +662,7 @@ const makeExecute = (
               message: text.slice(0, 8_000),
             });
           }
+
           return CodeExecutorStartError.make({
             implementation: dynamicWorkerImplementation,
             message: `The Worker Loader rejected the pass: ${text}`.slice(0, 8_000),
@@ -656,6 +701,7 @@ const makeExecute = (
       ),
       Fiber.join(server),
     ).pipe(Effect.exit);
+
     yield* closeAdmission;
     yield* Fiber.interrupt(server);
     if (passFailure !== undefined) {
@@ -668,6 +714,7 @@ const makeExecute = (
     const finishedAt = clock.monotonicTimeNanosUnsafe();
 
     const outcome = decodeHarnessOutcome(raw);
+
     if (Option.isNone(outcome)) {
       return yield* CodeExecutionProtocolError.make({
         implementation: dynamicWorkerImplementation,
@@ -768,6 +815,7 @@ const classifyWorkerFailure = (
   | CodeExecutorStartError
   | CodeSourceError => {
   const text = safeCauseDiagnostic(cause, "[unserializable worker failure]");
+
   // `WorkerLoader.load()` is lazy, so a module-compile error in the generated
   // program surfaces here at first use. Blame the program's source ONLY on a
   // genuine compile diagnostic (a `SyntaxError` or an explicit compile
@@ -797,6 +845,7 @@ const classifyWorkerFailure = (
       cause,
     });
   }
+
   return CodeExecutorTerminatedError.make({
     implementation: dynamicWorkerImplementation,
     message: text.slice(0, 8_000),
@@ -811,6 +860,7 @@ export const dynamicWorkerCodeExecutorLayer = (
     CodeExecutor,
     Effect.gen(function* () {
       const clock = yield* Clock.Clock;
+
       return CodeExecutor.of({ execute: makeExecute(options, clock) });
     }),
   );

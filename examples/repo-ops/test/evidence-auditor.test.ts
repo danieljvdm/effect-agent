@@ -70,6 +70,7 @@ const withTemporaryDirectory = <A, E>(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "effect-agent-repo-ops-" });
+
       return yield* use(directory);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -88,6 +89,7 @@ const FIXTURE_DOCUMENTS = ["docs/EVIDENCE-A.md", "docs/EVIDENCE-B.md"] as const;
 const writeFixtureTree = (root: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+
     yield* fs.makeDirectory(`${root}/docs`, { recursive: true });
     yield* fs.makeDirectory(`${root}/packages/notes/test`, { recursive: true });
     yield* fs.writeFileString(
@@ -125,9 +127,11 @@ const workerLayerFor = (workspace: {
   readonly reportRoot: string;
 }) => {
   const workspaceLayer = RepoOpsWorkspace.layer(workspace);
+
   const sinkLayer = AuditReportSink.layerFileSystem.pipe(
     Layer.provide(Layer.merge(NodeFileSystem.layer, workspaceLayer)),
   );
+
   return EvidenceAuditorToolkitLayer.pipe(
     Layer.provideMerge(Layer.mergeAll(LocalSandboxLayer, sinkLayer, workspaceLayer)),
   );
@@ -136,6 +140,7 @@ const workerLayerFor = (workspace: {
 const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
@@ -149,16 +154,20 @@ const submissionState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value;
   });
 
 const settledReport = (records: ReadonlyArray<CanonicalRecordEnvelope>) =>
   Effect.gen(function* () {
     const settled = payloadsOf(records, "SubmissionSettled")[0]?.record.payload;
+
     if (settled?._tag !== "SubmissionSettled") throw new Error("Expected SubmissionSettled");
     expect(settled.outcome).toBe("completed");
+
     return yield* decodeReport(settled.result);
   });
 
@@ -167,6 +176,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
     const decoded = Schema.decodeUnknownSync(EvidenceAuditorProfile)(
       Schema.encodeSync(EvidenceAuditorProfile)(evidenceAuditorProfile),
     );
+
     expect(decoded).toEqual(evidenceAuditorProfile);
     expect(evidenceAuditorProfile).toEqual({
       deploymentClass: "DN",
@@ -191,6 +201,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
         "docs/./here.md",
       ]) {
         const exit = yield* Effect.exit(normalizeRepoRelativePath(hostile));
+
         expect(Exit.isFailure(exit)).toBe(true);
       }
     }),
@@ -199,6 +210,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
   it("extracts curly-quoted cited test titles deterministically", () => {
     const text =
       "cites (`a/b.test.ts` — “first title”) and (`c/d.test.ts` — “second title”) and “first title” again.";
+
     expect(extractCitedTestTitles(text)).toEqual(["first title", "second title"]);
     expect(extractCitedTestTitles("no citations here")).toEqual([]);
   });
@@ -209,27 +221,32 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const root = `${directory}/workspace`;
+
           yield* writeFixtureTree(root);
           const documents = [...FIXTURE_DOCUMENTS];
           const missing = [MISSING_TITLE];
           const scripted = yield* makeOfflineAuditorModel(documents, missing);
           const agent = Agent.withModel(EvidenceAuditor, scripted.model);
+
           const workerLayer = workerLayerFor({
             root,
             searchRoots: ["packages"],
             reportRoot: root,
           });
+
           const reportFile = `${root}/${AUDIT_REPORT_PATH}`;
 
           yield* Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
             const runtime = yield* DurableAgentRuntime;
             const thread = decodeThreadId("repo-ops-audit-happy");
+
             const receipt: Receipt = yield* runtime.submit(
               agent,
               AuditMission.make({ evidenceDocuments: documents }),
               repoOpsSubmitOptions(thread, decodeIdempotencyKey("repo-ops-happy-1")),
             );
+
             const runId = runIdForSubmission(receipt.submissionId);
 
             // Drive 1: the audit runs (read-only ls/cat/grep through the
@@ -238,11 +255,13 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
             const first = yield* runtime
               .processThread(agent, thread)
               .pipe(Effect.provide(workerLayer));
+
             expect(first).toHaveLength(0);
             expect((yield* submissionState(receipt.submissionId)).state).toBe("suspended");
             expect(yield* fs.exists(reportFile)).toBe(false);
 
             const suspendedLog = yield* readLog(thread);
+
             const stepIds = documents.map((document) =>
               toolStepSettledRecordId(
                 runId,
@@ -250,7 +269,9 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
                 `audit:${document}`,
               ),
             );
+
             const recordIds = suspendedLog.map((envelope) => envelope.record.recordId as string);
+
             for (const stepId of stepIds) {
               expect(recordIds).toContain(stepId);
             }
@@ -263,6 +284,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
               (envelope) =>
                 envelope.record.recordId === `tool-settled:${runId}:1:${OFFLINE_AUDIT_CALL_ID}`,
             )?.record.payload;
+
             if (auditSettled?._tag !== "ToolCallSettled") {
               throw new Error("Expected the audit ToolCallSettled record");
             }
@@ -292,14 +314,18 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
                 reason: "The audit rows were reviewed.",
               }),
             );
+
             const settlements = yield* runtime
               .processThread(agent, thread)
               .pipe(Effect.provide(workerLayer));
+
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
             const log = yield* readLog(thread);
+
             expect(yield* settledReport(log)).toEqual(expectedOfflineReport(documents, missing));
             const decision = payloadsOf(log, "ToolApprovalDecided")[0]?.record.payload;
+
             if (decision?._tag !== "ToolApprovalDecided") {
               throw new Error("Expected ToolApprovalDecided");
             }
@@ -308,6 +334,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
             // The approved report exists with the exact deterministic content.
             expect(yield* fs.exists(reportFile)).toBe(true);
             const written: unknown = JSON.parse(yield* fs.readFileString(reportFile));
+
             expect(written).toEqual({
               reportPath: AUDIT_REPORT_PATH,
               summary: offlineReportSummary(documents, missing),
@@ -348,6 +375,7 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const repoRoot = path.resolve(process.cwd(), "..", "..");
+
           const workerLayer = workerLayerFor({
             root: repoRoot,
             searchRoots: ["packages"],
@@ -357,6 +385,7 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
           yield* Effect.gen(function* () {
             const runtime = yield* DurableAgentRuntime;
             const thread = decodeThreadId("repo-ops-audit-live");
+
             const receipt = yield* runtime.submit(
               OpenAiEvidenceAuditor,
               AuditMission.make({ evidenceDocuments: ["docs/S2-EVIDENCE.md"] }),
@@ -365,16 +394,20 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
 
             // Bounded drive loop: resolve any pending approval between drives.
             let outcome: string | undefined;
+
             for (let drive = 0; drive < 4 && outcome === undefined; drive += 1) {
               const settlements = yield* runtime
                 .processThread(OpenAiEvidenceAuditor, thread)
                 .pipe(Effect.provide(workerLayer));
+
               outcome = settlements[0]?.outcome;
               if (outcome !== undefined) break;
               const state = yield* submissionState(receipt.submissionId);
+
               if (state.state === "suspended") {
                 const log = yield* readLog(thread);
                 const request = payloadsOf(log, "ToolApprovalRequested").at(-1)?.record.payload;
+
                 if (request?._tag === "ToolApprovalRequested") {
                   yield* runtime.resolveApproval(
                     ApprovalDecisionCommand.make({
@@ -390,6 +423,7 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
             }
             expect(outcome).toBe("completed");
             const report = yield* settledReport(yield* readLog(thread));
+
             expect(report.documentsAudited).toBe(1);
           }).pipe(
             Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/live.sqlite`))),

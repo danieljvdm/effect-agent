@@ -27,6 +27,7 @@ describe("PageCrawl schemas", () => {
         deadlineMillis: 30_000,
       }),
     });
+
     const record = PageCrawlRecord.make({
       url: "https://docs.example.com/page",
       status: "completed",
@@ -37,6 +38,7 @@ describe("PageCrawl schemas", () => {
         title: "Page",
       },
     });
+
     const failure = {
       _tag: "PageCrawlLimitError",
       implementation,

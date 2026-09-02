@@ -48,6 +48,7 @@ const TestNamespace = MemoryNamespace.define({
 
 const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
 const access = MemoryAccess.make({ namespace: key.namespace, scope: MemoryScope.make("channel") });
+
 const profile = SemanticMemoryProfile.make({
   version: 1,
   provider: "test",
@@ -58,6 +59,7 @@ const profile = SemanticMemoryProfile.make({
   maxChunkBytes: 8,
   distance: "cosine",
 });
+
 const document = ActiveMemoryDocument.make({
   version: 1,
   key,
@@ -83,11 +85,13 @@ const document = ActiveMemoryDocument.make({
     extractedAt: 25,
   },
 });
+
 const indexLimits = SemanticIndexLimits.make({
   maxSourceBytes: 1_024,
   maxChunks: 16,
   timeoutMillis: 100,
 });
+
 const queryLimits = SemanticQueryLimits.make({
   maxQueryBytes: 128,
   maxCandidates: 8,
@@ -95,6 +99,7 @@ const queryLimits = SemanticQueryLimits.make({
   minScore: 0,
   timeoutMillis: 100,
 });
+
 const recallLimits = MemoryRecallLimits.make({
   maxSources: 4,
   maxItems: 2,
@@ -102,6 +107,7 @@ const recallLimits = MemoryRecallLimits.make({
   maxTokens: 4_096,
   timeoutMillis: 100,
 });
+
 const corrected = ActiveMemoryDocument.make({
   ...document,
   generation: 2,
@@ -109,12 +115,15 @@ const corrected = ActiveMemoryDocument.make({
   predecessor: document.source,
   content: { ...document.content, text: "Dan withdraws the queue proposal." },
 });
+
 const withdrawn = WithdrawnMemoryDocument.make({
   ...corrected,
   _tag: "WithdrawnMemoryDocument",
   reason: "withdrawn",
 });
+
 const byteLength = (text: string) => Encoding.encodeHex(text).length / 2;
+
 const candidate = (text = document.content.text, ordinal = 0) =>
   MemoryIndexCandidate.make({
     key,
@@ -128,6 +137,7 @@ const candidate = (text = document.content.text, ordinal = 0) =>
     score: 1,
     indexedAt: 40,
   });
+
 const providerFailure = AiError.make({
   module: "fixture",
   method: "embedMany",
@@ -159,6 +169,7 @@ const probe = () => {
     beforePublish: Effect.void,
     searchFailure: null,
   };
+
   const index = SemanticMemoryIndex.fromAdapter({
     profile,
     replace: ({ chunks }) =>
@@ -181,6 +192,7 @@ const probe = () => {
           : Effect.fail(state.searchFailure),
       ),
   });
+
   const layer = Layer.mergeAll(
     Layer.succeed(
       MemoryReader,
@@ -188,6 +200,7 @@ const probe = () => {
         get: () =>
           Effect.sync(() => {
             state.reads += 1;
+
             return state.current;
           }),
       }),
@@ -200,12 +213,14 @@ const probe = () => {
           Effect.gen(function* () {
             state.inputs.push(inputs);
             yield* state.embedding;
+
             return { results: inputs.map(() => [1, 0]), usage: { inputTokens: inputs.length * 2 } };
           }),
       }),
     ),
     NodeCrypto.layer,
   );
+
   return { state, index, layer };
 };
 
@@ -214,9 +229,11 @@ describe("optional semantic workflows", () => {
     "chunks complete UTF-8 codepoints deterministically with model/config identities and bounds",
     () => {
       const test = probe();
+
       return Effect.gen(function* () {
         const first = yield* indexMemorySource(key, indexLimits);
         const chunks = test.state.chunks;
+
         expect(chunks.map((chunk) => chunk.text)).toEqual(["Dan 🌊", " propose", "s a queu", "e."]);
         expect(chunks.map((chunk) => [chunk.startByte, chunk.endByte])).toEqual([
           [0, 8],
@@ -237,11 +254,13 @@ describe("optional semantic workflows", () => {
         );
         const changedProfile = SemanticMemoryProfile.make({ ...profile, modelRevision: "2" });
         const changedIndex = { ...test.index, profile: changedProfile };
+
         yield* indexMemorySource(key, indexLimits).pipe(
           Effect.provideService(SemanticMemoryIndex, changedIndex),
         );
         expect(test.state.chunks[0]?.passageId).not.toBe(chunks[0]?.passageId);
         const calls = test.state.inputs.length;
+
         expect(
           yield* indexMemorySource(key, { ...indexLimits, maxChunks: 1 }).pipe(Effect.flip),
         ).toMatchObject({ reason: "budget" });
@@ -263,6 +282,7 @@ describe("optional semantic workflows", () => {
     "does not publish sources corrected or withdrawn while embedding and skips missing sources",
     () => {
       const test = probe();
+
       return Effect.gen(function* () {
         for (const next of [corrected, withdrawn]) {
           test.state.current = document;
@@ -294,9 +314,12 @@ describe("optional semantic workflows", () => {
     "rereads current attribution once per source, excludes stale/access-revoked excerpts and obeys rendered budgets",
     () => {
       const test = probe();
+
       test.state.candidates = [candidate("Dan 🌊"), candidate("Dan 🌊", 1)];
+
       return Effect.gen(function* () {
         const queried = yield* querySemanticMemory("queue", access, queryLimits);
+
         expect(test.state.reads).toBe(1);
         expect(queried.lookup).toMatchObject({
           _tag: "Found",
@@ -316,19 +339,23 @@ describe("optional semantic workflows", () => {
             },
           ],
         });
+
         const recalled = yield* Memory.recall(
           [{ id: "semantic", essential: true, read: Effect.succeed(queried.lookup) }],
           { ...recallLimits, maxItems: 1 },
         );
+
         expect(recalled.passages).toHaveLength(1);
         expect(recalled.text).toContain('"speaker":"Dan"');
         expect(recalled.text).toContain('"observers":["Chad"]');
         expect(recalled.text).not.toContain(access.namespace.address);
         expect(recalled.text).toContain('"authority":"memory-authority:1"');
+
         const limited = yield* Memory.recall(
           [{ id: "semantic", essential: false, read: Effect.succeed(queried.lookup) }],
           { ...recallLimits, maxTokens: recalled.estimatedTokens - 1 },
         );
+
         expect(limited.passages).toEqual([]);
         for (const current of [corrected, withdrawn, null]) {
           test.state.current = current;
@@ -364,6 +391,7 @@ describe("optional semantic workflows", () => {
   it.effect("validates 128 candidate chunks from one maximum-size source", () => {
     const test = probe();
     const chunks = Array.from({ length: 128 }, (_, ordinal) => String(ordinal % 10).repeat(8_192));
+
     test.state.current = ActiveMemoryDocument.make({
       ...document,
       content: { ...document.content, text: chunks.join("") },
@@ -375,6 +403,7 @@ describe("optional semantic workflows", () => {
         endByte: (ordinal + 1) * 8_192,
       }),
     );
+
     const query = querySemanticMemory("queue", access, {
       ...queryLimits,
       maxCandidates: 128,
@@ -389,8 +418,10 @@ describe("optional semantic workflows", () => {
         }),
       ),
     );
+
     return Effect.gen(function* () {
       const result = yield* query;
+
       expect(result).toMatchObject({
         lookup: { _tag: "Found", passages: chunks.map((text) => ({ content: { text } })) },
         staleExcluded: 0,
@@ -404,13 +435,16 @@ describe("optional semantic workflows", () => {
     () => {
       const test = probe();
       const otherKey = MemoryKey.make({ ...key, id: "other" });
+
       const other = ActiveMemoryDocument.make({
         ...document,
         key: otherKey,
         source: { ...document.source, id: otherKey.id, locator: "chat://other/1" },
         content: { ...document.content, text: '"🌊"\\ tail' },
       });
+
       const laterKey = MemoryKey.make({ ...key, id: "later" });
+
       test.state.candidates = [
         candidate("Dan 🌊"),
         MemoryIndexCandidate.make({ ...candidate('"🌊"'), key: otherKey, source: other.source }),
@@ -422,17 +456,21 @@ describe("optional semantic workflows", () => {
         }),
       ];
       const reads: Array<string> = [];
+
       const sourceBytes = [document, other].reduce(
         (total, item) => total + new TextEncoder().encode(JSON.stringify(item)).byteLength,
         0,
       );
+
       const read = MemoryReader.fromAdapter({
         get: (requested) =>
           Effect.sync(() => {
             reads.push(requested.id);
+
             return requested.id === key.id ? document : requested.id === otherKey.id ? other : null;
           }),
       });
+
       return Effect.gen(function* () {
         expect(
           yield* querySemanticMemory("queue", access, {
@@ -446,10 +484,12 @@ describe("optional semantic workflows", () => {
         });
         expect(reads).toEqual([key.id, otherKey.id]);
         reads.length = 0;
+
         const exact = yield* querySemanticMemory("queue", access, {
           ...queryLimits,
           maxSourceBytes: sourceBytes,
         });
+
         expect(reads).toEqual([key.id, otherKey.id, laterKey.id]);
         expect(exact).toMatchObject({
           staleExcluded: 1,
@@ -468,8 +508,10 @@ describe("optional semantic workflows", () => {
 
   it.effect("does not charge missing, withdrawn, unauthorized, or identity-stale sources", () => {
     const test = probe();
+
     test.state.candidates = [candidate("Dan 🌊"), candidate("Dan 🌊", 1)];
     const largeContent = { ...document.content, text: "🌊".repeat(512) };
+
     return Effect.gen(function* () {
       for (const current of [
         null,
@@ -497,6 +539,7 @@ describe("optional semantic workflows", () => {
 
   it.effect("counts repeated provenance in the semantic output byte budget", () => {
     const test = probe();
+
     const current = ActiveMemoryDocument.make({
       ...document,
       content: {
@@ -508,8 +551,10 @@ describe("optional semantic workflows", () => {
         metadata: { evidence: "🌊".repeat(128) },
       },
     });
+
     test.state.current = current;
     test.state.candidates = [candidate("Dan 🌊"), candidate("Dan 🌊")];
+
     const expected = {
       version: 1,
       authority: access.namespace.address,
@@ -517,12 +562,15 @@ describe("optional semantic workflows", () => {
       passageId: "chunk:0",
       content: { ...current.content, text: "Dan 🌊" },
     };
+
     const outputBytes = new TextEncoder().encode(JSON.stringify(expected)).byteLength * 2;
+
     return Effect.gen(function* () {
       const exact = yield* querySemanticMemory("queue", access, {
         ...queryLimits,
         maxOutputBytes: outputBytes,
       });
+
       expect(exact.lookup).toEqual({ _tag: "Found", passages: [expected, expected] });
       expect(
         yield* querySemanticMemory("queue", access, {
@@ -539,9 +587,11 @@ describe("optional semantic workflows", () => {
 
   it.effect("filters the independent authority/index publication race before recall", () => {
     const test = probe();
+
     test.state.beforePublish = Effect.sync(() => {
       test.state.current = withdrawn;
     });
+
     return Effect.gen(function* () {
       yield* indexMemorySource(key, indexLimits);
       test.state.candidates = test.state.chunks.map((chunk) =>
@@ -566,6 +616,7 @@ describe("optional semantic workflows", () => {
     "preserves provider/index failures and defects, and rejects malformed embeddings",
     () => {
       const test = probe();
+
       return Effect.gen(function* () {
         test.state.embedding = Effect.fail(providerFailure);
         expect(yield* indexMemorySource(key, indexLimits).pipe(Effect.flip)).toEqual(
@@ -576,6 +627,7 @@ describe("optional semantic workflows", () => {
         );
         test.state.embedding = Effect.die("embedding defect");
         const defect = yield* querySemanticMemory("queue", access, queryLimits).pipe(Effect.exit);
+
         expect(Exit.isFailure(defect) && Cause.hasDies(defect.cause)).toBe(true);
         test.state.embedding = Effect.void;
         test.state.searchFailure = MemoryIndexError.make({
@@ -593,6 +645,7 @@ describe("optional semantic workflows", () => {
                 usage: { inputTokens: undefined },
               }),
           });
+
           expect(
             yield* querySemanticMemory("queue", access, queryLimits).pipe(
               Effect.provideService(EmbeddingModel.EmbeddingModel, malformed),
@@ -612,18 +665,23 @@ describe("optional semantic workflows", () => {
           const test = probe();
           const started = yield* Deferred.make<void>();
           let finalized = 0;
+
           const wait = Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
             Effect.sync(() => {
               finalized += 1;
             }),
           ).pipe(Effect.andThen(Effect.never), Effect.scoped);
+
           if (phase === "publication") test.state.beforePublish = wait;
           else test.state.embedding = wait;
+
           const work = Effect.gen(function* () {
             if (phase === "query") yield* querySemanticMemory("queue", access, queryLimits);
             else yield* indexMemorySource(key, indexLimits);
           });
+
           const fiber = yield* work.pipe(Effect.provide(test.layer), Effect.forkChild);
+
           yield* Deferred.await(started);
           if (mode === "timeout") {
             yield* TestClock.adjust(101);
@@ -634,6 +692,7 @@ describe("optional semantic workflows", () => {
           } else {
             yield* Fiber.interrupt(fiber);
             const exit = yield* Fiber.await(fiber);
+
             expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
           }
           expect(finalized).toBe(1);
@@ -647,6 +706,7 @@ describe("optional semantic workflows", () => {
 it("keeps native provider, source, index E/R visible and owns its temporary Scope", () => {
   const indexing = indexMemorySource(key, indexLimits);
   const querying = querySemanticMemory("queue", access, queryLimits);
+
   type IndexErrors = SemanticMemoryError | MemoryStorageError | MemoryIndexError | AiError.AiError;
   type QueryErrors = SemanticMemoryError | MemoryStorageError | MemoryIndexError | AiError.AiError;
   type IndexServices =
@@ -655,16 +715,21 @@ it("keeps native provider, source, index E/R visible and owns its temporary Scop
     | EmbeddingModel.EmbeddingModel
     | Crypto.Crypto;
   type QueryServices = MemoryReader | SemanticMemoryIndex | EmbeddingModel.EmbeddingModel;
+
   const indexErrorExact: [Effect.Error<typeof indexing>] extends [IndexErrors] ? true : false =
     true;
+
   const allIndexErrors: [IndexErrors] extends [Effect.Error<typeof indexing>] ? true : false = true;
+
   const queryErrorExact: [Effect.Error<typeof querying>] extends [QueryErrors] ? true : false =
     true;
+
   const allQueryErrors: [QueryErrors] extends [Effect.Error<typeof querying>] ? true : false = true;
   const indexR: [Effect.Services<typeof indexing>] extends [IndexServices] ? true : false = true;
   const allIndexR: [IndexServices] extends [Effect.Services<typeof indexing>] ? true : false = true;
   const queryR: [Effect.Services<typeof querying>] extends [QueryServices] ? true : false = true;
   const allQueryR: [QueryServices] extends [Effect.Services<typeof querying>] ? true : false = true;
+
   expect([
     indexErrorExact,
     allIndexErrors,

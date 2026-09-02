@@ -49,6 +49,7 @@ const countingThreadStoreLayer = Layer.effectContext(
     const store = yield* ThreadStore;
     const requests = yield* Ref.make<ReadonlyArray<ThreadRead>>([]);
     const failingAfter = yield* Ref.make<Option.Option<CanonicalSequence>>(Option.none());
+
     const counted = ThreadStore.of({
       materialize: store.materialize,
       append: store.append,
@@ -57,10 +58,13 @@ const countingThreadStoreLayer = Layer.effectContext(
           Effect.gen(function* () {
             yield* Ref.update(requests, (current) => [...current, request]);
             const failure = yield* Ref.get(failingAfter);
+
             if (Option.isSome(failure) && request.afterSequence === failure.value) {
               yield* Ref.set(failingAfter, Option.none());
+
               return Stream.fail(ThreadNotMaterialized.make({ threadId: request.threadId }));
             }
+
             return store.read(request);
           }),
         ),
@@ -69,6 +73,7 @@ const countingThreadStoreLayer = Layer.effectContext(
       inspectTail: store.inspectTail,
       checkpoints: store.checkpoints,
     });
+
     return Context.make(ThreadStore, counted).pipe(
       Context.add(
         RecoveryReadProbe,
@@ -123,6 +128,7 @@ const runtimeLayer = DurableAgentRuntime.layer.pipe(
 
 const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
   const store = yield* ThreadStore;
+
   yield* store.materialize(
     ThreadMaterialization.make({
       threadId: THREAD_ID,
@@ -132,10 +138,13 @@ const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
 
   let tailSequence = ZERO_SEQUENCE;
   let tailDigest = EMPTY_TAIL_DIGEST;
+
   for (let start = 0; start < HISTORY_RECORDS; start += 256) {
     const size = Math.min(256, HISTORY_RECORDS - start);
+
     const records = Array.from({ length: size }, (_, offset) => {
       const sequence = start + offset;
+
       return CanonicalRecord.make({
         recordId: decodeRecordId(`history-seed:${sequence}`),
         family: "thread",
@@ -148,10 +157,13 @@ const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
             : RepairAnnotated.make({ reason: "history seed", details: { sequence } }),
       });
     });
+
     const [first, ...rest] = records;
+
     if (first === undefined) {
       return yield* Effect.die(new Error("The history seed must produce a non-empty batch"));
     }
+
     const appended = yield* store.append(
       FencedAppendRequest.make({
         threadId: THREAD_ID,
@@ -165,6 +177,7 @@ const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
         producerEpoch: FIRST_EPOCH,
       }),
     );
+
     tailSequence = appended.lastSequence;
     tailDigest = appended.tailDigest;
   }
@@ -178,9 +191,11 @@ describe("DurableAgentRuntime recovery history", () => {
       const runtime = yield* DurableAgentRuntime;
       const probe = yield* RecoveryReadProbe;
       const admitted = [];
+
       for (let index = 0; index < 4; index++) {
         const input = { work: `submission-${index}` };
         const inputDigest = yield* digestJson(input);
+
         admitted.push(
           yield* ledger.admit(
             AdmissionRequest.make({
@@ -199,6 +214,7 @@ describe("DurableAgentRuntime recovery history", () => {
       const second = admitted[1];
       const third = admitted[2];
       const fourth = admitted[3];
+
       if (second === undefined || third === undefined || fourth === undefined) {
         return yield* Effect.die(new Error("The recovery fixture must admit four Submissions"));
       }
@@ -215,6 +231,7 @@ describe("DurableAgentRuntime recovery history", () => {
 
       yield* probe.reset;
       const reports = yield* runtime.runRecovery;
+
       expect(reports.map((report) => report.decision._tag)).toEqual([
         "RepairReadiness",
         "ApplyInput",
@@ -229,6 +246,7 @@ describe("DurableAgentRuntime recovery history", () => {
       ]);
 
       const requests = yield* probe.requests;
+
       expect(
         requests.map((request) => ({
           afterSequence: request.afterSequence,
@@ -248,9 +266,11 @@ describe("DurableAgentRuntime recovery history", () => {
       const ledger = yield* SubmissionLedger;
       const runtime = yield* DurableAgentRuntime;
       const probe = yield* RecoveryReadProbe;
+
       for (let index = 0; index < 2; index++) {
         const input = { work: `suffix-race-${index}` };
         const inputDigest = yield* digestJson(input);
+
         const admitted = yield* ledger.admit(
           AdmissionRequest.make({
             threadId: THREAD_ID,
@@ -263,6 +283,7 @@ describe("DurableAgentRuntime recovery history", () => {
             inputDigest,
           }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
         if (index === 0) {
           yield* ledger.requestAbort(
@@ -278,14 +299,17 @@ describe("DurableAgentRuntime recovery history", () => {
       yield* probe.reset;
       yield* probe.failReadAfter(HISTORY_TAIL);
       const failure = yield* runtime.runRecovery.pipe(Effect.flip);
+
       expect(failure).toMatchObject({
         _tag: "ThreadStoreError",
         operation: "read recovery history",
       });
+
       const requests = (yield* probe.requests).map((request) => ({
         afterSequence: request.afterSequence,
         limit: request.limit,
       }));
+
       expect(requests.slice(0, 3)).toEqual([
         { afterSequence: undefined, limit: 1_024 },
         { afterSequence: 1_024, limit: 1_024 },

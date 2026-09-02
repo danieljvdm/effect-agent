@@ -1,36 +1,15 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Crypto, Effect, Encoding, FileSystem, Schema, Stream } from "effect";
-import { Command as CliCommand, Flag } from "effect/unstable/cli";
+import { Console, Effect, FileSystem, Path, Schema, Stream } from "effect";
+import { Command as CliCommand } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
 // ---------------------------------------------------------------------------
-// Bundle the PR-review Action entrypoint into its committed dist file. A
-// node-runtime Action must run directly from an immutable checkout without an
-// install step. `--check` rebuilds to scratch and rejects stale bundles using
-// stable input and artifact digests; Bun may reorder equivalent bundle output.
+// Build the PR-review Action for local use and CI distribution. Generated
+// output is ignored on source branches; CI adds it only to release commits.
 // ---------------------------------------------------------------------------
 
 const entry = "packages/pr-review-action/src/action-entry.ts";
 const bundle = "action/dist/index.mjs";
-const manifestPath = "action/dist/index.manifest.json";
-const scratch = "node_modules/.tmp/action-dist-check/index.mjs";
-const metafile = "node_modules/.tmp/action-dist-check/pr-review.json";
-
-const buildInputs = ["scripts/build-action.ts", "package.json", "bun.lock"] as const;
-
-const Sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
-const BunMetafile = Schema.Struct({
-  inputs: Schema.Record(Schema.String, Schema.Unknown),
-});
-const BundleManifest = Schema.Struct({
-  version: Schema.Literal(1),
-  inputsSha256: Sha256,
-  bundleSha256: Sha256,
-});
-
-const decodeMetafile = Schema.decodeUnknownEffect(Schema.fromJsonString(BunMetafile));
-const decodeManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(BundleManifest));
-const encodeManifest = Schema.encodeEffect(Schema.fromJsonString(BundleManifest));
 
 class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   command: Schema.String,
@@ -44,101 +23,61 @@ class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   }
 }
 
-class StaleBundleError extends Schema.TaggedError<StaleBundleError>()("StaleBundleError", {
-  bundle: Schema.String,
-}) {
-  override get message() {
-    return `${this.bundle} is stale: rebuild it with \`vp run action:build\` and commit the result.`;
-  }
-}
-
 const runCommand = Effect.fn("runCommand")(function* (
   command: string,
   args: ReadonlyArray<string>,
 ) {
   const formatted = [command, ...args].join(" ");
   const child = yield* ChildProcess.make(command, args, { stderr: "pipe", stdout: "pipe" });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+
   const trimmed = output.trim();
+
   if (exitCode !== 0) {
     return yield* CommandError.make({ command: formatted, exitCode, output: trimmed });
   }
+
   return trimmed;
 });
 
-const sha256 = Effect.fn("sha256")(function* (bytes: Uint8Array) {
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto.digest("SHA-256", bytes);
-  return yield* Schema.decodeUnknownEffect(Sha256)(Encoding.encodeHex(digest));
-});
-
-const fingerprintInputs = Effect.fn("fingerprintInputs")(function* (metafilePath: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const metafile = yield* decodeMetafile(yield* fs.readFileString(metafilePath));
-  const inputs = [...Object.keys(metafile.inputs), ...buildInputs]
-    .map((source) => ({ source, key: source.replaceAll("\\", "/") }))
-    .sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
-  const records: Array<string> = [];
-  for (const input of inputs) {
-    const digest = yield* sha256(yield* fs.readFile(input.source));
-    records.push(`${input.key}\0${digest}\n`);
-  }
-  return yield* sha256(new TextEncoder().encode(records.join("")));
-});
-
-const bundleTo = Effect.fn("bundleTo")(function* (
-  entry: string,
-  outfile: string,
-  metafile: string,
-) {
-  yield* runCommand("bun", [
-    "build",
+const bundleTo = Effect.fn("bundleTo")(function* (entry: string, outfile: string) {
+  yield* runCommand("esbuild", [
     entry,
-    "--target=node",
+    "--bundle",
+    "--platform=node",
+    "--target=node24",
     "--format=esm",
+    // Bundled CommonJS dependencies still require Node built-ins at runtime.
+    '--banner:js=import { createRequire as __actionCreateRequire } from "node:module"; const require = __actionCreateRequire(import.meta.url);',
     `--outfile=${outfile}`,
-    `--metafile=${metafile}`,
   ]);
 });
 
-const checkFlag = Flag.boolean("check").pipe(
-  Flag.withDefault(false),
-  Flag.withDescription("Rebuild to a scratch path and fail if the committed bundle is stale."),
-);
-
-const command = CliCommand.make("build-action", { check: checkFlag }, ({ check }) =>
+export const command = CliCommand.make("build-action", {}, () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.makeDirectory("node_modules/.tmp/action-dist-check", { recursive: true });
-    if (!check) {
-      yield* bundleTo(entry, bundle, metafile);
-      const manifest = BundleManifest.make({
-        version: 1,
-        inputsSha256: yield* fingerprintInputs(metafile),
-        bundleSha256: yield* sha256(yield* fs.readFile(bundle)),
-      });
-      yield* fs.writeFileString(manifestPath, `${yield* encodeManifest(manifest)}\n`);
-      const stat = yield* fs.stat(bundle);
-      yield* Console.log(`Bundled ${entry} -> ${bundle} (${stat.size} bytes).`);
-      return;
-    }
-    yield* bundleTo(entry, scratch, metafile);
-    const manifest = yield* decodeManifest(yield* fs.readFileString(manifestPath));
-    const inputsSha256 = yield* fingerprintInputs(metafile);
-    const bundleSha256 = yield* sha256(yield* fs.readFile(bundle));
-    if (manifest.inputsSha256 !== inputsSha256 || manifest.bundleSha256 !== bundleSha256) {
-      return yield* StaleBundleError.make({ bundle });
-    }
-    yield* Console.log(`${bundle} is up to date.`);
+    const path = yield* Path.Path;
+    const scratch = path.join(yield* fs.makeTempDirectoryScoped(), "index.mjs");
+
+    yield* bundleTo(entry, scratch);
+    yield* runCommand("node", ["--check", scratch]);
+    const fresh = yield* fs.readFileString(scratch);
+
+    yield* fs.makeDirectory(path.dirname(bundle), { recursive: true });
+    yield* fs.writeFileString(bundle, fresh);
+    const stat = yield* fs.stat(bundle);
+
+    yield* Console.log(`Bundled ${entry} -> ${bundle} (${stat.size} bytes).`);
   }),
-).pipe(CliCommand.withDescription("Bundle the committed PR-review GitHub Action entrypoint."));
+).pipe(CliCommand.withDescription("Build the PR-review GitHub Action for distribution."));
 
 const program = CliCommand.run(command, { version: "1.0.0" }).pipe(
   Effect.scoped,
   Effect.provide(NodeServices.layer),
 );
 
-NodeRuntime.runMain(program);
+if (import.meta.main) NodeRuntime.runMain(program);

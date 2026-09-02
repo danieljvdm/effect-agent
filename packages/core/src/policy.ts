@@ -28,6 +28,7 @@ export class CompactionPolicy extends Schema.Class<CompactionPolicy>("Compaction
     });
   }
 }
+
 const FinitePositiveDuration = Schema.Duration.pipe(
   Schema.refine(
     (duration): duration is Duration.Duration =>
@@ -65,6 +66,7 @@ const AgentPolicyFields = Schema.Struct({
   runStatus: Schema.Literals(["appended", "off"]),
   compaction: CompactionPolicy,
 });
+
 type AgentPolicyFields = typeof AgentPolicyFields.Type;
 
 /** Inputs normalized and validated by `AgentPolicy.make`. */
@@ -126,9 +128,11 @@ export class AgentPolicy extends Schema.Class<AgentPolicy>("AgentPolicy")(AgentP
       (input.tokenBudget === undefined
         ? 4_096
         : Math.min(4_096, Math.floor(input.tokenBudget / 5)));
+
     if (input.tokenBudget !== undefined && completionReserveTokens > input.tokenBudget) {
       throw new Error("completionReserveTokens cannot exceed tokenBudget");
     }
+
     return super.make({
       ...input,
       maxDuration: Duration.fromInputUnsafe(input.maxDuration),

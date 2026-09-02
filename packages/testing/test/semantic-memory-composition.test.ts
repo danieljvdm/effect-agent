@@ -29,6 +29,7 @@ const TestNamespace = MemoryNamespace.define({
 
 const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
 const access = MemoryAccess.make({ namespace: key.namespace, scope: MemoryScope.make("channel") });
+
 const profile = SemanticMemoryProfile.make({
   version: 1,
   provider: "deterministic-port-fixture",
@@ -39,7 +40,9 @@ const profile = SemanticMemoryProfile.make({
   maxChunkBytes: 64,
   distance: "cosine",
 });
+
 const indexLimits = { maxSourceBytes: 1_024, maxChunks: 8, timeoutMillis: 1_000 };
+
 const queryLimits = {
   maxQueryBytes: 128,
   maxCandidates: 3,
@@ -47,7 +50,9 @@ const queryLimits = {
   minScore: 0.35,
   timeoutMillis: 1_000,
 };
+
 const sql = SqliteClient.layer({ filename: ":memory:" });
+
 const services = Layer.mergeAll(
   memoryStoreLayer.pipe(Layer.provide(sql)),
   inMemorySemanticIndexLayer(profile, { maxSources: 1, maxChunks: 8 }),
@@ -86,6 +91,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const writer = yield* MemoryWriter;
+
       yield* writer.change({
         _tag: "Put",
         key,
@@ -97,6 +103,7 @@ it.effect(
       });
       yield* indexMemorySource(key, indexLimits);
       const initial = yield* querySemanticMemory("queue", access, queryLimits);
+
       const recalled = yield* Memory.recall(
         [{ id: "semantic", essential: true, read: Effect.succeed(initial.lookup) }],
         {
@@ -107,11 +114,13 @@ it.effect(
           timeoutMillis: 1_000,
         },
       );
+
       expect(recalled.passages).toMatchObject([
         { authority: access.namespace.address, source: { id: key.id, revision: "1" }, content },
       ]);
 
       const corrected = { ...content, text: "Dan proposes a scheduler instead." };
+
       yield* writer.change({
         _tag: "Put",
         key,
@@ -155,6 +164,7 @@ it.effect(
 it.effect("preserves usable recall when an unchanged-source refresh fails or is cancelled", () =>
   Effect.gen(function* () {
     const writer = yield* MemoryWriter;
+
     yield* writer.change({
       _tag: "Put",
       key,
@@ -166,6 +176,7 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
     });
     yield* indexMemorySource(key, indexLimits);
     const index = yield* SemanticMemoryIndex;
+
     const search = {
       namespace: key.namespace,
       vector: [1, 0],
@@ -173,7 +184,9 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
       minScore: 0,
       maxScannedChunks: 8,
     };
+
     const original = yield* index.search(search);
+
     const providerFailure = AiError.make({
       module: "refresh-fixture",
       method: "embedMany",
@@ -183,6 +196,7 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
     for (const mode of ["failure", "defect", "timeout", "interrupt"] as const) {
       const started = yield* Deferred.make<void>();
       let finalized = 0;
+
       const model = yield* EmbeddingModel.make({
         embedMany: () =>
           Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
@@ -200,15 +214,18 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
             Effect.scoped,
           ),
       });
+
       const refreshing = yield* indexMemorySource(key, indexLimits).pipe(
         Effect.provideService(EmbeddingModel.EmbeddingModel, model),
         Effect.forkChild,
       );
+
       yield* Deferred.await(started);
       expect((yield* querySemanticMemory("queue", access, queryLimits)).lookup._tag).toBe("Found");
       if (mode === "timeout") yield* TestClock.adjust(1_001);
       if (mode === "interrupt") yield* Fiber.interrupt(refreshing);
       const exit = yield* Fiber.await(refreshing);
+
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
         if (mode === "failure")
@@ -229,6 +246,7 @@ it.effect("fences delayed replacement after a newer index or terminal withdrawal
     for (const mutation of ["correction", "withdrawal"] as const) {
       yield* Effect.gen(function* () {
         const writer = yield* MemoryWriter;
+
         yield* writer.change({
           _tag: "Put",
           key,
@@ -242,6 +260,7 @@ it.effect("fences delayed replacement after a newer index or terminal withdrawal
         const index = yield* SemanticMemoryIndex;
         const reached = yield* Deferred.make<void>();
         const resume = yield* Deferred.make<void>();
+
         const delayed = yield* indexMemorySource(key, indexLimits).pipe(
           Effect.provideService(
             SemanticMemoryIndex,
@@ -256,6 +275,7 @@ it.effect("fences delayed replacement after a newer index or terminal withdrawal
           ),
           Effect.forkChild,
         );
+
         yield* Deferred.await(reached);
         if (mutation === "correction") {
           yield* writer.change({
@@ -278,6 +298,7 @@ it.effect("fences delayed replacement after a newer index or terminal withdrawal
         }
         yield* indexMemorySource(key, indexLimits);
         const current = yield* querySemanticMemory("queue", access, queryLimits);
+
         expect(current.lookup).toMatchObject(
           mutation === "correction"
             ? { _tag: "Found", passages: [{ source: { revision: "2" } }] }

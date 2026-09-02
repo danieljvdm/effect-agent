@@ -25,6 +25,7 @@ const threadId = Schema.decodeSync(ThreadId)("memory-schedule-failpoint-thread")
 const digest = Schema.decodeSync(Digest)("d".repeat(64));
 const occurrenceId = Schema.decodeSync(Digest)("e".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
+
 const receipt = Receipt.make({
   receiptId: Schema.decodeSync(ReceiptId)("memory-schedule-failpoint-receipt"),
   submissionId: Schema.decodeSync(SubmissionId)("memory-schedule-failpoint-submission"),
@@ -39,6 +40,7 @@ const key = (name: string): ScheduleKey => ({
 
 const record = (name: string, pending: boolean): ScheduleRecord => {
   const recordKey = key(name);
+
   const base: ScheduleRecord = {
     schemaVersion: 1,
     ...recordKey,
@@ -64,7 +66,9 @@ const record = (name: string, pending: boolean): ScheduleRecord => {
     lastRefusal: null,
     lastSkippedRange: null,
   };
+
   if (!pending) return base;
+
   return {
     ...base,
     pending: {
@@ -96,7 +100,9 @@ const record = (name: string, pending: boolean): ScheduleRecord => {
 
 const pendingEnvelope = (name: string) => {
   const envelope = record(name, true).pending?.envelope;
+
   if (envelope === undefined) throw new Error("pending fixture is missing its envelope");
+
   return envelope;
 };
 
@@ -217,11 +223,14 @@ describe("MemoryScheduleStore mutation failpoints", () => {
     it.effect(`keeps insert ${phase} failure semantics atomic`, () => {
       const point = `schedule:insert:${phase}`;
       const initial = record(`insert-${phase}`, false);
+
       return Effect.gen(function* () {
         const store = yield* ScheduleStore;
         const failure = yield* store.insert(initial, 10).pipe(Effect.flip);
+
         expect(failure).toMatchObject({ _tag: "ScheduleFailpointError", point });
         const stored = yield* store.get(key(`insert-${phase}`));
+
         expect(stored === null).toBe(phase === "before");
       }).pipe(Effect.provide(layer(point)));
     });
@@ -229,20 +238,26 @@ describe("MemoryScheduleStore mutation failpoints", () => {
     for (const mutation of mutationCases) {
       it.effect(`keeps ${mutation.tag} ${phase} failure semantics atomic`, () => {
         const point = `schedule:${mutation.tag.toLowerCase()}:${phase}`;
+
         return Effect.gen(function* () {
           const store = yield* ScheduleStore;
+
           yield* store.insert(mutation.initial, 10);
+
           const failure = yield* store
             .change(
               { owner: mutation.initial.owner, scheduleId: mutation.initial.scheduleId },
               mutation.change,
             )
             .pipe(Effect.flip);
+
           expect(failure).toMatchObject({ _tag: "ScheduleFailpointError", point });
+
           const stored = yield* store.get({
             owner: mutation.initial.owner,
             scheduleId: mutation.initial.scheduleId,
           });
+
           expect(stored?.version).toBe(phase === "before" ? 1 : 2);
         }).pipe(Effect.provide(layer(point)));
       });
@@ -253,13 +268,18 @@ describe("MemoryScheduleStore mutation failpoints", () => {
     Effect.gen(function* () {
       const store = yield* ScheduleStore;
       const initial = record("boundary", false);
+
       yield* store.insert(initial, 10);
+
       const invalidKey = yield* store
         .get({ owner: { ...initial.owner, tenantId: "" }, scheduleId: initial.scheduleId })
         .pipe(Effect.flip);
+
       expect(invalidKey).toMatchObject({ _tag: "ScheduleStorageError", reason: "corrupt" });
       const invalidPage = yield* store.list({ owner: initial.owner, limit: 101 }).pipe(Effect.flip);
+
       expect(invalidPage).toMatchObject({ _tag: "ScheduleStorageError", reason: "corrupt" });
+
       const invalidChange = yield* store
         .change(
           { owner: initial.owner, scheduleId: initial.scheduleId },
@@ -272,6 +292,7 @@ describe("MemoryScheduleStore mutation failpoints", () => {
           },
         )
         .pipe(Effect.flip);
+
       expect(invalidChange).toMatchObject({ _tag: "ScheduleStorageError", reason: "corrupt" });
       expect((yield* store.get(key("boundary")))?.version).toBe(1);
     }).pipe(Effect.provide(MemoryScheduleStoreLive)),

@@ -1,7 +1,14 @@
 # Effect Agent PR Review action
 
-This directory is the published GitHub Action path. It contains the consumer
-contract in `action.yml` and the committed JavaScript bundle in `dist/`.
+This directory contains the GitHub Action contract in `action.yml`. CI builds
+the JavaScript bundle and commits it only on distribution tags.
+
+Use `danieljvdm/effect-agent/action@action-v1` for the latest validated release,
+or pin the distribution commit SHA reported by CI for an immutable version.
+Each release also has an immutable `action-<source-commit-sha>` tag.
+New source commits, including `@main`, do not contain a runnable bundle. Switch
+to a distribution ref to receive updates. Older SHA pins that contain a bundle
+continue to work.
 
 The private
 [`@effect-agent/pr-review-action`](../packages/pr-review-action) workspace
@@ -9,9 +16,33 @@ owns the source and tests. The public
 [`@effect-agent/pr-review`](../packages/pr-review) package remains provider-
 and transport-neutral.
 
-Rebuild the committed bundle with `vp run action:build`.
+Build locally with `vp run action:build`. The generated `action/dist/` directory
+is ignored by Git. `vp run ready` also builds the Action; no bundle update or
+generated-file merge is needed in a source PR.
+
+After a push to `main` passes static checks, tests, and builds, CI publishes that
+run's bundle in a child commit of the validated source. It creates the immutable
+tag and advances `action-v1` atomically. Failed or superseded runs leave the
+previous release available. Publication installs no dependencies and runs no
+project code with repository write permission. Package releases remain separate.
+
+For the initial cutover, seed `action-v1` with the last validated source commit
+that still contains the bundle before switching workflows. Subsequent main CI
+runs advance that tag automatically. When rebasing an older feature branch,
+keep the deletion of `action/dist/index.mjs`.
 
 ## Review behavior
+
+The reviewer automatically ignores known binary asset formats, including raster images,
+fonts, audio/video, archives, PDFs, and compiled binaries, before fetching their contents.
+Other bounded blobs containing NUL bytes are also ignored. These files count as ignored,
+not incomplete coverage, and are unavailable to source tools. A binary-only PR needs no
+model call. SVG, JSON, XML, and other text assets remain reviewable. API failures, malformed
+responses, invalid UTF-8 without NUL bytes, and source-size limits still fail coverage checks.
+Binary detection by content retains the existing file and byte read limits.
+When a rename or content replacement crosses between binary and text, the textual side
+is still reviewed as an addition or deletion. Explicit ignore rules continue to exclude
+an entire rename when either path matches.
 
 One bounded review run assesses every admitted patch before using immutable base and head source
 to resolve specific questions about plausible defects. Straightforward changes can finish from

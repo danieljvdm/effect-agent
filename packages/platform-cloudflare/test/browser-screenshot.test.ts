@@ -104,13 +104,16 @@ const trackedChunks = (
   let index = 0;
   let reads = 0;
   let cancelled = false;
+
   const stream = new ReadableStream<Uint8Array>(
     {
       pull(controller) {
         reads += 1;
         const chunk = chunks[index++];
+
         if (chunk === undefined) {
           if (options.close !== false) controller.close();
+
           return;
         }
         controller.enqueue(chunk);
@@ -123,12 +126,14 @@ const trackedChunks = (
     },
     { highWaterMark: 0 },
   );
+
   return { stream, reads: () => reads, cancelled: () => cancelled };
 };
 
 const repeatedChunks = (chunkSize: number, cancelError?: Error): TrackedStream => {
   let reads = 0;
   let cancelled = false;
+
   const stream = new ReadableStream<Uint8Array>(
     {
       pull(controller) {
@@ -142,17 +147,20 @@ const repeatedChunks = (chunkSize: number, cancelError?: Error): TrackedStream =
     },
     { highWaterMark: 0 },
   );
+
   return { stream, reads: () => reads, cancelled: () => cancelled };
 };
 
 const blockingStream = (started: Deferred.Deferred<void>): TrackedStream => {
   let reads = 0;
   let cancelled = false;
+
   const stream = new ReadableStream<Uint8Array>(
     {
       pull() {
         reads += 1;
         Effect.runSync(Deferred.succeed(started, undefined));
+
         return new Promise<void>(() => {});
       },
       cancel() {
@@ -161,37 +169,45 @@ const blockingStream = (started: Deferred.Deferred<void>): TrackedStream => {
     },
     { highWaterMark: 0 },
   );
+
   return { stream, reads: () => reads, cancelled: () => cancelled };
 };
 
 const pngResponse = (body: BodyInit | null, init: ResponseInit = {}): Response => {
   const headers = new Headers(init.headers);
+
   if (!headers.has("Content-Type")) headers.set("Content-Type", "image/png");
+
   return new Response(body, { ...init, headers });
 };
 
 describe("Browser Run PNG screenshot adapter", () => {
   it("keeps native binding authority visible in the Layer requirement", () => {
     const proof: ScreenshotRequiresBinding = true;
+
     expect(proof).toBe(true);
   });
 
   it("projects URL and HTML requests and returns only bounded PNG bytes", async () => {
     const calls: Array<BrowserRunScreenshotOptions> = [];
+
     const responses = [
       pngResponse(new Uint8Array([137, 80, 78, 71])),
       pngResponse(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])),
     ];
+
     const client = makeClient((options) =>
       Effect.sync(() => {
         calls.push(options);
         const response = responses.shift();
+
         return response ?? new Response(null, { status: 500 });
       }),
     );
 
     const urlRequest = request();
     const fromUrl = await capture(client, urlRequest);
+
     const fromHtml = await capture(
       client,
       request({ target: PageHtmlTarget.make({ html: "<main>proof</main>" }), fullPage: false }),
@@ -242,9 +258,11 @@ describe("Browser Run PNG screenshot adapter", () => {
     ] as const) {
       const tracked = trackedChunks([new Uint8Array(33)], { close: false });
       const headers = new Headers();
+
       if (scenario.contentType !== undefined) headers.set("Content-Type", scenario.contentType);
       if (scenario.contentLength !== undefined)
         headers.set("Content-Length", scenario.contentLength);
+
       const error = await captureError(
         makeClient(() => Effect.succeed(new Response(tracked.stream, { headers }))),
         request({ maxOutputBytes: 32 }),
@@ -264,21 +282,26 @@ describe("Browser Run PNG screenshot adapter", () => {
     for (const contentLength of [undefined, "broken"] as const) {
       const tracked = trackedChunks([new Uint8Array([137, 80, 78, 71])]);
       const headers = new Headers({ "Content-Type": "image/png" });
+
       if (contentLength !== undefined) headers.set("Content-Length", contentLength);
+
       const result = await capture(
         makeClient(() => Effect.succeed(new Response(tracked.stream, { headers }))),
       );
+
       expect(result.bytes.byteLength).toBe(4);
       expect(tracked.stream.locked).toBe(false);
     }
 
     const underreported = trackedChunks([new Uint8Array(16), new Uint8Array(17)]);
+
     const error = await captureError(
       makeClient(() =>
         Effect.succeed(pngResponse(underreported.stream, { headers: { "Content-Length": "1" } })),
       ),
       request({ maxOutputBytes: 32 }),
     );
+
     expect(error).toMatchObject({
       _tag: "PageScreenshotOutputLimitError",
       limit: 32,
@@ -289,6 +312,7 @@ describe("Browser Run PNG screenshot adapter", () => {
 
   it("stops an oversized stream on the first violating chunk, then cancels and unlocks", async () => {
     const tracked = repeatedChunks(512);
+
     const error = await captureError(
       makeClient(() => Effect.succeed(pngResponse(tracked.stream))),
       request({ maxOutputBytes: 1_024 }),
@@ -306,11 +330,13 @@ describe("Browser Run PNG screenshot adapter", () => {
 
   it("keeps provider, HTTP, rate, and engine failures exact and typed", async () => {
     const foreignCause = new Error("private provider failure");
+
     const rpc = await captureError(
       makeClient(() =>
         Effect.fail(BrowserQuickActionRpcError.make({ action: "screenshot", cause: foreignCause })),
       ),
     );
+
     expect(rpc).toMatchObject({
       _tag: "PageCaptureProtocolError",
       message: "The browser binding rejected the screenshot",
@@ -318,6 +344,7 @@ describe("Browser Run PNG screenshot adapter", () => {
     });
 
     const clientFor = (response: Response) => makeClient(() => Effect.succeed(response));
+
     expect(await captureError(clientFor(new Response("bad", { status: 400 })))).toMatchObject({
       _tag: "PageCaptureNavigationError",
       message: "The screenshot Quick Action answered HTTP 400",
@@ -338,15 +365,18 @@ describe("Browser Run PNG screenshot adapter", () => {
     });
 
     let calls = 0;
+
     const unsupported = await captureError(
       makeClient(() =>
         Effect.sync(() => {
           calls += 1;
+
           return pngResponse(new Uint8Array([137, 80, 78, 71]));
         }),
       ),
       request({ engine: "kitesurf" }),
     );
+
     expect(unsupported).toMatchObject({
       _tag: "PageCaptureUnsupportedError",
       feature: "engine",
@@ -356,10 +386,12 @@ describe("Browser Run PNG screenshot adapter", () => {
 
   it("cancels and unlocks acquired readers on success, typed failure, defect, timeout, and interruption", async () => {
     const success = trackedChunks([new Uint8Array([137, 80, 78, 71])]);
+
     await capture(makeClient(() => Effect.succeed(pngResponse(success.stream))));
     expect(success.stream.locked).toBe(false);
 
     const expectedFailure = repeatedChunks(8);
+
     await captureError(
       makeClient(() => Effect.succeed(pngResponse(expectedFailure.stream))),
       request({ maxOutputBytes: 8 }),
@@ -368,12 +400,14 @@ describe("Browser Run PNG screenshot adapter", () => {
     expect(expectedFailure.stream.locked).toBe(false);
 
     const beforeDefect = trackedChunks([new Uint8Array([137, 80, 78, 71])]);
+
     const defect = await Effect.runPromise(
       captureEffect(makeClient(() => Effect.succeed(pngResponse(beforeDefect.stream)))).pipe(
         Effect.andThen(Effect.die("defect after capture")),
         Effect.exit,
       ),
     );
+
     expect(Exit.isFailure(defect)).toBe(true);
     expect(beforeDefect.stream.locked).toBe(false);
 
@@ -381,6 +415,7 @@ describe("Browser Run PNG screenshot adapter", () => {
       Effect.gen(function* () {
         const timeoutStarted = yield* Deferred.make<void>();
         const timed = blockingStream(timeoutStarted);
+
         const timeoutFiber = yield* captureEffect(
           makeClient(() => Effect.succeed(pngResponse(timed.stream))),
         ).pipe(
@@ -390,20 +425,25 @@ describe("Browser Run PNG screenshot adapter", () => {
           }),
           Effect.forkChild,
         );
+
         yield* Deferred.await(timeoutStarted);
         const timeoutExit = yield* Fiber.await(timeoutFiber);
+
         expect(Exit.isFailure(timeoutExit)).toBe(true);
         expect(timed.cancelled()).toBe(true);
         expect(timed.stream.locked).toBe(false);
 
         const interruptedStarted = yield* Deferred.make<void>();
         const interrupted = blockingStream(interruptedStarted);
+
         const interruptedFiber = yield* Effect.forkChild(
           captureEffect(makeClient(() => Effect.succeed(pngResponse(interrupted.stream)))),
         );
+
         yield* Deferred.await(interruptedStarted);
         yield* Fiber.interrupt(interruptedFiber);
         const interruptedExit = yield* Fiber.await(interruptedFiber);
+
         expect(Exit.isFailure(interruptedExit)).toBe(true);
         expect(interrupted.cancelled()).toBe(true);
         expect(interrupted.stream.locked).toBe(false);
@@ -415,9 +455,11 @@ describe("Browser Run PNG screenshot adapter", () => {
     const sentinel = "private-screenshot-byte-sentinel";
     const encoded = new TextEncoder().encode(sentinel);
     const successBytes = new Uint8Array(8 + encoded.byteLength);
+
     successBytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
     successBytes.set(encoded, 8);
     const logs: Array<string> = [];
+
     const logger = Logger.make<unknown, void>(({ cause, message }) => {
       logs.push(`${String(message)} ${String(cause)}`);
     });
@@ -428,12 +470,14 @@ describe("Browser Run PNG screenshot adapter", () => {
         request({ maxOutputBytes: successBytes.byteLength }),
       ).pipe(Effect.provide(Logger.layer([logger]))),
     );
+
     expect(new TextDecoder().decode(result.bytes)).toContain(sentinel);
     expect(
       JSON.stringify({ implementation: result.implementation, mediaType: result.mediaType }),
     ).not.toContain(sentinel);
 
     const hostileBody = trackedChunks([encoded], { close: false });
+
     const mimeError = await Effect.runPromise(
       captureEffect(
         makeClient(() =>
@@ -443,15 +487,18 @@ describe("Browser Run PNG screenshot adapter", () => {
         ),
       ).pipe(Effect.flip, Effect.provide(Logger.layer([logger]))),
     );
+
     expect(JSON.stringify(mimeError)).not.toContain(sentinel);
 
     const cleanupFailure = repeatedChunks(8, new Error(sentinel));
+
     const limitError = await Effect.runPromise(
       captureEffect(
         makeClient(() => Effect.succeed(pngResponse(cleanupFailure.stream))),
         request({ maxOutputBytes: 8 }),
       ).pipe(Effect.flip, Effect.provide(Logger.layer([logger]))),
     );
+
     expect(limitError).toMatchObject({ _tag: "PageScreenshotOutputLimitError" });
     expect(JSON.stringify(limitError)).not.toContain(sentinel);
     expect(logs.join("\n")).toContain("Canceling the screenshot response failed");

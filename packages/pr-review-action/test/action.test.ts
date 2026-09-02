@@ -16,7 +16,12 @@ import {
   reviewEventFor,
   withActionInputs,
 } from "../src/action.ts";
-import { type ChangedFile, GitHubApiFailure, type RepositorySnapshot } from "../src/github.ts";
+import {
+  BinaryBlob,
+  type ChangedFile,
+  GitHubApiFailure,
+  type RepositorySnapshot,
+} from "../src/github.ts";
 import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
@@ -48,6 +53,7 @@ const jsonResponse = (request: TestHttpRequest, body: unknown) =>
 const decodePublishedReview = (request: TestHttpRequest) => {
   const encoded =
     request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
+
   return Schema.decodeUnknownSync(PublishedReviewBody)(JSON.parse(encoded));
 };
 
@@ -127,8 +133,10 @@ describe("immutable review source", () => {
         ignore: [],
         unavailablePaths: new Set(),
       });
+
       const source = yield* Effect.gen(function* () {
         const bound = yield* ReviewRepository;
+
         return yield* bound.readFile({
           path: "src/value.ts",
           revision: "base",
@@ -155,6 +163,7 @@ describe("immutable review source", () => {
           "source",
         ]),
       );
+
       const repository = makeReviewRepository({
         base: snapshot("base", {}),
         head: snapshot(
@@ -198,6 +207,7 @@ describe("immutable review source", () => {
           lineCount: 1,
         })
         .pipe(Effect.flip);
+
       const wide = yield* repository
         .readFile({
           path: "src/wide.ts",
@@ -219,6 +229,7 @@ describe("Action configuration", () => {
       const provider = withActionInputs(
         ConfigProvider.fromEnv({ env: { "INPUT_AUTOMATIC-REVIEW-LIMIT": "7" } }),
       );
+
       expect(yield* Config.string("PR_REVIEW_AUTOMATIC_LIMIT").parse(provider)).toBe("7");
     }),
   );
@@ -228,6 +239,7 @@ describe("Action configuration", () => {
       const provider = withActionInputs(
         ConfigProvider.fromEnv({ env: { INPUT_COMMAND: "@effect-agent review\r\n" } }),
       );
+
       expect(yield* Config.string("PR_REVIEW_COMMAND").parse(provider)).toBe(
         "@effect-agent review\r\n",
       );
@@ -241,6 +253,7 @@ describe("Action configuration", () => {
           env: { OPENAI_API_KEY: "", "INPUT_OPENAI-API-KEY": "action-key" },
         }),
       );
+
       expect(yield* Config.nonEmptyString("OPENAI_API_KEY").parse(provider)).toBe("action-key");
     }),
   );
@@ -250,14 +263,17 @@ describe("stale-head publication", () => {
   it.effect("preserves a generic publication failure without retrying", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
+
       const failure = GitHubApiFailure.make({
         operation: "publish pull request review",
         reason: "POST failed after an uncertain transport outcome",
       });
+
       const exit = yield* publishHeadBoundReview(
         Ref.update(attempts, (count) => count + 1).pipe(Effect.andThen(Effect.fail(failure))),
         { publish: () => Effect.die("Must not retry uncertain publication"), automatic: true },
       ).pipe(Effect.exit);
+
       if (Exit.isSuccess(exit)) throw new Error("Expected publication to fail");
       expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toEqual(failure);
       expect(yield* Ref.get(attempts)).toBe(1);
@@ -268,6 +284,7 @@ describe("stale-head publication", () => {
     Effect.gen(function* () {
       const pullReads = yield* Ref.make(0);
       const postBodies = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+
       const client = HttpClient.make((request, url) => {
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
           return Ref.getAndUpdate(pullReads, (count) => count + 1).pipe(
@@ -322,6 +339,7 @@ describe("stale-head publication", () => {
             url.pathname.endsWith("/git/trees/head-tree"))
         ) {
           const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
+
           return Effect.succeed(jsonResponse(request, { sha, tree: [], truncated: false }));
         }
         if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
@@ -330,8 +348,10 @@ describe("stale-head publication", () => {
             decodePublishedReview(request),
           ]).pipe(Effect.as(jsonResponse(request, { html_url: "https://github.test/review" })));
         }
+
         return Effect.die(`unexpected request ${request.method} ${url.href}`);
       });
+
       const exit = yield* runReviewAction(client, { PR_REVIEW_AUTOMATIC_LIMIT: "2" }).pipe(
         Effect.exit,
       );
@@ -354,6 +374,7 @@ describe("stale-head publication", () => {
 
       yield* runReviewAction(client, { PR_REVIEW_AUTOMATIC_LIMIT: "2" });
       const posts = yield* Ref.get(postBodies);
+
       expect(posts).toHaveLength(2);
       expect(posts[1]).toEqual({
         commit_id: "current-head",
@@ -372,10 +393,12 @@ describe("Manual command acknowledgement", () => {
   it.effect("PRR-007 reacts before reading pull-request state", () =>
     Effect.gen(function* () {
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const client = HttpClient.make((request, url) => {
         const wire = url.pathname.endsWith("/reactions")
           ? { id: 1, content: "eyes" }
           : pullRequestWire("Draft pull request", "base", "head", true);
+
         return recordJsonResponse(requests, request, url, wire);
       });
 
@@ -404,8 +427,10 @@ describe("Incremental review scope", () => {
         const path = "retired-action/dist/index.mjs";
         const published: Array<typeof PublishedReviewBody.Type> = [];
         const classified: Array<string> = [];
+
         const client = HttpClient.make((request, url) => {
           let body: unknown;
+
           if (url.pathname.endsWith("/pulls/12")) {
             body = pullRequestWire("Delete generated output", "target", "head");
           } else if (request.method === "GET" && url.pathname.endsWith("/reviews")) {
@@ -418,9 +443,11 @@ describe("Incremental review scope", () => {
             body = { merge_base_commit: { sha: "trusted-base" } };
           } else if (url.pathname.includes("/git/commits/")) {
             const revision = url.pathname.split("/").at(-1);
+
             body = { sha: revision, tree: { sha: `${revision}-tree` } };
           } else if (url.pathname.includes("/git/trees/")) {
             const tree = url.pathname.split("/").at(-1);
+
             body = {
               sha: tree,
               truncated: false,
@@ -431,6 +458,7 @@ describe("Incremental review scope", () => {
             };
           } else if (url.pathname === "/graphql") {
             if (request.body._tag !== "Uint8Array") throw new Error("Expected GraphQL JSON");
+
             const query = Schema.decodeUnknownSync(
               Schema.fromJsonString(
                 Schema.Struct({
@@ -438,6 +466,7 @@ describe("Incremental review scope", () => {
                 }),
               ),
             )(new TextDecoder().decode(request.body.body));
+
             expect(query.variables.path).toBe(path);
             classified.push(query.variables.revision);
             body = unavailable
@@ -458,15 +487,82 @@ describe("Incremental review scope", () => {
           } else {
             return Effect.die(`must not read bundle contents or call a model: ${url.href}`);
           }
+
           return Effect.succeed(jsonResponse(request, body));
         });
+
         const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: mode }).pipe(Effect.exit);
+
         expect(classified).toEqual(["trusted-base"]);
         expect(Exit.isSuccess(exit)).toBe(!unavailable);
         expect(published).toHaveLength(1);
         expect(published[0]?.body).toContain(reviewMarker(false, !unavailable));
         if (!unavailable) expect(published[0]?.body).toContain("1 ignored");
       }),
+  );
+
+  it.effect("completes a binary-only PR without fetching blobs or calling a model", () =>
+    Effect.gen(function* () {
+      const published = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+
+      const client = HttpClient.make((request, url) => {
+        let response: unknown;
+
+        if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
+          return Ref.update(published, (values) => [
+            ...values,
+            decodePublishedReview(request),
+          ]).pipe(
+            Effect.as(
+              jsonResponse(request, {
+                html_url: "https://github.test/reve-ai/example/pull/12#review",
+              }),
+            ),
+          );
+        }
+        if (url.pathname.endsWith("/pulls/12")) {
+          response = pullRequestWire("Update icons", "base", "head");
+        } else if (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files")) {
+          response = [];
+        } else if (url.pathname.includes("/compare/")) {
+          response = { merge_base_commit: { sha: "base" } };
+        } else if (url.pathname.includes("/git/commits/")) {
+          const sha = url.pathname.endsWith("/base") ? "base" : "head";
+
+          response = { sha, tree: { sha: `${sha}-tree` } };
+        } else if (url.pathname.includes("/git/trees/")) {
+          const sha = url.pathname.endsWith("/base-tree") ? "base-tree" : "head-tree";
+
+          response = {
+            sha,
+            truncated: false,
+            tree:
+              sha === "base-tree"
+                ? []
+                : [
+                    {
+                      path: "assets/icon.png",
+                      sha: "image",
+                      mode: "100644",
+                      type: "blob",
+                      size: 20_000_000,
+                    },
+                  ],
+          };
+        } else {
+          return Effect.die(`unexpected request ${request.method} ${url.href}`);
+        }
+
+        return Effect.succeed(jsonResponse(request, response));
+      });
+
+      yield* runReviewAction(client);
+      const reviews = yield* Ref.get(published);
+
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]?.body).toContain("1 ignored");
+      expect(reviews[0]?.body).toContain(reviewMarker(true, true));
+    }),
   );
 
   it("publishes blocking findings as a head-bound change request", () => {
@@ -515,17 +611,21 @@ describe("Incremental review scope", () => {
           `Review coverage is incomplete.\n\n${reviewMarker(true, false)}`,
         ]) {
           const requests = yield* Ref.make<ReadonlyArray<string>>([]);
+
           const client = HttpClient.make((request, url) => {
             const response = url.pathname.endsWith("/reviews")
               ? [reviewHistoryWire(1, body, "head", "2026-08-25T00:00:00Z")]
               : url.pathname.endsWith("/pulls/12")
                 ? pullRequestWire("Keep a failed check red", "base", "head")
                 : undefined;
+
             if (response === undefined) {
               return Effect.die(`unexpected request ${request.method} ${url.href}`);
             }
+
             return recordJsonResponse(requests, request, url, response);
           });
+
           const exit = yield* runReviewAction(client).pipe(Effect.exit);
 
           expect(Exit.isFailure(exit)).toBe(true);
@@ -545,10 +645,13 @@ describe("Incremental review scope", () => {
           const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>(
             [],
           );
+
           const requests = yield* Ref.make<ReadonlyArray<string>>([]);
           let pullReads = 0;
+
           const client = HttpClient.make((request, url) => {
             let response: unknown;
+
             if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
               response = pullRequestWire(
                 "Record preparation failures",
@@ -577,15 +680,19 @@ describe("Incremental review scope", () => {
               };
             } else if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
               const publishedWire = decodePublishedReview(request);
+
               response = { html_url: "https://github.test/reve-ai/example/pull/12#review" };
+
               return Ref.update(publishedWires, (current) => [...current, publishedWire]).pipe(
                 Effect.andThen(recordJsonResponse(requests, request, url, response)),
               );
             } else {
               return Effect.die(`unexpected request ${request.method} ${url.href}`);
             }
+
             return recordJsonResponse(requests, request, url, response);
           });
+
           const exit = yield* runReviewAction(
             client,
             failureKind === "missing-guidance"
@@ -595,6 +702,7 @@ describe("Incremental review scope", () => {
 
           expect(Exit.isFailure(exit)).toBe(true);
           const wires = yield* Ref.get(publishedWires);
+
           if (failureKind === "truncated-tree") {
             if (!Exit.isFailure(exit)) return;
             expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
@@ -634,6 +742,7 @@ describe("Incremental review scope", () => {
       const currentMergeBase = "current-merge-base";
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
       const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+
       const client = HttpClient.make((request, url) => {
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
           return recordJsonResponse(
@@ -677,6 +786,7 @@ describe("Incremental review scope", () => {
         }
         if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
           const wire = decodePublishedReview(request);
+
           return Ref.update(publishedWires, (current) => [...current, wire]).pipe(
             Effect.andThen(
               recordJsonResponse(requests, request, url, {
@@ -685,8 +795,10 @@ describe("Incremental review scope", () => {
             ),
           );
         }
+
         return Effect.die(`unexpected request ${request.method} ${url.href}`);
       });
+
       const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: "incremental" }).pipe(
         Effect.exit,
       );
@@ -697,10 +809,12 @@ describe("Incremental review scope", () => {
         IncrementalScopeUnavailable.make({ priorMergeBase, currentMergeBase }),
       );
       const observed = yield* Ref.get(requests);
+
       expect(observed.filter((value) => value.includes("/compare/"))).toHaveLength(2);
       expect(observed.some((value) => value.includes("/git/trees/"))).toBe(false);
       expect(observed.some((value) => value.includes("/git/blobs/"))).toBe(false);
       const published = yield* Ref.get(publishedWires);
+
       expect(published[0]?.body).toContain("The merge base changed.");
       expect(published).toEqual([
         {
@@ -723,6 +837,7 @@ describe("Incremental review scope", () => {
         const currentMergeBase = "current-merge-base";
         const requests = yield* Ref.make<ReadonlyArray<string>>([]);
         const publishedWires = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+
         const client = HttpClient.make((request, url) => {
           if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
             return recordJsonResponse(
@@ -787,10 +902,12 @@ describe("Incremental review scope", () => {
               url.pathname.endsWith("/git/trees/head-tree"))
           ) {
             const sha = url.pathname.endsWith("base-tree") ? "base-tree" : "head-tree";
+
             return recordJsonResponse(requests, request, url, { sha, tree: [], truncated: false });
           }
           if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
             const wire = decodePublishedReview(request);
+
             return Ref.update(publishedWires, (current) => [...current, wire]).pipe(
               Effect.andThen(
                 recordJsonResponse(requests, request, url, {
@@ -799,12 +916,15 @@ describe("Incremental review scope", () => {
               ),
             );
           }
+
           return Effect.die(`unexpected request ${request.method} ${url.href}`);
         });
+
         const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: mode }).pipe(Effect.exit);
 
         expect(Exit.isSuccess(exit)).toBe(true);
         const observed = yield* Ref.get(requests);
+
         expect(observed.filter((value) => value.includes("/compare/"))).toEqual([
           `GET /repos/reve-ai/example/compare/${targetHead}...${currentHead}`,
           ...(mode === "auto"
@@ -838,14 +958,17 @@ describe("Incremental review scope", () => {
       const targetBlob = "7".repeat(40);
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
       const publishedBodies = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const treeBlobs = new Map([
         [targetTree, targetBlob],
         [reviewedTree, unchangedBlob],
         [currentTree, unchangedBlob],
       ]);
+
       const client = HttpClient.make((request, url) => {
         const requestedTree = [...treeBlobs].find(([tree]) => url.pathname.endsWith(tree));
         let body: unknown;
+
         if (request.method === "POST" && url.pathname.endsWith("/reactions")) {
           body = { id: 1, content: "eyes" };
         } else if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
@@ -872,6 +995,7 @@ describe("Incremental review scope", () => {
           body = { sha: currentHead, tree: { sha: currentTree } };
         } else if (request.method === "GET" && requestedTree !== undefined) {
           const [tree, blob] = requestedTree;
+
           body = {
             sha: tree,
             truncated: false,
@@ -893,13 +1017,16 @@ describe("Incremental review scope", () => {
           };
         } else if (request.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
           const published = decodePublishedReview(request);
+
           body = { html_url: "https://github.test/reve-ai/example/pull/12#review" };
+
           return Ref.update(publishedBodies, (current) => [...current, published.body]).pipe(
             Effect.andThen(recordJsonResponse(requests, request, url, body)),
           );
         } else {
           return Effect.die(new Error(`unexpected request ${request.method} ${url.href}`));
         }
+
         return recordJsonResponse(requests, request, url, body);
       });
 
@@ -910,6 +1037,7 @@ describe("Incremental review scope", () => {
 
       const requested = yield* Ref.get(requests);
       const published = yield* Ref.get(publishedBodies);
+
       expect(requested.some((request) => request.includes("/compare/"))).toBe(true);
       expect(requested.filter((request) => request.includes("/git/trees/"))).toHaveLength(2);
       expect(published).toHaveLength(1);
@@ -961,6 +1089,7 @@ describe("exact review delta", () => {
   it.effect("ignores a deleted generated bundle before reading it, even after policy removal", () =>
     Effect.gen(function* () {
       const path = "retired-action/dist/index.mjs";
+
       const base = treeSnapshot(
         "trusted-base",
         {
@@ -969,7 +1098,9 @@ describe("exact review delta", () => {
         },
         new Set([path]),
       );
+
       const head = treeSnapshot("head", {});
+
       const surface = yield* hydrateExactChanges({
         files: base.paths.map((path) => ({ ...file(path, undefined), status: "removed" })),
         changedPaths: base.paths,
@@ -982,12 +1113,14 @@ describe("exact review delta", () => {
       expect(surface.ignoredPaths).toEqual([path]);
       expect(surface.unreviewedPaths).toEqual([]);
       expect(surface.changes.map((change) => change.path)).toEqual([".gitattributes"]);
+
       const repository = makeReviewRepository({
         base,
         head,
         ignore: [],
         unavailablePaths: surface.unavailablePaths,
       });
+
       expect(
         yield* repository
           .readFile({ path, revision: "base", startLine: 1, lineCount: 1 })
@@ -1003,15 +1136,18 @@ describe("exact review delta", () => {
         previousPath: "generated/old.ts",
         status: "renamed",
       };
+
       const before = treeSnapshot("base", {
         "generated/old.ts": "export const value = 1;\n",
         "generated/mode.ts": "export const mode = 1;\n",
       });
+
       const after = treeSnapshot("head", {
         "src/new.ts": "export const value = 1;\n",
         "generated/added.ts": "export const added = 1;\n",
         "generated/mode.ts": "export const mode = 1;\n",
       });
+
       const surface = yield* hydrateExactChanges({
         files: [
           renamed,
@@ -1024,6 +1160,7 @@ describe("exact review delta", () => {
           ...after,
           entry: (path) => {
             const entry = after.entry(path);
+
             return path === "generated/mode.ts" && entry !== undefined
               ? { ...entry, mode: "100755" }
               : entry;
@@ -1047,11 +1184,13 @@ describe("exact review delta", () => {
       const previousPath = "src/old-name.ts";
       const path = "src/new-name.ts";
       const unchanged = `export const value = "${"x".repeat(90_000)}";\n`;
+
       const renamed: ChangedFile = {
         ...file(path, undefined),
         previousPath,
         status: "renamed",
       };
+
       const surface = yield* hydrateExactChanges({
         files: [renamed],
         changedPaths: [previousPath, path],
@@ -1070,10 +1209,157 @@ describe("exact review delta", () => {
     }),
   );
 
+  it.effect("ignores binary assets before hydration and preserves capacity for text assets", () =>
+    Effect.gen(function* () {
+      const binaries = [
+        ...Array.from({ length: 101 }, (_, index) => `assets/${index}.PNG`),
+        "assets/font.woff2",
+        "assets/video.mp4",
+        "assets/archive.zip",
+        "assets/manual.pdf",
+      ];
+
+      const text = { "src/main.ts": "export const value = 1;", "assets/icon.svg": "<svg/>" };
+      const base = treeSnapshot("base", {});
+
+      const head = treeSnapshot(
+        "head",
+        {
+          ...Object.fromEntries(binaries.map((path) => [path, "not text"])),
+          ...text,
+          "assets/unchanged.jpg": "not text",
+        },
+        new Set([...binaries, "assets/unchanged.jpg"]),
+      );
+
+      const surface = yield* hydrateExactChanges({
+        files: [],
+        changedPaths: [...binaries, ...Object.keys(text)],
+        base,
+        head,
+        ignore: [],
+      });
+
+      expect(surface.ignoredPaths).toEqual([...binaries].sort());
+      expect(surface.unreviewedPaths).toEqual([]);
+      expect(surface.changes.map(({ path }) => path)).toEqual(Object.keys(text).sort());
+
+      const repository = makeReviewRepository({
+        base,
+        head,
+        ignore: [],
+        unavailablePaths: surface.unavailablePaths,
+      });
+
+      expect((yield* repository.findFiles({ revision: "head", query: "assets/" })).paths).toEqual([
+        "assets/icon.svg",
+      ]);
+      expect(
+        yield* repository
+          .readFile({ revision: "head", path: "assets/unchanged.jpg", startLine: 1, lineCount: 1 })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "ReviewContextError" });
+    }),
+  );
+
+  it.effect.each([false, true])("preserves the textual side of a binary rename: %s", (reverse) =>
+    Effect.gen(function* () {
+      const previousPath = reverse ? "src/icon.ts" : "assets/icon.png";
+      const path = reverse ? "assets/icon.png" : "src/icon.ts";
+      const content = "export const icon = true;\n";
+      const base = treeSnapshot("base", { [previousPath]: content }, new Set(["assets/icon.png"]));
+      const head = treeSnapshot("head", { [path]: content }, new Set(["assets/icon.png"]));
+
+      const surface = yield* hydrateExactChanges({
+        files: [{ ...file(path, undefined), previousPath, status: "renamed" }],
+        changedPaths: [previousPath, path],
+        base,
+        head,
+        ignore: [],
+      });
+
+      expect(surface.ignoredPaths).toEqual(["assets/icon.png"]);
+      expect(surface.unreviewedPaths).toEqual([]);
+      expect(surface.changes).toHaveLength(1);
+      expect(surface.changes[0]?.path).toBe("src/icon.ts");
+      expect(surface.changes[0]?.patch).toContain(`${reverse ? "-" : "+"}${content}`);
+      expect(surface.changes[0]?.patch).not.toContain("rename from");
+
+      const repository = makeReviewRepository({
+        base,
+        head,
+        ignore: [],
+        unavailablePaths: surface.unavailablePaths,
+      });
+
+      expect(
+        (yield* repository.findFiles({ revision: reverse ? "base" : "head", query: "src/" })).paths,
+      ).toEqual(["src/icon.ts"]);
+      yield* repository.readFile({
+        revision: reverse ? "base" : "head",
+        path: "src/icon.ts",
+        startLine: 1,
+        lineCount: 1,
+      });
+    }),
+  );
+
+  it.effect.each(
+    (["addition", "deletion", "binary", "failure"] as const).flatMap((mode) =>
+      [false, true].map((renamed) => ({ mode, renamed })),
+    ),
+  )(
+    "preserves text and read failures beside content-detected binaries: $mode, renamed=$renamed",
+    ({ mode, renamed }) =>
+      Effect.gen(function* () {
+        const path = "assets/unknown";
+        const previousPath = renamed ? "assets/old" : path;
+        const textPath = mode === "deletion" ? previousPath : path;
+
+        const surface = yield* hydrateExactChanges({
+          files: renamed ? [{ ...file(path, undefined), previousPath, status: "renamed" }] : [],
+          changedPaths: renamed ? [previousPath, path] : [path],
+          ignore: [],
+          base: {
+            ...treeSnapshot("base", { [previousPath]: "binary" }),
+            readTextFile: () =>
+              mode === "deletion"
+                ? Effect.succeed("text")
+                : Effect.fail(BinaryBlob.make({ sha: "binary" })),
+          },
+          head: {
+            ...treeSnapshot("head", { [path]: "text" }),
+            readTextFile: () =>
+              mode === "failure"
+                ? Effect.fail(
+                    GitHubApiFailure.make({ operation: "get Git blob", reason: "unavailable" }),
+                  )
+                : mode === "addition"
+                  ? Effect.succeed("text")
+                  : Effect.fail(BinaryBlob.make({ sha: "binary" })),
+          },
+        });
+
+        expect(surface.ignoredPaths).toEqual(mode === "binary" ? [path] : []);
+        expect(surface.unreviewedPaths).toEqual(mode === "failure" ? [path] : []);
+        if (mode === "addition" || mode === "deletion") {
+          expect(surface.changes).toHaveLength(1);
+          expect(surface.changes[0]?.path).toBe(textPath);
+          expect(surface.changes[0]?.patch).toContain(mode === "addition" ? "+text" : "-text");
+          expect(surface.changes[0]?.patch).not.toContain("rename from");
+          expect(surface.unavailablePaths.has(textPath)).toBe(false);
+        } else {
+          expect(surface.changes).toEqual([]);
+          expect(surface.unavailablePaths.has(path)).toBe(true);
+        }
+      }),
+  );
+
   it.effect("keeps expected blob read failures as coverage gaps and admits other files", () =>
     Effect.gen(function* () {
       const paths = ["src/a.ts", "src/b.ts"];
       const head = treeSnapshot("head", { "src/a.ts": "a", "src/b.ts": "b" });
+
       const surface = yield* hydrateExactChanges({
         files: paths.map((path) => file(path, undefined)),
         changedPaths: paths,
@@ -1104,6 +1390,7 @@ describe("exact review delta", () => {
     Effect.gen(function* () {
       const paths = ["src/a.ts", "src/b.ts"];
       const reads: Array<string> = [];
+
       const exit = yield* hydrateExactChanges({
         files: paths.map((path) => file(path, undefined)),
         changedPaths: paths,
@@ -1129,14 +1416,17 @@ describe("exact review delta", () => {
         const previousPath = "generated/old.ts";
         const path = "src/new.ts";
         const content = "export const generated = true;\n";
+
         const renamed: ChangedFile = {
           ...file(path, undefined),
           previousPath,
           status: "renamed",
         };
+
         for (const ignoredAlias of [previousPath, path]) {
           const base = treeSnapshot("base", { [previousPath]: content });
           const head = treeSnapshot("head", { [path]: content });
+
           const surface = yield* hydrateExactChanges({
             files: [renamed],
             changedPaths: [previousPath, path],
@@ -1144,6 +1434,7 @@ describe("exact review delta", () => {
             head,
             ignore: [ignoredAlias],
           });
+
           const repository = makeReviewRepository({
             base,
             head,
@@ -1171,11 +1462,13 @@ describe("exact review delta", () => {
     Effect.gen(function* () {
       const previousPath = "src/old-name.ts";
       const path = "src/new-name.ts";
+
       const renamed: ChangedFile = {
         ...file(path, undefined),
         previousPath,
         status: "renamed",
       };
+
       const surface = yield* hydrateExactChanges({
         files: [renamed],
         changedPaths: [path],
@@ -1196,11 +1489,14 @@ describe("exact review delta", () => {
         { length: 102 },
         (_, index) => `src/file-${String(index).padStart(3, "0")}.ts`,
       );
+
       const ignored = paths[0] ?? "";
       const afterCap = paths.at(-1) ?? "";
+
       const contents = Object.fromEntries(
         paths.map((path) => [path, `export const p = '${path}';\n`]),
       );
+
       const surface = yield* hydrateExactChanges({
         files: paths.map((path) => file(path, undefined)),
         changedPaths: paths,
@@ -1221,6 +1517,7 @@ describe("exact review delta", () => {
     () =>
       Effect.gen(function* () {
         const paths = ["docs/a.md", "docs/b.md", "docs/c.md", "docs/d.md", "src/e.ts"];
+
         const surface = yield* hydrateExactChanges({
           files: paths.map((path) => file(path, undefined)),
           changedPaths: paths,
@@ -1258,7 +1555,9 @@ describe("exact review delta", () => {
           "formal/SubagentEstablishment.tla":
             "child establishment and ownership invariant\n".repeat(2_100),
         };
+
         const paths = Object.keys(contents);
+
         const surface = yield* hydrateExactChanges({
           files: paths.map((path) => ({ ...file(path, undefined), status })),
           changedPaths: paths,
@@ -1273,6 +1572,7 @@ describe("exact review delta", () => {
         for (const change of surface.changes) {
           const source = contents[change.path] ?? "";
           const prefix = status === "added" ? "+" : "-";
+
           expect(change.patch.length).toBeGreaterThan(80_000);
           expect(change.patch).toContain(
             source
@@ -1290,6 +1590,7 @@ describe("exact review delta", () => {
       const path = "src/large.ts";
       const base = treeSnapshot("base", {});
       const head = treeSnapshot("head", { [path]: "export const large = true;\n".repeat(10_000) });
+
       const surface = yield* hydrateExactChanges({
         files: [file(path, undefined)],
         changedPaths: [path],
@@ -1297,12 +1598,14 @@ describe("exact review delta", () => {
         head,
         ignore: [],
       });
+
       const repository = makeReviewRepository({
         base,
         head,
         ignore: [],
         unavailablePaths: surface.unavailablePaths,
       });
+
       expect(surface.changes).toEqual([]);
       expect(surface.exclusions).toEqual([{ path, reason: "patch-limit" }]);
       expect((yield* repository.findFiles({ revision: "head", query: "large" })).paths).toEqual([
@@ -1318,6 +1621,7 @@ describe("exact review delta", () => {
   it.effect("excludes an earlier same-file change from the incremental patch", () =>
     Effect.gen(function* () {
       const path = "src/example.ts";
+
       const reviewed = [
         "const defect = 'already reviewed';",
         ...Array.from(
@@ -1326,7 +1630,9 @@ describe("exact review delta", () => {
         ),
         "export const tail = 1;",
       ].join("\n");
+
       const current = reviewed.replace("export const tail = 1;", "export const tail = 2;");
+
       const snapshot = (revision: string, sha: string, content: string): RepositorySnapshot => ({
         revision,
         paths: [path],
@@ -1353,12 +1659,14 @@ describe("exact review delta", () => {
   it.effect("keeps an unsupported changed tree entry unavailable", () =>
     Effect.gen(function* () {
       const path = "vendor/dependency";
+
       const base: RepositorySnapshot = {
         revision: "base",
         paths: [path],
         entry: () => ({ sha: "a".repeat(40), mode: "160000", type: "commit" }),
         readTextFile: () => Effect.die("must not read a submodule as text"),
       };
+
       const head: RepositorySnapshot = {
         ...base,
         revision: "head",
@@ -1380,6 +1688,7 @@ describe("exact review delta", () => {
   it.effect("hydrates a path reverted out of the current pull-request file list", () =>
     Effect.gen(function* () {
       const path = "src/reverted.ts";
+
       const snapshot = (revision: string, sha: string, content: string): RepositorySnapshot => ({
         revision,
         paths: [path],

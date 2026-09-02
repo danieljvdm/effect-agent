@@ -69,11 +69,13 @@ const jsonResponse = (value: unknown, status = 200, headers: HeadersInit = {}) =
   });
 
 const createResponse = () => jsonResponse({ success: true, result: JOB_ID });
+
 const deleteResponse = () =>
   jsonResponse({
     success: true,
     result: { job_id: JOB_ID, message: "cancelled" },
   });
+
 const resultResponse = (
   status:
     | "running"
@@ -116,6 +118,7 @@ const record = (
 
 const bodyValue = (request: Parameters<Parameters<typeof HttpClient.make>[0]>[0]): unknown => {
   if (request.body._tag !== "Uint8Array") return undefined;
+
   return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(
     new TextDecoder().decode(request.body.body),
   );
@@ -127,6 +130,7 @@ const runCrawl = (
 ): Effect.Effect<ReadonlyArray<PageCrawlRecord>, PageCrawlError> =>
   Effect.gen(function* () {
     const crawl = yield* PageCrawl;
+
     return yield* crawl.crawl(input).pipe(Stream.runCollect);
   }).pipe(
     Effect.scoped,
@@ -146,6 +150,7 @@ const resultClient = (
 ): HttpClient.HttpClient =>
   HttpClient.make((request, url) => {
     onRequest?.(request.method, url);
+
     const response =
       request.method === "POST"
         ? createResponse()
@@ -154,12 +159,14 @@ const resultClient = (
           : url.searchParams.has("limit")
             ? resultResponse("completed")
             : resultResponse("completed", records, cursor);
+
     return Effect.succeed(HttpClientResponse.fromWeb(request, response));
   });
 
 describe("Browser Run REST PageCrawl adapter", () => {
   it("keeps its Node-safe HttpClient requirement visible", () => {
     const proof: RestCrawlRequiresHttpClient = true;
+
     expect(proof).toBe(true);
   });
 
@@ -171,8 +178,10 @@ describe("Browser Run REST PageCrawl adapter", () => {
         readonly authorization: string | undefined;
         readonly body: unknown;
       }> = [];
+
       const firstPoll = yield* Deferred.make<void>();
       let statusCalls = 0;
+
       const client = HttpClient.make((request, url) =>
         Effect.gen(function* () {
           calls.push({
@@ -182,6 +191,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
             body: bodyValue(request),
           });
           let response: Response;
+
           if (request.method === "POST") {
             response = createResponse();
           } else if (request.method === "DELETE") {
@@ -199,11 +209,13 @@ describe("Browser Run REST PageCrawl adapter", () => {
               7,
             );
           }
+
           return HttpClientResponse.fromWeb(request, response);
         }),
       );
 
       const fiber = yield* runCrawl(client).pipe(Effect.forkChild);
+
       yield* Deferred.await(firstPoll);
       yield* TestClock.adjust("1 second");
       const records = yield* Fiber.join(fiber);
@@ -235,13 +247,16 @@ describe("Browser Run REST PageCrawl adapter", () => {
   it.effect("accepts a within-limit poll record larger than the control response budget", () =>
     Effect.gen(function* () {
       const markdown = `# Large\n${"x".repeat(70 * 1_024)}`;
+
       const client = HttpClient.make((request) => {
         const response =
           request.method === "POST"
             ? createResponse()
             : resultResponse("completed", [record("large", "completed", markdown)]);
+
         return Effect.succeed(HttpClientResponse.fromWeb(request, response));
       });
+
       const records = yield* runCrawl(
         client,
         crawlRequest({
@@ -250,6 +265,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
           maxTotalBytes: 8 * 1_024 * 1_024,
         }),
       );
+
       expect(records).toHaveLength(1);
       expect(records[0]?.markdown).toBe(markdown);
     }),
@@ -265,10 +281,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
         "errored",
         "cancelled",
       ] as const;
+
       const records = yield* runCrawl(
         resultClient(statuses.map((status, index) => record(String(index), status, "# page"))),
         crawlRequest({ maxPages: 6, maxTotalBytes: 6_144 }),
       );
+
       expect(records.map((value) => value.status)).toEqual(statuses);
     }),
   );
@@ -282,6 +300,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
         "cancelled_due_to_limits",
       ] as const) {
         let deletes = 0;
+
         const client = HttpClient.make((request) => {
           const response =
             request.method === "POST"
@@ -289,9 +308,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
               : request.method === "DELETE"
                 ? ((deletes += 1), deleteResponse())
                 : resultResponse(status);
+
           return Effect.succeed(HttpClientResponse.fromWeb(request, response));
         });
+
         const error = yield* runCrawl(client).pipe(Effect.flip);
+
         expect(error).toMatchObject({ _tag: "PageCrawlTerminalError", status });
         expect(deletes).toBe(0);
       }
@@ -301,16 +323,21 @@ describe("Browser Run REST PageCrawl adapter", () => {
   it.effect("classifies create throttling and rejects a malformed job status", () =>
     Effect.gen(function* () {
       let createRateDeletes = 0;
+
       const createRateClient = HttpClient.make((request) => {
         if (request.method === "DELETE") createRateDeletes += 1;
+
         const response = jsonResponse(
           { success: false, errors: [{ message: "daily quota exhausted" }] },
           429,
           { "retry-after": "4" },
         );
+
         return Effect.succeed(HttpClientResponse.fromWeb(request, response));
       });
+
       const rate = yield* runCrawl(createRateClient).pipe(Effect.flip);
+
       expect(rate).toMatchObject({
         _tag: "PageCrawlRateLimitedError",
         reason: "quota",
@@ -319,6 +346,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
       expect(createRateDeletes).toBe(0);
 
       let malformedDeletes = 0;
+
       const malformedStatusClient = HttpClient.make((request) => {
         const response =
           request.method === "POST"
@@ -333,9 +361,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
                     records: [],
                   },
                 });
+
         return Effect.succeed(HttpClientResponse.fromWeb(request, response));
       });
+
       const malformed = yield* runCrawl(malformedStatusClient).pipe(Effect.flip);
+
       expect(malformed).toMatchObject({ _tag: "PageCrawlProtocolError" });
       expect(malformedDeletes).toBe(1);
     }),
@@ -346,10 +377,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
       for (const deleteStatus of [200, 500]) {
         let deletes = 0;
         const warnings: Array<string> = [];
+
         const logger = Logger.make<unknown, void>(({ logLevel, message }) => {
           if (logLevel !== "Warn") return;
           warnings.push(Array.isArray(message) ? message.join(" ") : String(message));
         });
+
         const client = HttpClient.make((request) => {
           const response =
             request.method === "POST"
@@ -362,12 +395,15 @@ describe("Browser Run REST PageCrawl adapter", () => {
                 : jsonResponse({ success: false, errors: [{ message: "rate limited" }] }, 429, {
                     "retry-after": "7",
                   });
+
           return Effect.succeed(HttpClientResponse.fromWeb(request, response));
         });
+
         const exit = yield* runCrawl(client).pipe(
           Effect.exit,
           Effect.provide(Logger.layer([logger])),
         );
+
         if (Exit.isSuccess(exit)) return yield* Effect.die("crawl unexpectedly succeeded");
         expect(deletes).toBe(1);
         expect(Cause.squash(exit.cause)).toMatchObject({
@@ -388,18 +424,23 @@ describe("Browser Run REST PageCrawl adapter", () => {
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       let deletes = 0;
+
       const client = HttpClient.make((request) =>
         request.method === "POST"
           ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.sync(() => {
               if (request.method === "DELETE") deletes += 1;
+
               return HttpClientResponse.fromWeb(request, deleteResponse());
             }),
       );
+
       const fiber = yield* runCrawl(client).pipe(Effect.forkChild);
+
       yield* Deferred.await(started);
       yield* Fiber.interrupt(fiber);
       const exit = yield* Fiber.await(fiber);
+
       expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
       expect(deletes).toBe(0);
     }),
@@ -412,12 +453,14 @@ describe("Browser Run REST PageCrawl adapter", () => {
       ) {
         const polling = yield* Deferred.make<void>();
         let deletes = 0;
+
         const client = HttpClient.make((request) => {
           if (request.method === "POST") {
             return Effect.succeed(HttpClientResponse.fromWeb(request, createResponse()));
           }
           if (request.method === "DELETE") {
             deletes += 1;
+
             return Effect.succeed(HttpClientResponse.fromWeb(request, deleteResponse()));
           }
           if (mode === "defect") return Effect.die("poll defect");
@@ -426,17 +469,22 @@ describe("Browser Run REST PageCrawl adapter", () => {
               Effect.as(HttpClientResponse.fromWeb(request, resultResponse("running"))),
             );
           }
+
           return Deferred.succeed(polling, undefined).pipe(Effect.andThen(Effect.never));
         });
+
         const effect = runCrawl(
           client,
           mode === "deadline" ? crawlRequest({ deadlineMillis: 1_000 }) : crawlRequest(),
         );
+
         const fiber = yield* effect.pipe(Effect.forkChild);
+
         if (mode !== "defect") yield* Deferred.await(polling);
         if (mode === "deadline") yield* TestClock.adjust("1 second");
         if (mode === "interruption") yield* Fiber.interrupt(fiber);
         const exit = yield* Fiber.await(fiber);
+
         expect(Exit.isFailure(exit)).toBe(true);
         if (mode === "deadline" && Exit.isFailure(exit)) {
           expect(Cause.squash(exit.cause)).toMatchObject({
@@ -455,19 +503,24 @@ describe("Browser Run REST PageCrawl adapter", () => {
 
       const polling = yield* Deferred.make<void>();
       let deletes = 0;
+
       const earlyCloseClient = HttpClient.make((request) => {
         if (request.method === "POST") {
           return Effect.succeed(HttpClientResponse.fromWeb(request, createResponse()));
         }
         if (request.method === "DELETE") {
           deletes += 1;
+
           return Effect.succeed(HttpClientResponse.fromWeb(request, deleteResponse()));
         }
+
         return Deferred.succeed(polling, undefined).pipe(Effect.andThen(Effect.never));
       });
+
       yield* Effect.gen(function* () {
         const crawl = yield* PageCrawl;
         const pull = yield* Stream.toPull(crawl.crawl(crawlRequest()));
+
         yield* Effect.forkChild(pull);
         yield* Deferred.await(polling);
       }).pipe(
@@ -509,10 +562,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
           observed: 6,
         },
       ] as const;
+
       for (const scenario of cases) {
         const error = yield* runCrawl(resultClient(scenario.records), scenario.input).pipe(
           Effect.flip,
         );
+
         expect(error).toMatchObject({
           _tag: "PageCrawlLimitError",
           limit: scenario.limit,
@@ -533,6 +588,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
         },
       ]) {
         const error = yield* runCrawl(resultClient([hostile])).pipe(Effect.flip);
+
         expect(error).toMatchObject({ _tag: "PageCrawlProtocolError" });
         expect(error.message).toContain("off-host");
       }
@@ -543,10 +599,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
     Effect.gen(function* () {
       for (const cursor of ["", "x".repeat(1_025), -1, Number.MAX_SAFE_INTEGER + 1]) {
         const error = yield* runCrawl(resultClient([record("one")], cursor)).pipe(Effect.flip);
+
         expect(error).toMatchObject({ _tag: "PageCrawlProtocolError" });
       }
 
       let resultGets = 0;
+
       const client = HttpClient.make((request, url) => {
         const response =
           request.method === "POST"
@@ -559,9 +617,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
                   resultGets === 1
                     ? resultResponse("completed", [record("one")], 1)
                     : resultResponse("completed", [record("two")], "1"));
+
         return Effect.succeed(HttpClientResponse.fromWeb(request, response));
       });
+
       const repeated = yield* runCrawl(client).pipe(Effect.flip);
+
       expect(repeated).toMatchObject({ _tag: "PageCrawlProtocolError" });
       expect(repeated.message).toContain("repeated");
       expect(resultGets).toBe(2);
@@ -572,6 +633,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
     Effect.gen(function* () {
       const resultUrls: Array<string> = [];
       let deletes = 0;
+
       const client = resultClient(
         [record("one", "completed", "# one"), record("two", "completed", "# two")],
         "next",
@@ -580,8 +642,10 @@ describe("Browser Run REST PageCrawl adapter", () => {
           if (method === "GET" && !url.searchParams.has("limit")) resultUrls.push(url.href);
         },
       );
+
       const values = yield* Effect.gen(function* () {
         const crawl = yield* PageCrawl;
+
         return yield* crawl.crawl(crawlRequest()).pipe(Stream.take(1), Stream.runCollect);
       }).pipe(
         Effect.scoped,
@@ -593,6 +657,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
         ),
         Effect.provideService(HttpClient.HttpClient, client),
       );
+
       expect(values).toHaveLength(1);
       expect(resultUrls).toEqual([`${API_PATH}/${JOB_ID}`]);
       expect(deletes).toBe(0);
@@ -603,6 +668,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
     Effect.gen(function* () {
       let reads = 0;
       let cancelled = false;
+
       const body = new ReadableStream<Uint8Array>(
         {
           pull(controller) {
@@ -615,6 +681,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
         },
         { highWaterMark: 0 },
       );
+
       const client = HttpClient.make((request) =>
         Effect.succeed(
           HttpClientResponse.fromWeb(
@@ -623,7 +690,9 @@ describe("Browser Run REST PageCrawl adapter", () => {
           ),
         ),
       );
+
       const error = yield* runCrawl(client).pipe(Effect.flip);
+
       expect(error).toMatchObject({ _tag: "PageCrawlProtocolError" });
       expect(error.message).toContain("65536 transport bytes");
       expect(reads).toBe(3);
@@ -640,16 +709,20 @@ describe("Browser Run REST PageCrawl adapter", () => {
           readonly authorization: string | undefined;
           readonly body: string;
         }> = [];
+
         const logs: Array<string> = [];
+
         const logger = Logger.make<unknown, void>(({ cause, message }) => {
           logs.push(`${String(message)} ${String(cause)}`);
         });
+
         const client = HttpClient.make((request, url) => {
           seen.push({
             url: url.href,
             authorization: request.headers.authorization,
             body: JSON.stringify(bodyValue(request)),
           });
+
           return Effect.succeed(
             HttpClientResponse.fromWeb(
               request,
@@ -657,10 +730,12 @@ describe("Browser Run REST PageCrawl adapter", () => {
             ),
           );
         });
+
         const error = yield* runCrawl(client).pipe(
           Effect.flip,
           Effect.provide(Logger.layer([logger])),
         );
+
         expect(seen).toHaveLength(1);
         expect(seen[0]?.url).toBe(API_PATH);
         expect(seen[0]?.authorization).toBe(`Bearer ${TOKEN}`);
@@ -674,6 +749,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
 
   it("loads as a Node-safe subpath", async () => {
     const module = await import("@effect-agent/platform-cloudflare/browser-rest-crawl");
+
     expect(module.browserRestCrawlImplementation).toBe(browserRestCrawlImplementation);
   });
 });

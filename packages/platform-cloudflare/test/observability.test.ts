@@ -10,9 +10,11 @@ describe("effect-cf Durable Object observability ownership", () => {
     options?: { readonly failFlush?: boolean },
   ): Promise<A> => {
     const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(threadId));
+
     return runInDurableObject(stub, async (instance, state) => {
       const eventWaitUntilWork: Array<Promise<unknown>> = [];
       const nativeWaitUntil = state.waitUntil.bind(state);
+
       const waitUntil = vi.spyOn(state, "waitUntil").mockImplementation((promise) => {
         eventWaitUntilWork.push(promise);
         nativeWaitUntil(promise);
@@ -23,9 +25,11 @@ describe("effect-cf Durable Object observability ownership", () => {
           instance.failNextFlush();
         }
         const result = await run(instance);
+
         expect(eventWaitUntilWork).toHaveLength(1);
         await expect(Promise.all(eventWaitUntilWork)).resolves.toEqual([undefined]);
         expect(await instance.flushCount()).toBe(1);
+
         return result;
       } finally {
         waitUntil.mockRestore();
@@ -54,6 +58,7 @@ describe("effect-cf Durable Object observability ownership", () => {
       "effect-cf-observability-rpc-control",
       (instance) => instance.observePage({}),
     );
+
     const actual = await runEventAndDrainFlush(
       "effect-cf-observability-rpc-failing-exporter",
       (instance) => instance.observePage({}),

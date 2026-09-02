@@ -33,6 +33,7 @@ describe("TEST-014 P7 Travel Planner dual-profile pin", () => {
     const decoded = Schema.decodeUnknownSync(TravelPlannerPhase7Profile)(
       Schema.encodeSync(TravelPlannerPhase7Profile)(phase7TravelPlannerProfile),
     );
+
     expect(decoded).toEqual(phase7TravelPlannerProfile);
     expect(phase7TravelPlannerProfile).toEqual({
       phase: "P7",
@@ -100,8 +101,10 @@ describe.skipIf(!liveEnabled)("TEST-014 P7 Travel Planner live-model smoke (opt-
           // live model produced is replaced by its type marker.
           const redactor = yield* Redactor;
           const redactedTranscript: Array<string> = [];
+
           for (const event of events) {
             const encoded = yield* encodeRunEvent(event);
+
             redactedTranscript.push(`${event._tag} ${yield* redactor.redact(encoded)}`);
           }
           const transcriptText = redactedTranscript.join("\n");
@@ -109,8 +112,10 @@ describe.skipIf(!liveEnabled)("TEST-014 P7 Travel Planner live-model smoke (opt-
           // Exactly one successful settlement whose output decodes through the
           // SAME output Schema the offline conformance profile enforces.
           const completed = events.filter((event) => event._tag === "RunCompleted");
+
           expect(completed).toHaveLength(1);
           const plan = yield* Schema.decodeUnknownEffect(TravelPlan)(completed[0]?.output);
+
           expect(plan.itineraries.length).toBeGreaterThan(0);
 
           // Structural redaction holds: no live-model string scalar survives
@@ -127,6 +132,7 @@ describe.skipIf(!liveEnabled)("TEST-014 P7 Travel Planner live-model smoke (opt-
           // The live Run exercised the deterministic supplier Layers (the
           // supplier side stays offline by design — decision 9).
           const toolResults = events.filter((event) => event._tag === "ToolCallSucceeded");
+
           expect(toolResults.length).toBeGreaterThan(0);
         }).pipe(Effect.scoped, Effect.provide(liveSmokeLayer)),
       ),

@@ -34,15 +34,18 @@ const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const digests = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 const delegationCall = Schema.decodeSync(ToolCallId)("delegate-1");
 const usage = { inputTokens: {}, outputTokens: {} };
+
 class ProbeFailed extends Schema.TaggedError<ProbeFailed>()("ProbeFailed", {
   tag: Schema.String,
 }) {}
+
 const finalParts: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "answer" },
   { type: "text-delta", id: "answer", delta: '{"answer":"partial"}' },
   { type: "text-end", id: "answer" },
   { type: "finish", reason: "stop", usage },
 ];
+
 const toolTurn = (
   id: string,
   name: string,
@@ -51,8 +54,10 @@ const toolTurn = (
   { type: "tool-call", id, name, params, providerExecuted: false },
   { type: "finish", reason: "tool-calls", usage },
 ];
+
 const readLog = Effect.fn("AllowanceTest.readLog")(function* (threadId: ThreadId) {
   const store = yield* ThreadStore;
+
   return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1024 })));
 });
 
@@ -61,24 +66,29 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "subagent-shared-budget-" });
+
       const target = Agent.make("shared-budget-child", {
         input: Schema.String,
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Answer.",
         toolkit: Toolkit.empty,
       });
+
       const delegation = Subagent.define("delegate_shared_budget", {
         target,
         failureMode: "return",
       });
+
       const versions = DefinitionDigestInput.make({
         agent: "shared-budget-v1",
         model: "scripted-v1",
         tools: [],
       });
+
       const sharedDigests = yield* digestDefinitions(versions).pipe(
         Effect.provide(NodeCrypto.layer),
       );
+
       const childModel = Model.make(
         "scripted",
         "shared-child",
@@ -90,6 +100,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
           }),
         ),
       );
+
       const parent = Agent.withModel(
         Agent.make("shared-budget-parent", {
           input: Schema.String,
@@ -109,6 +120,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
                 const count = request.prompt.content.filter(
                   (message) => message.role === "tool",
                 ).length;
+
                 return Stream.fromIterable(
                   count < 2 ? toolTurn(`shared-${count}`, delegation.name, "question") : finalParts,
                 );
@@ -117,47 +129,59 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
           ),
         ),
       );
+
       const handlers = SubagentRuntime.layer(delegation, childModel, {
         durable: { targetDigests: sharedDigests },
       }).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
+
       const bindings = yield* compileRegistrations([
         { agent: parent, definitions: versions },
         { agent: target, model: childModel, definitions: versions },
       ]).pipe(Effect.provide([handlers, NodeCrypto.layer]));
+
       const parentId = Schema.decodeSync(ThreadId)("shared-budget-parent");
+
       const runtimeLayer = () =>
         NodeDurableRuntime.layer({
           filename: `${directory}/shared.sqlite`,
           deploymentId: "shared-budget",
           producerId: "shared-budget",
         });
+
       yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const receipt = yield* runtime.submit(parent, "start", {
           threadId: parentId,
           principal: Schema.decodeSync(Principal)("test"),
           idempotencyKey: Schema.decodeSync(IdempotencyKey)("shared"),
           definitions: sharedDigests,
         });
+
         expect(yield* runtime.processThreadResolved(parentId, bindings)).toEqual([]);
         yield* runtime.processThreadResolved(
           childThreadIdFor(receipt.submissionId, Schema.decodeSync(ToolCallId)("shared-0")),
           bindings,
         );
+
         return receipt;
       }).pipe(Effect.provide(runtimeLayer()));
       yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         expect((yield* runtime.processThreadResolved(parentId, bindings))[0]?.outcome).toBe(
           "completed",
         );
         const log = yield* readLog(parentId);
+
         expect(
           log.filter(({ record }) => record.payload._tag === "SubagentRequested"),
         ).toHaveLength(1);
+
         const settlements = log
           .filter(({ record }) => record.payload._tag === "ToolCallSettled")
           .map(({ record }) => record.payload);
+
         expect(settlements).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -183,6 +207,7 @@ it.effect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "subagent-allowance-" });
+
         const rows = [
           {
             requested: undefined,
@@ -206,9 +231,11 @@ it.effect(
             fault: "subagent:after-child-ready",
           },
         ] as const;
+
         for (const [index, row] of rows.entries()) {
           const filename = `${directory}/${index}.sqlite`;
           let incarnation = 0;
+
           const withRuntime = <A, E, R>(
             effect: Effect.Effect<A, E, R>,
             fault?: DurableRuntimeFailpointLocation,
@@ -226,8 +253,10 @@ it.effect(
                 }),
               ),
             );
+
           const starts: Array<number> = [];
           let offeredAllowance = 1;
+
           const tools = Toolkit.make(
             Tool.make("probe", {
               parameters: Schema.Struct({ index: Schema.Int }),
@@ -235,13 +264,16 @@ it.effect(
               needsApproval: ({ index }) => index === 1,
             }).annotate(ToolExecutionClass, "readonly"),
           );
+
           const handlers = tools.toLayer({
             probe: ({ index }) =>
               Effect.sync(() => {
                 starts.push(index);
+
                 return "found";
               }),
           });
+
           const childDefinition = Agent.make("allowance-child", {
             input: Schema.String,
             output: Schema.Struct({ answer: Schema.String }),
@@ -249,6 +281,7 @@ it.effect(
             toolkit: tools,
             policy: { maxToolCalls: row.definition },
           });
+
           // Prompt-derived calls survive replacement runtimes without a live model counter.
           const child = Agent.withModel(
             childDefinition,
@@ -265,6 +298,7 @@ it.effect(
                       .filter(
                         (part) => part.type === "tool-result" && part.name === "probe",
                       ).length;
+
                     return Stream.fromIterable(
                       request.toolChoice === "none"
                         ? finalParts
@@ -275,6 +309,7 @@ it.effect(
               ),
             ),
           );
+
           const delegation = Subagent.define("delegate_probe", {
             target: childDefinition,
             description: "Run bounded probes.",
@@ -295,6 +330,7 @@ it.effect(
               maxDuration: "5 minutes",
             }),
           });
+
           const parent = Agent.withModel(
             Agent.make("allowance-parent", {
               input: Schema.String,
@@ -329,53 +365,69 @@ it.effect(
               ),
             ),
           );
+
           const delegationLayer = SubagentRuntime.layer(delegation, child.model, {
             mapChildFailure: (failure) => new ProbeFailed({ tag: failure._tag }),
             durable: { targetDigests: digests },
           }).pipe(Layer.provide([handlers, SubagentReservationsMemoryLive, IdGenerator.layer]));
+
           const bindings = [
             yield* DurableWorkerBinding.make(parent, digests).pipe(Effect.provide(delegationLayer)),
             yield* DurableWorkerBinding.make(child, digests).pipe(Effect.provide(handlers)),
           ];
+
           const parentId = Schema.decodeSync(ThreadId)(`allowance-parent-${index}`);
+
           const receipt = yield* withRuntime(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
+
               const receipt = yield* runtime.submit(parent, "probe", {
                 threadId: parentId,
                 principal: Schema.decodeSync(Principal)("allowance-test"),
                 idempotencyKey: Schema.decodeSync(IdempotencyKey)("one"),
                 definitions: digests,
               });
+
               const exit = yield* Effect.exit(runtime.processThreadResolved(parentId, bindings));
+
               expect(
                 Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none(),
               ).toEqual(Option.some(DurableRuntimeFailpointError.make({ location: row.fault })));
+
               return receipt;
             }),
             row.fault,
           );
+
           // Re-evaluating the delegation on the next Attempt must not raise its pinned limit.
           offeredAllowance = 99;
           const childId = childThreadIdFor(receipt.submissionId, delegationCall);
+
           const childSubmission = yield* withRuntime(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
+
               // Complete admission from the request record, without a delegation handler.
               yield* runtime.runRecovery;
               yield* runtime.processThreadResolved(parentId, bindings);
               expect(yield* runtime.processThreadResolved(childId, bindings)).toEqual([]);
               expect(starts).toEqual([]);
               const explanations = yield* runtime.explainThread(childId);
+
               expect(explanations[0]?.evidence.approvalsPending).toHaveLength(1);
               const submission = explanations[0]?.submission;
+
               if (submission === undefined) return yield* Effect.die("Missing child Submission");
+
               return submission.submissionId;
             }),
           );
+
           yield* withRuntime(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
+
               yield* runtime.resolveApproval(
                 ApprovalDecisionCommand.make({
                   submissionId: childSubmission,
@@ -386,6 +438,7 @@ it.effect(
                 }),
               );
               const exit = yield* Effect.exit(runtime.processThreadResolved(childId, bindings));
+
               expect(
                 Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none(),
               ).toEqual(
@@ -400,8 +453,10 @@ it.effect(
           yield* withRuntime(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
+
               yield* runtime.runRecovery;
               const settlements = yield* runtime.processThreadResolved(childId, bindings);
+
               expect(settlements[0]?.outcome).toBe("completed");
               expect(starts).toEqual(
                 Array.from({ length: row.effective }, (_, index) => index + 1),
@@ -411,6 +466,7 @@ it.effect(
               );
               const parentLog = yield* readLog(parentId);
               const childLog = yield* readLog(childId);
+
               expect(
                 childLog.find(({ record }) => record.payload._tag === "SubmissionSettled")?.record
                   .payload,

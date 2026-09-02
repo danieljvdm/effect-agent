@@ -249,14 +249,17 @@ const compileUrlPolicy = (patterns: ReadonlyArray<string>): ReadonlyArray<string
       "Web capture requires at least one allowed host pattern; capture is deny-by-default",
     );
   }
+
   return Object.freeze(
     patterns.map((raw) => {
       const pattern = raw.trim().toLowerCase();
+
       if (!HOST_PATTERN.test(pattern)) {
         throw new Error(
           `Web capture host pattern ${JSON.stringify(raw)} must be a bare host name such as docs.example.com or *.example.com — no scheme, path, port, or credentials`,
         );
       }
+
       return pattern;
     }),
   );
@@ -268,26 +271,31 @@ const compileResourcePolicy = (patterns: ReadonlyArray<string>): PageResourcePol
       const wildcard = pattern.startsWith("*.");
       const escapedHost = (wildcard ? pattern.slice(2) : pattern).replaceAll(".", "\\.");
       const subdomains = wildcard ? "(?:[a-z0-9-]+\\.)*" : "";
+
       return `^https://${subdomains}${escapedHost}(?::[0-9]+)?(?:[/?#]|$)`;
     }),
   });
 
 const validateMaxResponseBytes = (value: number | undefined): number => {
   const bytes = value ?? defaultMaxResponseBytes;
+
   // Fail closed on an invalid budget: NaN would make every comparison false.
   if (!Number.isSafeInteger(bytes) || bytes < 1_024 || bytes > 1024 * 1024) {
     throw new Error(
       `Web capture maxResponseBytes must be an integer between 1024 and ${1024 * 1024}; received ${String(value)}`,
     );
   }
+
   return bytes;
 };
 
 const hostMatches = (host: string, pattern: string): boolean => {
   if (pattern.startsWith("*.")) {
     const base = pattern.slice(2);
+
     return host === base || host.endsWith(`.${base}`);
   }
+
   return host === pattern;
 };
 
@@ -315,15 +323,20 @@ const parseTargetUrl = (raw: string): ParsedTargetUrl | undefined => {
   if (typeof urlConstructor !== "function") return undefined;
   try {
     const parsed: unknown = Reflect.construct(urlConstructor, [raw]);
+
     if (parsed === null || typeof parsed !== "object") return undefined;
+
     const read = (key: string): string | undefined => {
       const value: unknown = Reflect.get(parsed, key);
+
       return typeof value === "string" ? value : undefined;
     };
+
     const protocol = read("protocol");
     const hostname = read("hostname");
     const username = read("username");
     const password = read("password");
+
     return protocol === undefined ||
       hostname === undefined ||
       username === undefined ||
@@ -342,6 +355,7 @@ const parseTargetUrl = (raw: string): ParsedTargetUrl | undefined => {
  */
 const deniedUrl = (raw: string, patterns: ReadonlyArray<string>): WebCaptureFailure | undefined => {
   const parsed = parseTargetUrl(raw);
+
   if (parsed === undefined) {
     return failure("WebCaptureInvalidUrl", `${raw.slice(0, 256)} is not an absolute URL`);
   }
@@ -352,12 +366,14 @@ const deniedUrl = (raw: string, patterns: ReadonlyArray<string>): WebCaptureFail
     return failure("WebCaptureUrlDenied", "URLs carrying credentials are not allowed");
   }
   const host = parsed.hostname.toLowerCase();
+
   if (!patterns.some((pattern) => hostMatches(host, pattern))) {
     return failure(
       "WebCaptureUrlDenied",
       `Host ${host} is outside the allowed set: ${patterns.join(", ")}`,
     );
   }
+
   return undefined;
 };
 
@@ -415,6 +431,7 @@ const make = <const Name extends string>(
   const maxResponseBytes = validateMaxResponseBytes(options.maxResponseBytes);
   const engine = options.engine ?? "chromium";
   const actions = Object.freeze([...new Set(options.actions ?? allActions)]);
+
   if (actions.length === 0) {
     throw new Error("Web capture requires at least one model-selectable action");
   }
@@ -452,9 +469,11 @@ const make = <const Name extends string>(
         );
       }
       const denied = deniedUrl(parameters.url, patterns);
+
       if (denied !== undefined) {
         return yield* denied;
       }
+
       const result = yield* pageCapture
         .capture(
           PageCaptureRequest.make({
@@ -466,7 +485,9 @@ const make = <const Name extends string>(
           }),
         )
         .pipe(Effect.catch((error) => Effect.fail(portFailure(error))));
+
       const output = result.output;
+
       if (parameters.action === "markdown" && output._tag === "PageMarkdownCaptured") {
         return WebCaptureSuccess.make({
           url: parameters.url,
@@ -488,6 +509,7 @@ const make = <const Name extends string>(
           links: output.links,
         });
       }
+
       return yield* failure(
         "WebCaptureProtocolMismatch",
         `The capture adapter answered a ${parameters.action} request with ${output._tag}`,
@@ -532,6 +554,7 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
   const maxResponseBytes = validateMaxResponseBytes(options.maxResponseBytes);
   const engine = options.engine ?? "chromium";
   const prompt = options.prompt;
+
   if (prompt !== undefined && (prompt.length === 0 || prompt.length > 8_192)) {
     throw new Error("Web capture extraction prompt must be between 1 and 8192 characters");
   }
@@ -542,11 +565,13 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
   const derived = ((): PageCaptureResponseFormat => {
     const jsonSchema = Tool.getJsonSchemaFromSchema(options.schema);
     const decoded = Schema.decodeUnknownOption(PageCaptureResponseFormat)(jsonSchema);
+
     if (Option.isNone(decoded)) {
       throw new Error(
         `Web capture cannot derive a bounded object JSON response format from the extraction Schema for ${name}`,
       );
     }
+
     return decoded.value;
   })();
 
@@ -576,9 +601,11 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
       readonly url: string;
     }) {
       const denied = deniedUrl(parameters.url, patterns);
+
       if (denied !== undefined) {
         return yield* denied;
       }
+
       const result = yield* pageCapture
         .capture(
           PageCaptureRequest.make({
@@ -593,12 +620,14 @@ const makeExtract = <const Name extends string, S extends Schema.Top>(
           }),
         )
         .pipe(Effect.catch((error) => Effect.fail(portFailure(error))));
+
       if (result.output._tag !== "PageStructuredCaptured") {
         return yield* failure(
           "WebCaptureProtocolMismatch",
           `The capture adapter answered a structured request with ${result.output._tag}`,
         );
       }
+
       // The platform's extraction is untrusted; only the original Effect
       // Schema decides whether the value is the promised shape.
       return yield* decodeExtracted(result.output.value).pipe(
@@ -647,6 +676,7 @@ const makeScrape = <const Name extends string>(
   const resourcePolicy = compileResourcePolicy(patterns);
   const maxResponseBytes = validateMaxResponseBytes(options.maxResponseBytes);
   const engine = options.engine ?? "chromium";
+
   const description = [
     options.description,
     "",
@@ -662,18 +692,22 @@ const makeScrape = <const Name extends string>(
   })
     .annotate(Tool.Readonly, false)
     .annotate(ToolExecutionClassAnnotation, "uncertain") as WebCaptureScrapeTool<Name>;
+
   const toolkit = Toolkit.make(tool);
 
   const build = Effect.gen(function* () {
     const pageCapture = yield* PageCapture;
+
     const invoke = Effect.fn(`WebCapture.${name}`)(function* (parameters: {
       readonly url: string;
       readonly selectors: ReadonlyArray<string>;
     }) {
       const denied = deniedUrl(parameters.url, patterns);
+
       if (denied !== undefined) {
         return yield* denied;
       }
+
       const result = yield* pageCapture
         .capture(
           PageCaptureRequest.make({
@@ -685,12 +719,14 @@ const makeScrape = <const Name extends string>(
           }),
         )
         .pipe(Effect.catch((error) => Effect.fail(portFailure(error))));
+
       if (result.output._tag !== "PageScrapeCaptured") {
         return yield* failure(
           "WebCaptureProtocolMismatch",
           `The capture adapter answered a selector scrape request with ${result.output._tag}`,
         );
       }
+
       return WebCaptureScrapeSuccess.make({
         url: parameters.url,
         groups: result.output.groups,

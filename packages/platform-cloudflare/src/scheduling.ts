@@ -119,6 +119,7 @@ const ScheduleOwnerRequest = Schema.Union([
   ScheduleListRequest,
   ScheduleControlRequest,
 ]);
+
 type ScheduleOwnerRequest = typeof ScheduleOwnerRequest.Type;
 
 const ScheduleOwnerFailure = Schema.Union([
@@ -131,6 +132,7 @@ const ScheduleOwnerFailure = Schema.Union([
   ScheduleFailpointError,
   ScheduleOwnerProtocolError,
 ]);
+
 type ScheduleOwnerFailure = typeof ScheduleOwnerFailure.Type;
 
 const ScheduleOwnerResponse = Schema.Union([
@@ -138,6 +140,7 @@ const ScheduleOwnerResponse = Schema.Union([
   Schema.TaggedStruct("Page", { value: ScheduleSnapshotPageSchema }),
   Schema.TaggedStruct("Failed", { failure: ScheduleOwnerFailure }),
 ]);
+
 type ScheduleOwnerResponse = typeof ScheduleOwnerResponse.Type;
 
 const decodeScheduleOwnerRequest = Schema.decodeUnknownEffect(ScheduleOwnerRequest);
@@ -181,6 +184,7 @@ export class CloudflareSchedulingClient {
             ScheduleStorageError.make({ operation: "Schedule Owner protocol", reason: "corrupt" }),
           ),
         );
+
         const raw = yield* Effect.tryPromise({
           try: () => namespace.get(namespace.idFromName(scheduleOwnerKey(owner))).schedule(encoded),
           catch: () =>
@@ -189,12 +193,15 @@ export class CloudflareSchedulingClient {
               reason: "unavailable",
             }),
         });
+
         const response = yield* decodeScheduleOwnerResponse(raw).pipe(
           Effect.mapError(() =>
             ScheduleStorageError.make({ operation: "Schedule Owner protocol", reason: "corrupt" }),
           ),
         );
+
         if (response._tag !== "Failed") return response;
+
         return yield* response.failure._tag === "ScheduleOwnerProtocolError"
           ? ScheduleStorageError.make({ operation: "Schedule Owner protocol", reason: "corrupt" })
           : response.failure;
@@ -213,6 +220,7 @@ export class CloudflareSchedulingClient {
             }),
           ),
         );
+
         return yield* Schema.decodeUnknownEffect(PersistedJson)(encoded).pipe(
           Effect.mapError(() =>
             ScheduleValidationError.make({
@@ -225,6 +233,7 @@ export class CloudflareSchedulingClient {
       const create: Scheduling["Service"]["create"] = (agent, input, options) =>
         Effect.gen(function* () {
           const payload = yield* encodeInput(agent, input);
+
           const response = yield* call(options.scope.owner, {
             _tag: "Create",
             schemaVersion: 1,
@@ -232,6 +241,7 @@ export class CloudflareSchedulingClient {
             input: payload,
             ...options,
           });
+
           return response._tag === "Snapshot"
             ? response.value
             : yield* ScheduleStorageError.make({
@@ -243,6 +253,7 @@ export class CloudflareSchedulingClient {
       const update: Scheduling["Service"]["update"] = (agent, input, options) =>
         Effect.gen(function* () {
           const payload = yield* encodeInput(agent, input);
+
           const response = yield* call(options.scope.owner, {
             _tag: "Update",
             schemaVersion: 1,
@@ -250,6 +261,7 @@ export class CloudflareSchedulingClient {
             input: payload,
             ...options,
           });
+
           return response._tag === "Snapshot"
             ? response.value
             : yield* ScheduleStorageError.make({
@@ -266,6 +278,7 @@ export class CloudflareSchedulingClient {
             scope,
             scheduleId,
           });
+
           return response._tag === "Snapshot"
             ? response.value
             : yield* ScheduleStorageError.make({
@@ -283,6 +296,7 @@ export class CloudflareSchedulingClient {
             ...(options.after === undefined ? {} : { after: options.after }),
             ...(options.limit === undefined ? {} : { limit: options.limit }),
           });
+
           return response._tag === "Page"
             ? response.value
             : yield* ScheduleStorageError.make({
@@ -306,6 +320,7 @@ export class CloudflareSchedulingClient {
             scheduleId,
             expectedRevision,
           });
+
           return response._tag === "Snapshot"
             ? response.value
             : yield* ScheduleStorageError.make({
@@ -340,6 +355,7 @@ const decodeOwnerName = Effect.fn("decodeScheduleOwnerName")(function* (
       message: "Schedule Owner objects require an idFromName identity",
     });
   }
+
   const tuple = yield* Schema.decodeUnknownEffect(
     Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String])),
   )(name).pipe(
@@ -347,6 +363,7 @@ const decodeOwnerName = Effect.fn("decodeScheduleOwnerName")(function* (
       ScheduleOwnerProtocolError.make({ message: "Schedule Owner object name is malformed" }),
     ),
   );
+
   return yield* Schema.decodeUnknownEffect(ScheduleOwner)({
     tenantId: tuple[0],
     ownerId: tuple[1],
@@ -371,10 +388,12 @@ const transactionLayer: Layer.Layer<
   DoScheduleTransaction,
   Effect.gen(function* () {
     const alarms = yield* DurableObjectAlarm.DurableObjectAlarm;
+
     return DoScheduleTransaction.of({
       run: (body) =>
         Effect.gen(function* () {
           const nowMillis = yield* Clock.currentTimeMillis;
+
           return yield* alarms
             .transaction((transaction) =>
               body((replacement) =>
@@ -434,6 +453,7 @@ const ensureOwner = (
   request: ScheduleOwnerRequest,
 ): Effect.Effect<void, ScheduleOwnerProtocolError> => {
   const observed = requestOwner(request);
+
   return observed.tenantId === expected.tenantId && observed.ownerId === expected.ownerId
     ? Effect.void
     : Effect.fail(
@@ -447,6 +467,7 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
   encoded: unknown,
 ): Effect.fn.Return<unknown, never, Scheduling | ScheduleOwnerIdentity> {
   const decoded = yield* decodeScheduleOwnerRequest(encoded).pipe(Effect.result);
+
   if (decoded._tag === "Failure") {
     return yield* encodeScheduleOwnerResponse(
       scheduleProtocolFailure("The Schedule request could not be decoded"),
@@ -455,6 +476,7 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
   const request = decoded.success;
   const { owner } = yield* ScheduleOwnerIdentity;
   const scheduling = yield* Scheduling;
+
   const response = yield* Effect.gen(function* () {
     yield* ensureOwner(owner, request);
     switch (request._tag) {
@@ -467,6 +489,7 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
           deliveryPrincipal: request.deliveryPrincipal,
           definitions: request.definitions,
         });
+
         return { _tag: "Snapshot" as const, value };
       }
       case "Update": {
@@ -479,6 +502,7 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
           definitions: request.definitions,
           expectedRevision: request.expectedRevision,
         });
+
         return { _tag: "Snapshot" as const, value };
       }
       case "Get":
@@ -509,6 +533,7 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
                   request.scheduleId,
                   request.expectedRevision,
                 );
+
         return { _tag: "Snapshot" as const, value };
       }
     }
@@ -522,6 +547,7 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
           ),
     ),
   );
+
   return yield* encodeScheduleOwnerResponse(response).pipe(Effect.orDie);
 });
 
@@ -545,8 +571,10 @@ const scheduleAlarmHandler = (limits: SchedulingLimits) =>
         const alarmControl = yield* DoScheduleAlarmControl;
         const { owner } = yield* ScheduleOwnerIdentity;
         const nowMillis = yield* Clock.currentTimeMillis;
+
         yield* alarmControl.prearm(nowMillis + limits.recoveryPollMillis);
         const pass = yield* scheduling.runDue(owner);
+
         if (pass.failed > 0) {
           yield* alarmControl.prearm((yield* Clock.currentTimeMillis) + limits.recoveryPollMillis);
         } else {
@@ -585,14 +613,17 @@ export const makeScheduleOwnerObjectClass = <E>(
     ScheduleOwnerIdentity,
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
+
       return ScheduleOwnerIdentity.of({ owner: yield* decodeOwnerName(state.raw.id.name) });
     }),
   );
+
   const sqlLayer = Layer.unwrap(
     Effect.map(EffectCfDurableObjectState.DurableObjectState, (state) =>
       SqliteClient.layer({ storage: state.raw.storage }),
     ),
   );
+
   const application = Layer.merge(Scheduling.layer(limits), ScheduleDriver.layer(limits)).pipe(
     Layer.provideMerge(
       scheduleStoreLayer.pipe(Layer.provide(transactionLayer), Layer.provide(sqlLayer)),
@@ -609,6 +640,7 @@ export const makeScheduleOwnerObjectClass = <E>(
     Layer.provide(host),
     Layer.provideMerge(ownerLayer),
   );
+
   const runtime: Layer.Layer<
     ScheduleRuntimeServices,
     E | ScheduleStorageError | ScheduleOwnerProtocolError | ScheduleValidationError,
@@ -617,6 +649,7 @@ export const makeScheduleOwnerObjectClass = <E>(
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
       const scope = yield* Effect.scope;
+
       return yield* state.blockConcurrencyWhile(Layer.buildWithScope(application, scope));
     }),
   );
@@ -636,5 +669,6 @@ export const makeScheduleOwnerObjectClass = <E>(
       return super.alarm?.(alarmInfo);
     }
   }
+
   return ScheduleOwnerObject;
 };

@@ -60,15 +60,19 @@ let cached: CertificationReport | undefined;
 
 const certified = Effect.gen(function* () {
   if (cached !== undefined) return cached;
+
   const report = yield* Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-certification-sqlite-",
       });
+
       // The same combined Layer instance is passed for BOTH ports: Layer memoization builds
       // it once, so ledger and store share one SqlClient over one database file.
       const adapters = combinedAdapters(`${directory}/certification.sqlite`);
+
       return yield* certifyDurableAdapters({
         adapter: { name: "@effect-agent/storage-sqlite" },
         submissionLedger: adapters,
@@ -77,8 +81,10 @@ const certified = Effect.gen(function* () {
       });
     }),
   ).pipe(Effect.provide([NodeFileSystem.layer, NodeCrypto.layer]));
+
   yield* maybeWriteReport("storage-sqlite", report);
   cached = report;
+
   return report;
 });
 
@@ -129,14 +135,18 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
             status: "exercised",
           },
         ];
+
         for (const row of rows) {
           const report = yield* Effect.scoped(
             Effect.gen(function* () {
               const fs = yield* FileSystem.FileSystem;
+
               const directory = yield* fs.makeTempDirectoryScoped({
                 prefix: "certification-verdict-",
               });
+
               const adapters = combinedAdapters(`${directory}/test.sqlite`);
+
               return yield* certifyDurableAdapters({
                 adapter: { name: row.name },
                 submissionLedger: adapters,
@@ -145,6 +155,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
               });
             }),
           );
+
           expect({
             ok: report.ok,
             full: report.fullyCertified,
@@ -162,6 +173,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
         const report = yield* certified;
         const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
         const storeCases = report.tier1.filter((result) => result.suite === "thread-store");
+
         expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
         expect(storeCases).toHaveLength(threadStoreConformanceCases.length);
         expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
@@ -174,6 +186,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
+
         expect(report.tier2).toHaveLength(34 * CERTIFICATION_SCENARIOS.length);
         expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
         expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);
@@ -196,6 +209,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
         const report = yield* certified;
         const encoded = yield* Schema.encodeEffect(CertificationReport)(report);
         const decoded = yield* Schema.decodeUnknownEffect(CertificationReport)(encoded);
+
         expect(decoded.format).toBe("effect-agent/certification@2");
         expect(decoded.fullyCertified).toBe(false);
         expect(decoded.adapter.name).toBe("@effect-agent/storage-sqlite");
@@ -210,6 +224,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
+
         expect(report.tier3.status).toBe("recorded-evidence");
         expect(report.tier3.evidence).toEqual(TIER3_EVIDENCE);
         expect(report.tier3.cases).toEqual([]);

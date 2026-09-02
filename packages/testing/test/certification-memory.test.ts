@@ -36,13 +36,16 @@ let cached: CertificationReport | undefined;
 
 const certified = Effect.gen(function* () {
   if (cached !== undefined) return cached;
+
   const report = yield* certifyDurableAdapters({
     adapter: { name: "@effect-agent/storage-memory" },
     submissionLedger: MemorySubmissionLedgerLive,
     threadStore: MemoryThreadStoreLive,
   }).pipe(Effect.provide(NodeCrypto.layer));
+
   yield* maybeWriteReport("storage-memory", report);
   cached = report;
+
   return report;
 });
 
@@ -54,6 +57,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
         const report = yield* certified;
         const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
         const storeCases = report.tier1.filter((result) => result.suite === "thread-store");
+
         expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
         expect(storeCases).toHaveLength(threadStoreConformanceCases.length);
         expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
@@ -66,6 +70,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
+
         // Full sweep: every location armed in every scenario shape.
         expect(report.tier2).toHaveLength(34 * CERTIFICATION_SCENARIOS.length);
         expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
@@ -93,6 +98,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
         const report = yield* certified;
         const encoded = yield* Schema.encodeEffect(CertificationReport)(report);
         const decoded = yield* Schema.decodeUnknownEffect(CertificationReport)(encoded);
+
         expect(decoded.format).toBe("effect-agent/certification@2");
         expect(decoded.fullyCertified).toBe(false);
         expect(decoded.adapter.name).toBe("@effect-agent/storage-memory");
@@ -109,6 +115,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
+
         expect(report.tier3.status).toBe("not-applicable");
         expect(report.tier3.cases).toEqual([]);
         expect(report.tier3.evidence).toEqual([]);
@@ -127,21 +134,25 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
           }),
         ]),
       });
+
       expect(exercised.status).toBe("exercised");
       expect(exercised.cases).toHaveLength(1);
 
       const recorded = yield* resolveTierThree("durable-node", {
         tierThreeEvidence: ["packages/platform-node/test/crash/crash.test.ts"],
       });
+
       expect(recorded.status).toBe("recorded-evidence");
 
       const notExercised = yield* resolveTierThree("durable-cloudflare", {});
+
       expect(notExercised.status).toBe("not-exercised");
       expect(notExercised.detail).toContain("NOT discharged");
 
       const notApplicable = yield* resolveTierThree("non-durable", {
         tierThreeEvidence: ["ignored"],
       });
+
       expect(notApplicable.status).toBe("not-applicable");
     }),
   );

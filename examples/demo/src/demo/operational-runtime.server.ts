@@ -127,9 +127,11 @@ const usage = {
 };
 
 const expectedItinerary = expectedTravelPlan.itineraries[0];
+
 if (expectedItinerary === undefined) {
   throw new Error("The deterministic Travel Planner fixture must contain one itinerary.");
 }
+
 const redirectedPlan = Schema.decodeSync(TravelPlan)({
   itineraries: [
     {
@@ -213,7 +215,9 @@ const McpDestinationBrief = Tool.make("destination_brief", {
   parameters: Schema.Struct({ destination: Schema.NonEmptyString }),
   success: Schema.String,
 });
+
 const DemoMcpToolkit = Toolkit.make(McpDestinationBrief);
+
 const demoMcpRequest = McpConnectionRequest.make({
   serverId: "demo-travel-mcp",
   maxToolCount: 4,
@@ -221,6 +225,7 @@ const demoMcpRequest = McpConnectionRequest.make({
   maxDiscoveryBytes: 16_384,
   connectTimeoutMillis: 1_000,
 });
+
 const demoMcpIdentity = McpServerIdentity.make({
   serverId: demoMcpRequest.serverId,
   implementation: McpSchema.Implementation.make({
@@ -228,6 +233,7 @@ const demoMcpIdentity = McpServerIdentity.make({
     version: "1.0.0",
   }),
 });
+
 const DemoMcpConnectorLayer = Layer.succeed(McpConnector)({
   connect: () =>
     Effect.acquireRelease(
@@ -297,16 +303,19 @@ const DemoHoldGatewayLayer = Layer.effect(
   ItineraryHoldGateway,
   Effect.gen(function* () {
     const controls = yield* DemoRunControls;
+
     return ItineraryHoldGateway.of({
       hold: (request) =>
         Effect.gen(function* () {
           const starts = yield* Ref.updateAndGet(controls.holdStarts, (count) => count + 1);
+
           yield* controls.emit(
             DemoHoldHandlerState.make({
               ...(yield* controls.eventBase),
               starts,
             }),
           );
+
           return ItineraryHold.make({
             holdId: "demo-hold-1",
             quoteId: request.quoteId,
@@ -323,11 +332,13 @@ const controlledFlight = FlightOption.make({
   estimatedCents: 180_000,
   currency: "USD",
 });
+
 const controlledLodging = LodgingOption.make({
   lodging: "Bloomsbury House · refundable quiet studio · 4 nights",
   estimatedCents: 104_000,
   currency: "USD",
 });
+
 const controlledActivities = ActivitySearchResult.make({
   activities: ["British Museum timed entry", "Thames evening walk"],
 });
@@ -336,24 +347,29 @@ const ControlledFlightCatalogLayer = Layer.effect(
   FlightCatalog,
   Effect.gen(function* () {
     const controls = yield* DemoRunControls;
+
     return FlightCatalog.of({
       search: () => markAndAwait(controls, "search_flights").pipe(Effect.as(controlledFlight)),
     });
   }),
 );
+
 const ControlledLodgingCatalogLayer = Layer.effect(
   LodgingCatalog,
   Effect.gen(function* () {
     const controls = yield* DemoRunControls;
+
     return LodgingCatalog.of({
       search: () => markAndAwait(controls, "search_lodging").pipe(Effect.as(controlledLodging)),
     });
   }),
 );
+
 const ControlledActivityCatalogLayer = Layer.effect(
   ActivityCatalog,
   Effect.gen(function* () {
     const controls = yield* DemoRunControls;
+
     return ActivityCatalog.of({
       search: () =>
         markAndAwait(controls, "search_activities").pipe(Effect.as(controlledActivities)),
@@ -436,6 +452,7 @@ const findActive = (
   Ref.get(activeRuns).pipe(
     Effect.flatMap((runs) => {
       const active = runs.get(handle);
+
       return active === undefined
         ? Effect.fail(
             DemoControlFailure.make({
@@ -457,6 +474,7 @@ const makeGates = Effect.fn("Demo.makeGates")(function* (): Effect.fn.Return<Sea
   const observedFlight = yield* Deferred.make<void>();
   const observedLodging = yield* Deferred.make<void>();
   const observedActivity = yield* Deferred.make<void>();
+
   return {
     started: {
       search_flights: flightStarted,
@@ -484,6 +502,7 @@ const scenarioLimits = (scenario: DemoScenario): UsageBudgetLimits => {
     maxCostMicrousd: 10_000,
     maxDurationMillis: 30_000,
   };
+
   switch (scenario) {
     case "budget-tokens":
       return UsageBudgetLimits.make({ ...ordinary, maxInputTokens: 1 });
@@ -522,6 +541,7 @@ const makeIdLayer = (threadId: ThreadId, runId: RunId): Layer.Layer<IdGenerator>
     IdGenerator,
     Effect.gen(function* () {
       const turn = yield* Ref.make(0);
+
       return IdGenerator.of({
         nextThreadId: Effect.succeed(threadId),
         nextRunId: Effect.succeed(runId),
@@ -546,6 +566,7 @@ const InteractiveRuntimeLive = Layer.effect(
       request: QueueRunCommandRequest,
     ) {
       const active = yield* findActive(activeRuns, request.handle);
+
       return yield* active.commandGate.withPermit(
         Effect.gen(function* () {
           if (!(yield* Ref.get(active.acceptingCommands))) {
@@ -557,6 +578,7 @@ const InteractiveRuntimeLive = Layer.effect(
           const sequence = yield* Ref.updateAndGet(active.commandCounter, (value) => value + 1);
           const commandId = `${active.runId}-command-${sequence}`;
           const createdAt = yield* nowUtc;
+
           const command =
             request.kind === "steering"
               ? SteeringCommand.make({
@@ -575,6 +597,7 @@ const InteractiveRuntimeLive = Layer.effect(
                   content: request.content,
                   createdAt,
                 });
+
           yield* active.commandQueue.offer(command).pipe(
             Effect.mapError(() =>
               DemoControlFailure.make({
@@ -595,6 +618,7 @@ const InteractiveRuntimeLive = Layer.effect(
               deliverySeam: request.kind === "steering" ? "after-tool-batch" : "otherwise-stop",
             }),
           ).pipe(Effect.asVoid);
+
           return DemoControlAccepted.make({ accepted: true });
         }),
       );
@@ -604,15 +628,20 @@ const InteractiveRuntimeLive = Layer.effect(
       request: ResolveRunApprovalRequest,
     ) {
       const active = yield* findActive(activeRuns, request.handle);
+
       const pending = yield* Ref.modify(active.pendingApprovals, (approvals) => {
         const current = approvals.get(request.requestId);
+
         if (current === undefined) {
           return [undefined, approvals] as const;
         }
         const next = new Map(approvals);
+
         next.delete(request.requestId);
+
         return [current, next] as const;
       });
+
       if (pending === undefined) {
         return yield* DemoControlFailure.make({
           reason: "approval-not-found",
@@ -620,6 +649,7 @@ const InteractiveRuntimeLive = Layer.effect(
         });
       }
       const decidedAt = yield* nowUtc;
+
       const decision =
         request.choice === "approve"
           ? ApprovalApproved.make({
@@ -634,7 +664,9 @@ const InteractiveRuntimeLive = Layer.effect(
               reason: "The traveler denied the itinerary hold.",
               timedOut: false,
             });
+
       const completed = yield* Deferred.succeed(pending.deferred, decision);
+
       if (!completed) {
         return yield* DemoControlFailure.make({
           reason: "approval-already-decided",
@@ -650,6 +682,7 @@ const InteractiveRuntimeLive = Layer.effect(
           choice: request.choice,
         }),
       );
+
       return DemoControlAccepted.make({ accepted: true });
     });
 
@@ -662,25 +695,33 @@ const InteractiveRuntimeLive = Layer.effect(
         Effect.gen(function* () {
           const live = profile === "openai";
           const identity = yield* Ref.updateAndGet(identityCounter, (value) => value + 1);
+
           const handle = yield* Schema.decodeUnknownEffect(DemoRunHandle)(
             `demo-handle-${identity}`,
           );
+
           const runId = yield* Schema.decodeUnknownEffect(RunId)(`demo-run-${identity}`);
+
           const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(
             live ? "demo-thread-live-travel" : "demo-thread-phase-2",
           );
+
           yield* threads.create(threadId);
+
           const output = yield* Queue.bounded<DemoOperationalEvent, DemoRunFailure | Cause.Done>(
             256,
           );
+
           const commandQueue = yield* makeRunCommandQueue(
             runId,
             RunCommandQueueConfig.make({ capacity: 8 }),
           );
+
           const pendingApprovals = yield* Ref.make<ReadonlyMap<string, PendingApproval>>(new Map());
           const commandCounter = yield* Ref.make(0);
           const acceptingCommands = yield* Ref.make(true);
           const commandGate = yield* Semaphore.make(1);
+
           const active: ActiveRun = {
             handle,
             runId,
@@ -692,9 +733,11 @@ const InteractiveRuntimeLive = Layer.effect(
             acceptingCommands,
             commandGate,
           };
+
           const registered = yield* Ref.modify(activeRuns, (current) =>
             current.size > 0 ? [false, current] : [true, new Map(current).set(handle, active)],
           );
+
           if (!registered) {
             return yield* DemoRunFailure.make({
               errorTag: "DemoRunAlreadyActive",
@@ -703,23 +746,29 @@ const InteractiveRuntimeLive = Layer.effect(
           }
 
           const cleanedUp = yield* Ref.make(false);
+
           const cleanup = Effect.gen(function* () {
             const alreadyCleaned = yield* Ref.getAndSet(cleanedUp, true);
+
             if (alreadyCleaned) {
               return;
             }
             yield* Ref.set(acceptingCommands, false);
             yield* Ref.update(activeRuns, (current) => {
               const next = new Map(current);
+
               next.delete(handle);
+
               return next;
             });
             const approvals = yield* Ref.getAndSet(pendingApprovals, new Map());
+
             yield* Effect.forEach(approvals.values(), (pending) =>
               Deferred.interrupt(pending.deferred),
             );
             yield* commandQueue.shutdown;
           }).pipe(Effect.asVoid);
+
           yield* Effect.addFinalizer(() => cleanup);
 
           const eventBase = Effect.gen(function* () {
@@ -728,8 +777,10 @@ const InteractiveRuntimeLive = Layer.effect(
               emittedAt: yield* nowUtc,
             } as const;
           });
+
           const emit = (event: DemoOperationalEvent): Effect.Effect<void> =>
             Queue.offer(output, event).pipe(Effect.asVoid);
+
           const gates = yield* makeGates();
           const holdStarts = yield* Ref.make(0);
           const controls = DemoRunControls.of({ gates, emit, eventBase, holdStarts });
@@ -747,6 +798,7 @@ const InteractiveRuntimeLive = Layer.effect(
 
           const limits = live ? liveResearchLimits : scenarioLimits(request.scenario);
           const budget = yield* makeUsageBudget(limits);
+
           yield* emit(
             DemoBudgetChanged.make({
               ...(yield* eventBase),
@@ -764,6 +816,7 @@ const InteractiveRuntimeLive = Layer.effect(
           );
 
           const baseBudgetHook = toRunBudgetHook(budget);
+
           const budgetHook = {
             guard: baseBudgetHook.guard,
             consume: (delta: Parameters<typeof baseBudgetHook.consume>[0]) =>
@@ -785,6 +838,7 @@ const InteractiveRuntimeLive = Layer.effect(
           };
 
           const claimedCommands = new Map<string, DemoCommandKind>();
+
           const inputHook: RunInputHook = {
             drain: (policy) =>
               commandGate.withPermit(
@@ -792,7 +846,9 @@ const InteractiveRuntimeLive = Layer.effect(
                   Effect.tap((commands) =>
                     Effect.forEach(commands, (command) => {
                       const kind = command._tag === "SteeringCommand" ? "steering" : "follow-up";
+
                       claimedCommands.set(command.id, kind);
+
                       return eventBase.pipe(
                         Effect.flatMap((base) =>
                           emit(
@@ -824,8 +880,10 @@ const InteractiveRuntimeLive = Layer.effect(
                       const source = [...claimedCommands.entries()].find(
                         ([, kind]) => kind === command.kind,
                       );
+
                       if (source === undefined) return Effect.void;
                       claimedCommands.delete(source[0]);
+
                       return eventBase.pipe(
                         Effect.flatMap((base) =>
                           emit(
@@ -863,6 +921,7 @@ const InteractiveRuntimeLive = Layer.effect(
               Effect.gen(function* () {
                 const sourceText = JSON.stringify(source.content);
                 const compacted = !live && turn > 1;
+
                 const summary = compacted
                   ? [
                       "Compacted Travel Planner context.",
@@ -876,7 +935,9 @@ const InteractiveRuntimeLive = Layer.effect(
                       "Quote reference: quote-sfo-lhr-001.",
                     ].join(" ")
                   : "No compaction needed for the first model request.";
+
                 const prompt = compacted ? Prompt.make(summary) : source;
+
                 yield* emit(
                   DemoContextPrepared.make({
                     ...(yield* eventBase),
@@ -887,6 +948,7 @@ const InteractiveRuntimeLive = Layer.effect(
                     summary,
                   }),
                 );
+
                 return { prompt };
               }),
           };
@@ -896,10 +958,12 @@ const InteractiveRuntimeLive = Layer.effect(
             intermediateStopTurn,
             finalPlanTurn,
           ];
+
           const durationTurn: ScriptedTurnInput = {
             ...phase1HappyPathTurns[0],
             onStreamStart: Effect.sleep("50 millis"),
           };
+
           const turns =
             request.scenario === "hold"
               ? ([holdTurn, finalPlanTurn] satisfies ReadonlyArray<ScriptedTurnInput>)
@@ -913,6 +977,7 @@ const InteractiveRuntimeLive = Layer.effect(
             request: (approvalRequest) =>
               Effect.gen(function* () {
                 const deferred = yield* Deferred.make<ApprovalDecision>();
+
                 yield* Ref.update(pendingApprovals, (current) =>
                   new Map(current).set(approvalRequest.requestId, {
                     requestId: approvalRequest.requestId,
@@ -925,11 +990,14 @@ const InteractiveRuntimeLive = Layer.effect(
                     request: approvalRequest,
                   }),
                 );
+
                 return yield* Deferred.await(deferred).pipe(
                   Effect.ensuring(
                     Ref.update(pendingApprovals, (current) => {
                       const next = new Map(current);
+
                       next.delete(approvalRequest.requestId);
+
                       return next;
                     }),
                   ),
@@ -946,6 +1014,7 @@ const InteractiveRuntimeLive = Layer.effect(
           });
 
           const controlsLayer = Layer.succeed(DemoRunControls)(controls);
+
           const commonRuntimeLayers = Layer.mergeAll(
             RunContextPreparationPassthrough,
             ThreadHistory.layerTransient,
@@ -956,11 +1025,13 @@ const InteractiveRuntimeLive = Layer.effect(
             ApprovalAuditMemoryLive,
             StructuralRedactorLive,
           );
+
           const scriptedRuntimeLayer = Layer.mergeAll(
             commonRuntimeLayers,
             request.scenario === "tool-defect" ? DefectiveCatalogLayers : ControlledCatalogLayers,
             TravelGuidanceLayer,
           ).pipe(Layer.provide(controlsLayer));
+
           const liveRuntimeLayer = Layer.mergeAll(
             RunContextPreparationPassthrough,
             ThreadHistory.layerTransient,
@@ -979,6 +1050,7 @@ const InteractiveRuntimeLive = Layer.effect(
                     Effect.provideService(McpConnector, connector),
                     Effect.provideService(Crypto.Crypto, crypto),
                   );
+
                   yield* emit(
                     DemoMcpConnected.make({
                       ...(yield* eventBase),
@@ -992,6 +1064,7 @@ const InteractiveRuntimeLive = Layer.effect(
                       maxDiscoveryBytes: demoMcpRequest.maxDiscoveryBytes,
                     }),
                   );
+
                   const sandboxRequest = SandboxRequest.make({
                     runtime: SandboxRuntime.make({
                       kind: "unisolated-process",
@@ -1010,6 +1083,7 @@ const InteractiveRuntimeLive = Layer.effect(
                     secretHandles: [],
                     artifactRules: [],
                   });
+
                   yield* sandbox
                     .execute(sandboxRequest)
                     .pipe(
@@ -1027,9 +1101,11 @@ const InteractiveRuntimeLive = Layer.effect(
           const declared = yield* Ref.make<ReadonlyArray<RunEvent & { _tag: "ToolCallDeclared" }>>(
             [],
           );
+
           const completed = yield* Ref.make<
             ReadonlyArray<RunEvent & { _tag: "ToolCallSucceeded" }>
           >([]);
+
           const committed = yield* Ref.make(false);
 
           const inspectRunEvent = (event: RunEvent) =>
@@ -1054,6 +1130,7 @@ const InteractiveRuntimeLive = Layer.effect(
                 }
               } else if (event._tag === "ModelStarted" && event.turn === 2) {
                 const alreadyCommitted = yield* Ref.getAndSet(committed, true);
+
                 if (!alreadyCommitted) {
                   yield* emit(
                     DemoToolBatchCommitted.make({
@@ -1127,6 +1204,7 @@ const InteractiveRuntimeLive = Layer.effect(
             Effect.gen(function* () {
               yield* Ref.set(acceptingCommands, false);
               const error = Cause.squash(cause);
+
               if (Schema.is(BudgetExceeded)(error)) {
                 yield* emit(
                   DemoBudgetRejected.make({
@@ -1152,6 +1230,7 @@ const InteractiveRuntimeLive = Layer.effect(
                 );
               }
               const message = "message" in request ? request.message : phase1Trip.request;
+
               const input = TripRequest.make({
                 request: message,
                 origin: phase1Trip.origin,
@@ -1162,6 +1241,7 @@ const InteractiveRuntimeLive = Layer.effect(
                 budgetCents: phase1Trip.budgetCents,
                 currency: phase1Trip.currency,
               });
+
               yield* AgentRuntime.stream(
                 makeRealTravelPlannerAgent("settings" in request ? request.settings : undefined),
                 input,
@@ -1185,6 +1265,7 @@ const InteractiveRuntimeLive = Layer.effect(
                 : terminalizeProducerFailure(exit.cause),
             ),
           );
+
           yield* Effect.forkChild(producer);
 
           return Stream.fromQueue(output);

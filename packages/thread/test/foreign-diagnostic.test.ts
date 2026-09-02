@@ -25,6 +25,7 @@ describe("foreign failure diagnostics", () => {
         throw new Error("keys escaped");
       },
     });
+
     const hostileCoercion = {
       [Symbol.toPrimitive]() {
         throw new Error("coercion escaped");

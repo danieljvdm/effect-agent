@@ -16,10 +16,12 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 export const ResearchDocumentId = Schema.NonEmptyString.check(Schema.isMaxLength(64)).pipe(
   Schema.brand("@effect-agent/testing/docs-researcher/ResearchDocumentId"),
 );
+
 export type ResearchDocumentId = typeof ResearchDocumentId.Type;
 
 const BoundedTitle = Schema.NonEmptyString.check(Schema.isMaxLength(120));
 const BoundedBody = Schema.NonEmptyString.check(Schema.isMaxLength(16 * 1024));
+
 /** Bounded summary text: the ONLY child-derived text that may cross to the parent. */
 export const BoundedSummary = Schema.NonEmptyString.check(Schema.isMaxLength(240));
 
@@ -66,6 +68,7 @@ export const FetchDocument = Tool.make("fetch_document", {
 });
 
 export const DocContentToolkit = Toolkit.make(FetchDocument);
+
 export const docContentToolkitLayer = DocContentToolkit.toLayer({
   fetch_document: (query) => Effect.flatMap(DocumentLibrary, (library) => library.fetch(query)),
 });
@@ -125,9 +128,11 @@ export const researchCorpusDocumentIds: ReadonlyArray<ResearchDocumentId> = [
 
 const requireCorpusEntry = (documentId: string): CorpusEntry => {
   const entry = corpusEntries.get(documentId);
+
   if (entry === undefined) {
     throw new Error(`No deterministic corpus entry exists for document ${documentId}`);
   }
+
   return entry;
 };
 
@@ -136,6 +141,7 @@ export const researchDocumentLookup = (
   query: DocumentQuery,
 ): Effect.Effect<ResearchDocument, DocumentUnavailable> => {
   const entry = corpusEntries.get(query.documentId);
+
   return entry === undefined
     ? Effect.fail(
         DocumentUnavailable.make({
@@ -333,6 +339,7 @@ export const expectedResearchDigest = (
   ResearchDigest.make({
     findings: documentIds.map((documentId) => {
       const summary = documentSummaryFor(documentId);
+
       return SummaryFinding.make({
         documentId: summary.documentId,
         summary: summary.summary,

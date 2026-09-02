@@ -159,6 +159,7 @@ const findSnapshot = (
   threadId: ThreadId,
 ): Effect.Effect<ThreadSnapshot, ThreadNotFound> => {
   const snapshot = state.get(threadId);
+
   return snapshot === undefined
     ? Effect.fail(ThreadNotFound.make({ threadId }))
     : Effect.succeed(snapshot);
@@ -166,7 +167,9 @@ const findSnapshot = (
 
 const totalStoreBytes = (threads: ReadonlyMap<ThreadId, ThreadSnapshot>): number => {
   let total = 0;
+
   for (const snapshot of threads.values()) total += snapshot.contentBytes;
+
   return total;
 };
 
@@ -178,6 +181,7 @@ const appendEncoded = (
   timestamp: DateTime.Utc,
 ): readonly [AppendResult, ReadonlyMap<ThreadId, ThreadSnapshot>] => {
   const current = threads.get(threadId);
+
   if (current === undefined) return [{ _tag: "not-found" }, threads];
   if (current.messages.length >= MAX_THREAD_MESSAGES) {
     return [
@@ -195,6 +199,7 @@ const appendEncoded = (
   }
   const messageBytes = utf8Bytes(encoded);
   const contentBytes = current.contentBytes + messageBytes;
+
   if (contentBytes > MAX_THREAD_CONTENT_BYTES) {
     return [
       {
@@ -210,6 +215,7 @@ const appendEncoded = (
     ];
   }
   const storeBytes = totalStoreBytes(threads) + messageBytes;
+
   if (storeBytes > MAX_EPHEMERAL_CONTENT_BYTES) {
     return [
       {
@@ -224,6 +230,7 @@ const appendEncoded = (
       threads,
     ];
   }
+
   const message = ThreadMessage.make({
     threadId,
     sequence: current.nextSequence,
@@ -232,6 +239,7 @@ const appendEncoded = (
     encodedBytes: messageBytes,
     timestamp,
   });
+
   const next = ThreadSnapshot.make({
     version: current.version,
     threadId: current.threadId,
@@ -239,6 +247,7 @@ const appendEncoded = (
     contentBytes,
     messages: [...current.messages, message],
   });
+
   return [{ _tag: "success", value: next }, new Map(threads).set(threadId, next)];
 };
 
@@ -256,14 +265,17 @@ const commitHistorySuffix = (
   timestamp: DateTime.Utc,
 ): readonly [RecordHistoryResult, ReadonlyMap<ThreadId, ThreadSnapshot>] => {
   const current = threads.get(threadId);
+
   if (current === undefined) {
     return [{ _tag: "failure", error: ThreadNotFound.make({ threadId }) }, threads];
   }
   if (current !== base) return [{ _tag: "stale" }, threads];
   let next = threads;
   let snapshot = current;
+
   for (const entry of suffix) {
     const [result, updated] = appendEncoded(next, threadId, entry.append, entry.encoded, timestamp);
+
     if (result._tag === "not-found") {
       return [{ _tag: "failure", error: ThreadNotFound.make({ threadId }) }, threads];
     }
@@ -273,6 +285,7 @@ const commitHistorySuffix = (
     snapshot = result.value;
     next = updated;
   }
+
   return [{ _tag: "success", value: snapshot }, next];
 };
 
@@ -289,13 +302,16 @@ export const EphemeralThreadsLive = Layer.effect(
       Effect.gen(function* () {
         const encoded = yield* encodeMessage(threadId, message.message);
         const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+
         const result = yield* Ref.modify(state, (threads) =>
           appendEncoded(threads, threadId, message, encoded, timestamp),
         );
+
         if (result._tag === "not-found") {
           return yield* ThreadNotFound.make({ threadId });
         }
         if (result._tag === "failure") return yield* result.error;
+
         return result.value;
       });
 
@@ -306,6 +322,7 @@ export const EphemeralThreadsLive = Layer.effect(
             state,
             (threads): readonly [CreateResult, ReadonlyMap<ThreadId, ThreadSnapshot>] => {
               const existing = threads.get(threadId);
+
               if (existing !== undefined) {
                 return [{ _tag: "success" as const, value: existing }, threads] as const;
               }
@@ -323,6 +340,7 @@ export const EphemeralThreadsLive = Layer.effect(
                   threads,
                 ] as const;
               }
+
               const created = ThreadSnapshot.make({
                 version: 1,
                 threadId,
@@ -330,13 +348,16 @@ export const EphemeralThreadsLive = Layer.effect(
                 contentBytes: 0,
                 messages: [],
               });
+
               return [
                 { _tag: "success" as const, value: created },
                 new Map(threads).set(threadId, created),
               ] as const;
             },
           );
+
           if (result._tag === "failure") return yield* result.error;
+
           return result.value;
         }),
       append,
@@ -345,13 +366,16 @@ export const EphemeralThreadsLive = Layer.effect(
           const incoming = yield* Effect.forEach(history.content, (message) =>
             encodeMessage(threadId, message).pipe(Effect.map((encoded) => ({ message, encoded }))),
           );
+
           const attempt: Effect.Effect<ThreadSnapshot, ThreadError> = Effect.gen(function* () {
             const current = yield* Ref.get(state).pipe(
               Effect.flatMap((all) => findSnapshot(all, threadId)),
             );
+
             const currentEncoded = yield* Effect.forEach(current.messages, (entry) =>
               encodeMessage(threadId, entry.message),
             );
+
             if (
               incoming.length < currentEncoded.length ||
               currentEncoded.some((encoded, index) => encoded !== incoming[index]?.encoded)
@@ -362,18 +386,23 @@ export const EphemeralThreadsLive = Layer.effect(
               });
             }
             const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+
             const suffix = incoming.slice(currentEncoded.length).map((entry) => ({
               append: ThreadAppend.make({ runId: historyRunId, message: entry.message }),
               encoded: entry.encoded,
             }));
+
             const result = yield* Ref.modify(state, (threads) =>
               commitHistorySuffix(threads, threadId, current, suffix, timestamp),
             );
+
             // Another writer committed after verification: re-verify against the new base.
             if (result._tag === "stale") return yield* attempt;
             if (result._tag === "failure") return yield* result.error;
+
             return result.value;
           });
+
           return yield* attempt;
         }),
       snapshot: (threadId) =>
@@ -381,6 +410,7 @@ export const EphemeralThreadsLive = Layer.effect(
       export: (threadId) =>
         Effect.gen(function* () {
           const snapshot = yield* findSnapshot(yield* Ref.get(state), threadId);
+
           return ThreadExport.make({
             format: "effect-agent/ephemeral-thread@1",
             exportedAt: DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),

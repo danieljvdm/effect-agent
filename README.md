@@ -49,6 +49,7 @@ Effect Agent uses Effect AI's tools, models, and provider integrations directly.
   [event subscriptions](docs/guide/operations.md#event-subscriptions).
 - [Sandbox and browser tools](docs/guide/sandbox.md) for processes, page capture, screenshots, and
   bounded crawling. The [browser guide](docs/guide/browser.md) covers adapters and host requirements.
+- [MCP server tools](docs/guide/tools.md#mcp) over Streamable HTTP or stdio, with bounded discovery.
 
 ## Durability
 
@@ -76,7 +77,8 @@ Plans are not implemented. Subagents cannot nest, hand off, or detach. See the
 [capability inventory](docs/reference/packages.md#capability-inventory) for the full list.
 
 Your application owns authorization and isolation. The local sandbox runs trusted code without
-isolation. For MCP, your application supplies the connector transport. Read the
+isolation. [MCP servers](docs/guide/tools.md#mcp) connect over Streamable HTTP or stdio with
+credentials and commands the application supplies. Read the
 [host isolation requirements](docs/guide/operations.md#authorization-and-isolation) before deploying.
 
 For GitHub integrations, see the [read-only PR reviewer](packages/pr-review/README.md).

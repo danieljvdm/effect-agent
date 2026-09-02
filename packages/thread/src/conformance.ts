@@ -108,6 +108,7 @@ const materialize = Effect.fn("ThreadStoreConformance.materialize")(function* (
   producerEpoch: ProducerEpoch,
 ) {
   const store = yield* ThreadStore;
+
   yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch }));
 });
 
@@ -118,6 +119,7 @@ const append = Effect.fn("ThreadStoreConformance.append")(function* (
   producerEpoch: ProducerEpoch = EPOCH_ONE,
 ) {
   const store = yield* ThreadStore;
+
   return yield* store.append(
     FencedAppendRequest.make({
       threadId,
@@ -131,6 +133,7 @@ const append = Effect.fn("ThreadStoreConformance.append")(function* (
 
 const readAll = Effect.fn("ThreadStoreConformance.readAll")(function* (threadId: ThreadId) {
   const store = yield* ThreadStore;
+
   return yield* store.read(ThreadRead.make({ threadId, limit: 1_024 })).pipe(Stream.runCollect);
 });
 
@@ -189,6 +192,7 @@ const atomicBatchVisibility = conformanceCase(
     Effect.gen(function* () {
       const threadId = decodeThreadId("conformance-atomic");
       const store = yield* ThreadStore;
+
       yield* materialize(threadId, EPOCH_ONE);
 
       const committed = yield* append(
@@ -199,12 +203,14 @@ const atomicBatchVisibility = conformanceCase(
           record("atomic-record-3", "third"),
         ]),
       );
+
       yield* ensure(
         committed.firstSequence === 1 && committed.lastSequence === 3,
         "A three-record batch must commit sequences 1 through 3",
       );
 
       const read = yield* readAll(threadId);
+
       yield* ensure(read.length === 3, "Readers must observe the full committed batch");
       yield* ensure(
         read.every((envelope, index) => envelope.sequence === index + 1),
@@ -214,6 +220,7 @@ const atomicBatchVisibility = conformanceCase(
       const observed = yield* store
         .observe(ThreadObservation.make({ threadId }))
         .pipe(Stream.take(3), Stream.runCollect);
+
       yield* ensure(
         observed.map((envelope) => envelope.record.recordId).join(",") ===
           read.map((envelope) => envelope.record.recordId).join(","),
@@ -221,10 +228,12 @@ const atomicBatchVisibility = conformanceCase(
       );
 
       const duplicate = record("atomic-record-4", "duplicate");
+
       const intraBatch = yield* expectFailure(
         "a batch containing one record ID twice",
         append(threadId, batch("atomic-batch-2", [duplicate, duplicate]), committed),
       );
+
       yield* ensure(
         isAppendConflict(intraBatch) && intraBatch.reason === "record-identity",
         "A duplicated record ID inside one batch must conflict with reason record-identity",
@@ -234,12 +243,14 @@ const atomicBatchVisibility = conformanceCase(
         "a batch reusing an already-committed record ID",
         append(threadId, batch("atomic-batch-3", [record("atomic-record-1", "reused")]), committed),
       );
+
       yield* ensure(
         isAppendConflict(crossBatch) && crossBatch.reason === "record-identity",
         "A record ID reused across batches must conflict with reason record-identity",
       );
 
       const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
+
       yield* ensure(
         exported.records.length === 3 &&
           exported.tailSequence === committed.lastSequence &&
@@ -254,16 +265,20 @@ const idempotentReplay = conformanceCase(
   ({ ensure, expectFailure }) =>
     Effect.gen(function* () {
       const threadId = decodeThreadId("conformance-replay");
+
       yield* materialize(threadId, EPOCH_ONE);
 
       const original = batch("replay-batch-1", [
         record("replay-record-1", "Lisbon"),
         record("replay-record-2", "Porto"),
       ]);
+
       const first = yield* append(threadId, original);
+
       yield* ensure(!first.replayed, "The first append of a batch must not report replayed");
 
       const replayed = yield* append(threadId, original);
+
       yield* ensure(
         replayed.replayed &&
           replayed.firstSequence === first.firstSequence &&
@@ -276,12 +291,14 @@ const idempotentReplay = conformanceCase(
         "replaying a batch ID with different canonical content",
         append(threadId, batch("replay-batch-1", [record("replay-record-3", "Faro")])),
       );
+
       yield* ensure(
         isAppendConflict(altered) && altered.reason === "batch-digest",
         "A batch ID replayed with different content must conflict with reason batch-digest",
       );
 
       const read = yield* readAll(threadId);
+
       yield* ensure(read.length === 2, "Replay and conflict must not duplicate committed records");
     }),
 );
@@ -291,7 +308,9 @@ const tailConflict = conformanceCase(
   ({ ensure, expectFailure }) =>
     Effect.gen(function* () {
       const threadId = decodeThreadId("conformance-tail");
+
       yield* materialize(threadId, EPOCH_ONE);
+
       const first = yield* append(
         threadId,
         batch("tail-batch-1", [record("tail-record-1", "first")]),
@@ -301,6 +320,7 @@ const tailConflict = conformanceCase(
         "an append declaring the pre-append tail sequence",
         append(threadId, batch("tail-batch-2", [record("tail-record-2", "second")])),
       );
+
       yield* ensure(
         isAppendConflict(staleSequence) && staleSequence.reason === "tail",
         "A stale expected tail sequence must conflict with reason tail",
@@ -319,6 +339,7 @@ const tailConflict = conformanceCase(
           tailDigest: EMPTY_TAIL_DIGEST,
         }),
       );
+
       yield* ensure(
         isAppendConflict(staleDigest) && staleDigest.reason === "tail",
         "A stale expected tail digest must conflict with reason tail",
@@ -329,6 +350,7 @@ const tailConflict = conformanceCase(
         batch("tail-batch-2", [record("tail-record-2", "second")]),
         first,
       );
+
       yield* ensure(
         recovered.firstSequence === first.lastSequence + 1,
         "An append declaring the true tail must commit after a tail conflict",
@@ -341,7 +363,9 @@ const producerFencing = conformanceCase(
   ({ ensure, expectFailure }) =>
     Effect.gen(function* () {
       const threadId = decodeThreadId("conformance-fencing");
+
       yield* materialize(threadId, EPOCH_ONE);
+
       const first = yield* append(
         threadId,
         batch("fence-batch-1", [record("fence-record-1", "first")]),
@@ -358,6 +382,7 @@ const producerFencing = conformanceCase(
           EPOCH_ONE,
         ),
       );
+
       yield* ensure(
         isFenceRejected(staleAppend) &&
           staleAppend.actualEpoch === EPOCH_TWO &&
@@ -369,6 +394,7 @@ const producerFencing = conformanceCase(
         "re-materializing with the pre-takeover producer epoch",
         materialize(threadId, EPOCH_ONE),
       );
+
       yield* ensure(
         isFenceRejected(staleMaterialize),
         "A stale producer epoch must not re-register through materialization",
@@ -380,6 +406,7 @@ const producerFencing = conformanceCase(
         first,
         EPOCH_TWO,
       );
+
       yield* ensure(
         !takeover.replayed && takeover.firstSequence === first.lastSequence + 1,
         "The takeover epoch must append after the committed tail",
@@ -393,7 +420,9 @@ const offsetResumability = conformanceCase(
     Effect.gen(function* () {
       const threadId = decodeThreadId("conformance-offsets");
       const store = yield* ThreadStore;
+
       yield* materialize(threadId, EPOCH_ONE);
+
       const first = yield* append(
         threadId,
         batch("offset-batch-1", [
@@ -401,11 +430,13 @@ const offsetResumability = conformanceCase(
           record("offset-record-2", "second"),
         ]),
       );
+
       const second = yield* append(
         threadId,
         batch("offset-batch-2", [record("offset-record-3", "third")]),
         first,
       );
+
       yield* append(
         threadId,
         batch("offset-batch-3", [record("offset-record-4", "fourth")]),
@@ -413,14 +444,17 @@ const offsetResumability = conformanceCase(
       );
 
       const committed = yield* readAll(threadId);
+
       yield* ensure(committed.length === 4, "All committed records must be readable");
       const savedOffset = committed[1]?.offset;
+
       yield* ensure(savedOffset !== undefined, "Committed records must carry observation offsets");
       if (savedOffset === undefined) return;
 
       const resumed = yield* store
         .observe(ThreadObservation.make({ threadId, afterOffset: savedOffset }))
         .pipe(Stream.take(2), Stream.runCollect);
+
       yield* ensure(
         resumed.map((envelope) => envelope.record.recordId).join(",") ===
           committed
@@ -433,6 +467,7 @@ const offsetResumability = conformanceCase(
       const fromStart = yield* store
         .observe(ThreadObservation.make({ threadId }))
         .pipe(Stream.take(4), Stream.runCollect);
+
       yield* ensure(
         fromStart.map((envelope) => envelope.record.recordId).join(",") ===
           committed.map((envelope) => envelope.record.recordId).join(","),
@@ -448,12 +483,14 @@ const checkpointBoundaries = conformanceCase(
       const threadId = decodeThreadId("conformance-checkpoints");
       const store = yield* ThreadStore;
       const checkpoints = store.checkpoints;
+
       if (checkpoints === undefined) {
         return yield* ThreadStoreConformanceViolation.make({
           caseName: "enforces checkpoint save and load boundary rules",
           message: "The optional checkpoint suite requires checkpoint support",
         });
       }
+
       const missing = [
         yield* expectFailure(
           "saving a checkpoint for an unmaterialized Thread",
@@ -468,11 +505,13 @@ const checkpointBoundaries = conformanceCase(
           checkpoints.load(LoadCheckpointRequest.make({ threadId })),
         ),
       ];
+
       yield* ensure(
         missing.every(isThreadNotMaterialized),
         "Checkpoints require a materialized Thread",
       );
       yield* materialize(threadId, EPOCH_ONE);
+
       const first = yield* append(
         threadId,
         batch("checkpoint-batch-1", [record("checkpoint-record-1", "Kyoto")]),
@@ -490,6 +529,7 @@ const checkpointBoundaries = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isCheckpointRejected(aheadOfTail) && aheadOfTail.reason === "ahead-of-tail",
         "A checkpoint ahead of the tail must be rejected with reason ahead-of-tail",
@@ -503,6 +543,7 @@ const checkpointBoundaries = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isCheckpointRejected(digestMismatch) && digestMismatch.reason === "digest-mismatch",
         "A checkpoint with a mismatched digest must be rejected with reason digest-mismatch",
@@ -513,10 +554,12 @@ const checkpointBoundaries = conformanceCase(
       );
 
       const valid = checkpointAt(threadId, first.lastSequence, first.tailDigest);
+
       yield* checkpoints.save(SaveCheckpointRequest.make({ checkpoint: valid }));
       yield* checkpoints.save(SaveCheckpointRequest.make({ checkpoint: valid }));
 
       const loaded = yield* checkpoints.load(LoadCheckpointRequest.make({ threadId }));
+
       yield* ensure(
         Option.isSome(loaded) &&
           loaded.value.throughSequence === first.lastSequence &&
@@ -527,6 +570,7 @@ const checkpointBoundaries = conformanceCase(
       const beforeCheckpoint = yield* checkpoints.load(
         LoadCheckpointRequest.make({ threadId, atOrBeforeSequence: ZERO_SEQUENCE }),
       );
+
       yield* ensure(
         Option.isNone(beforeCheckpoint),
         "Checkpoint lookup must respect the atOrBeforeSequence bound",
@@ -538,6 +582,7 @@ const checkpointBoundaries = conformanceCase(
         first,
       );
       const afterAppend = yield* checkpoints.load(LoadCheckpointRequest.make({ threadId }));
+
       yield* ensure(
         Option.isSome(afterAppend) && afterAppend.value.throughSequence === first.lastSequence,
         "An older checkpoint must remain loadable after later appends",
@@ -556,6 +601,7 @@ const tailInspection = conformanceCase(
         "inspecting the tail of an unmaterialized Thread",
         store.inspectTail(ThreadTailRequest.make({ threadId })),
       );
+
       yield* ensure(
         isThreadNotMaterialized(missing) && missing.threadId === threadId,
         "Tail inspection of an unmaterialized Thread must fail as not materialized",
@@ -563,6 +609,7 @@ const tailInspection = conformanceCase(
 
       yield* materialize(threadId, EPOCH_ONE);
       const empty = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
       yield* ensure(
         empty.tailSequence === ZERO_SEQUENCE &&
           empty.tailDigest === EMPTY_TAIL_DIGEST &&
@@ -574,7 +621,9 @@ const tailInspection = conformanceCase(
         threadId,
         batch("inspect-batch-1", [record("inspect-record-1", "first")]),
       );
+
       const afterAppend = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
       yield* ensure(
         afterAppend.tailSequence === first.lastSequence &&
           afterAppend.tailDigest === first.tailDigest,
@@ -587,6 +636,7 @@ const tailInspection = conformanceCase(
         { lastSequence: afterAppend.tailSequence, tailDigest: afterAppend.tailDigest },
         afterAppend.producerEpoch,
       );
+
       yield* ensure(
         resumed.firstSequence === afterAppend.tailSequence + 1,
         "An append composed from the inspected tail must commit without exporting the log",
@@ -594,6 +644,7 @@ const tailInspection = conformanceCase(
 
       yield* materialize(threadId, EPOCH_TWO);
       const afterTakeover = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
       yield* ensure(
         afterTakeover.producerEpoch === EPOCH_TWO &&
           afterTakeover.tailSequence === resumed.lastSequence,
@@ -630,6 +681,7 @@ const notMaterializedOperations = conformanceCase(
           store.inspectTail(ThreadTailRequest.make({ threadId })),
         ),
       ];
+
       yield* Effect.forEach(
         failures,
         (failure) =>

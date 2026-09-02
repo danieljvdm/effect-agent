@@ -75,13 +75,16 @@ layer(testLayer)("Agent input prompts", (it) => {
       const order: Array<string> = [];
       const requests: Array<Prompt.Prompt> = [];
       const sentinel = "HOST-ONLY-ENGINE-SENTINEL";
+
       const file = Prompt.filePart({
         mediaType: "image/png",
         data: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
       });
+
       const projected = Prompt.fromMessages([
         Prompt.userMessage({ content: [Prompt.textPart({ text: "public question:2" }), file] }),
       ]);
+
       const agent = Agent.withModel(
         Agent.make("native-input-prompt", {
           input: Schema.Struct({
@@ -93,6 +96,7 @@ layer(testLayer)("Agent input prompts", (it) => {
           instructions: () =>
             Effect.sync(() => {
               order.push("instructions");
+
               return "Answer the public question.";
             }),
           inputPrompt: (input) =>
@@ -101,6 +105,7 @@ layer(testLayer)("Agent input prompts", (it) => {
               expect(input.count).toBe(2);
               expect(input.hostOnly).toBe(sentinel);
               expect(`${prefix}${input.question}:${input.count}`).toBe("public question:2");
+
               return projected;
             }),
           toolkit: Toolkit.empty,
@@ -111,9 +116,11 @@ layer(testLayer)("Agent input prompts", (it) => {
           requests.push(prompt);
           expect(JSON.stringify(prompt)).not.toContain(sentinel);
           expect(prompt.content).toContainEqual(projected.content[0]);
+
           return requests.length === 1 ? "Prior thread summary." : '"done"';
         }),
       );
+
       const compactor = Layer.succeed(
         ContextCompactor,
         ContextCompactor.of({
@@ -135,6 +142,7 @@ layer(testLayer)("Agent input prompts", (it) => {
             ),
         }),
       );
+
       const result = yield* AgentRuntime.run(
         agent,
         { question: "question", count: "2", hostOnly: sentinel },
@@ -149,6 +157,7 @@ layer(testLayer)("Agent input prompts", (it) => {
                   Prompt.systemMessage({ content: "Answer the public question." }),
                   ...projected.content,
                 ]);
+
                 return { prompt: Prompt.concat(source, Prompt.make("context-added")) };
               }),
           },
@@ -157,6 +166,7 @@ layer(testLayer)("Agent input prompts", (it) => {
         Effect.provideService(InputPromptService, { prefix: "public " }),
         Effect.provide(compactor),
       );
+
       expect(result.output).toBe("done");
       expect(order).toEqual(["instructions", "input", "context", "compact", "summary", "model"]);
       expect(requests).toHaveLength(2);
@@ -166,10 +176,13 @@ layer(testLayer)("Agent input prompts", (it) => {
   it.effect("preserves default JSON rendering and permits an empty input prompt", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const model = captureModel((prompt) => {
         requests.push(prompt);
+
         return '"done"';
       });
+
       const options = {
         input: Schema.Struct({ value: Schema.NumberFromString }),
         output: Schema.String,
@@ -177,6 +190,7 @@ layer(testLayer)("Agent input prompts", (it) => {
         toolkit: Toolkit.empty,
         policy,
       };
+
       yield* AgentRuntime.run(Agent.withModel(Agent.make("default-input", options), model), {
         value: "2",
       });
@@ -199,6 +213,7 @@ layer(testLayer)("Agent input prompts", (it) => {
         const finalized = yield* Ref.make(false);
         const requests: Array<Prompt.Prompt> = [];
         const defect = new Error("input projection defect");
+
         const agent = Agent.withModel(
           Agent.make(`input-${mode}`, {
             input: Schema.String,
@@ -211,6 +226,7 @@ layer(testLayer)("Agent input prompts", (it) => {
                 );
                 if (mode === "failure") return yield* new InputPromptFailure();
                 if (mode === "defect") return yield* Effect.die(defect);
+
                 return yield* Effect.never;
               }),
             toolkit: Toolkit.empty,
@@ -218,21 +234,26 @@ layer(testLayer)("Agent input prompts", (it) => {
           }),
           captureModel((prompt) => {
             requests.push(prompt);
+
             return '"unreachable"';
           }),
         );
+
         const fiber = yield* AgentRuntime.run(agent, "HOST-ONLY-FAILURE-SENTINEL").pipe(
           Effect.scoped,
           Effect.forkChild,
         );
+
         yield* Deferred.await(entered);
         if (mode === "timeout") yield* TestClock.adjust("5 seconds");
         if (mode === "interruption") yield* Fiber.interrupt(fiber);
         const exit = yield* Fiber.await(fiber);
+
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isSuccess(exit)) return;
         if (mode === "failure" || mode === "timeout") {
           const failure = Cause.findErrorOption(exit.cause);
+
           expect(Option.isSome(failure)).toBe(true);
           if (Option.isSome(failure)) {
             expect(failure.value).toMatchObject(

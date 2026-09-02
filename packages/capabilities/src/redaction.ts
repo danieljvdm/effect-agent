@@ -7,10 +7,13 @@ const MAX_REDACTION_DEPTH = 16;
 
 const utf8Bytes = (value: string): number => {
   let total = 0;
+
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
+
     total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
   }
+
   return total;
 };
 
@@ -21,6 +24,7 @@ export const RedactedPreview = Schema.String.pipe(
   }),
   Schema.brand("@effect-agent/capabilities/RedactedPreview"),
 );
+
 export type RedactedPreview = typeof RedactedPreview.Type;
 
 /** Structural redaction failed closed rather than returning unreviewed caller text. */
@@ -60,9 +64,11 @@ const redactValue = (value: unknown, depth: number, counter: RedactionCounter): 
   }
   if (value !== null && typeof value === "object") {
     const redacted: Record<string, Schema.Json> = {};
+
     for (const [key, item] of Object.entries(value)) {
       redacted[key] = redactValue(item, depth + 1, counter);
     }
+
     return redacted;
   }
   // The default policy is deliberately type-aware and fail-closed: it preserves
@@ -74,6 +80,7 @@ const redactValue = (value: unknown, depth: number, counter: RedactionCounter): 
   if (typeof value === "string") return "[REDACTED:string]";
   if (typeof value === "number") return "[REDACTED:number]";
   if (typeof value === "boolean") return "[REDACTED:boolean]";
+
   return "[REDACTED:unsupported]";
 };
 
@@ -85,14 +92,17 @@ const truncateUtf8 = (value: string, maxBytes: number): string => {
   const suffixBytes = utf8Bytes(suffix);
   let output = "";
   let bytes = 0;
+
   for (const character of value) {
     const characterBytes = utf8Bytes(character);
+
     if (bytes + characterBytes + suffixBytes > maxBytes) {
       break;
     }
     output += character;
     bytes += characterBytes;
   }
+
   return `${output}${suffix}`;
 };
 
@@ -112,10 +122,13 @@ export const redactedTranscript = (
   Effect.gen(function* () {
     const redactor = yield* Redactor;
     const lines: Array<RedactedPreview> = [];
+
     for (const event of events) {
       const encoded = yield* encodeRunEvent(event).pipe(Effect.orDie);
+
       lines.push(yield* redactor.redact(encoded));
     }
+
     return lines;
   });
 
@@ -129,6 +142,7 @@ export const StructuralRedactorLive = Layer.succeed(Redactor)({
     Effect.try({
       try: () => {
         const structurallyRedacted = redactValue(decodedValue, 0, { nodes: 0 });
+
         return truncateUtf8(JSON.stringify(structurallyRedacted), MAX_REDACTED_PREVIEW_BYTES);
       },
       catch: (cause) =>

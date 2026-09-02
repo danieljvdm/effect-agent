@@ -36,6 +36,7 @@ const initialSequence = Schema.decodeSync(CanonicalSequence)(0);
 
 const writePersistentTravelPlanner = Effect.gen(function* () {
   const store = yield* ThreadStore;
+
   yield* store.materialize(
     ThreadMaterialization.make({
       threadId: phase3TravelPlannerThreadId,
@@ -52,6 +53,7 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
       producerEpoch,
     }),
   );
+
   const prefix = yield* store
     .read(
       ThreadRead.make({
@@ -60,7 +62,9 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
       }),
     )
     .pipe(Stream.runCollect);
+
   const prefixProjection = replayThread(phase3TravelPlannerThreadId, prefix, initial.tailDigest);
+
   yield* store.checkpoints!.save(
     SaveCheckpointRequest.make({
       checkpoint: makePhase3TravelPlannerCheckpoint(prefixProjection),
@@ -80,16 +84,19 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
 
 const inspectPersistentTravelPlanner = Effect.gen(function* () {
   const store = yield* ThreadStore;
+
   const exported = yield* store.export(
     ThreadExportRequest.make({
       threadId: phase3TravelPlannerThreadId,
     }),
   );
+
   const checkpoint = yield* store.checkpoints!.load(
     LoadCheckpointRequest.make({
       threadId: phase3TravelPlannerThreadId,
     }),
   );
+
   if (Option.isNone(checkpoint)) {
     return yield* Effect.die(new Error("Expected the Travel Planner checkpoint to exist"));
   }
@@ -97,27 +104,33 @@ const inspectPersistentTravelPlanner = Effect.gen(function* () {
   const checkpointProjection = yield* Schema.decodeUnknownEffect(ThreadProjection)(
     checkpoint.value.state,
   );
+
   const suffix = exported.records.filter(
     (record) => record.sequence > checkpoint.value.throughSequence,
   );
+
   const fullReplay = replayThread(
     phase3TravelPlannerThreadId,
     exported.records,
     exported.tailDigest,
   );
+
   const checkpointReplay = replayThreadFromCheckpoint(
     checkpointProjection,
     suffix,
     exported.tailDigest,
   );
+
   const plan = yield* travelPlanFromProjection(fullReplay);
 
   const checkpointRecord = exported.records.find(
     (record) => record.sequence === checkpoint.value.throughSequence,
   );
+
   if (checkpointRecord === undefined) {
     return yield* Effect.die(new Error("Expected the checkpoint's canonical record"));
   }
+
   const observedSuffix = yield* store
     .observe(
       ThreadObservation.make({
@@ -146,9 +159,11 @@ const withTemporaryDatabase = <A, E>(use: (filename: string) => Effect.Effect<A,
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-travel-planner-p3-",
       });
+
       return yield* use(`${directory}/travel-planner.sqlite`);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -158,6 +173,7 @@ describe("TEST-014 P3 persistent Travel Planner profile (P)", () => {
     const decoded = Schema.decodeUnknownSync(Schema.Array(CanonicalBatch))(
       phase3TravelPlannerEncodedFixture,
     );
+
     expect(decoded).toEqual(phase3TravelPlannerBatches);
     expect(phase3TravelPlannerProfile).toEqual({
       deploymentClass: "P",
@@ -165,6 +181,7 @@ describe("TEST-014 P3 persistent Travel Planner profile (P)", () => {
       canonicalSchemaVersion: 1,
     });
     const fixtureText = JSON.stringify(phase3TravelPlannerEncodedFixture);
+
     expect(fixtureText).not.toContain("credential");
     expect(fixtureText).not.toContain("passenger");
   });
@@ -187,6 +204,7 @@ describe("TEST-014 P3 persistent Travel Planner profile (P)", () => {
         yield* writePersistentTravelPlanner.pipe(
           Effect.provide(sqliteStorageLayer({ filename, observationPollInterval: 1 })),
         );
+
         const inspected = yield* inspectPersistentTravelPlanner.pipe(
           Effect.provide(sqliteStorageLayer({ filename, observationPollInterval: 1 })),
         );

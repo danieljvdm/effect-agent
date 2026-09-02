@@ -50,6 +50,7 @@ const proveServiceOperations = (
   driver: ScheduleDriver["Service"],
 ) => {
   const created = service.create(agent, { value: "value" }, createOptions);
+
   const updated = service.update(
     agent,
     { value: "value" },
@@ -58,6 +59,7 @@ const proveServiceOperations = (
       expectedRevision: 1,
     },
   );
+
   const got = service.get(scope, scheduleId);
   const listed = service.list(scope, listOptions);
   const paused = service.pause(scope, scheduleId, 1);
@@ -89,10 +91,12 @@ const proveServiceOperations = (
     ProcessFailureProof,
     RunDueFailureProof,
   ] = [true, true, true, true, true, true, true, true, true];
+
   return proofs;
 };
 
 const schedulingLayer = Scheduling.layer();
+
 type SchedulingLayerSuccessProof = Assert<Equal<Layer.Success<typeof schedulingLayer>, Scheduling>>;
 type SchedulingLayerFailureProof = Assert<
   Equal<Layer.Error<typeof schedulingLayer>, ScheduleValidationError>
@@ -105,6 +109,7 @@ type SchedulingLayerRequirementsProof = Assert<
 >;
 
 const driverLayer = ScheduleDriver.layer();
+
 type DriverRequirementsProof = Assert<
   Equal<
     Layer.Services<typeof driverLayer>,
@@ -127,6 +132,7 @@ describe("Scheduling public types", () => {
 
     const driverProof: DriverRequirementsProof = true;
     const managementProof: ManagementKeysProof = true;
+
     expect([driverProof, managementProof]).toEqual([true, true]);
     expect(serviceProof).toBe(proveServiceOperations);
     expect([successProof, failureProof, requirementsProof]).toEqual([true, true, true]);

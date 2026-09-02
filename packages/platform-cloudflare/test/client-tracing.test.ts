@@ -24,17 +24,21 @@ import { decodeThreadId, plannerDefinition, submitOptions } from "./fixtures.ts"
 
 const binding = "TASK_ORCHESTRATORS";
 const threadId = decodeThreadId("private-thread-not-a-span-name");
+
 const receipt = Schema.decodeUnknownSync(Receipt)({
   receiptId: "receipt-tracing",
   submissionId: "submission-tracing",
   threadId,
   queueSequence: 1,
 });
+
 const zeroSequence = Schema.decodeSync(CanonicalSequence)(0);
+
 const protocolFailure = {
   _tag: "HostFailed",
   failure: { _tag: "HostProtocolError", message: "fixture host refusal" },
 };
+
 const observedPage = { _tag: "ObservedPage", records: [] };
 
 const clientMethods = [
@@ -47,6 +51,7 @@ const clientMethods = [
   "resolveApprovalEncoded",
   "resolveUnknownEncoded",
 ] as const satisfies ReadonlyArray<keyof ThreadObjectRpc>;
+
 type ClientMethod = (typeof clientMethods)[number];
 interface NativeCall {
   readonly method: ClientMethod;
@@ -60,16 +65,20 @@ const clientFixture = (
 ) => {
   const calls: Array<NativeCall> = [];
   const spans: Array<Tracer.NativeSpan> = [];
+
   const stub = Object.fromEntries(
     clientMethods.map((method) => [
       method,
       (...args: Array<unknown>) => {
         calls.push({ method, args });
+
         return invoke(method, args);
       },
     ]),
   );
+
   const service = options.binding ?? binding;
+
   const layer = CloudflareThreadClient.layer.pipe(
     Layer.provide([
       threadNamespaceLayer(
@@ -80,13 +89,17 @@ const clientFixture = (
       BrowserCrypto.layer,
     ]),
   );
+
   const tracer = Tracer.make({
     span(spanOptions) {
       const span = new Tracer.NativeSpan(spanOptions);
+
       spans.push(span);
+
       return span;
     },
   });
+
   return { calls, spans, layer, tracer };
 };
 
@@ -111,9 +124,11 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
     },
   ])("preserves every host method's native contract with $label tracing", (scenario) => {
     const fixture = clientFixture(() => Promise.resolve(protocolFailure), scenario.options);
+
     return Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
       const outer = yield* Effect.currentSpan;
+
       const requests: ReadonlyArray<Effect.Effect<unknown, HostFailure | ThreadClientError>> = [
         client.submit(
           { definition: plannerDefinition },
@@ -155,8 +170,10 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
           }),
         ),
       ];
+
       for (const request of requests) {
         const exit = yield* request.pipe(Effect.exit);
+
         if (!Exit.isFailure(exit)) throw new Error("Expected the host refusal to remain a failure");
         expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject(
           protocolFailure.failure,
@@ -173,6 +190,7 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
       ]);
       const rpcSpans = fixture.spans.filter((span) => span.kind === "client");
       const propagate = scenario.options.rpcTracing === true && scenario.tracerEnabled;
+
       expect(rpcSpans).toHaveLength(propagate ? fixture.calls.length : 0);
       for (const [index, call] of fixture.calls.entries()) {
         expect(call.args).toHaveLength(propagate ? 2 : 1);
@@ -180,6 +198,7 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
         expect(call.args[0]).not.toHaveProperty("spanId");
         if (!propagate) continue;
         const span = rpcSpans[index];
+
         if (span === undefined) throw new Error("Missing native client span");
         expect(span.name).toBe(`${binding}/${call.method}`);
         expect(Option.getOrUndefined(span.parent)?.spanId).toBe(outer.spanId);
@@ -205,26 +224,33 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
   it.effect("keeps the client span open across native waiting and host-response decoding", () => {
     const started = Deferred.makeUnsafe<void>();
     const response = Deferred.makeUnsafe<unknown>();
+
     const fixture = clientFixture(
       () => {
         Deferred.doneUnsafe(started, Effect.void);
+
         return Effect.runPromise(Deferred.await(response));
       },
       { rpcTracing: true, binding: "PERSONA_ADVISORS" },
     );
+
     return Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
       const fiber = yield* client.readPage(threadId).pipe(Effect.forkChild);
+
       yield* Deferred.await(started);
       const span = fixture.spans.find((candidate) => candidate.kind === "client");
+
       if (span === undefined) throw new Error("Missing waiting client span");
       expect(span.name).toBe("PERSONA_ADVISORS/observePage");
       expect(span.status._tag).toBe("Started");
       yield* TestClock.adjust("5 seconds");
       let decodedWhileOpen = false;
+
       yield* Deferred.succeed(response, {
         get _tag() {
           decodedWhileOpen = span.status._tag === "Started";
+
           return "ObservedPage";
         },
         records: [],
@@ -248,11 +274,14 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
     { reason: "an invalid trace ID", disabled: false, traceId: "invalid-trace-id" },
   ])("omits native context for $reason without dropping the client span", (scenario) => {
     const fixture = clientFixture(() => Promise.resolve(observedPage), { rpcTracing: true });
+
     return Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       expect(yield* client.readPage(threadId)).toEqual([]);
       expect(fixture.calls[0]?.args).toHaveLength(1);
       const spans = fixture.spans.filter((span) => span.kind === "client");
+
       expect(spans).toHaveLength(1);
       expect(spans[0]?.status._tag).toBe("Ended");
     }).pipe(
@@ -271,6 +300,7 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
     (failureMode) => {
       const secret = "private payload https://capability.invalid/?token=secret";
       const rejected = new Error(secret);
+
       const fixture = clientFixture(
         () =>
           failureMode === "transport"
@@ -278,14 +308,17 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
             : Promise.resolve({ _tag: "ObservedPage", records: [secret] }),
         { rpcTracing: true },
       );
+
       return Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
         const failure: ClientObserveFailure = yield* client.readPage(threadId).pipe(Effect.flip);
+
         expect(failure._tag).toBe(
           failureMode === "transport" ? "ThreadClientError" : "HostProtocolError",
         );
         if (failure._tag === "ThreadClientError") expect(failure.cause).toBe(rejected);
         const span = fixture.spans.find((candidate) => candidate.kind === "client");
+
         if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
           throw new Error("Expected a closed, failed client span");
         }
@@ -309,20 +342,26 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
   ])("closes progress waits and preserves cancellation arity %#", (options) => {
     const started = Deferred.makeUnsafe<void>();
     const response = Deferred.makeUnsafe<unknown>();
+
     const fixture = clientFixture((method) => {
       if (method === "awaitProgressEncoded") {
         Deferred.doneUnsafe(started, Effect.void);
+
         return Effect.runPromise(Deferred.await(response));
       }
       Deferred.doneUnsafe(response, Effect.succeed({ _tag: "ProgressObserved" }));
+
       return Promise.resolve({ _tag: "ProgressCancelled" });
     }, options);
+
     return Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
       const wait = client.awaitProgress(threadId, zeroSequence);
+
       const fiber = yield* (options.timeout ? wait.pipe(Effect.timeout("1 second")) : wait).pipe(
         Effect.forkChild,
       );
+
       yield* Deferred.await(started);
       if (options.timeout) yield* TestClock.adjust("1 second");
       else yield* Fiber.interrupt(fiber);
@@ -336,8 +375,10 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
       );
       const awaited = yield* decodeAwaitProgressRequest(fixture.calls[0]?.args[0]);
       const cancelled = yield* decodeCancelProgressRequest(fixture.calls[1]?.args[0]);
+
       expect(cancelled.waiterId).toBe(awaited.waiterId);
       const rpcSpans = fixture.spans.filter((span) => span.kind === "client");
+
       expect(rpcSpans).toHaveLength(options.rpcTracing ? 2 : 0);
       for (const [index, span] of rpcSpans.entries()) {
         expect(span.status._tag).toBe("Ended");
@@ -354,25 +395,30 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
   it.effect("creates a fresh native context for a reset retry without changing its request", () => {
     const started = Deferred.makeUnsafe<void>();
     let attempts = 0;
+
     const fixture = clientFixture(
       () => {
         if (attempts++ === 0) {
           Deferred.doneUnsafe(started, Effect.void);
           throw Object.assign(new Error("fixture Object reset"), { retryable: true });
         }
+
         return Promise.resolve({ _tag: "ProgressObserved" });
       },
       { rpcTracing: true },
     );
+
     return Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
       const fiber = yield* client.awaitProgress(threadId, zeroSequence).pipe(Effect.forkChild);
+
       yield* Deferred.await(started);
       yield* TestClock.adjust("10 millis");
       yield* Fiber.join(fiber);
       expect(fixture.calls).toHaveLength(2);
       expect(fixture.calls[0]?.args[0]).toEqual(fixture.calls[1]?.args[0]);
       const spans = fixture.spans.filter((span) => span.kind === "client");
+
       expect(spans).toHaveLength(2);
       expect(spans[0]?.spanId).not.toBe(spans[1]?.spanId);
       expect(spans[0]?.traceId).toBe(spans[1]?.traceId);

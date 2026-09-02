@@ -73,6 +73,7 @@ import {
  */
 
 let laneCounter = 0;
+
 const lane = (location: string): string =>
   `cf-s2-${location.replaceAll(":", "-")}-${laneCounter++}`;
 
@@ -84,6 +85,7 @@ const submitCoordinator = (
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.submit(
         {
           definition: fixture === "sibling" ? siblingCoordinatorDefinition : coordinatorDefinition,
@@ -108,6 +110,7 @@ const abortParent = (thread: string, receipt: Receipt) =>
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.abort(
         decodeThreadId(thread),
         AbortCommand.make({
@@ -131,12 +134,15 @@ const coordinatorEvictionRow = async (
 ): Promise<{ readonly ref: string; readonly receipt: Receipt }> => {
   const ref = lane(location);
   const key = `${ref}-key`;
+
   armRuntimeEviction(ref, location);
   const receipt = await submitCoordinator(fixture, ref, key);
   const child = childThreadOf(receipt, ref);
+
   await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
   expect(armedEvictionsRemaining(ref), `${location} must actually have fired`).toBe(0);
   await assertDelegationConverged(completedDelegation(receipt, ref));
+
   return { ref, receipt };
 };
 
@@ -172,10 +178,12 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // gate the researcher until the armed eviction has provably fired.
     const location: DurableRuntimeFailpointLocation = "subagent:after-suspend";
     const ref = lane(location);
+
     gateChildModel(ref);
     armRuntimeEviction(ref, location);
     const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
     const child = childThreadOf(receipt, ref);
+
     await drainDelegationUntil([ref], async () => armedEvictionsRemaining(ref) === 0);
     releaseChildModel(ref);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
@@ -190,13 +198,16 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       "subagent:after-child-ready",
       "subagent:after-start-append",
     ];
+
     const ref = lane("establishment-ladder");
     const key = `${ref}-key`;
+
     // Chained rows arm the WHOLE ladder up front: due alarms auto-fire in the pool, so each
     // recovery pass can run within milliseconds of the previous abort.
     armRuntimeEviction(ref, ...ladder);
     const receipt = await submitCoordinator("coordinator", ref, key);
     const child = childThreadOf(receipt, ref);
+
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     expect(armedEvictionsRemaining(ref), "every armed ladder step must have fired").toBe(0);
     // Five doomed incarnations later: ONE child, ONE join, one researcher invocation.
@@ -210,6 +221,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const location: DurableRuntimeFailpointLocation = "subagent:after-admit";
     const ref = lane("child-awaits-lineage");
     const faultSuffix = `:${delegateCallIdFor(ref)}`;
+
     // An after-admit eviction buffer covers the window between the admission committing and
     // the transport fault arming (the pool auto-fires due alarms in the background, burning
     // roughly one armed eviction per millisecond); once the fault is armed, every parent
@@ -229,7 +241,9 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // means anything: the buffer stops burning once every parent pass answers Indeterminate.
     await waitFor(async () => {
       const before = armedEvictionsRemaining(ref);
+
       await new Promise((resolve) => setTimeout(resolve, 25));
+
       return before > 0 && armedEvictionsRemaining(ref) === before;
     }, "the armed-eviction burn to stop under the transport fault");
 
@@ -245,6 +259,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
         // doomed incarnation; the probes below carry the claim.
       }
       const rows = await laneRows(child, SUBAGENTS);
+
       expect(rows).toHaveLength(1);
       expect(rows[0]?.state, `child state in probe round ${round}`).toBe("admitted");
     }
@@ -258,7 +273,9 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const explainedRaw: unknown = await Promise.resolve(
       stubFor(child, SUBAGENTS).explainEncoded({}),
     );
+
     const explained = await Effect.runPromise(ThreadObject.decodeAdminResponse(explainedRaw));
+
     expect(explained._tag).toBe("ExplainedRecovery");
     if (explained._tag === "ExplainedRecovery") {
       expect(explained.explanations).toHaveLength(1);
@@ -277,6 +294,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const tags = childRecords.map((envelope) => envelope.record.payload._tag);
     const lineageIndex = tags.indexOf("SubagentLineageRecorded");
     const firstTurnIndex = tags.indexOf("ModelResponseRecorded");
+
     expect(lineageIndex, "the child log must carry its lineage record").toBeGreaterThanOrEqual(0);
     expect(firstTurnIndex, "the child must have run exactly after establishment").toBeGreaterThan(
       lineageIndex,
@@ -294,10 +312,12 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // only exists while the delegation actually suspends the batch.
     const location: DurableRuntimeFailpointLocation = "subagent:after-sibling-settle";
     const ref = lane(location);
+
     gateChildModel(ref);
     armRuntimeEviction(ref, location);
     const receipt = await submitCoordinator("sibling", ref, `${ref}-key`);
     const child = childThreadOf(receipt, ref);
+
     await drainDelegationUntil([ref], async () => armedEvictionsRemaining(ref) === 0);
     releaseChildModel(ref);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
@@ -306,11 +326,13 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // the eviction and the resumed batch injected it instead of re-executing (SUB-013).
     expect(siblingLookupInvocations(ref)).toBe(1);
     const records = await readCanonical(ref, SUBAGENTS);
+
     const siblingSettles = records.filter(
       (envelope) =>
         envelope.record.payload._tag === "ToolCallSettled" &&
         envelope.record.payload.toolCallId === `lookup-${ref}`,
     );
+
     expect(siblingSettles).toHaveLength(1);
   }, 40_000);
 
@@ -334,6 +356,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const ref = lane("child-settled-redelivery");
     const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
     const child = childThreadOf(receipt, ref);
+
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     const started = await assertDelegationConverged(completedDelegation(receipt, ref));
 
@@ -349,25 +372,32 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
         }),
       ),
     );
+
     const before = await readCanonical(ref, SUBAGENTS);
     const markersBefore = await settlementMarkers(ref);
+
     const instrumented = await runInDurableObject(stubFor(ref, SUBAGENTS), async (instance) => {
       const requestDescriptor = Object.getOwnPropertyDescriptor(redelivery, "request");
+
       if (requestDescriptor === undefined || !("value" in requestDescriptor)) {
         throw new Error("Expected an encoded port request with an own request data property");
       }
       let requestReads = 0;
       const envelope = Object.defineProperties({}, Object.getOwnPropertyDescriptors(redelivery));
+
       Object.defineProperty(envelope, "request", {
         enumerable: true,
         get: () => {
           requestReads += 1;
+
           return requestDescriptor.value;
         },
       });
       const response = await instance.portCall(envelope);
+
       return { requestReads, response };
     });
+
     expect(instrumented.requestReads).toBe(1);
     expect((await Effect.runPromise(decodePortResponse(instrumented.response)))._tag).toBe(
       "PortSucceeded",
@@ -376,6 +406,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       const decoded = await Effect.runPromise(
         decodePortResponse(await stubFor(ref, SUBAGENTS).portCall(redelivery)),
       );
+
       expect(decoded._tag).toBe("PortSucceeded");
       if (decoded._tag === "PortSucceeded") {
         expect(decoded.result._tag).toBe("LedgerRecordChildSettledResult");
@@ -390,6 +421,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     expect(await readCanonical(ref, SUBAGENTS)).toEqual(before);
     expect(await settlementMarkers(ref)).toEqual(markersBefore);
     const rows = await laneRows(ref, SUBAGENTS);
+
     expect(rows.map((row) => row.state)).toEqual(["settled"]);
   }, 40_000);
 
@@ -400,14 +432,17 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
   it("issue #93: child eviction after finalize cannot lose its precommitted parent wake", async () => {
     const ref = lane("lost-notification");
     const key = `${ref}-key`;
+
     // The researcher hangs mid-stream so the eviction can be armed with the child provably
     // active — no race against the child's own alarm-driven progress.
     gateChildModel(ref);
     const receipt = await submitCoordinator("coordinator", ref, key);
     const child = childThreadOf(receipt, ref);
+
     await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
     await waitFor(() => {
       kickWithoutAwaiting(child);
+
       return childModelInvocations(ref) === 1;
     }, "the hanging researcher invocation");
     await waitFor(
@@ -421,6 +456,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     releaseChildModel(ref);
     await waitFor(async () => {
       const rows = await laneRows(child, SUBAGENTS);
+
       return rows.length === 1 && rows[0]?.state === "settled";
     }, "the child settlement to commit before the eviction");
     expect(armedEvictionsRemaining(child)).toBe(0);
@@ -441,6 +477,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     async (childState) => {
       const ref = lane(`abort-propagation-${childState}`);
       const key = `${ref}-key`;
+
       gateChildModel(ref);
       if (childState === "unknown") {
         uncertainChildRefs.add(ref);
@@ -448,9 +485,11 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       }
       const receipt = await submitCoordinator("coordinator", ref, key);
       const child = childThreadOf(receipt, ref);
+
       await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
       await waitFor(() => {
         kickWithoutAwaiting(child);
+
         return childModelInvocations(ref) === 1;
       }, "the hanging researcher invocation");
 
@@ -470,12 +509,15 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       // Exactly one canonical child abort command, authored by the propagation (DUR-012).
       const childRecords = await readCanonical(child, SUBAGENTS);
       const abortRecords = payloadsOf(childRecords, "AbortRequested");
+
       expect(abortRecords).toHaveLength(1);
       const abortPayload = abortRecords[0]?.record.payload;
+
       if (abortPayload?._tag === "AbortRequested") {
         expect(abortPayload.author).toBe("subagent-parent-abort");
       }
       const childSettled = payloadsOf(childRecords, "SubmissionSettled")[0]?.record.payload;
+
       if (childSettled?._tag === "SubmissionSettled") {
         expect(childSettled.outcome).toBe("aborted");
       }
@@ -484,11 +526,14 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       // aborted settlement ("the parent settles only after the joins").
       const parentRecords = await readCanonical(ref, SUBAGENTS);
       const joined = payloadsOf(parentRecords, "SubagentJoined");
+
       expect(joined).toHaveLength(1);
       const joinedPayload = joined[0]?.record.payload;
+
       if (joinedPayload?._tag !== "SubagentJoined") throw new Error("Expected SubagentJoined");
       expect(joinedPayload.childOutcome).toBe("aborted");
       const settledEnvelope = payloadsOf(parentRecords, "SubmissionSettled")[0];
+
       expect(settledEnvelope).toBeDefined();
       if (settledEnvelope !== undefined && joined[0] !== undefined) {
         expect(Number(joined[0].sequence)).toBeLessThan(Number(settledEnvelope.sequence));
@@ -510,12 +555,15 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
   it("eviction at subagent:after-child-abort-intent: the replayed propagation is a no-op, never a second cross-Object command", async () => {
     const ref = lane("subagent:after-child-abort-intent");
     const key = `${ref}-key`;
+
     gateChildModel(ref);
     const receipt = await submitCoordinator("coordinator", ref, key);
     const child = childThreadOf(receipt, ref);
+
     await drainDelegationUntil([ref], anyInState(ref, "suspended", SUBAGENTS));
     await waitFor(() => {
       kickWithoutAwaiting(child);
+
       return childModelInvocations(ref) === 1;
     }, "the hanging researcher invocation");
 
@@ -529,8 +577,10 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // One canonical child abort command across the killed pass and every replay: the
     // redelivered idempotent requestAbort returned the recorded intent unchanged (DUR-012).
     const childRecords = await readCanonical(child, SUBAGENTS);
+
     expect(payloadsOf(childRecords, "AbortRequested")).toHaveLength(1);
     const parentRecords = await readCanonical(ref, SUBAGENTS);
+
     expect(payloadsOf(parentRecords, "SubagentJoined")).toHaveLength(1);
     expect(await parentOutcomeOf(ref)).toBe("aborted");
     expect(await reservationStatuses(ref)).toEqual(["released"]);
@@ -546,6 +596,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const ref = lane("indeterminate-establishment");
     const key = `${ref}-key`;
     const faultSuffix = `:${delegateCallIdFor(ref)}`;
+
     // Both levers arm BEFORE the submit: the child Thread's name is suffix-derivable
     // from the ref, so the fault covers the child Object before it can ever be reached.
     armTransportFault(faultSuffix);
@@ -570,10 +621,12 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     // settlement, NO child Submission exists in the child's Object, no start link was
     // recorded, and the researcher never ran — an Indeterminate answer admitted nothing.
     const parentLane = await laneRows(ref, SUBAGENTS);
+
     expect(parentLane).toHaveLength(1);
     expect(parentLane[0]?.state).not.toBe("settled");
     expect(await laneRows(child, SUBAGENTS)).toHaveLength(0);
     const duringFault = await readCanonical(ref, SUBAGENTS);
+
     expect(payloadsOf(duringFault, "SubagentStarted")).toHaveLength(0);
     expect(childModelInvocations(ref)).toBe(0);
     // Each recovery pass re-arms the alarm inside its own delivery, and workerd auto-retries
@@ -590,6 +643,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     healTransportFault(faultSuffix);
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     const parentRecords = await readCanonical(ref, SUBAGENTS);
+
     expect(payloadsOf(parentRecords, "SubagentRequested")).toHaveLength(1);
     await assertDelegationConverged(completedDelegation(receipt, ref));
   }, 60_000);
@@ -602,8 +656,10 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const ref = lane("clean-delegation");
     const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
     const child = childThreadOf(receipt, ref);
+
     await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
     const started = await assertDelegationConverged(completedDelegation(receipt, ref));
+
     // The two lanes really are different Durable Objects: distinct Threads, and the
     // child's records live in the child Object's OWN storage (probed independently above).
     expect(started.childThreadId).not.toBe(ref);

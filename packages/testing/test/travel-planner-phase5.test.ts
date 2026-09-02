@@ -112,6 +112,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts: Array<Prompt.Prompt> = [];
+
     const model = Model.make(
       "scripted",
       "travel-planner-phase-5",
@@ -124,6 +125,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
               Ref.getAndUpdate(calls, (call) => call + 1).pipe(
                 Effect.map((call) => {
                   prompts.push(request.prompt);
+
                   return Stream.fromIterable(script(call));
                 }),
               ),
@@ -131,6 +133,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
         }),
       ),
     );
+
     return { model, prompts };
   });
 
@@ -194,9 +197,11 @@ const approvalDelegateLayer = Layer.effectContext(
       yield* Ref.make<(request: RunApprovalRequest) => Effect.Effect<RunApprovalDecision>>(
         autoApprove,
       );
+
     const hook: RunApprovalHook<never, never> = {
       request: (request) => Ref.get(handler).pipe(Effect.flatMap((current) => current(request))),
     };
+
     return Context.make(DurableApprovalResolver, hook).pipe(
       Context.add(
         ApprovalDelegateTestControl,
@@ -234,6 +239,7 @@ const uncertainTestLayer = DurableAgentRuntime.layer.pipe(
 const readLog = (threadId: string) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(
       store.read(
         ThreadRead.make({
@@ -254,14 +260,17 @@ const lookupState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value.state;
   });
 
 const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
   Effect.gen(function* () {
     const control = yield* DurableRuntimeFailpointTestControl;
+
     yield* control.setHandler((hitLocation) =>
       hitLocation === location
         ? Effect.fail(DurableRuntimeFailpointError.make({ location: hitLocation }))
@@ -271,6 +280,7 @@ const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
 
 const clearFailpoint = Effect.gen(function* () {
   const control = yield* DurableRuntimeFailpointTestControl;
+
   yield* control.clear;
 });
 
@@ -278,9 +288,11 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
   const error: unknown = failure.value;
+
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -296,6 +308,7 @@ const interruptAtSupplierWrite = <A, E, R>(
 ) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(attempt);
+
     yield* held;
     yield* Fiber.interrupt(fiber);
   });
@@ -305,6 +318,7 @@ describe("TEST-014 P5 Travel Planner booking profile", () => {
     const decoded = Schema.decodeUnknownSync(TravelPlannerBookingProfile)(
       Schema.encodeSync(TravelPlannerBookingProfile)(phase5TravelPlannerProfile),
     );
+
     expect(decoded).toEqual(phase5TravelPlannerProfile);
     expect(phase5TravelPlannerProfile).toEqual({
       deploymentClass: "DN",
@@ -326,11 +340,13 @@ layer(reconciledTestLayer)(
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
           const desk = yield* SupplierBookingDesk;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("bf-replay-1", "book_flight", flightParams("traveler-replay")))
               : report([supplierBookingRefFor(bookFlightIdempotencyKey("bf-replay-1"))]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-settled-replay";
           const key = bookFlightIdempotencyKey("bf-replay-1");
@@ -340,12 +356,15 @@ layer(reconciledTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-replay-1"),
           );
+
           yield* armFailpoint("turn:after-results-append");
+
           const killed = yield* Effect.exit(
             runtime
               .processThread(agent, decodeThreadId(thread))
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
+
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
           // The booking executed once and its result is already canonical.
@@ -354,12 +373,14 @@ layer(reconciledTestLayer)(
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements[0]?.outcome).toBe("completed");
           // Exit gate: the recorded Tool outcome did not rerun.
           expect(yield* desk.callCount(key)).toBe(1);
 
           const runId = runIdForSubmission(receipt.submissionId);
           const records = yield* readLog(thread);
+
           expect(
             records.filter(
               (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:bf-replay-1`,
@@ -375,6 +396,7 @@ layer(reconciledTestLayer)(
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
           const desk = yield* SupplierBookingDesk;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(
@@ -389,6 +411,7 @@ layer(reconciledTestLayer)(
                   ),
                 ]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-step-replay";
           const flightKey = itineraryStepIdempotencyKey("bi-steps-1", "reserve-flight");
@@ -400,14 +423,17 @@ layer(reconciledTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-steps-1"),
           );
+
           // Kill right after the FIRST Step commit: reserve-flight is exactly-once-recorded,
           // reserve-lodging never ran.
           yield* armFailpoint("step:after-step-append");
+
           const killed = yield* Effect.exit(
             runtime
               .processThread(agent, decodeThreadId(thread))
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
+
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
           expect(yield* desk.callCount(flightKey)).toBe(1);
@@ -415,6 +441,7 @@ layer(reconciledTestLayer)(
 
           const runId = runIdForSubmission(receipt.submissionId);
           const callId = decodeToolCallId("bi-steps-1");
+
           expect((yield* readLog(thread)).map((envelope) => envelope.record.recordId)).toContain(
             toolStepSettledRecordId(runId, callId, "reserve-flight"),
           );
@@ -424,6 +451,7 @@ layer(reconciledTestLayer)(
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements[0]?.outcome).toBe("completed");
           // Exit gate: the committed Step replayed WITHOUT executing; later Steps ran once.
           expect(yield* desk.callCount(flightKey)).toBe(1);
@@ -431,6 +459,7 @@ layer(reconciledTestLayer)(
           expect(yield* desk.callCount(confirmKey)).toBe(1);
 
           const records = yield* readLog(thread);
+
           for (const stepName of ["reserve-flight", "reserve-lodging", "issue-confirmation"]) {
             expect(
               records.filter(
@@ -449,6 +478,7 @@ layer(reconciledTestLayer)(
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
           const desk = yield* SupplierBookingDesk;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(
@@ -460,6 +490,7 @@ layer(reconciledTestLayer)(
                   ),
                 ]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-step-atleastonce";
           const flightKey = itineraryStepIdempotencyKey("bi-lodging-1", "reserve-flight");
@@ -470,9 +501,11 @@ layer(reconciledTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-lodging-1"),
           );
+
           // Crash window INSIDE the second Step: the supplier write lands, the Step commit never
           // does — the durable state says "reserve-lodging may have happened".
           const hold = yield* desk.holdAfterWrite(lodgingKey);
+
           yield* interruptAtSupplierWrite(
             runtime
               .processThread(agent, decodeThreadId(thread))
@@ -485,6 +518,7 @@ layer(reconciledTestLayer)(
           const callId = decodeToolCallId("bi-lodging-1");
           const committed = yield* readLog(thread);
           const committedIds = committed.map((envelope) => envelope.record.recordId);
+
           expect(committedIds).toContain(toolStepSettledRecordId(runId, callId, "reserve-flight"));
           expect(committedIds).not.toContain(
             toolStepSettledRecordId(runId, callId, "reserve-lodging"),
@@ -493,23 +527,28 @@ layer(reconciledTestLayer)(
           // Recovery defers to the worker (SafeToRetry), and the re-entered handler re-executes
           // the uncommitted Step.
           const reports = yield* runtime.runRecovery;
+
           const recoveryReport = reports.find(
             (entry) => entry.submissionId === receipt.submissionId,
           );
+
           expect(recoveryReport?.decision._tag).toBe("MarkUnknown");
           expect(recoveryReport?.disposition).toBe("deferred");
 
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements[0]?.outcome).toBe("completed");
           // Exit gate: the external Step side effect stayed honestly at-least-once — TWO
           // supplier calls are observable, deduped to ONE booking by the supplier's own key.
           expect(yield* desk.callCount(flightKey)).toBe(1);
           expect(yield* desk.callCount(lodgingKey)).toBe(2);
+
           const lodgingBookings = (yield* desk.bookings).filter(
             (booking) => booking.idempotencyKey === lodgingKey,
           );
+
           expect(lodgingBookings).toHaveLength(1);
           yield* assertSettledBookingsExistAtSupplier(yield* readLog(thread));
         }),
@@ -519,11 +558,13 @@ layer(reconciledTestLayer)(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const desk = yield* SupplierBookingDesk;
+
         const scripted = yield* makeScriptedModel((call) =>
           call === 0
             ? toolTurn(toolCall("bf-rec-1", "book_flight", flightParams("traveler-reconciled")))
             : report([supplierBookingRefFor(bookFlightIdempotencyKey("bf-rec-1"))]),
         );
+
         const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
         const thread = "travel-p5-reconciled";
         const key = bookFlightIdempotencyKey("bf-rec-1");
@@ -533,8 +574,10 @@ layer(reconciledTestLayer)(
           phase1Trip,
           submitOptions(thread, "p5-reconciled-1"),
         );
+
         // The supplier confirms the booking; the Attempt dies before any outcome is recorded.
         const hold = yield* desk.holdAfterWrite(key);
+
         yield* interruptAtSupplierWrite(
           runtime
             .processThread(agent, decodeThreadId(thread))
@@ -549,6 +592,7 @@ layer(reconciledTestLayer)(
         // executing anything.
         const reports = yield* runtime.runRecovery;
         const recoveryReport = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
         expect(recoveryReport?.decision._tag).toBe("MarkUnknown");
         expect(recoveryReport?.disposition).toBe("repaired");
         expect(yield* desk.callCount(key)).toBe(1);
@@ -557,6 +601,7 @@ layer(reconciledTestLayer)(
         const afterRecovery = yield* readLog(thread);
         const byId = recordsById(afterRecovery);
         const settled = byId.get(`tool-settled:${runId}:1:bf-rec-1`)?.record.payload;
+
         expect(settled?._tag).toBe("ToolCallSettled");
         if (settled?._tag === "ToolCallSettled") {
           expect(settled.result).toEqual(
@@ -572,6 +617,7 @@ layer(reconciledTestLayer)(
           );
         }
         const resolved = byId.get(`tool-resolved:${runId}:1:bf-rec-1`)?.record.payload;
+
         expect(resolved?._tag).toBe("ToolCallResolved");
         if (resolved?._tag === "ToolCallResolved") {
           expect(resolved.resolution).toBe("completed-with-result");
@@ -581,6 +627,7 @@ layer(reconciledTestLayer)(
         const settlements = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.callCount(key)).toBe(1);
         yield* assertSettledBookingsExistAtSupplier(yield* readLog(thread));
@@ -592,6 +639,7 @@ layer(reconciledTestLayer)(
         const runtime = yield* DurableAgentRuntime;
         const desk = yield* SupplierBookingDesk;
         const bookedRef = supplierBookingRefFor(bookFlightIdempotencyKey("bf-cancel-1"));
+
         const scripted = yield* makeScriptedModel((call) => {
           switch (call) {
             case 0:
@@ -611,15 +659,18 @@ layer(reconciledTestLayer)(
               return report([]);
           }
         });
+
         const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
         const thread = "travel-p5-idempotent-cancel";
         const cancelKey = cancelBookingIdempotencyKey(bookedRef);
 
         // Submission 1 books and settles.
         yield* runtime.submit(agent, phase1Trip, submitOptions(thread, "p5-cancel-book"));
+
         const booked = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
         expect(booked[0]?.outcome).toBe("completed");
 
         // Submission 2 cancels; the Attempt dies AFTER the supplier cancellation lands but
@@ -629,7 +680,9 @@ layer(reconciledTestLayer)(
           followUpTrip,
           submitOptions(thread, "p5-cancel-cancel"),
         );
+
         const hold = yield* desk.holdAfterWrite(cancelKey);
+
         yield* interruptAtSupplierWrite(
           runtime
             .processThread(agent, decodeThreadId(thread))
@@ -642,23 +695,28 @@ layer(reconciledTestLayer)(
         // reconciliation proof, no Unknown Outcome.
         const reports = yield* runtime.runRecovery;
         const recoveryReport = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
         expect(recoveryReport?.decision._tag).toBe("MarkUnknown");
         expect(recoveryReport?.disposition).toBe("deferred");
 
         const settlements = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
         expect(settlements[0]?.outcome).toBe("completed");
         // Honest at-least-once: TWO supplier calls, ONE cancelled booking, one settled record.
         expect(yield* desk.callCount(cancelKey)).toBe(2);
+
         const cancelled = (yield* desk.bookings).filter(
           (booking) => booking.bookingRef === bookedRef,
         );
+
         expect(cancelled).toHaveLength(1);
         expect(cancelled[0]?.status).toBe("cancelled");
 
         const runId = runIdForSubmission(receipt.submissionId);
         const records = yield* readLog(thread);
+
         expect(
           records.filter(
             (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:cb-cancel-1`,
@@ -674,14 +732,17 @@ layer(reconciledTestLayer)(
       () =>
         Effect.gen(function* () {
           const control = yield* ApprovalDelegateTestControl;
+
           yield* control.set(() => Effect.succeed({ _tag: "unresolved" }));
           const runtime = yield* DurableAgentRuntime;
           const desk = yield* SupplierBookingDesk;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("bf-appr-1", "book_flight", flightParams("traveler-approval")))
               : report([supplierBookingRefFor(bookFlightIdempotencyKey("bf-appr-1"))]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-approval-suspend";
           const key = bookFlightIdempotencyKey("bf-appr-1");
@@ -691,9 +752,11 @@ layer(reconciledTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-approval-1"),
           );
+
           const first = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           // No settlement: the accepted-work obligation stays owed while the lane waits durably,
           // with the canonical ToolApprovalRequested as the safe boundary (durability §8).
           expect(first).toHaveLength(0);
@@ -702,6 +765,7 @@ layer(reconciledTestLayer)(
 
           const runId = runIdForSubmission(receipt.submissionId);
           const suspendedLog = yield* readLog(thread);
+
           expect(recordsById(suspendedLog).has(`approval-request:${runId}:1:bf-appr-1`)).toBe(true);
           expect(logTags(suspendedLog)).not.toContain("ToolCallPrepared");
 
@@ -714,9 +778,11 @@ layer(reconciledTestLayer)(
               reason: "the traveler confirmed the charge",
             }),
           );
+
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements[0]?.outcome).toBe("completed");
           expect(yield* desk.callCount(key)).toBe(1);
           // The resumed Attempt replayed the declared batch: exactly two model requests ever.
@@ -725,6 +791,7 @@ layer(reconciledTestLayer)(
           const records = yield* readLog(thread);
           const byId = recordsById(records);
           const decision = byId.get(`approval-decision:${runId}:1:bf-appr-1`)?.record.payload;
+
           expect(decision?._tag).toBe("ToolApprovalDecided");
           if (decision?._tag === "ToolApprovalDecided") {
             expect(decision.decision).toBe("approved");
@@ -738,14 +805,17 @@ layer(reconciledTestLayer)(
     it.effect("a denied booking settles failed with canonical request and decision records", () =>
       Effect.gen(function* () {
         const control = yield* ApprovalDelegateTestControl;
+
         yield* control.set(() => Effect.succeed({ _tag: "unresolved" }));
         const runtime = yield* DurableAgentRuntime;
         const desk = yield* SupplierBookingDesk;
+
         const scripted = yield* makeScriptedModel((call) =>
           call === 0
             ? toolTurn(toolCall("bf-deny-1", "book_flight", flightParams("traveler-denied")))
             : report([]),
         );
+
         const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
         const thread = "travel-p5-approval-deny";
         const key = bookFlightIdempotencyKey("bf-deny-1");
@@ -755,9 +825,11 @@ layer(reconciledTestLayer)(
           phase1Trip,
           submitOptions(thread, "p5-deny-1"),
         );
+
         const first = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
         expect(first).toHaveLength(0);
         expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
 
@@ -770,9 +842,11 @@ layer(reconciledTestLayer)(
             reason: "the traveler declined the charge",
           }),
         );
+
         const settlements = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
         // Denial-terminal (P2 default): the Run fails with the denial canonical; the supplier
         // was never called.
         expect(settlements[0]?.outcome).toBe("failed");
@@ -780,8 +854,10 @@ layer(reconciledTestLayer)(
 
         const runId = runIdForSubmission(receipt.submissionId);
         const byId = recordsById(yield* readLog(thread));
+
         expect(byId.has(`approval-request:${runId}:1:bf-deny-1`)).toBe(true);
         const decision = byId.get(`approval-decision:${runId}:1:bf-deny-1`)?.record.payload;
+
         expect(decision?._tag).toBe("ToolApprovalDecided");
         if (decision?._tag === "ToolApprovalDecided") {
           expect(decision.decision).toBe("denied");
@@ -796,11 +872,13 @@ layer(reconciledTestLayer)(
       () =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("bf-joinA-1", "book_flight", flightParams("traveler-join-a")))
               : report([supplierBookingRefFor(bookFlightIdempotencyKey("bf-joinA-1"))]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-join-claim";
 
@@ -809,17 +887,21 @@ layer(reconciledTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-join-a-host"),
           );
+
           const followUp = yield* runtime.submit(
             agent,
             followUpTrip,
             submitOptions(thread, "p5-join-a-followup"),
           );
+
           yield* armFailpoint("join:after-claim");
+
           const killed = yield* Effect.exit(
             runtime
               .processThread(agent, decodeThreadId(thread))
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
+
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
@@ -830,6 +912,7 @@ layer(reconciledTestLayer)(
           );
           const reports = yield* runtime.runRecovery;
           const joinReport = reports.find((entry) => entry.submissionId === followUp.submissionId);
+
           expect(joinReport?.decision._tag).toBe("RevertJoining");
           expect(joinReport?.disposition).toBe("repaired");
           expect(yield* lookupState(followUp.submissionId)).toBe("ready");
@@ -837,20 +920,24 @@ layer(reconciledTestLayer)(
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
             host.submissionId,
           ]);
           const joined = yield* runtime.awaitSettlement(followUp);
+
           expect(joined.outcome).toBe("completed");
 
           // Exactly one canonical input record ever, delivered into exactly one model request.
           const records = yield* readLog(thread);
+
           expect(
             records.filter(
               (envelope) => envelope.record.recordId === `input:${followUp.submissionId}`,
             ),
           ).toHaveLength(1);
           const firstPrompt = scripted.prompts[0];
+
           expect(
             firstPrompt === undefined
               ? 0
@@ -864,11 +951,13 @@ layer(reconciledTestLayer)(
       () =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("bf-joinB-1", "book_flight", flightParams("traveler-join-b")))
               : report([supplierBookingRefFor(bookFlightIdempotencyKey("bf-joinB-1"))]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-join-append";
 
@@ -877,17 +966,21 @@ layer(reconciledTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-join-b-host"),
           );
+
           const followUp = yield* runtime.submit(
             agent,
             followUpTrip,
             submitOptions(thread, "p5-join-b-followup"),
           );
+
           yield* armFailpoint("join:after-canonical-append");
+
           const killed = yield* Effect.exit(
             runtime
               .processThread(agent, decodeThreadId(thread))
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
+
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
@@ -898,6 +991,7 @@ layer(reconciledTestLayer)(
           );
           const reports = yield* runtime.runRecovery;
           const joinReport = reports.find((entry) => entry.submissionId === followUp.submissionId);
+
           expect(joinReport?.decision._tag).toBe("RepairJoinMarker");
           expect(joinReport?.disposition).toBe("repaired");
           expect(yield* lookupState(followUp.submissionId)).toBe("joined");
@@ -905,20 +999,24 @@ layer(reconciledTestLayer)(
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
             host.submissionId,
           ]);
           const joined = yield* runtime.awaitSettlement(followUp);
+
           expect(joined.outcome).toBe("completed");
 
           // Reattachment, never duplication: one canonical record, one prompt delivery.
           const records = yield* readLog(thread);
+
           expect(
             records.filter(
               (envelope) => envelope.record.recordId === `input:${followUp.submissionId}`,
             ),
           ).toHaveLength(1);
           const firstPrompt = scripted.prompts[0];
+
           expect(
             firstPrompt === undefined
               ? 0
@@ -938,11 +1036,13 @@ layer(uncertainTestLayer)(
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
           const desk = yield* SupplierBookingDesk;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("bf-unknown-1", "book_flight", flightParams("traveler-unknown")))
               : report([supplierBookingRefFor(bookFlightIdempotencyKey("bf-unknown-1"))]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-unknown-block";
           const key = bookFlightIdempotencyKey("bf-unknown-1");
@@ -952,7 +1052,9 @@ layer(uncertainTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-unknown-1"),
           );
+
           const hold = yield* desk.holdAfterWrite(key);
+
           yield* interruptAtSupplierWrite(
             runtime
               .processThread(agent, decodeThreadId(thread))
@@ -963,15 +1065,18 @@ layer(uncertainTestLayer)(
 
           // No proof either way: the outcome is Unknown and the lane blocks durably (DUR-009).
           const reports = yield* runtime.runRecovery;
+
           const recoveryReport = reports.find(
             (entry) => entry.submissionId === receipt.submissionId,
           );
+
           expect(recoveryReport?.decision._tag).toBe("MarkUnknown");
           expect(recoveryReport?.disposition).toBe("unknown");
           expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
 
           const runId = runIdForSubmission(receipt.submissionId);
           const records = yield* readLog(thread);
+
           expect(records.map((envelope) => envelope.record.recordId)).toContain(
             `tool-unknown:${runId}:1:bf-unknown-1`,
           );
@@ -984,6 +1089,7 @@ layer(uncertainTestLayer)(
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements).toEqual([]);
           expect(yield* desk.callCount(key)).toBe(1);
           expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
@@ -996,11 +1102,13 @@ layer(uncertainTestLayer)(
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
           const desk = yield* SupplierBookingDesk;
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("bf-truth-1", "book_flight", flightParams("traveler-truth")))
               : report([supplierBookingRefFor(bookFlightIdempotencyKey("bf-truth-1"))]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
           const thread = "travel-p5-unknown-resolve";
           const key = bookFlightIdempotencyKey("bf-truth-1");
@@ -1010,7 +1118,9 @@ layer(uncertainTestLayer)(
             phase1Trip,
             submitOptions(thread, "p5-truth-1"),
           );
+
           const hold = yield* desk.holdAfterWrite(key);
+
           yield* interruptAtSupplierWrite(
             runtime
               .processThread(agent, decodeThreadId(thread))
@@ -1023,8 +1133,10 @@ layer(uncertainTestLayer)(
           // The operator recovers supplier truth out of band (here: the desk itself) and
           // resolves the Unknown Outcome with it — the DUR-017 authorized resolution path.
           const booking = yield* desk.lookup(key);
+
           expect(Option.isSome(booking)).toBe(true);
           if (Option.isNone(booking)) throw new Error("Expected the supplier booking");
+
           const supplierTruth = toPersistedJson(
             encodeConfirmation(
               SupplierBookingConfirmation.make({
@@ -1034,6 +1146,7 @@ layer(uncertainTestLayer)(
               }),
             ),
           );
+
           yield* runtime.resolveUnknown(
             UnknownResolutionCommand.make({
               submissionId: receipt.submissionId,
@@ -1050,25 +1163,31 @@ layer(uncertainTestLayer)(
           const settlements = yield* runtime
             .processThread(agent, decodeThreadId(thread))
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
+
           expect(settlements[0]?.outcome).toBe("completed");
           // The resolved call never re-executed; the recovered result is the settled truth.
           expect(yield* desk.callCount(key)).toBe(1);
 
           const runId = runIdForSubmission(receipt.submissionId);
           const records = yield* readLog(thread);
+
           const settledRecords = records.filter(
             (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:bf-truth-1`,
           );
+
           expect(settledRecords).toHaveLength(1);
           const settled = settledRecords[0]?.record.payload;
+
           if (settled?._tag === "ToolCallSettled") {
             expect(settled.result).toEqual(supplierTruth);
           }
           expect(
             records.filter((envelope) => envelope.record.payload._tag === "SubmissionSettled"),
           ).toHaveLength(1);
+
           const resolved = recordsById(records).get(`tool-resolved:${runId}:1:bf-truth-1`)?.record
             .payload;
+
           if (resolved?._tag === "ToolCallResolved") {
             expect(resolved.resolution).toBe("completed-with-result");
             expect(resolved.author).toBe("operator");
@@ -1086,9 +1205,11 @@ const withTemporaryDirectory = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-travel-planner-p5-",
       });
+
       return yield* use(directory);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -1110,6 +1231,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
           const desk = yield* SupplierBookingDesk;
           const threadId = decodeThreadId("travel-p5-sqlite");
           const params = itineraryParams("traveler-sqlite");
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("bi-sqlite-1", "book_itinerary", params))
@@ -1122,6 +1244,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
                   ),
                 ]),
           );
+
           const agent = Agent.withModel(TravelPlannerPhase5, scripted.model);
 
           const receipt = yield* runtime.submit(
@@ -1129,15 +1252,20 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             phase1Trip,
             phase5TravelPlannerSubmitOptions(threadId, decodeIdempotencyKey("p5-sqlite-1")),
           );
+
           const settlements = yield* runtime.processThread(agent, threadId);
+
           expect(settlements[0]?.outcome).toBe("completed");
           const settlement = yield* runtime.awaitSettlement(receipt);
+
           expect(settlement.outcome).toBe("completed");
 
           const store = yield* ThreadStore;
+
           const records = yield* Stream.runCollect(
             store.read(ThreadRead.make({ threadId, limit: 1_024 })),
           );
+
           expect(logTags(records)).toEqual([
             "ThreadCreated",
             "UserInputRecorded",
@@ -1159,6 +1287,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
           // Since the P5 engine fix, official history carries Schema-ENCODED Tool parameters:
           // the class-shaped params persist as the exact plain-JSON wire form on SQLite.
           const prepared = byId.get(toolCallPreparedRecordId(runId, 1, callId))?.record.payload;
+
           expect(prepared?._tag).toBe("ToolCallPrepared");
           if (prepared?._tag === "ToolCallPrepared") {
             expect(prepared.parameters).toEqual(params);
@@ -1174,6 +1303,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
           // The canonical journal rebuilds the next-Run prompt without the prior instruction/wake
           // prefix (encoded params remain Prompt-valid; the P4 Struct workaround is unnecessary).
           const prompt = yield* promptFromCanonicalRecords(records);
+
           expect(prompt.content.map((message) => message.role)).toEqual([
             "assistant",
             "tool",

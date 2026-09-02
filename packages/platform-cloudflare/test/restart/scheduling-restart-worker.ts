@@ -57,6 +57,7 @@ export class SchedulingRestartThread extends ThreadObject.make(testRuntimeLayer,
     const rows = this.ctx.storage.sql
       .exec("SELECT submission_id FROM effect_agent_submissions ORDER BY queue_sequence")
       .toArray();
+
     return Schema.decodeUnknownSync(Schema.Array(SubmissionIdRow))(rows).map(
       (row) => row.submission_id,
     );
@@ -81,6 +82,7 @@ const scheduleHostLayer = Layer.mergeAll(
     hit: (point) => {
       if (point !== "schedule:admission:after" || !loseAdmissionReplies) return Effect.void;
       admissionReplyFailures += 1;
+
       return Effect.fail(ScheduleFailpointError.make({ point }));
     },
   }),
@@ -123,6 +125,7 @@ const schedulingLayer = CloudflareSchedulingClient.layer.pipe(
 
 const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: Request) {
   const url = new URL(request.url);
+
   if (url.pathname === "/introspect") {
     return Response.json({
       alarmDeliveries,
@@ -132,12 +135,14 @@ const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: R
   }
   if (url.pathname === "/arm-lost-reply") {
     loseAdmissionReplies = true;
+
     return Response.json({ armed: true });
   }
   if (url.pathname === "/create") {
     const body = yield* Effect.tryPromise(() => request.json());
     const { deadlineAtMillis } = yield* Schema.decodeUnknownEffect(CreateRequest)(body);
     const client = yield* Scheduling;
+
     const snapshot = yield* client.create(
       { definition: plannerDefinition },
       { question: "persist across Miniflare restart", ref: thread },
@@ -153,15 +158,18 @@ const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: R
         definitions: TEST_DIGESTS,
       },
     );
+
     return Response.json({ revision: snapshot.configurationRevision });
   }
   if (url.pathname === "/status") {
     const client = yield* Scheduling;
     const snapshot = yield* client.get(scope, scheduleId);
     const env = yield* WorkerEnvironment;
+
     const submissionIds = yield* Effect.promise(() =>
       env.RESTART_THREADS.getByName(thread).submissionIds(),
     );
+
     return Response.json({
       delivered: snapshot.lastReceipt !== null,
       pending: snapshot.pending !== null,
@@ -169,6 +177,7 @@ const handle = Effect.fn("SchedulingRestartWorker.handle")(function* (request: R
       submissionIds,
     });
   }
+
   return new Response("not found", { status: 404 });
 });
 

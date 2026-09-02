@@ -5,6 +5,7 @@ import { defineConfig, loadEnv } from "vite-plus";
 
 export default defineConfig(({ mode }) => {
   const isTest = process.env.VITEST === "true";
+
   // Unit tests need JSX, but not the app build plugins or server credentials.
   // Loading those also fingerprints every volatile GitHub runner variable.
   if (!isTest) {

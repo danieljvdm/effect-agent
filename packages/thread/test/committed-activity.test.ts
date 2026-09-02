@@ -40,17 +40,20 @@ import {
 
 const threadId = Schema.decodeSync(ThreadId)("dan-chad");
 const sequence = Schema.decodeSync(CanonicalSequence);
+
 const key = ActivityProcessorKey.make({
   processorId: "discussion",
   processorVersion: "1",
   threadId,
 });
+
 const limits = ActivityPassLimits.make({
   maxRecords: 2,
   pageSize: 1,
   timeoutMillis: 1_000,
   leaseMillis: 2_000,
 });
+
 const record = (number: number, text = `statement ${number}`, offset = `offset:${number}`) =>
   CanonicalRecordEnvelope.make({
     threadId,
@@ -85,11 +88,13 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
     prepareLostAck: false,
     advanceLostAck: false,
   };
+
   const store = ActivityProcessorStore.of({
     inspect: () => Effect.die("The processor must use its claim, not a separate progress read"),
     claim: (request) =>
       Effect.gen(function* () {
         state.epoch += 1;
+
         return ActivityClaim.make({
           ...request,
           epoch: state.epoch,
@@ -104,8 +109,10 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
         state.prepared.push(work);
         if (state.prepareLostAck) {
           state.prepareLostAck = false;
+
           return yield* ActivityMutationFailure.make({ point: "activity:prepare:after" });
         }
+
         return work;
       }),
     advance: ({ claim }) =>
@@ -114,8 +121,10 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
         state.pending = null;
         if (state.advanceLostAck) {
           state.advanceLostAck = false;
+
           return yield* ActivityMutationFailure.make({ point: "activity:advance:after" });
         }
+
         return ActivityClaim.make({ ...claim, throughSequence: state.through, pending: null });
       }),
     release: () =>
@@ -123,6 +132,7 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
         state.released += 1;
       }),
   });
+
   const threads = ThreadStore.of({
     materialize: () => Effect.die("Ingestion must not materialize Threads"),
     append: () => Effect.die("Ingestion must not append canonical records"),
@@ -139,6 +149,7 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
       ),
     read: (request) => {
       state.pages.push(request.limit);
+
       return Stream.fromIterable(
         state.records.slice(
           request.afterSequence ?? 0,
@@ -147,11 +158,13 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
       );
     },
   });
+
   const layer = Layer.mergeAll(
     Layer.succeed(ActivityProcessorStore, store),
     Layer.succeed(ThreadStore, threads),
     NodeCrypto.layer,
   );
+
   return { state, store, threads, layer };
 };
 
@@ -159,6 +172,7 @@ describe("finite committed activity processing", () => {
   it.effect("captures a bounded prefix and leaves later commits for another pass", () => {
     const p = probe([record(1), record(2), record(3)]);
     const applied: Array<number> = [];
+
     const options = {
       key,
       owner: "worker",
@@ -166,6 +180,7 @@ describe("finite committed activity processing", () => {
       extract: (value: CanonicalRecordEnvelope) =>
         Effect.sync(() => {
           if (value.sequence === 1) p.state.records.push(record(4));
+
           return value.record.payload._tag;
         }),
       apply: (work: PreparedActivity) =>
@@ -173,8 +188,10 @@ describe("finite committed activity processing", () => {
           applied.push(work.sequence);
         }),
     };
+
     return Effect.gen(function* () {
       const first = yield* processCommittedActivity(options);
+
       expect(first).toMatchObject({
         capturedTail: 3,
         throughSequence: 2,
@@ -183,6 +200,7 @@ describe("finite committed activity processing", () => {
       });
       expect(applied).toEqual([1, 2]);
       const second = yield* processCommittedActivity(options);
+
       expect(second).toMatchObject({
         capturedTail: 4,
         throughSequence: 4,
@@ -199,9 +217,11 @@ describe("finite committed activity processing", () => {
     "reuses pinned output after lost prepare acknowledgement even when the observation cursor changes",
     () => {
       const p = probe();
+
       p.state.prepareLostAck = true;
       let extractions = 0;
       const applied: Array<PreparedActivity> = [];
+
       const options = {
         key,
         owner: "worker",
@@ -209,6 +229,7 @@ describe("finite committed activity processing", () => {
         extract: () =>
           Effect.sync(() => {
             extractions += 1;
+
             return `extraction ${extractions}`;
           }),
         apply: (work: PreparedActivity) =>
@@ -216,6 +237,7 @@ describe("finite committed activity processing", () => {
             applied.push(work);
           }),
       };
+
       return Effect.gen(function* () {
         expect(yield* processCommittedActivity(options).pipe(Effect.flip)).toEqual(
           ActivityMutationFailure.make({ point: "activity:prepare:after" }),
@@ -237,6 +259,7 @@ describe("finite committed activity processing", () => {
       let extractions = 0;
       let attempts = 0;
       const receipts = new Map<string, PreparedActivity>();
+
       const options = {
         key,
         owner: "worker",
@@ -244,6 +267,7 @@ describe("finite committed activity processing", () => {
         extract: () =>
           Effect.sync(() => {
             extractions += 1;
+
             return "pinned";
           }),
         apply: (work: PreparedActivity) =>
@@ -253,6 +277,7 @@ describe("finite committed activity processing", () => {
             if (attempts === 1) return yield* new ExtractionUnavailable();
           }),
       };
+
       return Effect.gen(function* () {
         expect(yield* processCommittedActivity(options).pipe(Effect.flip)).toEqual(
           new ExtractionUnavailable(),
@@ -263,6 +288,7 @@ describe("finite committed activity processing", () => {
           ActivityMutationFailure.make({ point: "activity:advance:after" }),
         );
         const resumed = yield* processCommittedActivity(options);
+
         expect(resumed.processed).toBe(0);
         expect(resumed.throughSequence).toBe(1);
         expect(extractions).toBe(1);
@@ -278,6 +304,7 @@ describe("finite committed activity processing", () => {
       Effect.gen(function* () {
         const gap = probe([record(2)]);
         let applied = 0;
+
         const options = {
           key,
           owner: "worker",
@@ -288,18 +315,22 @@ describe("finite committed activity processing", () => {
               applied += 1;
             }),
         };
+
         const gapError = yield* processCommittedActivity(options).pipe(
           Effect.provide(gap.layer),
           Effect.flip,
         );
+
         expect(gapError).toMatchObject({
           _tag: "ActivityProcessingError",
           reason: "noncontiguous",
         });
         const changed = probe();
+
         changed.state.prepareLostAck = true;
         yield* processCommittedActivity(options).pipe(Effect.provide(changed.layer), Effect.exit);
         const pending = changed.state.pending;
+
         changed.state.records = [];
         expect(
           yield* processCommittedActivity(options).pipe(Effect.provide(changed.layer), Effect.flip),
@@ -309,10 +340,12 @@ describe("finite committed activity processing", () => {
         expect(changed.state.released).toBe(2);
         expect(changed.state.pages).toEqual([1]);
         changed.state.records = [record(1, "mutated canonical source")];
+
         const changedError = yield* processCommittedActivity(options).pipe(
           Effect.provide(changed.layer),
           Effect.flip,
         );
+
         expect(changedError).toMatchObject({
           _tag: "ActivityProcessingError",
           reason: "noncontiguous",
@@ -341,6 +374,7 @@ describe("finite committed activity processing", () => {
           },
         ]) {
           const p = probe();
+
           const exit = yield* processCommittedActivity({
             key,
             owner: "worker",
@@ -348,6 +382,7 @@ describe("finite committed activity processing", () => {
             extract: scenario.extract,
             apply: () => Effect.die("No invalid output may apply"),
           }).pipe(Effect.provide(p.layer), Effect.exit);
+
           expect(Exit.isFailure(exit)).toBe(true);
           if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toEqual(scenario.expected);
           expect(p.state.prepared).toHaveLength(0);
@@ -364,14 +399,17 @@ describe("finite committed activity processing", () => {
           const p = probe();
           const entered = yield* Deferred.make<void>();
           let released = 0;
+
           const waiting = Effect.gen(function* () {
             yield* Effect.acquireRelease(Deferred.succeed(entered, undefined), () =>
               Effect.sync(() => {
                 released += 1;
               }),
             );
+
             return yield* Effect.never;
           });
+
           const fiber = yield* processCommittedActivity({
             key,
             owner: "worker",
@@ -380,10 +418,12 @@ describe("finite committed activity processing", () => {
             apply: () =>
               boundary === "apply" ? waiting : Effect.die("No interrupted extraction may apply"),
           }).pipe(Effect.provide(p.layer), Effect.forkChild);
+
           yield* Deferred.await(entered);
           if (mode === "timeout") yield* TestClock.adjust(1_000);
           else yield* Fiber.interrupt(fiber);
           const exit = yield* Fiber.await(fiber);
+
           expect(Exit.isFailure(exit)).toBe(true);
           if (Exit.isFailure(exit)) {
             if (mode === "interrupt") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
@@ -407,6 +447,7 @@ describe("finite committed activity processing", () => {
       const p = probe();
       const entered = yield* Deferred.make<void>();
       let releaseFinalized = false;
+
       const service = ActivityProcessorStore.of({
         ...p.store,
         release: () =>
@@ -419,6 +460,7 @@ describe("finite committed activity processing", () => {
             ),
           ),
       });
+
       const fiber = yield* processCommittedActivity({
         key,
         owner: "worker",
@@ -435,6 +477,7 @@ describe("finite committed activity processing", () => {
         ),
         Effect.forkChild,
       );
+
       yield* Deferred.await(entered);
       yield* TestClock.adjust(500);
       expect((yield* Fiber.join(fiber)).throughSequence).toBe(1);

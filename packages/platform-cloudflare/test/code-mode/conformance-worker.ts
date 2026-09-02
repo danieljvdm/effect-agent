@@ -76,6 +76,7 @@ const executeOutcome = (
 ): Effect.Effect<{ readonly tag: string; readonly detail: unknown }, never, CodeExecutor> =>
   Effect.gen(function* () {
     const executor = yield* CodeExecutor;
+
     return yield* executor
       .execute(req)
       .pipe(Effect.provideService(CodeExecutionHost, CodeExecutionHost.of(host)));
@@ -129,15 +130,19 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
     const allCases = codeExecutorConformanceCases({
       implementation: dynamicWorkerImplementation,
     });
+
     for (const name of workerdConformanceCaseNames) {
       const conformanceCase = allCases.find((candidate) => candidate.name === name);
+
       if (conformanceCase === undefined) {
         failures.push(`missing shared conformance case: ${name}`);
         continue;
       }
       const exit = yield* conformanceCase.run.pipe(Effect.provide(layer), Effect.exit);
+
       if (Exit.isFailure(exit)) {
         const violation = Cause.findErrorOption(exit.cause);
+
         failures.push(
           Option.isSome(violation)
             ? `${conformanceCase.name}: ${violation.value.message}`
@@ -152,6 +157,7 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       request(`async () => { const r = await fetch("https://example.com"); return r.status; }`),
       layer,
     );
+
     if (networkOutcome.tag !== "CodeProgramFailedError") {
       failures.push(
         `ambient network denial: expected a program failure, got ${networkOutcome.tag}`,
@@ -164,6 +170,7 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       }),
       layer,
     );
+
     if (allowlistOutcome.tag !== "CodeExecutorUnsupportedError") {
       failures.push(
         `network allowlist rejection: expected CodeExecutorUnsupportedError, got ${allowlistOutcome.tag}`,
@@ -181,6 +188,7 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       }),
       layer,
     );
+
     if (
       !["CodeExecutionTimeoutError", "CodeExecutorTerminatedError"].includes(deadlineOutcome.tag)
     ) {
@@ -192,15 +200,18 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
     // End-to-end host composition through the real Worker Loader RPC.
     const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
     const calls: Array<CodeHostCall> = [];
+
     // A plain-object outcome (the shape the Code Mode capability's broker
     // route returns), not a class instance — the adapter must accept both.
     const host: CodeExecutionHost["Service"] = {
       call: (hostCall) =>
         Effect.sync(() => {
           calls.push(hostCall);
+
           return { _tag: "CodeHostCallSuccess", value: { rows: [1, 2, 3] } } as CodeHostCallResult;
         }),
     };
+
     const composed = yield* runOutcome(
       request(
         `async () => {
@@ -213,6 +224,7 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       layer,
       host,
     );
+
     if (
       composed.tag !== "success" ||
       JSON.stringify((composed.detail as { value: unknown }).value) !==
@@ -227,6 +239,7 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       ...baseLimits,
       maxHostCallResultBytes: 128,
     });
+
     for (const [label, hostCallResult] of [
       ["success", CodeHostCallSuccess.make({ value: "x".repeat(256) })],
       [
@@ -242,6 +255,7 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
         layer,
         { call: () => Effect.succeed(hostCallResult) },
       );
+
       if (
         outcome.tag !== "CodeOutputLimitError" ||
         !Predicate.isObject(outcome.detail) ||
@@ -270,10 +284,12 @@ const ExecutorFiberMarker = Context.Reference<"root" | "executor">(
 const runHostCallScopeRegression = (env: WorkerEnv) => {
   const layer = executorLayerFor(env);
   const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
+
   const host: CodeExecutionHost["Service"] = {
     call: () =>
       ExecutorFiberMarker.pipe(Effect.map((value) => CodeHostCallSuccess.make({ value }))),
   };
+
   return runOutcome(
     request("async () => warehouse.query({ sql: 'select 1' })", {
       namespaces: [namespace],
@@ -304,12 +320,14 @@ export class CodeModeExecutorObject extends DurableObject<WorkerEnv> {
   async run(): Promise<{ readonly tag: string; readonly value: unknown }> {
     await this.ctx.storage.put("marker", "executor");
     const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
+
     const host: CodeExecutionHost["Service"] = {
       call: () =>
         Effect.promise(() => this.ctx.storage.get<string>("marker")).pipe(
           Effect.map((value) => CodeHostCallSuccess.make({ value })),
         ),
     };
+
     return this.#runtime.runPromise(
       executeOutcome(
         request("async () => warehouse.query({ sql: 'select 1' })", {
@@ -361,6 +379,7 @@ const runDisposalRegression = Effect.gen(function* () {
   ];
 
   yield* Effect.forEach(hostileHandles, disposeRpcHandle, { discard: true });
+
   return { tag: "success" };
 });
 
@@ -369,12 +388,15 @@ export default {
     try {
       if (new URL(request.url).pathname === "/durable-object-host-call") {
         const first = env.CODE_MODE_EXECUTORS.getByName("first") as unknown as CodeModeExecutorStub;
+
         const second = env.CODE_MODE_EXECUTORS.getByName(
           "second",
         ) as unknown as CodeModeExecutorStub;
+
         await first.prime();
         await second.prime();
         const outcomes = [await second.run(), await first.run()];
+
         return Response.json({ outcomes });
       }
       if (new URL(request.url).pathname === "/host-call-pass-scope") {
@@ -384,12 +406,14 @@ export default {
         return Response.json(await Effect.runPromise(runDisposalRegression));
       }
       const failures = await Effect.runPromise(runAllChecks(env));
+
       return Response.json({ failures });
     } catch (cause) {
       const detail =
         cause instanceof Error
           ? `${cause.constructor.name}: ${cause.message}\n${String(cause)}`
           : String(cause);
+
       return Response.json({ failures: [`worker threw: ${detail.slice(0, 2_000)}`] });
     }
   },

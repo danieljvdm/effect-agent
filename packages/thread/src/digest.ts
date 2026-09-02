@@ -24,9 +24,11 @@ const canonicalJson = (value: Schema.Json): string => {
   if (isJsonArray(value)) {
     return `[${value.map(canonicalJson).join(",")}]`;
   }
+
   const entries = Object.entries(value).sort(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0,
   );
+
   return `{${entries
     .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
     .join(",")}}`;
@@ -37,9 +39,11 @@ export const digestJson = Effect.fn("Thread.digestJson")(function* (
   value: Schema.Json,
 ): Effect.fn.Return<Digest, DigestError, Crypto.Crypto> {
   const crypto = yield* Crypto.Crypto;
+
   const bytes = yield* Effect.fromResult(
     Encoding.decodeHex(Encoding.encodeHex(canonicalJson(value))),
   ).pipe(Effect.mapError(() => DigestError.make({ message: "Canonical JSON encoding failed" })));
+
   const digest = yield* crypto
     .digest("SHA-256", bytes)
     .pipe(
@@ -47,6 +51,7 @@ export const digestJson = Effect.fn("Thread.digestJson")(function* (
         DigestError.make({ message: `SHA-256 failed: ${error.message}`, cause: error }),
       ),
     );
+
   return yield* Schema.decodeUnknownEffect(Digest)(Encoding.encodeHex(digest)).pipe(
     Effect.mapError(() => DigestError.make({ message: "SHA-256 returned an invalid digest" })),
   );

@@ -351,6 +351,7 @@ const QUEUED_ABORT_SETTLEMENT_TOKEN = Schema.decodeSync(OwnershipToken)(
 /** Bound a hook-supplied approval reason to the canonical `BoundedText` persistence limits. */
 const boundedApprovalReason = (reason: string | undefined, fallback: string): string => {
   const value = reason === undefined || reason.length === 0 ? fallback : reason;
+
   return value.length > MAX_FAILURE_MESSAGE_LENGTH
     ? value.slice(0, MAX_FAILURE_MESSAGE_LENGTH)
     : value;
@@ -384,6 +385,7 @@ const CHILD_DELEGATION_DEPTH: DelegationDepth = Schema.decodeSync(DelegationDept
 
 /** Canonical `AbortRequested.author` of every propagated parent-abort command (spec §13.1). */
 const SUBAGENT_ABORT_AUTHOR = "subagent-parent-abort";
+
 /** Keep this exact reason, including its historical citation: abort repair replays the same command. */
 const SUBAGENT_ABORT_REASON =
   "The parent Submission was aborted; request-abort-and-join propagates the durable abort intent to every attached child (spec/subagents.md 13.1)";
@@ -416,8 +418,10 @@ const subagentRecordsOf = (
   const started = new Map<ToolCallId, SubagentStarted>();
   const joined = new Map<ToolCallId, SubagentJoined>();
   const preparedNames = new Map<ToolCallId, string>();
+
   for (const envelope of records) {
     const payload = envelope.record.payload;
+
     switch (payload._tag) {
       case "SubagentRequested": {
         if (payload.runId === runId) requested.set(payload.toolCallId, payload);
@@ -440,6 +444,7 @@ const subagentRecordsOf = (
       }
     }
   }
+
   return { requested, started, joined, preparedNames };
 };
 
@@ -734,6 +739,7 @@ class CoordinatorHalt {
 const PolicyFailure = Schema.TaggedStruct("AgentPolicyError", {
   limit: PolicyLimit,
 });
+
 const decodePolicyFailure = Schema.decodeUnknownOption(PolicyFailure);
 
 const decodePolicyFailureSafely = (error: unknown) => {
@@ -764,6 +770,7 @@ const agentChildPendingOption = (error: unknown): Option.Option<AgentChildPendin
 
 const errorMessageOf = (error: unknown): string => {
   const diagnostic = inspectForeignDiagnostic(error);
+
   return diagnostic.message ?? safeUnknownString(error, "Unknown failure");
 };
 
@@ -776,6 +783,7 @@ const nowUtc: Effect.Effect<DateTime.Utc> = Effect.map(Clock.currentTimeMillis, 
 
 const decodePrompt = Schema.decodeUnknownEffect(Prompt.Prompt);
 const decodePersisted = Schema.decodeUnknownEffect(PersistedJson);
+
 /** One application Tool Call declared inside a canonical `ModelResponseRecorded`'s messages. */
 interface DeclaredApplicationCall {
   readonly id: string;
@@ -811,6 +819,7 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
         const application: Array<DeclaredApplicationCall> = [];
         const all: Array<DeclaredApplicationCall> = [];
         const providerResults: Array<Prompt.ToolResultPart> = [];
+
         for (const message of prompt.content) {
           if (message.role !== "assistant") continue;
           for (const part of message.content) {
@@ -828,6 +837,7 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
             }
           }
         }
+
         return { total, application, all, providerResults };
       }),
     ),
@@ -851,12 +861,14 @@ const terminalAssistantText = Effect.fn("DurableAgentRuntime.terminalAssistantTe
       ),
       Effect.map((prompt) => {
         let text = "";
+
         for (const message of prompt.content) {
           if (message.role !== "assistant") continue;
           for (const part of message.content) {
             if (part.type === "text") text += part.text;
           }
         }
+
         return text;
       }),
     ),
@@ -922,11 +934,14 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const reconciler = yield* ToolReconciler;
   const approvalResolver = yield* DurableApprovalResolver;
+
   // Capture independent host choices at acquisition so worker callers cannot replace them.
   const runContextPreparation = yield* Effect.serviceOption(RunContextPreparation).pipe(
     Effect.map(Option.getOrElse(() => RunContextPreparation.of({}))),
   );
+
   const runToolAuthorization = yield* RunToolAuthorization;
+
   const compactor =
     runContextPreparation.compactor ??
     (yield* Effect.serviceOption(ContextCompactor).pipe(
@@ -937,6 +952,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     ));
+
   // Possession-default authorization reference (P7 WP1): the default allows everything —
   // exactly the pre-P7 service-possession boundary — and a host-supplied non-default Layer is
   // consulted fail-closed by observe, the admin operations, and the two resolution paths.
@@ -979,7 +995,9 @@ const make = Effect.gen(function* () {
       ...(settlement.failure === undefined ? {} : { failure: settlement.failure }),
       settledAt: settlement.settledAt,
     };
+
     const payload = record?.payload;
+
     if (
       payload === undefined ||
       payload._tag !== "SubmissionSettled" ||
@@ -990,13 +1008,16 @@ const make = Effect.gen(function* () {
     ) {
       return Settlement.make(common);
     }
+
     const canonical = {
       ...common,
       ...(payload.usageSummary === undefined ? {} : { usageSummary: payload.usageSummary }),
     };
+
     if (settlement.outcome !== "completed" || payload.runDisposition === undefined) {
       return Settlement.make(canonical);
     }
+
     return Settlement.make({
       ...canonical,
       runDisposition: payload.runDisposition,
@@ -1008,14 +1029,18 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<Array<CanonicalRecordEnvelope>, ThreadStoreError | ThreadNotMaterialized> {
     const collected: Array<CanonicalRecordEnvelope> = [];
     let after: CanonicalSequence | undefined = undefined;
+
     while (true) {
       const request: ThreadRead =
         after === undefined
           ? ThreadRead.make({ threadId, limit: READ_PAGE })
           : ThreadRead.make({ threadId, limit: READ_PAGE, afterSequence: after });
+
       const page: Array<CanonicalRecordEnvelope> = yield* Stream.runCollect(store.read(request));
+
       collected.push(...page);
       const last = page.at(-1);
+
       if (page.length < READ_PAGE || last === undefined) return collected;
       after = last.sequence;
     }
@@ -1055,14 +1080,18 @@ const make = Effect.gen(function* () {
     const collected: Array<CanonicalRecordEnvelope> = [];
     let after = afterSequence;
     let expected = afterSequence + 1;
+
     while (expected <= throughSequence) {
       const limit = Math.min(READ_PAGE, throughSequence - expected + 1);
+
       const request = ThreadRead.make({
         threadId,
         limit,
         ...(after === 0 ? {} : { afterSequence: after }),
       });
+
       const page: Array<CanonicalRecordEnvelope> = yield* Stream.runCollect(store.read(request));
+
       if (page.length !== limit) {
         return yield* ThreadStoreError.make({
           operation: "read recovery history",
@@ -1081,6 +1110,7 @@ const make = Effect.gen(function* () {
         collected.push(envelope);
       }
     }
+
     return collected;
   });
 
@@ -1097,7 +1127,9 @@ const make = Effect.gen(function* () {
       Effect.map(Option.some),
       Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(Option.none())),
     );
+
     if (Option.isNone(tail)) return { records: [], materialized: false };
+
     const records = yield* readCanonicalRange(
       threadId,
       ZERO_SEQUENCE,
@@ -1111,6 +1143,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
     return { records, materialized: true };
   });
 
@@ -1125,7 +1158,9 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<ReadonlyArray<CanonicalRecordEnvelope>, DurableWorkerFailure> {
     const after = records.at(-1)?.sequence ?? ZERO_SEQUENCE;
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
     if (tail.tailSequence <= after) return records;
+
     const suffix = yield* readCanonicalRange(threadId, after, tail.tailSequence).pipe(
       Effect.catchTag("ThreadNotMaterialized", (error) =>
         ThreadStoreError.make({
@@ -1135,6 +1170,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
     return [...records, ...suffix];
   });
 
@@ -1147,6 +1183,7 @@ const make = Effect.gen(function* () {
       submissionId: SubmissionId,
     ): Effect.fn.Return<SubmissionSettledRecord, LedgerError> {
       const payload = record.payload;
+
       if (
         payload._tag !== "SubmissionSettled" ||
         payload.submissionId !== submissionId ||
@@ -1158,6 +1195,7 @@ const make = Effect.gen(function* () {
           message: `The reserved canonical record is not the exact Settlement for Submission ${submissionId}`,
         });
       }
+
       return payload;
     },
   );
@@ -1170,6 +1208,7 @@ const make = Effect.gen(function* () {
       const record = records.find(
         (envelope) => envelope.record.recordId === submissionSettlementRecordId(submissionId),
       )?.record;
+
       if (record === undefined) {
         return yield* LedgerError.make({
           operation: "canonicalSettlementRecord",
@@ -1177,6 +1216,7 @@ const make = Effect.gen(function* () {
         });
       }
       yield* settlementPayloadFromRecord(record, submissionId);
+
       return record;
     },
   );
@@ -1196,13 +1236,17 @@ const make = Effect.gen(function* () {
     hostSubmissionId?: SubmissionId,
   ): Effect.fn.Return<RecoveryEvidence, RunJournalError | LedgerError> {
     const runId = runIdForSubmission(submissionId);
+
     const hostRunId =
       hostSubmissionId === undefined ? undefined : runIdForSubmission(hostSubmissionId);
+
     const inputId = submissionInputRecordId(submissionId);
     const abortId = submissionAbortRecordId(submissionId);
     const settlementId = submissionSettlementRecordId(submissionId);
+
     const hostSettlementId =
       hostSubmissionId === undefined ? undefined : submissionSettlementRecordId(hostSubmissionId);
+
     let inputRecorded = false;
     let inputSequence: CanonicalSequence | undefined;
     let abortRecorded = false;
@@ -1222,6 +1266,7 @@ const make = Effect.gen(function* () {
     for (const envelope of records) {
       const recordId = envelope.record.recordId;
       const payload = envelope.record.payload;
+
       if (recordId === inputId) {
         inputRecorded = true;
         inputSequence = envelope.sequence;
@@ -1247,6 +1292,7 @@ const make = Effect.gen(function* () {
         case "ToolCallPrepared": {
           if (payload.runId !== runId) break;
           const identity = toolCallPreparedRecordId(runId, payload.turn, payload.toolCallId);
+
           if (preparedKinds.has(identity)) {
             return yield* RunJournalError.make({
               message: "Duplicate canonical Tool preparation evidence",
@@ -1319,24 +1365,30 @@ const make = Effect.gen(function* () {
     // Only canonical classification authorizes the idempotent establishment protocol.
     // A lifecycle record cannot silently upgrade an ordinary or unclassified preparation.
     const subagent = subagentRecordsOf(records, runId);
+
     const isPreparedDelegation = (call: OpenToolCallEvidence): boolean =>
       preparedKinds.get(toolCallPreparedRecordId(runId, call.turn, call.toolCallId)) ===
       "delegation";
+
     const openByCallId = new Map(
       allOpenCalls.filter(isPreparedDelegation).map((call) => [call.toolCallId, call]),
     );
+
     const delegationCallIds: Array<ToolCallId> = [];
     const seenDelegationIds = new Set<ToolCallId>();
+
     const noteDelegation = (toolCallId: ToolCallId): void => {
       if (seenDelegationIds.has(toolCallId)) return;
       seenDelegationIds.add(toolCallId);
       delegationCallIds.push(toolCallId);
     };
+
     for (const toolCallId of subagent.requested.keys()) noteDelegation(toolCallId);
     for (const toolCallId of subagent.started.keys()) noteDelegation(toolCallId);
     for (const toolCallId of subagent.joined.keys()) noteDelegation(toolCallId);
     for (const toolCallId of delegationCallIds) {
       const request = subagent.requested.get(toolCallId);
+
       if (
         request === undefined ||
         preparedKinds.get(toolCallPreparedRecordId(runId, request.turn, toolCallId)) !==
@@ -1351,6 +1403,7 @@ const make = Effect.gen(function* () {
       if (isPreparedDelegation(call)) noteDelegation(call.toolCallId);
     }
     const openDelegationCalls: Array<OpenDelegationCallEvidence> = [];
+
     for (const toolCallId of delegationCallIds) {
       const open = openByCallId.get(toolCallId);
       const requestedRecord = subagent.requested.get(toolCallId);
@@ -1360,6 +1413,7 @@ const make = Effect.gen(function* () {
       // never proof of absence, and only a proven `not-admitted` permits an admission attempt.
       let admission: DelegationAdmissionEvidence | undefined;
       let childSubmissionId = startedRecord?.childSubmissionId;
+
       if (requestedRecord !== undefined && startedRecord === undefined) {
         const resolution = yield* ledger.resolveAdmission(
           SubmissionLookupByKey.make({
@@ -1368,6 +1422,7 @@ const make = Effect.gen(function* () {
             idempotencyKey: decodeIdempotencyKeySync(requestedRecord.childIdempotencyKey),
           }),
         );
+
         switch (resolution._tag) {
           case "NotAdmitted": {
             admission = "not-admitted";
@@ -1385,6 +1440,7 @@ const make = Effect.gen(function* () {
         }
       }
       const childThreadId = startedRecord?.childThreadId ?? requestedRecord?.childThreadId;
+
       openDelegationCalls.push(
         OpenDelegationCallEvidence.make({
           toolCallId,
@@ -1406,8 +1462,10 @@ const make = Effect.gen(function* () {
     const openToolCalls = allOpenCalls.filter((call) => !isPreparedDelegation(call));
 
     let declaredPendingBatch: DeclaredPendingBatchEvidence | undefined;
+
     if (lastResponse !== undefined && !preparedTurns.has(lastResponse.turn)) {
       const declared = yield* declaredApplicationCalls(lastResponse.messages);
+
       if (declared.length > 0 && !declared.some((call) => settledIds.has(call.id))) {
         declaredPendingBatch = DeclaredPendingBatchEvidence.make({
           turn: lastResponse.turn,
@@ -1443,6 +1501,7 @@ const make = Effect.gen(function* () {
     runId: ReturnType<typeof runIdForSubmission>,
   ): Effect.fn.Return<PendingToolBatch | undefined, RunJournalError> {
     let lastResponse: { readonly turn: number; readonly messages: PersistedJson } | undefined;
+
     const settledByCallId = new Map<
       string,
       {
@@ -1451,8 +1510,10 @@ const make = Effect.gen(function* () {
         readonly budgetRejected?: true;
       }
     >();
+
     for (const envelope of records) {
       const payload = envelope.record.payload;
+
       if (payload._tag === "ModelResponseRecorded" && payload.runId === runId) {
         if (lastResponse === undefined || payload.turn > lastResponse.turn) {
           lastResponse = { turn: payload.turn, messages: payload.messages };
@@ -1469,24 +1530,30 @@ const make = Effect.gen(function* () {
     }
     if (lastResponse === undefined) return undefined;
     const declared = yield* declaredToolCalls(lastResponse.messages);
+
     if (declared.application.length === 0) return undefined;
     const calls = declared.all;
+
     for (const part of declared.providerResults) {
       const result = yield* decodePersisted(part.result).pipe(
         Effect.mapError((cause) =>
           RunJournalError.make({ message: `Invalid canonical provider result ${part.id}`, cause }),
         ),
       );
+
       settledByCallId.set(part.id, { result, isFailure: part.isFailure });
     }
+
     const settled: Array<{
       id: string;
       result: PersistedJson;
       isFailure: boolean;
       budgetRejected?: true;
     }> = [];
+
     for (const call of calls) {
       const recorded = settledByCallId.get(call.id);
+
       if (call.providerExecuted === true && recorded === undefined) {
         return yield* RunJournalError.make({
           message: `Pending Turn lacks canonical provider result for ${call.id}`,
@@ -1497,6 +1564,7 @@ const make = Effect.gen(function* () {
       }
     }
     if (settled.length >= calls.length) return undefined;
+
     return {
       turn: lastResponse.turn,
       turnId: turnIdForRun(runId, lastResponse.turn),
@@ -1521,6 +1589,7 @@ const make = Effect.gen(function* () {
     records.filter((envelope) => {
       if (envelope.record.recordId === pending.responseRecordId) return false;
       const payload = envelope.record.payload;
+
       return !(
         payload._tag === "ToolCallSettled" &&
         payload.runId === runId &&
@@ -1551,11 +1620,14 @@ const make = Effect.gen(function* () {
     ThreadStoreError | ThreadNotMaterialized | AppendConflict | FenceRejected
   > {
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
     if (tail.tailSequence > 0) return;
+
     const record = yield* makeEnvelope(
       threadCreatedRecordId(threadId),
       ThreadCreated.make({ agentId, definitions }),
     );
+
     yield* store
       .append(
         FencedAppendRequest.make({
@@ -1594,6 +1666,7 @@ const make = Effect.gen(function* () {
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
     const tailRef = yield* Ref.make({ sequence: tail.tailSequence, digest: tail.tailDigest });
     const gate = yield* Semaphore.make(1);
+
     return { threadId, producerEpoch, tailRef, gate };
   });
 
@@ -1608,6 +1681,7 @@ const make = Effect.gen(function* () {
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
     const tailRef = yield* Ref.make({ sequence: tail.tailSequence, digest: tail.tailDigest });
     const gate = yield* Semaphore.make(1);
+
     return { threadId, producerEpoch: tail.producerEpoch, tailRef, gate };
   });
 
@@ -1626,6 +1700,7 @@ const make = Effect.gen(function* () {
         // WITHOUT its canonical record.
         for (let refresh = 0; ; refresh++) {
           const tail = yield* Ref.get(ctx.tailRef);
+
           const result = yield* store
             .append(
               FencedAppendRequest.make({
@@ -1652,6 +1727,7 @@ const make = Effect.gen(function* () {
                   : Effect.fail(conflict),
               ),
             );
+
           if (result !== undefined) {
             yield* Ref.set(ctx.tailRef, {
               sequence: result.lastSequence,
@@ -1660,6 +1736,7 @@ const make = Effect.gen(function* () {
             // Canonical storage is already committed. This hint may be lost or duplicated, but
             // it lets scoped progress waiters re-read promptly without making memory authoritative.
             yield* wake.notify(ctx.threadId);
+
             return result;
           }
         }
@@ -1679,6 +1756,7 @@ const make = Effect.gen(function* () {
         reason: intent.reason,
       }),
     );
+
     yield* appendBatch(
       ctx,
       CanonicalBatch.make({
@@ -1707,8 +1785,10 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<void, DurableWorkerFailure> {
     const runId = runIdForSubmission(submissionId);
     const byTurn = new Map<number, Array<OpenToolCallEvidence>>();
+
     for (const call of calls) {
       const group = byTurn.get(call.turn);
+
       if (group === undefined) byTurn.set(call.turn, [call]);
       else group.push(call);
     }
@@ -1716,9 +1796,12 @@ const make = Effect.gen(function* () {
       const missing = group.filter(
         (call) => !knownIds.has(toolCallUnknownRecordId(runId, turn, call.toolCallId)),
       );
+
       const first = missing[0];
+
       if (first === undefined) continue;
       const envelopes: Array<RecordEnvelope> = [];
+
       for (const call of missing) {
         envelopes.push(
           yield* makeEnvelope(
@@ -1734,6 +1817,7 @@ const make = Effect.gen(function* () {
         );
       }
       const head = envelopes[0];
+
       if (head === undefined) continue;
       // An identity conflict means another pass already recorded the same uncertainty.
       yield* appendBatch(
@@ -1775,6 +1859,7 @@ const make = Effect.gen(function* () {
     },
   ): Effect.fn.Return<void, DurableWorkerFailure> {
     const runId = runIdForSubmission(submissionId);
+
     const swallowIdentityConflict = (effect: ReturnType<typeof appendBatch>) =>
       effect.pipe(
         Effect.catch((error) =>
@@ -1782,8 +1867,10 @@ const make = Effect.gen(function* () {
         ),
         Effect.asVoid,
       );
+
     if (closure.result !== undefined) {
       const settledId = toolCallSettledRecordId(runId, call.turn, call.toolCallId);
+
       if (!knownIds.has(settledId)) {
         const envelope = yield* makeEnvelope(
           settledId,
@@ -1795,6 +1882,7 @@ const make = Effect.gen(function* () {
             isFailure: closure.result.isFailure,
           }),
         );
+
         yield* swallowIdentityConflict(
           appendBatch(
             ctx,
@@ -1809,6 +1897,7 @@ const make = Effect.gen(function* () {
       }
     }
     const resolvedId = toolCallResolvedRecordId(runId, call.turn, call.toolCallId);
+
     if (!knownIds.has(resolvedId)) {
       const envelope = yield* makeEnvelope(
         resolvedId,
@@ -1820,6 +1909,7 @@ const make = Effect.gen(function* () {
           reason: closure.reason,
         }),
       );
+
       yield* swallowIdentityConflict(
         appendBatch(
           ctx,
@@ -1858,20 +1948,25 @@ const make = Effect.gen(function* () {
     const submissionId = submission.submissionId;
     const runId = runIdForSubmission(submissionId);
     const preparedByCallId = new Map<string, ToolCallPrepared>();
+
     for (const envelope of records) {
       const payload = envelope.record.payload;
+
       if (payload._tag === "ToolCallPrepared" && payload.runId === runId) {
         preparedByCallId.set(payload.toolCallId, payload);
       }
     }
     const intents = new Map<string, UnknownResolutionIntent>();
+
     for (const intent of snapshot.unknownResolutions) {
       intents.set(intent.toolCallId, intent);
     }
     const review: OpenCallReview = { uncertain: [], unproven: [], retryable: [], recovered: 0 };
     let recovered = 0;
+
     for (const call of openCalls) {
       const intent = intents.get(call.toolCallId);
+
       if (intent !== undefined) {
         switch (intent.resolution._tag) {
           case "AbortSubmission": {
@@ -1921,12 +2016,14 @@ const make = Effect.gen(function* () {
         continue;
       }
       const prepared = preparedByCallId.get(call.toolCallId);
+
       if (prepared === undefined) {
         // Open evidence without its prepared record is unreadable state: stay blocked,
         // never guess (fail-closed).
         review.unproven.push(call);
         continue;
       }
+
       const reconciled = yield* reconciler
         .reconcile(
           PreparedToolCallEvidence.make({
@@ -1944,11 +2041,13 @@ const make = Effect.gen(function* () {
           Effect.map(Option.some),
           Effect.catchTag("ToolReconcilerError", () => Effect.succeed(Option.none())),
         );
+
       if (Option.isNone(reconciled)) {
         review.unproven.push(call);
         continue;
       }
       const decision = reconciled.value;
+
       switch (decision._tag) {
         case "CompletedWithResult": {
           yield* appendClosedCall(ctx, submissionId, knownIds, call, {
@@ -1971,6 +2070,7 @@ const make = Effect.gen(function* () {
         }
       }
     }
+
     return { ...review, recovered };
   });
 
@@ -1987,6 +2087,7 @@ const make = Effect.gen(function* () {
     reason: string,
   ): Effect.fn.Return<void, DurableWorkerFailure> {
     const first = calls[0];
+
     if (first === undefined) return;
     yield* appendUnknownRecords(ctx, submissionId, knownIds, calls, reason);
     yield* ledger.markUnknown(
@@ -2014,9 +2115,11 @@ const make = Effect.gen(function* () {
     const submissionId = submission.submissionId;
     const recordId = submissionInputRecordId(submissionId);
     const existing = records.find((envelope) => envelope.record.recordId === recordId);
+
     if (existing !== undefined) {
       if (inputApplied === undefined) {
         const ownershipToken = yield* Ref.get(tokenRef);
+
         yield* ledger.markInputApplied(
           MarkInputAppliedRequest.make({
             submissionId,
@@ -2026,8 +2129,10 @@ const make = Effect.gen(function* () {
           }),
         );
       }
+
       return;
     }
+
     const envelope = yield* makeEnvelope(
       recordId,
       UserInputRecorded.make({
@@ -2037,6 +2142,7 @@ const make = Effect.gen(function* () {
         input: submission.inputPayload,
       }),
     );
+
     const result = yield* appendBatch(
       ctx,
       CanonicalBatch.make({
@@ -2045,8 +2151,10 @@ const make = Effect.gen(function* () {
         records: [envelope],
       }),
     );
+
     yield* hit("input:after-canonical-append");
     const ownershipToken = yield* Ref.get(tokenRef);
+
     yield* ledger.markInputApplied(
       MarkInputAppliedRequest.make({
         submissionId,
@@ -2061,10 +2169,13 @@ const make = Effect.gen(function* () {
     "DurableAgentRuntime.canonicalRunStartFromRecords",
   )(function* (records: ReadonlyArray<CanonicalRecordEnvelope>, runId: RunId) {
     const recordId = runStartedRecordId(runId);
+
     const starts = records.filter(
       ({ record }) => record.payload._tag === "RunStarted" && record.payload.runId === runId,
     );
+
     const existing = records.find(({ record }) => record.recordId === recordId);
+
     if (
       starts.length > 1 ||
       (starts.length === 1 && starts[0]?.record.recordId !== recordId) ||
@@ -2075,6 +2186,7 @@ const make = Effect.gen(function* () {
         message: `Run ${runId} has conflicting start evidence`,
       });
     }
+
     return existing?.record;
   });
 
@@ -2088,6 +2200,7 @@ const make = Effect.gen(function* () {
     const records = yield* readAll(submission.threadId);
     const existing = yield* canonicalRunStartFromRecords(records, runId);
     let start: RecordEnvelope;
+
     if (existing !== undefined && existing.payload._tag === "RunStarted") {
       if (existing.payload.maxDurationMillis !== maxDurationMillis) {
         return yield* RunJournalError.make({
@@ -2100,6 +2213,7 @@ const make = Effect.gen(function* () {
         ({ record: { payload } }) =>
           payload._tag !== "UserInputRecorded" && "runId" in payload && payload.runId === runId,
       );
+
       if (executionStarted) {
         return yield* RunJournalError.make({
           message: `Run ${runId} has execution records but no canonical start; reset incompatible private-development data`,
@@ -2120,6 +2234,7 @@ const make = Effect.gen(function* () {
       );
       yield* hit("run:after-start-append");
     }
+
     return {
       startedAt: start.createdAt,
       deadline: DateTime.addDuration(start.createdAt, Duration.millis(maxDurationMillis)),
@@ -2149,6 +2264,7 @@ const make = Effect.gen(function* () {
     "DurableAgentRuntime.notifyParentOfChildSettlement",
   )(function* (submission: SubmissionSnapshot): Effect.fn.Return<void, LedgerError> {
     const linkage = submission.parentLinkage;
+
     if (linkage === undefined) return;
     yield* ledger.recordChildSettled(
       ChildSettledNotification.make({
@@ -2156,9 +2272,11 @@ const make = Effect.gen(function* () {
         childSubmissionId: submission.submissionId,
       }),
     );
+
     const parent = yield* ledger.lookup(
       SubmissionLookupById.make({ submissionId: linkage.parentSubmissionId }),
     );
+
     if (Option.isSome(parent)) {
       yield* wake.notify(parent.value.threadId);
     }
@@ -2175,6 +2293,7 @@ const make = Effect.gen(function* () {
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
     let record: RecordEnvelope;
+
     if (joined.reservation !== undefined) {
       // A prior pass already reserved the exact outcome: re-append the STORED record so the
       // batch replay is byte-identical (DUR-011).
@@ -2190,10 +2309,12 @@ const make = Effect.gen(function* () {
           ...(hostSettlement.outcome === "failed" ? { result: hostSettlement.result } : {}),
         }),
       ).pipe(Effect.orDie);
+
       const envelope = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
       // The envelope was constructed from validated parts, so an encode failure is a defect.
       const encoded = yield* Schema.encodeEffect(RecordEnvelope)(envelope).pipe(Effect.orDie);
       const recordDigest = yield* withCrypto(digestJson(encoded));
+
       const reserved = yield* ledger
         .reserveSettlement(
           SettlementReservation.make({
@@ -2213,14 +2334,18 @@ const make = Effect.gen(function* () {
               const current = yield* ledger.loadRecoverySnapshot(
                 RecoverySnapshotRequest.make({ submissionId }),
               );
+
               const reservation = current.reservation;
+
               if (reservation === undefined || reservation.outcome !== outcome) {
                 return yield* conflict;
               }
+
               return reservation;
             }),
           ),
         );
+
       record = reserved.record;
       yield* hit("terminalize:after-reserve");
     }
@@ -2237,11 +2362,14 @@ const make = Effect.gen(function* () {
     );
     yield* hit("terminalize:after-canonical-append");
     yield* notifyParentOfChildSettlement(submission);
+
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
+
     yield* wake.notify(submission.threadId);
     yield* notifyParentOfChildSettlement(submission);
+
     return settlement;
   });
 
@@ -2259,14 +2387,18 @@ const make = Effect.gen(function* () {
       hostSettlement: SubmissionSettledRecord,
     ): Effect.fn.Return<void, DurableWorkerFailure> {
       const hostSubmissionId = hostSettlement.submissionId;
+
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: hostSubmissionId }),
       );
+
       for (const join of snapshot.joins) {
         if (join.state !== "joined" && join.state !== "terminalizing") continue;
+
         const joinedSnapshot = yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId: join.submissionId }),
         );
+
         if (joinedSnapshot.submission.state === "settled") continue;
         yield* settleOneJoined(ctx, hostSettlement, joinedSnapshot);
       }
@@ -2288,6 +2420,7 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<Settlement, DurableWorkerFailure> {
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
+
     const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
       SubmissionSettled.make({
         submissionId,
@@ -2314,11 +2447,13 @@ const make = Effect.gen(function* () {
         ...(outcome.usageSummary === undefined ? {} : { usageSummary: outcome.usageSummary }),
       }),
     ).pipe(Effect.orDie);
+
     const record = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
     // The envelope was constructed from validated parts, so an encode failure is a defect.
     const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie);
     const recordDigest = yield* withCrypto(digestJson(encoded));
     const ownershipToken = yield* Ref.get(tokenRef);
+
     const reserved = yield* ledger.reserveSettlement(
       SettlementReservation.make({
         submissionId,
@@ -2329,6 +2464,7 @@ const make = Effect.gen(function* () {
         recordDigest,
       }),
     );
+
     yield* hit("terminalize:after-reserve");
     yield* appendBatch(
       ctx,
@@ -2343,13 +2479,17 @@ const make = Effect.gen(function* () {
     );
     yield* hit("terminalize:after-canonical-append");
     yield* notifyParentOfChildSettlement(submission);
+
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
+
     const canonicalSettlement = yield* settlementPayloadFromRecord(reserved.record, submissionId);
+
     yield* wake.notify(submission.threadId);
     yield* notifyParentOfChildSettlement(submission);
     yield* settleJoinedSubmissions(ctx, canonicalSettlement);
+
     return materializeSettlement(settlement, reserved.record);
   });
 
@@ -2377,19 +2517,23 @@ const make = Effect.gen(function* () {
       yield* hit("terminalize:after-canonical-append");
     }
     yield* notifyParentOfChildSettlement(submission);
+
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({
         submissionId: submission.submissionId,
         settlementId: reservation.settlementId,
       }),
     );
+
     const canonicalSettlement = yield* settlementPayloadFromRecord(
       reservation.record,
       submission.submissionId,
     );
+
     yield* wake.notify(submission.threadId);
     yield* notifyParentOfChildSettlement(submission);
     yield* settleJoinedSubmissions(ctx, canonicalSettlement);
+
     return materializeSettlement(settlement, reservation.record);
   });
 
@@ -2399,18 +2543,23 @@ const make = Effect.gen(function* () {
     record: RecordEnvelope,
   ): Effect.fn.Return<Settlement, LedgerError | SettlementConflict> {
     const canonicalSettlement = yield* settlementPayloadFromRecord(record, submission.submissionId);
+
     yield* notifyParentOfChildSettlement(submission);
+
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({
         submissionId: submission.submissionId,
         settlementId: canonicalSettlement.settlementId,
       }),
     );
+
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
+
     yield* wake.notify(submission.threadId);
     yield* notifyParentOfChildSettlement(submission);
+
     return materializeSettlement(settlement, snapshot.reservation?.record);
   });
 
@@ -2439,6 +2588,7 @@ const make = Effect.gen(function* () {
         "The Submission was aborted while this ordinary Tool call had no canonical outcome; abort never asserts external rollback",
       );
     }
+
     return yield* terminalize(
       ctx,
       submission,
@@ -2470,7 +2620,9 @@ const make = Effect.gen(function* () {
     childRecords: ReadonlyArray<CanonicalRecordEnvelope>,
   ): Effect.fn.Return<void, DurableWorkerFailure> {
     const recordId = subagentLineageRecordId(request.childThreadId);
+
     if (childRecords.some((envelope) => envelope.record.recordId === recordId)) return;
+
     const envelope = yield* makeEnvelope(
       recordId,
       SubagentLineageRecorded.make({
@@ -2492,9 +2644,11 @@ const make = Effect.gen(function* () {
         ...(request.policy === undefined ? {} : { policy: request.policy }),
       }),
     );
+
     const tail = yield* store.inspectTail(
       ThreadTailRequest.make({ threadId: request.childThreadId }),
     );
+
     yield* store
       .append(
         FencedAppendRequest.make({
@@ -2554,6 +2708,7 @@ const make = Effect.gen(function* () {
     ): Effect.fn.Return<ChildAdmissionOutcome, DurableWorkerFailure> {
       const principal = decodePrincipalSync(request.childPrincipal);
       const idempotencyKey = decodeIdempotencyKeySync(request.childIdempotencyKey);
+
       const resolution = yield* ledger.resolveAdmission(
         SubmissionLookupByKey.make({
           threadId: request.childThreadId,
@@ -2561,8 +2716,10 @@ const make = Effect.gen(function* () {
           idempotencyKey,
         }),
       );
+
       let childSubmissionId: SubmissionId;
       let receiptId: ReceiptId;
+
       switch (resolution._tag) {
         case "Indeterminate": {
           return { _tag: "indeterminate", reason: resolution.reason };
@@ -2574,6 +2731,7 @@ const make = Effect.gen(function* () {
               reason: "The expired parent cannot admit a new child",
             };
           }
+
           const admitted: AdmissionResult = yield* ledger
             .admit(
               AdmissionRequest.make({
@@ -2597,6 +2755,7 @@ const make = Effect.gen(function* () {
                 conflictToLedgerError("establishChildFromRequest"),
               ),
             );
+
           childSubmissionId = admitted.submissionId;
           receiptId = admitted.receiptId;
           break;
@@ -2607,6 +2766,7 @@ const make = Effect.gen(function* () {
           // (fail-closed; identifiers are never capabilities, D10).
           const child = resolution.submission;
           const linkage = child.parentLinkage;
+
           if (
             child.agentId !== request.targetAgentId ||
             !definitionDigestsEqual(child.agentDigests, request.targetDigests) ||
@@ -2633,10 +2793,12 @@ const make = Effect.gen(function* () {
         request.targetDigests,
       );
       const childRead = yield* readAllTolerant(request.childThreadId);
+
       yield* ensureChildLineage(parent, request, childRead.records);
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: childSubmissionId }));
       yield* hit("subagent:after-child-ready");
       yield* wake.notify(request.childThreadId);
+
       return { _tag: "established", childSubmissionId, receiptId };
     },
   );
@@ -2652,11 +2814,14 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<PersistedJson> => {
     let turns = 0;
     let toolCalls = 0;
+
     for (const envelope of childRecords) {
       const payload = envelope.record.payload;
+
       if (payload._tag === "ModelResponseRecorded" && payload.runId === childRunId) turns += 1;
       if (payload._tag === "ToolCallSettled" && payload.runId === childRunId) toolCalls += 1;
     }
+
     return decodePersisted({ turns, toolCalls }).pipe(Effect.orDie);
   };
 
@@ -2668,6 +2833,7 @@ const make = Effect.gen(function* () {
     if (payload.outcome === "failed") {
       return Effect.succeed(payload.result);
     }
+
     return decodePersisted({
       errorTag: "SubagentAborted",
       message: `Attached child ${childSubmissionId} settled aborted`,
@@ -2701,6 +2867,7 @@ const make = Effect.gen(function* () {
     childSubmissionId: SubmissionId,
   ): Effect.fn.Return<ChildVerification, DurableWorkerFailure> {
     const mismatch = (message: string): ChildVerification => ({ _tag: "mismatch", message });
+
     // The child's lane state crosses the store boundary through `lookup` — a status check on
     // the child's owning ledger — because recovery snapshots are lane-local by construction:
     // on Cloudflare the child Thread lives in a different Durable Object whose
@@ -2710,6 +2877,7 @@ const make = Effect.gen(function* () {
     const childLookup = yield* ledger.lookup(
       SubmissionLookupById.make({ submissionId: childSubmissionId }),
     );
+
     if (Option.isNone(childLookup)) {
       return yield* LedgerError.make({
         operation: "verifySettledChild",
@@ -2717,6 +2885,7 @@ const make = Effect.gen(function* () {
       });
     }
     const child = childLookup.value;
+
     if (child.threadId !== request.childThreadId) {
       return mismatch("The child Thread does not match the intended child identity");
     }
@@ -2730,6 +2899,7 @@ const make = Effect.gen(function* () {
       return mismatch("The child input digest does not match the canonical request");
     }
     const linkage = child.parentLinkage;
+
     if (
       linkage === undefined ||
       linkage.parentSubmissionId !== parent.submissionId ||
@@ -2738,10 +2908,13 @@ const make = Effect.gen(function* () {
       return mismatch("The child admission linkage does not name this parent Tool Call");
     }
     const childRecords = yield* readAll(request.childThreadId);
+
     const lineageEnvelope = childRecords.find(
       (envelope) => envelope.record.recordId === subagentLineageRecordId(request.childThreadId),
     );
+
     const lineage = lineageEnvelope?.record.payload;
+
     if (lineage === undefined || lineage._tag !== "SubagentLineageRecorded") {
       return mismatch("The child Thread carries no immutable lineage record");
     }
@@ -2764,10 +2937,13 @@ const make = Effect.gen(function* () {
     ) {
       return mismatch("The child lineage digests or allowance do not match the canonical request");
     }
+
     const settlementEnvelope = childRecords.find(
       (envelope) => envelope.record.recordId === submissionSettlementRecordId(childSubmissionId),
     );
+
     const settlement = settlementEnvelope?.record.payload;
+
     if (settlement === undefined || settlement._tag !== "SubmissionSettled") {
       return mismatch("The child has no canonical Settlement record");
     }
@@ -2786,10 +2962,12 @@ const make = Effect.gen(function* () {
     if (settlement.outcome === "completed" && settlement.result === undefined) {
       return mismatch("The completed child Settlement carries no terminal output");
     }
+
     const encodedResult =
       settlement.outcome === "completed" && settlement.result !== undefined
         ? settlement.result
         : yield* boundedChildFailureResult(settlement, childSubmissionId);
+
     return {
       _tag: "verified",
       value: { outcome: settlement.outcome, encodedResult, settlement, childRecords },
@@ -2871,6 +3049,7 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<void, DurableWorkerFailure> {
     const runId = runIdForSubmission(parent.submissionId);
     const request = subagent.requested.get(toolCallId);
+
     if (request === undefined) {
       return yield* LedgerError.make({
         operation: "joinSettledChildForClosedParent",
@@ -2880,10 +3059,12 @@ const make = Effect.gen(function* () {
     const joinedRecordId = subagentJoinedRecordId(runId, toolCallId);
     let finalAccounting: PersistedJson;
     const existing = subagent.joined.get(toolCallId);
+
     if (existing !== undefined) {
       finalAccounting = existing.finalAccounting;
     } else {
       const verification = yield* verifySettledChild(parent, request, childSubmissionId);
+
       if (verification._tag === "mismatch") {
         return yield* LedgerError.make({
           operation: "joinSettledChildForClosedParent",
@@ -2891,6 +3072,7 @@ const make = Effect.gen(function* () {
         });
       }
       const verified = verification.value;
+
       // Static-shape projections; a bounds failure is a defect, matching `annotateRepair`.
       const boundedResult = yield* decodePersisted({
         errorTag: reason === "aborted" ? "SubagentParentAborted" : "SubagentParentDurationExceeded",
@@ -2898,11 +3080,13 @@ const make = Effect.gen(function* () {
           `The parent Submission ${reason === "aborted" ? "aborted" : "exceeded its duration"}; attached child ${childSubmissionId} settled ${verified.outcome}`,
         ),
       }).pipe(Effect.orDie);
+
       finalAccounting = yield* decodePersisted({
         basis: reason === "aborted" ? "aborted-conservative" : "duration-conservative",
         allocation: reservation.allocation,
       }).pipe(Effect.orDie);
       const childRunId = runIdForSubmission(childSubmissionId);
+
       const joinedPayload = SubagentJoined.make({
         runId,
         toolCallId,
@@ -2915,8 +3099,10 @@ const make = Effect.gen(function* () {
         reservationId: reservation.reservationId,
         finalAccounting,
       });
+
       const settledRecordId = toolCallSettledRecordId(runId, request.turn, toolCallId);
       const joinedEnvelope = yield* makeEnvelope(joinedRecordId, joinedPayload);
+
       const settledEnvelope = yield* makeEnvelope(
         settledRecordId,
         ToolCallSettled.make({
@@ -2927,6 +3113,7 @@ const make = Effect.gen(function* () {
           isFailure: true,
         }),
       );
+
       if (!knownIds.has(joinedRecordId)) {
         yield* appendBatch(
           ctx,
@@ -2964,13 +3151,16 @@ const make = Effect.gen(function* () {
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
+
     if (snapshot.childReservations.length === 0) return false;
     const records = yield* readAll(submission.threadId);
     const subagent = subagentRecordsOf(records, runIdForSubmission(submission.submissionId));
     let open = false;
+
     for (const reservation of snapshot.childReservations) {
       if (reservation.status === "released") continue;
       const joined = subagent.joined.get(reservation.parentToolCallId);
+
       if (joined !== undefined) {
         yield* applyReservationRelease(reservation.reservationId, joined.finalAccounting);
         continue;
@@ -2981,6 +3171,7 @@ const make = Effect.gen(function* () {
       }
       open = true;
     }
+
     return open;
   });
 
@@ -2994,16 +3185,20 @@ const make = Effect.gen(function* () {
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
       );
+
       const records = yield* readAll(parent.threadId);
       const runId = runIdForSubmission(parent.submissionId);
       const pending = yield* pendingToolBatchFor(records, runId);
       const knownIds = knownRecordIdsOf(records);
       const subagent = subagentRecordsOf(records, runId);
+
       for (const reservation of snapshot.childReservations) {
         const toolCallId = reservation.parentToolCallId;
+
         if (reservation.status !== "reserved" || subagent.joined.has(toolCallId)) continue;
         let started = subagent.started.get(toolCallId);
         const request = subagent.requested.get(toolCallId);
+
         if (
           started === undefined &&
           request === undefined &&
@@ -3013,6 +3208,7 @@ const make = Effect.gen(function* () {
           continue;
         }
         const call = pending?.calls.find((candidate) => candidate.id === toolCallId);
+
         if (
           pending === undefined ||
           call === undefined ||
@@ -3038,6 +3234,7 @@ const make = Effect.gen(function* () {
               idempotencyKey: decodeIdempotencyKeySync(request.childIdempotencyKey),
             }),
           );
+
           if (resolution._tag === "Indeterminate") continue;
           if (resolution._tag === "NotAdmitted") {
             if (reservation.childSubmissionId !== undefined) {
@@ -3052,6 +3249,7 @@ const make = Effect.gen(function* () {
           // Finish only the already-admitted child's materialization and readiness. A second
           // authoritative lookup must still never turn a stale observation into a new admission.
           const admission = yield* establishChildFromRequest(parent, request, false);
+
           if (admission._tag === "indeterminate") continue;
           started = SubagentStarted.make({
             runId,
@@ -3063,6 +3261,7 @@ const make = Effect.gen(function* () {
           });
           const startRecordId = subagentStartedRecordId(runId, toolCallId);
           const envelope = yield* makeEnvelope(startRecordId, started);
+
           yield* appendBatch(
             ctx,
             CanonicalBatch.make({
@@ -3075,9 +3274,11 @@ const make = Effect.gen(function* () {
           subagent.started.set(toolCallId, started);
           yield* hit("subagent:after-start-append");
         }
+
         const child = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: started.childSubmissionId }),
         );
+
         if (
           Option.isNone(child) ||
           (reservation.childSubmissionId !== undefined &&
@@ -3141,20 +3342,25 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<ChildAbortDisposition, DurableWorkerFailure> {
     const submissionId = parent.submissionId;
     const runId = runIdForSubmission(submissionId);
+
     while (true) {
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId }),
       );
+
       if (snapshot.childReservations.length === 0) return "clear";
       const records = yield* readAll(parent.threadId);
+
       for (const envelope of records) knownIds.add(envelope.record.recordId);
       const subagent = subagentRecordsOf(records, runId);
       const waiting: Array<WaitingChild> = [];
       let blocked = false;
+
       for (const reservation of snapshot.childReservations) {
         if (reservation.status === "released") continue;
         const toolCallId = reservation.parentToolCallId;
         const joined = subagent.joined.get(toolCallId);
+
         if (joined !== undefined) {
           yield* applyReservationRelease(reservation.reservationId, joined.finalAccounting);
           continue;
@@ -3169,8 +3375,10 @@ const make = Effect.gen(function* () {
           continue;
         }
         const request = subagent.requested.get(toolCallId);
+
         let childSubmissionId =
           subagent.started.get(toolCallId)?.childSubmissionId ?? reservation.childSubmissionId;
+
         if (childSubmissionId === undefined) {
           if (request === undefined) {
             // Reservation without a canonical request under abort: provably childless —
@@ -3179,6 +3387,7 @@ const make = Effect.gen(function* () {
             continue;
           }
           const admission = yield* establishChildFromRequest(parent, request);
+
           if (admission._tag === "indeterminate") {
             // A child may exist: never release, settle, or re-admit until the authoritative
             // owner answers (SUB-031).
@@ -3187,9 +3396,11 @@ const make = Effect.gen(function* () {
           }
           childSubmissionId = admission.childSubmissionId;
         }
+
         const child = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: childSubmissionId }),
         );
+
         if (Option.isNone(child)) {
           return yield* LedgerError.make({
             operation: "abortAttachedChildren",
@@ -3232,8 +3443,10 @@ const make = Effect.gen(function* () {
       }
       if (blocked) return "blocked";
       const first = waiting[0];
+
       if (first === undefined) return "clear";
       const ownershipToken = yield* Ref.get(tokenRef);
+
       const suspension = yield* ledger.suspend(
         SuspendRequest.make({
           submissionId,
@@ -3241,6 +3454,7 @@ const make = Effect.gen(function* () {
           reason: WaitingForChildSuspension.make({ children: [first, ...waiting.slice(1)] }),
         }),
       );
+
       yield* hit("subagent:after-suspend");
       if (suspension === "suspended") return "waiting";
       // Every listed child settled before the suspend committed: loop to join the winners.
@@ -3285,7 +3499,9 @@ const make = Effect.gen(function* () {
     knownIds: Set<string>,
   ): Effect.fn.Return<void, DurableWorkerFailure> {
     const recordId = modelResponseInterruptedRecordId(runId, lineage.supersededEpoch);
+
     if (knownIds.has(recordId)) return;
+
     const envelope = yield* makeEnvelope(
       recordId,
       ModelResponseInterrupted.make({
@@ -3296,6 +3512,7 @@ const make = Effect.gen(function* () {
           "A prior ownership period ended without a canonical settlement; any in-flight model response was lost and the model may be re-invoked (duplicate provider cost is observable)",
       }),
     );
+
     yield* appendBatch(
       ctx,
       CanonicalBatch.make({
@@ -3367,9 +3584,11 @@ const make = Effect.gen(function* () {
       const submissionId = submission.submissionId;
       const runId = runIdForSubmission(submissionId);
       const journal = yield* projectRunJournal(records, runId);
+
       const childLineage = records.find(
         ({ record }) => record.recordId === subagentLineageRecordId(submission.threadId),
       )?.record.payload;
+
       if (
         submission.parentLinkage !== undefined &&
         (childLineage?._tag !== "SubagentLineageRecorded" ||
@@ -3383,19 +3602,25 @@ const make = Effect.gen(function* () {
         });
       }
       const pending = yield* pendingToolBatchFor(records, runId);
+
       const resumeProjection =
         pending === undefined
           ? journal
           : yield* projectRunJournal(withoutPendingBatch(records, pending, runId), runId);
+
       const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
+
       for (const envelope of records) {
         const payload = envelope.record.payload;
+
         if (payload._tag !== "ToolCallPrepared" || payload.runId !== runId) continue;
         const tool = tools[payload.toolName];
+
         const kind =
           tool !== undefined && Context.get(tool.annotations, DelegationTool)
             ? "delegation"
             : "ordinary";
+
         if (tool === undefined || (payload.executionKind ?? "ordinary") !== kind) {
           return yield* RunJournalError.make({
             message: `Prepared Tool ${payload.toolCallId} classification conflicts with the resolved binding`,
@@ -3405,8 +3630,10 @@ const make = Effect.gen(function* () {
 
       const knownIds = knownRecordIdsOf(records);
       const stepOutputs = new Map<string, PersistedJson>();
+
       for (const envelope of records) {
         const payload = envelope.record.payload;
+
         if (payload._tag === "ToolStepSettled" && payload.runId === runId) {
           stepOutputs.set(
             toolStepSettledRecordId(runId, payload.toolCallId, payload.stepName),
@@ -3420,8 +3647,10 @@ const make = Effect.gen(function* () {
       // identity so a later append never contradicts a committed batch.
       const canonicalApprovalDecisions = new Map<string, ApprovalDecision>();
       const approvalRequestedTurns = new Set<number>();
+
       for (const envelope of records) {
         const payload = envelope.record.payload;
+
         if (payload._tag === "ToolApprovalDecided" && payload.runId === runId) {
           canonicalApprovalDecisions.set(payload.toolCallId, payload.decision);
         } else if (payload._tag === "ToolApprovalRequested" && payload.runId === runId) {
@@ -3429,6 +3658,7 @@ const make = Effect.gen(function* () {
         }
       }
       const approvalIntents = new Map<string, ApprovalDecisionIntent>();
+
       for (const intent of approvalDecisions) {
         approvalIntents.set(intent.toolCallId, intent);
       }
@@ -3439,8 +3669,10 @@ const make = Effect.gen(function* () {
       // covered inputs are already inside the journal prompt and must never re-deliver.
       const joinedInputEnvelopes = new Map<string, CanonicalRecordEnvelope>();
       let lastHostResponseSequence: CanonicalSequence | undefined;
+
       for (const envelope of records) {
         const payload = envelope.record.payload;
+
         if (
           payload._tag === "UserInputRecorded" &&
           payload.runId === runId &&
@@ -3457,6 +3689,7 @@ const make = Effect.gen(function* () {
           }
         }
       }
+
       // RUN-023: per-Turn usage staged by the engine's `noteTurnUsage` for the
       // Turn's canonical response record (keyed by CANONICAL turn number).
       const stagedUsage = new Map<
@@ -3468,6 +3701,7 @@ const make = Effect.gen(function* () {
           readonly modelUsage: ReadonlyArray<ModelCallUsage>;
         }
       >();
+
       const checkedUsageTotal = (
         field: string,
         value: number,
@@ -3480,14 +3714,18 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+
       const addUsageTotal = (field: string, left: number, right: number) =>
         checkedUsageTotal(field, left + right);
+
       const subtractUsageTotal = (field: string, left: number, right: number) =>
         checkedUsageTotal(field, left - right);
+
       const currentUsageSummary = (): Effect.Effect<RunUsageSummary, RunJournalError> =>
         Effect.gen(function* () {
           const stagedCalls = [...stagedUsage.values()].flatMap((usage) => usage.modelUsage);
           const detailedCalls = [...journal.usage.modelUsage, ...stagedCalls];
+
           const detailed = yield* summarizeModelUsage(detailedCalls).pipe(
             Effect.mapError((cause) =>
               RunJournalError.make({
@@ -3496,45 +3734,54 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
+
           let inputTokens = journal.usage.inputTokens;
           let outputTokens = journal.usage.outputTokens;
           let costMicrousd = journal.usage.costMicrousd;
+
           for (const usage of stagedUsage.values()) {
             inputTokens = yield* addUsageTotal("inputTokens", inputTokens, usage.inputTokens);
             outputTokens = yield* addUsageTotal("outputTokens", outputTokens, usage.outputTokens);
             costMicrousd = yield* addUsageTotal("costMicrousd", costMicrousd, usage.costMicrousd);
           }
+
           const modelCalls = yield* addUsageTotal(
             "modelCalls",
             journal.usage.modelCalls,
             stagedCalls.length,
           );
+
           const legacyCalls = yield* subtractUsageTotal(
             "legacy.modelCalls",
             modelCalls,
             detailed.modelCalls,
           );
+
           const legacyInput = yield* subtractUsageTotal(
             "legacy.inputTokens",
             inputTokens,
             detailed.inputTokens.total,
           );
+
           const legacyOutput = yield* subtractUsageTotal(
             "legacy.outputTokens",
             outputTokens,
             detailed.outputTokens.total,
           );
+
           const legacyCost = yield* subtractUsageTotal(
             "legacy.costMicrousd",
             costMicrousd,
             detailed.costMicrousd,
           );
+
           if (legacyCalls === 0 && (legacyInput !== 0 || legacyOutput !== 0 || legacyCost !== 0)) {
             return yield* RunJournalError.make({
               message: "Run aggregate usage has legacy totals without a legacy model call",
             });
           }
           const byModel = [...detailed.byModel];
+
           if (legacyCalls > 0) {
             const existingIndex = byModel.findIndex(
               (group) =>
@@ -3543,7 +3790,9 @@ const make = Effect.gen(function* () {
                 group.serviceTier === undefined &&
                 group.pricingVersion === undefined,
             );
+
             const existing = existingIndex < 0 ? undefined : byModel[existingIndex];
+
             const legacyGroup = ModelUsageGroup.make({
               provider: "unknown",
               model: "legacy-record",
@@ -3585,19 +3834,23 @@ const make = Effect.gen(function* () {
                 legacyCost,
               ),
             });
+
             if (existingIndex < 0) byModel.push(legacyGroup);
             else byModel[existingIndex] = legacyGroup;
           }
+
           const uncached = yield* addUsageTotal(
             "inputTokens.uncached",
             detailed.inputTokens.uncached,
             legacyInput,
           );
+
           const text = yield* addUsageTotal(
             "outputTokens.text",
             detailed.outputTokens.text,
             legacyOutput,
           );
+
           return RunUsageSummary.make({
             modelCalls,
             inputTokens: InputTokenUsage.make({
@@ -3616,15 +3869,18 @@ const make = Effect.gen(function* () {
             byModel,
           });
         });
+
       const recordedCompletion = records.find(
         (envelope) => envelope.record.recordId === runCompletedRecordId(runId),
       )?.record.payload;
+
       if (recordedCompletion !== undefined) {
         if (recordedCompletion._tag !== "RunCompleted" || recordedCompletion.runId !== runId) {
           return yield* RunJournalError.make({
             message: `Run ${runId} has an invalid terminal completion marker`,
           });
         }
+
         const response = [...records]
           .reverse()
           .find(
@@ -3632,6 +3888,7 @@ const make = Effect.gen(function* () {
               envelope.record.payload._tag === "ModelResponseRecorded" &&
               envelope.record.payload.runId === runId,
           )?.record.payload;
+
         if (response?._tag !== "ModelResponseRecorded") {
           return yield* RunJournalError.make({
             message: `Run ${runId} has a terminal completion marker without a response`,
@@ -3639,13 +3896,16 @@ const make = Effect.gen(function* () {
         }
         const declared = yield* declaredToolCalls(response.messages);
         const calls = declared.application;
+
         let expectedOutput: {
           readonly encoded: Schema.Json;
           readonly decoded: OutputSchema["Type"];
         };
+
         if (calls.length > 0) {
           const completion = agent.definition.completion;
           const call = calls[0];
+
           const settled =
             call === undefined
               ? undefined
@@ -3655,6 +3915,7 @@ const make = Effect.gen(function* () {
                     envelope.record.payload.runId === runId &&
                     envelope.record.payload.toolCallId === call.id,
                 )?.record.payload;
+
           if (
             completion === undefined ||
             declared.total !== 1 ||
@@ -3683,6 +3944,7 @@ const make = Effect.gen(function* () {
           );
         } else {
           const responseText = yield* terminalAssistantText(response.messages);
+
           expectedOutput = yield* AgentRuntime.decodeFinalOutput(agent, responseText).pipe(
             Effect.mapError((cause) =>
               RunJournalError.make({
@@ -3692,6 +3954,7 @@ const make = Effect.gen(function* () {
             ),
           );
         }
+
         const boundedExpectedOutput = yield* decodePersisted(expectedOutput.encoded).pipe(
           Effect.mapError((cause) =>
             RunJournalError.make({
@@ -3700,6 +3963,7 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+
         const [expectedOutputDigest, recordedOutputDigest] = yield* Effect.all([
           withCrypto(digestJson(boundedExpectedOutput)),
           withCrypto(digestJson(recordedCompletion.output)),
@@ -3711,11 +3975,13 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+
         if (expectedOutputDigest !== recordedOutputDigest) {
           return yield* RunJournalError.make({
             message: `Run ${runId} terminal completion output disagrees with its canonical response or Tool result`,
           });
         }
+
         const expectedRunDisposition =
           recordedCompletion.finishReason === "budget-exhausted"
             ? undefined
@@ -3727,6 +3993,7 @@ const make = Effect.gen(function* () {
                   }),
                 ),
               );
+
         if (
           (expectedRunDisposition === undefined) !==
           (recordedCompletion.runDisposition === undefined)
@@ -3747,6 +4014,7 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
+
           const [expectedRunDispositionDigest, recordedRunDispositionDigest] = yield* Effect.all([
             withCrypto(digestJson(boundedExpectedRunDisposition)),
             withCrypto(digestJson(recordedCompletion.runDisposition)),
@@ -3758,12 +4026,14 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
+
           if (expectedRunDispositionDigest !== recordedRunDispositionDigest) {
             return yield* RunJournalError.make({
               message: `Run ${runId} terminal run disposition disagrees with its reconstructed output`,
             });
           }
         }
+
         return {
           _tag: "completed" as const,
           result: recordedCompletion.output,
@@ -3785,8 +4055,10 @@ const make = Effect.gen(function* () {
       // stays untouched. The in-memory view may cover more; the record is
       // canonical (RUN-026).
       let ownerFirstSequence: CanonicalSequence | undefined;
+
       for (const envelope of records) {
         const payload = envelope.record.payload;
+
         if ("runId" in payload && payload.runId === runId) {
           ownerFirstSequence = envelope.sequence;
           break;
@@ -3809,6 +4081,7 @@ const make = Effect.gen(function* () {
       // advanced by the establish/join hook closures below, and consulted on every replay so an
       // identical establishment converges on the one existing child.
       const subagentState = subagentRecordsOf(records, runId);
+
       for (const [callId, name] of subagentState.preparedNames) {
         declaredNamesByCallId.set(callId, name);
       }
@@ -3823,6 +4096,7 @@ const make = Effect.gen(function* () {
       // committed inside the pending record — re-enter official history through the engine so
       // the resumed live model context does not silently drop them.
       let resumeLeadingMessages: Prompt.Prompt | undefined;
+
       if (pending !== undefined) {
         const pendingMessages = yield* decodePrompt(pending.messages).pipe(
           Effect.mapError((cause) =>
@@ -3833,17 +4107,21 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+
         const firstAssistant = pendingMessages.content.findIndex(
           (message) => message.role === "assistant",
         );
+
         if (firstAssistant > 0) {
           resumeLeadingMessages = Prompt.fromMessages(
             pendingMessages.content.slice(0, firstAssistant),
           );
         }
       }
+
       let currentToolTurn: { readonly turn: number; readonly turnId: TurnId } | undefined =
         pending === undefined ? undefined : { turn: pending.turn, turnId: pending.turnId };
+
       // Terminal sibling results observed from the Run event stream, keyed by Tool Call id: the
       // suspension seam commits each settled non-waiting sibling as a per-call late-settle batch
       // BEFORE the `waitingForChild` suspension so no sibling effect is lost to it (plan §2).
@@ -3851,11 +4129,13 @@ const make = Effect.gen(function* () {
         string,
         { readonly toolCallId: ToolCallId; readonly result: unknown; readonly isFailure: boolean }
       >();
+
       const budgetRejectedCalls = new Set<string>();
       // Step-hook coordinator failures are re-wrapped by the engine as `DurableStepError` in the
       // handler channel; this side channel preserves the original failure so the Attempt aborts
       // (obligation still owed) instead of settling the Run `failed` on an infrastructure fault.
       const haltRef = yield* Ref.make<DurableWorkerFailure | undefined>(undefined);
+
       const recordHalt = <A, R>(
         effect: Effect.Effect<A, DurableWorkerFailure, R>,
       ): Effect.Effect<A, CoordinatorHalt, R> =>
@@ -3874,6 +4154,7 @@ const make = Effect.gen(function* () {
         readonly completedFinishReason: "budget-exhausted" | undefined;
         readonly completedExhausted: ExhaustedLimit | undefined;
       }
+
       const stateRef = yield* Ref.make<RunState>({
         baseLen: undefined,
         lastCommitLen: 0,
@@ -3884,7 +4165,9 @@ const make = Effect.gen(function* () {
         completedFinishReason: undefined,
         completedExhausted: undefined,
       });
+
       const turnCounter = yield* Ref.make(journal.committedTurns);
+
       const idGenerator: (typeof IdGenerator)["Service"] = {
         nextThreadId: Effect.succeed(submission.threadId),
         nextRunId: Effect.succeed(runId),
@@ -3930,6 +4213,7 @@ const make = Effect.gen(function* () {
       };
 
       const externalContext = runContextPreparation.hook;
+
       const preparedContext: RunContextHook<RunContextPreparationError, never> | undefined =
         externalContext === undefined
           ? journal.committedTurns === 0
@@ -3957,11 +4241,14 @@ const make = Effect.gen(function* () {
               const recordId = decodeRecordIdSync(
                 `policy:${runId}:${usage.programmaticToolCalls}:${usage.finalizationUsed}`,
               );
+
               if (knownIds.has(recordId)) return;
+
               const record = yield* makeEnvelope(
                 recordId,
                 RunPolicyUsageReserved.make({ runId, ...usage }),
               );
+
               yield* hit("policy:before-reservation-append");
               yield* appendBatch(
                 ctx,
@@ -3979,15 +4266,18 @@ const make = Effect.gen(function* () {
           recordHalt(
             Effect.gen(function* () {
               const canonicalTurn = commit.turn;
+
               currentToolTurn = { turn: canonicalTurn, turnId: commit.turnId };
               for (const call of commit.calls) {
                 encodedParamsByCallId.set(call.toolCallId, call.parameters);
                 declaredNamesByCallId.set(call.toolCallId, call.toolName);
               }
               const responseId = modelResponseRecordId(runId, canonicalTurn);
+
               if (knownIds.has(responseId)) return;
               const state = yield* Ref.get(stateRef);
               const history = state.history;
+
               if (history === undefined) {
                 return yield* RunJournalError.make({
                   message: `Turn ${canonicalTurn} committed a response before official history advanced`,
@@ -3998,6 +4288,7 @@ const make = Effect.gen(function* () {
               // leading messages of this response batch.
               const pendingSlice = history.content.slice(state.lastCommitLen);
               const createdAt = yield* nowUtc;
+
               const batch = yield* withCrypto(
                 turnResponseBatch({
                   runId,
@@ -4013,6 +4304,7 @@ const make = Effect.gen(function* () {
                   usage: stagedUsage.get(canonicalTurn),
                 }),
               );
+
               yield* appendBatch(ctx, batch);
               for (const record of batch.records) knownIds.add(record.recordId);
               yield* hit("turn:after-response-append");
@@ -4022,8 +4314,10 @@ const make = Effect.gen(function* () {
           recordHalt(
             Effect.gen(function* () {
               const first = calls[0];
+
               if (first === undefined) return;
               const turnInfo = currentToolTurn;
+
               if (turnInfo === undefined) {
                 return yield* RunJournalError.make({
                   message: "Tool Calls were prepared before any canonical response commit",
@@ -4035,6 +4329,7 @@ const make = Effect.gen(function* () {
                 return;
               }
               const preparedRecords: Array<RecordEnvelope> = [];
+
               for (const call of calls) {
                 const parameters = yield* decodePersisted(call.parameters).pipe(
                   Effect.mapError((cause) =>
@@ -4044,7 +4339,9 @@ const make = Effect.gen(function* () {
                     }),
                   ),
                 );
+
                 const parametersDigest = yield* withCrypto(digestJson(parameters));
+
                 preparedRecords.push(
                   yield* makeEnvelope(
                     toolCallPreparedRecordId(runId, turnInfo.turn, call.toolCallId),
@@ -4062,6 +4359,7 @@ const make = Effect.gen(function* () {
                 );
               }
               const head = preparedRecords[0];
+
               if (head === undefined) return;
               yield* hit("tools:before-prepared-append");
               yield* appendBatch(
@@ -4082,13 +4380,16 @@ const make = Effect.gen(function* () {
               const output = stepOutputs.get(
                 toolStepSettledRecordId(runId, key.toolCallId, key.stepName),
               );
+
               return output === undefined ? Option.none() : Option.some({ encodedOutput: output });
             }),
           commit: (key, encodedOutput) =>
             recordHalt(
               Effect.gen(function* () {
                 const recordId = toolStepSettledRecordId(runId, key.toolCallId, key.stepName);
+
                 if (knownIds.has(recordId)) return;
+
                 const output = yield* decodePersisted(encodedOutput).pipe(
                   Effect.mapError((cause) =>
                     RunJournalError.make({
@@ -4097,7 +4398,9 @@ const make = Effect.gen(function* () {
                     }),
                   ),
                 );
+
                 const outputDigest = yield* withCrypto(digestJson(output));
+
                 const envelope = yield* makeEnvelope(
                   recordId,
                   ToolStepSettled.make({
@@ -4108,6 +4411,7 @@ const make = Effect.gen(function* () {
                     outputDigest,
                   }),
                 );
+
                 yield* appendBatch(
                   ctx,
                   CanonicalBatch.make({
@@ -4128,6 +4432,7 @@ const make = Effect.gen(function* () {
             // Turn's own response stage into the same canonical Turn.
             const key = usage.turn;
             const prior = stagedUsage.get(key);
+
             stagedUsage.set(key, {
               inputTokens: (prior?.inputTokens ?? 0) + usage.usage.inputTokens.total,
               outputTokens: (prior?.outputTokens ?? 0) + usage.usage.outputTokens.total,
@@ -4139,6 +4444,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const canonicalTurn = commit.turn;
             const recordId = compactionRecordId(runId, canonicalTurn, commit.kind);
+
             if (knownIds.has(recordId)) {
               return yield* CompactionError.make({
                 message: "Compaction is already committed for this Turn and kind",
@@ -4148,11 +4454,13 @@ const make = Effect.gen(function* () {
             // appended by THIS Attempt are all owner-Run and excluded by the
             // prior-Runs-only rule regardless.
             const coverable: Array<CanonicalRecordEnvelope> = [];
+
             for (const envelope of records) {
               if (ownerFirstSequence !== undefined && envelope.sequence >= ownerFirstSequence) {
                 break;
               }
               const tag = envelope.record.payload._tag;
+
               if (tag === "ModelResponseRecorded" || tag === "ToolCallSettled") {
                 coverable.push(envelope);
               }
@@ -4162,6 +4470,7 @@ const make = Effect.gen(function* () {
                 message: "Durable compaction requires eligible prior-Run records",
               });
             }
+
             // Map only a prefix the strategy actually covered. Reprojection retains prior
             // compaction records, so indices remain correct after earlier summaries. A host
             // prompt transform that breaks this correspondence cannot authorize deletion.
@@ -4173,16 +4482,21 @@ const make = Effect.gen(function* () {
                 }),
               ),
             );
+
             let lastCovered: CanonicalRecordEnvelope | undefined;
+
             for (let index = 0; index < coverable.length; index += 1) {
               const candidate = coverable[index];
+
               if (candidate === undefined) continue;
               const following = coverable[index + 1];
+
               if (
                 following !== undefined &&
                 following.record.payload._tag !== "ModelResponseRecorded"
               )
                 continue;
+
               const prefix = yield* recordHalt(
                 projectRunJournal(
                   records.filter(
@@ -4193,7 +4507,9 @@ const make = Effect.gen(function* () {
                   runId,
                 ),
               );
+
               const length = prefix.prompt.content.length;
+
               if (length === 0 || length > commit.through) continue;
               // A shorter canonical prefix is sufficient only if the remaining source
               // messages would not change. Never acknowledge partial persistence.
@@ -4207,6 +4523,7 @@ const make = Effect.gen(function* () {
                   )
               )
                 continue;
+
               const encodedPrefix = yield* Schema.encodeEffect(Prompt.Prompt)(prefix.prompt).pipe(
                 Effect.mapError((cause) =>
                   CompactionError.make({
@@ -4215,6 +4532,7 @@ const make = Effect.gen(function* () {
                   }),
                 ),
               );
+
               if (
                 JSON.stringify(encodedPrefix.content) !==
                 JSON.stringify(encodedSource.content.slice(0, length))
@@ -4232,6 +4550,7 @@ const make = Effect.gen(function* () {
                 message: "A summarize compaction commit carried no summary",
               });
             }
+
             const payload = yield* Schema.decodeUnknownEffect(CompactionCreated)({
               _tag: "CompactionCreated",
               runId,
@@ -4247,7 +4566,9 @@ const make = Effect.gen(function* () {
                 }),
               ),
             );
+
             const envelope = yield* recordHalt(makeEnvelope(recordId, payload));
+
             yield* recordHalt(
               appendBatch(
                 ctx,
@@ -4273,6 +4594,7 @@ const make = Effect.gen(function* () {
               message: `Tool Call ${toolCallId} requested approval before its response commit`,
             });
           }
+
           const parameters = yield* decodePersisted(encodedParamsByCallId.get(toolCallId)).pipe(
             Effect.mapError((cause) =>
               RunJournalError.make({
@@ -4281,6 +4603,7 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
+
           return yield* withCrypto(digestJson(parameters));
         });
 
@@ -4312,8 +4635,10 @@ const make = Effect.gen(function* () {
           const decisionRecordId = toolApprovalDecisionRecordId(runId, turnInfo.turn, toolCallId);
           const envelopes: Array<RecordEnvelope> = [];
           const appendRequest = !knownIds.has(requestRecordId);
+
           if (appendRequest) {
             const parametersDigest = yield* approvalParametersDigest(toolCallId);
+
             envelopes.push(
               yield* makeEnvelope(
                 requestRecordId,
@@ -4344,12 +4669,14 @@ const make = Effect.gen(function* () {
             );
           }
           const head = envelopes[0];
+
           if (head !== undefined) {
             const batchId = appendRequest
               ? approvalRequestedTurns.has(turnInfo.turn)
                 ? decodeBatchId(`approval-request:${runId}:${turnInfo.turn}:${toolCallId}`)
                 : turnApprovalsBatchId(runId, turnInfo.turn)
               : approvalDecisionBatchId(submissionId, toolCallId);
+
             yield* appendBatch(
               ctx,
               CanonicalBatch.make({
@@ -4391,6 +4718,7 @@ const make = Effect.gen(function* () {
           recordHalt(
             Effect.gen(function* () {
               const turnInfo = currentToolTurn;
+
               if (turnInfo === undefined) {
                 return yield* RunJournalError.make({
                   message: `Tool Call ${request.toolCallId} requested approval before any canonical response commit`,
@@ -4398,24 +4726,28 @@ const make = Effect.gen(function* () {
               }
               const toolCallId = request.toolCallId;
               const canonical = canonicalApprovalDecisions.get(toolCallId);
+
               if (canonical !== undefined) {
                 return canonical === "approved"
                   ? { _tag: "approved" as const }
                   : { _tag: "denied" as const };
               }
               const intent = approvalIntents.get(toolCallId);
+
               if (intent !== undefined) {
                 yield* appendApprovalRecords(turnInfo, toolCallId, request.toolName, {
                   decision: intent.decision,
                   resolver: intent.resolver,
                   reason: intent.reason,
                 });
+
                 return intent.decision === "approved"
                   ? { _tag: "approved" as const, reason: intent.reason }
                   : { _tag: "denied" as const, reason: intent.reason };
               }
               if (approvalResolver !== undefined) {
                 const delegated = yield* approvalResolver.request(request);
+
                 if (delegated._tag !== "unresolved") {
                   yield* appendApprovalRecords(turnInfo, toolCallId, request.toolName, {
                     decision: delegated._tag,
@@ -4425,10 +4757,12 @@ const make = Effect.gen(function* () {
                       "The configured approval policy decided immediately",
                     ),
                   });
+
                   return delegated;
                 }
               }
               yield* appendApprovalRecords(turnInfo, toolCallId, request.toolName, undefined);
+
               return {
                 _tag: "unresolved" as const,
                 reason:
@@ -4462,9 +4796,11 @@ const make = Effect.gen(function* () {
       const renderJoinedInput = (encodedInput: PersistedJson) =>
         Effect.gen(function* () {
           const inputPrompt = agent.definition.inputPrompt;
+
           if (inputPrompt === undefined) {
             return yield* renderInputPrompt(undefined, encodedInput, encodedInput);
           }
+
           const decodedInput = yield* Schema.decodeUnknownEffect(agent.definition.input)(
             encodedInput,
           ).pipe(
@@ -4474,6 +4810,7 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
+
           return yield* renderInputPrompt(inputPrompt, decodedInput, encodedInput);
         });
 
@@ -4487,23 +4824,28 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 const limit = policy === "one" ? 1 : MAX_JOIN_DRAIN;
                 const joinedInputs: Array<PersistedJson> = [];
+
                 if (joinBacklog === undefined) {
                   const hostSnapshot = yield* ledger.loadRecoverySnapshot(
                     RecoverySnapshotRequest.make({ submissionId }),
                   );
+
                   joinBacklog = hostSnapshot.joins;
                 }
                 for (const join of joinBacklog) {
                   if (joinedInputs.length >= limit) break;
                   const joinId = join.submissionId;
+
                   if (deliveredJoinInputs.has(joinId)) continue;
                   if (join.state !== "joining" && join.state !== "joined") continue;
                   const existing = joinedInputEnvelopes.get(joinId);
+
                   if (existing === undefined) continue;
                   if (join.state === "joining") {
                     // Canonical input without its joined marker (crash between the append and
                     // `markJoined`): repair the marker from history before reattaching.
                     const ownershipToken = yield* Ref.get(tokenRef);
+
                     yield* ledger.markJoined(
                       MarkJoinedRequest.make({
                         submissionId: joinId,
@@ -4521,11 +4863,13 @@ const make = Effect.gen(function* () {
                     continue;
                   }
                   const payload = existing.record.payload;
+
                   if (payload._tag !== "UserInputRecorded") continue;
                   joinedInputs.push(payload.input);
                 }
                 if (joinedInputs.length < limit) {
                   const ownershipToken = yield* Ref.get(tokenRef);
+
                   const claims = yield* ledger.claimJoining(
                     ClaimJoiningRequest.make({
                       threadId: submission.threadId,
@@ -4534,6 +4878,7 @@ const make = Effect.gen(function* () {
                       maxCount: limit - joinedInputs.length,
                     }),
                   );
+
                   if (claims.length > 0) {
                     yield* hit("join:after-claim");
                   }
@@ -4541,6 +4886,7 @@ const make = Effect.gen(function* () {
                     const claimSnapshot = yield* ledger.loadRecoverySnapshot(
                       RecoverySnapshotRequest.make({ submissionId: claim.submissionId }),
                     );
+
                     if (claimSnapshot.abortIntent !== undefined) {
                       // Aborted before the host consumed the input: honor the intent by
                       // returning the claim to ready (revert-then-abort, plan §2.5); it settles
@@ -4553,6 +4899,7 @@ const make = Effect.gen(function* () {
                     const recordId = submissionInputRecordId(claim.submissionId);
                     let sequence: CanonicalSequence;
                     const existing = joinedInputEnvelopes.get(claim.submissionId);
+
                     if (existing !== undefined) {
                       // Defensive reattach: the exact record is already canonical, so only the
                       // marker and the delivery remain (DUR-016 — never a duplicate append).
@@ -4567,6 +4914,7 @@ const make = Effect.gen(function* () {
                           input: claim.inputPayload,
                         }),
                       );
+
                       const result = yield* appendBatch(
                         ctx,
                         CanonicalBatch.make({
@@ -4575,12 +4923,14 @@ const make = Effect.gen(function* () {
                           records: [envelope],
                         }),
                       );
+
                       sequence = result.firstSequence;
                       knownIds.add(recordId);
                       yield* hit("join:after-canonical-append");
                     }
                     // Re-read the token: the concurrent lease renewal may rotate it mid-batch.
                     const markToken = yield* Ref.get(tokenRef);
+
                     yield* ledger.markJoined(
                       MarkJoinedRequest.make({
                         submissionId: claim.submissionId,
@@ -4593,9 +4943,11 @@ const make = Effect.gen(function* () {
                     joinedInputs.push(claim.inputPayload);
                   }
                 }
+
                 return joinedInputs;
               }),
             );
+
             return yield* Effect.forEach(joinedInputs, (joinedInput) =>
               renderJoinedInput(joinedInput).pipe(
                 Effect.map((input): RunInputCommand => ({
@@ -4617,6 +4969,7 @@ const make = Effect.gen(function* () {
        * handler channel while the Attempt aborts with the original infrastructure failure.
        */
       const establishmentGate = yield* Semaphore.make(1);
+
       const establishSubagent = (
         request: RunSubagentEstablishRequest,
       ): Effect.Effect<ChildEstablishStatus, CoordinatorHalt> =>
@@ -4624,17 +4977,21 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const toolCallId = request.toolCallId;
             const turnInfo = currentToolTurn;
+
             if (turnInfo === undefined) {
               return yield* RunJournalError.make({
                 message: `Delegation Tool Call ${toolCallId} established before any canonical response commit`,
               });
             }
+
             const denied = (errorTag: string, message: string): ChildEstablishStatus => ({
               _tag: "denied",
               errorTag,
               message: boundedText(message),
             });
+
             let requestedPayload = subagentState.requested.get(toolCallId);
+
             if (requestedPayload === undefined) {
               // FIRST establishment of this call: fix every digest fail-closed BEFORE any
               // durable mutation, then reserve → append the canonical request (spec §12
@@ -4647,20 +5004,24 @@ const make = Effect.gen(function* () {
                   `S2 fixes attached durable children at delegation depth 1; depth ${request.depth} was requested`,
                 );
               }
+
               const decodedDigests = yield* decodeDefinitionDigests({
                 agent: request.targetDigests.agent,
                 model: request.targetDigests.model,
                 tools: request.targetDigests.tools,
               }).pipe(Effect.option);
+
               if (Option.isNone(decodedDigests)) {
                 return denied(
                   "SubagentDigestsInvalid",
                   "The declared child Binding digests are not valid stored digests",
                 );
               }
+
               const childInput = yield* decodePersisted(request.encodedChildInput).pipe(
                 Effect.option,
               );
+
               if (Option.isNone(childInput)) {
                 return denied(
                   "SubagentInputUnpersistable",
@@ -4668,9 +5029,11 @@ const make = Effect.gen(function* () {
                 );
               }
               const grant = yield* decodePersisted(request.encodedGrant).pipe(Effect.option);
+
               const allocation = yield* decodePersisted(request.encodedAllocation).pipe(
                 Effect.option,
               );
+
               if (Option.isNone(grant) || Option.isNone(allocation)) {
                 return denied(
                   "SubagentDeclarationUnpersistable",
@@ -4693,9 +5056,11 @@ const make = Effect.gen(function* () {
                 if (!Schema.is(SubagentBudgetReservation)(request.budget)) {
                   return denied("SubagentBudgetInvalid", "The shared delegation budget is invalid");
                 }
+
                 const decodedAllocation = Schema.decodeUnknownOption(SubagentReservationAmounts)(
                   allocation.value,
                 );
+
                 if (
                   Option.isNone(decodedAllocation) ||
                   !Equal.equals(decodedAllocation.value, request.budget.allocation)
@@ -4707,6 +5072,7 @@ const make = Effect.gen(function* () {
                 }
                 const { caps, allocation: requested } = request.budget;
                 const prior = [...subagentState.requested.values()];
+
                 if (
                   prior.some(
                     (entry) => entry.budget === undefined || !Equal.equals(entry.budget.caps, caps),
@@ -4727,6 +5093,7 @@ const make = Effect.gen(function* () {
                   );
                 }
                 const active = prior.filter((entry) => !subagentState.joined.has(entry.toolCallId));
+
                 if (
                   caps.maxConcurrentChildren !== undefined &&
                   active.length >= caps.maxConcurrentChildren
@@ -4736,6 +5103,7 @@ const make = Effect.gen(function* () {
                     "The parent Run exhausted its concurrent child budget",
                   );
                 }
+
                 const dimensions = [
                   ["turns", "maxTurns"],
                   ["toolCalls", "maxToolCalls"],
@@ -4745,17 +5113,23 @@ const make = Effect.gen(function* () {
                   ["costMicrousd", "maxCostMicrousd"],
                   ["resultBytes", "maxResultBytes"],
                 ] as const;
+
                 const accounting = Schema.Struct({ consumed: SubagentReservationAmounts });
+
                 for (const [amount, cap] of dimensions) {
                   const limit = caps[cap];
+
                   if (limit === undefined) continue;
                   let consumed = requested[amount];
+
                   for (const entry of prior) {
                     const joined = subagentState.joined.get(entry.toolCallId);
+
                     const observed =
                       joined === undefined
                         ? Option.none()
                         : Schema.decodeUnknownOption(accounting)(joined.finalAccounting);
+
                     consumed += Option.isSome(observed)
                       ? observed.value.consumed[amount]
                       : (entry.budget?.allocation[amount] ?? limit);
@@ -4773,6 +5147,7 @@ const make = Effect.gen(function* () {
               const allocationDigest = yield* withCrypto(digestJson(allocation.value));
               const reservationId = childReservationIdFor(runId, toolCallId);
               const ownershipToken = yield* Ref.get(tokenRef);
+
               yield* ledger
                 .reserveChildBudget(
                   ChildBudgetReservationRequest.make({
@@ -4814,8 +5189,10 @@ const make = Effect.gen(function* () {
                 ...(request.budget === undefined ? {} : { budget: request.budget }),
               });
               const requestRecordId = subagentRequestedRecordId(runId, toolCallId);
+
               if (!knownIds.has(requestRecordId)) {
                 const envelope = yield* makeEnvelope(requestRecordId, requestedPayload);
+
                 yield* appendBatch(
                   ctx,
                   CanonicalBatch.make({
@@ -4837,6 +5214,7 @@ const make = Effect.gen(function* () {
             // Steps 4-8: resolveAdmission-gated admission with immutable parent linkage,
             // child materialization + lineage, readiness, Receipt (SUB-016/SUB-017/SUB-031).
             const admission = yield* establishChildFromRequest(submission, requestedPayload);
+
             if (admission._tag === "indeterminate") {
               // Wait-and-retry, never a second admission: the Attempt aborts with the
               // obligation still owed and the next pass re-queries the authoritative owner.
@@ -4848,6 +5226,7 @@ const make = Effect.gen(function* () {
             const childRunId = runIdForSubmission(admission.childSubmissionId);
             // Step 9: the start link is appended only after the child Receipt exists (SUB-017).
             let startedPayload = subagentState.started.get(toolCallId);
+
             if (startedPayload === undefined) {
               startedPayload = SubagentStarted.make({
                 runId,
@@ -4858,8 +5237,10 @@ const make = Effect.gen(function* () {
                 childRunId,
               });
               const startRecordId = subagentStartedRecordId(runId, toolCallId);
+
               if (!knownIds.has(startRecordId)) {
                 const envelope = yield* makeEnvelope(startRecordId, startedPayload);
+
                 yield* appendBatch(
                   ctx,
                   CanonicalBatch.make({
@@ -4884,6 +5265,7 @@ const make = Effect.gen(function* () {
               });
             }
             const attachToken = yield* Ref.get(tokenRef);
+
             yield* ledger
               .attachChildToReservation(
                 AttachChildToReservationRequest.make({
@@ -4898,15 +5280,18 @@ const make = Effect.gen(function* () {
                   conflictToLedgerError("attachChildToReservation"),
                 ),
               );
+
             const identity = {
               childThreadId: startedPayload.childThreadId,
               childSubmissionId: startedPayload.childSubmissionId,
               childRunId: startedPayload.childRunId,
               receiptId: startedPayload.childReceiptId,
             };
+
             const child = yield* ledger.lookup(
               SubmissionLookupById.make({ submissionId: startedPayload.childSubmissionId }),
             );
+
             if (Option.isNone(child)) {
               return yield* LedgerError.make({
                 operation: "establishSubagent",
@@ -4916,6 +5301,7 @@ const make = Effect.gen(function* () {
             if (child.value.state !== "settled") {
               return { _tag: "waiting" as const, ...identity };
             }
+
             // §1.6: the child already settled — verify Parent Link, target, digests, and the
             // settlement record fail-closed before handing the outcome to the handler.
             const verification = yield* verifySettledChild(
@@ -4923,9 +5309,11 @@ const make = Effect.gen(function* () {
               requestedPayload,
               startedPayload.childSubmissionId,
             );
+
             if (verification._tag === "mismatch") {
               return denied("SubagentVerificationFailed", verification.message);
             }
+
             return {
               _tag: "settled" as const,
               ...identity,
@@ -4948,6 +5336,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const toolCallId = request.toolCallId;
             const turnInfo = currentToolTurn;
+
             if (turnInfo === undefined) {
               return yield* RunJournalError.make({
                 message: `Delegation Tool Call ${toolCallId} joined before any canonical response commit`,
@@ -4955,6 +5344,7 @@ const make = Effect.gen(function* () {
             }
             const requestedPayload = subagentState.requested.get(toolCallId);
             const startedPayload = subagentState.started.get(toolCallId);
+
             if (requestedPayload === undefined || startedPayload === undefined) {
               return yield* RunJournalError.make({
                 message: `Delegation Tool Call ${toolCallId} joined without canonical establishment records`,
@@ -4964,6 +5354,7 @@ const make = Effect.gen(function* () {
             const joinedRecordId = subagentJoinedRecordId(runId, toolCallId);
             let finalAccounting: PersistedJson;
             const existingJoined = subagentState.joined.get(toolCallId);
+
             if (existingJoined !== undefined) {
               // The atomic join batch is already canonical: only the reservation release below
               // may remain (spec §12 join step 6 — the canonical record is the replay source).
@@ -4977,6 +5368,7 @@ const make = Effect.gen(function* () {
                   }),
                 ),
               );
+
               const accounting = yield* decodePersisted(request.encodedAccounting).pipe(
                 Effect.mapError((cause) =>
                   RunJournalError.make({
@@ -4985,11 +5377,13 @@ const make = Effect.gen(function* () {
                   }),
                 ),
               );
+
               const verification = yield* verifySettledChild(
                 submission,
                 requestedPayload,
                 startedPayload.childSubmissionId,
               );
+
               if (verification._tag === "mismatch") {
                 return yield* LedgerError.make({
                   operation: "joinSubagent",
@@ -4998,11 +5392,13 @@ const make = Effect.gen(function* () {
               }
               const verified = verification.value;
               const toolName = declaredNamesByCallId.get(toolCallId);
+
               if (toolName === undefined) {
                 return yield* RunJournalError.make({
                   message: `Delegation Tool Call ${toolCallId} joined without a declared Tool name`,
                 });
               }
+
               const joinedPayload = SubagentJoined.make({
                 runId,
                 toolCallId,
@@ -5020,8 +5416,10 @@ const make = Effect.gen(function* () {
                 reservationId: requestedPayload.reservationId,
                 finalAccounting: accounting,
               });
+
               const settledRecordId = toolCallSettledRecordId(runId, turnInfo.turn, toolCallId);
               const joinedEnvelope = yield* makeEnvelope(joinedRecordId, joinedPayload);
+
               const settledEnvelope = yield* makeEnvelope(
                 settledRecordId,
                 ToolCallSettled.make({
@@ -5032,6 +5430,7 @@ const make = Effect.gen(function* () {
                   isFailure: request.isFailure,
                 }),
               );
+
               yield* appendBatch(
                 ctx,
                 CanonicalBatch.make({
@@ -5118,12 +5517,15 @@ const make = Effect.gen(function* () {
       const commitPendingTurn: Effect.Effect<void, DurableWorkerFailure> = Effect.gen(function* () {
         const state = yield* Ref.get(stateRef);
         const history = state.history;
+
         if (state.pendingTurn === undefined || history === undefined) return;
         let appended = history.content.slice(state.lastCommitLen);
+
         if (appended.length === 0) return;
         const canonicalTurn = state.pendingTurn.turn;
         const createdAt = yield* nowUtc;
         let committedLen = history.content.length;
+
         const completedRun =
           state.completedOutput === undefined
             ? undefined
@@ -5139,6 +5541,7 @@ const make = Effect.gen(function* () {
                   ? {}
                   : { exhausted: state.completedExhausted }),
               };
+
         if (knownIds.has(modelResponseRecordId(runId, canonicalTurn))) {
           // The response is already durable (commit 1 of the split shape): only the results
           // batch remains. The slice is [response messages…, tool message, trailing input…]:
@@ -5157,16 +5560,19 @@ const make = Effect.gen(function* () {
           const remaining: Array<Prompt.Message> = [];
           const resultParts: Array<Prompt.ToolResultPart> = [];
           let toolParts = 0;
+
           for (const message of appended) {
             if (message.role !== "tool") {
               remaining.push(message);
               continue;
             }
+
             const parts = message.content.filter(
               (part): part is Prompt.ToolResultPart =>
                 part.type === "tool-result" &&
                 !knownIds.has(`tool-settled:${runId}:${canonicalTurn}:${part.id}`),
             );
+
             if (parts.length === 0) continue;
             toolParts += parts.length;
             resultParts.push(...parts);
@@ -5175,6 +5581,7 @@ const make = Effect.gen(function* () {
           if (toolParts > 0) {
             const completion = agent.definition.completion;
             const completionPart = resultParts[0];
+
             const runCompletion =
               completion !== undefined &&
               resultParts.length === 1 &&
@@ -5183,6 +5590,7 @@ const make = Effect.gen(function* () {
               completedRun !== undefined
                 ? completedRun
                 : undefined;
+
             const batch = yield* turnResultsBatch({
               budgetRejectedCalls,
               runId,
@@ -5194,6 +5602,7 @@ const make = Effect.gen(function* () {
               createdAt,
               ...(runCompletion === undefined ? {} : { runCompletion }),
             });
+
             yield* appendBatch(ctx, batch);
             for (const record of batch.records) knownIds.add(record.recordId);
             yield* hit("turn:after-results-append");
@@ -5204,6 +5613,7 @@ const make = Effect.gen(function* () {
             canonicalTurn === 1
               ? appended.findIndex((message) => message.role === "assistant")
               : -1;
+
           const batch = yield* withCrypto(
             turnCanonicalBatch({
               budgetRejectedCalls,
@@ -5219,6 +5629,7 @@ const make = Effect.gen(function* () {
               usage: stagedUsage.get(canonicalTurn),
             }),
           );
+
           yield* appendBatch(ctx, batch);
           for (const record of batch.records) knownIds.add(record.recordId);
           yield* hit("turn:after-canonical-append");
@@ -5246,12 +5657,14 @@ const make = Effect.gen(function* () {
               }),
             ),
           );
+
           if (finishReason === "budget-exhausted" && runDisposition !== undefined) {
             return yield* LedgerError.make({
               operation: "recordCompleted",
               message: "A budget-exhausted Run cannot declare an application run disposition",
             });
           }
+
           const persistedRunDisposition =
             runDisposition === undefined
               ? undefined
@@ -5264,6 +5677,7 @@ const make = Effect.gen(function* () {
                     }),
                   ),
                 );
+
           yield* Ref.update(stateRef, (state) => ({
             ...state,
             completedOutput: result,
@@ -5282,6 +5696,7 @@ const make = Effect.gen(function* () {
           }
           case "TurnCompleted": {
             const turnId = event.turnId ?? turnIdForRun(runId, event.turn);
+
             return Ref.update(stateRef, (state) => ({
               ...state,
               pendingTurn: { turn: event.turn, turnId },
@@ -5315,6 +5730,7 @@ const make = Effect.gen(function* () {
                 isFailure: false,
               });
             }
+
             return Effect.void;
           }
           case "ToolCallFailed": {
@@ -5328,6 +5744,7 @@ const make = Effect.gen(function* () {
                 isFailure: true,
               });
             }
+
             return Effect.void;
           }
           default: {
@@ -5349,26 +5766,33 @@ const make = Effect.gen(function* () {
       ): Effect.Effect<void, DurableWorkerFailure> =>
         Effect.gen(function* () {
           const turnInfo = currentToolTurn;
+
           if (turnInfo === undefined) return;
           const waitingIds = new Set<string>(children.map((child) => child.toolCallId));
+
           // Declared order first (SUB-013's commit-order rule), then any residue in arrival order.
           const ordered = [
             ...[...declaredNamesByCallId.keys()].filter((callId) => siblingResults.has(callId)),
             ...[...siblingResults.keys()].filter((callId) => !declaredNamesByCallId.has(callId)),
           ];
+
           for (const callId of ordered) {
             if (waitingIds.has(callId)) continue;
             const settled = siblingResults.get(callId);
+
             if (settled === undefined) continue;
             const toolCallId = settled.toolCallId;
             const recordId = toolCallSettledRecordId(runId, turnInfo.turn, toolCallId);
+
             if (knownIds.has(recordId)) continue;
             const toolName = declaredNamesByCallId.get(callId);
+
             if (toolName === undefined) {
               return yield* RunJournalError.make({
                 message: `Settled sibling ${toolCallId} has no declared Tool name at the suspension seam`,
               });
             }
+
             const result = yield* decodePersisted(settled.result).pipe(
               Effect.mapError((cause) =>
                 RunJournalError.make({
@@ -5377,6 +5801,7 @@ const make = Effect.gen(function* () {
                 }),
               ),
             );
+
             const envelope = yield* makeEnvelope(
               recordId,
               ToolCallSettled.make({
@@ -5387,6 +5812,7 @@ const make = Effect.gen(function* () {
                 isFailure: settled.isFailure,
               }),
             );
+
             yield* appendBatch(
               ctx,
               CanonicalBatch.make({
@@ -5429,6 +5855,7 @@ const make = Effect.gen(function* () {
               // A broker reports hook failures as Tool preflight data. The coordinator's recorded
               // infrastructure halt must win before any subsequent event commits that Tool outcome.
               const failure = yield* Ref.get(haltRef);
+
               if (failure !== undefined) return yield* Effect.fail(failure);
               yield* handleEvent(event);
             }),
@@ -5441,12 +5868,16 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           while (true) {
             yield* Effect.sleep(config.abortPollInterval);
+
             const snapshot = yield* ledger.loadRecoverySnapshot(
               RecoverySnapshotRequest.make({ submissionId }),
             );
+
             const intent = snapshot.abortIntent;
+
             if (intent === undefined) continue;
             yield* appendAbortRecord(ctx, intent);
+
             return { _tag: "aborted" as const };
           }
         }),
@@ -5458,9 +5889,11 @@ const make = Effect.gen(function* () {
         Effect.repeat(
           Effect.gen(function* () {
             const ownershipToken = yield* Ref.get(tokenRef);
+
             const renewal = yield* ledger.renewOwnership(
               RenewOwnershipRequest.make({ submissionId, ownershipToken }),
             );
+
             yield* Ref.set(tokenRef, renewal.ownershipToken);
           }),
           { schedule: Schedule.spaced(config.leaseRenewalInterval) },
@@ -5488,6 +5921,7 @@ const make = Effect.gen(function* () {
               return Effect.fail(error.failure);
             }
             const approvalPending = agentApprovalPendingOption(error);
+
             if (Option.isSome(approvalPending)) {
               // Durable approval suspension (plan §2.6): the approval hook already made the
               // request canonical; `runAttempt` owns the ledger transition. The engine decoded
@@ -5498,6 +5932,7 @@ const make = Effect.gen(function* () {
               );
             }
             const childPending = agentChildPendingOption(error);
+
             if (Option.isSome(childPending)) {
               // Durable waitingForChild suspension (spec §12 step 10): every non-waiting
               // sibling settled before the Run terminated; commit their results as per-call
@@ -5510,14 +5945,17 @@ const make = Effect.gen(function* () {
                 })),
               );
             }
+
             return Effect.gen(function* () {
               // A recorded halt means a coordinator mutation failed inside a Tool handler
               // (the engine re-wraps step-hook and subagent-hook errors): abort the Attempt
               // with the original infrastructure failure instead of settling the Run failed.
               const halted = yield* Ref.get(haltRef);
+
               if (halted !== undefined) {
                 return yield* halted;
               }
+
               return {
                 _tag: "failedRun" as const,
                 outcome: yield* failureOutcome(error),
@@ -5537,15 +5975,18 @@ const make = Effect.gen(function* () {
           ...result.outcome,
           usageSummary: yield* currentUsageSummary(),
         };
+
         return failed;
       }
       const state = yield* Ref.get(stateRef);
+
       if (state.completedOutput === undefined) {
         return yield* LedgerError.make({
           operation: "runModel",
           message: "Agent Run stream ended without RunCompleted",
         });
       }
+
       const completed: RunPhaseOutcome = {
         _tag: "completed",
         result: state.completedOutput,
@@ -5560,6 +6001,7 @@ const make = Effect.gen(function* () {
           : { exhausted: state.completedExhausted }),
         usageSummary: yield* currentUsageSummary(),
       };
+
       return completed;
     });
 
@@ -5605,32 +6047,39 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const submissionId = claim.submissionId;
       const tokenRef = yield* Ref.make(claim.ownershipToken);
+
       // The Thread-store fence BEFORE this Attempt advances it identifies the superseded
       // ownership period for the durability §9 interruption audit.
       const supersededEpoch = yield* store.inspectTail(ThreadTailRequest.make({ threadId })).pipe(
         Effect.map((tail) => tail.producerEpoch),
         Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(ZERO_EPOCH)),
       );
+
       // Advance the Thread-store fence to this Attempt's epoch (idempotent when equal).
       yield* store.materialize(
         ThreadMaterialization.make({ threadId, producerEpoch: claim.producerEpoch }),
       );
+
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId }),
       );
+
       const submission = snapshot.submission;
+
       yield* ensureThreadCreated(threadId, submission.agentId, submission.agentDigests);
       if (submission.state === "admitted") {
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId }));
       }
       const ctx = yield* attemptContextFor(threadId, claim.producerEpoch);
       const records = yield* readAll(threadId);
+
       const childPolicy =
         submission.parentLinkage === undefined
           ? undefined
           : records
               .map((envelope) => envelope.record.payload)
               .find((payload) => payload._tag === "SubagentLineageRecorded")?.policy;
+
       const agent =
         childPolicy === undefined
           ? registeredAgent
@@ -5638,6 +6087,7 @@ const make = Effect.gen(function* () {
               ...registeredAgent,
               definition: { ...registeredAgent.definition, policy: childPolicy },
             };
+
       const evidence = yield* evidenceFor(records, submissionId, true, snapshot.hostSubmissionId);
       const knownIds = knownRecordIdsOf(records);
 
@@ -5645,7 +6095,9 @@ const make = Effect.gen(function* () {
         const record = yield* canonicalSettlementRecord(records, submissionId);
         const settlement = yield* finalizeFromHistory(submission, record);
         const canonicalSettlement = yield* settlementPayloadFromRecord(record, submissionId);
+
         yield* settleJoinedSubmissions(ctx, canonicalSettlement);
+
         return Option.some(settlement);
       }
       if (snapshot.reservation !== undefined) {
@@ -5659,27 +6111,34 @@ const make = Effect.gen(function* () {
         // aborted ONLY once no child obligation stays open. A waiting/blocked disposition ends
         // the ownership period without settling — the obligation stays owed.
         const disposition = yield* abortAttachedChildren(ctx, submission, tokenRef, knownIds);
+
         if (disposition === "waiting") {
           return Option.none<Settlement>();
         }
         if (disposition === "blocked") {
           const ownershipToken = yield* Ref.get(tokenRef);
+
           yield* ledger
             .releaseOwnership(ReleaseOwnershipRequest.make({ submissionId, ownershipToken }))
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
           return Option.none<Settlement>();
         }
+
         return Option.some(
           yield* settleAborted(ctx, submission, tokenRef, snapshot.abortIntent, evidence, knownIds),
         );
       }
       yield* applyCanonicalInput(ctx, submission, tokenRef, records, snapshot.inputApplied);
+
       const runTiming = yield* ensureRunStarted(
         ctx,
         submission,
         Duration.toMillis(agent.definition.policy.maxDuration),
       );
+
       let expiredChildObligation = false;
+
       if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(runTiming.deadline)) {
         yield* reconcileExpiredChildren(ctx, submission, yield* Ref.get(tokenRef));
         expiredChildObligation = yield* completeJoinedReleases(submission);
@@ -5688,18 +6147,22 @@ const make = Effect.gen(function* () {
       // Recheck after duration interruption too: that Attempt may have prepared new ordinary calls.
       const ordinaryCallsResolved = Effect.gen(function* () {
         const reconciliationRecords = yield* readAll(threadId);
+
         const reconciliationSnapshot = yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId }),
         );
+
         const reconciliationEvidence = yield* evidenceFor(
           reconciliationRecords,
           submissionId,
           true,
           reconciliationSnapshot.hostSubmissionId,
         );
+
         if (reconciliationEvidence.openToolCalls.length === 0) return true;
         for (const envelope of reconciliationRecords) knownIds.add(envelope.record.recordId);
         const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
+
         const review = yield* reconcileOpenCalls(
           ctx,
           submission,
@@ -5709,9 +6172,11 @@ const make = Effect.gen(function* () {
           knownIds,
           (toolName) => {
             const tool = tools[toolName];
+
             return tool === undefined ? undefined : getToolExecutionClass(tool);
           },
         );
+
         if (review.uncertain.length > 0 || review.unproven.length > 0) {
           if (review.uncertain.length > 0) {
             yield* markCallsUnknown(
@@ -5725,13 +6190,17 @@ const make = Effect.gen(function* () {
           // The lane is blocked (marked Unknown, or the reconciliation policy itself failed):
           // release the claim without settling — the accepted-work obligation stays owed.
           const ownershipToken = yield* Ref.get(tokenRef);
+
           yield* ledger
             .releaseOwnership(ReleaseOwnershipRequest.make({ submissionId, ownershipToken }))
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
           return false;
         }
+
         return true;
       });
+
       if (!expiredChildObligation && !(yield* ordinaryCallsResolved))
         return Option.none<Settlement>();
 
@@ -5740,9 +6209,12 @@ const make = Effect.gen(function* () {
         supersededEpoch,
         inputWasRecorded: evidence.inputRecorded,
       };
+
       let approvalDecisionIntents = snapshot.approvalDecisions;
+
       while (true) {
         const currentRecords = yield* readAll(threadId);
+
         const outcome = yield* runModel(
           agent,
           ctx,
@@ -5753,6 +6225,7 @@ const make = Effect.gen(function* () {
           approvalDecisionIntents,
           runTiming,
         );
+
         if (outcome._tag === "suspendedChild") {
           // Durable waitingForChild suspension (spec §12 step 10, SUB-030): the sibling
           // late-settles are already canonical; the ledger transition ends the ownership
@@ -5761,6 +6234,7 @@ const make = Effect.gen(function* () {
           // suspend transaction returns `resume-immediately`: the declared batch replays under
           // this same claim and the handler joins the settled child.
           const [firstChild, ...restChildren] = outcome.children;
+
           const waitingChildren: readonly [WaitingChild, ...Array<WaitingChild>] = [
             WaitingChild.make({
               toolCallId: firstChild.toolCallId,
@@ -5773,7 +6247,9 @@ const make = Effect.gen(function* () {
               }),
             ),
           ];
+
           const ownershipToken = yield* Ref.get(tokenRef);
+
           const suspension = yield* ledger.suspend(
             SuspendRequest.make({
               submissionId,
@@ -5781,6 +6257,7 @@ const make = Effect.gen(function* () {
               reason: WaitingForChildSuspension.make({ children: waitingChildren }),
             }),
           );
+
           yield* hit("subagent:after-suspend");
           for (const child of outcome.children) {
             yield* wake.notify(child.childThreadId);
@@ -5797,6 +6274,7 @@ const make = Effect.gen(function* () {
           // returns `resume-immediately`: the declared batch replays under this same claim with
           // the fresh decision intents (no model re-invocation — the response is canonical).
           const ownershipToken = yield* Ref.get(tokenRef);
+
           const suspension = yield* ledger.suspend(
             SuspendRequest.make({
               submissionId,
@@ -5804,6 +6282,7 @@ const make = Effect.gen(function* () {
               reason: ApprovalPendingSuspension.make({ toolCallIds: [outcome.toolCallId] }),
             }),
           );
+
           yield* hit("approval:after-suspend");
           if (suspension === "suspended") {
             return Option.none<Settlement>();
@@ -5817,16 +6296,20 @@ const make = Effect.gen(function* () {
           // The abort watcher ended the Run while attached children may still be open:
           // request-abort-and-join before the aborted settlement (spec §13.1).
           const disposition = yield* abortAttachedChildren(ctx, submission, tokenRef, knownIds);
+
           if (disposition === "waiting") {
             return Option.none<Settlement>();
           }
           if (disposition === "blocked") {
             const ownershipToken = yield* Ref.get(tokenRef);
+
             yield* ledger
               .releaseOwnership(ReleaseOwnershipRequest.make({ submissionId, ownershipToken }))
               .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
             return Option.none<Settlement>();
           }
+
           return Option.some(yield* terminalize(ctx, submission, tokenRef, outcome, true));
         }
         // Canonical joins drive their reservation release BEFORE the parent settles (a settled
@@ -5836,15 +6319,19 @@ const make = Effect.gen(function* () {
           yield* reconcileExpiredChildren(ctx, submission, yield* Ref.get(tokenRef));
         }
         const openObligation = yield* completeJoinedReleases(submission);
+
         if (openObligation) {
           if (outcome._tag === "failed") {
             // Release the claim and leave the lane to recovery classification.
             const ownershipToken = yield* Ref.get(tokenRef);
+
             yield* ledger
               .releaseOwnership(ReleaseOwnershipRequest.make({ submissionId, ownershipToken }))
               .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
             return Option.none<Settlement>();
           }
+
           // A completed Run with an unjoined reservation is structurally unreachable (the
           // delegation Tool Call settles only through the atomic join batch): fail closed
           // with the obligation visibly owed instead of settling across it.
@@ -5860,6 +6347,7 @@ const make = Effect.gen(function* () {
         ) {
           return Option.none<Settlement>();
         }
+
         return Option.some(yield* terminalize(ctx, submission, tokenRef, outcome, true));
       }
     });
@@ -5887,21 +6375,26 @@ const make = Effect.gen(function* () {
       const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
       const tokenRef = yield* Ref.make(claim.ownershipToken);
       const records = yield* readAll(submission.threadId);
+
       const recorded = records.some(
         (envelope) =>
           envelope.record.recordId === submissionSettlementRecordId(submission.submissionId),
       );
+
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
       );
+
       if (snapshot.reservation !== undefined) {
         // An earlier pass already reserved the one exact outcome: complete it, never re-decide.
         return yield* completeReservation(ctx, submission, snapshot.reservation, recorded);
       }
+
       const result = yield* Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
         errorTag: "ChildCompatibilityFailure",
         message: boundedText(failure.message),
       }).pipe(Effect.orDie);
+
       return yield* terminalize(ctx, submission, tokenRef, { _tag: "failed", result }, false);
     },
   );
@@ -5923,16 +6416,20 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     Effect.gen(function* () {
       const settlements: Array<Settlement> = [];
+
       while (true) {
         const claimed = yield* ledger.claim(
           ClaimRequest.make({ threadId, producerId: config.producerId }),
         );
+
         if (Option.isNone(claimed)) return settlements;
         yield* hit("claim:after-claim");
         const claim = claimed.value;
+
         const found = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: claim.submissionId }),
         );
+
         if (Option.isNone(found)) {
           return yield* LedgerError.make({
             operation: "drainThread",
@@ -5940,6 +6437,7 @@ const make = Effect.gen(function* () {
           });
         }
         const submission = found.value;
+
         // The claim head rule legally grants an `admitted` head, so the worker path
         // enforces the same AwaitParentEstablishment discipline as the recovery classifier —
         // a parent-linked child whose Thread lacks its canonical lineage record is not
@@ -5948,9 +6446,11 @@ const make = Effect.gen(function* () {
         // Release the claim, nudge the parent lane, and leave the child to establishment.
         if (submission.parentLinkage !== undefined && submission.state === "admitted") {
           const read = yield* readAllTolerant(threadId);
+
           const lineageRecorded = read.records.some(
             (envelope) => envelope.record.payload._tag === "SubagentLineageRecorded",
           );
+
           if (!lineageRecorded) {
             yield* ledger
               .releaseOwnership(
@@ -5960,17 +6460,21 @@ const make = Effect.gen(function* () {
                 }),
               )
               .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
             const parent = yield* ledger.lookup(
               SubmissionLookupById.make({
                 submissionId: submission.parentLinkage.parentSubmissionId,
               }),
             );
+
             if (Option.isSome(parent)) {
               yield* wake.notify(parent.value.threadId);
             }
+
             return settlements;
           }
         }
+
         const resolution = yield* resolve(submission).pipe(
           Effect.map((binding) => ({ _tag: "resolved" as const, binding })),
           Effect.catchTags({
@@ -5979,6 +6483,7 @@ const make = Effect.gen(function* () {
               Effect.succeed({ _tag: "refused" as const, failure }),
           }),
         );
+
         if (resolution._tag === "refused") {
           if (submission.parentLinkage !== undefined) {
             settlements.push(
@@ -5996,9 +6501,11 @@ const make = Effect.gen(function* () {
               }),
             )
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
           return yield* resolution.failure;
         }
         const settlement = yield* resolution.binding.attempt(runAttempt, threadId, claim);
+
         if (Option.isNone(settlement)) {
           // The head is durably blocked (Unknown Outcome, approval suspension, or a
           // waitingForChild suspension): the lane frees its worker permit while the settlement
@@ -6045,6 +6552,7 @@ const make = Effect.gen(function* () {
       // a claimed head with a different Agent never runs against this binding (the latent P4
       // gap) — and digest-transparent, because this call site registers no digest authority.
       const binding = yield* makeLegacyWorkerBinding(agent);
+
       return yield* drainThread(
         (submission) =>
           submission.agentId === binding.agentId
@@ -6077,6 +6585,7 @@ const make = Effect.gen(function* () {
         producerId: config.producerId,
       }),
     );
+
     if (Option.isNone(claimed)) return Option.none();
     if (claimed.value.submissionId !== submission.submissionId) {
       // FIFO: only the lane head is claimable; this Submission must wait for the head.
@@ -6088,8 +6597,10 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
       return Option.none();
     }
+
     return Option.some(claimed.value);
   });
 
@@ -6107,14 +6618,18 @@ const make = Effect.gen(function* () {
       const encodedDecision = yield* Schema.encodeEffect(RecoveryDecision)(decision).pipe(
         Effect.orDie,
       );
+
       const details = yield* Schema.decodeUnknownEffect(PersistedJson)(encodedDecision).pipe(
         Effect.orDie,
       );
+
       const envelope = yield* makeEnvelope(
         recoveryRepairRecordId(submissionId, decision._tag),
         RepairAnnotated.make({ reason: `recovery:${decision._tag}`, details }),
       );
+
       const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
       yield* store.append(
         FencedAppendRequest.make({
           threadId,
@@ -6139,8 +6654,10 @@ const make = Effect.gen(function* () {
       _decision: SettleAbortedDecision,
     ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure> {
       const intent = snapshot.abortIntent;
+
       if (intent === undefined) return "deferred";
       const submission = snapshot.submission;
+
       if (submission.state === "suspended" && snapshot.suspension !== undefined) {
         if (snapshot.suspension.reason._tag === "WaitingForChild") {
           // The classifier reaches SettleAborted only when every attached-child obligation is
@@ -6159,8 +6676,10 @@ const make = Effect.gen(function* () {
                 }),
               );
             }
+
             return true;
           }).pipe(Effect.catchTag("LedgerError", () => Effect.succeed(false)));
+
           if (!woken) return "deferred";
         } else {
           // A suspended head is never worker-claimable (WP2 claim rule), so the aborted
@@ -6172,6 +6691,7 @@ const make = Effect.gen(function* () {
           const decided = new Set(
             snapshot.approvalDecisions.map((decision) => decision.toolCallId),
           );
+
           for (const toolCallId of snapshot.suspension.reason.toolCallIds) {
             if (decided.has(toolCallId)) continue;
             yield* ledger
@@ -6195,6 +6715,7 @@ const make = Effect.gen(function* () {
         }
       }
       const claimed = yield* claimFor(submission);
+
       if (Option.isNone(claimed)) {
         // P7 §7(c): an aborted, never-claimed, still-queued `ready` Submission settles NOW
         // instead of waiting to head the lane — settlement order of never-run work is not
@@ -6212,6 +6733,7 @@ const make = Effect.gen(function* () {
             );
             const ctx = yield* attemptContextAtTail(submission.threadId);
             const tokenRef = yield* Ref.make(QUEUED_ABORT_SETTLEMENT_TOKEN);
+
             yield* settleAborted(
               ctx,
               submission,
@@ -6220,6 +6742,7 @@ const make = Effect.gen(function* () {
               evidence,
               knownRecordIdsOf(records),
             );
+
             return "repaired" as const;
           }).pipe(
             Effect.catchTags({
@@ -6229,9 +6752,11 @@ const make = Effect.gen(function* () {
             }),
           );
         }
+
         return "deferred";
       }
       const claim = claimed.value;
+
       yield* store.materialize(
         ThreadMaterialization.make({
           threadId: submission.threadId,
@@ -6241,7 +6766,9 @@ const make = Effect.gen(function* () {
       yield* ensureThreadCreated(submission.threadId, submission.agentId, submission.agentDigests);
       const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
       const tokenRef = yield* Ref.make(claim.ownershipToken);
+
       yield* settleAborted(ctx, submission, tokenRef, intent, evidence, knownRecordIdsOf(records));
+
       return "repaired";
     },
   );
@@ -6261,8 +6788,10 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<"repaired" | "deferred" | "unknown", DurableWorkerFailure> {
     const submission = snapshot.submission;
     const claimed = yield* claimFor(submission);
+
     if (Option.isNone(claimed)) return "deferred";
     const claim = claimed.value;
+
     yield* store.materialize(
       ThreadMaterialization.make({
         threadId: submission.threadId,
@@ -6275,6 +6804,7 @@ const make = Effect.gen(function* () {
     // never marks Unknown — its establishment is idempotent and routes through the Subagent
     // rows), so reconciliation is scoped to exactly those ids.
     const markableIds = new Set<string>(decision.openToolCallIds);
+
     const review = yield* reconcileOpenCalls(
       ctx,
       submission,
@@ -6284,7 +6814,9 @@ const make = Effect.gen(function* () {
       knownIds,
       () => undefined,
     );
+
     let disposition: "repaired" | "deferred" | "unknown";
+
     if (review.uncertain.length > 0) {
       yield* markCallsUnknown(
         ctx,
@@ -6307,6 +6839,7 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
     return disposition;
   });
 
@@ -6326,6 +6859,7 @@ const make = Effect.gen(function* () {
     const submission = snapshot.submission;
     const ctx = yield* attemptContextAtTail(submission.threadId);
     const knownIds = knownRecordIdsOf(records);
+
     const applied = yield* reconcileOpenCalls(
       ctx,
       submission,
@@ -6339,6 +6873,7 @@ const make = Effect.gen(function* () {
       // A fence advance mid-pass means another owner took the Thread: defer to it.
       Effect.catchTag("FenceRejected", () => Effect.succeed(false)),
     );
+
     if (!applied) return "deferred";
     for (const intent of snapshot.unknownResolutions) {
       // Replaying the stored intent re-checks the covering wake idempotently (WP2 contract).
@@ -6363,6 +6898,7 @@ const make = Effect.gen(function* () {
         );
     }
     yield* wake.notify(submission.threadId);
+
     return "repaired";
   });
 
@@ -6382,16 +6918,22 @@ const make = Effect.gen(function* () {
       evidence: RecoveryEvidence,
     ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure> {
       const submission = snapshot.submission;
+
       if (submission.state === "suspended") return "deferred";
       const decided = new Set(snapshot.approvalDecisions.map((decision) => decision.toolCallId));
+
       const undecided = evidence.approvalsPending.filter(
         (pending) => !decided.has(pending.toolCallId),
       );
+
       const first = undecided[0];
+
       if (first === undefined) return "deferred";
       const claimed = yield* claimFor(submission);
+
       if (Option.isNone(claimed)) return "deferred";
       const claim = claimed.value;
+
       const outcome = yield* ledger.suspend(
         SuspendRequest.make({
           submissionId: submission.submissionId,
@@ -6404,6 +6946,7 @@ const make = Effect.gen(function* () {
           }),
         }),
       );
+
       yield* hit("approval:after-suspend");
       if (outcome === "resume-immediately") {
         // Decisions raced in between the snapshot read and the suspend transaction: nothing to
@@ -6416,8 +6959,10 @@ const make = Effect.gen(function* () {
             }),
           )
           .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
         return "deferred";
       }
+
       return "repaired";
     },
   );
@@ -6433,6 +6978,7 @@ const make = Effect.gen(function* () {
   const resumeSuspendedForRecovery = Effect.fn("DurableAgentRuntime.resumeSuspendedForRecovery")(
     function* (snapshot: RecoverySnapshot): Effect.fn.Return<"deferred", DurableWorkerFailure> {
       yield* wake.notify(snapshot.submission.threadId);
+
       return "deferred";
     },
   );
@@ -6447,6 +6993,7 @@ const make = Effect.gen(function* () {
       const submission = snapshot.submission;
       const runId = runIdForSubmission(submission.submissionId);
       const start = yield* canonicalRunStartFromRecords(records, runId);
+
       if (
         start?.payload._tag === "RunStarted" &&
         start.payload.runId === runId &&
@@ -6462,8 +7009,10 @@ const make = Effect.gen(function* () {
         // existing child's link. Do this before ordinary Unknown Outcomes make the lane
         // unclaimable, and never let binding-free recovery admit new work after expiry.
         const claimed = yield* claimFor(submission);
+
         if (Option.isNone(claimed)) return "deferred";
         const claim = claimed.value;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId: submission.threadId,
@@ -6471,8 +7020,10 @@ const make = Effect.gen(function* () {
           }),
         );
         const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
+
         yield* reconcileExpiredChildren(ctx, submission, claim.ownershipToken);
         const open = yield* completeJoinedReleases(submission);
+
         yield* ledger
           .releaseOwnership(
             ReleaseOwnershipRequest.make({
@@ -6481,6 +7032,7 @@ const make = Effect.gen(function* () {
             }),
           )
           .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
         return open ? "deferred" : "repaired";
       }
       switch (decision._tag) {
@@ -6518,15 +7070,19 @@ const make = Effect.gen(function* () {
             RevertJoiningRequest.make({ submissionId: submission.submissionId }),
           );
           yield* wake.notify(submission.threadId);
+
           return "repaired";
         }
         case "RepairJoinMarker": {
           const hostSubmissionId = snapshot.hostSubmissionId;
+
           if (hostSubmissionId === undefined) return "deferred";
+
           const inputEnvelope = records.find(
             (envelope) =>
               envelope.record.recordId === submissionInputRecordId(submission.submissionId),
           );
+
           if (inputEnvelope === undefined) return "deferred";
           if (evidence.hostSettlementOutcome !== undefined) {
             // The host settled while the marker was lost, so no host ownership can ever repair
@@ -6540,20 +7096,26 @@ const make = Effect.gen(function* () {
                 RevertJoiningRequest.make({ submissionId: submission.submissionId }),
               );
               yield* wake.notify(submission.threadId);
+
               return "repaired";
             }
+
             return "deferred";
           }
+
           // `markJoined` is fenced by the HOST lane's ownership: claim the host head, repair
           // the marker from history (DUR-015), and release. A live host defers to that host's
           // own drain-seam repair.
           const host = yield* ledger.lookup(
             SubmissionLookupById.make({ submissionId: hostSubmissionId }),
           );
+
           if (Option.isNone(host)) return "deferred";
           const claimed = yield* claimFor(host.value);
+
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
+
           yield* ledger.markJoined(
             MarkJoinedRequest.make({
               submissionId: submission.submissionId,
@@ -6571,10 +7133,12 @@ const make = Effect.gen(function* () {
             )
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
           yield* wake.notify(submission.threadId);
+
           return "repaired";
         }
         case "SettleJoinedWithHost": {
           const hostSubmissionId = snapshot.hostSubmissionId;
+
           if (hostSubmissionId === undefined) return "deferred";
           const hostRecord = yield* canonicalSettlementRecord(records, hostSubmissionId);
           const hostSettlement = yield* settlementPayloadFromRecord(hostRecord, hostSubmissionId);
@@ -6582,16 +7146,19 @@ const make = Effect.gen(function* () {
           // head is never claimable): the joined settlement completes unfenced at the current
           // tail, deferring to any racing fence advance.
           const ctx = yield* attemptContextAtTail(submission.threadId);
+
           const applied = yield* settleOneJoined(ctx, hostSettlement, snapshot).pipe(
             Effect.as(true),
             Effect.catchTag("FenceRejected", () => Effect.succeed(false)),
           );
+
           return applied ? "repaired" : "deferred";
         }
         case "AwaitHostSettlement": {
           // The joined input reattaches through the host Run's resume (prompt-coverage rule);
           // hint the shared lane and keep the obligation visible.
           yield* wake.notify(submission.threadId);
+
           return "deferred";
         }
         case "CompleteMaterialization":
@@ -6603,13 +7170,16 @@ const make = Effect.gen(function* () {
             submission.agentDigests,
           );
           yield* ledger.markReady(MarkReadyRequest.make({ submissionId: submission.submissionId }));
+
           return "repaired";
         }
         case "ApplyInput":
         case "RepairInputMarker": {
           const claimed = yield* claimFor(submission);
+
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
+
           yield* store.materialize(
             ThreadMaterialization.make({
               threadId: submission.threadId,
@@ -6624,6 +7194,7 @@ const make = Effect.gen(function* () {
           const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
           const tokenRef = yield* Ref.make(claim.ownershipToken);
           const currentRecords = yield* refreshRecoveryHistory(submission.threadId, records);
+
           yield* applyCanonicalInput(
             ctx,
             submission,
@@ -6632,6 +7203,7 @@ const make = Effect.gen(function* () {
             snapshot.inputApplied,
           );
           const ownershipToken = yield* Ref.get(tokenRef);
+
           yield* ledger
             .releaseOwnership(
               ReleaseOwnershipRequest.make({
@@ -6640,12 +7212,15 @@ const make = Effect.gen(function* () {
               }),
             )
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
           return "repaired";
         }
         case "AppendReservedSettlement": {
           const reservation = snapshot.reservation;
+
           if (reservation === undefined) return "deferred";
           const claimed = yield* claimFor(submission);
+
           if (Option.isNone(claimed)) {
             // P7 §7(c) crash replay: a queued-abort settlement that committed its reservation
             // but lost the append/finalize completes at the current tail — the aborted,
@@ -6657,6 +7232,7 @@ const make = Effect.gen(function* () {
               snapshot.ownership === undefined
             ) {
               const ctx = yield* attemptContextAtTail(submission.threadId);
+
               return yield* completeReservation(
                 ctx,
                 submission,
@@ -6670,9 +7246,11 @@ const make = Effect.gen(function* () {
                 }),
               );
             }
+
             return "deferred";
           }
           const claim = claimed.value;
+
           yield* store.materialize(
             ThreadMaterialization.make({
               threadId: submission.threadId,
@@ -6680,17 +7258,21 @@ const make = Effect.gen(function* () {
             }),
           );
           const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
+
           yield* completeReservation(
             ctx,
             submission,
             reservation,
             evidence.recordedSettlementOutcome !== undefined,
           );
+
           return "repaired";
         }
         case "FinalizeLedgerFromHistory": {
           const record = yield* canonicalSettlementRecord(records, submission.submissionId);
+
           yield* finalizeFromHistory(submission, record);
+
           return "repaired";
         }
         case "SettleAborted": {
@@ -6702,8 +7284,10 @@ const make = Effect.gen(function* () {
           // live delegation handler — one child, same Receipt on every replay (SUB-016).
           const subagent = subagentRecordsOf(records, runIdForSubmission(submission.submissionId));
           const requestedPayload = subagent.requested.get(decision.toolCallId);
+
           if (requestedPayload === undefined) return "deferred";
           const admission = yield* establishChildFromRequest(submission, requestedPayload);
+
           return admission._tag === "indeterminate" ? "deferred" : "repaired";
         }
         case "RepairSubagentStartLink": {
@@ -6714,12 +7298,16 @@ const make = Effect.gen(function* () {
           const runId = runIdForSubmission(submission.submissionId);
           const subagent = subagentRecordsOf(records, runId);
           const requestedPayload = subagent.requested.get(decision.toolCallId);
+
           if (requestedPayload === undefined) return "deferred";
           const admission = yield* establishChildFromRequest(submission, requestedPayload);
+
           if (admission._tag === "indeterminate") return "deferred";
           const claimed = yield* claimFor(submission);
+
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
+
           yield* store.materialize(
             ThreadMaterialization.make({
               threadId: submission.threadId,
@@ -6729,6 +7317,7 @@ const make = Effect.gen(function* () {
           const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
           const knownIds = knownRecordIdsOf(records);
           const startRecordId = subagentStartedRecordId(runId, decision.toolCallId);
+
           if (!knownIds.has(startRecordId)) {
             const envelope = yield* makeEnvelope(
               startRecordId,
@@ -6741,6 +7330,7 @@ const make = Effect.gen(function* () {
                 childRunId: runIdForSubmission(admission.childSubmissionId),
               }),
             );
+
             yield* appendBatch(
               ctx,
               CanonicalBatch.make({
@@ -6780,6 +7370,7 @@ const make = Effect.gen(function* () {
             .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
           yield* wake.notify(requestedPayload.childThreadId);
           yield* wake.notify(submission.threadId);
+
           return "repaired";
         }
         case "EnsureWaitingForChild": {
@@ -6788,8 +7379,10 @@ const make = Effect.gen(function* () {
           // ownership period itself, so the lane holds no worker permit while each child runs
           // on its own lane. Never spawns a replacement invocation (SUB-018/SUB-030).
           const claimed = yield* claimFor(submission);
+
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
+
           const suspension = yield* ledger.suspend(
             SuspendRequest.make({
               submissionId: submission.submissionId,
@@ -6797,6 +7390,7 @@ const make = Effect.gen(function* () {
               reason: WaitingForChildSuspension.make({ children: decision.children }),
             }),
           );
+
           yield* hit("subagent:after-suspend");
           if (suspension === "resume-immediately") {
             // Every listed child already settled: leave the joins to a claiming worker's batch
@@ -6809,8 +7403,10 @@ const make = Effect.gen(function* () {
                 }),
               )
               .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
             return "deferred";
           }
+
           return "repaired";
         }
         case "ResumeWaitingParent": {
@@ -6826,6 +7422,7 @@ const make = Effect.gen(function* () {
             );
           }
           yield* wake.notify(submission.threadId);
+
           return "repaired";
         }
         case "ApplyJoinAccounting": {
@@ -6835,19 +7432,24 @@ const make = Effect.gen(function* () {
           const reservation = snapshot.childReservations.find(
             (row) => row.reservationId === decision.reservationId,
           );
+
           if (reservation === undefined) return "deferred";
           if (reservation.status === "released") return "repaired";
           const subagent = subagentRecordsOf(records, runIdForSubmission(submission.submissionId));
           const joinedPayload = subagent.joined.get(decision.toolCallId);
+
           if (joinedPayload !== undefined) {
             yield* applyReservationRelease(decision.reservationId, joinedPayload.finalAccounting);
+
             return "repaired";
           }
           if (reservation.status === "releasePending" && reservation.accounting !== undefined) {
             // The decision is already frozen: finish the idempotent release — never re-freeze.
             yield* applyReservationRelease(decision.reservationId, reservation.accounting);
+
             return "repaired";
           }
+
           return "deferred";
         }
         case "PropagateChildAbort": {
@@ -6873,17 +7475,21 @@ const make = Effect.gen(function* () {
                 Effect.asVoid,
               );
             yield* hit("subagent:after-child-abort-intent");
+
             const childRow = yield* ledger.lookup(
               SubmissionLookupById.make({ submissionId: child.childSubmissionId }),
             );
+
             if (Option.isSome(childRow)) {
               yield* wake.notify(childRow.value.threadId);
             }
           }
           if (submission.state !== "suspended") {
             const claimed = yield* claimFor(submission);
+
             if (Option.isNone(claimed)) return "deferred";
             const claim = claimed.value;
+
             const suspension = yield* ledger.suspend(
               SuspendRequest.make({
                 submissionId: submission.submissionId,
@@ -6891,6 +7497,7 @@ const make = Effect.gen(function* () {
                 reason: WaitingForChildSuspension.make({ children: decision.children }),
               }),
             );
+
             yield* hit("subagent:after-suspend");
             if (suspension === "resume-immediately") {
               // Every child settled while suspending: the next pass joins the winners.
@@ -6904,6 +7511,7 @@ const make = Effect.gen(function* () {
                 .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
             }
           }
+
           return "repaired";
         }
         case "ReleaseOrphanChildReservation": {
@@ -6912,6 +7520,7 @@ const make = Effect.gen(function* () {
           for (const reservationId of decision.reservationIds) {
             yield* releaseOrphanReservation(reservationId);
           }
+
           return "repaired";
         }
         case "AwaitChildAdmissionResolution": {
@@ -6936,9 +7545,11 @@ const make = Effect.gen(function* () {
           const parent = yield* ledger.lookup(
             SubmissionLookupById.make({ submissionId: decision.parentSubmissionId }),
           );
+
           if (Option.isSome(parent)) {
             yield* wake.notify(parent.value.threadId);
           }
+
           return "deferred";
         }
       }
@@ -6952,22 +7563,27 @@ const make = Effect.gen(function* () {
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
+
     const evidence = yield* evidenceFor(
       history.records,
       submission.submissionId,
       history.materialized,
       snapshot.hostSubmissionId,
     );
+
     const decision = classifyRecovery(snapshot, evidence);
+
     const disposition = yield* executeRecoveryDecision(
       snapshot,
       evidence,
       decision,
       history.records,
     );
+
     if (disposition === "repaired") {
       yield* annotateRepair(submission.threadId, submission.submissionId, decision);
     }
+
     return RecoveryReport.make({
       submissionId: submission.submissionId,
       threadId: submission.threadId,
@@ -6986,12 +7602,16 @@ const make = Effect.gen(function* () {
       // rather than multiplied by its nonterminal Submission count, and the prefix becomes
       // unreachable before the next Thread is read.
       let index = 0;
+
       while (index < nonterminal.length) {
         const first = nonterminal[index];
+
         if (first === undefined) break;
         const history = yield* readRecoveryHistory(first.threadId);
+
         while (index < nonterminal.length) {
           const submission = nonterminal[index];
+
           if (submission === undefined || submission.threadId !== first.threadId) {
             break;
           }
@@ -6999,6 +7619,7 @@ const make = Effect.gen(function* () {
           index += 1;
         }
       }
+
       return reports;
     },
   );
@@ -7013,6 +7634,7 @@ const make = Effect.gen(function* () {
         AgentInputError.make({ message: `Unable to encode Agent input: ${cause.message}` }),
       ),
     );
+
     const inputPayload = yield* Schema.decodeUnknownEffect(PersistedJson)(encodedInput).pipe(
       Effect.mapError(() =>
         AgentInputError.make({
@@ -7020,7 +7642,9 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
     const inputDigest = yield* withCrypto(digestJson(inputPayload));
+
     const admitted = yield* ledger.admit(
       AdmissionRequest.make({
         threadId: options.threadId,
@@ -7033,13 +7657,16 @@ const make = Effect.gen(function* () {
         inputDigest,
       }),
     );
+
     yield* hit("submit:after-admit");
+
     const receipt = Receipt.make({
       receiptId: admitted.receiptId,
       submissionId: admitted.submissionId,
       threadId: options.threadId,
       queueSequence: admitted.queueSequence,
     });
+
     // A replay of an already-ready Submission resumes by returning the original Receipt;
     // an admitted-but-not-ready Submission (ours or a crashed predecessor's) is completed here.
     if (admitted.replayed && admitted.state !== "admitted") {
@@ -7050,6 +7677,7 @@ const make = Effect.gen(function* () {
     yield* hit("submit:after-materialize");
     yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
     yield* wake.notify(options.threadId);
+
     return receipt;
   });
 
@@ -7068,6 +7696,7 @@ const make = Effect.gen(function* () {
       const snapshot = yield* ledger.lookup(
         SubmissionLookupById.make({ submissionId: receipt.submissionId }),
       );
+
       if (Option.isNone(snapshot)) {
         return yield* LedgerError.make({
           operation: "awaitSettlement",
@@ -7090,9 +7719,11 @@ const make = Effect.gen(function* () {
             settlementId: submissionSettlementId(receipt.submissionId),
           }),
         );
+
         const recovery = yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
         );
+
         return materializeSettlement(settlement, recovery.reservation?.record);
       }
       // Wake delivery is a pure liveness hint; the ledger poll below guarantees progress.
@@ -7124,6 +7755,7 @@ const make = Effect.gen(function* () {
         // and parking completes the returned one-shot Effect, so neither subscribe/check nor
         // check/park can lose progress.
         const awaitHint = yield* wake.subscribe(threadId);
+
         const committed = yield* Stream.runHead(
           store.read(
             ThreadRead.make({
@@ -7133,6 +7765,7 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+
         if (Option.isSome(committed)) return;
         // A wake is only a hint. The caller re-reads canonical records after this returns.
         yield* awaitHint;
@@ -7172,13 +7805,17 @@ const make = Effect.gen(function* () {
       }),
     );
     const intent = yield* ledger.requestAbort(command);
+
     yield* hit("abort:after-intent");
+
     const snapshot = yield* ledger.lookup(
       SubmissionLookupById.make({ submissionId: command.submissionId }),
     );
+
     if (Option.isSome(snapshot)) {
       yield* wake.notify(snapshot.value.threadId);
     }
+
     return intent;
   });
 
@@ -7201,6 +7838,7 @@ const make = Effect.gen(function* () {
       }),
     );
     const intent = yield* ledger.recordUnknownResolution(command);
+
     yield* hit("resolve:after-intent");
     if (command.resolution._tag === "AbortSubmission") {
       yield* ledger.requestAbort(
@@ -7211,12 +7849,15 @@ const make = Effect.gen(function* () {
         }),
       );
     }
+
     const snapshot = yield* ledger.lookup(
       SubmissionLookupById.make({ submissionId: command.submissionId }),
     );
+
     if (Option.isSome(snapshot)) {
       yield* wake.notify(snapshot.value.threadId);
     }
+
     return intent;
   });
 
@@ -7242,12 +7883,15 @@ const make = Effect.gen(function* () {
       }),
     );
     const intent = yield* ledger.recordApprovalDecision(command);
+
     const snapshot = yield* ledger.lookup(
       SubmissionLookupById.make({ submissionId: command.submissionId }),
     );
+
     if (Option.isSome(snapshot)) {
       yield* wake.notify(snapshot.value.threadId);
     }
+
     return intent;
   });
 
@@ -7265,12 +7909,14 @@ const make = Effect.gen(function* () {
     submissionId: SubmissionId,
   ): Effect.fn.Return<SubmissionSnapshot, LedgerError> {
     const found = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     if (Option.isNone(found)) {
       return yield* LedgerError.make({
         operation,
         message: `Unknown Submission ${submissionId}`,
       });
     }
+
     return found.value;
   });
 
@@ -7286,21 +7932,26 @@ const make = Effect.gen(function* () {
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
+
     const read = yield* readAllTolerant(submission.threadId);
+
     const evidence = yield* evidenceFor(
       read.records,
       submission.submissionId,
       read.materialized,
       snapshot.hostSubmissionId,
     );
+
     const decision = classifyRecovery(snapshot, evidence);
     const nowMillis = yield* Clock.currentTimeMillis;
     const explainedAt = yield* nowUtc;
     const runId = runIdForSubmission(submission.submissionId);
     const resolvedIds = new Set(snapshot.unknownResolutions.map((intent) => intent.toolCallId));
     const unknownCalls: Array<ExplainedUnknownCall> = [];
+
     for (const envelope of read.records) {
       const payload = envelope.record.payload;
+
       if (payload._tag !== "ToolCallUnknown" || payload.runId !== runId) continue;
       unknownCalls.push(
         ExplainedUnknownCall.make({
@@ -7313,6 +7964,7 @@ const make = Effect.gen(function* () {
       );
     }
     const row = snapshot.submission;
+
     return RecoveryExplanation.make({
       submission: ExplainedSubmission.make({
         submissionId: row.submissionId,
@@ -7361,6 +8013,7 @@ const make = Effect.gen(function* () {
       OperationAuthorizationRequest.make({ operation: "explain", submissionId }),
     );
     const submission = yield* lookupKnownSubmission("explain", submissionId);
+
     return yield* explainSubmission(submission);
   });
 
@@ -7372,10 +8025,12 @@ const make = Effect.gen(function* () {
     );
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
     const explanations: Array<RecoveryExplanation> = [];
+
     for (const submission of nonterminal) {
       if (submission.threadId !== threadId) continue;
       explanations.push(yield* explainSubmission(submission));
     }
+
     return explanations;
   });
 
@@ -7391,14 +8046,17 @@ const make = Effect.gen(function* () {
     // everything settled (DUR-015).
     const rows = new Map<SubmissionId, SubmissionSnapshot>();
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+
     for (const submission of nonterminal) {
       if (submission.threadId === threadId) {
         rows.set(submission.submissionId, submission);
       }
     }
     const named = new Set<SubmissionId>();
+
     for (const envelope of exported.records) {
       const payload = envelope.record.payload;
+
       if (
         payload._tag === "UserInputRecorded" ||
         payload._tag === "SubmissionSettled" ||
@@ -7410,10 +8068,12 @@ const make = Effect.gen(function* () {
     for (const submissionId of named) {
       if (rows.has(submissionId)) continue;
       const found = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
       if (Option.isSome(found) && found.value.threadId === threadId) {
         rows.set(submissionId, found.value);
       }
     }
+
     // The latest stored checkpoint binds against the report; a typed load rejection IS an
     // integrity finding rather than an operation failure.
     const checkpointLoad:
@@ -7431,6 +8091,7 @@ const make = Effect.gen(function* () {
               Effect.succeed({ _tag: "rejected" as const, reason: rejected.reason }),
             ),
           );
+
     const report = yield* verifyThreadInvariants({
       export: exported,
       submissions: [...rows.values()],
@@ -7439,6 +8100,7 @@ const make = Effect.gen(function* () {
         ? { checkpoint: checkpointLoad.checkpoint }
         : {}),
     }).pipe(withCrypto);
+
     if (checkpointLoad._tag === "rejected") {
       const checks = [
         ...report.checks.filter((result) => result.name !== "checkpoint-binding"),
@@ -7448,6 +8110,7 @@ const make = Effect.gen(function* () {
           detail: `the stored checkpoint was rejected on load: ${checkpointLoad.reason}`,
         }),
       ];
+
       return IntegrityReport.make({
         threadId: report.threadId,
         tailSequence: report.tailSequence,
@@ -7457,6 +8120,7 @@ const make = Effect.gen(function* () {
         ok: false,
       });
     }
+
     return report;
   });
 
@@ -7479,17 +8143,22 @@ const make = Effect.gen(function* () {
       }),
     );
     const submission = yield* lookupKnownSubmission("retry", command.submissionId);
+
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: command.submissionId }),
     );
+
     const read = yield* readAllTolerant(submission.threadId);
+
     const evidence = yield* evidenceFor(
       read.records,
       command.submissionId,
       read.materialized,
       snapshot.hostSubmissionId,
     );
+
     const decision = classifyRecovery(snapshot, evidence);
+
     if (decision._tag === "NoAction") {
       return yield* RetryRefused.make({
         submissionId: command.submissionId,
@@ -7526,10 +8195,12 @@ const make = Effect.gen(function* () {
       }),
     );
     const disposition = yield* executeRecoveryDecision(snapshot, evidence, decision, read.records);
+
     if (disposition === "repaired") {
       yield* annotateRepair(submission.threadId, command.submissionId, decision);
     }
     yield* wake.notify(submission.threadId);
+
     return RecoveryReport.make({
       submissionId: command.submissionId,
       threadId: submission.threadId,
@@ -7565,30 +8236,39 @@ const make = Effect.gen(function* () {
     const generatedAt = yield* nowUtc;
     const recordsCache = new Map<ThreadId, ReadonlyArray<CanonicalRecordEnvelope>>();
     const entries: Array<ObligationEntry> = [];
+
     for (const submission of nonterminal) {
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
       );
+
       let blockedOn: ObligationBlockedOn;
       let since: DateTime.Utc = submission.readyAt ?? submission.createdAt;
+
       switch (submission.state) {
         case "unknown": {
           blockedOn = "unknown";
           let records = recordsCache.get(submission.threadId);
+
           if (records === undefined) {
             records = (yield* readAllTolerant(submission.threadId)).records;
             recordsCache.set(submission.threadId, records);
           }
+
           const resolvedIds = new Set(
             snapshot.unknownResolutions.map((intent) => intent.toolCallId),
           );
+
           const runId = runIdForSubmission(submission.submissionId);
           let earliest: DateTime.Utc | undefined;
+
           for (const envelope of records) {
             const payload = envelope.record.payload;
+
             if (payload._tag !== "ToolCallUnknown" || payload.runId !== runId) continue;
             if (resolvedIds.has(payload.toolCallId)) continue;
             const recordedAt = envelope.record.createdAt;
+
             if (
               earliest === undefined ||
               DateTime.toEpochMillis(recordedAt) < DateTime.toEpochMillis(earliest)
@@ -7616,6 +8296,7 @@ const make = Effect.gen(function* () {
         }
       }
       const ageSeconds = ageSecondsSince(since, nowMillis);
+
       entries.push(
         ObligationEntry.make({
           submissionId: submission.submissionId,
@@ -7627,6 +8308,7 @@ const make = Effect.gen(function* () {
         }),
       );
     }
+
     return ObligationReport.make({ thresholds, entries, generatedAt });
   });
 
@@ -7664,6 +8346,7 @@ const make = Effect.gen(function* () {
       // Wake subscriptions may drop hints, so a ledger scan seeds the worklist (persistence §14).
       const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
       const seen = new Set<ThreadId>();
+
       for (const submission of nonterminal) {
         if (seen.has(submission.threadId)) continue;
         seen.add(submission.threadId);
@@ -7681,6 +8364,7 @@ const make = Effect.gen(function* () {
       // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
       const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
       const seen = new Set<ThreadId>();
+
       for (const submission of nonterminal) {
         if (seen.has(submission.threadId)) continue;
         seen.add(submission.threadId);

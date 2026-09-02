@@ -144,7 +144,9 @@ const HostedSearch = Tool.providerDefined({
   parameters: Schema.Struct({ query: Schema.String }),
   success: Schema.Struct({ status: Schema.String }),
 })(undefined);
+
 const hostedTools = Toolkit.make(HostedSearch);
+
 const hostedDefinition = Agent.make("hosted-tool", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -172,10 +174,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   }
 
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -191,6 +195,7 @@ const errorMessageForTest = (error: unknown): string =>
 const reachableTelemetryValues = (root: unknown): ReadonlyArray<unknown> => {
   const values: Array<unknown> = [];
   const visited = new WeakSet<object>();
+
   const visit = (value: unknown): void => {
     values.push(value);
     if ((typeof value !== "object" && typeof value !== "function") || value === null) return;
@@ -207,10 +212,13 @@ const reachableTelemetryValues = (root: unknown): ReadonlyArray<unknown> => {
     for (const key of Reflect.ownKeys(value)) {
       visit(key);
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
       if (descriptor !== undefined && "value" in descriptor) visit(descriptor.value);
     }
   };
+
   visit(root);
+
   return values;
 };
 
@@ -279,6 +287,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("runs Definitions with composed native Layers and decodes encoded input", () =>
     Effect.gen(function* () {
       const received: Array<number> = [];
+
       const definition = Agent.make("transformed-input", {
         output: runtimeDefinition.output,
         toolkit: Toolkit.empty,
@@ -286,15 +295,18 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         input: Schema.Struct({ days: Schema.NumberFromString }),
         instructions: ({ days }) => {
           received.push(days);
+
           return `Plan ${days} days.`;
         },
         inputPrompt: ({ days }) => `Decoded days: ${days}`,
       });
+
       const result = yield* AgentRuntime.run(definition, { days: "2" }).pipe(
         Effect.provide(
           Layer.mergeAll(modelFromParts(finalParts('{"answer":"two days"}')), identifiers),
         ),
       );
+
       expect(result.output).toEqual({ answer: "two days" });
       expect(received).toEqual([2]);
     }),
@@ -304,6 +316,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       let instructions = 0;
       let modelCalls = 0;
+
       const definition = Agent.make("external-input", {
         input: runtimeDefinition.input,
         output: runtimeDefinition.output,
@@ -311,9 +324,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         policy: runtimeDefinition.policy,
         instructions: () => {
           instructions++;
+
           return "Answer the question.";
         },
       });
+
       const model = Model.make(
         "scripted",
         "invalid-input",
@@ -323,20 +338,25 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: () => {
               modelCalls++;
+
               return Stream.fromIterable(finalParts('{"answer":"unexpected"}'));
             },
           }),
         ),
       );
+
       yield* Effect.gen(function* () {
         const input: unknown = { question: 42 };
         const runExit = yield* AgentRuntime.runUnknown(definition, input).pipe(Effect.exit);
+
         const streamExit = yield* AgentRuntime.streamUnknown(definition, input).pipe(
           Stream.runDrain,
           Effect.exit,
         );
+
         const detached = yield* AgentRuntime.startUnknown(definition, input);
         const startExit = yield* detached.await.pipe(Effect.exit);
+
         for (const exit of [runExit, streamExit, startExit]) {
           expect(failureFrom(exit)).toBeInstanceOf(AgentInputError);
         }
@@ -352,6 +372,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const started = yield* Deferred.make<void>();
         const finish = yield* Deferred.make<void>();
         const finalized = yield* Deferred.make<void>();
+
         const model = Model.make(
           "scripted",
           "captured",
@@ -359,9 +380,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             LanguageModel.LanguageModel,
             Effect.gen(function* () {
               const answer = yield* ModelConfiguration;
+
               yield* Effect.acquireRelease(Effect.void, () =>
                 Deferred.succeed(finalized, undefined),
               );
+
               return yield* LanguageModel.make({
                 generateText: () => Effect.succeed([]),
                 streamText: () =>
@@ -375,15 +398,18 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
+
         const captured = yield* model.captureRequirements.pipe(
           Effect.provideService(ModelConfiguration, "captured answer"),
         );
+
         yield* Effect.gen(function* () {
           const child = yield* bound
             ? AgentRuntime.start(Agent.withModel(runtimeDefinition, captured), {
                 question: "hello",
               })
             : AgentRuntime.start(runtimeDefinition, { question: "hello" });
+
           yield* Deferred.await(started);
           expect(yield* Deferred.isDone(finalized)).toBe(false);
           yield* Deferred.succeed(finish, undefined);
@@ -407,7 +433,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         content: [Prompt.makePart("text", { text: "Edinburgh." })],
       }),
     ]);
+
     let observedPrompt: Prompt.Prompt | undefined;
+
     const model = Model.make(
       "scripted",
       "history-prefix",
@@ -417,6 +445,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           generateText: () => Effect.succeed([]),
           streamText: (request) => {
             observedPrompt = request.prompt;
+
             return Stream.fromIterable(finalParts('{"answer":"Edinburgh."}'));
           },
         }),
@@ -458,11 +487,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           consume: () =>
             Effect.gen(function* () {
               yield* HookService;
+
               return yield* HookFailure.make({ message: "budget hook failed" });
             }),
         },
       },
     );
+
     type ErrorProof = HookFailure extends Effect.Error<typeof program> ? true : false;
     type RequirementsProof = HookService extends Effect.Services<typeof program> ? true : false;
     const errorProof: ErrorProof = true;
@@ -470,6 +501,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
     expect(errorProof).toBe(true);
     expect(requirementsProof).toBe(true);
+
     return Effect.void;
   });
 
@@ -478,7 +510,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       parameters: Schema.Struct({ query: Schema.String }),
       success: Schema.Struct({ available: Schema.Boolean }),
     });
+
     const tools = Toolkit.make(Search);
+
     const model = Model.make(
       "scripted",
       "two-turn",
@@ -486,6 +520,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: () =>
@@ -517,6 +552,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
+
     const definition = Agent.make("two-turn", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -529,7 +565,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         toolConcurrency: 1,
       }),
     });
+
     const agent = Agent.withModel(definition, model);
+
     const toolLayer = tools.toLayer({
       search: () => Effect.succeed({ available: true }),
     });
@@ -557,6 +595,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ]);
       const declared = result.find((event) => event._tag === "ToolCallDeclared");
       const succeeded = result.find((event) => event._tag === "ToolCallSucceeded");
+
       expect(declared).toMatchObject({
         parameters: { query: "sea" },
         providerExecuted: false,
@@ -570,6 +609,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("keeps provider-executed Tools distinct from application handlers", () => {
     let providerResultStayedAssistant = false;
+
     const model = Model.make(
       "scripted",
       "hosted-tool",
@@ -577,6 +617,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: (request) =>
@@ -595,6 +636,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                         request.prompt.content.some((message) => message.role === "tool"),
                       ).toBe(false);
                     }
+
                     return Stream.fromIterable<Response.StreamPartEncoded>(
                       value === 0
                         ? [
@@ -665,6 +707,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("retains an owned normalized snapshot of provider Tool results", () => {
     const providerResult = { status: "completed" };
     let observedPromptResult: unknown;
+
     const model = Model.make(
       "scripted",
       "owned-provider-result",
@@ -672,6 +715,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: (request) =>
@@ -684,10 +728,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                         ?.content.find(
                           (part) => part.type === "tool-result" && part.id === "owned-result-1",
                         );
+
                       observedPromptResult =
                         observedPart?.type === "tool-result" ? observedPart.result : undefined;
+
                       return Stream.fromIterable(finalParts('{"answer":"owned"}'));
                     }
+
                     return Stream.fromIterable<Response.StreamPartEncoded>([
                       {
                         type: "tool-call",
@@ -709,6 +756,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                         Stream.fromEffect(
                           Effect.sync(() => {
                             providerResult.status = "mutated-after-emission";
+
                             return {
                               type: "finish" as const,
                               reason: "tool-calls" as const,
@@ -740,32 +788,42 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("exports content-free canonical Tool spans and bounded terminal logs", () => {
     const spans: Array<Tracer.NativeSpan> = [];
     const logs: Array<ExportedLogObservation> = [];
+
     const tracer = Tracer.make({
       span(options) {
         const span = new Tracer.NativeSpan(options);
+
         spans.push(span);
+
         return span;
       },
     });
+
     const logger = Logger.make<unknown, void>((options) => {
       const observation = exportedLogObservation(options);
+
       logs.push(observation);
     });
+
     const handlerSecret = "handler-result-must-not-be-exported";
     const failureSecret = "failure-message-must-not-be-exported";
     const failureToolCallId = "fail-observed-1";
     const returnedFailure = ScheduledToolFailure.make({ message: failureSecret });
+
     const Read = Tool.make("read", {
       parameters: Schema.Struct({ path: Schema.String }),
       success: Schema.String,
     }).annotate(ToolExecutionClass, "readonly");
+
     const Fail = Tool.make("fail", {
       parameters: Schema.Struct({ command: Schema.String }),
       success: Schema.String,
       failure: ScheduledToolFailure,
       failureMode: "return",
     });
+
     const tools = Toolkit.make(Read, Fail);
+
     const model = Model.make(
       "scripted",
       "tool-observability",
@@ -773,6 +831,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: () =>
@@ -805,6 +864,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
+
     const definition = Agent.make("tool-observability", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -817,6 +877,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         toolConcurrency: 2,
       }),
     });
+
     const toolLayer = tools.toLayer({
       read: () => Effect.succeed(handlerSecret).pipe(Effect.withSpan("host.read")),
       fail: () => Effect.fail(returnedFailure),
@@ -833,6 +894,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const toolSpans = spans
         .filter((span) => span.name.startsWith("execute_tool "))
         .toSorted((left, right) => left.name.localeCompare(right.name));
+
       expect(toolSpans).toHaveLength(2);
       expect(toolSpans.map((span) => span.name)).toEqual([
         "execute_tool fail",
@@ -840,11 +902,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ]);
       expect(spans.some((span) => span.name === "AgentRuntime.toolkit.handle")).toBe(false);
       const hostOwnedSpan = spans.find((span) => span.name === "host.read");
+
       expect(hostOwnedSpan?.status._tag).toBe("Ended");
       expect(Object.fromEntries(hostOwnedSpan?.attributes ?? [])).toEqual({});
       expect(hostOwnedSpan?.events).toEqual([]);
       expect(hostOwnedSpan?.links).toEqual([]);
       const hostParent = Option.getOrUndefined(hostOwnedSpan?.parent ?? Option.none());
+
       expect(hostParent?._tag).toBe("Span");
       if (hostParent?._tag !== "Span") {
         throw new Error("Expected the host-owned handler span to have a canonical Tool parent");
@@ -853,8 +917,10 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(hostOwnedSpan?.traceId).toBe(hostParent.traceId);
 
       const [failedSpan, succeededSpan] = toolSpans;
+
       expect(failedSpan?.kind).toBe("internal");
       const failedAttributes = Object.fromEntries(failedSpan?.attributes ?? []);
+
       expect(failedAttributes).toMatchObject({
         "gen_ai.operation.name": "execute_tool",
         "gen_ai.tool.name": "fail",
@@ -889,6 +955,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       }
       expect(Exit.isSuccess(succeededSpan.status.exit)).toBe(true);
       const spanNames = spans.map((span) => span.name);
+
       expect(spanNames).not.toContain("AgentRuntime.decodeToolCallId");
       expect(spanNames).not.toContain("AgentRuntime.decodeProviderToolCallId");
       expect(spanNames).not.toContain("AgentRuntime.decodeProviderResponsePartId");
@@ -898,6 +965,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           renderedLogMessage(entry.message),
         ),
       );
+
       expect(terminalLogs).toHaveLength(2);
       expect(
         terminalLogs
@@ -935,23 +1003,29 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "thread-1",
       ]);
       const failedLog = terminalLogs.find(({ annotations }) => annotations.toolName === "fail");
+
       expect(failedLog?.annotations).toMatchObject({
         "gen_ai.tool.call.id": failureToolCallId,
         toolCallId: failureToolCallId,
       });
       const succeededLog = terminalLogs.find(({ annotations }) => annotations.toolName === "read");
+
       expect(succeededLog?.annotations).toMatchObject({
         "gen_ai.tool.call.id": "read-observed-1",
         toolCallId: "read-observed-1",
       });
+
       const exportedValues = reachableTelemetryValues({
         spans: spans.map(exportedSpanObservation),
         logs,
       });
+
       expect(exportedValues).not.toContain(returnedFailure);
+
       const exportedStrings = exportedValues
         .filter((value) => typeof value === "string")
         .join("\n");
+
       expect(exportedStrings).not.toContain("/private/source.ts");
       expect(exportedStrings).not.toContain("printenv SECRET");
       expect(exportedStrings).not.toContain(handlerSecret);
@@ -965,11 +1039,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const invalidIdSecret = "invalid-tool-call-id-must-not-reach-a-handler";
       const invalidId = `unsafe/${invalidIdSecret}/${"x".repeat(256)}`;
+
       const Read = Tool.make("read_invalid_id", {
         parameters: Schema.Struct({ path: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Read);
+
       const definition = Agent.make("invalid-tool-call-id", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -982,6 +1059,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const model = modelFromParts([
         {
           type: "tool-call",
@@ -992,6 +1070,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const toolLayer = tools.toLayer({
         read_invalid_id: () =>
           Ref.update(handlerCalls, (calls) => calls + 1).pipe(Effect.as("unexpected")),
@@ -1005,6 +1084,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -1022,6 +1102,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("rejects every retained or correlated model response-part identifier", () => {
     const invalidIdSecret = "invalid-response-part-id-must-not-enter-runtime-state";
     const invalidId = `unsafe/${invalidIdSecret}/${"x".repeat(256)}`;
+
     const cases: ReadonlyArray<{
       readonly label: string;
       readonly part: Response.StreamPartEncoded;
@@ -1090,6 +1171,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             Effect.exit,
             Effect.map((exit) => {
               const failure = failureFrom(exit);
+
               expect(failure).toBeInstanceOf(ModelProtocolError);
               expect(failure.message).toContain("invalid");
               expect(failure.message).not.toContain(invalidIdSecret);
@@ -1114,7 +1196,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         ),
         { question: "Tool result" },
       ).pipe(Stream.runDrain, Effect.exit);
+
       const toolResultFailure = failureFrom(toolResultExit);
+
       expect(toolResultFailure).toBeInstanceOf(ModelProtocolError);
       expect(toolResultFailure.message).toContain("invalid Tool Call ID");
       expect(toolResultFailure.message).not.toContain(invalidIdSecret);
@@ -1124,25 +1208,33 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("exports one failed Tool outcome when downstream stops at its terminal event", () => {
     const spans: Array<Tracer.NativeSpan> = [];
     const logs: Array<ExportedLogObservation> = [];
+
     const tracer = Tracer.make({
       span(options) {
         const span = new Tracer.NativeSpan(options);
+
         spans.push(span);
+
         return span;
       },
     });
+
     const logger = Logger.make<unknown, void>((options) => {
       logs.push(exportedLogObservation(options));
     });
+
     const failureSecret = "early-close-returned-failure-must-not-be-exported";
     const returnedFailure = ScheduledToolFailure.make({ message: failureSecret });
+
     const Fail = Tool.make("fail_early", {
       parameters: Schema.Struct({ command: Schema.String }),
       success: Schema.String,
       failure: ScheduledToolFailure,
       failureMode: "return",
     });
+
     const tools = Toolkit.make(Fail);
+
     const model = modelFromParts([
       {
         type: "tool-call",
@@ -1153,6 +1245,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       },
       { type: "finish", reason: "tool-calls", usage },
     ]);
+
     const definition = Agent.make("early-close-tool-observability", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -1181,9 +1274,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         toolName: "fail_early",
         providerExecuted: false,
       });
+
       const terminalLogs = logs.filter(
         (entry) => renderedLogMessage(entry.message) === "agent tool execution failed",
       );
+
       expect(terminalLogs).toHaveLength(1);
       expect(terminalLogs[0]?.annotations).toMatchObject({
         "effect_agent.tool.outcome": "failure",
@@ -1192,16 +1287,19 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       });
 
       const span = spans.find((candidate) => candidate.name === "execute_tool fail_early");
+
       expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
         "effect_agent.tool.outcome": "failure",
       });
       if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
         throw new Error("Expected the early-closed returned Tool failure span to end failed");
       }
+
       const exportedValues = reachableTelemetryValues({
         spans: [exportedSpanObservation(span)],
         logs: terminalLogs,
       });
+
       expect(exportedValues).not.toContain(returnedFailure);
       expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
         failureSecret,
@@ -1212,6 +1310,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("runs deferred work once from an ordinary second pull", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
+
       const observed = yield* emitThenAfter(
         Effect.succeed("terminal-event"),
         Ref.update(attempts, (count) => count + 1),
@@ -1225,6 +1324,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("runs deferred work once when downstream closes after the first value", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
+
       const observed = yield* emitThenAfter(
         Effect.succeed("terminal-event"),
         Ref.update(attempts, (count) => count + 1),
@@ -1240,6 +1340,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const entered = yield* Deferred.make<void>();
       const blocked = yield* Deferred.make<void>();
       const interruptor = 7332;
+
       const fiber = yield* emitThenAfter(
         Effect.succeed("terminal-event"),
         Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked))),
@@ -1263,6 +1364,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const typedFailure = new Error("early-close-typed-derivative-failure");
     const defect = new Error("early-close-derivative-defect");
     const reports: Array<Cause.Cause<unknown>> = [];
+
     const reporter = ErrorReporter.make(({ cause }) => {
       reports.push(cause);
     });
@@ -1272,6 +1374,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Effect.succeed("typed-event"),
         Effect.fail(typedFailure),
       ).pipe(Stream.take(1), Stream.runCollect);
+
       const defectObserved = yield* emitThenAfter(
         Effect.succeed("defect-event"),
         Effect.die(defect),
@@ -1303,6 +1406,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
       const eventFailure = new Error("terminal event was not committed");
+
       const exit = yield* emitThenAfter(
         Effect.fail(eventFailure),
         Ref.update(attempts, (count) => count + 1),
@@ -1317,6 +1421,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("does not arm deferred work when downstream takes zero values", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
+
       const observed = yield* emitThenAfter(
         Effect.succeed("terminal-event"),
         Ref.update(attempts, (count) => count + 1),
@@ -1330,6 +1435,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("does not arm deferred work when an opened scope closes before its first pull", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
+
       const stream = emitThenAfter(
         Effect.succeed("terminal-event"),
         Ref.update(attempts, (count) => count + 1),
@@ -1344,10 +1450,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0);
       const observed: Array<string> = [];
+
       const exit = yield* Effect.scoped(
         Effect.gen(function* () {
           const telemetryEntered = yield* Deferred.make<void>();
           const telemetryBlocked = yield* Deferred.make<void>();
+
           const stream = emitThenAfter(
             Effect.succeed("terminal-event"),
             Ref.update(attempts, (count) => count + 1).pipe(
@@ -1361,14 +1469,17 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
               }),
             ),
           );
+
           const pull = yield* Stream.toPull(stream);
 
           expect(yield* pull).toEqual(["terminal-event"]);
           expect(observed).toEqual(["terminal-event"]);
 
           const secondPull = yield* Effect.forkChild(pull);
+
           yield* Deferred.await(telemetryEntered);
           yield* Fiber.interrupt(secondPull);
+
           return yield* Fiber.await(secondPull);
         }),
       );
@@ -1382,10 +1493,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("keeps committed terminal outcomes authoritative over telemetry interruption", () => {
     const spans: Array<Tracer.NativeSpan> = [];
+
     const tracer = Tracer.make({
       span(options) {
         const span = new Tracer.NativeSpan(options);
+
         spans.push(span);
+
         return span;
       },
     });
@@ -1393,12 +1507,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     return Effect.gen(function* () {
       const telemetry = yield* ToolSpanTelemetry;
       const failureMarker = ToolSpanFailure.marker();
+
       yield* Effect.forEach(
         ["success", "failure"] as const,
         (outcome) =>
           Effect.gen(function* () {
             const entered = yield* Deferred.make<void>();
             const blocked = yield* Deferred.make<void>();
+
             const pullExit = yield* Effect.scoped(
               Effect.gen(function* () {
                 const stream = emitThenAfter(
@@ -1426,14 +1542,19 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                   Stream.withSpan(`execute_tool interrupted-${outcome}`),
                   telemetry.isolateSpanLifecycle,
                 );
+
                 const pull = yield* Stream.toPull(stream);
+
                 expect(yield* pull).toEqual([`terminal-${outcome}`]);
                 const secondPull = yield* Effect.forkChild(pull);
+
                 yield* Deferred.await(entered);
                 yield* Fiber.interrupt(secondPull);
+
                 return yield* Fiber.await(secondPull);
               }),
             );
+
             if (Exit.isSuccess(pullExit)) throw new Error("Expected telemetry interruption");
             expect(Cause.hasInterrupts(pullExit.cause)).toBe(true);
           }),
@@ -1444,6 +1565,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const span = spans.find(
           (candidate) => candidate.name === `execute_tool interrupted-${outcome}`,
         );
+
         expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
           "effect_agent.tool.outcome": outcome,
         });
@@ -1462,10 +1584,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("preserves the enclosing interruption when no terminal outcome exists", () => {
     const spans: Array<Tracer.NativeSpan> = [];
+
     const tracer = Tracer.make({
       span(options) {
         const span = new Tracer.NativeSpan(options);
+
         spans.push(span);
+
         return span;
       },
     });
@@ -1474,23 +1599,30 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const telemetry = yield* ToolSpanTelemetry;
       const entered = yield* Deferred.make<void>();
       const blocked = yield* Deferred.make<void>();
+
       const pullExit = yield* Effect.scoped(
         Effect.gen(function* () {
           const stream = emitThenAfter(
             Effect.succeed("nonterminal-event"),
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked))),
           ).pipe(Stream.withSpan("execute_tool without-outcome"), telemetry.isolateSpanLifecycle);
+
           const pull = yield* Stream.toPull(stream);
+
           expect(yield* pull).toEqual(["nonterminal-event"]);
           const secondPull = yield* Effect.forkChild(pull);
+
           yield* Deferred.await(entered);
           yield* Fiber.interrupt(secondPull);
+
           return yield* Fiber.await(secondPull);
         }),
       );
+
       if (Exit.isSuccess(pullExit)) throw new Error("Expected telemetry interruption");
 
       const span = spans.find((candidate) => candidate.name === "execute_tool without-outcome");
+
       if (span?.status._tag !== "Ended" || Exit.isSuccess(span.status.exit)) {
         throw new Error("Expected the unannotated span to preserve interruption");
       }
@@ -1502,21 +1634,26 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const tracer = Tracer.make({
       span: (options) => new Tracer.NativeSpan(options),
     });
+
     const expectedFailure = ScheduledToolFailure.make({ message: "typed-no-parent-span" });
     let attempts = 0;
 
     return Effect.gen(function* () {
       const telemetry = yield* ToolSpanTelemetry;
+
       const success = yield* telemetry.isolateToolkitHandle(
         Effect.sync(() => {
           attempts += 1;
+
           return "handled-without-parent";
         }),
       );
+
       const failureExit = yield* telemetry
         .isolateToolkitHandle(
           Effect.suspend(() => {
             attempts += 1;
+
             return Effect.fail(expectedFailure);
           }),
         )
@@ -1530,21 +1667,26 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("allocates span isolation for each execution of a reusable Stream", () => {
     let isolationAllocations = 0;
+
     const delegateContext: NonNullable<Tracer.Tracer["context"]> = <X>(
       primitive: Tracer.EffectPrimitive<X>,
       fiber: Fiber.Fiber<unknown, unknown>,
     ): X => primitive["~effect/Effect/evaluate"](fiber);
+
     const instrumentedContext = new Proxy(delegateContext, {
       get(target, property, receiver) {
         if (property === "bind") {
           return (thisArgument: unknown) => {
             isolationAllocations += 1;
+
             return target.bind(thisArgument);
           };
         }
+
         return Reflect.get(target, property, receiver);
       },
     });
+
     const delegate = Tracer.make({
       span: (options) => new Tracer.NativeSpan(options),
       context: instrumentedContext,
@@ -1552,11 +1694,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
     return Effect.gen(function* () {
       const telemetry = yield* ToolSpanTelemetry;
+
       const reusable = Stream.succeed("value").pipe(
         Stream.withSpan("reusable-isolated-stream"),
         telemetry.isolateSpanLifecycle,
       );
+
       const beforeExecutions = isolationAllocations;
+
       const [left, right] = yield* Effect.all(
         [Stream.runCollect(reusable), Stream.runCollect(reusable)],
         { concurrency: "unbounded" },
@@ -1574,6 +1719,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("drains a queued terminal event before a merged producer interruption", () =>
     Effect.gen(function* () {
       const observed: Array<string> = [];
+
       const exit = yield* Stream.mergeAll(
         [emitThenAfter(Effect.succeed("terminal-event"), Effect.interrupt)],
         { concurrency: "unbounded" },
@@ -1597,6 +1743,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const blocked = yield* Deferred.make<void>();
+
       const fiber = yield* isolateToolDerivative(
         Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked))),
       ).pipe(Effect.forkChild);
@@ -1604,6 +1751,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
       const exit = yield* Fiber.await(fiber);
+
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isSuccess(exit)) throw new Error("Expected terminal telemetry interruption");
       expect(Cause.hasInterrupts(exit.cause)).toBe(true);
@@ -1612,15 +1760,18 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("preserves the host tracer's final sampling decision", () => {
     const requestedSampling: Array<boolean> = [];
+
     const delegate = Tracer.make({
       span(options) {
         requestedSampling.push(options.sampled);
+
         return new Tracer.NativeSpan({ ...options, sampled: false });
       },
     });
 
     return Effect.gen(function* () {
       const telemetry = yield* ToolSpanTelemetry;
+
       const observed = yield* Stream.fromEffect(
         Effect.map(Effect.currentSpan, (span) => span.sampled),
       )
@@ -1638,6 +1789,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("preserves the host tracer context receiver", () => {
     const receiverToken = Symbol("host-tracer-receiver");
     let contextCalls = 0;
+
     class ReceiverAwareTracer implements Tracer.Tracer {
       readonly receiver = receiverToken;
 
@@ -1648,11 +1800,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       context<X>(primitive: Tracer.EffectPrimitive<X>, fiber: Fiber.Fiber<unknown, unknown>): X {
         if (this.receiver !== receiverToken) throw new Error("host tracer receiver was lost");
         contextCalls += 1;
+
         return primitive["~effect/Effect/evaluate"](fiber);
       }
     }
     const delegate = new ReceiverAwareTracer();
     const isolated = makeIsolatedToolTracer(delegate);
+
     const primitive: Tracer.EffectPrimitive<string> = {
       ["~effect/Effect/evaluate"]: () => "completed",
     };
@@ -1660,6 +1814,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     return Effect.withFiber((fiber) =>
       Effect.sync(() => {
         const context = isolated.tracer.context;
+
         if (context === undefined) throw new Error("Expected the isolated tracer context");
 
         expect(context(primitive, fiber)).toBe("completed");
@@ -1671,6 +1826,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("isolates a defecting host tracer context getter", () => {
     const contextDefect = new Error("host-tracer-context-getter-defect");
     const reports: Array<Cause.Cause<unknown>> = [];
+
     const delegate = Object.defineProperty(
       Tracer.make({
         span: (options) => new Tracer.NativeSpan(options),
@@ -1682,7 +1838,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
       },
     );
+
     const isolated = makeIsolatedToolTracer(delegate);
+
     const reporter = ErrorReporter.make(({ cause }) => {
       reports.push(cause);
     });
@@ -1700,6 +1858,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("preserves interruption raised while reporting span lifecycle defects", () => {
     const contextDefect = new Error("host-tracer-context-defect-before-reporter-interruption");
     const interruptor = 7331;
+
     const delegate = Object.defineProperty(
       Tracer.make({
         span: (options) => new Tracer.NativeSpan(options),
@@ -1711,7 +1870,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
       },
     );
+
     const isolated = makeIsolatedToolTracer(delegate);
+
     const reporter = ErrorReporter.make(({ cause, fiber }) => {
       expect(cause.reasons).toHaveLength(1);
       expect(cause.reasons[0]?._tag).toBe("Die");
@@ -1723,6 +1884,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     return Effect.gen(function* () {
       const reportingFiber = yield* Effect.forkChild(isolated.reportLifecycleDefects);
       const exit = yield* Fiber.await(reportingFiber);
+
       if (Exit.isSuccess(exit)) throw new Error("Expected reporter interruption");
       expect(exit.cause.reasons).toHaveLength(1);
       expect(exit.cause.reasons[0]?._tag).toBe("Interrupt");
@@ -1739,19 +1901,24 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const contextDefect = new Error("host-tracer-context-before-evaluation-defect");
       const reports: Array<Cause.Cause<unknown>> = [];
       let evaluations = 0;
+
       const delegate = Tracer.make({
         span: (options) => new Tracer.NativeSpan(options),
         context: () => {
           throw contextDefect;
         },
       });
+
       const isolated = makeIsolatedToolTracer(delegate);
+
       const reporter = ErrorReporter.make(({ cause }) => {
         reports.push(cause);
       });
+
       const primitive: Tracer.EffectPrimitive<string> = {
         ["~effect/Effect/evaluate"]: () => {
           evaluations += 1;
+
           return "completed";
         },
       };
@@ -1759,6 +1926,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       return Effect.withFiber((fiber) =>
         Effect.gen(function* () {
           const context = isolated.tracer.context;
+
           if (context === undefined) throw new Error("Expected the isolated tracer context");
 
           expect(context(primitive, fiber)).toBe("completed");
@@ -1779,6 +1947,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const contextDefect = new Error("host-tracer-context-after-evaluation-defect");
       const reports: Array<Cause.Cause<unknown>> = [];
       let evaluations = 0;
+
       const delegate = Tracer.make({
         span: (options) => new Tracer.NativeSpan(options),
         context: <X>(
@@ -1789,13 +1958,17 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           throw contextDefect;
         },
       });
+
       const isolated = makeIsolatedToolTracer(delegate);
+
       const reporter = ErrorReporter.make(({ cause }) => {
         reports.push(cause);
       });
+
       const primitive: Tracer.EffectPrimitive<string> = {
         ["~effect/Effect/evaluate"]: () => {
           evaluations += 1;
+
           return "completed";
         },
       };
@@ -1803,6 +1976,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       return Effect.withFiber((fiber) =>
         Effect.gen(function* () {
           const context = isolated.tracer.context;
+
           if (context === undefined) throw new Error("Expected the isolated tracer context");
 
           expect(context(primitive, fiber)).toBe("completed");
@@ -1819,25 +1993,31 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("does not let host tracer context substitute a primitive result", () => {
     let evaluations = 0;
+
     const delegateContext: NonNullable<Tracer.Tracer["context"]> = <X>(
       primitive: Tracer.EffectPrimitive<X>,
       fiber: Fiber.Fiber<unknown, unknown>,
     ): X => primitive["~effect/Effect/evaluate"](fiber);
+
     const substitutingContext = new Proxy(delegateContext, {
       apply(target, thisArgument, argumentsList) {
         Reflect.apply(target, thisArgument, argumentsList);
+
         return "host-substituted-result";
       },
     });
+
     const isolated = makeIsolatedToolTracer(
       Tracer.make({
         span: (options) => new Tracer.NativeSpan(options),
         context: substitutingContext,
       }),
     );
+
     const primitive: Tracer.EffectPrimitive<string> = {
       ["~effect/Effect/evaluate"]: () => {
         evaluations += 1;
+
         return "engine-result";
       },
     };
@@ -1845,6 +2025,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     return Effect.withFiber((fiber) =>
       Effect.sync(() => {
         const context = isolated.tracer.context;
+
         if (context === undefined) throw new Error("Expected the isolated tracer context");
 
         expect(context(primitive, fiber)).toBe("engine-result");
@@ -1858,6 +2039,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const contextDefect = new Error("host-tracer-context-wrapper-defect");
     const reports: Array<Cause.Cause<unknown>> = [];
     let evaluations = 0;
+
     const delegate = Tracer.make({
       span: (options) => new Tracer.NativeSpan(options),
       context: <X>(
@@ -1871,10 +2053,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }
       },
     });
+
     const isolated = makeIsolatedToolTracer(delegate);
+
     const reporter = ErrorReporter.make(({ cause }) => {
       reports.push(cause);
     });
+
     const primitive: Tracer.EffectPrimitive<string> = {
       ["~effect/Effect/evaluate"]: () => {
         evaluations += 1;
@@ -1885,9 +2070,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     return Effect.withFiber((fiber) =>
       Effect.gen(function* () {
         const context = isolated.tracer.context;
+
         if (context === undefined) throw new Error("Expected the isolated tracer context");
 
         let observed: unknown;
+
         try {
           context(primitive, fiber);
         } catch (error) {
@@ -1905,33 +2092,43 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const spans: Array<Tracer.NativeSpan> = [];
     const logs: Array<ExportedLogObservation> = [];
     const reports: Array<Cause.Cause<unknown>> = [];
+
     const tracer = Tracer.make({
       span(options) {
         const span = new Tracer.NativeSpan(options);
+
         spans.push(span);
+
         return span;
       },
     });
+
     const telemetryDefect = new Error("terminal-logger-defect-must-not-reach-exported-span-or-log");
     const reporterDefect = new Error("terminal-error-reporter-defect-must-be-isolated");
     let defectiveReporterCalls = 0;
+
     const logger = Logger.make<unknown, void>((options) => {
       const rendered = renderedLogMessage(options.message);
+
       logs.push(exportedLogObservation(options));
       if (rendered === "agent tool execution completed") throw telemetryDefect;
     });
+
     const reporter = ErrorReporter.make(({ cause }) => {
       reports.push(cause);
       defectiveReporterCalls += 1;
       throw reporterDefect;
     });
+
     let handlerAttempts = 0;
 
     const Read = Tool.make("read_once", {
       parameters: Schema.Struct({ path: Schema.String }),
       success: Schema.String,
     });
+
     const tools = Toolkit.make(Read);
+
     const model = Model.make(
       "scripted",
       "terminal-telemetry-defect",
@@ -1939,6 +2136,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: () =>
@@ -1966,6 +2164,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
+
     const definition = Agent.make("terminal-telemetry-defect", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -1989,6 +2188,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             read_once: () =>
               Effect.sync(() => {
                 handlerAttempts += 1;
+
                 return "original-success";
               }),
           }),
@@ -2015,6 +2215,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ]);
 
       const span = spans.find((candidate) => candidate.name === "execute_tool read_once");
+
       expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
         "effect_agent.tool.outcome": "success",
       });
@@ -2025,6 +2226,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         spans: spans.map(exportedSpanObservation),
         logs,
       });
+
       expect(exportedValues).not.toContain(telemetryDefect);
       expect(exportedValues).not.toContain(reporterDefect);
       expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
@@ -2056,17 +2258,21 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const wrapDefect = new Error("canonical-span-wrap-defect");
       const wrapCloseDefect = new Error("canonical-span-wrap-close-defect");
       const closeDefect = new Error("canonical-span-close-defect");
+
       class CloseDefectSpan extends Tracer.NativeSpan {
         override end(): void {
           throw closeDefect;
         }
       }
+
       const tracer = Tracer.make({
         span(options) {
           if (options.name === "execute_tool create_safe") throw createDefect;
           if (options.name === "execute_tool wrap_safe") {
             const allocated = new Tracer.NativeSpan(options);
+
             spans.push(allocated);
+
             return new Proxy(allocated, {
               get(target, property) {
                 if (property === "sampled") throw wrapDefect;
@@ -2077,34 +2283,44 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                   };
                 }
                 const value = Reflect.get(target, property, target);
+
                 return typeof value === "function" ? value.bind(target) : value;
               },
             });
           }
+
           const span =
             options.name === "execute_tool close_safe"
               ? new CloseDefectSpan(options)
               : new Tracer.NativeSpan(options);
+
           spans.push(span);
+
           return span;
         },
       });
+
       const reporter = ErrorReporter.make(({ cause }) => {
         reports.push(cause);
       });
+
       const CreateSafe = Tool.make("create_safe", {
         parameters: Schema.Struct({ value: Schema.String }),
         success: Schema.String,
       });
+
       const WrapSafe = Tool.make("wrap_safe", {
         parameters: Schema.Struct({ value: Schema.String }),
         success: Schema.String,
       });
+
       const CloseSafe = Tool.make("close_safe", {
         parameters: Schema.Struct({ value: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(CreateSafe, WrapSafe, CloseSafe);
+
       const model = Model.make(
         "scripted",
         "span-lifecycle-defects",
@@ -2112,6 +2328,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           LanguageModel.LanguageModel,
           Effect.gen(function* () {
             const turn = yield* Ref.make(0);
+
             return yield* LanguageModel.make({
               generateText: () => Effect.succeed([]),
               streamText: () =>
@@ -2153,6 +2370,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("span-lifecycle-defects", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -2165,6 +2383,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       let createAttempts = 0;
       let wrapAttempts = 0;
       let closeAttempts = 0;
@@ -2179,16 +2398,19 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
               create_safe: () =>
                 Effect.sync(() => {
                   createAttempts += 1;
+
                   return "create-result";
                 }),
               wrap_safe: () =>
                 Effect.sync(() => {
                   wrapAttempts += 1;
+
                   return "wrap-result";
                 }),
               close_safe: () =>
                 Effect.sync(() => {
                   closeAttempts += 1;
+
                   return "close-result";
                 }),
             }),
@@ -2225,6 +2447,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         ).toEqual([createDefect, wrapDefect, wrapCloseDefect, closeDefect]);
         expect(spans.some((span) => span.name === "execute_tool create_safe")).toBe(false);
         const wrapSpan = spans.find((span) => span.name === "execute_tool wrap_safe");
+
         expect(wrapSpan?.status._tag).toBe("Ended");
         if (wrapSpan?.status._tag !== "Ended" || !Exit.isFailure(wrapSpan.status.exit)) {
           throw new Error("Expected the allocated wrapper-failure span to close failed");
@@ -2234,13 +2457,16 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         );
 
         const exportedValues = reachableTelemetryValues(spans.map(exportedSpanObservation));
+
         expect(exportedValues).not.toContain(createDefect);
         expect(exportedValues).not.toContain(wrapDefect);
         expect(exportedValues).not.toContain(wrapCloseDefect);
         expect(exportedValues).not.toContain(closeDefect);
+
         const exportedStrings = exportedValues
           .filter((value) => typeof value === "string")
           .join("\n");
+
         expect(exportedStrings).not.toContain(createDefect.message);
         expect(exportedStrings).not.toContain(wrapDefect.message);
         expect(exportedStrings).not.toContain(wrapCloseDefect.message);
@@ -2259,28 +2485,38 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("overrides apparent Tool success when the handler stream later fails", () => {
     const spans: Array<Tracer.NativeSpan> = [];
     const logs: Array<ExportedLogObservation> = [];
+
     const tracer = Tracer.make({
       span(options) {
         const span = new Tracer.NativeSpan(options);
+
         spans.push(span);
+
         return span;
       },
     });
+
     const logger = Logger.make<unknown, void>((options) => {
       logs.push(exportedLogObservation(options));
     });
+
     const postTerminalSecret = "post-terminal-handler-secret";
+
     const postTerminalFailure = AiError.make({
       module: "Toolkit",
       method: "lookup.handle",
       reason: AiError.UnknownError.make({ description: postTerminalSecret }),
     });
+
     const postTerminalInterruptor = 4242;
+
     const Lookup = Tool.make("lookup", {
       parameters: Schema.Struct({ query: Schema.String }),
       success: Schema.String,
     });
+
     const tools = Toolkit.make(Lookup);
+
     const anomalousRuntime = Effect.map(
       tools,
       (native) =>
@@ -2309,12 +2545,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             ),
         }) satisfies Toolkit.WithHandler<typeof tools.tools>,
     );
+
     // Test-only Effect AI Toolkit seam: runtime execution consumes the Toolkit Effect and
     // `tools`; handler Layer construction stays on the native `tools` value below.
     const anomalousTools = Object.assign(anomalousRuntime, {
       "~effect/ai/Toolkit": "~effect/ai/Toolkit" as const,
       tools: tools.tools,
     }) as Toolkit.Toolkit<typeof tools.tools>;
+
     const model = modelFromParts([
       {
         type: "tool-call",
@@ -2325,6 +2563,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       },
       { type: "finish", reason: "tool-calls", usage },
     ]);
+
     const definition = Agent.make("post-terminal-tool-failure", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -2337,7 +2576,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         toolConcurrency: 1,
       }),
     });
+
     const finalized = Ref.makeUnsafe(0);
+
     const toolLayer = tools.toLayer({
       lookup: () =>
         Effect.succeed("apparently successful").pipe(
@@ -2347,6 +2588,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
     return Effect.gen(function* () {
       const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
         question: "status",
       }).pipe(
@@ -2369,9 +2611,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(Cause.interruptors(exit.cause).has(postTerminalInterruptor)).toBe(true);
       expect(exit.cause.reasons.filter(Cause.isFailReason)).toEqual([]);
       expect(yield* Ref.get(finalized)).toBe(1);
+
       const terminalEvents = (yield* Ref.get(observed)).filter(
         (event) => event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed",
       );
+
       expect(terminalEvents).toEqual([
         expect.objectContaining({
           _tag: "ToolCallFailed",
@@ -2382,6 +2626,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ]);
       expect(terminalEvents.some((event) => event._tag === "ToolCallSucceeded")).toBe(false);
       const span = spans.find((candidate) => candidate.name === "execute_tool lookup");
+
       expect(span).toBeDefined();
       expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
         "effect_agent.tool.outcome": "failure",
@@ -2389,10 +2634,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
         throw new Error("Expected the post-terminal Tool span to end failed");
       }
+
       const exportedValues = reachableTelemetryValues({
         spans: [exportedSpanObservation(span)],
         logs,
       });
+
       expect(exportedValues).not.toContain(postTerminalFailure);
       expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
         postTerminalSecret,
@@ -2403,6 +2650,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           renderedLogMessage(entry.message),
         ),
       );
+
       expect(
         terminalLogs.map((entry) => ({
           message: renderedLogMessage(entry.message),
@@ -2448,27 +2696,36 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it("removes only Tool span marker Reasons while preserving residual identity and order", () => {
     const originalFailure = new Error("original tool cause");
+
     const originalFailureReason = Cause.makeFailReason(originalFailure).annotate(
       Context.make(TestCauseSource, "handler"),
     );
+
     const originalInterruptReason = Cause.makeInterruptReason(4242).annotate(
       Context.make(TestCauseSource, "interrupt"),
     );
+
     const residualDefect = new Error("span wrapper residual");
     const residualFailure = new Error("span wrapper typed residual");
+
     const residualDefectReason = Cause.makeDieReason(residualDefect).annotate(
       Context.make(TestCauseSource, "span-finalizer"),
     );
+
     const residualFailureReason = Cause.makeFailReason(residualFailure).annotate(
       Context.make(TestCauseSource, "span-wrapper"),
     );
+
     const marker = ToolSpanFailure.marker();
     const firstMarker = Cause.makeFailReason(marker);
     const secondMarker = Cause.makeFailReason(marker);
+
     const foreignMarker = Cause.makeFailReason(ToolSpanFailure.marker()).annotate(
       Context.make(TestCauseSource, "handler-lookalike"),
     );
+
     const original = Cause.fromReasons([originalFailureReason, originalInterruptReason]);
+
     const observed = Cause.fromReasons<Error | ToolSpanFailure>([
       residualDefectReason,
       firstMarker,
@@ -2478,6 +2735,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     ]);
 
     const stripped = stripToolSpanFailures<Error | ToolSpanFailure>(observed, marker);
+
     expect(stripped.found).toBe(true);
     expect(stripped.residual.reasons).toEqual([
       residualDefectReason,
@@ -2519,7 +2777,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       parameters: Schema.Struct({ query: Schema.String }),
       success: Schema.Struct({ status: Schema.String }),
     })(undefined);
+
     const tools = Toolkit.make(HostedSearch, HostedLookup);
+
     const definition = Agent.make("hosted-tool-name-correlation", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -2532,6 +2792,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         toolConcurrency: 1,
       }),
     });
+
     const model = modelFromParts([
       {
         type: "tool-call",
@@ -2555,6 +2816,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
         question: "What is current?",
       }).pipe(Effect.exit);
+
       const failure = failureFrom(exit);
 
       expect(failure).toBeInstanceOf(ModelProtocolError);
@@ -2567,6 +2829,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("preserves native Effect AI rejection of an unknown provider Tool", () =>
     Effect.gen(function* () {
       const seen = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const model = modelFromParts([
         {
           type: "tool-call",
@@ -2585,6 +2848,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         ...finalParts('{"answer":"Untrusted result."}'),
       ]);
+
       const exit = yield* AgentRuntime.stream(Agent.withModel(runtimeDefinition, model), {
         question: "What is current?",
       }).pipe(
@@ -2592,6 +2856,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const events = yield* Ref.get(seen);
 
@@ -2648,10 +2913,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const events = yield* AgentRuntime.stream(agent, {
         question: "What color?",
       }).pipe(Stream.runCollect);
+
       const reduced = events.find(
         (event): event is Extract<RunEvent, { readonly _tag: "RunCompleted" }> =>
           event._tag === "RunCompleted",
       );
+
       const runResult = yield* AgentRuntime.run(agent, {
         question: "What color?",
       });
@@ -2673,6 +2940,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it("AgentResultSchema rejects a disposition on budget exhaustion", () => {
     const Result = AgentResultSchema(Schema.Struct({ answer: Schema.String }));
+
     const ordinary = {
       output: { answer: "done" },
       threadId: "thread-1",
@@ -2681,11 +2949,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       finishReason: "completed",
       runDisposition: "application-complete",
     } as const;
+
     const budgetExhausted = {
       ...ordinary,
       finishReason: "budget-exhausted",
       exhausted: "turns",
     } as const;
+
     const budgetWithoutDisposition = {
       output: ordinary.output,
       threadId: ordinary.threadId,
@@ -2710,6 +2980,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         value === "application-complete" ? undefined : `Rejected disposition: ${value}`,
       ),
     );
+
     const definition = Agent.make("run-disposition", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({
@@ -2735,9 +3006,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         definition,
         modelFromParts(finalParts('{"answer":"done","runDisposition":"application-complete"}')),
       );
+
       const events = yield* AgentRuntime.stream(valid, { question: "done?" }).pipe(
         Stream.runCollect,
       );
+
       const result = yield* AgentRuntime.run(valid, { question: "done?" });
 
       expect(events.at(-1)).toMatchObject({
@@ -2747,6 +3020,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(result.runDisposition).toBe("application-complete");
 
       const secret = "sensitive-run-disposition-must-not-enter-events";
+
       const invalidDefinition = Agent.make("invalid-run-disposition", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -2763,11 +3037,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           fromOutput: () => secret,
         },
       });
+
       const invalid = Agent.withModel(
         invalidDefinition,
         modelFromParts(finalParts('{"answer":"done"}')),
       );
+
       const observed: Array<RunEvent> = [];
+
       const invalidExit = yield* AgentRuntime.stream(invalid, { question: "done?" }).pipe(
         Stream.tap((event) =>
           Effect.sync(() => {
@@ -2777,8 +3054,10 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(invalidExit);
       const isRunDispositionError = Schema.is(AgentRunDispositionError)(failure);
+
       expect(isRunDispositionError).toBe(true);
       if (!isRunDispositionError) {
         throw new Error("Expected AgentRunDispositionError");
@@ -2798,15 +3077,19 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("keeps a thrown run-disposition selector cause out of canonical events", () => {
     const RunDisposition = Schema.Literal("application-complete");
     const secret = "selector-secret-must-not-enter-events";
+
     const structuredCause = {
       _tag: "SelectorDependencyFailure",
       code: "E_SELECTOR",
       detail: secret,
     } as const;
+
     const selectorFailure = new Error(`selector failed with ${secret}`, {
       cause: structuredCause,
     });
+
     selectorFailure.name = "SelectorFailure";
+
     const definition = Agent.make("throwing-run-disposition", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -2825,10 +3108,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
       },
     });
+
     const agent = Agent.withModel(definition, modelFromParts(finalParts('{"answer":"done"}')));
 
     return Effect.gen(function* () {
       const observed: Array<RunEvent> = [];
+
       const exit = yield* AgentRuntime.stream(agent, { question: "done?" }).pipe(
         Stream.tap((event) =>
           Effect.sync(() => {
@@ -2838,9 +3123,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
 
       const isRunDispositionError = Schema.is(AgentRunDispositionError)(failure);
+
       expect(isRunDispositionError).toBe(true);
       if (!isRunDispositionError) {
         throw new Error("Expected AgentRunDispositionError");
@@ -2868,12 +3155,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const inputExit = yield* AgentRuntime.runUnknown(agent, {
         question: 42,
       }).pipe(Effect.exit);
+
       const outputExit = yield* AgentRuntime.run(agent, {
         question: "What color?",
       }).pipe(Effect.exit);
 
       const input = failureFrom(inputExit);
       const output = failureFrom(outputExit);
+
       expect(input).toBeInstanceOf(AgentInputError);
       expect(input.message).toContain("Expected string");
       expect(input.message).toContain('at ["question"]');
@@ -2927,11 +3216,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("never executes a Tool whose streamed parameters are incomplete", () => {
     let handlerStarted = false;
+
     const Search = Tool.make("search", {
       parameters: Schema.Struct({ query: Schema.String }),
       success: Schema.String,
     });
+
     const tools = Toolkit.make(Search);
+
     const definition = Agent.make("truncated-tool-parameters", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -2944,6 +3236,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         toolConcurrency: 1,
       }),
     });
+
     const model = modelFromParts([
       {
         type: "tool-params-start",
@@ -2968,6 +3261,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             search: () =>
               Effect.sync(() => {
                 handlerStarted = true;
+
                 return "unexpected";
               }),
           }),
@@ -2975,6 +3269,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Effect.scoped,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
 
       expect(failure).toBeInstanceOf(ModelProtocolError);
@@ -2994,26 +3289,31 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
         ] as const;
+
         const release = [
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
         ] as const;
+
         const startedObserved = [
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
         ] as const;
+
         const completed = [
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
         ] as const;
+
         const succeededObserved = [
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
           yield* Deferred.make<void>(),
         ] as const;
+
         const active = yield* Ref.make(0);
         const maximumActive = yield* Ref.make(0);
         const completionOrder = yield* Ref.make<ReadonlyArray<number>>([]);
@@ -3023,20 +3323,25 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           parameters: Schema.Struct({ index: Schema.Int }),
           success: Schema.Struct({ value: Schema.String }),
         });
+
         const tools = Toolkit.make(Lookup);
+
         const toolLayer = tools.toLayer({
           lookup: ({ index }, context) =>
             Effect.gen(function* () {
               const current = yield* Ref.updateAndGet(active, (value) => value + 1);
+
               yield* Ref.update(maximumActive, (value) => Math.max(value, current));
               yield* Deferred.succeed(entered[index], undefined);
               yield* context.preliminary({ value: `progress-${index}` });
               yield* Deferred.await(release[index]);
               yield* Ref.update(completionOrder, (order) => [...order, index]);
               yield* Deferred.succeed(completed[index], undefined);
+
               return { value: `result-${index}` };
             }).pipe(Effect.ensuring(Ref.update(active, (value) => value - 1))),
         });
+
         const model = Model.make(
           "scripted",
           "bounded-tools",
@@ -3044,6 +3349,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             LanguageModel.LanguageModel,
             Effect.gen(function* () {
               const turn = yield* Ref.make(0);
+
               return yield* LanguageModel.make({
                 generateText: () => Effect.succeed([]),
                 streamText: (request) =>
@@ -3054,11 +3360,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                           const toolMessage = request.prompt.content.find(
                             (message) => message.role === "tool",
                           );
+
                           promptOrder =
                             toolMessage?.content
                               .filter((part) => part.type === "tool-result")
                               .map((part) => part.id) ?? [];
                         }
+
                         return Stream.fromIterable<Response.StreamPartEncoded>(
                           value === 0
                             ? [
@@ -3094,6 +3402,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
+
         const definition = Agent.make("bounded-tools", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -3160,6 +3469,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           const callEvents = events.filter(
             (event) => "toolCallId" in event && event.toolCallId === callId,
           );
+
           expect(callEvents.map((event) => event._tag)).toEqual([
             "ToolCallDeclared",
             "ToolCallStarted",
@@ -3175,11 +3485,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const starts = yield* Ref.make(0);
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const Lookup = Tool.make("lookup", {
         parameters: Schema.Struct({ value: Schema.Int }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Lookup);
+
       const definition = Agent.make("batch-preflight", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -3192,6 +3505,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 2,
         }),
       });
+
       const model = modelFromParts([
         {
           type: "tool-call",
@@ -3209,6 +3523,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const toolLayer = tools.toLayer({
         lookup: () => Ref.update(starts, (value) => value + 1).pipe(Effect.as("unexpected")),
       });
@@ -3221,6 +3536,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -3237,11 +3553,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     let handlerParameter: unknown;
     let authorizationCall: RunToolAuthorizationRequest["call"] | undefined;
     let promptResult: unknown;
+
     const Increment = Tool.make("increment", {
       parameters: Schema.Struct({ value: Schema.FiniteFromString }),
       success: Schema.Struct({ value: Schema.Finite }),
     });
+
     const tools = Toolkit.make(Increment);
+
     const model = Model.make(
       "scripted",
       "transformed-tool-parameters",
@@ -3249,6 +3568,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: (request) =>
@@ -3259,10 +3579,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                       const toolMessage = request.prompt.content.find(
                         (message) => message.role === "tool",
                       );
+
                       promptResult = toolMessage?.content.find(
                         (part) => part.type === "tool-result",
                       )?.result;
                     }
+
                     return Stream.fromIterable<Response.StreamPartEncoded>(
                       value === 0
                         ? [
@@ -3284,6 +3606,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       ),
     );
+
     const definition = Agent.make("transformed-tool-parameters", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -3305,6 +3628,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           authorize: (request) =>
             Effect.sync(() => {
               authorizationCall = request.call;
+
               return { _tag: "allowed" } as const;
             }),
         },
@@ -3314,6 +3638,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         tools.toLayer({
           increment: ({ value }) => {
             handlerParameter = value;
+
             return Effect.succeed({ value: value + 1 });
           },
         }),
@@ -3332,21 +3657,28 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("emits Started and Failed before propagating the concrete typed Tool failure", () =>
     Effect.gen(function* () {
       const spans: Array<Tracer.NativeSpan> = [];
+
       const tracer = Tracer.make({
         span(options) {
           const span = new Tracer.NativeSpan(options);
+
           spans.push(span);
+
           return span;
         },
       });
+
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const finalized = yield* Deferred.make<void>();
+
       const Fail = Tool.make("fail", {
         parameters: Schema.Struct({}),
         success: Schema.String,
         failure: ScheduledToolFailure,
       });
+
       const tools = Toolkit.make(Fail);
+
       const definition = Agent.make("typed-tool-failure", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -3359,6 +3691,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const model = modelFromParts([
         {
           type: "tool-call",
@@ -3369,8 +3702,10 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const failureSecret = "typed-scheduled-failure-must-not-be-exported";
       const expected = ScheduledToolFailure.make({ message: failureSecret });
+
       const toolLayer = tools.toLayer({
         fail: () =>
           Effect.acquireUseRelease(
@@ -3389,6 +3724,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Effect.provideService(Tracer.Tracer, tracer),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -3405,12 +3741,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ).toEqual(["ToolCallStarted", "ToolCallFailed", "RunFailed"]);
       expect(observed.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
       const span = spans.find((candidate) => candidate.name === "execute_tool fail");
+
       expect(span?.attributes.get("effect_agent.tool.outcome")).toBe("failure");
       expect(span?.status._tag).toBe("Ended");
       if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
         throw new Error("Expected the typed Tool failure to close its span with a failed Exit");
       }
       const exportedValues = reachableTelemetryValues(exportedSpanObservation(span));
+
       expect(exportedValues).not.toContain(expected);
       expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
         failureSecret,
@@ -3422,11 +3760,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("treats Option.none as a successful empty Tool result", () =>
     Effect.gen(function* () {
       let promptResult: unknown;
+
       const Maybe = Tool.make("maybe", {
         parameters: Schema.Struct({}),
         success: Schema.OptionFromNullOr(Schema.String),
       });
+
       const tools = Toolkit.make(Maybe);
+
       const model = Model.make(
         "scripted",
         "empty-success",
@@ -3434,6 +3775,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           LanguageModel.LanguageModel,
           Effect.gen(function* () {
             const turn = yield* Ref.make(0);
+
             return yield* LanguageModel.make({
               generateText: () => Effect.succeed([]),
               streamText: (request) =>
@@ -3444,10 +3786,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                         const toolMessage = request.prompt.content.find(
                           (message) => message.role === "tool",
                         );
+
                         promptResult = toolMessage?.content.find(
                           (part) => part.type === "tool-result",
                         )?.result;
                       }
+
                       return Stream.fromIterable<Response.StreamPartEncoded>(
                         value === 0
                           ? [
@@ -3469,6 +3813,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("empty-success", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -3536,6 +3881,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Agent.withModel(hostedDefinition, modelFromParts(parts)),
         { question: "sequence" },
       ).pipe(Stream.runCollect);
+
       const observed = [...events];
 
       expect(observed.map(({ sequence }) => sequence)).toEqual(
@@ -3572,7 +3918,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           preliminary: true,
         }),
       );
+
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const exit = yield* AgentRuntime.stream(
         Agent.withModel(
           hostedDefinition,
@@ -3602,6 +3950,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -3617,6 +3966,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("bounds the encoded bytes of staged provider results", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const exit = yield* AgentRuntime.stream(
         Agent.withModel(
           hostedDefinition,
@@ -3645,6 +3995,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -3676,9 +4027,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         ]),
         { question: "metadata" },
       ).pipe(Stream.runDrain, Effect.exit);
+
       expect(Exit.isSuccess(metadataExit)).toBe(true);
 
       const countEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const countExit = yield* AgentRuntime.stream(
         makeAgent(finalParts('{"answer":"count"}')),
         { question: "count" },
@@ -3688,12 +4041,15 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const countFailure = failureFrom(countExit);
+
       expect(countFailure).toBeInstanceOf(ModelProtocolError);
       expect(countFailure.message).toContain("2-part response limit");
       expect((yield* Ref.get(countEvents)).at(-1)?._tag).toBe("RunFailed");
 
       const byteEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const byteExit = yield* AgentRuntime.stream(
         makeAgent(finalParts(`{"answer":"${"x".repeat(4_096)}"}`)),
         { question: "bytes" },
@@ -3703,7 +4059,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const byteFailure = failureFrom(byteExit);
+
       expect(byteFailure).toBeInstanceOf(ModelProtocolError);
       expect(byteFailure.message).toContain("1024-byte retained response limit");
       expect((yield* Ref.get(byteEvents)).at(-1)?._tag).toBe("RunFailed");
@@ -3713,6 +4071,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("reserves one bounded Run event slot for a typed terminal failure", () =>
     Effect.gen(function* () {
       const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const exit = yield* AgentRuntime.stream(
         makeAgent(finalParts('{"answer":"event bound"}')),
         { question: "events" },
@@ -3722,6 +4081,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const events = yield* Ref.get(observed);
 
@@ -3741,6 +4101,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       let hostileReads = 0;
       const hostile = Object.create(null) as Record<PropertyKey, unknown>;
+
       Object.defineProperty(hostile, "message", {
         enumerable: true,
         get: () => {
@@ -3762,6 +4123,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       });
 
       const hostileEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const hostileExit = yield* AgentRuntime.stream(
         makeAgent([{ type: "error", error: hostile }]),
         { question: "hostile" },
@@ -3770,7 +4132,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const hostileFailure = failureFrom(hostileExit);
+
       expect(hostileFailure).toBeInstanceOf(ModelProtocolError);
       expect(hostileFailure.message).toContain("retained response limit");
       expect((yield* Ref.get(hostileEvents)).at(-1)).toMatchObject({
@@ -3779,6 +4143,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(hostileReads).toBe(0);
 
       const diagnosticFailure = Object.create(null) as Record<PropertyKey, unknown>;
+
       Object.defineProperty(diagnosticFailure, "message", {
         get: () => {
           hostileReads += 1;
@@ -3796,6 +4161,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(hostileReads).toBe(0);
 
       const oversizedEvents = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const oversizedExit = yield* AgentRuntime.stream(
         makeAgent([{ type: "error", error: { message: "x".repeat(8_192) } }]),
         { question: "oversized" },
@@ -3804,9 +4170,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const oversizedFailure = failureFrom(oversizedExit);
+
       expect(oversizedFailure).toBeInstanceOf(ModelProtocolError);
       const terminal = (yield* Ref.get(oversizedEvents)).at(-1);
+
       expect(terminal?._tag).toBe("RunFailed");
       if (terminal?._tag === "RunFailed") {
         expect(terminal.message.length).toBeLessThanOrEqual(4_096);
@@ -3818,13 +4187,17 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const encoderDefect = new Error("response encoder defect");
       const target: Response.StreamPartEncoded = { type: "text-start", id: "answer" };
+
       const defectingPart = new Proxy(target, {
         get: (part, key, receiver) => {
           if (key === "id") throw encoderDefect;
+
           return Reflect.get(part, key, receiver);
         },
       });
+
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const exit = yield* AgentRuntime.stream(makeAgent([defectingPart]), {
         question: "defect",
       }).pipe(
@@ -3843,6 +4216,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it("normalizes one bounded JSON snapshot without invoking dynamic serialization behavior", () => {
     let suffixReads = 0;
     const payload: Array<unknown> = ["x".repeat(32)];
+
     Object.defineProperty(payload, 1, {
       enumerable: true,
       get: () => {
@@ -3855,19 +4229,24 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     expect(suffixReads).toBe(0);
 
     let toJsonCalls = 0;
+
     const inheritedToJson = Object.create({
       toJSON: () => {
         toJsonCalls += 1;
+
         return "x".repeat(2_000_000);
       },
     });
+
     inheritedToJson.safe = "small";
     expect(boundedJsonSnapshot(inheritedToJson, 128)).toBeUndefined();
 
     const ownToJson = { safe: "small" };
+
     Object.defineProperty(ownToJson, "toJSON", {
       value: () => {
         toJsonCalls += 1;
+
         return "x".repeat(2_000_000);
       },
     });
@@ -3875,10 +4254,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
     let accessorReads = 0;
     const accessorBacked = {};
+
     Object.defineProperty(accessorBacked, "result", {
       enumerable: true,
       get: () => {
         accessorReads += 1;
+
         return accessorReads === 1 ? "small" : "x".repeat(2_000_000);
       },
     });
@@ -3888,13 +4269,17 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
     let proxyReads = 0;
     const proxyTarget = { result: "small" };
+
     const dynamicProxy = new Proxy(proxyTarget, {
       get: (target, key, receiver) => {
         proxyReads += 1;
+
         return key === "result" ? "x".repeat(2_000_000) : Reflect.get(target, key, receiver);
       },
     });
+
     const proxySnapshot = boundedJsonSnapshot(dynamicProxy, 128);
+
     expect(proxySnapshot).toBeDefined();
     expect(proxyReads).toBe(0);
     expect(proxySnapshot?.value).toEqual({ result: "small" });
@@ -3908,11 +4293,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it("rejects invalid bounded-snapshot limits before traversing provider data", () => {
     let reflectionAttempts = 0;
+
     const payload = new Proxy(
       { result: "small" },
       {
         getPrototypeOf: (target) => {
           reflectionAttempts += 1;
+
           return Reflect.getPrototypeOf(target);
         },
       },
@@ -3933,6 +4320,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const backing = new ArrayBuffer(4_096);
     const view = new Uint8Array(backing, 0, 1);
     let binaryAccessorReads = 0;
+
     Object.defineProperty(view, "buffer", {
       get: () => {
         binaryAccessorReads += 1;
@@ -3961,6 +4349,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     ).toBeUndefined();
     expect(binaryAccessorReads).toBe(0);
     const expandedView = new Uint8Array(1);
+
     Object.defineProperty(expandedView, "payload", { value: "x".repeat(2_048) });
     expect(boundedValueFootprint(expandedView, 1_024)).toBeUndefined();
     class HiddenView extends Uint8Array {
@@ -3986,10 +4375,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       boundedValueFootprint(Redacted.make(new Map([["small", "value"]])), 1_024),
     ).toBeUndefined();
     const forgedRedacted = Object.create(Object.getPrototypeOf(Redacted.make("secret")));
+
     expect(boundedValueFootprint(forgedRedacted, 1_024)).toBeUndefined();
     expect(boundedValueFootprint(new Map([["small", "value"]]), 1_024)).toBeUndefined();
     expect(boundedValueFootprint(new Set(["small"]), 1_024)).toBeUndefined();
     const forgedEffectValue = Object.create({ "~effect/forged": "~effect/forged" });
+
     forgedEffectValue.value = "small";
     expect(boundedValueFootprint(forgedEffectValue, 1_024)).toBeUndefined();
     class UnknownEnvelope extends Schema.Class<UnknownEnvelope>("UnknownEnvelope")({
@@ -4008,10 +4399,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
     let accessorReads = 0;
     const accessorBacked = {};
+
     Object.defineProperty(accessorBacked, "value", {
       enumerable: true,
       get: () => {
         accessorReads += 1;
+
         return "small";
       },
     });
@@ -4022,6 +4415,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("rejects duplicate provider terminals before appending any Tool success", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const agent = Agent.withModel(
         hostedDefinition,
         modelFromParts([
@@ -4057,6 +4451,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -4070,6 +4465,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("rejects post-finish provider content before appending staged terminal events", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const agent = Agent.withModel(
         hostedDefinition,
         modelFromParts([
@@ -4098,6 +4494,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -4114,6 +4511,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const modelStarted = yield* Deferred.make<void>();
       const modelFinalized = yield* Deferred.make<void>();
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const model = Model.make(
         "scripted",
         "absolute-timeout",
@@ -4126,6 +4524,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("absolute-timeout", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4138,6 +4537,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const fiber = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
         question: "wait",
       }).pipe(
@@ -4178,11 +4578,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const finalized = yield* Deferred.make<void>();
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
         const defect = new Error("handler defect");
+
         const Defect = Tool.make("defect", {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(Defect);
+
         const definition = Agent.make("tool-defect", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -4195,6 +4598,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const model = modelFromParts([
           {
             type: "tool-call",
@@ -4205,6 +4609,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           },
           { type: "finish", reason: "tool-calls", usage },
         ]);
+
         const toolLayer = tools.toLayer({
           defect: () =>
             Effect.acquireUseRelease(
@@ -4222,6 +4627,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         if (Exit.isSuccess(exit)) {
           throw new Error("Expected the handler defect to fail the Run");
         }
@@ -4244,7 +4650,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Wait);
+
       const toolLayer = tools.toLayer({
         wait: () =>
           Effect.scoped(
@@ -4252,10 +4660,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
               yield* Effect.acquireRelease(Deferred.succeed(toolStarted, undefined), () =>
                 Deferred.succeed(toolFinalized, undefined),
               );
+
               return yield* Effect.never;
             }),
           ),
       });
+
       const model = Model.make(
         "scripted",
         "interrupt-test",
@@ -4284,6 +4694,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           ),
         ),
       );
+
       const definition = Agent.make("interrupt-test", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4296,11 +4707,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const agent = Agent.withModel(definition, model);
 
       const fiber = yield* AgentRuntime.stream(agent, {
         question: "wait",
       }).pipe(Stream.runDrain, Effect.provide(toolLayer), Effect.forkChild);
+
       yield* Deferred.await(toolStarted);
       yield* Fiber.interrupt(fiber);
 
@@ -4315,23 +4728,31 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const spans: Array<Tracer.NativeSpan> = [];
       const logs: Array<ExportedLogObservation> = [];
+
       const tracer = Tracer.make({
         span(options) {
           const span = new Tracer.NativeSpan(options);
+
           spans.push(span);
+
           return span;
         },
       });
+
       const logger = Logger.make<unknown, void>((options) => {
         logs.push(exportedLogObservation(options));
       });
+
       const toolStarted = yield* Deferred.make<void>();
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const Wait = Tool.make("wait_interrupted", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Wait);
+
       const definition = Agent.make("interrupted-tool-observability", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4344,6 +4765,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const model = modelFromParts([
         {
           type: "tool-call",
@@ -4354,6 +4776,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const toolLayer = tools.toLayer({
         wait_interrupted: () =>
           Deferred.succeed(toolStarted, undefined).pipe(Effect.andThen(Effect.never)),
@@ -4369,8 +4792,10 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Effect.provide(Logger.layer([logger])),
         Effect.forkChild,
       );
+
       yield* Deferred.await(toolStarted);
       const interruptor = 7335;
+
       fiber.interruptUnsafe(interruptor);
       const exit = yield* Fiber.await(fiber);
 
@@ -4383,12 +4808,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(exit.cause.reasons[0].fiberId).toBe(interruptor);
 
       const observed = yield* Ref.get(events);
+
       expect(
         observed.filter(
           (event) => event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed",
         ),
       ).toEqual([]);
       const span = spans.find((candidate) => candidate.name === "execute_tool wait_interrupted");
+
       expect(Object.fromEntries(span?.attributes ?? [])).not.toHaveProperty(
         "effect_agent.tool.outcome",
       );
@@ -4414,12 +4841,15 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const handlerStarted = yield* Ref.make(false);
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const Hold = Tool.make("hold", {
         parameters: Schema.Struct({ itineraryId: Schema.String }),
         success: Schema.String,
         needsApproval: true,
       });
+
       const tools = Toolkit.make(Hold);
+
       const definition = Agent.make("approval-no-start", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4432,6 +4862,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const model = modelFromParts([
         {
           type: "tool-call",
@@ -4442,10 +4873,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const agent = Agent.withModel(definition, model);
+
       const toolLayer = tools.toLayer({
         hold: () => Ref.set(handlerStarted, true).pipe(Effect.as("held")),
       });
+
       const exit = yield* AgentRuntime.stream(
         agent,
         { question: "hold" },
@@ -4478,6 +4912,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           },
         },
       ).pipe(Effect.provide(toolLayer), Effect.exit);
+
       expect(failureFrom(deniedExit)).toBeInstanceOf(AgentApprovalDenied);
       expect(yield* Ref.get(handlerStarted)).toBe(false);
     }),
@@ -4499,6 +4934,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           onExhaustion: "fail",
         }),
       });
+
       const parts: ReadonlyArray<Response.StreamPartEncoded> = [
         ...finalParts('{"answer":"done"}').slice(0, -1),
         {
@@ -4514,6 +4950,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const exit = yield* AgentRuntime.run(Agent.withModel(definition, modelFromParts(parts)), {
         question: "answer",
       }).pipe(Effect.exit);
+
       const failure = failureFrom(exit);
 
       expect(failure).toBeInstanceOf(AgentPolicyError);
@@ -4527,6 +4964,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("sums component-only usage reports for both token fallbacks", () =>
     Effect.gen(function* () {
       const deltas = yield* Ref.make<ReadonlyArray<RunUsageDelta>>([]);
+
       const parts: ReadonlyArray<Response.StreamPartEncoded> = [
         { type: "text-start", id: "answer" },
         { type: "text-delta", id: "answer", delta: '{"answer":"counted"}' },
@@ -4540,6 +4978,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           },
         },
       ];
+
       const budget: RunBudgetHook = {
         guard: (effect) => effect,
         consume: (delta) => Ref.update(deltas, (all) => [...all, delta]),
@@ -4548,6 +4987,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       yield* AgentRuntime.run(makeAgent(parts), { question: "count usage" }, { budget });
 
       const observed = yield* Ref.get(deltas);
+
       expect(observed).toHaveLength(1);
       expect(observed[0]).toMatchObject({
         inputTokens: 9,
@@ -4563,11 +5003,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       Effect.gen(function* () {
         const handlerStarts = yield* Ref.make(0);
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
         const Search = Tool.make("search", {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(Search);
+
         const definition = Agent.make("turn-exhaustion", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -4581,6 +5024,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             onExhaustion: "fail",
           }),
         });
+
         const model = modelFromParts([
           {
             type: "tool-call",
@@ -4591,6 +5035,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           },
           { type: "finish", reason: "tool-calls", usage },
         ]);
+
         const toolLayer = tools.toLayer({
           search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
         });
@@ -4603,6 +5048,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         const failure = failureFrom(exit);
         const observed = yield* Ref.get(events);
 
@@ -4625,11 +5071,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const handlerStarts = yield* Ref.make(0);
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
         const turns = yield* Ref.make(0);
+
         const Search = Tool.make("search", {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(Search);
+
         const model = Model.make(
           "scripted",
           "tool-call-exhaustion",
@@ -4657,6 +5106,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
+
         const definition = Agent.make("tool-call-exhaustion", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -4670,6 +5120,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             onExhaustion: "fail",
           }),
         });
+
         const toolLayer = tools.toLayer({
           search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
         });
@@ -4682,6 +5133,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         const failure = failureFrom(exit);
         const observed = yield* Ref.get(events);
 
@@ -4703,13 +5155,16 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       Effect.gen(function* () {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
         const turns = yield* Ref.make(0);
+
         const Flaky = Tool.make("flaky", {
           parameters: Schema.Struct({}),
           success: Schema.String,
           failure: ScheduledToolFailure,
           failureMode: "return",
         });
+
         const tools = Toolkit.make(Flaky);
+
         const model = Model.make(
           "scripted",
           "repeated-failures",
@@ -4737,6 +5192,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
+
         const definition = Agent.make("repeated-failures", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -4750,6 +5206,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             repeatedFailureLimit: 2,
           }),
         });
+
         const toolLayer = tools.toLayer({
           flaky: () => Effect.fail(ScheduledToolFailure.make({ message: "still unavailable" })),
         });
@@ -4762,6 +5219,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         const failure = failureFrom(exit);
         const observed = yield* Ref.get(events);
 
@@ -4780,13 +5238,16 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("resets the repeated-failure counter when an interleaved Tool Call succeeds", () =>
     Effect.gen(function* () {
       const turns = yield* Ref.make(0);
+
       const Flaky = Tool.make("flaky", {
         parameters: Schema.Struct({ fail: Schema.Boolean }),
         success: Schema.String,
         failure: ScheduledToolFailure,
         failureMode: "return",
       });
+
       const tools = Toolkit.make(Flaky);
+
       const model = Model.make(
         "scripted",
         "repeated-failure-reset",
@@ -4832,6 +5293,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("repeated-failure-reset", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4845,6 +5307,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           repeatedFailureLimit: 2,
         }),
       });
+
       const toolLayer = tools.toLayer({
         flaky: ({ fail }) =>
           fail
@@ -4885,6 +5348,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.runDrain,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -4902,11 +5366,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const sources = yield* Ref.make<ReadonlyArray<number>>([]);
       const received = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
       const turns = yield* Ref.make(0);
+
       const Search = Tool.make("search", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Search);
+
       const model = Model.make(
         "scripted",
         "compaction-source",
@@ -4919,6 +5386,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                 Effect.gen(function* () {
                   yield* Ref.update(received, (all) => [...all, request.prompt]);
                   const turn = yield* Ref.getAndUpdate(turns, (value) => value + 1);
+
                   return Stream.fromIterable<Response.StreamPartEncoded>(
                     turn === 0
                       ? [
@@ -4938,6 +5406,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("compaction-source", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4968,15 +5437,18 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ).pipe(Effect.provide(tools.toLayer({ search: () => Effect.succeed("found") })));
 
       const observed = yield* Ref.get(sources);
+
       expect(observed).toHaveLength(2);
       expect(observed[1]).toBeGreaterThan(observed[0] ?? 0);
       const receivedPrompts = yield* Ref.get(received);
+
       expect(receivedPrompts).toHaveLength(2);
       for (const receivedPrompt of receivedPrompts) {
         // The model-visible output contract (RUN-028) is
         // applied after context preparation, so compaction cannot drop it.
         expect(receivedPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
         const encoded = JSON.stringify(receivedPrompt.content);
+
         expect(encoded).toContain("Final output contract:");
         expect(encoded).toContain("compacted model context");
         expect(encoded).not.toContain("Search.");
@@ -4994,11 +5466,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const queued = yield* Ref.make(false);
         const requests = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
         const turns = yield* Ref.make(0);
+
         const Wait = Tool.make("wait_for_change", {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(Wait);
+
         const model = Model.make(
           "scripted",
           "steering-safe-seam",
@@ -5011,6 +5486,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                   Effect.gen(function* () {
                     yield* Ref.update(requests, (all) => [...all, request.prompt]);
                     const turn = yield* Ref.getAndUpdate(turns, (value) => value + 1);
+
                     return Stream.fromIterable<Response.StreamPartEncoded>(
                       turn === 0
                         ? [
@@ -5030,6 +5506,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
+
         const definition = Agent.make("steering-safe-seam", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -5042,6 +5519,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const fiber = yield* AgentRuntime.run(
           Agent.withModel(definition, model),
           { question: "initial dates" },
@@ -5069,6 +5547,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           ),
           Effect.forkChild,
         );
+
         yield* Deferred.await(toolStarted);
         yield* Ref.set(queued, true);
         expect(yield* Ref.get(requests)).toHaveLength(1);
@@ -5076,6 +5555,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         yield* Fiber.join(fiber);
 
         const observed = yield* Ref.get(requests);
+
         expect(observed).toHaveLength(2);
         expect(JSON.stringify(observed[0])).not.toContain("change dates to August");
         expect(JSON.stringify(observed[1])).toContain("change dates to August");
@@ -5087,11 +5567,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const drains = yield* Ref.make(0);
       const requests = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
       const turns = yield* Ref.make(0);
+
       const Search = Tool.make("search_once", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Search);
+
       const model = Model.make(
         "scripted",
         "follow-up-stop-seam",
@@ -5104,6 +5587,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                 Effect.gen(function* () {
                   yield* Ref.update(requests, (all) => [...all, request.prompt]);
                   const turn = yield* Ref.getAndUpdate(turns, (value) => value + 1);
+
                   return Stream.fromIterable<Response.StreamPartEncoded>(
                     turn === 0
                       ? [
@@ -5125,6 +5609,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("follow-up-stop-seam", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -5148,6 +5633,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
               Ref.getAndUpdate(drains, (value) => value + 1).pipe(
                 Effect.map((drain) => {
                   expect(policy).toBe("all");
+
                   return drain === 1
                     ? [
                         { kind: "follow-up" as const, input: "prefer quiet hotels" },
@@ -5161,6 +5647,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ).pipe(Effect.provide(tools.toLayer({ search_once: () => Effect.succeed("found") })));
 
       const observed = yield* Ref.get(requests);
+
       expect(observed).toHaveLength(3);
       expect(JSON.stringify(observed[1])).not.toContain("prefer quiet hotels");
       expect(JSON.stringify(observed[2])).toContain("prefer quiet hotels");
@@ -5174,16 +5661,20 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const maximum = yield* Ref.make(0);
       const exclusiveStartedWith = yield* Ref.make<number | undefined>(undefined);
       const toolResultOrder = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const Ordinary = Tool.make("ordinary", {
         parameters: Schema.Struct({ value: Schema.String }),
         success: Schema.String,
       });
+
       const Exclusive = Tool.make("exclusive", {
         parameters: Schema.Struct({ value: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Ordinary, Exclusive);
       const turns = yield* Ref.make(0);
+
       const model = Model.make(
         "scripted",
         "scheduling-overrides",
@@ -5199,15 +5690,18 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                       const message = request.prompt.content.find(
                         (candidate) => candidate.role === "tool",
                       );
+
                       const ids =
                         message?.content.flatMap((part) =>
                           part.type === "tool-result" ? [part.id] : [],
                         ) ?? [];
+
                       return Stream.fromEffect(Ref.set(toolResultOrder, ids)).pipe(
                         Stream.drain,
                         Stream.concat(Stream.fromIterable(finalParts('{"answer":"done"}'))),
                       );
                     }
+
                     return Stream.fromIterable<Response.StreamPartEncoded>([
                       {
                         type: "tool-call",
@@ -5242,6 +5736,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("scheduling-overrides", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -5254,12 +5749,15 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 3,
         }),
       });
+
       const enter = Effect.fn(function* () {
         const now = yield* Ref.updateAndGet(active, (value) => value + 1);
+
         yield* Ref.update(maximum, (value) => Math.max(value, now));
         yield* Effect.yieldNow;
         yield* Effect.yieldNow;
       });
+
       const leave = Ref.update(active, (value) => value - 1);
 
       yield* AgentRuntime.run(
@@ -5297,11 +5795,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const active = yield* Ref.make(0);
       const maximum = yield* Ref.make(0);
       const turns = yield* Ref.make(0);
+
       const Work = Tool.make("work", {
         parameters: Schema.Struct({ value: Schema.String }),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Work);
+
       const model = Model.make(
         "scripted",
         "sequential-run",
@@ -5340,6 +5841,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("sequential-run", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -5363,9 +5865,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             work: ({ value }) =>
               Effect.gen(function* () {
                 const now = yield* Ref.updateAndGet(active, (count) => count + 1);
+
                 yield* Ref.update(maximum, (count) => Math.max(count, now));
                 yield* Effect.yieldNow;
                 yield* Ref.update(active, (count) => count - 1);
+
                 return value;
               }),
           }),
@@ -5380,6 +5884,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const threadId = yield* Schema.decodeEffect(ThreadId)("shared-thread");
       let history = Prompt.empty;
+
       const first = yield* AgentRuntime.run(
         makeAgent(finalParts("invalid final output")),
         { question: "first" },
@@ -5391,9 +5896,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
         },
       ).pipe(Effect.flip);
+
       expect(first).toBeInstanceOf(AgentOutputError);
       expect(JSON.stringify(history)).toContain("invalid final output");
       let secondPrompt = "";
+
       const secondModel = Model.make(
         "scripted",
         "thread-second-run",
@@ -5403,11 +5910,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: (request) => {
               secondPrompt = JSON.stringify(request.prompt);
+
               return Stream.fromIterable(finalParts('{"answer":"second run"}'));
             },
           }),
         ),
       );
+
       const second = yield* AgentRuntime.run(
         Agent.withModel(runtimeDefinition, secondModel),
         { question: "second" },
@@ -5435,11 +5944,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           costBudgetMicrousd: 1,
         }),
       });
+
       const agent = Agent.withModel(definition, modelFromParts(finalParts('{"answer":"done"}')));
 
       const missing = failureFrom(
         yield* AgentRuntime.run(agent, { question: "missing estimator" }).pipe(Effect.exit),
       );
+
       expect(missing).toBeInstanceOf(AgentPolicyError);
       if (!(missing instanceof AgentPolicyError)) {
         throw new Error("Expected AgentPolicyError");
@@ -5454,6 +5965,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           { estimateCostMicrousd: () => Effect.succeed(2) },
         ).pipe(Effect.exit),
       );
+
       expect(exhausted).toBeInstanceOf(AgentPolicyError);
       if (!(exhausted instanceof AgentPolicyError)) {
         throw new Error("Expected AgentPolicyError");
@@ -5469,6 +5981,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         guard: () => Effect.fail(BudgetGuardFailure.make({ message: "model deadline reached" })),
         consume: () => Effect.void,
       };
+
       const stalledModel = Model.make(
         "scripted",
         "guarded-model",
@@ -5480,6 +5993,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const failure = failureFrom(
         yield* AgentRuntime.run(
           Agent.withModel(runtimeDefinition, stalledModel),
@@ -5500,11 +6014,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     Effect.gen(function* () {
       const expired = yield* Deferred.make<void>();
       const toolStarted = yield* Deferred.make<void>();
+
       const Wait = Tool.make("wait_for_budget", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Wait);
+
       const definition = Agent.make("guarded-tool", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -5517,6 +6034,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const model = modelFromParts([
         {
           type: "tool-call",
@@ -5527,7 +6045,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const budgetFailure = BudgetGuardFailure.make({ message: "tool deadline reached" });
+
       const budget: RunBudgetHook<BudgetGuardFailure> = {
         guard: (effect) =>
           Effect.raceFirst(
@@ -5536,6 +6056,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           ),
         consume: () => Effect.void,
       };
+
       const program = AgentRuntime.run(
         Agent.withModel(definition, model),
         { question: "stall in Tool" },
@@ -5548,7 +6069,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const fiber = yield* program.pipe(Effect.forkChild);
+
       yield* Deferred.await(toolStarted);
       yield* Deferred.succeed(expired, undefined);
       const failure = failureFrom(yield* Fiber.join(fiber).pipe(Effect.exit));
@@ -5564,9 +6087,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const modelFinalized = yield* Ref.make(0);
       const streamFinalized = yield* Ref.make(0);
       const observerFinalized = yield* Ref.make(0);
+
       const owner = yield* Effect.acquireRelease(Scope.make(), (scope) =>
         Scope.close(scope, Exit.void),
       );
+
       const model = Model.make(
         "scripted",
         "detached-owner-close",
@@ -5574,6 +6099,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           LanguageModel.LanguageModel,
           Effect.gen(function* () {
             yield* Effect.addFinalizer(() => Ref.update(modelFinalized, (n) => n + 1));
+
             return yield* LanguageModel.make({
               generateText: () => Effect.succeed([]),
               streamText: () =>
@@ -5584,19 +6110,24 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const detached = yield* AgentRuntime.start(Agent.withModel(runtimeDefinition, model), {
         question: "wait for owner closure",
       }).pipe(Scope.provide(owner));
+
       yield* Deferred.await(acquired);
+
       const observer = yield* detached.observe.pipe(
         Stream.runForEach(() => Deferred.succeed(observing, undefined)),
         Effect.ensuring(Ref.update(observerFinalized, (n) => n + 1)),
         Effect.forkChild,
       );
+
       yield* Deferred.await(observing);
       yield* Scope.close(owner, Exit.void);
 
       const executionExit = yield* detached.await.pipe(Effect.exit);
+
       expect(Exit.isFailure(executionExit) && Cause.hasInterrupts(executionExit.cause)).toBe(true);
       expect(yield* Ref.get(modelFinalized)).toBe(1);
       expect(yield* Ref.get(streamFinalized)).toBe(1);
@@ -5604,6 +6135,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       yield* Fiber.await(observer);
       expect(yield* Ref.get(observerFinalized)).toBe(1);
       const subscriptionExit = yield* detached.observe.pipe(Stream.runDrain, Effect.exit);
+
       expect(Exit.isFailure(subscriptionExit) && Cause.hasInterrupts(subscriptionExit.cause)).toBe(
         true,
       );
@@ -5613,21 +6145,26 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("does not let a slow detached observer determine completion", () =>
     Effect.gen(function* () {
       let bufferLimitReads = 0;
+
       const options = {
         get bufferLimits() {
           bufferLimitReads += 1;
+
           return { maxRunEvents: 8 };
         },
       };
+
       const detached = yield* AgentRuntime.start(
         makeAgent(finalParts('{"answer":"detached"}')),
         { question: "complete independently" },
         options,
       );
+
       const slowObserver = yield* detached.observe.pipe(
         Stream.runForEach(() => Effect.never),
         Effect.forkChild,
       );
+
       const result = yield* detached.await;
 
       expect(result.output).toEqual({ answer: "detached" });
@@ -5640,6 +6177,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         { question: "accept frozen options" },
         Object.freeze({ bufferLimits: Object.freeze({ maxRunEvents: 8 }) }),
       );
+
       expect((yield* frozenDetached.await).output).toEqual({ answer: "frozen" });
     }),
   );
@@ -5652,11 +6190,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const releaseTool = yield* Deferred.make<void>();
         const observerSawResult = yield* Deferred.make<void>();
         const turns = yield* Ref.make(0);
+
         const Wait = Tool.make("wait_for_release", {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(Wait);
+
         const model = Model.make(
           "scripted",
           "live-observer",
@@ -5695,6 +6236,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             }),
           ),
         );
+
         const definition = Agent.make("live-observer", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -5707,6 +6249,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const toolLayer = tools.toLayer({
           wait_for_release: () =>
             Deferred.succeed(toolStarted, undefined).pipe(
@@ -5718,7 +6261,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const detached = yield* AgentRuntime.start(Agent.withModel(definition, model), {
           question: "observe",
         }).pipe(Effect.provide(toolLayer));
+
         yield* Deferred.await(toolStarted);
+
         const observer = yield* detached.observe.pipe(
           Stream.tap((event) =>
             event._tag === "ToolCallSucceeded"
@@ -5728,6 +6273,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           Stream.runCollect,
           Effect.forkChild,
         );
+
         yield* Deferred.succeed(releaseTool, undefined);
         const result = yield* detached.await;
         const collected = yield* Fiber.join(observer);
@@ -5748,10 +6294,12 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           "BudgetWarning",
           "RunCompleted",
         ];
+
         expect(result.output).toEqual({ answer: "observed live" });
         expect(collected.map((event) => event._tag)).toEqual(expectedTrace);
         expect((yield* detached.events).map((event) => event._tag)).toEqual(expectedTrace);
         const replayed = yield* detached.observe.pipe(Stream.runCollect);
+
         expect(replayed.map((event) => event._tag)).toEqual(expectedTrace);
       }),
   );
@@ -5762,11 +6310,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         city: Schema.String,
         departAt: Schema.DateTimeUtcFromString,
       }) {}
+
       const Plan = Tool.make("plan_itinerary", {
         parameters: ItineraryParams,
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Plan);
+
       const definition = Agent.make("class-shaped-parameters", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -5779,7 +6330,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const turns = yield* Ref.make(0);
+
       const model = Model.make(
         "scripted",
         "class-shaped-parameters",
@@ -5811,6 +6364,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           }),
         ),
       );
+
       const histories = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
 
       const result = yield* AgentRuntime.run(
@@ -5823,27 +6377,33 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       );
 
       const finalHistory = (yield* Ref.get(histories)).at(-1);
+
       expect(finalHistory).toBeDefined();
       if (finalHistory === undefined) {
         throw new Error("Expected official history to advance");
       }
+
       const callPart = finalHistory.content
         .filter((message) => message.role === "assistant")
         .flatMap((message) => message.content)
         .find((part) => part.type === "tool-call");
+
       expect(callPart).toBeDefined();
       if (callPart === undefined || callPart.type !== "tool-call") {
         throw new Error("Expected the official history to carry the tool-call part");
       }
+
       // Official history carries the wire form: plain JSON, not the decoded
       // Schema.Class instance with its DateTime field.
       const params = yield* Schema.decodeUnknownEffect(
         Schema.Struct({ city: Schema.String, departAt: Schema.String }),
       )(callPart.params);
+
       expect(params).toEqual({ city: "Kyoto", departAt: "2026-08-12T09:00:00.000Z" });
       // The full official history round-trips through the Prompt codec into
       // plain JSON — the property the canonical persistence boundary needs.
       const encodedHistory = yield* Schema.encodeEffect(Prompt.Prompt)(finalHistory);
+
       expect(Option.isSome(Schema.decodeUnknownOption(Schema.Json)(encodedHistory))).toBe(true);
       expect(result.output).toEqual({ answer: "planned" });
     }),
@@ -5856,11 +6416,14 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         departAt: Schema.DateTimeUtcFromString,
       }) {}
       let handlerParams: ItineraryParams | undefined;
+
       const Plan = Tool.make("plan_itinerary", {
         parameters: ItineraryParams,
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Plan);
+
       const definition = Agent.make("decoded-handler-parameters", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -5873,7 +6436,9 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const turns = yield* Ref.make(0);
+
       const model = Model.make(
         "scripted",
         "decoded-handler-parameters",
@@ -5912,6 +6477,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             plan_itinerary: (params) =>
               Effect.sync(() => {
                 handlerParams = params;
+
                 return "planned";
               }),
           }),
@@ -5930,14 +6496,18 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     () =>
       Effect.gen(function* () {
         const leadingText = "steering committed inside the pending turn";
+
         const resumeLeadingTurnId = yield* Schema.decodeEffect(TurnId)("turn-resume-leading").pipe(
           Effect.orDie,
         );
+
         const Lookup = Tool.make("lookup", {
           parameters: Schema.Struct({ key: Schema.String }),
           success: Schema.String,
         });
+
         const tools = Toolkit.make(Lookup);
+
         const definition = Agent.make("resume-leading-messages", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -5950,12 +6520,15 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const toolLayer = tools.toLayer({
           lookup: ({ key }) => Effect.succeed(`handled-${key}`),
         });
+
         const runResumed = (leadingMessages: Prompt.Prompt | undefined) =>
           Effect.gen(function* () {
             let captured: Prompt.Prompt | undefined;
+
             const model = Model.make(
               "scripted",
               "resume-leading",
@@ -5965,11 +6538,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                   generateText: () => Effect.succeed([]),
                   streamText: (request) => {
                     captured = request.prompt;
+
                     return Stream.fromIterable(finalParts('{"answer":"resumed"}'));
                   },
                 }),
               ),
             );
+
             const resume: RunTurnResume = {
               turn: 1,
               turnId: resumeLeadingTurnId,
@@ -5977,6 +6552,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
               settled: [],
               ...(leadingMessages === undefined ? {} : { leadingMessages }),
             };
+
             const result = yield* AgentRuntime.run(
               Agent.withModel(definition, model),
               { question: "resume" },
@@ -5997,11 +6573,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                 },
               },
             ).pipe(Effect.provide(toolLayer), Effect.scoped);
+
             expect(result.output).toEqual({ answer: "resumed" });
             expect(captured).toBeDefined();
             if (captured === undefined) {
               throw new Error("Expected the follow-up model request to be captured");
             }
+
             return captured;
           });
 
@@ -6010,6 +6588,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             content: [Prompt.makePart("text", { text: leadingText })],
           }),
         ]);
+
         const prompt = yield* runResumed(leadingMessages);
 
         const leadingIndex = prompt.content.findIndex(
@@ -6017,17 +6596,21 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
             message.role === "user" &&
             message.content.some((part) => part.type === "text" && part.text === leadingText),
         );
+
         const assistantIndex = prompt.content.findIndex(
           (message) =>
             message.role === "assistant" &&
             message.content.some((part) => part.type === "tool-call" && part.id === "lookup-1"),
         );
+
         const toolIndex = prompt.content.findIndex((message) => message.role === "tool");
+
         const inputIndex = prompt.content.findIndex(
           (message) =>
             message.role === "user" &&
             message.content.some((part) => part.type === "text" && part.text.includes("resume")),
         );
+
         // The pending Turn's committed leading messages sit between the
         // re-evaluated initial prompt and the rebuilt assistant tool-call
         // message, and precede the Tool results.
@@ -6039,11 +6622,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         // Absent leadingMessages keeps the prior behavior: the steering text
         // never enters the resumed model context.
         const bare = yield* runResumed(undefined);
+
         const bareLeading = bare.content.findIndex(
           (message) =>
             message.role === "user" &&
             message.content.some((part) => part.type === "text" && part.text === leadingText),
         );
+
         expect(bareLeading).toBe(-1);
       }),
   );
@@ -6062,7 +6647,9 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
     parameters: Schema.Struct({}),
     success: Schema.String,
   });
+
   const softLandingTools = Toolkit.make(Search);
+
   const softLandingDefinition = (policy: AgentPolicy) =>
     Agent.make("soft-landing", {
       input: Schema.Struct({ question: Schema.String }),
@@ -6071,6 +6658,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       toolkit: softLandingTools,
       policy,
     });
+
   const searchCall = (id: string): Response.StreamPartEncoded => ({
     type: "tool-call",
     id,
@@ -6078,6 +6666,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
     params: {},
     providerExecuted: false,
   });
+
   const turnScriptedModel = (
     name: string,
     turns: Ref.Ref<number>,
@@ -6098,6 +6687,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
                 yield* Ref.update(toolChoices, (all) => [...all, request.toolChoice]);
                 yield* Ref.update(prompts, (all) => [...all, JSON.stringify(request.prompt)]);
                 const turn = yield* Ref.getAndUpdate(turns, (value) => value + 1);
+
                 return Stream.fromIterable(script(turn));
               }),
             ),
@@ -6114,6 +6704,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         const turns = yield* Ref.make(0);
         const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
         const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
         const definition = softLandingDefinition(
           AgentPolicy.make({
             maxTurns: 5,
@@ -6122,6 +6713,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
             toolConcurrency: 1,
           }),
         );
+
         const model = turnScriptedModel(
           "soft-landing-batch",
           turns,
@@ -6136,6 +6728,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
                 ]
               : finalParts('{"answer":"partial findings"}'),
         );
+
         const toolLayer = softLandingTools.toLayer({
           search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
         });
@@ -6148,6 +6741,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         const observed = yield* Ref.get(events);
         const observedChoices = yield* Ref.get(toolChoices);
         const observedPrompts = yield* Ref.get(prompts);
@@ -6157,6 +6751,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         expect(observed.filter((event) => event._tag === "ToolCallDeclared")).toHaveLength(2);
         expect(observed.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(0);
         const failed = observed.filter((event) => event._tag === "ToolCallFailed");
+
         expect(failed).toHaveLength(2);
         for (const event of failed) {
           expect(event).toMatchObject({ errorTag: "AgentPolicyError" });
@@ -6167,6 +6762,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           finishReason: "budget-exhausted",
         });
         expect(observedChoices).toEqual(["auto", "none"]);
+
         // The rejected batch is model-visible: the final-answer request
         // carries one failed tool result per rejected call, in declaration
         // order, each with the synthetic policy failure as its payload.
@@ -6181,10 +6777,12 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
             }>;
           }>;
         };
+
         const toolResults = (secondPrompt.content ?? [])
           .filter((message) => message.role === "tool")
           .flatMap((message) => message.content)
           .filter((part) => part.type === "tool-result");
+
         expect(toolResults.map((part) => part.id)).toEqual(["search-1", "search-2"]);
         for (const part of toolResults) {
           expect(part.isFailure).toBe(true);
@@ -6200,6 +6798,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       const turns = yield* Ref.make(0);
       const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const definition = softLandingDefinition(
         AgentPolicy.make({
           maxTurns: 5,
@@ -6209,6 +6808,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           repeatedFailureLimit: 3,
         }),
       );
+
       const model = turnScriptedModel("soft-landing-exempt", turns, toolChoices, prompts, (turn) =>
         turn === 0
           ? [
@@ -6220,6 +6820,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
             ]
           : finalParts('{"answer":"still landed"}'),
       );
+
       const toolLayer = softLandingTools.toLayer({
         search: () => Effect.succeed("found"),
       });
@@ -6232,6 +6833,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const observed = yield* Ref.get(events);
 
       expect(Exit.isSuccess(exit)).toBe(true);
@@ -6251,6 +6853,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       const turns = yield* Ref.make(0);
       const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const definition = softLandingDefinition(
         AgentPolicy.make({
           maxTurns: 5,
@@ -6259,11 +6862,13 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           toolConcurrency: 1,
         }),
       );
+
       const model = turnScriptedModel("soft-landing-exact", turns, toolChoices, prompts, (turn) =>
         turn === 0
           ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
           : finalParts('{"answer":"done"}'),
       );
+
       const toolLayer = softLandingTools.toLayer({
         search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
       });
@@ -6276,6 +6881,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const observed = yield* Ref.get(events);
       const observedChoices = yield* Ref.get(toolChoices);
 
@@ -6298,9 +6904,11 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         const turns = yield* Ref.make(0);
         const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
         const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
         const resumeTurnId = yield* Schema.decodeEffect(TurnId)("turn-resume-soft").pipe(
           Effect.orDie,
         );
+
         const definition = softLandingDefinition(
           AgentPolicy.make({
             maxTurns: 5,
@@ -6309,12 +6917,15 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
             toolConcurrency: 1,
           }),
         );
+
         const model = turnScriptedModel("soft-landing-resume", turns, toolChoices, prompts, () =>
           finalParts('{"answer":"resumed partial"}'),
         );
+
         const toolLayer = softLandingTools.toLayer({
           search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
         });
+
         const resume: RunTurnResume = {
           turn: 1,
           turnId: resumeTurnId,
@@ -6350,6 +6961,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         const observed = yield* Ref.get(events);
         const observedPrompts = yield* Ref.get(prompts);
 
@@ -6375,6 +6987,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       const turns = yield* Ref.make(0);
       const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const definition = softLandingDefinition(
         AgentPolicy.make({
           maxTurns: 1,
@@ -6383,11 +6996,13 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           toolConcurrency: 1,
         }),
       );
+
       const model = turnScriptedModel("soft-landing-grace", turns, toolChoices, prompts, (turn) =>
         turn === 0
           ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
           : finalParts('{"answer":"grace"}'),
       );
+
       const toolLayer = softLandingTools.toLayer({
         search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
       });
@@ -6400,6 +7015,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const observed = yield* Ref.get(events);
 
       expect(Exit.isSuccess(exit)).toBe(true);
@@ -6421,6 +7037,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
       const followUpOffered = yield* Ref.make(false);
+
       const definition = softLandingDefinition(
         AgentPolicy.make({
           maxTurns: 1,
@@ -6429,6 +7046,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           toolConcurrency: 1,
         }),
       );
+
       const model = turnScriptedModel(
         "soft-landing-no-second-grace",
         turns,
@@ -6439,6 +7057,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
             ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
             : finalParts('{"answer":"grace"}'),
       );
+
       const toolLayer = softLandingTools.toLayer({
         search: () => Effect.succeed("found"),
       });
@@ -6462,6 +7081,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
@@ -6482,6 +7102,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       const turns = yield* Ref.make(0);
       const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const definition = softLandingDefinition(
         AgentPolicy.make({
           maxTurns: 5,
@@ -6490,6 +7111,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           toolConcurrency: 1,
         }),
       );
+
       const model = turnScriptedModel(
         "soft-landing-fail-closed",
         turns,
@@ -6504,6 +7126,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
               ]
             : [searchCall("search-3"), { type: "finish", reason: "tool-calls", usage }],
       );
+
       const toolLayer = softLandingTools.toLayer({
         search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
       });
@@ -6516,6 +7139,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
 
       expect(failure).toBeInstanceOf(ModelProtocolError);
@@ -6533,6 +7157,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         const turns = yield* Ref.make(0);
         const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
         const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
         const definition = softLandingDefinition(
           AgentPolicy.make({
             maxTurns: 5,
@@ -6541,6 +7166,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
             toolConcurrency: 1,
           }),
         );
+
         const model = turnScriptedModel(
           "allowance-tightens",
           turns,
@@ -6555,6 +7181,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
                 ]
               : finalParts('{"answer":"partial under allowance"}'),
         );
+
         const toolLayer = softLandingTools.toLayer({
           search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
         });
@@ -6569,6 +7196,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           Effect.provide(toolLayer),
           Effect.exit,
         );
+
         const observed = yield* Ref.get(events);
 
         // The batch of 2 exceeds the effective limit of min(5, 1) = 1: it is
@@ -6590,6 +7218,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       const turns = yield* Ref.make(0);
       const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const definition = softLandingDefinition(
         AgentPolicy.make({
           maxTurns: 5,
@@ -6599,11 +7228,13 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           onExhaustion: "fail",
         }),
       );
+
       const model = turnScriptedModel("allowance-no-widen", turns, toolChoices, prompts, () => [
         searchCall("search-1"),
         searchCall("search-2"),
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const toolLayer = softLandingTools.toLayer({
         search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
       });
@@ -6613,6 +7244,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         { question: "research" },
         { toolCallAllowance: 100 },
       ).pipe(Stream.runDrain, Effect.provide(toolLayer), Effect.exit);
+
       const failure = failureFrom(exit);
 
       // min(policy 1, allowance 100) = 1: the policy ceiling holds.
@@ -6631,6 +7263,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         const turns = yield* Ref.make(0);
         const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
         const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
         const definition = softLandingDefinition(
           AgentPolicy.make({
             maxTurns: 5,
@@ -6640,11 +7273,13 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
             onExhaustion: "fail",
           }),
         );
+
         const model = turnScriptedModel("allowance-nan", turns, toolChoices, prompts, () => [
           searchCall("search-1"),
           searchCall("search-2"),
           { type: "finish", reason: "tool-calls", usage },
         ]);
+
         const toolLayer = softLandingTools.toLayer({
           search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
         });
@@ -6656,6 +7291,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           { question: "research" },
           { toolCallAllowance: Number.NaN },
         ).pipe(Stream.runDrain, Effect.provide(toolLayer), Effect.exit);
+
         const failure = failureFrom(exit);
 
         expect(failure).toBeInstanceOf(AgentPolicyError);
@@ -6671,6 +7307,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
       const turns = yield* Ref.make(0);
       const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const definition = softLandingDefinition(
         AgentPolicy.make({
           maxTurns: 5,
@@ -6679,11 +7316,13 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
           toolConcurrency: 1,
         }),
       );
+
       const model = turnScriptedModel("turn-allowance", turns, toolChoices, prompts, (turn) =>
         turn === 0
           ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
           : finalParts('{"answer":"grace under allowance"}'),
       );
+
       const toolLayer = softLandingTools.toLayer({
         search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
       });
@@ -6698,6 +7337,7 @@ layer(testLayer)("RUN-018 budget soft landing", (it) => {
         Effect.provide(toolLayer),
         Effect.exit,
       );
+
       const observed = yield* Ref.get(events);
 
       // The pending batch at the effective final Turn executes; the single
@@ -6723,6 +7363,7 @@ layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) =>
   it.effect("a defect appends one bounded terminal RunFailed and rethrows the original cause", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const model = Model.make(
         "scripted",
         "defect-boundary",
@@ -6760,14 +7401,17 @@ layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) =>
 
       const observed = yield* Ref.get(events);
       const failures = observed.filter((event) => event._tag === "RunFailed");
+
       expect(failures).toHaveLength(1);
       const terminal = observed.at(-1);
+
       expect(terminal?._tag).toBe("RunFailed");
       if (terminal?._tag === "RunFailed") {
         expect(terminal.errorTag).toBe("Defect");
         expect(terminal.message).toContain("the supplier catalog crashed");
         // Identity comes from the already-streamed events, one sequence later.
         const previous = observed.at(-2);
+
         expect(previous).toBeDefined();
         if (previous !== undefined) {
           expect(terminal.runId).toBe(previous.runId);
@@ -6783,6 +7427,7 @@ layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) =>
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
         // Invalid final JSON fails typed (AgentOutputError): the engine already emits the
         // terminal RunFailed, so the boundary helper must pass the cause through untouched.
         const exit = yield* AgentRuntime.stream(makeAgent(finalParts("not json")), {
@@ -6793,10 +7438,13 @@ layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) =>
           Stream.runDrain,
           Effect.exit,
         );
+
         const failure = failureFrom(exit);
+
         expect(errorMessageForTest(failure)).toContain("not valid JSON");
         const observed = yield* Ref.get(events);
         const failures = observed.filter((event) => event._tag === "RunFailed");
+
         expect(failures).toHaveLength(1);
         if (failures[0]?._tag === "RunFailed") {
           expect(failures[0].errorTag).not.toBe("Defect");
@@ -6807,6 +7455,7 @@ layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) =>
   it.effect("a completed Run streams unchanged through the boundary", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       yield* AgentRuntime.stream(makeAgent(finalParts('{"answer":"fine"}')), {
         question: "ok",
       }).pipe(
@@ -6815,6 +7464,7 @@ layer(testLayer)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) =>
         Stream.runDrain,
       );
       const observed = yield* Ref.get(events);
+
       expect(observed.some((event) => event._tag === "RunFailed")).toBe(false);
       expect(observed.at(-1)?._tag).toBe("RunCompleted");
     }),

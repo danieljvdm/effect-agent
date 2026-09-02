@@ -51,7 +51,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `examples/browser-run-worker-proof` | Opt-in hosted Browser Run verification; owns Wrangler |
 | `examples/pr-review-eval`           | Opt-in live review evaluation                         |
 | `examples/code-mode-cloudflare`     | Generated JavaScript over a SQLite DO warehouse       |
-| `action/`                           | Distributed PR-review Action and bundle               |
+| `action/`                           | PR-review Action contract and ignored build output    |
 
 Framework code stays in `packages/*`. Examples are leaf workspaces.
 Provider integrations come from upstream Effect AI Layers.
@@ -73,22 +73,22 @@ Shared compiler settings live in `tsconfig.base.json`.
 
 Run `vp help` or `vp <command> --help` for options.
 
-| Command                                    | Use                                                                            |
-| ------------------------------------------ | ------------------------------------------------------------------------------ |
-| `vp install`                               | Install dependencies and hooks                                                 |
-| `vp check`                                 | Format, lint, and type checks                                                  |
-| `vp fmt` / `vp fmt --check`                | Format files / check formatting                                                |
-| `vp lint` / `vp lint --fix`                | Lint / apply fixes                                                             |
-| `vp test`                                  | Root test runner                                                               |
-| `vp run check`                             | All static checks, package types, scripts, purity, and Action bundle freshness |
-| `vp run test`                              | All workspace suites, including Cloudflare                                     |
-| `vp run build`                             | Package and docs builds                                                        |
-| `vp run ready`                             | Full handoff gate: check, test, build                                          |
-| `vp run docs:dev`                          | Docs development server                                                        |
-| `vp run docs:build`                        | Build docs and check links                                                     |
-| `vp run docs:preview`                      | Preview built docs                                                             |
-| `vp run -F @effect-agent/example-demo dev` | Browser demo on port 4173                                                      |
-| `vp env doctor`                            | Diagnose toolchain setup                                                       |
+| Command                                    | Use                                                   |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `vp install`                               | Install dependencies and hooks                        |
+| `vp check`                                 | Format, lint, and type checks                         |
+| `vp fmt` / `vp fmt --check`                | Format files / check formatting                       |
+| `vp lint` / `vp lint --fix`                | Lint / apply fixes                                    |
+| `vp test`                                  | Root test runner                                      |
+| `vp run check`                             | All static checks, package types, scripts, and purity |
+| `vp run test`                              | All workspace suites, including Cloudflare            |
+| `vp run build`                             | Package, docs, and Action builds                      |
+| `vp run ready`                             | Full handoff gate: check, test, build                 |
+| `vp run docs:dev`                          | Docs development server                               |
+| `vp run docs:build`                        | Build docs and check links                            |
+| `vp run docs:preview`                      | Preview built docs                                    |
+| `vp run -F @effect-agent/example-demo dev` | Browser demo on port 4173                             |
+| `vp env doctor`                            | Diagnose toolchain setup                              |
 
 Use `vp run <task>` for other scripts. Do not use `bun run`, `npm run`, `pnpm run`,
 `yarn run`, or invoke the wrapped compiler, formatter, linter, or test runner directly.
@@ -265,9 +265,30 @@ The verified generated Changesets PR uses the release flow above.
 Explicit `@effect-agent review` comments still request review.
 
 Each test-matrix job has its own task-cache key. Successful task results are saved even when
-another task fails. Main pushes run tests and builds to populate shared caches; static checks and
-the `ready` fan-in run only on PRs. Main runs are not cancelled by newer pushes.
+another task fails. Main pushes run static checks, tests, and builds to populate shared caches
+and validate Action releases. The `ready` fan-in runs only on PRs. Main runs are not cancelled
+by newer pushes.
 Tests are reused only when task inputs match, never solely because paths did not change.
 
 The pre-commit hook runs `vp check --fix` on staged JavaScript and TypeScript.
-CI runs the full gate, including package type checks and Action bundle freshness.
+CI runs the full gate, including package type checks and the Action build.
+
+Action bundles use the catalog-pinned esbuild. `vp run action:build` writes ignored
+output to `action/dist/index.mjs` and checks its Node.js syntax. The root build task
+also builds the Action, so every PR validates bundling without committing generated
+JavaScript. There is no bundle freshness check or input-hash manifest.
+
+On successful `main` runs, CI publishes the exact build artifact in a child commit
+of the validated source. It creates `action-<source-commit-sha>` and advances
+`action-v1` in one atomic push, without changing `main`. Only the publication job
+has repository write permission; it installs no dependencies and runs no project
+code. Superseded source commits are skipped, and a Git lease prevents competing
+publishers from overwriting a newer channel. Failed publication preserves the last
+release and can be retried by rerunning the failed CI job.
+
+Consumers use `danieljvdm/effect-agent/action@action-v1` or pin the distribution
+commit SHA printed in the CI summary. New source commits and `@main` no longer
+contain a runnable bundle; older SHA pins still work. Before the initial cutover, seed `action-v1` with the
+last validated source commit that still contains the bundle, then migrate existing
+workflows. The first successful main CI run publishes the new distribution commits.
+These tags are independent of npm package releases.

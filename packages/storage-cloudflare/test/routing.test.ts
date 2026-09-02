@@ -115,6 +115,7 @@ const transportLayer = (state: TransportControl) =>
             }),
           );
         }
+
         return Effect.tryPromise({
           try: () => threadStub(threadId).portCall(request),
           catch: (cause) => portTransportFailure(threadId, cause),
@@ -180,24 +181,31 @@ const claimedLocalLane = Effect.fn("RoutingTest.claimedLocalLane")(function* (
 ) {
   const ledger = yield* SubmissionLedger;
   const admitted = yield* ledger.admit(yield* admission(threadId, key, input));
+
   yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+
   const claimed = yield* ledger.claim(
     ClaimRequest.make({ threadId: thread(threadId), producerId: TEST_PRODUCER }),
   );
+
   expect(Option.isSome(claimed)).toBe(true);
   const claim: Claim = Option.getOrThrow(claimed);
+
   return { admitted, claim };
 });
 
 describe("cross-DO port routing", () => {
   it("preserves absent checkpoint support while routing base store operations", () => {
     const state = control();
+
     return withRoutedPorts(
       "wp2-no-checkpoints",
       state,
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         expect(store.checkpoints).toBeUndefined();
+
         const missing = yield* store
           .export(
             ThreadExportRequest.make({
@@ -205,6 +213,7 @@ describe("cross-DO port routing", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(missing._tag).toBe("ThreadNotMaterialized");
         expect(state.calls).toBe(1);
       }),
@@ -227,6 +236,7 @@ describe("cross-DO port routing", () => {
 
     expect(() => portTransportFailure("foreign-thread", hostile)).not.toThrow();
     const mapped = portTransportFailure("foreign-thread", hostile);
+
     expect(mapped).toMatchObject({
       _tag: "PortTransportError",
       target: "foreign-thread",
@@ -239,6 +249,7 @@ describe("cross-DO port routing", () => {
       retryable: true,
       toString: () => "overloaded",
     });
+
     expect(signaled.retryable).toBe(true);
     expect(portTransportFailure("foreign-thread", "x".repeat(5_000)).message).toHaveLength(4_096);
   });
@@ -253,6 +264,7 @@ describe("cross-DO port routing", () => {
       state,
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const byKey = SubmissionLookupByKey.make({
           threadId: thread(childConv),
           principal: TEST_PRINCIPAL,
@@ -261,10 +273,12 @@ describe("cross-DO port routing", () => {
 
         // The authoritative owner proves absence before any admission (SUB-031).
         const before = yield* ledger.resolveAdmission(byKey);
+
         expect(before._tag).toBe("NotAdmitted");
 
         const request = yield* admission(childConv, "wp2-child-key", { task: "research" });
         const admitted = yield* ledger.admit(request);
+
         expect(admitted.replayed).toBe(false);
         expect(admitted.state).toBe("admitted");
         // D-P6-5: the minted identity carries its owning Thread after the first ":".
@@ -272,6 +286,7 @@ describe("cross-DO port routing", () => {
 
         // An identical routed replay resumes instead of duplicating (DUR-001).
         const replay = yield* ledger.admit(request);
+
         expect(replay.replayed).toBe(true);
         expect(replay.submissionId).toBe(admitted.submissionId);
         expect(replay.receiptId).toBe(admitted.receiptId);
@@ -280,6 +295,7 @@ describe("cross-DO port routing", () => {
         // owning Object's local facet raised, fields intact (error-tag fidelity).
         const divergent = yield* admission(childConv, "wp2-child-key", { task: "different" });
         const conflict = yield* ledger.admit(divergent).pipe(Effect.flip);
+
         expect(conflict).toBeInstanceOf(AdmissionConflict);
         if (isAdmissionConflict(conflict)) {
           expect(conflict.threadId).toBe(childConv);
@@ -292,6 +308,7 @@ describe("cross-DO port routing", () => {
         const byIdRow = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: admitted.submissionId }),
         );
+
         expect(Option.isSome(byIdRow)).toBe(true);
         if (Option.isSome(byIdRow)) {
           expect(byIdRow.value.state).toBe("ready");
@@ -299,9 +316,11 @@ describe("cross-DO port routing", () => {
         }
 
         const byKeyRow = yield* ledger.lookup(byKey);
+
         expect(Option.isSome(byKeyRow)).toBe(true);
 
         const after = yield* ledger.resolveAdmission(byKey);
+
         expect(after._tag).toBe("Admitted");
         if (after._tag === "Admitted") {
           expect(after.submission.submissionId).toBe(admitted.submissionId);
@@ -315,24 +334,29 @@ describe("cross-DO port routing", () => {
             idempotencyKey: idempotencyKey("wp2-never-admitted"),
           }),
         );
+
         expect(Option.isNone(unknown)).toBe(true);
 
         // This Object's OWN ledger holds nothing: the child row lives in the owning Object.
         const localScan = yield* ledger.scanNonterminal.pipe(Stream.runCollect);
+
         expect(localScan).toEqual([]);
 
         return admitted;
       }),
     );
+
     expect(state.calls).toBeGreaterThan(0);
 
     // Authoritative verification inside the owning Object's local facet.
     await withThreadStorage(childConv, (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const row = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: established.submissionId }),
         );
+
         expect(Option.isSome(row)).toBe(true);
         if (Option.isSome(row)) {
           expect(row.value.state).toBe("ready");
@@ -353,10 +377,13 @@ describe("cross-DO port routing", () => {
     const prepared = await withThreadStorage(targetConv, (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const host = yield* ledger.admit(
           yield* admission(targetConv, "wp2-abort-host", { role: "host" }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: host.submissionId }));
+
         const hostClaim = Option.getOrThrow(
           yield* ledger.claim(
             ClaimRequest.make({
@@ -369,7 +396,9 @@ describe("cross-DO port routing", () => {
         const queued = yield* ledger.admit(
           yield* admission(targetConv, "wp2-abort-joined", { role: "queued" }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: queued.submissionId }));
+
         const joining = yield* ledger.claimJoining(
           ClaimJoiningRequest.make({
             threadId: thread(targetConv),
@@ -378,6 +407,7 @@ describe("cross-DO port routing", () => {
             maxCount: 1,
           }),
         );
+
         expect(joining.map((claim) => claim.submissionId)).toEqual([queued.submissionId]);
         yield* ledger.markJoined(
           MarkJoinedRequest.make({
@@ -394,6 +424,7 @@ describe("cross-DO port routing", () => {
           hostClaim.ownershipToken,
           "completed",
         );
+
         yield* ledger.reserveSettlement(reservation);
         yield* ledger.finalizeSettlement(
           SettlementFinalization.make({
@@ -405,6 +436,7 @@ describe("cross-DO port routing", () => {
         const live = yield* ledger.admit(
           yield* admission(targetConv, "wp2-abort-live", { role: "live" }),
         );
+
         return { host, joined: queued, live };
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
@@ -425,6 +457,7 @@ describe("cross-DO port routing", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(settledConflict).toBeInstanceOf(SettlementConflict);
         if (isSettlementConflict(settledConflict)) {
           expect(settledConflict.existingOutcome).toBe("completed");
@@ -441,6 +474,7 @@ describe("cross-DO port routing", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(joinedRedirect).toBeInstanceOf(JoinedToHost);
         if (isJoinedToHost(joinedRedirect)) {
           expect(joinedRedirect.hostSubmissionId).toBe(prepared.host.submissionId);
@@ -454,9 +488,11 @@ describe("cross-DO port routing", () => {
             reason: "no longer needed",
           }),
         );
+
         expect(intent.submissionId).toBe(prepared.live.submissionId);
         expect(intent.author).toBe("wp2-operator");
         expect(intent.reason).toBe("no longer needed");
+
         const replay = yield* ledger.requestAbort(
           AbortCommand.make({
             submissionId: prepared.live.submissionId,
@@ -464,6 +500,7 @@ describe("cross-DO port routing", () => {
             reason: "duplicate request",
           }),
         );
+
         // Idempotent per submission: the FIRST recorded intent replays unchanged (DUR-012).
         expect(replay.author).toBe("wp2-operator");
         expect(replay.requestedAt).toStrictEqual(intent.requestedAt);
@@ -474,9 +511,11 @@ describe("cross-DO port routing", () => {
     await withThreadStorage(targetConv, (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const snapshot = yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId: prepared.live.submissionId }),
         );
+
         expect(snapshot.abortIntent?.reason).toBe("no longer needed");
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
@@ -492,11 +531,13 @@ describe("cross-DO port routing", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const settled = yield* claimedLocalLane(childConv, "wp2-settled-child", { part: 1 });
+
         const reservation = yield* settlementReservation(
           settled.admitted,
           settled.claim.ownershipToken,
           "completed",
         );
+
         yield* ledger.reserveSettlement(reservation);
         yield* ledger.finalizeSettlement(
           SettlementFinalization.make({
@@ -504,10 +545,13 @@ describe("cross-DO port routing", () => {
             settlementId: reservation.settlementId,
           }),
         );
+
         const pending = yield* ledger.admit(
           yield* admission(childConv, "wp2-pending-child", { part: 2 }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: pending.submissionId }));
+
         return { settled: settled.admitted, pending };
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
@@ -517,9 +561,11 @@ describe("cross-DO port routing", () => {
     const parent = await withThreadStorage(parentConv, (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const lane = yield* claimedLocalLane(parentConv, "wp2-waiting-parent", {
           plan: "delegate",
         });
+
         const outcome = yield* ledger.suspend(
           SuspendRequest.make({
             submissionId: lane.admitted.submissionId,
@@ -538,7 +584,9 @@ describe("cross-DO port routing", () => {
             }),
           }),
         );
+
         expect(outcome).toBe("suspended");
+
         return lane.admitted;
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
@@ -550,12 +598,14 @@ describe("cross-DO port routing", () => {
       state,
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const first = yield* ledger.recordChildSettled(
           ChildSettledNotification.make({
             parentSubmissionId: parent.submissionId,
             childSubmissionId: children.settled.submissionId,
           }),
         );
+
         expect(first).toBe("still-waiting");
       }),
     );
@@ -565,6 +615,7 @@ describe("cross-DO port routing", () => {
     await withThreadStorage(childConv, (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const claimed = Option.getOrThrow(
           yield* ledger.claim(
             ClaimRequest.make({
@@ -573,12 +624,15 @@ describe("cross-DO port routing", () => {
             }),
           ),
         );
+
         expect(claimed.submissionId).toBe(children.pending.submissionId);
+
         const reservation = yield* settlementReservation(
           children.pending,
           claimed.ownershipToken,
           "completed",
         );
+
         yield* ledger.reserveSettlement(reservation);
         yield* ledger.finalizeSettlement(
           SettlementFinalization.make({
@@ -594,12 +648,14 @@ describe("cross-DO port routing", () => {
       state,
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const second = yield* ledger.recordChildSettled(
           ChildSettledNotification.make({
             parentSubmissionId: parent.submissionId,
             childSubmissionId: children.pending.submissionId,
           }),
         );
+
         expect(second).toBe("woken");
 
         // At-least-once redelivery answers not-waiting idempotently after the wake.
@@ -609,12 +665,14 @@ describe("cross-DO port routing", () => {
             childSubmissionId: children.pending.submissionId,
           }),
         );
+
         expect(redelivered).toBe("not-waiting");
 
         // The routed lookup observes the woken parent lane in ITS Object.
         const woken = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: parent.submissionId }),
         );
+
         expect(Option.isSome(woken)).toBe(true);
         if (Option.isSome(woken)) {
           expect(woken.value.state).toBe("input-applied");
@@ -638,6 +696,7 @@ describe("cross-DO port routing", () => {
         const missing = yield* store
           .inspectTail(ThreadTailRequest.make({ threadId: thread(targetConv) }))
           .pipe(Effect.flip);
+
         expect(missing).toBeInstanceOf(ThreadNotMaterialized);
         if (isThreadNotMaterialized(missing)) {
           expect(missing.threadId).toBe(targetConv);
@@ -662,6 +721,7 @@ describe("cross-DO port routing", () => {
             producerEpoch: epoch(1),
           }),
         );
+
         expect(appended.firstSequence).toBe(1);
         expect(appended.lastSequence).toBe(2);
         expect(appended.replayed).toBe(false);
@@ -669,6 +729,7 @@ describe("cross-DO port routing", () => {
         const page = yield* store
           .read(ThreadRead.make({ threadId: thread(targetConv), limit: 10 }))
           .pipe(Stream.runCollect);
+
         expect(page.map((envelope) => envelope.record.recordId)).toEqual([
           "wp2-routed-record-1",
           "wp2-routed-record-2",
@@ -677,6 +738,7 @@ describe("cross-DO port routing", () => {
         const tail = yield* store.inspectTail(
           ThreadTailRequest.make({ threadId: thread(targetConv) }),
         );
+
         expect(tail.tailSequence).toBe(2);
         expect(tail.tailDigest).toBe(appended.tailDigest);
         expect(tail.producerEpoch).toBe(1);
@@ -684,6 +746,7 @@ describe("cross-DO port routing", () => {
         const exported = yield* store.export(
           ThreadExportRequest.make({ threadId: thread(targetConv) }),
         );
+
         expect(exported.threadId).toBe(targetConv);
         expect(exported.tailSequence).toBe(2);
         expect(exported.records).toHaveLength(2);
@@ -700,6 +763,7 @@ describe("cross-DO port routing", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(staleTail).toBeInstanceOf(AppendConflict);
         if (isAppendConflict(staleTail)) {
           expect(staleTail.reason).toBe("tail");
@@ -719,6 +783,7 @@ describe("cross-DO port routing", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(fenced).toBeInstanceOf(FenceRejected);
         if (isFenceRejected(fenced)) {
           expect(fenced.actualEpoch).toBe(1);
@@ -733,6 +798,7 @@ describe("cross-DO port routing", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(staleMaterialize).toBeInstanceOf(FenceRejected);
       }),
     );
@@ -742,9 +808,11 @@ describe("cross-DO port routing", () => {
     await withThreadStorage(targetConv, (storage) =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         const local = yield* store
           .read(ThreadRead.make({ threadId: thread(targetConv), limit: 10 }))
           .pipe(Stream.runCollect);
+
         expect(local).toHaveLength(2);
       }).pipe(Effect.provide(storeLayer({ storage, observationPollInterval: 1 }))),
     );
@@ -828,6 +896,7 @@ describe("cross-DO port routing", () => {
         const observeFailure = yield* store
           .observe(ThreadObservation.make({ threadId: thread(foreignConv) }))
           .pipe(Stream.runCollect, Effect.flip);
+
         expect(observeFailure).toBeInstanceOf(ThreadStoreError);
         if (isThreadStoreError(observeFailure)) {
           expect(observeFailure.message).toContain("not route-capable");
@@ -836,6 +905,7 @@ describe("cross-DO port routing", () => {
         const checkpointFailure = yield* store
           .checkpoints!.load(LoadCheckpointRequest.make({ threadId: thread(foreignConv) }))
           .pipe(Effect.flip);
+
         expect(checkpointFailure).toBeInstanceOf(ThreadStoreError);
         if (isThreadStoreError(checkpointFailure)) {
           expect(checkpointFailure.message).toContain("not route-capable");
@@ -857,9 +927,11 @@ describe("cross-DO port routing", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const oversized = submissionId("a".repeat(1_100));
+
         const failure = yield* ledger
           .markReady(MarkReadyRequest.make({ submissionId: oversized }))
           .pipe(Effect.flip);
+
         expect(failure).toBeInstanceOf(LedgerError);
         if (isLedgerError(failure)) {
           expect(failure.message).toContain("1024");
@@ -872,6 +944,7 @@ describe("cross-DO port routing", () => {
   it("delegates this-thread and opaque-identity operations to the local facet without the transport", async () => {
     const localConv = "wp2-local-delegation";
     const state = control();
+
     // A transport that would fail EVERY delivery proves by construction that local work
     // never touches it.
     state.fault = "poisoned transport: local operations must not route";
@@ -884,11 +957,13 @@ describe("cross-DO port routing", () => {
         const store = yield* ThreadStore;
 
         const lane = yield* claimedLocalLane(localConv, "wp2-local-key", { work: "local" });
+
         expect(lane.admitted.submissionId.endsWith(`:${localConv}`)).toBe(true);
 
         const found = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: lane.admitted.submissionId }),
         );
+
         expect(Option.isSome(found)).toBe(true);
 
         const resolution = yield* ledger.resolveAdmission(
@@ -898,16 +973,20 @@ describe("cross-DO port routing", () => {
             idempotencyKey: idempotencyKey("wp2-local-key"),
           }),
         );
+
         expect(resolution._tag).toBe("Admitted");
 
         // Identities without the DC-minted shape fall back to the local authority.
         const opaque = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: submissionId("submission-opaque") }),
         );
+
         expect(Option.isNone(opaque)).toBe(true);
+
         const nonUuidHead = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: submissionId("not-a-uuid:some-conv") }),
         );
+
         expect(Option.isNone(nonUuidHead)).toBe(true);
 
         yield* store.materialize(
@@ -925,13 +1004,17 @@ describe("cross-DO port routing", () => {
             producerEpoch: lane.claim.producerEpoch,
           }),
         );
+
         const page = yield* store
           .read(ThreadRead.make({ threadId: thread(localConv), limit: 10 }))
           .pipe(Stream.runCollect);
+
         expect(page).toHaveLength(1);
+
         const tail = yield* store.inspectTail(
           ThreadTailRequest.make({ threadId: thread(localConv) }),
         );
+
         expect(tail.tailSequence).toBe(1);
         yield* store.export(ThreadExportRequest.make({ threadId: thread(localConv) }));
       }),
@@ -943,6 +1026,7 @@ describe("cross-DO port routing", () => {
     const parentConv = "wp2-sub031-parent";
     const childConv = "wp2-sub031-child";
     const state = control();
+
     const byKey = SubmissionLookupByKey.make({
       threadId: thread(childConv),
       principal: TEST_PRINCIPAL,
@@ -955,6 +1039,7 @@ describe("cross-DO port routing", () => {
       state,
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         return yield* ledger.admit(
           yield* admission(childConv, "wp2-sub031-key", { task: "establish once" }),
         );
@@ -967,11 +1052,13 @@ describe("cross-DO port routing", () => {
       state,
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         state.fault = "injected transport fault: owning Object unreachable";
 
         // An unreachable authority proves NOTHING: the answer is Indeterminate — never
         // NotAdmitted (which alone would permit a second admission).
         const resolution = yield* ledger.resolveAdmission(byKey);
+
         expect(resolution._tag).toBe("Indeterminate");
         if (resolution._tag === "Indeterminate") {
           expect(resolution.reason).toContain("unreachable");
@@ -983,18 +1070,22 @@ describe("cross-DO port routing", () => {
         const admitFailure = yield* ledger
           .admit(yield* admission(childConv, "wp2-sub031-key", { task: "establish once" }))
           .pipe(Effect.flip);
+
         expect(admitFailure).toBeInstanceOf(LedgerError);
 
         // Transport heals: the same key converges on the ORIGINAL admission.
         state.fault = undefined;
         const healed = yield* ledger.resolveAdmission(byKey);
+
         expect(healed._tag).toBe("Admitted");
         if (healed._tag === "Admitted") {
           expect(healed.submission.submissionId).toBe(established.submissionId);
         }
+
         const replay = yield* ledger.admit(
           yield* admission(childConv, "wp2-sub031-key", { task: "establish once" }),
         );
+
         expect(replay.replayed).toBe(true);
         expect(replay.submissionId).toBe(established.submissionId);
       }),
@@ -1005,6 +1096,7 @@ describe("cross-DO port routing", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const rows = yield* ledger.scanNonterminal.pipe(Stream.runCollect);
+
         expect(rows.map((row) => row.submissionId)).toEqual([established.submissionId]);
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
@@ -1028,10 +1120,12 @@ describe("cross-DO port routing", () => {
         const child = yield* ledger.admit(
           yield* admission(childConv, "wp2-enrich-child-key", { task: "research" }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
 
         const allocation: PersistedJson = { maxTurns: 3 };
         const allocationDigest = yield* digestJson(allocation);
+
         yield* ledger.reserveChildBudget(
           ChildBudgetReservationRequest.make({
             reservationId: id(ChildReservationId, "wp2-enrich-reservation"),
@@ -1055,6 +1149,7 @@ describe("cross-DO port routing", () => {
         const snapshot = yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId: lane.admitted.submissionId }),
         );
+
         expect(snapshot.childAttachments).toHaveLength(1);
         expect(snapshot.childAttachments[0].toolCallId).toBe("wp2-enrich-call");
         expect(snapshot.childAttachments[0].childSubmissionId).toBe(child.submissionId);
@@ -1064,11 +1159,13 @@ describe("cross-DO port routing", () => {
         // A transport failure surfaces typed so the alarm pass retries (never a silently
         // impoverished snapshot).
         state.fault = "injected transport fault during recovery enrichment";
+
         const failure = yield* ledger
           .loadRecoverySnapshot(
             RecoverySnapshotRequest.make({ submissionId: lane.admitted.submissionId }),
           )
           .pipe(Effect.flip);
+
         expect(failure).toBeInstanceOf(LedgerError);
         state.fault = undefined;
       }),

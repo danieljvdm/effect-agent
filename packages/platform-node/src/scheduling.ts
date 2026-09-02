@@ -22,7 +22,9 @@ export const nodeScheduleWakeLayer: Layer.Layer<ScheduleWake> = Layer.effect(
   Effect.gen(function* () {
     const hints = yield* PubSub.sliding<void>(1);
     const subscription = yield* PubSub.subscribe(hints);
+
     yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
+
     return ScheduleWake.of({
       notify: PubSub.publish(hints, undefined).pipe(Effect.asVoid),
       await: PubSub.take(subscription),
@@ -58,20 +60,25 @@ const nodeSchedulingDriverLayer = (
             Effect.map((pass) => pass.failed === 0),
             Effect.catchCause(reportPassFailure),
           );
+
           const deadlineResult = passSucceeded
             ? yield* store.nextDeadline().pipe(Effect.result)
             : Result.fail(
                 ScheduleStorageError.make({ operation: "driver pass", reason: "unavailable" }),
               );
+
           if (Result.isFailure(deadlineResult) && passSucceeded) {
             yield* Effect.logWarning("Node scheduling deadline query failed");
           }
           const nowMillis = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+
           const deadlineDelay =
             Result.isSuccess(deadlineResult) && deadlineResult.success !== null
               ? Math.max(0, deadlineResult.success - nowMillis)
               : limits.recoveryPollMillis;
+
           const delay = Math.min(deadlineDelay, limits.recoveryPollMillis);
+
           yield* Effect.raceFirst(wake.await, Effect.sleep(Duration.millis(delay)));
         }
       });
@@ -97,10 +104,12 @@ export class NodeScheduling {
     NodeDurableHost | ScheduleStore | ScheduleAuthorizer
   > {
     const limits = options.limits ?? defaultSchedulingLimits;
+
     const schedulingWithDriver = nodeSchedulingDriverLayer(limits).pipe(
       Layer.provide(ScheduleDriver.layer(limits)),
       Layer.merge(Scheduling.layer(limits)),
     );
+
     return schedulingWithDriver.pipe(
       Layer.provide(
         Layer.mergeAll(nodeScheduledInputAdmissionLayer, nodeScheduleWakeLayer, NodeCrypto.layer),

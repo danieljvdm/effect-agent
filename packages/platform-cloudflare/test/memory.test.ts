@@ -55,30 +55,38 @@ declare global {
 let counter = 0;
 const project = () => `memory-${counter++}`;
 const stub = (name: string) => env.MEMORIES.getByName(MemoryProjects.make(name).address);
+
 const client = (name: string, principal = memoryPrincipal) =>
   CloudflareMemoryClient.fromBinding(env.MEMORIES, { access: memoryAccess(name), principal });
+
 const decode = (encoded: string) =>
   Schema.decodeSync(Schema.fromJsonString(MemoryOwnerResponse))(encoded);
+
 const encodedCandidates = (ids: ReadonlyArray<string>) =>
   Schema.encodeSync(MemoryOwnerRequest.members[0].fields.lookup)(memoryCandidates(ids));
 
 describe("shared Cloudflare memory owner", () => {
   it("bounds owner response and source bytes and reads duplicate sources only once", async () => {
     const name = project();
+
     await runInDurableObject(stub(name), (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const writer = yield* MemoryWriter;
           const reader = yield* MemoryReader;
+
           yield* writer.change(memoryPut(name, "source"));
           let reads = 0;
+
           const counted = MemoryReader.fromAdapter({
             get: (key) =>
               Effect.suspend(() => {
                 reads++;
+
                 return reader.get(key);
               }),
           });
+
           const request: MemoryOwnerRequest = {
             _tag: "Revalidate",
             version: 1,
@@ -88,11 +96,14 @@ describe("shared Cloudflare memory owner", () => {
             limits: memoryRecallLimits,
             deadlineMillis: (yield* Clock.currentTimeMillis) + 1000,
           };
+
           const encoded = yield* encodeMemoryWire(MemoryOwnerRequest, request, 1_048_576);
+
           const smallResponse = yield* handleMemoryOwnerRequest(encoded, {
             ...defaultMemoryRpcLimits,
             maxResponseBytes: 256,
           }).pipe(Effect.provideService(MemoryReader, counted));
+
           expect(reads).toBe(1);
           expect(smallResponse.length).toBeLessThanOrEqual(256);
           expect(decode(smallResponse)).toMatchObject({
@@ -125,6 +136,7 @@ describe("shared Cloudflare memory owner", () => {
         const memory = yield* client(name);
         const first = yield* memory.change(memoryPut(name, "a"));
         const second = yield* memory.change(memoryPut(name, "b"));
+
         const profile = SemanticMemoryProfile.make({
           version: 1,
           provider: "test",
@@ -135,6 +147,7 @@ describe("shared Cloudflare memory owner", () => {
           maxChunkBytes: 8192,
           distance: "cosine",
         });
+
         const candidate = (document: typeof first) =>
           MemoryIndexCandidate.make({
             key: document.key,
@@ -148,11 +161,13 @@ describe("shared Cloudflare memory owner", () => {
             score: 1,
             indexedAt: 1,
           });
+
         const candidates = [candidate(second), candidate(first), candidate(second)];
         const found = MemoryIndexSearch.make({ candidates, scannedChunks: 3 });
         const limits = { maxCandidates: 16, maxScannedChunks: 16, minScore: 0 };
         const before = memoryCalls.get(MemoryProjects.make(name).address) ?? 0;
         const result = yield* memory.revalidateSemantic(found, profile, limits);
+
         expect(memoryCalls.get(MemoryProjects.make(name).address)).toBe(before + 1);
         expect(result.lookup).toMatchObject({
           _tag: "Found",
@@ -163,6 +178,7 @@ describe("shared Cloudflare memory owner", () => {
           ],
         });
         yield* memory.change(memoryPut(name, "a", "update", "1", "updated"));
+
         const next = yield* memory.revalidateSemantic(
           MemoryIndexSearch.make({
             candidates: [
@@ -174,18 +190,21 @@ describe("shared Cloudflare memory owner", () => {
           profile,
           limits,
         );
+
         expect(next.lookup).toEqual({ _tag: "NoMatch" });
         expect(next.staleExcluded).toBe(2);
       }),
     ));
   it("rejects duplicate-expanded semantic output before reading later sources or encoding the RPC response", async () => {
     const name = project();
+
     await runInDurableObject(stub(name), (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const writer = yield* MemoryWriter;
           const reader = yield* MemoryReader;
           const put = memoryPut(name, "a");
+
           const first = yield* writer.change(
             MemoryWrite.make({
               ...put,
@@ -199,7 +218,9 @@ describe("shared Cloudflare memory owner", () => {
               },
             }),
           );
+
           const second = yield* writer.change(memoryPut(name, "b"));
+
           const candidate = (document: typeof first) =>
             MemoryIndexCandidate.make({
               key: document.key,
@@ -213,6 +234,7 @@ describe("shared Cloudflare memory owner", () => {
               score: 1,
               indexedAt: 1,
             });
+
           const request: MemoryOwnerRequest = {
             _tag: "RevalidateSemantic",
             version: 1,
@@ -236,20 +258,26 @@ describe("shared Cloudflare memory owner", () => {
               minScore: 0,
             }),
           };
+
           const ownerLimits = { ...defaultMemoryRpcLimits, maxResponseBytes: 4096 };
           const reads: Array<string> = [];
+
           const counted = MemoryReader.fromAdapter({
             get: (key) =>
               Effect.suspend(() => {
                 reads.push(key.id);
+
                 return reader.get(key);
               }),
           });
+
           const single = yield* handleMemoryOwnerRequest(
             yield* encodeMemoryWire(MemoryOwnerRequest, request, 1_048_576),
             ownerLimits,
           );
+
           expect(decode(single)).toMatchObject({ _tag: "Semantic" });
+
           const expanded = {
             ...request,
             found: MemoryIndexSearch.make({
@@ -260,10 +288,12 @@ describe("shared Cloudflare memory owner", () => {
               scannedChunks: 128,
             }),
           };
+
           const response = yield* handleMemoryOwnerRequest(
             yield* encodeMemoryWire(MemoryOwnerRequest, expanded, 1_048_576),
             ownerLimits,
           ).pipe(Effect.provideService(MemoryReader, counted));
+
           expect(decode(response)).toMatchObject({
             _tag: "Failed",
             failure: {
@@ -288,6 +318,7 @@ describe("shared Cloudflare memory owner", () => {
     const threads: DurableObjectNamespace<TestThreadObject> = env.THREADS;
     const a = threads.getByName(`${name}-thread-a`);
     const b = threads.getByName(`${name}-thread-b`);
+
     await a.memoryChange(name, Schema.encodeSync(MemoryWrite.Wire)(memoryPut(name, "a")));
     await a.memoryChange(name, Schema.encodeSync(MemoryWrite.Wire)(memoryPut(name, "b")));
     await a.memoryChange(
@@ -296,6 +327,7 @@ describe("shared Cloudflare memory owner", () => {
     );
     const before = memoryCalls.get(MemoryProjects.make(name).address) ?? 0;
     const recalled = await b.memoryRecall(name, encodedCandidates(["b", "a", "b"]));
+
     expect(memoryCalls.get(MemoryProjects.make(name).address)).toBe(before + 1);
     expect(recalled.passages.map((p) => p.content.text)).toEqual(["text-b", "corrected"]);
     expect(recalled.passages[1]?.content.attributions[0]).toMatchObject({
@@ -311,16 +343,19 @@ describe("shared Cloudflare memory owner", () => {
       Effect.gen(function* () {
         const name = project();
         const memory = yield* client(name);
+
         yield* memory.change(memoryPut(name, "a"));
         yield* memory.change(memoryPut(name, "b"));
         const candidates = memoryCandidates(["a", "b"]);
         const program = memory.recall(candidates, { ...memoryRecallLimits, maxItems: 1 });
+
         expectTypeOf<Effect.Success<typeof program>>().toEqualTypeOf<RecalledMemory>();
         expectTypeOf<Effect.Error<typeof program>>().toEqualTypeOf<
           MemoryOwnerFailure | MemoryRecallError
         >();
         expectTypeOf<Effect.Services<typeof program>>().toEqualTypeOf<never>();
         const recalled = yield* program;
+
         expect(recalled.passages.map((passage) => passage.content.text)).toEqual(["text-a"]);
         expect(recalled.outcomes).toEqual([
           { sourceId: "memory", status: "Found", selected: 1, deduplicated: 0, omitted: 1 },
@@ -336,15 +371,18 @@ describe("shared Cloudflare memory owner", () => {
             sourceId: "memory",
           });
         }
+
         const estimated = yield* memory.recall(
           candidates,
           { ...memoryRecallLimits, maxTokens: 1 },
           () => 1,
         );
+
         expect(estimated.estimatedTokens).toBe(1);
         expect(estimated.passages).toHaveLength(2);
         expect(estimated.bytes).toBe(new TextEncoder().encode(estimated.text).byteLength);
         const empty = yield* memory.recall({ _tag: "NoMatch" }, memoryRecallLimits);
+
         expect(empty).toMatchObject({ text: "", passages: [], bytes: 0, estimatedTokens: 0 });
         expect(empty.outcomes).toEqual([
           { sourceId: "memory", status: "NoMatch", selected: 0, deduplicated: 0, omitted: 0 },
@@ -360,6 +398,7 @@ describe("shared Cloudflare memory owner", () => {
           });
         }
         const before = memoryCalls.get(MemoryProjects.make(name).address);
+
         expect(
           yield* memory
             .recall(candidates, { ...memoryRecallLimits, maxItems: 0 })
@@ -375,6 +414,7 @@ describe("shared Cloudflare memory owner", () => {
         const name = project();
         const memory = yield* client(name);
         const initial = yield* memory.change(memoryPut(name, "source"));
+
         const results = yield* Effect.all(
           [
             memory.change(memoryPut(name, "source", "a", "1", "left")).pipe(Effect.result),
@@ -382,6 +422,7 @@ describe("shared Cloudflare memory owner", () => {
           ],
           { concurrency: 2 },
         );
+
         expect(results.filter((r) => r._tag === "Success")).toHaveLength(1);
         expect(results.filter((r) => r._tag === "Failure").map((r) => r.failure._tag)).toEqual([
           "MemoryConflict",
@@ -400,8 +441,10 @@ describe("shared Cloudflare memory owner", () => {
       Effect.gen(function* () {
         const name = project();
         const memory = yield* client(name);
+
         yield* memory.change(memoryPut(name, "source"));
         const captured = yield* memory.revalidate(memoryCandidates(["source"]), memoryRecallLimits);
+
         yield* memory.change(
           MemoryWrite.make({ ...memoryPut(name, "source", "revoke", "1"), scopes: [] }),
         );
@@ -443,6 +486,7 @@ describe("shared Cloudflare memory owner", () => {
         expectTypeOf<Principal>().not.toExtend<MemoryScope>();
         const name = project();
         const foreign = project();
+
         const request: MemoryOwnerRequest = {
           _tag: "Revalidate",
           version: 1,
@@ -452,13 +496,16 @@ describe("shared Cloudflare memory owner", () => {
           limits: memoryRecallLimits,
           deadlineMillis: (yield* Clock.currentTimeMillis) + 1000,
         };
+
         const encoded = yield* encodeMemoryWire(MemoryOwnerRequest, request, 1_048_576);
         const response = yield* Effect.promise(() => stub(name).memory(encoded));
+
         expect(decode(response)).toMatchObject({
           _tag: "Failed",
           failure: { _tag: "MemoryRpcError", reason: "denied" },
         });
         const localRequest = { ...request, access: memoryAccess(name) };
+
         for (const malformed of [
           { ...localRequest, principal: "" },
           { ...localRequest, principal: "x".repeat(257) },
@@ -468,11 +515,13 @@ describe("shared Cloudflare memory owner", () => {
           const rejected = yield* Effect.promise(() =>
             stub(name).memory(JSON.stringify(malformed)),
           );
+
           expect(decode(rejected)).toMatchObject({
             _tag: "Failed",
             failure: { _tag: "MemoryRpcError", reason: "protocol" },
           });
         }
+
         const boundedIdentity = yield* Effect.promise(() =>
           stub(name).memory(
             JSON.stringify({
@@ -481,15 +530,19 @@ describe("shared Cloudflare memory owner", () => {
             }),
           ),
         );
+
         expect(decode(boundedIdentity)).toMatchObject({ failure: { reason: "denied" } });
         const denied = yield* client(name, Principal.make("untrusted"));
+
         expect(
           yield* denied.recall({ _tag: "NoMatch" }, memoryRecallLimits).pipe(Effect.flip),
         ).toMatchObject({ reason: "denied" });
+
         const scope = yield* CloudflareMemoryClient.make(
           { ...memoryAccess(name), scope: MemoryScope.make("foreign") },
           memoryPrincipal,
         ).pipe(Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }));
+
         expect(
           yield* scope
             .revalidate(memoryCandidates(["source"]), memoryRecallLimits)
@@ -503,6 +556,7 @@ describe("shared Cloudflare memory owner", () => {
       Effect.gen(function* () {
         const name = project();
         const memory = yield* client(name);
+
         expect(
           yield* memory
             .revalidate(
@@ -512,21 +566,26 @@ describe("shared Cloudflare memory owner", () => {
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "budget" });
         expect(memoryCalls.get(MemoryProjects.make(name).address)).toBe(1);
+
         const bounded = CloudflareMemoryClient.fromBinding(env.MEMORIES, {
           access: memoryAccess(name),
           principal: memoryPrincipal,
           rpcLimits: { ...defaultMemoryRpcLimits, maxRequestBytes: 256 },
         });
+
         expectTypeOf<Effect.Services<typeof bounded>>().toEqualTypeOf<never>();
         const injected = CloudflareMemoryClient.make(memoryAccess(name), memoryPrincipal);
+
         expectTypeOf<Effect.Services<typeof injected>>().toEqualTypeOf<MemoryObjectNamespace>();
         const tiny = yield* bounded;
+
         expect(
           yield* tiny
             .revalidate(memoryCandidates(["source"]), memoryRecallLimits)
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "budget" });
         expect(memoryCalls.get(MemoryProjects.make(name).address)).toBe(1);
+
         const request: MemoryOwnerRequest = {
           _tag: "Revalidate",
           version: 1,
@@ -536,7 +595,9 @@ describe("shared Cloudflare memory owner", () => {
           limits: memoryRecallLimits,
           deadlineMillis: 0,
         };
+
         const encoded = yield* encodeMemoryWire(MemoryOwnerRequest, request, 1_048_576);
+
         expect(decode(yield* Effect.promise(() => stub(name).memory(encoded)))).toMatchObject({
           failure: { reason: "timeout" },
         });
@@ -549,6 +610,7 @@ describe("shared Cloudflare memory owner", () => {
   for (const point of MemoryMutationPoint.literals) {
     it(`recovers after owner eviction at ${point}`, async () => {
       const name = project();
+
       // Initialize separately so only the targeted durable change is interrupted.
       if (point.startsWith("memory:change:")) {
         await Effect.runPromise(
@@ -560,16 +622,20 @@ describe("shared Cloudflare memory owner", () => {
       memoryFaults.set(MemoryProjects.make(name).address, { point, kind: "abort" });
       const write = Effect.flatMap(client(name), (c) => c.change(memoryPut(name, "source")));
       const first = await Effect.runPromise(Effect.result(write));
+
       expect(first._tag).toBe("Failure");
       expect(memoryFaults.has(MemoryProjects.make(name).address)).toBe(false);
       const recovered = await Effect.runPromise(write);
+
       expect(recovered.generation).toBe(1);
       expect(await Effect.runPromise(write)).toEqual(recovered);
+
       const lookup = await Effect.runPromise(
         Effect.flatMap(client(name), (c) =>
           c.revalidate(memoryCandidates(["source"]), memoryRecallLimits),
         ),
       );
+
       expect(lookup).toMatchObject({ _tag: "Found", passages: [{ source: { revision: "1" } }] });
     });
   }
@@ -579,16 +645,19 @@ describe("shared Cloudflare memory owner", () => {
       Effect.gen(function* () {
         const name = project();
         const memory = yield* client(name);
+
         memoryFaults.set(MemoryProjects.make(name).address, {
           point: "memory:change:after",
           kind: "fail",
         });
         const command = memoryPut(name, "source");
+
         expect(yield* memory.change(command).pipe(Effect.flip)).toMatchObject({
           _tag: "MemoryMutationFailure",
           point: "memory:change:after",
         });
         const replay = yield* memory.change(command);
+
         expect(replay.generation).toBe(1);
         expect(yield* memory.change(command)).toEqual(replay);
       }),
@@ -596,12 +665,14 @@ describe("shared Cloudflare memory owner", () => {
 
   it("bounds local stored rows and receipt count atomically while allowing exact replay at capacity", async () => {
     const name = project();
+
     await runInDurableObject(stub(name), (_instance, state) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const writer = yield* MemoryWriter;
           const reader = yield* MemoryReader;
           const command = memoryPut(name, "source");
+
           expect(
             yield* writer
               .change(memoryPut(name, "oversized", "too-big", null, "x".repeat(5000)))
@@ -609,6 +680,7 @@ describe("shared Cloudflare memory owner", () => {
           ).toMatchObject({ operation: "memory row byte limit", reason: "invalid-input" });
           expect(yield* reader.get(memoryPut(name, "oversized").key)).toBeNull();
           const first = yield* writer.change(command);
+
           expect(yield* writer.change(command)).toEqual(first);
           expect(yield* writer.change(memoryPut(name, "second")).pipe(Effect.flip)).toMatchObject({
             _tag: "MemoryStorageError",
@@ -639,20 +711,26 @@ describe("shared Cloudflare memory owner", () => {
         const address = MemoryProjects.make(name).address;
         const started = yield* Deferred.make<void>();
         const finished = yield* Deferred.make<void>();
+
         slowStarted.set(address, started);
         slowFinished.set(address, finished);
         const memory = yield* client(name, Principal.make("slow"));
+
         const pending = yield* memory
           .recall({ _tag: "NoMatch" }, { ...memoryRecallLimits, timeoutMillis: 100 })
           .pipe(Effect.forkChild);
+
         yield* Deferred.await(started);
         yield* Fiber.interrupt(pending);
         yield* Deferred.await(finished);
+
         const timeout = yield* memory
           .recall({ _tag: "NoMatch" }, { ...memoryRecallLimits, timeoutMillis: 10 })
           .pipe(Effect.flip);
+
         expect(timeout).toMatchObject({ reason: "timeout" });
         const normal = yield* client(name);
+
         expect(yield* normal.revalidate({ _tag: "NoMatch" }, memoryRecallLimits)).toEqual({
           _tag: "NoMatch",
         });
@@ -663,6 +741,7 @@ describe("shared Cloudflare memory owner", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const memory = yield* client(project(), Principal.make("defect"));
+
         expect(
           yield* memory.recall({ _tag: "NoMatch" }, memoryRecallLimits).pipe(Effect.flip),
         ).toMatchObject({ _tag: "MemoryRpcError", reason: "unavailable" });

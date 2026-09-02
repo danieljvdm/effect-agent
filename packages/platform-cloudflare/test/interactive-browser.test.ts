@@ -132,12 +132,15 @@ interface Gate<A> {
 const makeGate = <A>(): Gate<A> => {
   let resolveValue: ((value: A | PromiseLike<A>) => void) | undefined;
   let resolveStarted: (() => void) | undefined;
+
   const promise = new Promise<A>((resolve) => {
     resolveValue = resolve;
   });
+
   const started = new Promise<void>((resolve) => {
     resolveStarted = resolve;
   });
+
   return {
     promise,
     started,
@@ -168,6 +171,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       settleTimedOut: false,
     },
   };
+
   const calls: Array<string> = [];
   const keepAliveMillis: Array<number> = [];
   let currentUrl: unknown = options.initialUrl ?? "https://example.com/";
@@ -182,28 +186,35 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
   const controls: FixtureControls = {
     emitRequest: (url, emissionOptions = {}) => {
       if (requestListener === undefined) throw new Error("No request listener is installed");
+
       const settle = (): Promise<void> => {
         if (emissionOptions.settlement === "throw") {
           throw new Error("private-request-resolution-failure");
         }
+
         return emissionOptions.settlement === "reject"
           ? Promise.reject(new Error("private-request-resolution-failure"))
           : Promise.resolve();
       };
+
       const request: BrowserRunInteractiveRequest = {
         url: () => {
           if (emissionOptions.urlThrows === true) throw new Error("private-url-failure");
+
           return url;
         },
         abort: () => {
           calls.push(`request.abort:${url}`);
+
           return settle();
         },
         continue: () => {
           calls.push(`request.continue:${url}`);
+
           return settle();
         },
       };
+
       requestListener(request);
     },
     setUrl: (url) => {
@@ -247,10 +258,12 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
     },
     url: () => {
       if (options.urlError !== undefined) throw options.urlError;
+
       return currentUrl;
     },
     readText: async (selector, maximumBytes) => {
       calls.push(`page.readText:${selector ?? "<body>"}:${String(maximumBytes)}`);
+
       return options.readText === undefined
         ? { _tag: "Text", text: "Example Domain" }
         : await options.readText(selector, maximumBytes);
@@ -259,16 +272,19 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       calls.push(`page.fill:${selector}:${value}`);
       onDispatch();
       await options.fill?.(selector, value);
+
       return observation;
     },
     click: async (selector, _signal, onDispatch) => {
       calls.push(`page.click:${selector}`);
       onDispatch();
       await options.click?.(selector);
+
       return observation;
     },
     screenshot: async (fullPage) => {
       calls.push(`page.screenshot:${String(fullPage)}`);
+
       return options.screenshot === undefined
         ? new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
         : await options.screenshot(fullPage);
@@ -279,6 +295,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
     },
     createCdpSession: async () => {
       calls.push("page.createCdpSession");
+
       const session: BrowserRunInteractiveCdpSession = {
         send: async (command, parameters) => {
           calls.push(`cdp.send:${command}`);
@@ -290,6 +307,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
             };
           }
           if (command === "Cloudflare.handoff") return { handoffId: "handoff-id" };
+
           return { active: true, handoffId: "handoff-id", durationMs: 10 };
         },
         detach: async () => {
@@ -297,6 +315,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
           await options.remoteClose?.("cdp");
         },
       };
+
       return options.createCdp === undefined ? session : options.createCdp(session);
     },
     setViewport: async (viewport) => {
@@ -309,6 +328,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
     newPage: async () => {
       calls.push("context.newPage");
       if (options.newPageError !== undefined) throw options.newPageError;
+
       return options.newPage === undefined ? page : options.newPage(page);
     },
     close: async () => {
@@ -321,6 +341,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
     createContext: async () => {
       calls.push("browser.createContext");
       if (options.createContextError !== undefined) throw options.createContextError;
+
       return options.createContext === undefined ? context : options.createContext(context);
     },
     close: async () => {
@@ -330,6 +351,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
     sessionId: () => options.sessionId ?? "session-id",
     isConnected: () => {
       if (options.connectionStateError !== undefined) throw options.connectionStateError;
+
       return options.connected !== false;
     },
     onDisconnected: (listener) => {
@@ -350,6 +372,7 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
       calls.push("binding.launch");
       keepAliveMillis.push(keepAlive);
       if (options.launchError !== undefined) throw options.launchError;
+
       return options.launch === undefined ? browser : options.launch(browser);
     },
     closeSession: (sessionId) =>
@@ -381,12 +404,15 @@ const policy = (
   });
 
 const navigate = (url = "https://example.com/page") => BrowserNavigateRequest.make({ url });
+
 const supportedNetworks = [
   { _tag: "ExactHosts", allowedHosts: ["example.com"] },
   { _tag: "Unrestricted" },
 ] satisfies ReadonlyArray<InteractiveBrowserNetworkPolicy>;
+
 const readText = (selector?: string) =>
   BrowserReadTextRequest.make(selector === undefined ? {} : { selector });
+
 const fill = () => BrowserFillRequest.make({ selector: "#query", value: "effect" });
 const click = () => BrowserClickRequest.make({ selector: "button[type=submit]" });
 
@@ -408,6 +434,7 @@ const withBrowser = <A, E, R>(
   Effect.gen(function* () {
     const browser = yield* InteractiveBrowser;
     const handle = yield* browser.open(browserPolicy);
+
     return yield* use(handle);
   }).pipe(Effect.scoped, Effect.provide(fixtureLayer(fixture)));
 
@@ -439,14 +466,17 @@ describe("Browser Run interactive browser adapter", () => {
     () =>
       Effect.gen(function* () {
         const viewports: Array<BrowserRunViewport> = [];
+
         const fixture = makeFixture({
           setViewport: async (viewport) => {
             viewports.push(viewport);
           },
         });
+
         yield* withHost(fixture, (host) =>
           Effect.gen(function* () {
             const session = yield* host.open(policy({ maxActions: 1 }));
+
             yield* session.resizeViewport({ width: 1_440, height: 900 });
             yield* session.handle.navigate(navigate());
             yield* session.resizeViewport({ width: 1_024, height: 768, deviceScaleFactor: 2 });
@@ -468,10 +498,12 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("validates mutated viewport values before provider dispatch or budget admission", () =>
     Effect.gen(function* () {
       const fixture = makeFixture();
+
       yield* withHost(fixture, (host) =>
         Effect.gen(function* () {
           const session = yield* host.open(policy({ maxActions: 1 }));
           const viewport = BrowserRunViewport.make({ width: 1_440, height: 900 });
+
           Reflect.set(viewport, "deviceScaleFactor", 2);
           expect(yield* session.resizeViewport(viewport).pipe(Effect.flip)).toMatchObject({
             _tag: "InteractiveBrowserPolicyDeniedError",
@@ -494,11 +526,13 @@ describe("Browser Run interactive browser adapter", () => {
   ])("rejects resize on an unavailable page (%s)", (reason) =>
     Effect.gen(function* () {
       const fixture = makeFixture();
+
       yield* withHost(fixture, (host) =>
         Effect.gen(function* () {
           const session = yield* reason === "scope-closed"
             ? Effect.scoped(host.open(policy()))
             : host.open(policy());
+
           if (reason === "closed") yield* session.close;
           if (reason === "disconnected") fixture.controls.disconnect();
           if (reason === "off-policy") fixture.controls.setUrl("https://elsewhere.example/");
@@ -528,10 +562,13 @@ describe("Browser Run interactive browser adapter", () => {
     (operation) =>
       Effect.gen(function* () {
         const gate = makeGate<void>();
+
         const wait = () => {
           gate.markStarted();
+
           return gate.promise;
         };
+
         const fixture = makeFixture({
           setViewport: operation === "resize" ? wait : undefined,
           goto: operation === "navigate" ? wait : undefined,
@@ -539,14 +576,17 @@ describe("Browser Run interactive browser adapter", () => {
             operation === "handoff"
               ? async () => {
                   await wait();
+
                   return { active: false };
                 }
               : undefined,
         });
+
         yield* withHost(fixture, (host) =>
           Effect.gen(function* () {
             const session = yield* host.open(policy());
             const resize = session.resizeViewport({ width: 800, height: 600 });
+
             const pending = yield* (
               operation === "resize"
                 ? resize
@@ -554,6 +594,7 @@ describe("Browser Run interactive browser adapter", () => {
                   ? session.handle.navigate(navigate()).pipe(Effect.asVoid)
                   : session.getHandoffState.pipe(Effect.asVoid)
             ).pipe(Effect.forkChild);
+
             yield* awaitPromise(gate.started);
             expect(yield* resize.pipe(Effect.flip)).toMatchObject({
               _tag: "InteractiveBrowserBusyError",
@@ -578,18 +619,23 @@ describe("Browser Run interactive browser adapter", () => {
         const cause = new Error(
           failure === "remote-closure" ? "Target closed" : "private-provider-error",
         );
+
         const fixture = makeFixture({
           setViewport: () => {
             if (failure === "throw") throw cause;
+
             return Promise.reject(cause);
           },
         });
+
         yield* withHost(fixture, (host) =>
           Effect.gen(function* () {
             const session = yield* host.open(policy({ maxActions: 1 }));
+
             const error = yield* session
               .resizeViewport({ width: 800, height: 600 })
               .pipe(Effect.flip);
+
             expect(error).toMatchObject({
               _tag:
                 failure === "remote-closure"
@@ -616,17 +662,21 @@ describe("Browser Run interactive browser adapter", () => {
     (ending) =>
       Effect.gen(function* () {
         const gate = makeGate<void>();
+
         const fixture = makeFixture({
           setViewport: () => {
             gate.markStarted();
+
             return gate.promise;
           },
         });
+
         yield* withHost(fixture, (host) =>
           Effect.gen(function* () {
             const session = yield* host.open(policy({ maxElapsedMillis: 100 }));
             const resize = session.resizeViewport({ width: 800, height: 600 });
             const pending = yield* resize.pipe(Effect.forkChild);
+
             yield* awaitPromise(gate.started);
             if (ending === "timeout") {
               yield* TestClock.adjust(Duration.millis(100));
@@ -663,6 +713,7 @@ describe("Browser Run interactive browser adapter", () => {
     const proof: InteractiveLayerRequiresBinding = true;
     const scoped: ScopedOpenRequirement = true;
     const resize: ResizeEffect = true;
+
     expect(proof && scoped && resize).toBe(true);
   });
 
@@ -683,6 +734,7 @@ describe("Browser Run interactive browser adapter", () => {
           const text = yield* handle.readText(readText("main"));
           const filled = yield* handle.fill(fill());
           const clicked = yield* handle.click(click());
+
           return { navigation, text, filled, clicked };
         }),
       );
@@ -715,6 +767,7 @@ describe("Browser Run interactive browser adapter", () => {
     Effect.gen(function* () {
       const browserPolicy = policy({ maxActions: 1 });
       const fixture = makeFixture();
+
       yield* withBrowser(
         fixture,
         (handle) =>
@@ -731,10 +784,12 @@ describe("Browser Run interactive browser adapter", () => {
             const denied = yield* handle
               .navigate(navigate("https://widened.invalid/"))
               .pipe(Effect.flip);
+
             expect(denied).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
 
             yield* handle.navigate(navigate());
             const limit = yield* handle.readText(readText()).pipe(Effect.flip);
+
             expect(limit).toMatchObject({
               _tag: "InteractiveBrowserLimitError",
               limit: "actions",
@@ -746,11 +801,14 @@ describe("Browser Run interactive browser adapter", () => {
       );
 
       const malformedPolicy = policy();
+
       expect(Reflect.set(malformedPolicy.network, "allowedHosts", [])).toBe(true);
       const malformed = makeFixture();
+
       const error = yield* withBrowser(malformed, () => Effect.void, malformedPolicy).pipe(
         Effect.flip,
       );
+
       expect(error).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
       expect(malformed.calls).not.toContain("binding.launch");
     }),
@@ -764,13 +822,18 @@ describe("Browser Run interactive browser adapter", () => {
         maxElapsedMillis: 120_000,
         maxReturnedBytes: 1_024,
       });
+
       const fixture = makeFixture({ launchError: new Error("provider must not be reached") });
+
       const genericError = yield* withBrowser(fixture, () => Effect.void, publicWeb).pipe(
         Effect.flip,
       );
+
       const hostError = yield* withHost(fixture, (host) => host.open(publicWeb)).pipe(Effect.flip);
+
       for (const error of [genericError, hostError]) {
         const encoded = yield* Schema.encodeEffect(InteractiveBrowserError)(error);
+
         expect(encoded).toEqual({
           _tag: "InteractiveBrowserUnsupportedError",
           implementation: {
@@ -793,6 +856,7 @@ describe("Browser Run interactive browser adapter", () => {
           controls.emitRequest("https://example.com/interception-start");
         },
       });
+
       yield* withBrowser(fixture, () => Effect.void);
 
       expect(fixture.calls).toContain("request.continue:https://example.com/interception-start");
@@ -807,9 +871,11 @@ describe("Browser Run interactive browser adapter", () => {
     () =>
       Effect.gen(function* () {
         const initial = makeFixture();
+
         const initialError = yield* withBrowser(initial, (handle) =>
           handle.navigate(navigate("https://example.com.evil.invalid/")),
         ).pipe(Effect.flip);
+
         expect(initialError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
         expect(initial.calls.some((call) => call.startsWith("page.goto:"))).toBe(false);
 
@@ -825,20 +891,24 @@ describe("Browser Run interactive browser adapter", () => {
               controls.setUrl("https://example.com/final");
             },
           });
+
           const error = yield* withBrowser(intercepted, (handle) =>
             handle.navigate(navigate()),
           ).pipe(Effect.flip);
+
           expect(error).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
           expect(intercepted.calls).toContain(`request.abort:${deniedUrl}`);
           expect(intercepted.calls).not.toContain(`request.continue:${deniedUrl}`);
         }
 
         const port = makeFixture();
+
         const portError = yield* withBrowser(
           port,
           (handle) => handle.navigate(navigate("https://example.com/")),
           policy({ allowedHosts: ["example.com:8443"] }),
         ).pipe(Effect.flip);
+
         expect(portError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
       }),
   );
@@ -853,9 +923,11 @@ describe("Browser Run interactive browser adapter", () => {
             controls.emitRequest(url, { settlement });
           },
         });
+
         const error = yield* withBrowser(fixture, (handle) => handle.navigate(navigate())).pipe(
           Effect.flip,
         );
+
         expect(error).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
       }
     }),
@@ -866,10 +938,12 @@ describe("Browser Run interactive browser adapter", () => {
     (network) =>
       Effect.gen(function* () {
         const gate = makeGate<void>();
+
         const fixture = makeFixture({
           readText: async () => {
             gate.markStarted();
             await gate.promise;
+
             return { _tag: "Text", text: "done" };
           },
         });
@@ -879,14 +953,17 @@ describe("Browser Run interactive browser adapter", () => {
           (handle) =>
             Effect.gen(function* () {
               const reading = yield* handle.readText(readText()).pipe(Effect.forkChild);
+
               yield* awaitPromise(gate.started);
               const busy = yield* handle.click(click()).pipe(Effect.flip);
+
               expect(busy).toMatchObject({ _tag: "InteractiveBrowserBusyError" });
               expect(fixture.calls.some((call) => call.startsWith("page.click:"))).toBe(false);
 
               gate.resolve(undefined);
               expect((yield* Fiber.join(reading)).text).toBe("done");
               const limit = yield* handle.navigate(navigate()).pipe(Effect.flip);
+
               expect(limit).toMatchObject({
                 _tag: "InteractiveBrowserLimitError",
                 limit: "actions",
@@ -906,11 +983,13 @@ describe("Browser Run interactive browser adapter", () => {
         const overLimit = makeFixture({
           readText: async () => ({ _tag: "OverLimit", observed: 9 }),
         });
+
         const limit = yield* withBrowser(
           overLimit,
           (handle) => handle.readText(readText()),
           policy({ network, maxReturnedBytes: 8 }),
         ).pipe(Effect.flip);
+
         expect(limit).toMatchObject({
           _tag: "InteractiveBrowserLimitError",
           limit: "returned-bytes",
@@ -921,11 +1000,13 @@ describe("Browser Run interactive browser adapter", () => {
         const multibyte = makeFixture({
           readText: async () => ({ _tag: "Text", text: "éé" }),
         });
+
         const byteLimit = yield* withBrowser(
           multibyte,
           (handle) => handle.readText(readText()),
           policy({ network, maxReturnedBytes: 3 }),
         ).pipe(Effect.flip);
+
         expect(byteLimit).toMatchObject({
           _tag: "InteractiveBrowserLimitError",
           limit: "returned-bytes",
@@ -938,11 +1019,13 @@ describe("Browser Run interactive browser adapter", () => {
           { _tag: "Unknown" },
         ]) {
           const malformed = makeFixture({ readText: async () => observation });
+
           const error = yield* withBrowser(
             malformed,
             (handle) => handle.readText(readText()),
             policy({ network }),
           ).pipe(Effect.flip);
+
           expect(error).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
         }
       }),
@@ -953,6 +1036,7 @@ describe("Browser Run interactive browser adapter", () => {
     (network) =>
       Effect.gen(function* () {
         const gate = makeGate<void>();
+
         const fixture = makeFixture({
           goto: async () => {
             gate.markStarted();
@@ -965,9 +1049,11 @@ describe("Browser Run interactive browser adapter", () => {
           (handle) =>
             Effect.gen(function* () {
               const navigating = yield* handle.navigate(navigate()).pipe(Effect.forkChild);
+
               yield* awaitPromise(gate.started);
               yield* TestClock.adjust(Duration.millis(100));
               const elapsed = yield* Fiber.join(navigating).pipe(Effect.flip);
+
               expect(elapsed).toMatchObject({
                 _tag: "InteractiveBrowserLimitError",
                 limit: "elapsed",
@@ -976,6 +1062,7 @@ describe("Browser Run interactive browser adapter", () => {
               });
               gate.resolve(undefined);
               const expired = yield* handle.readText(readText()).pipe(Effect.flip);
+
               expect(expired).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
             }),
           policy({ network, maxElapsedMillis: 100 }),
@@ -987,20 +1074,25 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("closes every remote resource that arrives after acquisition has timed out", () =>
     Effect.gen(function* () {
       const browserGate = makeGate<BrowserRunInteractiveBrowser>();
+
       const browserFixture = makeFixture({
         launch: async () => {
           browserGate.markStarted();
+
           return browserGate.promise;
         },
       });
+
       const opening = yield* withBrowser(
         browserFixture,
         () => Effect.void,
         policy({ maxElapsedMillis: 100 }),
       ).pipe(Effect.forkChild);
+
       yield* awaitPromise(browserGate.started);
       yield* TestClock.adjust(Duration.millis(100));
       const elapsed = yield* Fiber.join(opening).pipe(Effect.flip);
+
       expect(elapsed).toMatchObject({
         _tag: "InteractiveBrowserLimitError",
         limit: "elapsed",
@@ -1012,18 +1104,22 @@ describe("Browser Run interactive browser adapter", () => {
       expect(closedResources(browserFixture)).toEqual(["browser.close"]);
 
       const contextGate = makeGate<void>();
+
       const contextFixture = makeFixture({
         createContext: async (context) => {
           contextGate.markStarted();
           await contextGate.promise;
+
           return context;
         },
       });
+
       const creatingContext = yield* withBrowser(
         contextFixture,
         () => Effect.void,
         policy({ maxElapsedMillis: 100 }),
       ).pipe(Effect.forkChild);
+
       yield* awaitPromise(contextGate.started);
       yield* TestClock.adjust(Duration.millis(100));
       expect(yield* Fiber.join(creatingContext).pipe(Effect.flip)).toMatchObject({
@@ -1037,18 +1133,22 @@ describe("Browser Run interactive browser adapter", () => {
       expect(contextFixture.calls.filter((call) => call === "browser.close")).toHaveLength(1);
 
       const pageGate = makeGate<void>();
+
       const pageFixture = makeFixture({
         newPage: async (page) => {
           pageGate.markStarted();
           await pageGate.promise;
+
           return page;
         },
       });
+
       const creatingPage = yield* withBrowser(
         pageFixture,
         () => Effect.void,
         policy({ maxElapsedMillis: 100 }),
       ).pipe(Effect.forkChild);
+
       yield* awaitPromise(pageGate.started);
       yield* TestClock.adjust(Duration.millis(100));
       expect(yield* Fiber.join(creatingPage).pipe(Effect.flip)).toMatchObject({
@@ -1067,18 +1167,21 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("unwinds each partially acquired open exactly once", () =>
     Effect.gen(function* () {
       const contextFailure = makeFixture({ createContextError: new Error("context failed") });
+
       expect(yield* withBrowser(contextFailure, () => Effect.void).pipe(Effect.flip)).toMatchObject(
         { _tag: "InteractiveBrowserProtocolError" },
       );
       expect(closedResources(contextFailure)).toEqual(["browser.close"]);
 
       const pageFailure = makeFixture({ newPageError: new Error("page failed") });
+
       expect(yield* withBrowser(pageFailure, () => Effect.void).pipe(Effect.flip)).toMatchObject({
         _tag: "InteractiveBrowserProtocolError",
       });
       expect(closedResources(pageFailure)).toEqual(["context.close", "browser.close"]);
 
       const bypassFailure = makeFixture({ setupError: new Error("bypass failed") });
+
       expect(yield* withBrowser(bypassFailure, () => Effect.void).pipe(Effect.flip)).toMatchObject({
         _tag: "InteractiveBrowserProtocolError",
       });
@@ -1087,6 +1190,7 @@ describe("Browser Run interactive browser adapter", () => {
       const interceptionFailure = makeFixture({
         interceptionError: new Error("interception failed"),
       });
+
       expect(
         yield* withBrowser(interceptionFailure, () => Effect.void).pipe(Effect.flip),
       ).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
@@ -1099,23 +1203,28 @@ describe("Browser Run interactive browser adapter", () => {
     Effect.gen(function* () {
       const capacity = makeFixture({ launchError: new Error("429 browser time limit") });
       const capacityError = yield* withBrowser(capacity, () => Effect.void).pipe(Effect.flip);
+
       expect(capacityError).toMatchObject({ _tag: "InteractiveBrowserCapacityError" });
 
       const protocol = makeFixture({ launchError: new Error("bad handshake") });
       const protocolError = yield* withBrowser(protocol, () => Effect.void).pipe(Effect.flip);
+
       expect(protocolError).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
 
       const unreadableConnection = makeFixture({
         connectionStateError: new Error("bad connection state"),
       });
+
       const connectionError = yield* withBrowser(unreadableConnection, () => Effect.void).pipe(
         Effect.flip,
       );
+
       expect(connectionError).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
       expect(closedResources(unreadableConnection)).toEqual(["browser.close"]);
 
       const disconnected = makeFixture({ connected: false });
       const expired = yield* withBrowser(disconnected, () => Effect.void).pipe(Effect.flip);
+
       expect(expired).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
       expect(closedResources(disconnected)).toEqual(["browser.close"]);
     }),
@@ -1128,13 +1237,16 @@ describe("Browser Run interactive browser adapter", () => {
           throw new Error("Target closed");
         },
       });
+
       const expired = yield* withBrowser(closed, (handle) =>
         Effect.gen(function* () {
           const first = yield* handle.navigate(navigate()).pipe(Effect.flip);
           const second = yield* handle.navigate(navigate()).pipe(Effect.flip);
+
           return { first, second };
         }),
       );
+
       expect(expired.first).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
       expect(expired.second).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
       expect(closed.calls.filter((call) => call.startsWith("page.goto:")).length).toBe(1);
@@ -1144,9 +1256,11 @@ describe("Browser Run interactive browser adapter", () => {
           throw new Error("provider rejected navigation");
         },
       });
+
       const navigationError = yield* withBrowser(navigation, (handle) =>
         handle.navigate(navigate()),
       ).pipe(Effect.flip);
+
       expect(navigationError).toMatchObject({
         _tag: "InteractiveBrowserActionError",
         operation: "navigate",
@@ -1158,9 +1272,11 @@ describe("Browser Run interactive browser adapter", () => {
           throw new Error("provider rejected read");
         },
       });
+
       const readError = yield* withBrowser(reading, (handle) => handle.readText(readText())).pipe(
         Effect.flip,
       );
+
       expect(readError).toMatchObject({
         _tag: "InteractiveBrowserActionError",
         operation: "read-text",
@@ -1172,9 +1288,11 @@ describe("Browser Run interactive browser adapter", () => {
           throw new Error("provider rejected fill");
         },
       });
+
       const fillError = yield* withBrowser(filling, (handle) => handle.fill(fill())).pipe(
         Effect.flip,
       );
+
       expect(fillError).toMatchObject({
         _tag: "InteractiveBrowserActionError",
         operation: "fill",
@@ -1186,9 +1304,11 @@ describe("Browser Run interactive browser adapter", () => {
           throw new Error("provider rejected click");
         },
       });
+
       const clickError = yield* withBrowser(clicking, (handle) => handle.click(click())).pipe(
         Effect.flip,
       );
+
       expect(clickError).toMatchObject({
         _tag: "InteractiveBrowserActionError",
         operation: "click",
@@ -1200,21 +1320,27 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("validates every post-action URL as malformed or off-policy", () =>
     Effect.gen(function* () {
       const malformed = makeFixture({ initialUrl: 42 });
+
       const malformedError = yield* withBrowser(malformed, (handle) => handle.click(click())).pipe(
         Effect.flip,
       );
+
       expect(malformedError).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
 
       const unreadable = makeFixture({ urlError: new Error("url failed") });
+
       const unreadableError = yield* withBrowser(unreadable, (handle) =>
         handle.click(click()),
       ).pipe(Effect.flip);
+
       expect(unreadableError).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
 
       const denied = makeFixture({ initialUrl: "https://off-policy.invalid/" });
+
       const deniedError = yield* withBrowser(denied, (handle) => handle.fill(fill())).pipe(
         Effect.flip,
       );
+
       expect(deniedError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
     }),
   );
@@ -1225,6 +1351,7 @@ describe("Browser Run interactive browser adapter", () => {
       Effect.gen(function* () {
         const browserPolicy = policy({ network });
         const success = makeFixture();
+
         yield* withBrowser(success, () => Effect.void, browserPolicy);
         expectResourcesClosedOnce(success);
 
@@ -1233,30 +1360,36 @@ describe("Browser Run interactive browser adapter", () => {
             throw new Error("navigation failed");
           },
         });
+
         const failureExit = yield* withBrowser(
           failure,
           (handle) => handle.navigate(navigate("https://denied.invalid/")),
           browserPolicy,
         ).pipe(Effect.exit);
+
         expect(Exit.isFailure(failureExit)).toBe(true);
         expectResourcesClosedOnce(failure);
 
         const defect = makeFixture();
+
         const defectExit = yield* withBrowser(
           defect,
           () => Effect.die("test defect"),
           browserPolicy,
         ).pipe(Effect.exit);
+
         expect(Exit.isFailure(defectExit)).toBe(true);
         expectResourcesClosedOnce(defect);
 
         const timeoutReady = makeGate<void>();
         const timeout = makeFixture();
+
         const timeoutFiber = yield* withBrowser(
           timeout,
           () => Effect.sync(timeoutReady.markStarted).pipe(Effect.andThen(Effect.never)),
           browserPolicy,
         ).pipe(Effect.timeout(Duration.millis(100)), Effect.forkChild);
+
         yield* awaitPromise(timeoutReady.started);
         yield* TestClock.adjust(Duration.millis(100));
         yield* Fiber.await(timeoutFiber);
@@ -1264,11 +1397,13 @@ describe("Browser Run interactive browser adapter", () => {
 
         const interruptReady = makeGate<void>();
         const interrupted = makeFixture();
+
         const interruptedFiber = yield* withBrowser(
           interrupted,
           () => Effect.sync(interruptReady.markStarted).pipe(Effect.andThen(Effect.never)),
           browserPolicy,
         ).pipe(Effect.forkChild);
+
         yield* awaitPromise(interruptReady.started);
         yield* Fiber.interrupt(interruptedFiber);
         expectResourcesClosedOnce(interrupted);
@@ -1282,6 +1417,7 @@ describe("Browser Run interactive browser adapter", () => {
 
       expectResourcesClosedOnce(fixture);
       const error = yield* escaped.click(click()).pipe(Effect.flip);
+
       expect(error).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
       expect(fixture.calls.some((call) => call.startsWith("page.click:"))).toBe(false);
     }),
@@ -1290,9 +1426,11 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("warns with fixed cleanup messages without changing the primary typed failure", () =>
     Effect.gen(function* () {
       const logs: Array<string> = [];
+
       const logger = Logger.make<unknown, void>(({ cause, message }) => {
         logs.push(`${String(message)} ${String(cause)}`);
       });
+
       const fixture = makeFixture({
         closeErrors: new Set<CloseTarget>([
           "page",
@@ -1302,6 +1440,7 @@ describe("Browser Run interactive browser adapter", () => {
           "disconnect-listener",
         ]),
       });
+
       const error = yield* withBrowser(fixture, (handle) =>
         handle.navigate(navigate("https://denied.invalid/")),
       ).pipe(Effect.flip, Effect.provide(Logger.layer([logger])));
@@ -1321,6 +1460,7 @@ describe("Browser Run interactive browser adapter", () => {
     Effect.gen(function* () {
       const providerBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]);
       const fixture = makeFixture({ screenshot: async () => providerBytes });
+
       const result = yield* withBrowser(
         fixture,
         (handle) =>
@@ -1328,10 +1468,13 @@ describe("Browser Run interactive browser adapter", () => {
             const scrolled = yield* handle.scroll(
               BrowserScrollRequest.make({ deltaX: -10, deltaY: 250 }),
             );
+
             const screenshot = yield* handle.screenshot(
               BrowserScreenshotRequest.make({ fullPage: false }),
             );
+
             const limit = yield* handle.readText(readText()).pipe(Effect.flip);
+
             return { limit, screenshot, scrolled };
           }),
         policy({ maxActions: 2, maxReturnedBytes: 9 }),
@@ -1354,18 +1497,23 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("rejects malformed screenshot input, PNG output, and per-result overflow", () =>
     Effect.gen(function* () {
       const malformedRequest = BrowserScreenshotRequest.make({ fullPage: false });
+
       expect(Reflect.set(malformedRequest, "fullPage", "yes")).toBe(true);
       const inputFixture = makeFixture();
+
       const inputError = yield* withBrowser(inputFixture, (handle) =>
         handle.screenshot(malformedRequest),
       ).pipe(Effect.flip);
+
       expect(inputError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
       expect(inputFixture.calls.some((call) => call.startsWith("page.screenshot:"))).toBe(false);
 
       const malformedPng = makeFixture({ screenshot: async () => new Uint8Array([1, 2, 3]) });
+
       const protocol = yield* withBrowser(malformedPng, (handle) =>
         handle.screenshot(BrowserScreenshotRequest.make({ fullPage: true })),
       ).pipe(Effect.flip);
+
       expect(protocol).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
       expect(protocol).not.toHaveProperty("cause");
       expect(String(protocol)).not.toContain("1,2,3");
@@ -1374,11 +1522,13 @@ describe("Browser Run interactive browser adapter", () => {
         screenshot: async () =>
           new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]),
       });
+
       const limit = yield* withBrowser(
         overflow,
         (handle) => handle.screenshot(BrowserScreenshotRequest.make({ fullPage: true })),
         policy({ maxReturnedBytes: 8 }),
       ).pipe(Effect.flip);
+
       expect(limit).toMatchObject({
         _tag: "InteractiveBrowserLimitError",
         limit: "returned-bytes",
@@ -1391,6 +1541,7 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("invalidates immediately and tears down once during an in-flight action", () =>
     Effect.gen(function* () {
       const gate = makeGate<void>();
+
       const fixture = makeFixture({
         scroll: async () => {
           gate.markStarted();
@@ -1403,13 +1554,16 @@ describe("Browser Run interactive browser adapter", () => {
           const scrolling = yield* handle
             .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 1 }))
             .pipe(Effect.forkChild);
+
           yield* awaitPromise(gate.started);
           yield* handle.close;
           yield* handle.close;
           gate.resolve(undefined);
           const stale = yield* Fiber.join(scrolling).pipe(Effect.flip);
+
           expect(stale).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
           const closed = yield* handle.readText(readText()).pipe(Effect.flip);
+
           expect(closed).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
         }),
       );
@@ -1422,6 +1576,7 @@ describe("Browser Run interactive browser adapter", () => {
     () =>
       Effect.gen(function* () {
         const gate = makeGate<void>();
+
         const fixture = makeFixture({
           scroll: async () => {
             gate.markStarted();
@@ -1434,6 +1589,7 @@ describe("Browser Run interactive browser adapter", () => {
             const scrolling = yield* handle
               .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 1 }))
               .pipe(Effect.forkChild);
+
             yield* awaitPromise(gate.started);
             yield* Fiber.interrupt(scrolling);
             expect(closedResources(fixture)).toEqual([]);
@@ -1450,6 +1606,7 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("does not let local teardown exceed the deadline or veto confirmed termination", () =>
     Effect.gen(function* () {
       const pageClose = makeGate<void>();
+
       const fixture = makeFixture({
         remoteClose: async (target) => {
           if (target === "page") {
@@ -1462,6 +1619,7 @@ describe("Browser Run interactive browser adapter", () => {
       yield* withBrowser(fixture, (handle) =>
         Effect.gen(function* () {
           const closing = yield* handle.close.pipe(Effect.forkChild);
+
           yield* awaitPromise(pageClose.started);
           yield* TestClock.adjust(Duration.seconds(10));
           yield* Fiber.join(closing);
@@ -1496,6 +1654,7 @@ describe("Browser Run interactive browser adapter", () => {
     ({ network, destination, resource }) =>
       Effect.gen(function* () {
         const parameters: Array<unknown> = [];
+
         const fixture = makeFixture({
           goto: async (url, controls) => {
             controls.emitRequest(url);
@@ -1512,6 +1671,7 @@ describe("Browser Run interactive browser adapter", () => {
               };
             }
             if (command === "Cloudflare.handoff") return { handoffId: "private-handoff" };
+
             return { active: false, handoffId: "private-handoff", durationMs: 25 };
           },
         });
@@ -1525,31 +1685,39 @@ describe("Browser Run interactive browser adapter", () => {
                 maxElapsedMillis: 90_000,
               }),
             );
+
             expect(Redacted.isRedacted(session.sessionId)).toBe(true);
             expect(Redacted.value(session.sessionId)).toBe("session-id");
             expect((yield* session.handle.navigate(navigate("https://example.com/"))).url).toBe(
               destination,
             );
             yield* session.handle.navigate(navigate(destination));
+
             const liveView = yield* session.getLiveView(
               BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
             );
+
             const handoff = yield* session.handoff(
               BrowserRunHandoffRequest.make({ instructions: "Complete MFA", timeout: 1_000 }),
             );
+
             fixture.controls.emitRequest(`${destination}after-human`);
             fixture.controls.setUrl(`${destination}after-human`);
             const state = yield* session.getHandoffState;
+
             expect(Redacted.isRedacted(liveView.devtoolsFrontendUrl)).toBe(true);
             expect(Redacted.value(liveView.devtoolsFrontendUrl)).toContain("jwt=secret");
             expect(Redacted.value(handoff.handoffId)).toBe("private-handoff");
             expect(Redacted.value(state.handoffId!)).toBe("private-handoff");
             expect(state.active).toBe(false);
+
             const resumed = yield* session.handle.scroll(
               BrowserScrollRequest.make({ deltaX: 0, deltaY: 10 }),
             );
+
             expect(resumed.url).toBe(`${destination}after-human`);
             const limit = yield* session.handle.readText(readText()).pipe(Effect.flip);
+
             expect(limit).toMatchObject({
               _tag: "InteractiveBrowserLimitError",
               limit: "actions",
@@ -1581,43 +1749,54 @@ describe("Browser Run interactive browser adapter", () => {
     Effect.gen(function* () {
       const unsafe =
         "https://operator:secret@live.browser.run/ui/view?mode=tab&wss=live.browser.run/api/devtools/browser/session/page/target";
+
       const fixture = makeFixture({
         cdpSend: async () => ({ devtoolsFrontendUrl: unsafe }),
       });
+
       const malformed = yield* withHost(fixture, (host) =>
         Effect.gen(function* () {
           const session = yield* host.open(policy({ maxElapsedMillis: 90_000 }));
+
           return yield* session
             .getLiveView(BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }))
             .pipe(Effect.flip);
         }),
       );
+
       expect(malformed).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
       expect(malformed).not.toHaveProperty("cause");
       expect(String(malformed)).not.toContain("operator:secret");
       expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(1);
 
       const shortExpiry = BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 });
+
       expect(Reflect.set(shortExpiry, "expiresInMs", 10_000)).toBe(true);
       const expiryFixture = makeFixture();
+
       const expiryError = yield* withHost(expiryFixture, (host) =>
         Effect.gen(function* () {
           const session = yield* host.open(policy({ maxElapsedMillis: 90_000 }));
+
           return yield* session.getLiveView(shortExpiry).pipe(Effect.flip);
         }),
       );
+
       expect(expiryError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
       expect(expiryFixture.calls.some((call) => call.startsWith("cdp.send:"))).toBe(false);
 
       const incompleteState = makeFixture({
         cdpSend: async () => ({ active: true }),
       });
+
       const stateError = yield* withHost(incompleteState, (host) =>
         Effect.gen(function* () {
           const session = yield* host.open(policy());
+
           return yield* session.getHandoffState.pipe(Effect.flip);
         }),
       );
+
       expect(stateError).toMatchObject({ _tag: "InteractiveBrowserProtocolError" });
       expect(stateError).not.toHaveProperty("cause");
 
@@ -1625,26 +1804,33 @@ describe("Browser Run interactive browser adapter", () => {
         instructions: "Wait",
         timeout: 1_000,
       });
+
       expect(Reflect.set(longInstructions, "instructions", "x".repeat(1_025))).toBe(true);
       const instructionFixture = makeFixture();
+
       const instructionError = yield* withHost(instructionFixture, (host) =>
         Effect.gen(function* () {
           const session = yield* host.open(policy());
+
           return yield* session.handoff(longInstructions).pipe(Effect.flip);
         }),
       );
+
       expect(instructionError).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
       expect(instructionFixture.calls.some((call) => call.startsWith("cdp.send:"))).toBe(false);
 
       const overlong = makeFixture();
+
       const denied = yield* withHost(overlong, (host) =>
         Effect.gen(function* () {
           const session = yield* host.open(policy({ maxElapsedMillis: 500 }));
+
           return yield* session
             .handoff(BrowserRunHandoffRequest.make({ instructions: "Wait", timeout: 1_000 }))
             .pipe(Effect.flip);
         }),
       );
+
       expect(denied).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
       expect(overlong.calls.some((call) => call.startsWith("cdp.send:"))).toBe(false);
     }),
@@ -1653,6 +1839,7 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("closes the exact provider session without a browser connection", () =>
     Effect.gen(function* () {
       const fixture = makeFixture();
+
       yield* withHost(fixture, (host) => host.closeSession(Redacted.make("leaked_session")));
       expect(fixture.calls).toEqual(["binding.terminate:leaked_session"]);
     }),
@@ -1661,9 +1848,11 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("rejects a concurrent generic action while a host control owns the pass", () =>
     Effect.gen(function* () {
       const gate = makeGate<unknown>();
+
       const fixture = makeFixture({
         cdpSend: async () => {
           gate.markStarted();
+
           return gate.promise;
         },
       });
@@ -1672,10 +1861,13 @@ describe("Browser Run interactive browser adapter", () => {
         Effect.gen(function* () {
           const session = yield* host.open(policy());
           const querying = yield* session.getHandoffState.pipe(Effect.forkChild);
+
           yield* awaitPromise(gate.started);
+
           const busy = yield* session.handle
             .scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 1 }))
             .pipe(Effect.flip);
+
           expect(busy).toMatchObject({ _tag: "InteractiveBrowserBusyError" });
           expect(fixture.calls.filter((call) => call === "page.createCdpSession")).toHaveLength(1);
           expect(fixture.calls.some((call) => call.startsWith("page.scroll:"))).toBe(false);
@@ -1690,9 +1882,11 @@ describe("Browser Run interactive browser adapter", () => {
   it.effect("detaches a CDP session that arrives after the pass deadline", () =>
     Effect.gen(function* () {
       const gate = makeGate<BrowserRunInteractiveCdpSession>();
+
       const fixture = makeFixture({
         createCdp: async () => {
           gate.markStarted();
+
           return gate.promise;
         },
       });
@@ -1701,18 +1895,21 @@ describe("Browser Run interactive browser adapter", () => {
         Effect.gen(function* () {
           const session = yield* host.open(policy({ maxElapsedMillis: 100 }));
           const querying = yield* session.getHandoffState.pipe(Effect.forkChild);
+
           yield* awaitPromise(gate.started);
           yield* TestClock.adjust(Duration.millis(100));
           expect(yield* Fiber.join(querying).pipe(Effect.flip)).toMatchObject({
             _tag: "InteractiveBrowserLimitError",
             limit: "elapsed",
           });
+
           const cdp: BrowserRunInteractiveCdpSession = {
             send: async () => ({ active: false }),
             detach: async () => {
               fixture.calls.push("late-cdp.detach");
             },
           };
+
           gate.resolve(cdp);
           yield* Effect.yieldNow;
           yield* Effect.yieldNow;

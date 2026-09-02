@@ -25,6 +25,7 @@ export const CompactionDecision = Schema.Union([
     ),
   }),
 ]);
+
 export type CompactionDecision = typeof CompactionDecision.Type;
 
 /** Expected strategy or decision-validation failure. Causes stay in the live Effect only. */
@@ -74,13 +75,17 @@ const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
     Stream.suspend(() => {
       const { source, policy, targetTokens, forceSummarize, allowSummarize } = request;
       const state = { ...request.state };
+
       const keepRecentTokens =
         targetTokens === undefined
           ? policy.keepRecentTokens
           : Math.max(1, Math.min(policy.keepRecentTokens, targetTokens));
+
       const decisions: Array<CompactionDecision> = [];
+
       if (!forceSummarize && policy.mode !== "summarize") {
         const through = choosePruneBound(source.content, state, keepRecentTokens);
+
         if (through > state.clearedThrough) {
           state.clearedThrough = through;
           decisions.push({ kind: "clear-tool-results", through });
@@ -93,15 +98,19 @@ const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
         }
       }
       const prune = Stream.fromIterable(decisions);
+
       if ((!allowSummarize || policy.mode === "prune") && !forceSummarize) return prune;
+
       return prune.pipe(
         Stream.concat(
           Stream.unwrap(
             Effect.gen(function* () {
               const through = chooseSummarizeCut(source.content, state, keepRecentTokens);
               const covered = collectCoveredMessages(source.content, state, through);
+
               if (covered.length === 0) return Stream.empty;
               const transcript = renderForSummary(covered, state.summary);
+
               const prompt = Prompt.fromMessages([
                 Prompt.userMessage({
                   content: [
@@ -111,7 +120,9 @@ const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
                   ],
                 }),
               ]);
+
               const text = yield* request.summarize(prompt, model);
+
               return Stream.succeed({
                 kind: "summarize",
                 through,

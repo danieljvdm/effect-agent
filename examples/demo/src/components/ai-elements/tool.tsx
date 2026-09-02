@@ -45,6 +45,7 @@ export function ToolHeader({
   readonly state: ToolState;
 }) {
   const meta = stateMeta[state];
+
   return (
     <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left outline-none">
       <span className="flex min-w-0 items-center gap-2">

@@ -23,9 +23,9 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "action:build": "bun scripts/build-action.ts",
-    "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && bun scripts/verify-package-purity.ts && bun scripts/build-action.ts --check",
+    "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && bun scripts/verify-package-purity.ts",
     "test": "vp run -r --parallel --concurrency-limit 4 test",
-    "build": "vp run -r build && vp run docs:build",
+    "build": "vp run -r build && vp run docs:build && vp run action:build",
     "ready": "vp run check && vp run test && vp run build"
   },
   "devDependencies": {

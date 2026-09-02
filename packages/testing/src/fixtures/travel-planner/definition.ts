@@ -5,11 +5,13 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 export const AirportCode = Schema.NonEmptyString.pipe(
   Schema.brand("@effect-agent/testing/travel-planner/AirportCode"),
 );
+
 export type AirportCode = typeof AirportCode.Type;
 
 export const QuoteId = Schema.NonEmptyString.pipe(
   Schema.brand("@effect-agent/testing/travel-planner/QuoteId"),
 );
+
 export type QuoteId = typeof QuoteId.Type;
 
 export class TripRequest extends Schema.Class<TripRequest>("TripRequest")({
@@ -84,18 +86,22 @@ export class TravelPlan extends Schema.Class<TravelPlan>("TravelPlan")({
 }) {}
 
 const unavailableFields = { query: Schema.String, message: Schema.String };
+
 export class FlightUnavailable extends Schema.TaggedError<FlightUnavailable>()(
   "FlightUnavailable",
   unavailableFields,
 ) {}
+
 export class LodgingUnavailable extends Schema.TaggedError<LodgingUnavailable>()(
   "LodgingUnavailable",
   unavailableFields,
 ) {}
+
 export class ActivityUnavailable extends Schema.TaggedError<ActivityUnavailable>()(
   "ActivityUnavailable",
   unavailableFields,
 ) {}
+
 export class GuidanceFailure extends Schema.TaggedError<GuidanceFailure>()("GuidanceFailure", {
   message: Schema.String,
 }) {}
@@ -104,10 +110,12 @@ export class FlightCatalog extends Context.Service<
   FlightCatalog,
   { readonly search: (query: FlightQuery) => Effect.Effect<FlightOption, FlightUnavailable> }
 >()("@effect-agent/testing/travel-planner/FlightCatalog") {}
+
 export class LodgingCatalog extends Context.Service<
   LodgingCatalog,
   { readonly search: (query: LodgingQuery) => Effect.Effect<LodgingOption, LodgingUnavailable> }
 >()("@effect-agent/testing/travel-planner/LodgingCatalog") {}
+
 export class ActivityCatalog extends Context.Service<
   ActivityCatalog,
   {
@@ -116,6 +124,7 @@ export class ActivityCatalog extends Context.Service<
     ) => Effect.Effect<ActivitySearchResult, ActivityUnavailable>;
   }
 >()("@effect-agent/testing/travel-planner/ActivityCatalog") {}
+
 export class TravelGuidance extends Context.Service<
   TravelGuidance,
   { readonly instructions: (input: TripRequest) => Effect.Effect<string, GuidanceFailure> }
@@ -128,6 +137,7 @@ export const SearchFlights = Tool.make("search_flights", {
   failureMode: "error",
   dependencies: [FlightCatalog],
 });
+
 export const SearchLodging = Tool.make("search_lodging", {
   parameters: LodgingQuery,
   success: LodgingOption,
@@ -135,6 +145,7 @@ export const SearchLodging = Tool.make("search_lodging", {
   failureMode: "error",
   dependencies: [LodgingCatalog],
 });
+
 export const SearchActivities = Tool.make("search_activities", {
   parameters: ActivityQuery,
   success: ActivitySearchResult,
@@ -144,6 +155,7 @@ export const SearchActivities = Tool.make("search_activities", {
 });
 
 export const TravelPlannerToolkit = Toolkit.make(SearchFlights, SearchLodging, SearchActivities);
+
 export const TravelPlannerToolkitLayer = TravelPlannerToolkit.toLayer({
   search_flights: (query) => Effect.flatMap(FlightCatalog, (catalog) => catalog.search(query)),
   search_lodging: (query) => Effect.flatMap(LodgingCatalog, (catalog) => catalog.search(query)),

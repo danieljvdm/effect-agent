@@ -63,6 +63,7 @@ export const PageScreenshotError = Schema.Union([
   PageCaptureProtocolError,
   PageScreenshotOutputLimitError,
 ]);
+
 export type PageScreenshotError = typeof PageScreenshotError.Type;
 
 /** Stateless, one-output PNG capture port. It owns neither persistence nor later byte handoff. */

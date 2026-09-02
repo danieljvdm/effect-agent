@@ -35,6 +35,7 @@ import {
   registrationDefinitions,
   testRuntimeLayer,
   runtimeEvictionFailpoint,
+  notifyScheduleAlarmCompleted,
   scheduleAuthorizer,
   scheduleFailpoint,
   storageEvictionFailpoint,
@@ -66,7 +67,9 @@ export class TestMemoryObject extends MemoryObject.make(memoryAuthorizer, {
 }) {
   override memory(encoded: string): Promise<string> {
     const name = this.ctx.id.name ?? "";
+
     memoryCalls.set(name, (memoryCalls.get(name) ?? 0) + 1);
+
     return super.memory(encoded);
   }
 }
@@ -124,7 +127,12 @@ export class TestScheduleOwnerObject extends makeScheduleOwnerObjectClass(schedu
   retryMaxMillis: 100,
   admissionTimeoutMillis: 5_000,
   recoveryPollMillis: 100,
-}) {}
+}) {
+  override async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await super.alarm(alarmInfo);
+    notifyScheduleAlarmCompleted(this.ctx);
+  }
+}
 
 const subscriptionHostLayer = Layer.mergeAll(
   subscriptionAuthorizerLayer,
@@ -179,8 +187,10 @@ const registrationResourceLayer = Layer.effect(
     const { raw: ctx } = yield* DurableObjectState.DurableObjectState;
     const env = yield* WorkerEnvironment;
     const { threadId, producerId } = yield* ThreadObjectIdentity;
+
     yield* Crypto.Crypto;
     const previous = bindingSourceProbes.get(ctx);
+
     bindingSourceProbes.set(ctx, {
       evaluationCount: (previous?.evaluationCount ?? 0) + 1,
       incarnation: previous?.incarnation ?? ++nextBindingSourceIncarnation,
@@ -188,6 +198,7 @@ const registrationResourceLayer = Layer.effect(
       producerId,
       rawEnvHasNamespace: env.DYNAMIC_BINDINGS !== undefined,
     });
+
     const resource = yield* Effect.acquireRelease(
       Effect.sync(() => ({ open: true })),
       (resource) =>
@@ -195,6 +206,7 @@ const registrationResourceLayer = Layer.effect(
           resource.open = false;
         }),
     );
+
     return {
       check: Effect.suspend(() =>
         resource.open ? Effect.void : Effect.fail("registration resource closed"),
@@ -214,7 +226,9 @@ const dynamicRuntime = ThreadObject.layer([
         instructions: (input: Agent.Input<typeof plannerDefinition>) =>
           Effect.gen(function* () {
             const resource = yield* RegistrationResource;
+
             yield* resource.check;
+
             return plannerDefinition.instructions(input);
           }),
       }),
@@ -226,22 +240,27 @@ const dynamicRuntime = ThreadObject.layer([
 
 /** The eviction/alarm/chaos suites' Thread Object. */
 const progressWaiterCounts = new WeakMap<DurableObjectState, number>();
+
 interface ProgressWaiterCountLatch {
   readonly expected: number;
   readonly resolve: () => void;
 }
+
 const progressWaiterCountLatches = new WeakMap<
   DurableObjectState,
   Array<ProgressWaiterCountLatch>
 >();
+
 const progressIncarnations = new WeakMap<DurableObjectState, number>();
 let nextProgressIncarnation = 0;
 
 const setProgressWaiterCount = (ctx: DurableObjectState, count: number): void => {
   progressWaiterCounts.set(ctx, count);
   const latches = progressWaiterCountLatches.get(ctx);
+
   if (latches === undefined) return;
   const pending: Array<ProgressWaiterCountLatch> = [];
+
   for (const latch of latches) {
     if (latch.expected === count) {
       latch.resolve();
@@ -258,8 +277,10 @@ const setProgressWaiterCount = (ctx: DurableObjectState, count: number): void =>
 
 const awaitProgressWaiterCount = (ctx: DurableObjectState, expected: number): Promise<void> => {
   if ((progressWaiterCounts.get(ctx) ?? 0) === expected) return Promise.resolve();
+
   return new Promise((resolve) => {
     const latches = progressWaiterCountLatches.get(ctx) ?? [];
+
     latches.push({ expected, resolve });
     progressWaiterCountLatches.set(ctx, latches);
   });
@@ -267,9 +288,12 @@ const awaitProgressWaiterCount = (ctx: DurableObjectState, expected: number): Pr
 
 const progressIncarnation = (ctx: DurableObjectState): number => {
   const existing = progressIncarnations.get(ctx);
+
   if (existing !== undefined) return existing;
   const created = ++nextProgressIncarnation;
+
   progressIncarnations.set(ctx, created);
+
   return created;
 };
 
@@ -278,11 +302,14 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {
         const env = yield* WorkerEnvironment;
+
         const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
           access: memoryAccess(project),
           principal: memoryPrincipal,
         });
+
         const write = yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)(encoded);
+
         const document = yield* client.change({
           ...write,
           key: {
@@ -290,6 +317,7 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
             namespace: yield* MemoryProjects.restore(write.key.namespace.address),
           },
         });
+
         return yield* Schema.encodeEffect(MemoryDocument.Wire)(document);
       }),
     );
@@ -299,11 +327,14 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {
         const env = yield* WorkerEnvironment;
+
         const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
           access: memoryAccess(project),
           principal: memoryPrincipal,
         });
+
         const lookup = yield* Schema.decodeUnknownEffect(MemoryLookup)(encoded);
+
         return yield* client
           .recall(lookup, memoryRecallLimits)
           .pipe(Effect.flatMap(Schema.encodeEffect(RecalledMemory)));
@@ -333,8 +364,10 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
     expected: number,
   ): Promise<number | null> {
     const incarnation = progressIncarnation(this.ctx);
+
     if (incarnation === previousIncarnation) return null;
     await awaitProgressWaiterCount(this.ctx, expected);
+
     return incarnation;
   }
 
@@ -385,7 +418,9 @@ export class DynamicBindingsThreadObject extends ThreadObject.make(dynamicRuntim
 }) {
   async bindingSourceProbe(): Promise<BindingSourceProbe & { readonly stateMatches: boolean }> {
     const probe = bindingSourceProbes.get(this.ctx);
+
     if (probe === undefined) throw new Error("Binding source was not evaluated");
+
     return { ...probe, stateMatches: bindingSourceProbes.has(this.ctx) };
   }
 }
@@ -431,14 +466,18 @@ export class TelemetryThreadObject extends TelemetryThreadObjectBase {
     options: DurableObject.RunOptions = {},
   ): Promise<A> {
     const event = options.event;
+
     if (event === undefined) return super[DurableObject.RunSymbol](effect, options);
     const threadId = this.ctx.id.name ?? this.ctx.id.toString();
+
     const observed = Effect.gen(function* () {
       // Also proves that the factory's public hook retains the event Layer's service type.
       yield* OtlpExporter.Flusher;
       telemetryProbe(threadId).invocations.push(options);
+
       return yield* effect;
     });
+
     return super[DurableObject.RunSymbol](
       options.rpc === undefined
         ? Effect.withSpan(observed, `TELEMETRY/${event}`, { kind: "server", root: true })
@@ -481,18 +520,23 @@ const faultableStub = <RpcService extends ThreadObjectRpc>(
       if (property === "portCall") {
         return (encoded: unknown): Promise<unknown> => {
           const reason = transportFaultReason(name);
+
           if (reason !== undefined) throw new Error(reason);
+
           return target.portCall(encoded);
         };
       }
       if (property === "wake") {
         return (): Promise<void> => {
           const reason = transportFaultReason(name);
+
           if (reason !== undefined) throw new Error(reason);
+
           return target.wake();
         };
       }
       const value: unknown = Reflect.get(target, property, receiver);
+
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
@@ -515,6 +559,7 @@ const faultableNamespace = <RpcService extends ThreadObjectRpc>(
         ): DurableObjectStub<RpcService> => faultableStub(target.getByName(name, options), name);
       }
       const value: unknown = Reflect.get(target, property, receiver);
+
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
@@ -523,6 +568,7 @@ const faultableEnvironment = (env: Cloudflare.Env): Cloudflare.Env =>
   new Proxy(env, {
     get(target, property, receiver) {
       if (property === "SUBAGENTS") return faultableNamespace(target.SUBAGENTS);
+
       return Reflect.get(target, property, receiver);
     },
   });

@@ -104,6 +104,7 @@ const decodeProducerId = Schema.decodeSync(ProducerId);
 const resubmit = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     return yield* runtime.submit(
       { definition: plannerDefinition },
       { question: CRASH_QUESTION },
@@ -116,6 +117,7 @@ const drainPlanner = (thread: string, answer: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(plannerDefinition, model);
+
     return yield* runtime.processThread(agent, decodeThreadId(thread));
   });
 
@@ -124,6 +126,7 @@ const drainSearch = (thread: string, answer: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(searchDefinition, model);
+
     return yield* runtime
       .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(searchToolLayer));
@@ -134,6 +137,7 @@ const drainUncertainBook = (site: CrashSite, thread: string, answer: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(bookDefinition, model);
+
     return yield* runtime
       .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookTools)));
@@ -144,6 +148,7 @@ const drainIdempotentBook = (site: CrashSite, thread: string, answer: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(bookIdempotentDefinition, model);
+
     return yield* runtime
       .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookIdempotentTools)));
@@ -154,6 +159,7 @@ const drainApprovalBook = (site: CrashSite, thread: string, answer: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(approvalDefinition, model);
+
     return yield* runtime
       .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, approvalTools)));
@@ -164,6 +170,7 @@ const drainItinerary = (site: CrashSite, thread: string, answer: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(itineraryDefinition, model);
+
     return yield* runtime
       .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(makeItineraryToolLayer(site.supplier)));
@@ -173,9 +180,12 @@ const drainItinerary = (site: CrashSite, thread: string, answer: string) =>
 const runResolver = (options: ChildOptions) =>
   Effect.gen(function* () {
     const result = yield* runWorkerToExit(options);
+
     expect(result.exit.code, `resolver stderr: ${result.stderr}`).toBe(0);
     const resolved = childMessages(result.stdout).find((message) => message.kind === "resolved");
+
     expect(resolved).toBeDefined();
+
     return resolved;
   });
 
@@ -200,6 +210,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-admit";
             const key = "kill-admit-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "submit",
@@ -207,6 +218,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               key,
               killAt: "submit:after-admit",
             });
+
             expectKilled(result);
 
             yield* withHost(
@@ -214,23 +226,28 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const snapshot = yield* lookupByKey(thread, key);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("CompleteMaterialization");
                 expect(report?.disposition).toBe("repaired");
                 expect(yield* lookupState(snapshot.submissionId)).toBe("ready");
                 const records = yield* readLog(thread);
+
                 expect(records[0]?.record.recordId).toBe(`thread-created:${thread}`);
 
                 // Reattachment: the identical payload under the same key resumes the Receipt.
                 const receipt = yield* resubmit(thread, key);
+
                 expect(receipt.receiptId).toBe(snapshot.receiptId);
                 expect(receipt.submissionId).toBe(snapshot.submissionId);
                 expect(Number(receipt.queueSequence)).toBe(Number(snapshot.queueSequence));
 
                 // The same key with DIFFERENT content is refused, never silently replaced.
                 const runtime = yield* DurableAgentRuntime;
+
                 const conflict = yield* Effect.exit(
                   runtime.submit(
                     { definition: plannerDefinition },
@@ -238,12 +255,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     crashSubmitOptions(thread, key),
                   ),
                 );
+
                 expect(failureTag(conflict)).toBe("AdmissionConflict");
 
                 const settlements = yield* drainPlanner(thread, CHILD_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
                 const settlement = yield* host.awaitSettlement(receipt);
+
                 expect(settlement.outcome).toBe("completed");
                 yield* assertConvergence(thread, [snapshot.submissionId]);
               }),
@@ -260,6 +280,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-ready";
             const key = "kill-ready-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "submit",
@@ -267,6 +288,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               key,
               killAtStorage: "ledger:mark-ready:after",
             });
+
             expectKilled(result);
 
             // Client-only restart (no recovery pass): the replay alone returns the Receipt.
@@ -274,10 +296,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const snapshot = yield* lookupByKey(thread, key);
+
                 expect(snapshot.state).toBe("ready");
                 const receipt = yield* resubmit(thread, key);
+
                 expect(receipt.receiptId).toBe(snapshot.receiptId);
                 expect(receipt.submissionId).toBe(snapshot.submissionId);
+
                 return snapshot.submissionId;
               }),
             );
@@ -286,16 +311,21 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("ApplyInput");
                 expect(report?.disposition).toBe("repaired");
                 const settlements = yield* drainPlanner(thread, CHILD_ANSWER);
+
                 expect(settlements[0]?.outcome).toBe("completed");
+
                 const inputRecords = (yield* readLog(thread)).filter(
                   (envelope) => envelope.record.recordId === submissionInputRecordId(submissionId),
                 );
+
                 expect(inputRecords).toHaveLength(1);
                 yield* assertConvergence(thread, [submissionId]);
               }),
@@ -312,6 +342,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-claim";
             const key = "kill-claim-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run",
@@ -320,6 +351,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "claim:after-claim",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -329,24 +361,31 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const ledger = yield* SubmissionLedger;
                 const snapshot = yield* lookupByKey(thread, key);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("ApplyInput");
                 expect(report?.disposition).toBe("repaired");
+
                 const recovered = yield* ledger.loadRecoverySnapshot(
                   RecoverySnapshotRequest.make({ submissionId: snapshot.submissionId }),
                 );
+
                 expect(recovered.inputApplied?.recordId).toBe(
                   submissionInputRecordId(snapshot.submissionId),
                 );
 
                 const settlements = yield* drainPlanner(thread, CHILD_ANSWER);
+
                 expect(settlements[0]?.outcome).toBe("completed");
+
                 const inputRecords = (yield* readLog(thread)).filter(
                   (envelope) =>
                     envelope.record.recordId === submissionInputRecordId(snapshot.submissionId),
                 );
+
                 expect(inputRecords).toHaveLength(1);
                 yield* assertConvergence(thread, [snapshot.submissionId]);
               }),
@@ -366,6 +405,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const thread = `thread-${killAt}`;
                 const key = "run-clock";
+
                 expectKilled(
                   yield* runWorkerToExit({
                     db: site.db,
@@ -381,16 +421,20 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   site.db,
                   Effect.gen(function* () {
                     const snapshot = yield* lookupByKey(thread, key);
+
                     const before = (yield* readLog(thread)).filter(
                       ({ record }) => record.payload._tag === "RunStarted",
                     );
+
                     expect(before).toHaveLength(killAt === "run:after-start-append" ? 1 : 0);
                     expect(
                       (yield* drainPlanner(thread, CHILD_ANSWER)).map((entry) => entry.outcome),
                     ).toEqual(["completed"]);
+
                     const after = (yield* readLog(thread)).filter(
                       ({ record }) => record.payload._tag === "RunStarted",
                     );
+
                     expect(after).toHaveLength(1);
                     if (before.length > 0) expect(after).toEqual(before);
                     yield* assertConvergence(thread, [snapshot.submissionId]);
@@ -410,6 +454,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-input";
             const key = "kill-input";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-two",
@@ -418,6 +463,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "input:after-canonical-append",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -433,12 +479,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const headReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === head.submissionId,
                 );
+
                 expect(headReport?.decision._tag).toBe("RepairInputMarker");
                 expect(headReport?.disposition).toBe("repaired");
+
                 // The queued Submission stays deferred: it is not claimable behind the head.
                 const queuedReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === queued.submissionId,
                 );
+
                 expect(queuedReport?.disposition).toBe("deferred");
 
                 // FIFO: a direct claim grants ONLY the unsettled lane head.
@@ -448,6 +497,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     producerId: decodeProducerId(HOST_PRODUCER_ID),
                   }),
                 );
+
                 expect(Option.isSome(claimed)).toBe(true);
                 if (Option.isNone(claimed)) throw new Error("Expected a claimable lane head");
                 expect(claimed.value.submissionId).toBe(head.submissionId);
@@ -459,6 +509,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
 
                 const settlements = yield* drainPlanner(thread, CHILD_ANSWER);
+
                 // P5 (plan §2.5): the queued Submission joins the resumed head Run at its
                 // first Turn seam and settles WITH it — one head settlement, both settled in
                 // admitted FIFO order (assertConvergence pins the canonical ordering).
@@ -466,6 +517,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   head.submissionId,
                 ]);
                 const records = yield* readLog(thread);
+
                 expect(
                   records.filter(
                     (envelope) =>
@@ -487,6 +539,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-midturn";
             const key = "kill-midturn-1";
+
             const exit = yield* Effect.scoped(
               Effect.gen(function* () {
                 const handle = yield* startWorker({
@@ -498,12 +551,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   markerFile: site.marker,
                   releaseFile: site.release,
                 });
+
                 // Turn 1 (tool call) is canonical once the marker exists; Turn 2 is mid-stream.
                 yield* waitForFile(site.marker);
                 handle.kill();
+
                 return yield* handle.awaitExit;
               }),
             );
+
             expect(exit.signal).toBe("SIGKILL");
             yield* waitOutChildLease;
 
@@ -517,6 +573,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // Exactly Turn 1 survived; the incomplete Turn 2 left no canonical trace.
                 const committed = yield* readLog(thread);
+
                 expect(logTags(committed)).toEqual([
                   "ThreadCreated",
                   "UserInputRecorded",
@@ -524,14 +581,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   "ModelResponseRecorded",
                   "ToolCallSettled",
                 ]);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("ResumeFromTurnBoundary");
                 expect(report?.disposition).toBe("deferred");
 
                 // Client restart: same-key resubmission reattaches to the original Receipt.
                 const receipt = yield* resubmit(thread, key);
+
                 expect(receipt.receiptId).toBe(snapshot.receiptId);
                 expect(receipt.submissionId).toBe(snapshot.submissionId);
 
@@ -539,19 +599,25 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const observedHead = yield* Stream.runCollect(
                   Stream.take(runtime.observe(receipt), 2),
                 );
+
                 expect(observedHead).toHaveLength(2);
                 const storedOffset = observedHead[0]?.offset;
+
                 if (storedOffset === undefined) throw new Error("Expected a stored offset");
+
                 const observedResume = yield* Stream.runCollect(
                   Stream.take(runtime.observe(receipt, { after: storedOffset }), 1),
                 );
+
                 expect(Number(observedResume[0]?.sequence)).toBe(Number(observedHead[1]?.sequence));
 
                 const settlements = yield* drainSearch(thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
 
                 const records = yield* readLog(thread);
+
                 expect(
                   records.filter(
                     (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
@@ -561,6 +627,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   modelResponseRecordId(runId, 2),
                 );
                 const settlement = yield* host.awaitSettlement(receipt);
+
                 expect(settlement.outcome).toBe("completed");
                 yield* assertConvergence(thread, [snapshot.submissionId]);
               }),
@@ -577,6 +644,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-fenced";
             const key = "fenced-1";
+
             yield* Effect.scoped(
               Effect.gen(function* () {
                 const handle = yield* startWorker({
@@ -588,6 +656,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   markerFile: site.marker,
                   releaseFile: site.release,
                 });
+
                 yield* waitForFile(site.marker);
                 // The blocked child's short lease lapses while it is still alive mid-Turn.
                 yield* waitOutChildLease;
@@ -598,8 +667,10 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   Effect.gen(function* () {
                     const snapshot = yield* lookupByKey(thread, key);
                     const settlements = yield* drainSearch(thread, FRESH_ANSWER);
+
                     expect(settlements).toHaveLength(1);
                     expect(settlements[0]?.outcome).toBe("completed");
+
                     return snapshot.submissionId;
                   }),
                 );
@@ -607,10 +678,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // Unblock the stale child: its Turn commit must be fenced, never committed.
                 yield* touchFile(site.release);
                 const exit = yield* handle.awaitExit;
+
                 expect(exit.code).toBe(FENCED_EXIT_CODE);
+
                 const failure = childMessages(handle.stdoutText()).find(
                   (message) => message.kind === "worker-failure",
                 );
+
                 expect(["FenceRejected", "OwnershipLost"]).toContain(
                   failure?.kind === "worker-failure" && failure.tag,
                 );
@@ -620,22 +694,27 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   Effect.gen(function* () {
                     const records = yield* readLog(thread);
                     const runId = runIdForSubmission(submissionId);
+
                     const turnTwo = records.filter(
                       (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 2),
                     );
+
                     expect(turnTwo).toHaveLength(1);
                     const payload = turnTwo[0]?.record.payload;
+
                     expect(payload?._tag).toBe("ModelResponseRecorded");
                     if (payload?._tag === "ModelResponseRecorded") {
                       const messages = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(
                         payload.messages,
                       );
+
                       const text = messages.content
                         .filter((message) => message.role === "assistant")
                         .flatMap((message) => message.content)
                         .filter((part) => part.type === "text")
                         .map((part) => part.text)
                         .join("");
+
                       // The surviving Turn 2 is the fresh Attempt's, not the fenced stale one.
                       expect(text).toBe(FRESH_ANSWER);
                     }
@@ -656,6 +735,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-prereserve";
             const key = "kill-prereserve-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run",
@@ -664,6 +744,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAtStorage: "ledger:reserve-settlement:before",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -672,19 +753,23 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const snapshot = yield* lookupByKey(thread, key);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("ResumeFromTurnBoundary");
                 expect(report?.disposition).toBe("deferred");
 
                 const settlements = yield* drainPlanner(thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
 
                 // The response and Run completion committed atomically before
                 // reservation, so recovery terminalizes without another model call.
                 const records = yield* readLog(thread);
+
                 expect(
                   logTags(records).filter((tag) => tag === "ModelResponseRecorded"),
                 ).toHaveLength(1);
@@ -707,6 +792,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-reserved";
             const key = "kill-reserved-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run",
@@ -715,6 +801,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "terminalize:after-reserve",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -724,9 +811,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const ledger = yield* SubmissionLedger;
                 const snapshot = yield* lookupByKey(thread, key);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("AppendReservedSettlement");
                 expect(report?.disposition).toBe("repaired");
                 expect(yield* lookupState(snapshot.submissionId)).toBe("settled");
@@ -735,10 +824,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const recovered = yield* ledger.loadRecoverySnapshot(
                   RecoverySnapshotRequest.make({ submissionId: snapshot.submissionId }),
                 );
+
                 const records = yield* readLog(thread);
+
                 const settled = records.filter(
                   (envelope) => envelope.record.payload._tag === "SubmissionSettled",
                 );
+
                 expect(settled).toHaveLength(1);
                 expect(settled[0]?.record).toEqual(recovered.reservation?.record);
                 expect(records.map((envelope) => envelope.record.recordId)).toContain(
@@ -748,6 +840,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // awaitSettlement after restart returns the recorded Settlement.
                 const receipt = yield* resubmit(thread, key);
                 const settlement = yield* host.awaitSettlement(receipt);
+
                 expect(settlement.outcome).toBe("completed");
                 expect(settlement.receiptId).toBe(snapshot.receiptId);
                 yield* assertConvergence(thread, [snapshot.submissionId]);
@@ -765,6 +858,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-finalize";
             const key = "kill-finalize-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run",
@@ -773,6 +867,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "terminalize:after-canonical-append",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
 
             // Before any recovery: the canonical outcome exists, the ledger row is nonterminal.
@@ -780,14 +875,19 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const snapshot = yield* lookupByKey(thread, key);
+
                 expect(snapshot.state).not.toBe("settled");
                 const records = yield* readLog(thread);
+
                 const settled = records.filter(
                   (envelope) => envelope.record.payload._tag === "SubmissionSettled",
                 );
+
                 expect(settled).toHaveLength(1);
                 const envelope = settled[0];
+
                 if (envelope === undefined) throw new Error("Expected a settled record");
+
                 return { submissionId: snapshot.submissionId, envelope };
               }),
             );
@@ -796,22 +896,27 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === before.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("FinalizeLedgerFromHistory");
                 expect(report?.disposition).toBe("repaired");
                 expect(yield* lookupState(before.submissionId)).toBe("settled");
 
                 const records = yield* readLog(thread);
+
                 const settled = records.filter(
                   (envelope) => envelope.record.payload._tag === "SubmissionSettled",
                 );
+
                 expect(settled).toHaveLength(1);
                 expect(settled[0]).toEqual(before.envelope);
 
                 const receipt = yield* resubmit(thread, key);
                 const settlement = yield* host.awaitSettlement(receipt);
+
                 expect(settlement.outcome).toBe("completed");
                 yield* assertConvergence(thread, [before.submissionId]);
               }),
@@ -828,6 +933,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-abort-ready";
             const key = "abort-ready-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "abort-ready",
@@ -835,6 +941,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               key,
               killAt: "abort:after-intent",
             });
+
             expectKilled(result);
 
             yield* withHost(
@@ -843,18 +950,22 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const runtime = yield* DurableAgentRuntime;
                 const snapshot = yield* lookupByKey(thread, key);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("SettleAborted");
                 expect(report?.disposition).toBe("repaired");
 
                 const receipt = yield* resubmit(thread, key);
                 const settlement = yield* host.awaitSettlement(receipt);
+
                 expect(settlement.outcome).toBe("aborted");
 
                 const records = yield* readLog(thread);
                 const tags = logTags(records);
+
                 expect(tags.indexOf("AbortRequested")).toBeGreaterThanOrEqual(0);
                 expect(tags.indexOf("AbortRequested")).toBeLessThan(
                   tags.indexOf("SubmissionSettled"),
@@ -876,6 +987,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     }),
                   ),
                 );
+
                 expect(failureTag(conflict)).toBe("SettlementConflict");
                 yield* assertConvergence(thread, [snapshot.submissionId]);
               }),
@@ -896,6 +1008,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             // DUR-012 permits settling inactive accepted work without an Attempt).
             const thread = "thread-abort-queued";
             const key = "abort-queued-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "abort-queued",
@@ -903,6 +1016,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               key,
               killAt: "abort:after-intent",
             });
+
             expectKilled(result);
 
             yield* withHost(
@@ -912,9 +1026,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const runtime = yield* DurableAgentRuntime;
                 const head = yield* lookupByKey(thread, `${key}-head`);
                 const queued = yield* lookupByKey(thread, `${key}-queued`);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === queued.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("SettleAborted");
                 expect(report?.disposition).toBe("repaired");
 
@@ -925,6 +1041,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 const midRecords = yield* readLog(thread);
                 const midIds = midRecords.map((envelope) => envelope.record.recordId);
+
                 // Never claimed: no canonical input, no model call; abort precedes settlement.
                 expect(midIds).not.toContain(submissionInputRecordId(queued.submissionId));
                 expect(midIds).toContain(
@@ -933,6 +1050,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // The head then completes normally behind the already-settled non-head.
                 const settlements = yield* drainPlanner(thread, '{"answer":"post-abort"}');
+
                 expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
                   head.submissionId,
                 ]);
@@ -940,6 +1058,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 const records = yield* readLog(thread);
                 const recordIds = records.map((envelope) => envelope.record.recordId);
+
                 expect(
                   recordIds.indexOf(submissionSettlementRecordId(queued.submissionId)),
                 ).toBeLessThan(recordIds.indexOf(submissionSettlementRecordId(head.submissionId)));
@@ -954,6 +1073,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     }),
                   ),
                 );
+
                 expect(failureTag(conflict)).toBe("SettlementConflict");
                 yield* assertConvergence(thread, [head.submissionId, queued.submissionId]);
               }),
@@ -970,6 +1090,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-abort-active";
             const key = "abort-active-1";
+
             yield* Effect.scoped(
               Effect.gen(function* () {
                 const handle = yield* startWorker({
@@ -979,6 +1100,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   key,
                   markerFile: site.marker,
                 });
+
                 // The child's Attempt is live and blocked inside its first model call.
                 yield* waitForFile(site.marker);
 
@@ -988,6 +1110,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   Effect.gen(function* () {
                     const runtime = yield* DurableAgentRuntime;
                     const snapshot = yield* lookupByKey(thread, key);
+
                     yield* runtime.abort(
                       AbortCommand.make({
                         submissionId: snapshot.submissionId,
@@ -999,10 +1122,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
 
                 const exit = yield* handle.awaitExit;
+
                 expect(exit.code, `stderr: ${handle.stderrText()}`).toBe(0);
+
                 const settled = childMessages(handle.stdoutText()).find(
                   (message) => message.kind === "settlements",
                 );
+
                 expect(settled?.kind === "settlements" && settled.settlements.length).toBe(1);
                 if (settled?.kind === "settlements") {
                   expect(settled.settlements[0]?.outcome).toBe("aborted");
@@ -1016,10 +1142,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const runtime = yield* DurableAgentRuntime;
                 const snapshot = yield* lookupByKey(thread, key);
+
                 expect(snapshot.state).toBe("settled");
 
                 const records = yield* readLog(thread);
                 const tags = logTags(records);
+
                 // Durable §13: the abort became canonical BEFORE the Run fiber died — and the
                 // interrupted model produced no committed Turn at all.
                 expect(tags.indexOf("AbortRequested")).toBeGreaterThanOrEqual(0);
@@ -1031,7 +1159,9 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 const receipt = yield* resubmit(thread, key);
                 const settlement = yield* host.awaitSettlement(receipt);
+
                 expect(settlement.outcome).toBe("aborted");
+
                 const conflict = yield* Effect.exit(
                   runtime.abort(
                     AbortCommand.make({
@@ -1041,6 +1171,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     }),
                   ),
                 );
+
                 expect(failureTag(conflict)).toBe("SettlementConflict");
                 yield* assertConvergence(thread, [snapshot.submissionId]);
               }),
@@ -1061,6 +1192,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-response";
             const key = "kill-response-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-uncertain",
@@ -1070,6 +1202,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               leaseMillis: CHILD_LEASE_MS,
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -1083,6 +1216,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // The provably-safe window (durability §15): the response is canonical, nothing
                 // is prepared, and the external supplier was never called.
                 const committed = yield* readLog(thread);
+
                 expect(logTags(committed)).toEqual([
                   "ThreadCreated",
                   "UserInputRecorded",
@@ -1090,13 +1224,16 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   "ModelResponseRecorded",
                 ]);
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("ResumePendingToolBatch");
                 expect(report?.disposition).toBe("deferred");
 
                 const settlements = yield* drainUncertainBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
@@ -1106,6 +1243,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // declaration instead of asking the model again.
                 const records = yield* readLog(thread);
                 const ids = records.map((envelope) => envelope.record.recordId);
+
                 expect(
                   records.filter(
                     (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
@@ -1139,6 +1277,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-prepared-proof";
             const key = "kill-prepared-proof-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-uncertain",
@@ -1148,6 +1287,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               leaseMillis: CHILD_LEASE_MS,
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -1160,14 +1300,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // The empty supplier store IS the marker: the handler provably never started.
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("MarkUnknown");
                 expect(report?.disposition).toBe("deferred");
                 expect(yield* lookupState(snapshot.submissionId)).not.toBe("unknown");
 
                 const settlements = yield* drainUncertainBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
@@ -1176,6 +1319,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // exactly one canonical settled result.
                 const records = yield* readLog(thread);
                 const tags = logTags(records);
+
                 expect(tags).not.toContain("ToolCallUnknown");
                 expect(tags).not.toContain("ToolCallResolved");
                 expect(
@@ -1204,6 +1348,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-prepared-unknown";
             const key = "kill-prepared-unknown-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-uncertain",
@@ -1213,6 +1358,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               leaseMillis: CHILD_LEASE_MS,
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -1222,9 +1368,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const snapshot = yield* lookupByKey(thread, key);
                 const runId = runIdForSubmission(snapshot.submissionId);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 // Fail-closed default (AGENTS rule 11): no registered policy proves anything, so
                 // the open call becomes a durable Unknown Outcome and the lane blocks.
                 expect(report?.decision._tag).toBe("MarkUnknown");
@@ -1236,6 +1384,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // The unresolved ordinary call is never auto-replayed: draining grants nothing.
                 const blocked = yield* drainUncertainBook(site, thread, FRESH_ANSWER);
+
                 expect(blocked).toEqual([]);
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
 
@@ -1250,16 +1399,19 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(yield* lookupState(snapshot.submissionId)).toBe("input-applied");
 
                 const settlements = yield* drainUncertainBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
 
                 const records = yield* readLog(thread);
+
                 const resolved = records.find(
                   (envelope) =>
                     envelope.record.recordId ===
                     toolCallResolvedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
                 )?.record.payload;
+
                 expect(resolved?._tag).toBe("ToolCallResolved");
                 if (resolved?._tag === "ToolCallResolved") {
                   expect(resolved.resolution).toBe("never-started");
@@ -1290,6 +1442,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-midhandler";
             const key = "kill-midhandler-1";
+
             const exit = yield* Effect.scoped(
               Effect.gen(function* () {
                 const handle = yield* startWorker({
@@ -1301,13 +1454,16 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   supplierDir: site.supplier,
                   markerFile: site.marker,
                 });
+
                 // The handler has performed the EXTERNAL booking (marker proves it) but will
                 // never return: kill the process while the call is prepared-but-unsettled.
                 yield* waitForFile(site.marker);
                 handle.kill();
+
                 return yield* handle.awaitExit;
               }),
             );
+
             expect(exit.signal).toBe("SIGKILL");
             yield* waitOutChildLease;
             expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
@@ -1318,9 +1474,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const snapshot = yield* lookupByKey(thread, key);
                 const runId = runIdForSubmission(snapshot.submissionId);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 // The supplier store shows the booking: recovery settles the recovered result
                 // canonically WITHOUT executing anything (never fabricate, durability §10).
                 expect(report?.decision._tag).toBe("MarkUnknown");
@@ -1328,21 +1486,25 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
 
                 const records = yield* readLog(thread);
+
                 const settled = records.find(
                   (envelope) =>
                     envelope.record.recordId ===
                     toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
                 )?.record.payload;
+
                 expect(settled?._tag).toBe("ToolCallSettled");
                 if (settled?._tag === "ToolCallSettled") {
                   expect(settled.result).toEqual({ confirmation: `confirmed-${BOOK_REF}` });
                   expect(settled.isFailure).toBe(false);
                 }
+
                 const resolved = records.find(
                   (envelope) =>
                     envelope.record.recordId ===
                     toolCallResolvedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
                 )?.record.payload;
+
                 expect(resolved?._tag).toBe("ToolCallResolved");
                 if (resolved?._tag === "ToolCallResolved") {
                   expect(resolved.resolution).toBe("completed-with-result");
@@ -1350,6 +1512,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 }
 
                 const settlements = yield* drainUncertainBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
                 // The supplier call count stays 1: the recovered outcome was never re-executed.
@@ -1373,6 +1536,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-preresults";
             const key = "kill-preresults-1";
+
             // The supplier gate arms `append:before` to fire only once the booking exists, so the
             // kill lands exactly between the handler's return and the Turn's results append.
             const result = yield* runWorkerToExit({
@@ -1385,6 +1549,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               leaseMillis: CHILD_LEASE_MS,
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
             expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
@@ -1397,8 +1562,10 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const snapshot = yield* lookupByKey(thread, key);
                 const runId = runIdForSubmission(snapshot.submissionId);
+
                 expect(snapshot.state).not.toBe("settled");
                 const before = (yield* readLog(thread)).map((envelope) => envelope.record.recordId);
+
                 // The result was lost in memory: prepared is canonical, settled is not.
                 expect(before).toContain(
                   toolCallPreparedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
@@ -1408,6 +1575,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
 
                 const settlements = yield* drainIdempotentBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
 
@@ -1415,6 +1583,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // the duplicate is OBSERVABLE — supplier count 2, never hidden (rule 8).
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(2);
                 const records = yield* readLog(thread);
+
                 expect(logTags(records)).not.toContain("ToolCallUnknown");
                 expect(
                   records.filter(
@@ -1441,6 +1610,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-step";
             const key = "kill-step-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-steps",
@@ -1450,6 +1620,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               leaseMillis: CHILD_LEASE_MS,
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
             // Step 1 executed and committed; step 2 never ran; the handler entered once.
@@ -1465,17 +1636,21 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const runId = runIdForSubmission(snapshot.submissionId);
                 const callId = decodeToolCallId(ITINERARY_CALL_ID);
                 const committed = yield* readLog(thread);
+
                 expect(committed.map((envelope) => envelope.record.recordId)).toContain(
                   toolStepSettledRecordId(runId, callId, "reserve-flight"),
                 );
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 // The Durable Tool is re-enterable (SafeToRetry proof): the worker resumes it.
                 expect(report?.decision._tag).toBe("MarkUnknown");
                 expect(report?.disposition).toBe("deferred");
 
                 const settlements = yield* drainItinerary(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
 
@@ -1486,6 +1661,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(supplierCount(site.supplier, "reserve-lodging", STEP_REF)).toBe(1);
 
                 const records = yield* readLog(thread);
+
                 expect(
                   records.filter(
                     (envelope) =>
@@ -1496,10 +1672,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(records.map((envelope) => envelope.record.recordId)).toContain(
                   toolStepSettledRecordId(runId, callId, "reserve-lodging"),
                 );
+
                 const settled = records.find(
                   (envelope) =>
                     envelope.record.recordId === toolCallSettledRecordId(runId, 1, callId),
                 )?.record.payload;
+
                 expect(settled?._tag).toBe("ToolCallSettled");
                 if (settled?._tag === "ToolCallSettled") {
                   expect(settled.result).toEqual({
@@ -1529,6 +1707,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-approval-request";
             const key = "kill-approval-request-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "suspend-approval",
@@ -1538,6 +1717,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               leaseMillis: CHILD_LEASE_MS,
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -1547,6 +1727,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const snapshot = yield* lookupByKey(thread, key);
                 const runId = runIdForSubmission(snapshot.submissionId);
+
                 expect(snapshot.state).toBe("input-applied");
                 expect(
                   (yield* readLog(thread)).map((envelope) => envelope.record.recordId),
@@ -1560,9 +1741,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const snapshot = yield* lookupByKey(thread, key);
                 const runId = runIdForSubmission(snapshot.submissionId);
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 // The lost suspension is repaired from the canonical request (durability §8);
                 // no execution, no settlement.
                 expect(report?.decision._tag).toBe("AwaitApprovalDecision");
@@ -1580,22 +1763,26 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(yield* lookupState(snapshot.submissionId)).toBe("input-applied");
 
                 const settlements = yield* drainApprovalBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
 
                 // The request was appended exactly once across the crash and both Attempts.
                 const records = yield* readLog(thread);
+
                 expect(
                   records.filter(
                     (envelope) => envelope.record.payload._tag === "ToolApprovalRequested",
                   ),
                 ).toHaveLength(1);
+
                 const decision = records.find(
                   (envelope) =>
                     envelope.record.recordId ===
                     toolApprovalDecisionRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
                 )?.record.payload;
+
                 expect(decision?._tag).toBe("ToolApprovalDecided");
                 if (decision?._tag === "ToolApprovalDecided") {
                   expect(decision.decision).toBe("approved");
@@ -1619,6 +1806,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-approval-suspend";
             const key = "kill-approval-suspend-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "suspend-approval",
@@ -1627,6 +1815,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "approval:after-suspend",
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
 
             yield* withHost(
@@ -1635,12 +1824,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const snapshot = yield* lookupByKey(thread, key);
                 const runId = runIdForSubmission(snapshot.submissionId);
+
                 // The suspend transaction committed before the crash: the lane is durably
                 // suspended, permit-free, with nothing for recovery to repair.
                 expect(snapshot.state).toBe("suspended");
+
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === snapshot.submissionId,
                 );
+
                 expect(report?.decision._tag).toBe("AwaitApprovalDecision");
                 expect(report?.disposition).toBe("deferred");
 
@@ -1654,6 +1846,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(yield* lookupState(snapshot.submissionId)).toBe("input-applied");
 
                 const settlements = yield* drainApprovalBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
@@ -1662,6 +1855,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // the declaring Turn; the gated call entered the ordinary uncertainty protocol.
                 const records = yield* readLog(thread);
                 const ids = records.map((envelope) => envelope.record.recordId);
+
                 expect(
                   records.filter(
                     (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
@@ -1691,6 +1885,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-approval-deny";
             const key = "kill-approval-deny-1";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "suspend-approval",
@@ -1699,6 +1894,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "approval:after-suspend",
               supplierDir: site.supplier,
             });
+
             expectKilled(result);
 
             yield* withHost(
@@ -1706,6 +1902,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const snapshot = yield* lookupByKey(thread, key);
                 const runId = runIdForSubmission(snapshot.submissionId);
+
                 expect(snapshot.state).toBe("suspended");
 
                 yield* runResolver({
@@ -1717,6 +1914,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 });
 
                 const settlements = yield* drainApprovalBook(site, thread, FRESH_ANSWER);
+
                 expect(settlements).toHaveLength(1);
                 // Denial-terminal (P2 default): the Run fails with the denial canonical and the
                 // handler NEVER started — the supplier store stays empty.
@@ -1725,11 +1923,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 const records = yield* readLog(thread);
                 const ids = records.map((envelope) => envelope.record.recordId);
+
                 const decision = records.find(
                   (envelope) =>
                     envelope.record.recordId ===
                     toolApprovalDecisionRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
                 )?.record.payload;
+
                 expect(decision?._tag).toBe("ToolApprovalDecided");
                 if (decision?._tag === "ToolApprovalDecided") {
                   expect(decision.decision).toBe("denied");
@@ -1758,6 +1958,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-join-claim";
             const key = "kill-join-claim";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-join",
@@ -1766,6 +1967,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "join:after-claim",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -1774,10 +1976,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const queued = yield* lookupByKey(thread, `${key}-2`);
+
                 expect(queued.state).toBe("joining");
                 expect(
                   (yield* readLog(thread)).map((envelope) => envelope.record.recordId),
                 ).not.toContain(submissionInputRecordId(queued.submissionId));
+
                 return queued.submissionId;
               }),
             );
@@ -1787,15 +1991,18 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const headSnapshot = yield* lookupByKey(thread, `${key}-1`);
+
                 const queuedReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === queuedId,
                 );
+
                 // DUR-016: joining without canonical input reverts to ready.
                 expect(queuedReport?.decision._tag).toBe("RevertJoining");
                 expect(queuedReport?.disposition).toBe("repaired");
                 expect(yield* lookupState(queuedId)).toBe("ready");
 
                 const settlements = yield* drainPlanner(thread, FRESH_ANSWER);
+
                 // One HEAD settlement: the reverted Submission re-joined the resumed host Run.
                 expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
                   headSnapshot.submissionId,
@@ -1805,6 +2012,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // Delivered exactly once: one canonical input record ever, and the queued text
                 // entered exactly one committed model response (the coverage rule's evidence).
                 const records = yield* readLog(thread);
+
                 expect(
                   records.filter(
                     (envelope) => envelope.record.recordId === submissionInputRecordId(queuedId),
@@ -1826,6 +2034,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-join-append";
             const key = "kill-join-append";
+
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "run-join",
@@ -1834,6 +2043,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAt: "join:after-canonical-append",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
             yield* waitOutChildLease;
 
@@ -1842,10 +2052,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const queued = yield* lookupByKey(thread, `${key}-2`);
+
                 expect(queued.state).toBe("joining");
                 expect(
                   (yield* readLog(thread)).map((envelope) => envelope.record.recordId),
                 ).toContain(submissionInputRecordId(queued.submissionId));
+
                 return queued.submissionId;
               }),
             );
@@ -1855,14 +2067,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const headSnapshot = yield* lookupByKey(thread, `${key}-1`);
+
                 const queuedReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === queuedId,
                 );
+
                 expect(queuedReport?.decision._tag).toBe("RepairJoinMarker");
                 expect(queuedReport?.disposition).toBe("repaired");
                 expect(yield* lookupState(queuedId)).toBe("joined");
 
                 const settlements = yield* drainPlanner(thread, FRESH_ANSWER);
+
                 expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
                   headSnapshot.submissionId,
                 ]);
@@ -1870,6 +2085,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // Reattached, never duplicated: one canonical record, one prompt coverage.
                 const records = yield* readLog(thread);
+
                 expect(
                   records.filter(
                     (envelope) => envelope.record.recordId === submissionInputRecordId(queuedId),
@@ -1891,6 +2107,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-joined-host";
             const key = "kill-joined-host";
+
             const exit = yield* Effect.scoped(
               Effect.gen(function* () {
                 const handle = yield* startWorker({
@@ -1901,13 +2118,16 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   leaseMillis: CHILD_LEASE_MS,
                   markerFile: site.marker,
                 });
+
                 // The marker is written by Turn 1's model stream, which begins only after the
                 // pre-Turn join drain claimed, appended, and marked the queued input joined.
                 yield* waitForFile(site.marker);
                 handle.kill();
+
                 return yield* handle.awaitExit;
               }),
             );
+
             expect(exit.signal).toBe("SIGKILL");
             yield* waitOutChildLease;
 
@@ -1916,12 +2136,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const queued = yield* lookupByKey(thread, `${key}-2`);
+
                 expect(queued.state).toBe("joined");
                 const records = yield* readLog(thread);
+
                 expect(records.map((envelope) => envelope.record.recordId)).toContain(
                   submissionInputRecordId(queued.submissionId),
                 );
                 expect(logTags(records)).not.toContain("ModelResponseRecorded");
+
                 return queued.submissionId;
               }),
             );
@@ -1931,14 +2154,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const headSnapshot = yield* lookupByKey(thread, `${key}-1`);
+
                 const queuedReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === queuedId,
                 );
+
                 // A live host owns its joined Submissions: recovery defers to the host's resume.
                 expect(queuedReport?.decision._tag).toBe("AwaitHostSettlement");
                 expect(queuedReport?.disposition).toBe("deferred");
 
                 const settlements = yield* drainPlanner(thread, FRESH_ANSWER);
+
                 expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
                   headSnapshot.submissionId,
                 ]);
@@ -1948,15 +2174,18 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // The coverage rule across process death: the reattached input entered exactly
                 // one committed model response, and the joined settlement rides the host Run.
                 const records = yield* readLog(thread);
+
                 expect(
                   records.filter(
                     (envelope) => envelope.record.recordId === submissionInputRecordId(queuedId),
                   ),
                 ).toHaveLength(1);
                 expect(responseOccurrences(records, JOIN_QUESTION)).toBe(1);
+
                 const joinedSettlement = records.find(
                   (envelope) => envelope.record.recordId === submissionSettlementRecordId(queuedId),
                 )?.record.payload;
+
                 expect(joinedSettlement?._tag).toBe("SubmissionSettled");
                 if (joinedSettlement?._tag === "SubmissionSettled") {
                   expect(joinedSettlement.outcome).toBe("completed");
@@ -1979,6 +2208,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
           Effect.gen(function* () {
             const thread = "thread-kill-joined-settle";
             const key = "kill-joined-settle";
+
             // The FIRST ledger finalization of the run is the host's: the kill lands after the
             // host is fully settled but before the joined settlement loop starts.
             const result = yield* runWorkerToExit({
@@ -1989,6 +2219,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               killAtStorage: "ledger:finalize-settlement:after",
               leaseMillis: CHILD_LEASE_MS,
             });
+
             expectKilled(result);
 
             const ids = yield* withRuntime(
@@ -1996,13 +2227,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const head = yield* lookupByKey(thread, `${key}-1`);
                 const queued = yield* lookupByKey(thread, `${key}-2`);
+
                 expect(head.state).toBe("settled");
                 expect(queued.state).toBe("joined");
+
                 const recordIds = (yield* readLog(thread)).map(
                   (envelope) => envelope.record.recordId,
                 );
+
                 expect(recordIds).toContain(submissionSettlementRecordId(head.submissionId));
                 expect(recordIds).not.toContain(submissionSettlementRecordId(queued.submissionId));
+
                 return { head: head.submissionId, queued: queued.submissionId };
               }),
             );
@@ -2011,19 +2246,23 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               site.db,
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
+
                 const queuedReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === ids.queued,
                 );
+
                 // The canonical host settlement authorizes the joined settlement (DUR-015).
                 expect(queuedReport?.decision._tag).toBe("SettleJoinedWithHost");
                 expect(queuedReport?.disposition).toBe("repaired");
                 expect(yield* lookupState(ids.queued)).toBe("settled");
 
                 const records = yield* readLog(thread);
+
                 const joinedSettlement = records.find(
                   (envelope) =>
                     envelope.record.recordId === submissionSettlementRecordId(ids.queued),
                 )?.record.payload;
+
                 expect(joinedSettlement?._tag).toBe("SubmissionSettled");
                 if (joinedSettlement?._tag === "SubmissionSettled") {
                   expect(joinedSettlement.outcome).toBe("completed");

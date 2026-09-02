@@ -29,6 +29,7 @@ const makeWakeScheduler = Effect.gen(function* () {
   const config = yield* NodeWakeSchedulerConfig;
   const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
   const progress = yield* makeWakeSubscriptionHub;
+
   yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
   /**
@@ -41,9 +42,11 @@ const makeWakeScheduler = Effect.gen(function* () {
   ).pipe(
     Effect.map((snapshots) => {
       const lanes = new Set<ThreadId>();
+
       for (const snapshot of snapshots) {
         lanes.add(snapshot.threadId);
       }
+
       return [...lanes];
     }),
     Effect.catch((error) =>

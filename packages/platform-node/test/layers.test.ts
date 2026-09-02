@@ -85,6 +85,7 @@ const runtimeLayerProbe = NodeDurableRuntime.layer({
   deploymentId: "deployment-proof",
   producerId: "producer-proof",
 });
+
 const hostLayerProbe = NodeDurableHost.layer();
 
 class ContextSetupError extends Schema.TaggedError<ContextSetupError>()("ContextSetupError", {}) {}
@@ -105,21 +106,27 @@ const configuredContext = Layer.effect(
   Effect.gen(function* () {
     yield* Crypto.Crypto;
     const config = yield* ContextConfig;
+
     if (config.fail) return yield* new ContextSetupError();
+
     return RunContextPreparation.of({});
   }),
 );
+
 const configuredAuthorization = Layer.effect(
   RunToolAuthorization,
   Effect.gen(function* () {
     yield* Crypto.Crypto;
     const config = yield* AuthorizationConfig;
+
     if (config.fail) return yield* new AuthorizationSetupError();
+
     return RunToolAuthorization.of({
       authorize: () => Effect.succeed({ _tag: "denied", reason: "test policy" }),
     });
   }),
 );
+
 type RuntimeLayerServicesProof = Assert<
   Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableRuntimeServices>
 >;
@@ -178,6 +185,7 @@ const makeScriptedModel = Effect.fn("PlatformNodeTest.makeScriptedModel")(functi
   script: (call: number, prompt: Prompt.Prompt) => ReadonlyArray<Response.StreamPartEncoded>,
 ) {
   const calls = yield* Ref.make(0);
+
   return Model.make(
     "scripted",
     "platform-node-test",
@@ -215,9 +223,11 @@ const withTemporaryDatabase = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-platform-node-",
       });
+
       return yield* use(`${directory}/host.sqlite`);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -238,6 +248,7 @@ const withHost = <A, E, R>(
 const failureOf = <A, E>(exit: Exit.Exit<A, E>): unknown => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
+
   return Cause.squash(exit.cause);
 };
 
@@ -246,20 +257,25 @@ const lookupState = (
 ): Effect.Effect<SubmissionState, never, SubmissionLedger> =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
+
     const snapshot = yield* ledger
       .lookup(SubmissionLookupById.make({ submissionId }))
       .pipe(Effect.orDie);
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value.state;
   });
 
 const readLogTags = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     const records = yield* Stream.runCollect(
       store.read(ThreadRead.make({ threadId, limit: 1_024 })),
     );
+
     return records.map((envelope) => envelope.record.payload._tag);
   });
 
@@ -276,6 +292,7 @@ describe("NodeDurableRuntime", () => {
           const active = yield* Ref.make(false);
           const reads = yield* Ref.make(0);
           const settled = yield* Deferred.make<void>();
+
           const instructions = Layer.effect(
             Instructions,
             Effect.acquireRelease(
@@ -284,6 +301,7 @@ describe("NodeDurableRuntime", () => {
                   text: Effect.gen(function* () {
                     expect(yield* Ref.get(active)).toBe(true);
                     yield* Ref.update(reads, (n) => n + 1);
+
                     return "Answer as JSON.";
                   }),
                 }),
@@ -291,7 +309,9 @@ describe("NodeDurableRuntime", () => {
               () => Ref.set(active, false),
             ),
           );
+
           const model = yield* makeScriptedModel(() => finalParts('{"answer":"registered"}'));
+
           const agent = Agent.withModel(
             Agent.make("registered-node-agent", {
               input: plannerDefinition.input,
@@ -302,11 +322,13 @@ describe("NodeDurableRuntime", () => {
             }),
             model,
           );
+
           const definitions = DefinitionDigestInput.make({
             agent: { id: agent.definition.id, revision: 1 },
             model: { provider: "scripted", name: "platform-node-test" },
             tools: [],
           });
+
           const live = NodeDurableHost.layerRegistered(
             [{ agent, definitions }],
             runtimeOptions(filename, {
@@ -316,20 +338,27 @@ describe("NodeDurableRuntime", () => {
                   : Effect.void,
             }),
           );
+
           const requirements: Assert<Equal<Layer.Services<typeof live>, Instructions>> = true;
+
           const errors: Assert<
             Equal<
               Layer.Error<typeof live>,
               DigestError | DurableWorkerFailure | NodeDurableRuntimeInitializationError
             >
           > = true;
+
           expect(requirements && errors).toBe(true);
+
           const digests = yield* digestDefinitions(definitions).pipe(
             Effect.provide(NodeCrypto.layer),
           );
+
           const host = yield* Effect.gen(function* () {
             const host = yield* NodeDurableHost;
+
             expect(yield* Ref.get(reads)).toBe(0);
+
             const receipt = yield* host.submit(
               agent,
               { question: "registered?" },
@@ -338,14 +367,19 @@ describe("NodeDurableRuntime", () => {
                 definitions: digests,
               },
             );
+
             const worker = yield* host.runResolvedWorkers.pipe(Effect.forkChild);
+
             yield* Deferred.await(settled);
             const settlement = yield* host.awaitSettlement(receipt);
+
             expect(settlement.outcome).toBe("completed");
             yield* Fiber.interrupt(worker);
             expect(yield* Ref.get(active)).toBe(true);
+
             return host;
           }).pipe(Effect.provide(live.pipe(Layer.provide(instructions))));
+
           expect(yield* Ref.get(reads)).toBeGreaterThan(0);
           expect(yield* Ref.get(active)).toBe(false);
           expect(yield* host.admissionOpen).toBe(false);
@@ -362,6 +396,7 @@ describe("NodeDurableRuntime", () => {
           const released = yield* Ref.make(false);
           const started = yield* Deferred.make<void>();
           const model = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
+
           const agent = Agent.withModel(
             Agent.make("registered-setup", {
               input: plannerDefinition.input,
@@ -372,19 +407,23 @@ describe("NodeDurableRuntime", () => {
             }),
             model,
           );
+
           const preparation = Layer.effect(
             RunContextPreparation,
             Effect.gen(function* () {
               yield* Deferred.succeed(started, undefined);
               if (mode === "failure") return yield* ContextSetupError.make({});
               if (mode === "defect") return yield* Effect.die("setup defect");
+
               return yield* Effect.never;
             }),
           );
+
           const resource = Layer.effect(
             Resource,
             Effect.acquireRelease(Effect.succeed({}), () => Ref.set(released, true)),
           );
+
           const live = NodeDurableHost.layerRegistered(
             [
               {
@@ -394,14 +433,18 @@ describe("NodeDurableRuntime", () => {
             ],
             { ...runtimeOptions(filename), runContext: preparation },
           ).pipe(Layer.provide(resource));
+
           const build = NodeDurableHost.pipe(Effect.provide(live));
+
           const fiber = yield* (
             mode === "timeout" ? build.pipe(Effect.timeout("1 second")) : build
           ).pipe(Effect.forkChild);
+
           yield* Deferred.await(started);
           if (mode === "timeout") yield* TestClock.adjust("1 second");
           if (mode === "interruption") yield* Fiber.interrupt(fiber);
           const exit = yield* Fiber.await(fiber);
+
           expect(Exit.isFailure(exit)).toBe(true);
           expect(yield* Ref.get(released)).toBe(true);
           if (mode === "failure")
@@ -418,31 +461,38 @@ describe("NodeDurableRuntime", () => {
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
     });
+
     const authorizationOnly = NodeDurableRuntime.layer({
       ...runtimeOptions("unused.sqlite"),
       toolAuthorization: configuredAuthorization,
     });
+
     const both = NodeDurableHost.layerRegistered([], {
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
       toolAuthorization: configuredAuthorization,
     });
+
     const contextErrors: Assert<
       Equal<
         Layer.Error<typeof contextOnly>,
         NodeDurableRuntimeInitializationError | ContextSetupError
       >
     > = true;
+
     const contextNeeds: Assert<Equal<Layer.Services<typeof contextOnly>, ContextConfig>> = true;
+
     const authorizationErrors: Assert<
       Equal<
         Layer.Error<typeof authorizationOnly>,
         NodeDurableRuntimeInitializationError | AuthorizationSetupError
       >
     > = true;
+
     const authorizationNeeds: Assert<
       Equal<Layer.Services<typeof authorizationOnly>, AuthorizationConfig>
     > = true;
+
     const hostErrors: Assert<
       Equal<
         Layer.Error<typeof both>,
@@ -453,9 +503,11 @@ describe("NodeDurableRuntime", () => {
         | AuthorizationSetupError
       >
     > = true;
+
     const hostNeeds: Assert<
       Equal<Layer.Services<typeof both>, ContextConfig | AuthorizationConfig>
     > = true;
+
     expect([
       contextErrors,
       contextNeeds,
@@ -484,6 +536,7 @@ describe("NodeDurableRuntime", () => {
             ]),
             Effect.exit,
           );
+
           if (Exit.isSuccess(opened))
             return yield* Effect.die("Expected service initialization to fail");
           expect(Cause.findErrorOption(opened.cause)).toEqual(
@@ -517,11 +570,15 @@ describe("NodeDurableRuntime", () => {
           ),
           Effect.exit,
         );
+
         const error = failureOf(opened);
+
         expect(error).toHaveProperty("_tag", "NodePlatformConfigError");
+
         const databaseExists = yield* FileSystem.FileSystem.use((fs) => fs.exists(filename)).pipe(
           Effect.provide(NodeFileSystem.layer),
         );
+
         expect(databaseExists).toBe(false);
       }),
     ),
@@ -532,13 +589,16 @@ describe("NodeDurableRuntime", () => {
       withTemporaryDatabase((filename) => {
         const observations: Array<ToolFailureObservation> = [];
         const ambient: Array<ToolFailureObservation> = [];
+
         const Failed = Tool.make("failed", {
           parameters: Schema.Struct({}),
           success: Schema.String,
           failure: Schema.String,
           failureMode: "return",
         });
+
         const tools = Toolkit.make(Failed);
+
         return Effect.gen(function* () {
           const model = yield* makeScriptedModel((n) =>
             n === 0
@@ -554,6 +614,7 @@ describe("NodeDurableRuntime", () => {
                 ]
               : finalParts('{"answer":"fallback"}'),
           );
+
           const agent = Agent.withModel(
             Agent.make("node-observer", {
               input: Schema.Struct({ question: Schema.String }),
@@ -564,13 +625,16 @@ describe("NodeDurableRuntime", () => {
             }),
             model,
           );
+
           const runtime = yield* DurableAgentRuntime;
           const threadId = decodeThreadId("node-observer");
+
           const receipt = yield* runtime.submit(
             agent,
             { question: "try" },
             submitOptions(threadId, "node-observer"),
           );
+
           yield* runtime
             .processThread(agent, threadId)
             .pipe(Effect.provide(tools.toLayer({ failed: () => Effect.fail("unavailable") })));
@@ -625,6 +689,7 @@ describe("NodeDurableRuntime", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql.unsafe("PRAGMA user_version = 1");
           }),
         );
@@ -633,7 +698,9 @@ describe("NodeDurableRuntime", () => {
           Effect.provide(NodeDurableHost.layerStack(runtimeOptions(filename))),
           Effect.exit,
         );
+
         const error = failureOf(opened);
+
         expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
         if (error instanceof SqliteStorageCompatibilityError) {
           expect(error.actualVersion).toBe(1);
@@ -646,6 +713,7 @@ describe("NodeDurableRuntime", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             return yield* sql<Record<string, unknown>>`
               SELECT name
               FROM sqlite_master
@@ -654,6 +722,7 @@ describe("NodeDurableRuntime", () => {
             `;
           }),
         );
+
         expect(tables).toEqual([]);
       }),
     ),
@@ -663,12 +732,14 @@ describe("NodeDurableRuntime", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const marks: Array<string> = [];
+
         const tools = Toolkit.make(
           Tool.make("book", {
             parameters: Schema.Struct({}),
             success: Schema.String,
           }).annotate(ToolExecutionClass, "readonly"),
         );
+
         const model = yield* makeScriptedModel((call) => [
           {
             type: "tool-call",
@@ -679,6 +750,7 @@ describe("NodeDurableRuntime", () => {
           },
           { type: "finish", reason: "tool-calls", usage },
         ]);
+
         const agent = Agent.withModel(
           Agent.make("node-run-services", {
             input: Schema.String,
@@ -689,26 +761,32 @@ describe("NodeDurableRuntime", () => {
           }),
           model,
         );
+
         const handlers = tools.toLayer({
           book: () =>
             Effect.sync(() => {
               marks.push("handler");
+
               return "booked";
             }),
         });
+
         const threadId = decodeThreadId("node-run-services");
+
         for (const incarnation of [1, 2]) {
           const runContext = Layer.effect(
             RunContextPreparation,
             Effect.acquireRelease(
               Effect.sync(() => {
                 marks.push(`acquire-context:${incarnation}`);
+
                 return RunContextPreparation.of({
                   hook: {
                     prepare: ({ source }) =>
                       Effect.sync(() => {
                         marks.push(`prepare:${incarnation}`);
                         if (incarnation === 2) expect(JSON.stringify(source)).toContain("booked");
+
                         return { prompt: source };
                       }),
                   },
@@ -720,6 +798,7 @@ describe("NodeDurableRuntime", () => {
                 }),
             ),
           );
+
           const toolAuthorization = Layer.effect(
             RunToolAuthorization,
             Effect.acquireRelease(
@@ -728,6 +807,7 @@ describe("NodeDurableRuntime", () => {
                   authorize: () =>
                     Effect.sync(() => {
                       marks.push(`authorize:${incarnation}`);
+
                       return incarnation === 1
                         ? { _tag: "allowed" as const }
                         : { _tag: "denied" as const, reason: "revoked" };
@@ -740,6 +820,7 @@ describe("NodeDurableRuntime", () => {
                 }),
             ),
           );
+
           yield* withHost(
             runtimeOptions(filename, {
               runContext,
@@ -751,9 +832,11 @@ describe("NodeDurableRuntime", () => {
             }),
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
+
               if (incarnation === 1) {
                 yield* runtime.submit(agent, "book", submitOptions(threadId, "book"));
                 const interrupted = yield* runtime.processThread(agent, threadId).pipe(Effect.exit);
+
                 expect(failureOf(interrupted)).toHaveProperty(
                   "_tag",
                   "DurableRuntimeFailpointError",
@@ -762,6 +845,7 @@ describe("NodeDurableRuntime", () => {
                 const settlements = yield* runtime
                   .processThread(agent, threadId)
                   .pipe(Effect.provide(RunToolAuthorization.allowAll));
+
                 expect(settlements[0]).toMatchObject({
                   outcome: "failed",
                   failure: { errorTag: "AgentToolAuthorizationDenied" },
@@ -795,15 +879,18 @@ describe("NodeDurableRuntime", () => {
         const authorizedInputs: Array<unknown> = [];
         const projectedInputs: Array<string> = [];
         const inputSchema = Schema.Struct({ question: Schema.String, hostOnly: Schema.String });
+
         const tools = Toolkit.make(
           Tool.make("lookup", {
             parameters: Schema.Struct({}),
             success: Schema.String,
           }).annotate(ToolExecutionClass, "readonly"),
         );
+
         const model = yield* makeScriptedModel((call, prompt) => {
           requests.push(prompt);
           expect(JSON.stringify(prompt)).not.toContain(sentinel);
+
           return call === 0
             ? [
                 {
@@ -817,6 +904,7 @@ describe("NodeDurableRuntime", () => {
               ]
             : finalParts('{"answer":"done"}');
         });
+
         const agent = Agent.withModel(
           Agent.make("node-input-projection", {
             input: inputSchema,
@@ -826,6 +914,7 @@ describe("NodeDurableRuntime", () => {
               Effect.sync(() => {
                 expect(input.hostOnly).toBe(sentinel);
                 projectedInputs.push(input.question);
+
                 return Prompt.make([
                   { role: "user", content: [{ type: "text", text: input.question }] },
                 ]);
@@ -835,17 +924,21 @@ describe("NodeDurableRuntime", () => {
           }),
           model,
         );
+
         const threadId = decodeThreadId("node-input-projection");
         const rootInput = { question: "public root question", hostOnly: sentinel };
         const joinedInput = { question: "public joined question", hostOnly: sentinel };
         const handlers = tools.toLayer({ lookup: () => Effect.succeed("public result") });
+
         const toolAuthorization = Layer.succeed(RunToolAuthorization, {
           authorize: ({ input }) =>
             Effect.sync(() => {
               authorizedInputs.push(input);
+
               return { _tag: "allowed" as const };
             }),
         });
+
         for (const incarnation of [1, 2, 3]) {
           yield* withHost(
             runtimeOptions(filename, {
@@ -858,31 +951,40 @@ describe("NodeDurableRuntime", () => {
             }),
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
+
               if (incarnation === 1) {
                 yield* runtime.submit(agent, rootInput, submitOptions(threadId, "root"));
                 yield* runtime.submit(agent, joinedInput, submitOptions(threadId, "joined"));
               }
               const result = yield* Effect.exit(runtime.processThread(agent, threadId));
+
               if (incarnation < 3) {
                 expect(failureOf(result)).toHaveProperty("_tag", "DurableRuntimeFailpointError");
               } else {
                 expect(Exit.isSuccess(result)).toBe(true);
                 const store = yield* ThreadStore;
+
                 const records = yield* Stream.runCollect(
                   store.read(ThreadRead.make({ threadId, limit: 1_024 })),
                 );
+
                 const inputs = records.flatMap(({ record }) =>
                   record.payload._tag === "UserInputRecorded" ? [record.payload.input] : [],
                 );
+
                 expect(inputs).toEqual([rootInput, joinedInput]);
+
                 const responses = records.filter(
                   ({ record }) => record.payload._tag === "ModelResponseRecorded",
                 );
+
                 expect(responses).toHaveLength(2);
                 expect(JSON.stringify(responses)).not.toContain(sentinel);
+
                 const settlements = records.flatMap(({ record }) =>
                   record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
                 );
+
                 expect(settlements).toEqual(["completed", "completed"]);
               }
             }).pipe(Effect.provide(handlers)),
@@ -917,10 +1019,13 @@ describe("NodeDurableRuntime", () => {
           const finalized = yield* Ref.make(false);
           const requests: Array<Prompt.Prompt> = [];
           const input = { question: "public question", hostOnly: "HOST-ONLY-FAILURE-SENTINEL" };
+
           const model = yield* makeScriptedModel((_call, prompt) => {
             requests.push(prompt);
+
             return finalParts('"done"');
           });
+
           const agent = Agent.withModel(
             Agent.make(`node-projection-${kind}-${mode}`, {
               input: Schema.Struct({ question: Schema.String, hostOnly: Schema.String }),
@@ -931,6 +1036,7 @@ describe("NodeDurableRuntime", () => {
                   ? Effect.succeed(question)
                   : Effect.gen(function* () {
                       yield* Deferred.succeed(started, undefined);
+
                       return yield* mode === "failure"
                         ? Effect.fail(new ProjectionFailure())
                         : Effect.never;
@@ -940,46 +1046,57 @@ describe("NodeDurableRuntime", () => {
             }),
             model,
           );
+
           const threadId = decodeThreadId(`node-projection-${kind}-${mode}`);
           const joinedInput = { ...input, question: "public joined question" };
+
           yield* withHost(
             runtimeOptions(filename),
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
               const receipt = yield* runtime.submit(agent, input, submitOptions(threadId, mode));
+
               if (kind === "joined") {
                 yield* runtime.submit(agent, joinedInput, submitOptions(threadId, "joined"));
               }
               if (mode === "failure") {
                 const settlements = yield* runtime.processThread(agent, threadId);
+
                 expect(settlements).toMatchObject([
                   { outcome: "failed", failure: { errorTag: "ProjectionFailure" } },
                 ]);
               } else {
                 const worker = yield* runtime.processThread(agent, threadId).pipe(Effect.forkChild);
+
                 yield* Deferred.await(started);
                 yield* Fiber.interrupt(worker);
                 expect(Exit.hasInterrupts(yield* Fiber.await(worker))).toBe(true);
               }
               expect(yield* Ref.get(finalized)).toBe(true);
               const ledger = yield* SubmissionLedger;
+
               const stored = yield* ledger.lookup(
                 SubmissionLookupById.make({ submissionId: receipt.submissionId }),
               );
+
               expect(Option.isSome(stored)).toBe(true);
               if (Option.isSome(stored)) expect(stored.value.inputPayload).toEqual(input);
               const store = yield* ThreadStore;
+
               const records = yield* Stream.runCollect(
                 store.read(ThreadRead.make({ threadId, limit: 1_024 })),
               );
+
               expect(
                 records.flatMap(({ record }) =>
                   record.payload._tag === "UserInputRecorded" ? [record.payload.input] : [],
                 ),
               ).toEqual(kind === "joined" ? [input, joinedInput] : [input]);
+
               const settled = records.flatMap(({ record }) =>
                 record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
               );
+
               expect(settled).toEqual(
                 mode === "failure" ? (kind === "joined" ? ["failed", "failed"] : ["failed"]) : [],
               );
@@ -1018,10 +1135,13 @@ describe("NodeDurableRuntime", () => {
               { question: "reconcile?" },
               submitOptions("thread-reconcile", "reconcile-1"),
             );
+
             const crashed = yield* Effect.exit(runtime.processThread(agent, thread));
             const error = failureOf(crashed);
+
             expect(error).toHaveProperty("_tag", "DurableRuntimeFailpointError");
             expect(yield* lookupState(receipt.submissionId)).toBe("terminalizing");
+
             return receipt;
           }),
         );
@@ -1033,24 +1153,30 @@ describe("NodeDurableRuntime", () => {
           runtimeOptions(filename),
           Effect.gen(function* () {
             const host = yield* NodeDurableHost;
+
             expect(yield* host.admissionOpen).toBe(true);
+
             const report = host.startupRecovery.find(
               (candidate) => candidate.submissionId === receipt.submissionId,
             );
+
             expect(report?.decision._tag).toBe("AppendReservedSettlement");
             expect(report?.disposition).toBe("repaired");
             expect(yield* lookupState(receipt.submissionId)).toBe("settled");
 
             const model = yield* makeScriptedModel(() => finalParts('{"answer":"ok"}'));
             const agent = Agent.withModel(plannerDefinition, model);
+
             const replayed = yield* host.submit(
               agent,
               { question: "reconcile?" },
               submitOptions("thread-reconcile", "reconcile-1"),
             );
+
             expect(replayed).toEqual(receipt);
 
             const settlement = yield* host.awaitSettlement(receipt);
+
             expect(settlement.outcome).toBe("completed");
             expect(settlement.receiptId).toBe(receipt.receiptId);
 
@@ -1076,19 +1202,23 @@ describe("NodeDurableRuntime", () => {
 
         // Host process 1, with an explicit Scope so shutdown ordering is observable.
         const scope = yield* Scope.make();
+
         const context = yield* Layer.build(
           NodeDurableHost.layerStack(runtimeOptions(filename)),
         ).pipe(Scope.provide(scope));
+
         const host = Context.get(context, NodeDurableHost);
         const ledger = Context.get(context, SubmissionLedger);
 
         const model = yield* makeScriptedModel(() => finalParts('{"answer":"ok"}'));
         const agent = Agent.withModel(plannerDefinition, model);
+
         const receipt = yield* host.submit(
           agent,
           { question: "shutdown?" },
           submitOptions("thread-shutdown", "shutdown-1"),
         );
+
         expect(yield* host.admissionOpen).toBe(true);
 
         // Hold an ownership lease (default 30s; the TestClock never advances past it).
@@ -1098,15 +1228,18 @@ describe("NodeDurableRuntime", () => {
             producerId: decodeProducerId("producer-platform-node"),
           }),
         );
+
         expect(Option.isSome(claimed)).toBe(true);
 
         yield* Scope.close(scope, Exit.void);
 
         // Shutdown step 1: admission is closed before anything else.
         expect(yield* host.admissionOpen).toBe(false);
+
         const refused = yield* Effect.exit(
           host.submit(agent, { question: "late" }, submitOptions("thread-shutdown", "late-1")),
         );
+
         expect(failureOf(refused)).toHaveProperty("_tag", "AdmissionClosed");
 
         // Host process 2 claims the lane IMMEDIATELY: the drain released the lease instead of
@@ -1116,9 +1249,11 @@ describe("NodeDurableRuntime", () => {
           Effect.gen(function* () {
             const nextHost = yield* NodeDurableHost;
             const nextLedger = yield* SubmissionLedger;
+
             const report = nextHost.startupRecovery.find(
               (candidate) => candidate.submissionId === receipt.submissionId,
             );
+
             expect(report?.decision._tag).toBe("ApplyInput");
             expect(report?.disposition).toBe("repaired");
 
@@ -1128,6 +1263,7 @@ describe("NodeDurableRuntime", () => {
                 producerId: decodeProducerId("producer-platform-node-2"),
               }),
             );
+
             expect(Option.isSome(reclaimed)).toBe(true);
             if (Option.isSome(claimed) && Option.isSome(reclaimed)) {
               expect(reclaimed.value.submissionId).toBe(receipt.submissionId);
@@ -1153,6 +1289,7 @@ describe("NodeDurableRuntime", () => {
           // an admission from another process that this worker never heard about.
           const input: PersistedJson = { question: "wake?" };
           const inputDigest = yield* digestJson(input).pipe(Effect.provide(NodeCrypto.layer));
+
           const admitted = yield* ledger.admit(
             AdmissionRequest.make({
               threadId: thread,
@@ -1165,15 +1302,18 @@ describe("NodeDurableRuntime", () => {
               inputDigest,
             }),
           );
+
           yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
 
           const woken = yield* Effect.forkChild(Stream.runCollect(Stream.take(wake.wakes, 1)));
+
           yield* TestClock.adjust(Duration.millis(1_000));
           expect(yield* Fiber.join(woken)).toEqual([thread]);
 
           const model = yield* makeScriptedModel(() => finalParts('{"answer":"woken"}'));
           const agent = Agent.withModel(plannerDefinition, model);
           const settlements = yield* runtime.processThread(agent, thread);
+
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.outcome).toBe("completed");
           expect(yield* lookupState(admitted.submissionId)).toBe("settled");
@@ -1194,6 +1334,7 @@ describe("NodeDurableRuntime", () => {
         Effect.gen(function* () {
           const nodeConfig = yield* NodeDurableRuntimeConfig;
           const sessionConfig = yield* DurableRuntimeConfig;
+
           expect(nodeConfig.workerConcurrency).toBe(3);
           expect(nodeConfig.filename).toBe(filename);
           expect(sessionConfig.deploymentId).toBe("deployment-platform-node");
@@ -1205,6 +1346,7 @@ describe("NodeDurableRuntime", () => {
           // runWorkers drives exactly `workerConcurrency` copies of the worker effect.
           const started = yield* Ref.make(0);
           const host = yield* NodeDurableHost;
+
           yield* host.runWorkers(Ref.update(started, (count) => count + 1));
           expect(yield* Ref.get(started)).toBe(3);
         }),

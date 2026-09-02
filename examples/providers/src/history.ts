@@ -15,6 +15,7 @@ const sqliteHistory = (filename: string) =>
   PersistentHistory.layer.pipe(Layer.provide(sqliteStore({ filename })));
 
 const threadId = Schema.decodeSync(ThreadId)("persistent-history-example");
+
 const definition = Agent.make("history-example", {
   input: Schema.String,
   output: Schema.String,
@@ -44,6 +45,7 @@ const binding = (answer: string) => {
     ],
     termination: { _tag: "Complete" },
   };
+
   return Agent.withModel(
     definition,
     Model.make("scripted", "history-example", ScriptedModel.layer([turn])),
@@ -55,11 +57,13 @@ export const writeHistory = Effect.fn("example.writeHistory")(function* (filenam
   const first = yield* AgentRuntime.run(binding("I'll remember Kyoto."), "I'm visiting Kyoto.", {
     threadId,
   }).pipe(Effect.provide([sqliteHistory(filename), RunContextPreparationPassthrough]));
+
   const second = yield* AgentRuntime.run(
     binding("You're visiting Kyoto."),
     "Which city am I visiting?",
     { threadId },
   ).pipe(Effect.provide([sqliteHistory(filename), RunContextPreparationPassthrough]));
+
   return [first.output, second.output];
 });
 
@@ -81,21 +85,25 @@ const history = Command.make("history").pipe(
     ),
   }),
 );
+
 const seed = Command.make(
   "seed",
   {},
   Effect.fn("history.seed")(function* () {
     const { database } = yield* history;
     const replies = yield* writeHistory(database);
+
     yield* Console.log(replies.join("\n"));
   }),
 ).pipe(Command.withDescription("Append two successful Runs to the example Thread"));
+
 const show = Command.make(
   "show",
   {},
   Effect.fn("history.show")(function* () {
     const { database } = yield* history;
     const prompt = yield* readHistory(database);
+
     yield* Console.log(yield* Schema.encodeEffect(Schema.fromJsonString(Prompt.Prompt))(prompt));
   }),
 ).pipe(Command.withDescription("Reconstruct and print the canonical Prompt as JSON"));

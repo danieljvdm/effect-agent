@@ -69,6 +69,7 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
   }
   try {
     const jsonSchema = Tool.getJsonSchemaFromSchema(definition.output);
+
     return {
       _tag: "rendered",
       message: `${contractDirective(definition)}\n\n${JSON.stringify(jsonSchema, undefined, 2)}`,
@@ -96,11 +97,13 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
 export const insertOutputContract = (prompt: Prompt.Prompt, message: string): Prompt.Prompt => {
   const content = prompt.content;
   let insertAt = 0;
+
   for (let index = 0; index < content.length; index += 1) {
     if (content[index]?.role === "system") {
       insertAt = index + 1;
     }
   }
+
   return Prompt.fromMessages([
     ...content.slice(0, insertAt),
     Prompt.makeMessage("system", { content: message }),

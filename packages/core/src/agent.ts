@@ -306,6 +306,7 @@ export namespace Agent {
     RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
     InputPromptValue
   >;
+
   export function make<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
@@ -331,6 +332,7 @@ export namespace Agent {
     ToolkitValue,
     RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>
   >;
+
   export function make<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
@@ -351,6 +353,7 @@ export namespace Agent {
       readonly runDisposition?: undefined;
     },
   ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue, undefined, InputPromptValue>;
+
   export function make<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
@@ -363,6 +366,7 @@ export namespace Agent {
       readonly runDisposition?: undefined;
     },
   ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue>;
+
   export function make(
     id: string,
     options: {

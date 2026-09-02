@@ -21,11 +21,13 @@ const DOCUMENT_TABLE = "effect_agent_memory_documents_v1";
 const RECEIPT_TABLE = "effect_agent_memory_receipts_v1";
 const MAX_STORED_JSON_CODE_UNITS = 16 * 1024 * 1024;
 const StoredJson = Schema.String.check(Schema.isMaxLength(MAX_STORED_JSON_CODE_UNITS));
+
 const EncodedMemoryChange = Schema.Struct({
   commandJson: StoredJson,
   documentJson: StoredJson,
   resultJson: StoredJson,
 });
+
 const equivalentContent = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.content);
 const equivalentScopes = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.scopes);
 
@@ -163,14 +165,19 @@ const decodeVersionedJson = Effect.fn("SqliteMemoryStore.decodeVersionedJson")(f
   const header = yield* Schema.decodeEffect(Schema.fromJsonString(StoredVersionHeader))(value).pipe(
     Effect.mapError(() => storageError(operation, "corrupt")),
   );
+
   if (header.version !== STORAGE_VERSION) {
     return yield* storageError(operation, "incompatible");
   }
+
   const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(value).pipe(
     Effect.mapError(() => storageError(operation, "corrupt")),
   );
+
   const canonical = yield* encodeJson(schema, decoded, operation);
+
   if (canonical !== value) return yield* storageError(operation, "corrupt");
+
   return decoded;
 });
 
@@ -191,6 +198,7 @@ const validateDocument = Effect.fn("SqliteMemoryStore.validateDocument")(functio
   ) {
     return yield* storageError(operation, "corrupt");
   }
+
   return document;
 });
 
@@ -212,6 +220,7 @@ const validateReceiptResult = Effect.fn("SqliteMemoryStore.validateReceiptResult
     ) {
       return yield* storageError(operation, "corrupt");
     }
+
     return;
   }
   if (
@@ -238,19 +247,23 @@ const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(functio
             version INTEGER NOT NULL
           )
         `;
+
         const metadataRows = yield* sql<Record<string, unknown>>`
           SELECT version
           FROM effect_agent_memory_metadata
           WHERE component = ${METADATA_COMPONENT}
         `;
+
         const metadata = yield* decodeRows(
           MemoryMetadataRow,
           metadataRows,
           "decode memory schema version",
         );
+
         if (metadata.length > 1)
           return yield* storageError("decode memory schema version", "corrupt");
         const currentVersion = metadata[0]?.version;
+
         if (currentVersion !== undefined && currentVersion !== STORAGE_VERSION) {
           return yield* storageError("initialize memory schema", "incompatible");
         }
@@ -260,11 +273,13 @@ const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(functio
             FROM sqlite_master
             WHERE type = 'table' AND name IN (${DOCUMENT_TABLE}, ${RECEIPT_TABLE})
           `;
+
           const existingTables = yield* decodeRows(
             MemoryTableRow,
             tableRows,
             "inspect memory schema",
           );
+
           if (existingTables.length > 0) {
             return yield* storageError("initialize memory schema", "incompatible");
           }
@@ -326,15 +341,19 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
       `,
       operation,
     );
+
     const rows = yield* decodeRows(MemoryDocumentRow, rawRows, operation);
+
     if (rows.length === 0) return null;
     if (rows.length !== 1) return yield* storageError(operation, "corrupt");
     const row = rows[0];
+
     if (row.format_version !== STORAGE_VERSION) {
       return yield* storageError(operation, "incompatible");
     }
     const stored = yield* decodeVersionedJson(StoredMemoryResult, row.document_json, operation);
     const document = stored.value;
+
     yield* validateDocument(document, key, operation);
     if (
       row.namespace !== key.namespace.address ||
@@ -344,11 +363,13 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
     ) {
       return yield* storageError(operation, "corrupt");
     }
+
     return document;
   });
 
   const get = Effect.fn("SqliteMemoryStore.get")(function* (key: MemoryKey) {
     const decodedKey = yield* decodeInput(MemoryKey.Wire, key, "get memory document");
+
     return yield* readDocument(decodedKey, "get memory document");
   });
 
@@ -359,6 +380,7 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* MemoryMutationFailpoint;
   const limits = yield* SqlMemoryLimits;
+
   yield* initializeMemorySchema();
   const { get, readDocument } = yield* makeMemoryReader();
 
@@ -374,23 +396,29 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
       `,
       operation,
     );
+
     const rows = yield* decodeRows(MemoryReceiptRow, rawRows, operation);
+
     if (rows.length === 0) return null;
     if (rows.length !== 1) return yield* storageError(operation, "corrupt");
     const row = rows[0];
+
     if (row.format_version !== STORAGE_VERSION) {
       return yield* storageError(operation, "incompatible");
     }
+
     const command = yield* decodeVersionedJson(
       StoredMemoryCommand,
       row.command_json,
       `${operation} command`,
     );
+
     const result = yield* decodeVersionedJson(
       StoredMemoryResult,
       row.result_json,
       `${operation} result`,
     );
+
     if (
       row.namespace !== command.value.key.namespace.address ||
       row.operation_id !== command.value.operationId ||
@@ -402,24 +430,29 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
     }
     yield* validateDocument(result.value, command.value.key, operation);
     yield* validateReceiptResult(command.value, result.value, operation);
+
     return { commandJson: row.command_json, result: result.value };
   });
 
   const change = Effect.fn("SqliteMemoryStore.change")(function* (write: MemoryWrite) {
     const operation = "change memory document";
     const decodedWrite = yield* decodeInput(MemoryWrite.Wire, write, operation);
+
     const commandJson = yield* encodeJson(
       StoredMemoryCommand,
       StoredMemoryCommand.make({ version: STORAGE_VERSION, value: decodedWrite }),
       "encode memory command",
     );
+
     yield* failpoint.hit("memory:change:before");
+
     // The adapter must serialize before reading receipts and state. Node uses BEGIN
     // IMMEDIATE; Durable Objects use the driver's storage-backed transaction and permit.
     const transactionResult = yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const receipt = yield* readReceipt(decodedWrite, operation);
+
           if (receipt !== null) {
             if (receipt.commandJson !== commandJson) {
               return yield* MemoryOperationConflict.make({
@@ -427,18 +460,22 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
                 operationId: decodedWrite.operationId,
               });
             }
+
             return { document: receipt.result, changed: false } as const;
           }
 
           const current = yield* readDocument(decodedWrite.key, operation);
           const modifiedAt = yield* Clock.currentTimeMillis;
           const next = yield* applyMemoryWrite(current, decodedWrite, modifiedAt);
+
           const resultJson = yield* encodeJson(
             StoredMemoryResult,
             StoredMemoryResult.make({ version: STORAGE_VERSION, value: next }),
             "encode memory result",
           );
+
           const documentJson = resultJson;
+
           yield* validateEncodedChange({ commandJson, documentJson, resultJson }, operation);
 
           if (
@@ -450,15 +487,18 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
             const bytes = (value: string) => Encoding.encodeHex(value).length / 2;
             const identityBytes = bytes(next.key.namespace.address) + bytes(next.key.id);
             const documentBytes = identityBytes + bytes(documentJson) + 128;
+
             const receiptBytes =
               identityBytes +
               bytes(decodedWrite.operationId) +
               bytes(commandJson) +
               bytes(resultJson) +
               128;
+
             if (Math.max(documentBytes, receiptBytes) > limits.maxRowBytes) {
               return yield* storageError("memory row byte limit", "invalid-input");
             }
+
             const usage = yield* sql<Record<string, unknown>>`
               SELECT
                 (SELECT COUNT(*) FROM effect_agent_memory_documents_v1) AS documents,
@@ -469,7 +509,9 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
                   length(CAST(operation_id AS BLOB)) + length(CAST(command_json AS BLOB)) +
                   length(CAST(result_json AS BLOB)) + 128) FROM effect_agent_memory_receipts_v1), 0) AS bytes
             `.pipe(Effect.flatMap((rows) => decodeRows(UsageRow, rows, operation)));
+
             const used = usage[0];
+
             if (usage.length !== 1 || used === undefined)
               return yield* storageError(operation, "corrupt");
             // Conservatively charge the replacement document as well. Receipts are never pruned.
@@ -504,10 +546,13 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
                   AND revision = ${current.source.revision}
               `;
           }
+
           const changedRows = yield* sql<Record<string, unknown>>`
               SELECT changes() AS changed
             `;
+
           const changed = yield* decodeRows(MemoryChangeCountRow, changedRows, operation);
+
           if (changed.length !== 1 || changed[0].changed !== 1) {
             return yield* storageError(operation, "corrupt");
           }
@@ -521,11 +566,14 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
               )
             `;
           yield* failpoint.hit("memory:change:after-receipt");
+
           return { document: next, changed: true } as const;
         }),
       )
       .pipe(Effect.catchTag("SqlError", () => Effect.fail(storageError(operation))));
+
     if (transactionResult.changed) yield* failpoint.hit("memory:change:after");
+
     return transactionResult.document;
   });
 
@@ -558,6 +606,7 @@ export const memoryReaderLayer: Layer.Layer<
   Effect.gen(function* () {
     const sql = yield* SqlClientService.SqlClient;
     const operation = "open memory reader";
+
     const tables = yield* query(
       sql<Record<string, unknown>>`
         SELECT name FROM sqlite_master
@@ -567,15 +616,18 @@ export const memoryReaderLayer: Layer.Layer<
       `,
       operation,
     ).pipe(Effect.flatMap((rows) => decodeRows(MemoryTableRow, rows, operation)));
+
     if (tables.length !== 3) {
       return yield* storageError(operation, tables.length === 0 ? "unavailable" : "incompatible");
     }
+
     const metadata = yield* query(
       sql<Record<string, unknown>>`
         SELECT version FROM effect_agent_memory_metadata WHERE component = ${METADATA_COMPONENT}
       `,
       operation,
     ).pipe(Effect.flatMap((rows) => decodeRows(MemoryMetadataRow, rows, operation)));
+
     if (metadata.length !== 1 || metadata[0].version !== STORAGE_VERSION) {
       return yield* storageError(operation, "incompatible");
     }
@@ -587,6 +639,7 @@ export const memoryReaderLayer: Layer.Layer<
       operation,
     );
     const { get } = yield* makeMemoryReader();
+
     return MemoryReader.fromAdapter({ get });
   }),
 );

@@ -12,6 +12,7 @@ const START_HOST = "httpbin.org";
 const PROOF_FACT = "Herman Melville - Moby-Dick";
 const MAX_PAGES = 3;
 const MAX_PAGE_BYTES = 32 * 1_024;
+
 const enabled =
   phase7LiveProfileEnabled(process.env) && !!process.env[ACCOUNT] && !!process.env[TOKEN];
 
@@ -21,8 +22,10 @@ describe.skipIf(!enabled)("Browser Run REST crawl smoke (opt-in)", () => {
       Effect.gen(function* () {
         const accountId = yield* Config.nonEmptyString(ACCOUNT);
         const apiToken = yield* Config.redacted(TOKEN);
+
         const records = yield* Effect.gen(function* () {
           const crawl = yield* PageCrawl;
+
           return yield* crawl
             .crawl(
               PageCrawlRequest.make({
@@ -50,9 +53,11 @@ describe.skipIf(!enabled)("Browser Run REST crawl smoke (opt-in)", () => {
             );
           }
         }
+
         const completed = records.filter(
           (record) => record.status === "completed" && record.markdown !== undefined,
         );
+
         expect(completed.length).toBeGreaterThan(0);
         expect(completed[0]?.markdown).toContain(PROOF_FACT);
 

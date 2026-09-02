@@ -58,6 +58,7 @@ const isCredentialFreeWebUrl = (value: string, allowHttp: boolean): boolean => {
 
   try {
     const parsed: unknown = Reflect.construct(pageUrlConstructor, [value]);
+
     if (!Predicate.isObject(parsed)) return false;
 
     const protocol: unknown = Reflect.get(parsed, "protocol");
@@ -83,6 +84,7 @@ export const PageCaptureTargetUrl = BoundedUrl.check(
     title: "an absolute HTTPS URL without embedded credentials",
   }),
 );
+
 export type PageCaptureTargetUrl = typeof PageCaptureTargetUrl.Type;
 
 /** Discovered HTTP(S) links are data, never navigation authority, and carry no credentials. */
@@ -91,6 +93,7 @@ export const PageCaptureLinkUrl = BoundedUrl.check(
     title: "an absolute HTTP or HTTPS URL without embedded credentials",
   }),
 );
+
 export type PageCaptureLinkUrl = typeof PageCaptureLinkUrl.Type;
 
 const ResponseFormatPrimitive = Schema.Literals([
@@ -102,6 +105,7 @@ const ResponseFormatPrimitive = Schema.Literals([
   "null",
   "integer",
 ]);
+
 const ResponseFormatPrimitiveList = Schema.Array(ResponseFormatPrimitive).check(
   Schema.isMinLength(1),
   Schema.isMaxLength(7),
@@ -181,13 +185,16 @@ const responseFormatFields = () => {
     Schema.isMinLength(1),
     Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
   );
+
   const boundedDefinitions = Schema.Record(BoundedSchemaProperty, ResponseFormatNode).check(
     Schema.isMaxProperties(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
   );
+
   const boundedRequired = Schema.Array(BoundedSchemaProperty).check(
     Schema.isMaxLength(MAX_RESPONSE_FORMAT_COLLECTION_LENGTH),
     Schema.isUnique(),
   );
+
   const subschema = Schema.Union([Schema.Boolean, ResponseFormatNode]);
 
   return {
@@ -275,6 +282,7 @@ const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormat
   const pending: Array<{ readonly value: unknown; readonly depth: number }> = [
     { value: input, depth: 0 },
   ];
+
   const visited = new WeakSet<object>();
   let nodes = 0;
   let textUnits = 0;
@@ -282,6 +290,7 @@ const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormat
   try {
     while (pending.length > 0) {
       const current = pending.pop();
+
       if (
         current === undefined ||
         current.depth > MAX_RESPONSE_FORMAT_DEPTH ||
@@ -291,6 +300,7 @@ const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormat
       }
 
       const value = current.value;
+
       if (value === null || typeof value === "boolean") continue;
       if (typeof value === "number") {
         if (!Number.isFinite(value)) return false;
@@ -307,6 +317,7 @@ const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormat
       const entries = Array.isArray(value)
         ? value.map((entry, index) => [index, entry] as const)
         : Object.entries(value);
+
       if (entries.length > MAX_RESPONSE_FORMAT_COLLECTION_LENGTH) return false;
 
       for (const [key, entry] of entries) {
@@ -318,6 +329,7 @@ const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormat
 
     if (!isResponseFormatDocument(input)) return false;
     const encoded = JSON.stringify(input);
+
     return Encoding.encodeHex(encoded).length / 2 <= MAX_RESPONSE_FORMAT_BYTES;
   } catch {
     return false;
@@ -329,6 +341,7 @@ export const PageCaptureResponseFormat = Schema.declare(isBoundedResponseFormat,
   identifier: "@effect-agent/sandbox/PageCaptureResponseFormat",
   description: "An object JSON Schema bounded to 64 KiB, depth 32, and 4096 nodes",
 });
+
 export type PageCaptureResponseFormat = typeof PageCaptureResponseFormat.Type;
 
 /** Capture a URL after a full render, the common case. */
@@ -404,6 +417,7 @@ export const PageCaptureAction = Schema.Union([
   CapturePageScrape,
   CapturePageStructured,
 ]);
+
 export type PageCaptureAction = typeof PageCaptureAction.Type;
 
 /** Wait for one CSS selector to appear before capturing. */
@@ -557,6 +571,7 @@ export const PageCaptureOutput = Schema.Union([
   PageScrapeCaptured,
   PageStructuredCaptured,
 ]);
+
 export type PageCaptureOutput = typeof PageCaptureOutput.Type;
 
 /** Explicit accounting for model inference performed by a capture adapter. */
@@ -666,6 +681,7 @@ export const PageCaptureError = Schema.Union([
   PageCaptureOutputLimitError,
   PageCaptureProtocolError,
 ]);
+
 export type PageCaptureError = typeof PageCaptureError.Type;
 
 /**

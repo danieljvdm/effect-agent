@@ -55,6 +55,7 @@ const proofCapture = WebCapture.make("capture_example_domain", {
 });
 
 const PROOF_SCRAPE_SELECTORS = ["h1", "a"] as const;
+
 const proofScrape = WebCapture.makeScrape("scrape_example_domain", {
   description: "Scrape the fixed Example Domain proof page by selector.",
   urls: ["example.com"],
@@ -98,18 +99,23 @@ class WorkerCaptureProofError extends Schema.TaggedError<WorkerCaptureProofError
 const proofLayer = Layer.unwrap(
   Effect.gen(function* () {
     const env = yield* WorkerEnvironment;
+
     const lifecycleConfig = yield* Config.all({
       accountId: Config.string("CLOUDFLARE_ACCOUNT_ID"),
       apiToken: Config.redacted("BROWSER_RENDERING_API_TOKEN"),
     }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)));
+
     const quickActionLayer = browserQuickActionScreenshotLayer().pipe(
       Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })),
     );
+
     const interactiveLayer = CloudflareInteractiveBrowser.hostLayer({
       browser: env.BROWSER,
       ...lifecycleConfig,
     }).pipe(Layer.provide(FetchHttpClient.layer));
+
     const browserRunLayer = Layer.merge(quickActionLayer, interactiveLayer);
+
     return Layer.merge(
       CloudflareBrowser.layer(proofCapture, { browser: env.BROWSER }),
       CloudflareBrowser.layer(proofScrape, { browser: env.BROWSER }),
@@ -119,19 +125,24 @@ const proofLayer = Layer.unwrap(
 
 const runProof = Effect.gen(function* () {
   let stage: typeof BrowserRunProofStage.Type = "capture";
+
   return yield* Effect.gen(function* () {
     const toolkit = yield* Toolkit.make(proofCapture.tool);
+
     const results = yield* toolkit.handle("capture_example_domain", {
       url: PROOF_SOURCE_URL,
       action: "markdown",
     });
+
     const last = yield* Stream.runLast(results);
+
     if (Option.isNone(last) || last.value.preliminary) {
       return yield* WorkerCaptureProofError.make({
         message: "The WebCapture handler did not return a final result",
       });
     }
     const result = last.value.result;
+
     if (!Schema.is(WebCaptureSuccess)(result) || !result.markdown?.includes(PROOF_FACT)) {
       return yield* WorkerCaptureProofError.make({
         message: "The Markdown capture did not contain the expected stable fact",
@@ -140,20 +151,25 @@ const runProof = Effect.gen(function* () {
     yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
     stage = "scrape";
     const scrapeToolkit = yield* Toolkit.make(proofScrape.tool);
+
     const scrapeResults = yield* scrapeToolkit.handle("scrape_example_domain", {
       url: PROOF_SOURCE_URL,
       selectors: PROOF_SCRAPE_SELECTORS,
     });
+
     const scrapeLast = yield* Stream.runLast(scrapeResults);
+
     if (Option.isNone(scrapeLast) || scrapeLast.value.preliminary) {
       return yield* WorkerCaptureProofError.make({
         message: "The selector scrape handler did not return a final result",
       });
     }
     const scrapeResult = scrapeLast.value.result;
+
     const heading = Schema.is(WebCaptureScrapeSuccess)(scrapeResult)
       ? scrapeResult.groups.find((group) => group.selector === "h1")
       : undefined;
+
     if (
       heading === undefined ||
       !heading.results.some((element) => element.text.includes(PROOF_FACT))
@@ -164,21 +180,27 @@ const runProof = Effect.gen(function* () {
     }
     yield* Effect.sleep(QUICK_ACTION_PACING_DELAY);
     const screenshots = yield* PageScreenshot;
+
     stage = "screenshot";
     const screenshot = yield* screenshots.capture(screenshotRequest);
+
     if (screenshot.mediaType !== "image/png" || !hasPngSignature(screenshot.bytes)) {
       return yield* WorkerCaptureProofError.make({
         message: "The screenshot was not a PNG with the expected signature",
       });
     }
+
     const interactive = yield* Effect.scoped(
       Effect.gen(function* () {
         const browsers = yield* BrowserRunInteractiveHost;
+
         stage = "open";
         const session = yield* browsers.open(interactivePolicy);
         const handle = session.handle;
+
         stage = "navigate";
         const navigation = yield* handle.navigate(interactiveNavigateRequest);
+
         if (navigation.url !== PROOF_SOURCE_URL) {
           return yield* WorkerCaptureProofError.make({
             message: "The interactive browser did not finish at the expected URL",
@@ -186,6 +208,7 @@ const runProof = Effect.gen(function* () {
         }
         stage = "read";
         const page = yield* handle.readText(interactiveReadTextRequest);
+
         if (
           !page.text.includes(PROOF_FACT) ||
           new TextEncoder().encode(page.text).byteLength > INTERACTIVE_MAX_TEXT_BYTES
@@ -195,9 +218,11 @@ const runProof = Effect.gen(function* () {
           });
         }
         stage = "scroll";
+
         const scrolled = yield* handle.scroll(
           BrowserScrollRequest.make({ deltaX: 0, deltaY: 128 }),
         );
+
         if (scrolled.url !== PROOF_SOURCE_URL) {
           return yield* WorkerCaptureProofError.make({
             message: "The interactive scroll changed the expected page URL",
@@ -205,24 +230,30 @@ const runProof = Effect.gen(function* () {
         }
         stage = "interactive-screenshot";
         const image = yield* handle.screenshot(BrowserScreenshotRequest.make({ fullPage: false }));
+
         if (image.mediaType !== "image/png" || !hasPngSignature(image.bytes)) {
           return yield* WorkerCaptureProofError.make({
             message: "The interactive screenshot was not a PNG with the expected signature",
           });
         }
         stage = "live-view";
+
         const liveView = yield* session.getLiveView(
           BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
         );
+
         stage = "handoff";
+
         const handoff = yield* session.handoff(
           BrowserRunHandoffRequest.make({
             instructions: "Temporary browser proof. The host will close this session immediately.",
             timeout: 5_000,
           }),
         );
+
         stage = "handoff-state";
         const handoffState = yield* session.getHandoffState;
+
         if (
           !handoffState.active ||
           handoffState.handoffId === undefined ||
@@ -238,11 +269,13 @@ const runProof = Effect.gen(function* () {
         yield* session.close;
         stage = "closed-handle";
         const afterClose = yield* handle.readText(interactiveReadTextRequest).pipe(Effect.flip);
+
         if (afterClose._tag !== "InteractiveBrowserExpiredError") {
           return yield* WorkerCaptureProofError.make({
             message: "The explicitly closed browser handle did not reject further actions",
           });
         }
+
         return BrowserRunInteractiveProof.make({
           finalUrl: PROOF_SOURCE_URL,
           readFact: PROOF_FACT,
@@ -254,6 +287,7 @@ const runProof = Effect.gen(function* () {
         });
       }),
     );
+
     return Response.json(
       BrowserRunWorkerProofResult.make({
         sourceUrl: PROOF_SOURCE_URL,

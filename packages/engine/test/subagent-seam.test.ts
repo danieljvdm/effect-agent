@@ -39,10 +39,12 @@ const decodeTurnId = Schema.decodeSync(TurnId);
 const identifiers = Layer.effect(IdGenerator)(
   Effect.gen(function* () {
     const counter = yield* Ref.make(0);
+
     const next = <A>(decode: (value: string) => A, prefix: string) =>
       Ref.updateAndGet(counter, (value) => value + 1).pipe(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
+
     return {
       nextThreadId: next(decodeThreadId, "thread"),
       nextRunId: next(decodeRunId, "run"),
@@ -80,6 +82,7 @@ const delegatingModel = (name: string, params: unknown, answerText: string) =>
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: () =>
@@ -129,7 +132,9 @@ const EmittingDelegate = Tool.make("delegate", {
   parameters: Schema.Struct({ question: Schema.String }),
   success: Schema.Struct({ value: Schema.String }),
 }).addDependency(RunEventSink);
+
 const emittingTools = Toolkit.make(EmittingDelegate);
+
 const emittingDefinition = Agent.make("seam-emitting-parent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -150,7 +155,9 @@ const SpawningDelegate = Tool.make("delegate", {
 })
   .addDependency(AgentSpawner)
   .addDependency(IdGenerator);
+
 const spawningTools = Toolkit.make(SpawningDelegate);
+
 const spawningDefinition = Agent.make("seam-spawning-parent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -179,10 +186,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -198,6 +207,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
   it.effect("honors preallocated Thread and Run identity in every emitted event", () => {
     const threadId = Schema.decodeSync(ThreadId)("thread-preallocated");
     const runId = Schema.decodeSync(RunId)("run-preallocated");
+
     const agent = Agent.withModel(
       simpleDefinition,
       modelFromParts("preallocated", finalParts('{"answer":"ok"}')),
@@ -226,6 +236,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         delegate: () =>
           Effect.gen(function* () {
             const sink = yield* RunEventSink;
+
             yield* sink.emit({ _tag: "SubagentRequested", ...fabricatedChildIdentity });
             yield* sink.emit({ _tag: "SubagentStarted", ...fabricatedChildIdentity });
             yield* sink.emit({
@@ -240,10 +251,12 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
               finishReason: "completed",
             });
             yield* sink.emit({ _tag: "SubagentJoined", ...fabricatedChildIdentity });
+
             return { value: "done" };
             // The sink cannot be closed while this batch is live.
           }).pipe(Effect.orDie),
       });
+
       const agent = Agent.withModel(
         emittingDefinition,
         delegatingModel("emitting", { question: "child?" }, '{"answer":"joined"}'),
@@ -257,6 +270,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         ).pipe(Stream.runCollect, Effect.provide(toolLayer));
 
         const subagentEvents = events.filter(isSubagentEvent);
+
         expect(subagentEvents.map((event) => event._tag)).toEqual([
           "SubagentRequested",
           "SubagentStarted",
@@ -267,6 +281,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
 
         const runStarted = events.find((event) => event._tag === "RunStarted");
         const firstTurn = events.find((event) => event._tag === "TurnStarted");
+
         expect(runStarted).toBeDefined();
         expect(firstTurn).toBeDefined();
         for (const event of subagentEvents) {
@@ -280,6 +295,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         }
         const completed = subagentEvents.find((event) => event._tag === "SubagentCompleted");
         const progress = subagentEvents.find((event) => event._tag === "SubagentProgress");
+
         expect(completed).toMatchObject({
           delegationId,
           childThreadId: "child-thread",
@@ -298,12 +314,14 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         const secondTurnIndex = tags.indexOf("TurnStarted", tags.indexOf("TurnStarted") + 1);
         const requestedIndex = tags.indexOf("SubagentRequested");
         const joinedIndex = tags.indexOf("SubagentJoined");
+
         expect(requestedIndex).toBeGreaterThan(declaredIndex);
         expect(joinedIndex).toBeLessThan(secondTurnIndex);
 
         // Sequences are stamped through the shared monotonic counter.
         expect(new Set(events.map((event) => event.sequence)).size).toBe(events.length);
         const subagentSequences = subagentEvents.map((event) => event.sequence);
+
         for (let index = 1; index < subagentSequences.length; index += 1) {
           expect(subagentSequences[index]).toBeGreaterThan(subagentSequences[index - 1] ?? -1);
         }
@@ -314,14 +332,18 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
   it.effect("fails closed when a handler emits after its Tool batch settled", () =>
     Effect.gen(function* () {
       const leakedSink = yield* Deferred.make<RunEventSinkService>();
+
       const toolLayer = emittingTools.toLayer({
         delegate: () =>
           Effect.gen(function* () {
             const sink = yield* RunEventSink;
+
             yield* Deferred.succeed(leakedSink, sink);
+
             return { value: "done" };
           }),
       });
+
       const agent = Agent.withModel(
         emittingDefinition,
         delegatingModel("leaky", { question: "child?" }, '{"answer":"settled"}'),
@@ -330,13 +352,17 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
       const result = yield* AgentRuntime.run(agent, { question: "root?" }).pipe(
         Effect.provide(toolLayer),
       );
+
       expect(result.output).toEqual({ answer: "settled" });
 
       const sink = yield* Deferred.await(leakedSink);
+
       const exit = yield* sink
         .emit({ _tag: "SubagentRequested", ...fabricatedChildIdentity })
         .pipe(Effect.exit);
+
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(RunEventSinkClosedError);
       expect(failure.message).toContain("settled");
     }),
@@ -349,6 +375,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         const rootDepth = yield* Ref.make(-1);
         const childDepth = yield* Ref.make(-1);
         const contextThreads: Array<ThreadId> = [];
+
         const captured = yield* Ref.make<
           | {
               readonly threadId: string;
@@ -363,7 +390,9 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
           parameters: Schema.Struct({}),
           success: Schema.Struct({ acknowledged: Schema.Boolean }),
         }).addDependency(AgentSpawner);
+
         const childTools = Toolkit.make(Probe);
+
         const childDefinition = Agent.make("seam-child", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -376,6 +405,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const childModel = Model.make(
           "scripted",
           "probing-child",
@@ -383,6 +413,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
             LanguageModel.LanguageModel,
             Effect.gen(function* () {
               const turn = yield* Ref.make(0);
+
               return yield* LanguageModel.make({
                 generateText: () => Effect.succeed([]),
                 streamText: () =>
@@ -410,12 +441,16 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
             }),
           ),
         );
+
         const childBinding = Agent.withModel(childDefinition, childModel);
+
         const childToolLayer = childTools.toLayer({
           probe: () =>
             Effect.gen(function* () {
               const spawner = yield* AgentSpawner;
+
               yield* Ref.set(childDepth, spawner.depth);
+
               return { acknowledged: true };
             }),
         });
@@ -424,23 +459,29 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
           delegate: ({ question }) =>
             Effect.gen(function* () {
               const spawner = yield* AgentSpawner;
+
               yield* Ref.set(rootDepth, spawner.depth);
+
               const child = yield* spawner.spawn(
                 childBinding,
                 { question },
                 { delegationId, parentToolCallId: delegateCallId },
               );
+
               const result = yield* child.await.pipe(Effect.orDie);
               const childEvents = yield* child.events;
+
               yield* Ref.set(captured, {
                 threadId: child.threadId,
                 runId: child.runId,
                 parentLink: child.parentLink,
                 childEvents,
               });
+
               return { answer: result.output.answer };
             }).pipe(Effect.provide(childToolLayer), Effect.scoped),
         });
+
         const parent = Agent.withModel(
           spawningDefinition,
           delegatingModel("spawning", { question: "child?" }, '{"answer":"parent-answer"}'),
@@ -453,6 +494,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
               load: ({ threadId }) =>
                 Effect.sync(() => {
                   contextThreads.push(threadId);
+
                   return Prompt.empty;
                 }),
             },
@@ -464,6 +506,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         expect(yield* Ref.get(childDepth)).toBe(1);
 
         const snapshot = yield* Ref.get(captured);
+
         expect(snapshot).toBeDefined();
         if (snapshot === undefined) {
           throw new Error("Expected the delegate handler to capture the spawned child");
@@ -487,6 +530,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         });
         // The preallocated identity flowed through the interpreter unchanged.
         const childStarted = snapshot.childEvents.at(0);
+
         expect(childStarted?._tag).toBe("RunStarted");
         expect(childStarted?.threadId).toBe(snapshot.threadId);
         expect(childStarted?.runId).toBe(snapshot.runId);
@@ -505,7 +549,9 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const childTools = Toolkit.make(Block);
+
       const childToolLayer = childTools.toLayer({
         block: () =>
           Effect.scoped(
@@ -513,10 +559,12 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
               yield* Effect.acquireRelease(Deferred.succeed(childToolStarted, undefined), () =>
                 Deferred.succeed(childToolFinalized, undefined),
               );
+
               return yield* Effect.never;
             }),
           ),
       });
+
       const childDefinition = Agent.make("seam-blocking-child", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -529,6 +577,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const childModel = Model.make(
         "scripted",
         "blocking-child",
@@ -553,24 +602,30 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
           ),
         ),
       );
+
       const childBinding = Agent.withModel(childDefinition, childModel);
 
       const parentToolLayer = spawningTools.toLayer({
         delegate: ({ question }) =>
           Effect.gen(function* () {
             const spawner = yield* AgentSpawner;
+
             yield* Effect.acquireRelease(Effect.void, () =>
               Deferred.succeed(handlerFinalized, undefined),
             );
+
             const child = yield* spawner.spawn(
               childBinding,
               { question },
               { delegationId, parentToolCallId: delegateCallId },
             );
+
             const result = yield* child.await.pipe(Effect.orDie);
+
             return { answer: result.output.answer };
           }).pipe(Effect.provide(childToolLayer), Effect.scoped),
       });
+
       const parent = Agent.withModel(
         spawningDefinition,
         delegatingModel("interrupted-parent", { question: "child?" }, '{"answer":"unreached"}'),
@@ -582,6 +637,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         Effect.exit,
         Effect.forkChild,
       );
+
       yield* Deferred.await(childToolStarted);
       yield* Fiber.interrupt(fiber);
 
@@ -600,10 +656,12 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
     const toolLayer = spawningTools.toLayer({
       delegate: () => Effect.succeed({ answer: "typed" }),
     });
+
     const agent = Agent.withModel(
       spawningDefinition,
       delegatingModel("typed", { question: "child?" }, '{"answer":"typed"}'),
     );
+
     const program = AgentRuntime.run(agent, { question: "types" });
 
     type Services = Effect.Services<typeof program>;
@@ -619,6 +677,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
       sinkExcluded: true,
       idGeneratorKept: true,
     });
+
     return AgentRuntime.run(agent, { question: "types" }).pipe(
       Effect.provide(toolLayer),
       Effect.asVoid,

@@ -64,6 +64,7 @@ const completedAttemptWire: unknown = {
   html_url: "https://github.com/effect/agent/actions/runs/202",
   actor: { login: "octocat" },
 };
+
 const completedAttempt = Schema.decodeUnknownSync(GitHubWorkflowRunAttempt)(completedAttemptWire);
 
 const sourceWith = (attempt: typeof GitHubWorkflowRunAttempt.Type) =>
@@ -82,15 +83,20 @@ describe("GitHub workflow completion source", () => {
       // https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
       const signature = "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17";
       const verifier = yield* GitHubWebhookSignatureVerifier;
+
       yield* verifier.verify(new TextEncoder().encode("Hello, World!"), signature);
+
       const changed = yield* Effect.flip(
         verifier.verify(new TextEncoder().encode("Hello, World?"), signature),
       );
+
       expect(changed.reason).toBe("invalid-signature");
       const malformed = yield* Effect.flip(verifier.verify(new Uint8Array(), "sha256=bad"));
+
       expect(malformed.reason).toBe("invalid-signature");
 
       let intakes = 0;
+
       const rejected = yield* Effect.flip(
         acceptVerifiedGitHubWorkflowRunWebhook({
           body: new TextEncoder().encode("{}"),
@@ -104,6 +110,7 @@ describe("GitHub workflow completion source", () => {
               accept: () =>
                 Effect.sync(() => {
                   intakes++;
+
                   return {
                     partition: record.key.partition,
                     eventId: "invalid",
@@ -115,6 +122,7 @@ describe("GitHub workflow completion source", () => {
           ),
         ),
       );
+
       expect(rejected).toMatchObject({ reason: "invalid-signature" });
       expect(intakes).toBe(0);
     }).pipe(
@@ -130,6 +138,7 @@ describe("GitHub workflow completion source", () => {
   it.effect("normalizes webhook and reconciliation races to one logical event", () =>
     Effect.gen(function* () {
       let accepted: unknown = undefined;
+
       const webhook = JSON.stringify({
         action: "completed",
         repository: { id: 101, full_name: "effect/agent", private: true },
@@ -145,6 +154,7 @@ describe("GitHub workflow completion source", () => {
         },
         sender: { login: "octocat" },
       });
+
       yield* acceptVerifiedGitHubWorkflowRunWebhook({
         body: new TextEncoder().encode(webhook),
         eventHeader: "workflow_run",
@@ -160,6 +170,7 @@ describe("GitHub workflow completion source", () => {
           SubscriptionIntake.of({
             accept: (_principal, _source, payload) => {
               accepted = payload;
+
               return Effect.succeed({
                 partition: record.key.partition,
                 eventId: "accepted",
@@ -174,6 +185,7 @@ describe("GitHub workflow completion source", () => {
       const source = yield* sourceWith(completedAttempt);
       const webhookEvent = yield* source.normalize(accepted);
       const reconcile = source.reconcile;
+
       if (reconcile === undefined) return yield* Effect.die("source has no reconciler");
       const reconciledEvent = yield* reconcile(record);
 
@@ -199,7 +211,9 @@ describe("GitHub workflow completion source", () => {
         status: "in_progress",
         conclusion: null,
       });
+
       const reconcile = source.reconcile;
+
       if (reconcile === undefined) return yield* Effect.die("source has no reconciler");
       expect(yield* reconcile(record)).toBeNull();
     }),
@@ -209,8 +223,10 @@ describe("GitHub workflow completion source", () => {
     Effect.gen(function* () {
       const source = yield* sourceWith({ ...completedAttempt, run_attempt: 4 });
       const reconcile = source.reconcile;
+
       if (reconcile === undefined) return yield* Effect.die("source has no reconciler");
       const failure = yield* Effect.flip(reconcile(record));
+
       expect(failure).toMatchObject({
         _tag: "SubscriptionSourceError",
         code: "github-identity-mismatch",
@@ -222,6 +238,7 @@ describe("GitHub workflow completion source", () => {
   it.effect("rejects a canonical completion from another repository", () =>
     Effect.gen(function* () {
       const source = yield* sourceWith(completedAttempt);
+
       const failure = yield* Effect.flip(
         source.normalize({
           repositoryId: 999,
@@ -231,6 +248,7 @@ describe("GitHub workflow completion source", () => {
           conclusion: "success",
         }),
       );
+
       expect(failure).toMatchObject({ _tag: "SubscriptionSourceError", code: "source-schema" });
     }),
   );

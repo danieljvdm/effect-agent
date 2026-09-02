@@ -6,6 +6,7 @@ import { DemoControlAccepted, DemoRunHandle, DemoRunOpened } from "./operational
 import { DemoRunRpcs } from "./run-rpc";
 
 const handle = Schema.decodeSync(DemoRunHandle)("demo-handle-rpc");
+
 const opened = Schema.decodeSync(DemoRunOpened)({
   _tag: "DemoRunOpened",
   handle,
@@ -32,20 +33,24 @@ describe("interactive Phase 2 RPC", () => {
 
       yield* Effect.gen(function* () {
         const client = yield* RpcTest.makeClient(DemoRunRpcs);
+
         const events = yield* client
           .StreamOperationalRun({ scenario: "guided" })
           .pipe(Stream.runCollect);
+
         const liveEvents = yield* client
           .StreamLiveTravelChatRun({
             message: "Plan the fixture London trip.",
             scenario: "guided",
           })
           .pipe(Stream.runCollect);
+
         const queued = yield* client.QueueRunCommand({
           handle,
           kind: "follow-up",
           content: "Prefer a quiet room.",
         });
+
         const resolved = yield* client.ResolveRunApproval({
           handle,
           requestId: "approval-rpc",
@@ -64,6 +69,7 @@ describe("interactive Phase 2 RPC", () => {
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       const finalized = yield* Deferred.make<void>();
+
       const handlers = DemoRunRpcs.toLayer({
         StreamChatRun: () => Stream.empty,
         StreamOperationalRun: () =>
@@ -78,9 +84,11 @@ describe("interactive Phase 2 RPC", () => {
 
       yield* Effect.gen(function* () {
         const client = yield* RpcTest.makeClient(DemoRunRpcs);
+
         const fiber = yield* client
           .StreamOperationalRun({ scenario: "guided" })
           .pipe(Stream.runDrain, Effect.forkChild);
+
         yield* Deferred.await(started);
         yield* Fiber.interrupt(fiber);
         yield* Deferred.await(finalized);

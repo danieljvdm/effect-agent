@@ -49,6 +49,7 @@ const followUp = ReviewFollowUp.make({
   id: "prior-review",
   description: "The earlier review blocks because omitted input is retained without a bound.",
 });
+
 const resolution = ReviewResolution.make({
   id: followUp.id,
   evidence:
@@ -182,9 +183,11 @@ describe("review output boundary", () => {
       Effect.gen(function* () {
         const calls = yield* Ref.make(0);
         const control = costControl(calls);
+
         const review = makeReviewer({
           model: scriptedModel((prompt) => {
             expect(reviewInput(prompt)).toContain(followUp.description);
+
             return Stream.unwrap(
               Ref.update(calls, (n) => n + 1).pipe(
                 Effect.as(
@@ -214,13 +217,16 @@ describe("review output boundary", () => {
             unreviewedPaths: mode === "excluded" ? ["src/other.ts"] : [],
           }),
         );
+
         expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
         expectTypeOf<
           Extract<Effect.Error<typeof review>, ReviewVerificationError>
         >().toEqualTypeOf<ReviewVerificationError>();
+
         const outcome = yield* review.pipe(
           Effect.provideService(ReviewRepository, emptyRepository),
         );
+
         expect(outcome.resolutions ?? []).toEqual(mode === "complete" ? [resolution] : []);
       }),
   );
@@ -252,6 +258,7 @@ describe("review output boundary", () => {
         })
           .review(ReviewRequest.make({ ...request, followUps: [followUp] }))
           .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.flip);
+
         expect(outcome._tag).toBe("ReviewVerificationError");
       }),
   );
@@ -259,18 +266,23 @@ describe("review output boundary", () => {
   it.effect("verifies follow-ups once in the final batch without renewing the budget", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
+
       const model = scriptedModel((prompt) =>
         Stream.unwrap(
           Effect.gen(function* () {
             const call = yield* Ref.updateAndGet(calls, (n) => n + 1);
+
             expect(reviewInput(prompt).includes(followUp.description)).toBe(call === 2);
+
             return response({ findings: [], ...(call === 2 ? { resolutions: [resolution] } : {}) });
           }),
         ),
       );
+
       const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
         .review(ReviewRequest.make({ ...largeRequest(2, 256_000), followUps: [followUp] }))
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
       expect(outcome.resolutions).toEqual([resolution]);
       expect(outcome.turns).toBe(2);
     }),
@@ -284,9 +296,11 @@ describe("review output boundary", () => {
           incomplete: true,
         }),
       );
+
       const outcome = yield* makeReviewer({ model })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
       expect(outcome.report.findings).toEqual([blocker]);
       expect(outcome.incomplete).toBe(true);
       expect(outcome.exhausted).toBeUndefined();
@@ -297,6 +311,7 @@ describe("review output boundary", () => {
   it.effect("PRR-002 completes one native review and keeps independent same-line blockers", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
+
       const model = scriptedModel((prompt, tools, toolChoice) => {
         expect(toolChoice).toBe("required");
         expect(tools.map((tool) => tool.name)).toEqual([
@@ -306,23 +321,27 @@ describe("review output boundary", () => {
           "submit_review",
         ]);
         const text = reviewInput(prompt);
+
         expect(text).toContain(patch);
         expect(text.split(patch)).toHaveLength(2);
         expect(text).not.toContain("__new hunk__");
         expect(text).not.toContain("__old hunk__");
 
         const completion = tools.find((tool) => tool.name === "submit_review");
+
         expect(completion).toBeDefined();
         if (completion !== undefined) {
           const schema = JSON.stringify(
             Tool.getJsonSchema(completion, { transformer: toCodecOpenAI }),
           );
+
           expect(schema).toContain('"findings"');
           expect(schema).toContain('"maxItems":24');
           expect(schema).toContain('"priority"');
           expect(schema).not.toContain('"severity"');
           expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
         }
+
         return Stream.unwrap(
           Ref.update(calls, (count) => count + 1).pipe(
             Effect.as(
@@ -344,6 +363,7 @@ describe("review output boundary", () => {
         guidance: "Preserve acknowledgments.",
         estimateCostMicrousd: () => Effect.succeed(123),
       }).review(request);
+
       expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       expectTypeOf<
@@ -380,6 +400,7 @@ describe("review output boundary", () => {
         const reads = yield* Ref.make<
           ReadonlyArray<Parameters<typeof emptyRepository.readFile>[0]>
         >([]);
+
         const failedInputs = [
           {
             path: "src/missing.ts",
@@ -400,19 +421,24 @@ describe("review output boundary", () => {
             lineCount: 4,
           },
         ] as const;
+
         const base = {
           path: "src/index.ts",
           revision: "base",
           startLine: 1,
           lineCount: 4,
         } as const;
+
         const head = { ...base, revision: "head" } as const;
+
         const recoveryUsage = {
           inputTokens: { total: 40_000, uncached: 40_000, cacheRead: 0, cacheWrite: 0 },
           outputTokens: { total: 4 },
         };
+
         const model = scriptedModel((prompt) => {
           const results = sourceResults(prompt);
+
           if (results.length < failedInputs.length) {
             if (results.length > 0) {
               expect(results.at(-1)).toMatchObject({
@@ -420,6 +446,7 @@ describe("review output boundary", () => {
                 result: { _tag: "ReviewContextError", message: "Source range unavailable" },
               });
             }
+
             return Stream.fromIterable([
               {
                 type: "tool-call",
@@ -432,6 +459,7 @@ describe("review output boundary", () => {
           }
           if (results.length === failedInputs.length) {
             expect(results.map((result) => result.isFailure)).toEqual([true, true, true]);
+
             return Stream.fromIterable([
               { type: "tool-call", id: "base", name: "read_file", params: base },
               { type: "finish", reason: "tool-calls", usage: recoveryUsage },
@@ -442,6 +470,7 @@ describe("review output boundary", () => {
               isFailure: false,
               result: { revision: "base", content: "old" },
             });
+
             return Stream.fromIterable([
               { type: "tool-call", id: "head", name: "read_file", params: head },
               { type: "finish", reason: "tool-calls", usage: recoveryUsage },
@@ -451,8 +480,10 @@ describe("review output boundary", () => {
             isFailure: false,
             result: { revision: "head", content: "new" },
           });
+
           return response({ findings: [] }, recoveryUsage);
         });
+
         const repository = ReviewRepository.of({
           ...emptyRepository,
           readFile: (input) =>
@@ -461,6 +492,7 @@ describe("review output boundary", () => {
               if (input.path !== "src/index.ts" || input.startLine !== 1) {
                 return yield* ReviewContextError.make({ message: "Source range unavailable" });
               }
+
               return ReviewSource.make({
                 path: input.path,
                 revision: input.revision,
@@ -496,6 +528,7 @@ describe("review output boundary", () => {
       Effect.gen(function* () {
         const reads = yield* Ref.make(0);
         const calls = yield* Ref.make(0);
+
         const model = scriptedModel((prompt, _tools, toolChoice) =>
           Stream.unwrap(
             Ref.updateAndGet(calls, (count) => count + 1).pipe(
@@ -503,6 +536,7 @@ describe("review output boundary", () => {
                 expect(JSON.stringify(prompt.content)).toContain("<run-status>");
                 if (call <= 2) {
                   expect(toolChoice).toBe("required");
+
                   return Stream.fromIterable([
                     {
                       type: "tool-call",
@@ -532,6 +566,7 @@ describe("review output boundary", () => {
                 }
                 expect(call).toBe(3);
                 expect(toolChoice).toEqual({ tool: "submit_review" });
+
                 return response(
                   { findings: [submittedFinding(blocker, 1)] },
                   {
@@ -548,6 +583,7 @@ describe("review output boundary", () => {
             ),
           ),
         );
+
         const outcome = yield* makeReviewer({
           model,
           estimateCostMicrousd: () => Effect.succeed(123),
@@ -570,6 +606,7 @@ describe("review output boundary", () => {
                 ),
             }),
           );
+
         expect(yield* Ref.get(reads)).toBe(2);
         expect(yield* Ref.get(calls)).toBe(3);
         expect(outcome).toMatchObject({
@@ -597,9 +634,11 @@ describe("review output boundary", () => {
           ],
         }),
       );
+
       const result = yield* makeReviewer({ model })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+
       expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewVerificationError");
     }),
   );
@@ -608,6 +647,7 @@ describe("review output boundary", () => {
     Effect.gen(function* () {
       const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
       const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
+
       const model = scriptedModel(() =>
         response({
           findings: [
@@ -619,9 +659,11 @@ describe("review output boundary", () => {
           ],
         }),
       );
+
       const outcome = yield* makeReviewer({ model })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
       expect(outcome.report.findings).toEqual([blocker, topLevel]);
     }),
   );
@@ -634,6 +676,7 @@ describe("review output boundary", () => {
           title: `Independent cause ${String(index)}`,
         }),
       );
+
       const result = yield* makeReviewer({
         model: scriptedModel(() =>
           response({ findings: findings.map((finding) => submittedFinding(finding, 1)) }),
@@ -641,6 +684,7 @@ describe("review output boundary", () => {
       })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+
       if (count === 24) {
         expect(Result.isSuccess(result) && result.success.report.findings).toEqual(findings);
       } else {
@@ -652,14 +696,17 @@ describe("review output boundary", () => {
   it.effect("PRR-002 rejects malformed native completion without retrying", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
+
       const model = scriptedModel(() =>
         Stream.unwrap(
           Ref.update(calls, (count) => count + 1).pipe(Effect.as(response({ summary: "safe" }))),
         ),
       );
+
       const result = yield* makeReviewer({ model })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+
       expect(Result.isFailure(result) && result.failure._tag).toBe("AiError");
       expect(yield* Ref.get(calls)).toBe(1);
     }),
@@ -668,8 +715,10 @@ describe("review output boundary", () => {
   it.effect("preserves recorded findings when a later completion fails validation", () =>
     Effect.gen(function* () {
       let calls = 0;
+
       const model = scriptedModel(() => {
         calls += 1;
+
         return calls === 1
           ? Stream.fromIterable([
               {
@@ -689,9 +738,11 @@ describe("review output boundary", () => {
               ],
             });
       });
+
       const outcome = yield* makeReviewer({ model })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
       expect(calls).toBe(2);
       expect(outcome.incomplete).toBe(true);
       expect(outcome.exhausted).toBeUndefined();
@@ -710,9 +761,11 @@ new mode 100755
 @@ -5,2 +5,1 @@
  keep
 -removed`;
+
       const modeOnlyPatch = `diff --git a/tool.sh b/tool.sh
 old mode 100644
 new mode 100755`;
+
       const formattedRequest = ReviewRequest.make({
         ...request,
         changes: [
@@ -720,14 +773,18 @@ new mode 100755`;
           ReviewChange.make({ path: "tool.sh", patch: modeOnlyPatch }),
         ],
       });
+
       const model = scriptedModel((prompt) => {
         const text = reviewInput(prompt);
+
         expect(text).toContain("old mode 100644");
         expect(text).toContain("new mode 100755");
         expect(text).toContain(deletionPatch);
         expect(text).toContain(modeOnlyPatch);
+
         return response({ findings: [] });
       });
+
       yield* makeReviewer({ model })
         .review(formattedRequest)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
@@ -738,18 +795,24 @@ new mode 100755`;
     Effect.gen(function* () {
       const manyContextLines = Array.from({ length: 12_000 }, () => " context").join("\n");
       const rawPatch = `@@ -1,12001 +1,12001 @@\n${manyContextLines}\n-old\n+new`;
+
       expect(rawPatch.length).toBeGreaterThan(80_000);
+
       const largeRequest = ReviewRequest.make({
         ...request,
         changes: [ReviewChange.make({ path: "src/index.ts", patch: rawPatch })],
       });
+
       const model = scriptedModel((prompt) => {
         const text = reviewInput(prompt);
+
         expect(text).not.toContain("__new hunk__");
         expect(text).toContain(rawPatch);
         expect(text.split(rawPatch)).toHaveLength(2);
+
         return response({ findings: [] });
       });
+
       yield* makeReviewer({ model })
         .review(largeRequest)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
@@ -763,6 +826,7 @@ new mode 100755`;
       })
         .review(ReviewRequest.make({ ...request, scope: "incremental" }))
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
       expect(outcome.report.summary).toContain(
         "Earlier findings remain open unless explicitly verified",
       );
@@ -774,6 +838,7 @@ new mode 100755`;
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
       const input = largeRequest(27);
+
       const review = makeReviewer({
         model: scriptedModel(() =>
           Stream.unwrap(
@@ -782,9 +847,11 @@ new mode 100755`;
         ),
         costControl: costControl(calls),
       }).review(input);
+
       expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
       expect(yield* Ref.get(calls)).toBe(9);
       expect(outcome.exhausted).toBeUndefined();
       expect(outcome.incomplete).toBeUndefined();
@@ -797,11 +864,14 @@ new mode 100755`;
       const calls = yield* Ref.make(0);
       const reads = yield* Ref.make(0);
       const input = largeRequest(9);
+
       const model = scriptedModel((_prompt, _tools, choice) =>
         Stream.unwrap(
           Effect.gen(function* () {
             const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+
             if (call === 2 || typeof choice === "object") return response({ findings: [] });
+
             return Stream.fromIterable<Response.StreamPartEncoded>([
               ...Array.from({ length: 32 }, (_, index): Response.StreamPartEncoded => ({
                 type: "tool-call",
@@ -814,6 +884,7 @@ new mode 100755`;
           }),
         ),
       );
+
       const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
         .review(input)
         .pipe(
@@ -825,6 +896,7 @@ new mode 100755`;
               ),
           }),
         );
+
       expect(yield* Ref.get(reads)).toBe(32);
       expect(outcome.exhausted).toBe("tool-calls");
       expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
@@ -838,11 +910,14 @@ new mode 100755`;
       const firstStarted = yield* Deferred.make<void>();
       const secondStarted = yield* Deferred.make<void>();
       const input = largeRequest(9);
+
       const model = scriptedModel(() =>
         Stream.unwrap(
           Effect.gen(function* () {
             const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+
             yield* Deferred.succeed(call === 1 ? firstStarted : secondStarted, undefined);
+
             return Stream.fromEffect(Effect.sleep("4 minutes")).pipe(
               Stream.flatMap(() => response({ findings: [] })),
               Stream.ensuring(Ref.update(finalized, (count) => count + 1)),
@@ -850,14 +925,17 @@ new mode 100755`;
           }),
         ),
       );
+
       const fiber = yield* makeReviewer({ model, costControl: costControl(calls) })
         .review(input)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+
       yield* Deferred.await(firstStarted);
       yield* TestClock.adjust("4 minutes");
       yield* Deferred.await(secondStarted);
       yield* TestClock.adjust("1 minute");
       const outcome = yield* Fiber.join(fiber);
+
       expect(yield* Ref.get(calls)).toBe(2);
       expect(yield* Ref.get(finalized)).toBe(2);
       expect(outcome.incomplete).toBe(true);
@@ -872,10 +950,12 @@ new mode 100755`;
         const finalized = yield* Ref.make(0);
         const calls = yield* Ref.make(0);
         const started = yield* Deferred.make<void>();
+
         const model = scriptedModel(() =>
           Stream.unwrap(
             Effect.gen(function* () {
               const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+
               const stream =
                 call === 1
                   ? response({ findings: [] })
@@ -884,13 +964,16 @@ new mode 100755`;
                         failure === "interrupt" ? Stream.never : Stream.die("batch defect"),
                       ),
                     );
+
               return stream.pipe(Stream.ensuring(Ref.update(finalized, (count) => count + 1)));
             }),
           ),
         );
+
         const fiber = yield* makeReviewer({ model, costControl: costControl(calls) })
           .review(largeRequest(9))
           .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+
         yield* Deferred.await(started);
         if (failure === "interrupt") yield* Fiber.interrupt(fiber);
         expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
@@ -907,11 +990,15 @@ new mode 100755`;
         startLine: 1,
         lineCount: 200,
       } as const;
+
       const source = yield* ReviewSource.fromText(input, "first\nlast\n");
+
       expect(source).toMatchObject({ totalLines: 2, content: "first\nlast" });
       const empty = yield* ReviewSource.fromText(input, "");
+
       expect(empty).toMatchObject({ totalLines: 0, content: "" });
       const finalBlank = yield* ReviewSource.fromText({ ...input, startLine: 2 }, "first\n\n");
+
       expect(finalBlank).toMatchObject({ totalLines: 2, startLine: 2, content: "" });
       for (const read of [
         ReviewSource.fromText({ ...input, startLine: 3 }, "first\nlast\n"),
@@ -919,6 +1006,7 @@ new mode 100755`;
         ReviewSource.fromText(input, "x".repeat(20_001)),
       ]) {
         const result = yield* Effect.result(read);
+
         expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewContextError");
       }
     }),
@@ -940,6 +1028,7 @@ type EffectRequirements<Value> =
   Value extends Effect.Effect<unknown, unknown, infer Requirements> ? Requirements : never;
 
 declare const typedModel: Model.Model<"typed", LanguageModel.LanguageModel, never>;
+
 const typedReviews = (model: typeof typedModel) => ({
   unpriced: makeReviewer({ model }).review(request),
   priced: makeReviewer({
@@ -965,7 +1054,9 @@ const typedReviews = (model: typeof typedModel) => ({
     },
   }).review(request),
 });
+
 type TypedReviews = ReturnType<typeof typedReviews>;
+
 const pricingTypeProofs: readonly [
   Assert<Equal<EffectError<TypedReviews["controlled"]>, EffectError<TypedReviews["unpriced"]>>>,
   Assert<Equal<EffectRequirements<TypedReviews["controlled"]>, ReviewRepository>>,
@@ -982,4 +1073,5 @@ const pricingTypeProofs: readonly [
     >
   >,
 ] = [true, true, true, true, true, true, true];
+
 void pricingTypeProofs;

@@ -62,6 +62,7 @@ const scriptedModel = (firstTurn: ReadonlyArray<Response.StreamPartEncoded>, fin
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: () =>
@@ -135,7 +136,9 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
       parameters: Schema.Struct({ plan: Schema.String }),
       success: Schema.Any,
     }).addDependency(ToolBroker);
+
     const outerToolkit = Toolkit.make(Orchestrate);
+
     const definition = Agent.make("broker-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -143,20 +146,25 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
       toolkit: outerToolkit,
       policy: options.agentPolicy ?? policy(),
     });
+
     const model = scriptedModel(orchestrateCall("orchestrate-1"), '{"answer":"done"}');
+
     const toolLayer = outerToolkit
       .toLayer(
         Effect.gen(function* () {
           const inner = yield* options.innerToolkit;
+
           return {
             orchestrate: () =>
               Effect.gen(function* () {
                 const broker = yield* ToolBroker;
+
                 // Inside a live Tool batch the broker is always bound; an
                 // unavailable broker here is a harness defect, not a test case.
                 const pass = yield* broker
                   .openPass(inner, options.passOptions ?? { maxResultBytes: 1024 * 1024 })
                   .pipe(Effect.orDie);
+
                 return yield* options.program(pass);
               }),
           };
@@ -169,6 +177,7 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
       { question: "go" },
       options.runOptions ?? {},
     ).pipe(Effect.provide(toolLayer), Effect.scoped);
+
     return result;
   });
 
@@ -185,6 +194,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         parameters: Schema.Struct({ plan: Schema.String }),
         success: Schema.Unknown,
       }).addDependency(ToolBroker);
+
       const outer = Toolkit.make(Orchestrate);
       const inner = Toolkit.make(Query);
       const bothEntered = yield* Deferred.make<void>();
@@ -193,6 +203,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       let maxActiveReservations = 0;
       const reservations: Array<number> = [];
       let handlerStarts = 0;
+
       const definition = Agent.make("parallel-reservations", {
         input: Schema.String,
         output: Schema.String,
@@ -200,23 +211,28 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         toolkit: outer,
         policy: policy({ maxToolCalls: 4 }),
       });
+
       const model = scriptedModel(
         [...orchestrateCall("outer-1").slice(0, -1), ...orchestrateCall("outer-2")],
         '"done"',
       );
+
       const handlers = outer
         .toLayer(
           Effect.gen(function* () {
             const toolkit = yield* inner;
+
             return {
               orchestrate: () =>
                 Effect.gen(function* () {
                   entered += 1;
                   if (entered === 2) yield* Deferred.succeed(bothEntered, undefined);
                   const broker = yield* ToolBroker;
+
                   const pass = yield* broker
                     .openPass(toolkit, { maxResultBytes: 1024 })
                     .pipe(Effect.orDie);
+
                   return yield* pass.invoke({
                     toolName: "query",
                     encodedArguments: { sql: "select" },
@@ -231,11 +247,13 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               query: () =>
                 Effect.sync(() => {
                   handlerStarts += 1;
+
                   return { rows: [1] };
                 }),
             }),
           ),
         );
+
       yield* AgentRuntime.run(Agent.withModel(definition, model), "q", {
         durability: {
           commitResponse: () => Effect.void,
@@ -267,12 +285,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         const innerToolkit = Toolkit.make(Query);
         const marks: Array<string> = [];
         const outcomes: Array<ProgrammaticCallOutcome> = [];
+
         yield* runOrchestrated({
           innerToolkit,
           innerHandlers: innerToolkit.toLayer({
             query: () =>
               Effect.sync(() => {
                 marks.push("handler");
+
                 return { rows: [1] };
               }),
           }),
@@ -311,6 +331,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               outcomes.push(
                 yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "second" } }),
               );
+
               return null;
             }),
         });
@@ -328,12 +349,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       const innerToolkit = Toolkit.make(Query);
       let starts = 0;
       let reserved = 0;
+
       const exit = yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
           query: () =>
             Effect.sync(() => {
               starts += 1;
+
               return { rows: [1] };
             }),
         }),
@@ -352,6 +375,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         },
         program: (pass) => pass.invoke({ toolName: "query", encodedArguments: { sql: "never" } }),
       }).pipe(Effect.exit);
+
       expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
       expect(reserved).toBe(1);
       expect(starts).toBe(0);
@@ -362,11 +386,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     Effect.gen(function* () {
       const captured = yield* Ref.make<unknown>(undefined);
       const innerToolkit = Toolkit.make(Query);
+
       const Orchestrate = Tool.make("orchestrate", {
         parameters: Schema.Struct({ plan: Schema.String }),
         success: Schema.Any,
       }).addDependency(ToolBroker);
+
       const outerToolkit = Toolkit.make(Orchestrate);
+
       const definition = Agent.make("broker-missing-options", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -374,10 +401,12 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         toolkit: outerToolkit,
         policy: policy(),
       });
+
       const handlers = outerToolkit
         .toLayer(
           Effect.gen(function* () {
             const inner = yield* innerToolkit;
+
             return {
               orchestrate: () =>
                 Effect.gen(function* () {
@@ -385,6 +414,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
                   // @ts-expect-error Exercise the JavaScript boundary where the required argument
                   // can be omitted despite the TypeScript declaration.
                   const exit = yield* broker.openPass(inner).pipe(Effect.exit);
+
                   if (Exit.isSuccess(exit)) {
                     throw new Error("Expected missing pass options to fail");
                   }
@@ -392,6 +422,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
                     captured,
                     Option.getOrUndefined(Cause.findErrorOption(exit.cause)),
                   );
+
                   return null;
                 }),
             };
@@ -416,10 +447,12 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     () =>
       Effect.gen(function* () {
         const seen = yield* Ref.make<ReadonlyArray<unknown>>([]);
+
         const handler = {
           query: ({ sql }: { readonly sql: string }) =>
             Ref.update(seen, (all) => [...all, sql]).pipe(Effect.as({ rows: [1, 2, 3] })),
         };
+
         const innerToolkit = Toolkit.make(Query);
 
         // Direct: the model declares the call itself, and the second model
@@ -432,7 +465,9 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           toolkit: innerToolkit,
           policy: policy(),
         });
+
         const directResults = yield* Ref.make<ReadonlyArray<unknown>>([]);
+
         const directModel = Model.make(
           "scripted",
           "direct-capture",
@@ -440,6 +475,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
             LanguageModel.LanguageModel,
             Effect.gen(function* () {
               const turn = yield* Ref.make(0);
+
               return yield* LanguageModel.make({
                 generateText: () => Effect.succeed([]),
                 streamText: ({ prompt }) =>
@@ -477,17 +513,21 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
             }),
           ),
         );
+
         const direct = yield* AgentRuntime.run(
           Agent.withModel(directDefinition, directModel),
           { question: "go" },
           {},
         ).pipe(Effect.provide(innerToolkit.toLayer(handler)), Effect.scoped);
+
         expect(direct.output).toEqual({ answer: "direct" });
         const [directRecorded] = yield* Ref.get(directResults);
+
         expect(directRecorded).toEqual({ rows: [1, 2, 3] });
 
         // Programmatic: the same Tool, same encoded arguments, through the broker.
         const programmatic = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
+
         const result = yield* runOrchestrated({
           innerToolkit,
           innerHandlers: innerToolkit.toLayer(handler),
@@ -496,12 +536,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               .invoke({ toolName: "query", encodedArguments: { sql: "select 1" } })
               .pipe(Effect.tap((outcome) => Ref.set(programmatic, [outcome]))),
         });
+
         expect(result.output).toEqual({ answer: "done" });
         expect(yield* Ref.get(seen)).toEqual(["select 1", "select 1"]);
         // The broker's encoded success is the same value the direct path
         // records for the model — equivalence of the observable result, not
         // only of the handler inputs.
         const [outcome] = yield* Ref.get(programmatic);
+
         expect(outcome).toMatchObject({
           _tag: "ProgrammaticCallSuccess",
           index: 0,
@@ -517,18 +559,23 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     "exports privacy-safe canonical telemetry for programmatic success and returned failure",
     () => {
       const spans: Array<Tracer.NativeSpan> = [];
+
       const logs: Array<{
         readonly message: unknown;
         readonly annotations: Readonly<Record<string, unknown>>;
         readonly cause: string;
       }> = [];
+
       const tracer = Tracer.make({
         span(options) {
           const span = new Tracer.NativeSpan(options);
+
           spans.push(span);
+
           return span;
         },
       });
+
       const logger = Logger.make<unknown, void>(({ cause, fiber, message }) => {
         logs.push({
           message,
@@ -536,22 +583,27 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           cause: Cause.pretty(cause),
         });
       });
+
       const argumentSecret = "select private_token from tenant_secrets";
       const failureSecret = "database failure contains a private tenant value";
+
       const ObservedQuery = Tool.make("observed_query", {
         parameters: Schema.Struct({ sql: Schema.String }),
         success: Schema.Struct({ rows: Schema.Array(Schema.Int) }),
       }).annotate(ToolExecutionClass, "readonly");
+
       const ObservedFailure = Tool.make("observed_failure", {
         parameters: Schema.Struct({ sql: Schema.String }),
         success: Schema.Struct({ rows: Schema.Array(Schema.Int) }),
         failure: QueryFailure,
         failureMode: "return",
       }).annotate(ToolExecutionClass, "readonly");
+
       const innerToolkit = Toolkit.make(ObservedQuery, ObservedFailure);
 
       return Effect.gen(function* () {
         const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
+
         yield* runOrchestrated({
           innerToolkit,
           innerHandlers: innerToolkit.toLayer({
@@ -565,11 +617,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
                 toolName: "observed_query",
                 encodedArguments: { sql: argumentSecret },
               });
+
               const failure = yield* pass.invoke({
                 toolName: "observed_failure",
                 encodedArguments: { sql: argumentSecret },
               });
+
               yield* Ref.set(outcomes, [success, failure]);
+
               return null;
             }),
         }).pipe(
@@ -585,6 +640,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         const programmaticSpans = spans.filter(
           (span) => span.attributes.get("effect_agent.tool.invocation_kind") === "programmatic",
         );
+
         expect(programmaticSpans.map((span) => span.name)).toEqual([
           "execute_tool observed_query",
           "execute_tool observed_failure",
@@ -593,6 +649,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         expect(spans.some((span) => span.name === "AgentRuntime.toolkit.handle")).toBe(false);
 
         const [successSpan, failureSpan] = programmaticSpans;
+
         expect(Object.fromEntries(successSpan?.attributes ?? [])).toMatchObject({
           "gen_ai.operation.name": "execute_tool",
           "gen_ai.tool.name": "observed_query",
@@ -627,6 +684,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
 
         const hostSpan = spans.find((span) => span.name === "host.programmatic.query");
         const hostParent = Option.getOrUndefined(hostSpan?.parent ?? Option.none());
+
         expect(hostParent?._tag).toBe("Span");
         if (hostParent?._tag !== "Span") {
           throw new Error("Expected the host span to have a canonical programmatic Tool parent");
@@ -637,6 +695,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         const programmaticLogs = logs.filter(
           ({ annotations }) => annotations["effect_agent.tool.invocation_kind"] === "programmatic",
         );
+
         expect(
           programmaticLogs.map(({ annotations, message }) => ({
             message: Array.isArray(message)
@@ -675,6 +734,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           ),
           ...logs.map((entry) => Inspectable.toStringUnknown(entry)),
         ].join("\n");
+
         expect(exportedText).not.toContain(argumentSecret);
         expect(exportedText).not.toContain(failureSecret);
       });
@@ -685,6 +745,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     Effect.gen(function* () {
       const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
       const innerToolkit = Toolkit.make(Query);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
@@ -696,15 +757,19 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "query",
               encodedArguments: { sql: "a" },
             });
+
             const second = yield* pass.invoke({
               toolName: "query",
               encodedArguments: { sql: "b" },
             });
+
             yield* Ref.set(outcomes, [first, second]);
+
             return null;
           }),
       });
       const [first, second] = yield* Ref.get(outcomes);
+
       expect(first).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 0 });
       expect(second).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 1 });
     }),
@@ -716,6 +781,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       const started = yield* Deferred.make<void>();
       const gate = yield* Deferred.make<void>();
       const innerToolkit = Toolkit.make(Query);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
@@ -730,22 +796,29 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
             const firstFiber = yield* pass
               .invoke({ toolName: "query", encodedArguments: { sql: "a" } })
               .pipe(Effect.forkChild);
+
             yield* Deferred.await(started);
+
             const second = yield* pass.invoke({
               toolName: "query",
               encodedArguments: { sql: "b" },
             });
+
             yield* Deferred.succeed(gate, undefined);
             const first = yield* Fiber.join(firstFiber);
+
             const third = yield* pass.invoke({
               toolName: "query",
               encodedArguments: { sql: "c" },
             });
+
             yield* Ref.set(outcomes, [first, second, third]);
+
             return null;
           }),
       });
       const [first, second, third] = yield* Ref.get(outcomes);
+
       expect(first).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 0 });
       expect(second).toMatchObject({
         _tag: "ProgrammaticCallError",
@@ -762,6 +835,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       const invocations = yield* Ref.make(0);
       const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
       const innerToolkit = Toolkit.make(Query);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
@@ -773,15 +847,19 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "not_allowlisted",
               encodedArguments: {},
             });
+
             const invalid = yield* pass.invoke({
               toolName: "query",
               encodedArguments: { wrong: true },
             });
+
             yield* Ref.set(outcomes, [unknown, invalid]);
+
             return null;
           }),
       });
       const [unknown, invalid] = yield* Ref.get(outcomes);
+
       expect(unknown).toMatchObject({
         _tag: "ProgrammaticCallError",
         errorTag: "ProgrammaticToolUnknownError",
@@ -799,6 +877,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       const invocations = yield* Ref.make(0);
       const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
       const innerToolkit = Toolkit.make(ApprovalQuery);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
@@ -810,11 +889,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "approval_query",
               encodedArguments: { sql: "select 1" },
             });
+
             yield* Ref.set(outcomes, [denied]);
+
             return null;
           }),
       });
       const [denied] = yield* Ref.get(outcomes);
+
       expect(denied).toMatchObject({
         _tag: "ProgrammaticCallError",
         errorTag: "ProgrammaticApprovalUnsupportedError",
@@ -827,6 +909,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     Effect.gen(function* () {
       const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
       const innerToolkit = Toolkit.make(Query);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
@@ -838,11 +921,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "query",
               encodedArguments: { sql: "select" },
             });
+
             yield* Ref.set(outcomes, [failed]);
+
             return null;
           }),
       });
       const [failed] = yield* Ref.get(outcomes);
+
       expect(failed).toMatchObject({
         _tag: "ProgrammaticCallError",
         index: 0,
@@ -856,6 +942,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     Effect.gen(function* () {
       const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
       const innerToolkit = Toolkit.make(LooseTool);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
@@ -867,11 +954,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "loose",
               encodedArguments: { key: "x" },
             });
+
             yield* Ref.set(outcomes, [bad]);
+
             return null;
           }),
       });
       const [bad] = yield* Ref.get(outcomes);
+
       expect(bad).toMatchObject({
         _tag: "ProgrammaticCallError",
         errorTag: "ModelProtocolError",
@@ -883,9 +973,11 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     Effect.gen(function* () {
       const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
       const innerToolkit = Toolkit.make(Query);
+
       const handlers = innerToolkit.toLayer({
         query: () => Effect.succeed({ rows: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }),
       });
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: handlers,
@@ -896,17 +988,21 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "query",
               encodedArguments: { sql: "big" },
             });
+
             yield* Ref.set(outcomes, [over]);
+
             return null;
           }),
       });
       const [over] = yield* Ref.get(outcomes);
+
       expect(over).toMatchObject({
         _tag: "ProgrammaticCallError",
         errorTag: "ProgrammaticResultLimitError",
       });
 
       const redacted = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: handlers,
@@ -920,11 +1016,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "query",
               encodedArguments: { sql: "select" },
             });
+
             yield* Ref.set(redacted, [outcome]);
+
             return null;
           }),
       });
       const [outcome] = yield* Ref.get(redacted);
+
       expect(outcome).toMatchObject({
         _tag: "ProgrammaticCallSuccess",
         encodedResult: { rows: "[REDACTED]" },
@@ -937,6 +1036,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       const invocations = yield* Ref.make(0);
       const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
       const innerToolkit = Toolkit.make(Query);
+
       yield* runOrchestrated({
         innerToolkit,
         innerHandlers: innerToolkit.toLayer({
@@ -951,15 +1051,19 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
               toolName: "query",
               encodedArguments: { sql: "a" },
             });
+
             const second = yield* pass.invoke({
               toolName: "query",
               encodedArguments: { sql: "b" },
             });
+
             yield* Ref.set(outcomes, [first, second]);
+
             return null;
           }),
       });
       const [first, second] = yield* Ref.get(outcomes);
+
       expect(first).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 0 });
       expect(second).toMatchObject({
         _tag: "ProgrammaticCallError",
@@ -975,11 +1079,14 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       // pass mid-pass checks, but a SECOND declared batch would exceed the
       // limit at the Turn seam because programmatic calls are included.
       const innerToolkit = Toolkit.make(Query);
+
       const Orchestrate = Tool.make("orchestrate", {
         parameters: Schema.Struct({ plan: Schema.String }),
         success: Schema.Any,
       }).addDependency(ToolBroker);
+
       const outerToolkit = Toolkit.make(Orchestrate);
+
       const definition = Agent.make("broker-turn-seam", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -989,6 +1096,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         // final-answer resolution is covered by the RUN-018 suite.
         policy: policy({ maxToolCalls: 3, maxTurns: 4, onExhaustion: "fail" }),
       });
+
       const model = Model.make(
         "scripted",
         "turn-seam",
@@ -996,6 +1104,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           LanguageModel.LanguageModel,
           Effect.gen(function* () {
             const turn = yield* Ref.make(0);
+
             return yield* LanguageModel.make({
               generateText: () => Effect.succeed([]),
               streamText: () =>
@@ -1014,19 +1123,24 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           }),
         ),
       );
+
       const toolLayer = outerToolkit
         .toLayer(
           Effect.gen(function* () {
             const inner = yield* innerToolkit;
+
             return {
               orchestrate: () =>
                 Effect.gen(function* () {
                   const broker = yield* ToolBroker;
+
                   const pass = yield* broker
                     .openPass(inner, { maxResultBytes: 1024 })
                     .pipe(Effect.orDie);
+
                   yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "a" } });
                   yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "b" } });
+
                   return null;
                 }),
             };
@@ -1039,11 +1153,13 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         { question: "go" },
         {},
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isSuccess(exit)) {
         throw new Error("Expected the Run to fail at the Turn seam");
       }
       const failure = Cause.findErrorOption(exit.cause);
+
       expect(Option.isSome(failure)).toBe(true);
       if (Option.isNone(failure)) {
         throw new Error("Expected a typed failure in the Cause");

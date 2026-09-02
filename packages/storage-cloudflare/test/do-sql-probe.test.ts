@@ -33,6 +33,7 @@ const sqlProbe = Effect.gen(function* () {
     .withTransaction(
       Effect.gen(function* () {
         yield* sql`INSERT INTO wp0_probe (id, label) VALUES (${3}, ${"rolled-back"})`;
+
         return yield* ProbeRollback.make();
       }),
     )
@@ -70,6 +71,7 @@ describe("@effect/sql-sqlite-do inside a SQLite-backed Durable Object (WP0 probe
   // temporary database file per case) or reset between tests.
   it("shares DO storage across tests in a run: first write", async () => {
     const stub = env.PROBE.get(env.PROBE.idFromName("wp0-isolation-probe"));
+
     await runInDurableObject(stub, async (_instance, state) => {
       await state.storage.put("wp0:isolation", "written-by-earlier-test");
     });
@@ -77,9 +79,11 @@ describe("@effect/sql-sqlite-do inside a SQLite-backed Durable Object (WP0 probe
 
   it("shares DO storage across tests in a run: later read observes it", async () => {
     const stub = env.PROBE.get(env.PROBE.idFromName("wp0-isolation-probe"));
+
     const observed = await runInDurableObject(stub, (_instance, state) =>
       state.storage.get<string>("wp0:isolation"),
     );
+
     expect(observed).toBe("written-by-earlier-test");
   });
 
@@ -98,6 +102,7 @@ describe("@effect/sql-sqlite-do inside a SQLite-backed Durable Object (WP0 probe
     const fires = await runInDurableObject(stub, (_instance, state) =>
       state.storage.get<number>("wp0:alarm-fires"),
     );
+
     expect(fires).toBe(1);
   });
 });

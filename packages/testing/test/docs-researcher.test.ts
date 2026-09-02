@@ -67,9 +67,11 @@ const withTemporaryDirectory = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-docs-researcher-",
       });
+
       return yield* use(directory);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -77,6 +79,7 @@ const withTemporaryDirectory = <A, E>(
 const submitMission = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     return yield* runtime.submit(
       docsResearcherSubmitAgent,
       researchMissionRequest,
@@ -88,12 +91,14 @@ const submitMission = (thread: string, key: string) =>
 const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     return yield* runtime.processThreadResolved(threadId, bindings);
   });
 
 const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
@@ -107,8 +112,10 @@ const submissionState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value;
   });
 
@@ -121,10 +128,13 @@ describe("CAP-009 docs-researcher MCP content discovery", () => {
         const connection = yield* Effect.scoped(
           Effect.gen(function* () {
             const opened = yield* connectMcp(docsMcpRequest);
+
             yield* assertDiscoveryMatchesAuthoredToolkit(opened);
+
             return opened;
           }),
         ).pipe(Effect.provide(docsMcpConnectorLayer));
+
         expect(connection.discovery.identity.serverId).toBe("docs-content-mcp");
         expect(connection.discovery.tools).toHaveLength(1);
         expect(connection.discovery.tools[0]?.name).toBe("fetch_document");
@@ -138,6 +148,7 @@ describe("CAP-009 docs-researcher MCP content discovery", () => {
           Effect.provide(docsMcpOversizedConnectorLayer),
           Effect.flip,
         );
+
         expect(oversized).toMatchObject({
           _tag: "McpDiscoveryLimitExceeded",
           limit: "tool-description-bytes",
@@ -150,6 +161,7 @@ describe("CAP-009 docs-researcher MCP content discovery", () => {
           Effect.provide(docsMcpMismatchedConnectorLayer),
           Effect.flip,
         );
+
         expect(drifted._tag).toBe("McpToolkitMismatch");
       }).pipe(Effect.provide(NodeCrypto.layer)),
   );
@@ -162,12 +174,14 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const harness = yield* makeDocsResearcherHarness().pipe(Effect.provide(NodeCrypto.layer));
+
           expect(harness.discovery.tools.map((tool) => tool.name)).toEqual(["fetch_document"]);
 
           yield* Effect.gen(function* () {
             const receipt = yield* submitMission("docs-researcher-happy", "docs-happy-1");
             const parentRunId = runIdForSubmission(receipt.submissionId);
             const documents = researchCorpusDocumentIds;
+
             const childThreads = documents.map((documentId) =>
               childThreadIdFor(receipt.submissionId, decodeToolCallId(summarizeCallId(documentId))),
             );
@@ -176,18 +190,22 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // parent suspends waitingForChild, holds no worker permit, and no
             // child model ran (spec §12 step 10, SUB-030).
             const first = yield* drive(harness.bindings, receipt.threadId);
+
             expect(first).toHaveLength(0);
             expect((yield* submissionState(receipt.submissionId)).state).toBe("suspended");
             const ledger = yield* SubmissionLedger;
+
             const claimed = yield* ledger.claim(
               ClaimRequest.make({
                 threadId: receipt.threadId,
                 producerId: decodeProducerId("docs-researcher-probe"),
               }),
             );
+
             expect(Option.isNone(claimed)).toBe(true);
             expect(yield* harness.childModelCalls).toBe(0);
             const afterEstablish = yield* readLog(receipt.threadId);
+
             expect(payloadsOf(afterEstablish, "SubagentRequested")).toHaveLength(documents.length);
             expect(payloadsOf(afterEstablish, "SubagentStarted")).toHaveLength(documents.length);
 
@@ -195,6 +213,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // Every summarizer consulted the MCP content tool exactly once.
             for (const childThreadId of childThreads) {
               const settlements = yield* drive(harness.bindings, childThreadId);
+
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
             for (const documentId of documents) {
@@ -213,10 +232,13 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // Phase 3: the woken parent joins BOTH verified settlements and
             // settles completed with the digest of bounded findings.
             const settlements = yield* drive(harness.bindings, receipt.threadId);
+
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             const log = yield* readLog(receipt.threadId);
+
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(documents.length);
             const settled = payloadsOf(log, "SubmissionSettled")[0]?.record.payload;
+
             if (settled?._tag !== "SubmissionSettled")
               throw new Error("Expected SubmissionSettled");
             expect(yield* decodeDigest(settled.result)).toEqual(expectedResearchDigest(documents));
@@ -226,6 +248,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
                   envelope.record.recordId ===
                   `tool-settled:${parentRunId}:1:${summarizeCallId(documentId)}`,
               )?.record.payload;
+
               expect(
                 joinSettle?._tag === "ToolCallSettled" ? joinSettle.result : undefined,
               ).toEqual({
@@ -241,8 +264,10 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // and the audit-surface preview of a raw document is structurally
             // redacted end to end.
             const parentLogJson = JSON.stringify(log.map((envelope) => envelope.record.payload));
+
             expect(parentLogJson).not.toContain(docsDocumentBodySecret);
             const finalPrompt = (yield* harness.parentPrompts).at(-1);
+
             expect(finalPrompt).toBeDefined();
             for (const documentId of documents) {
               expect(parentLogJson).not.toContain(documentBodyPhrase(documentId));
@@ -253,14 +278,18 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             for (const [index, childThreadId] of childThreads.entries()) {
               const documentId = documents[index] ?? "";
               const childLog = yield* readLog(childThreadId);
+
               const childLogJson = JSON.stringify(
                 childLog.map((envelope) => envelope.record.payload),
               );
+
               expect(childLogJson).toContain(docsDocumentBodySecret);
               expect(childLogJson).toContain(fetchCallId(documentId));
+
               const preview = yield* redactedDocumentPreview(documentId).pipe(
                 Effect.provide(StructuralRedactorLive),
               );
+
               expect(preview).toContain("[REDACTED:string]");
               expect(preview).not.toContain(docsDocumentBodySecret);
               expect(preview).not.toContain(documentBodyPhrase(documentId));

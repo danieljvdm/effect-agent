@@ -55,6 +55,7 @@ export const selectEvalCases = (
   if (caseIds.length === 0) return Effect.succeed(suite.cases);
   const selected = new Set(caseIds);
   const unknown = caseIds.filter((id) => !suite.cases.some((evalCase) => evalCase.id === id));
+
   if (unknown.length > 0) {
     return Effect.fail(
       EvalConfigurationError.make({
@@ -62,6 +63,7 @@ export const selectEvalCases = (
       }),
     );
   }
+
   return Effect.succeed(suite.cases.filter((evalCase) => selected.has(evalCase.id)));
 };
 
@@ -74,12 +76,15 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
   const clock = yield* Clock.Clock;
   const recordedAt = yield* DateTime.now;
   const startedAt = yield* clock.monotonicTimeNanos;
+
   const result = yield* Effect.result(
     job.variant
       .review(job.evalCase.request)
       .pipe(Effect.provide(repositoryLayer(job.evalCase.repository))),
   );
+
   const finishedAt = yield* clock.monotonicTimeNanos;
+
   return EvalObservation.make({
     version: 1,
     runnerVersion: CURRENT_RUNNER_VERSION,
@@ -117,17 +122,20 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
       }),
     ),
   );
+
   if (variants.length === 0 || variants.length > 8) {
     return yield* EvalConfigurationError.make({
       message: "Select between one and eight eval variants",
     });
   }
   const variantIds = variants.map((variant) => variant.configuration.id);
+
   if (new Set(variantIds).size !== variantIds.length) {
     return yield* EvalConfigurationError.make({ message: "Eval variant IDs must be unique" });
   }
   const selectedCases = yield* selectEvalCases(suite, decodedOptions.caseIds);
   const jobs: Array<EvalJob<Requirements>> = [];
+
   for (const evalCase of selectedCases) {
     for (const variant of variants) {
       for (let trial = 1; trial <= decodedOptions.trials; trial += 1) {
@@ -135,6 +143,7 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
       }
     }
   }
+
   return Stream.fromIterable(jobs).pipe(
     Stream.mapEffect(runJob, { concurrency: decodedOptions.concurrency, unordered: true }),
   );

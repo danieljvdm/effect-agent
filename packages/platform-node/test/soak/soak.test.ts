@@ -58,10 +58,13 @@ const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
 const mulberry32 = (seed: number): (() => number) => {
   let state = seed | 0;
+
   return () => {
     state = (state + 0x6d2b79f5) | 0;
     let t = Math.imul(state ^ (state >>> 15), 1 | state);
+
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 };
@@ -70,9 +73,11 @@ const mulberry32 = (seed: number): (() => number) => {
 const heapAfterGc = (): number => {
   v8.setFlagsFromString("--expose-gc");
   const gc = vm.runInNewContext("gc") as () => void;
+
   gc();
   gc();
   v8.setFlagsFromString("--no-expose-gc");
+
   return process.memoryUsage().heapUsed;
 };
 
@@ -102,9 +107,11 @@ const startSoakWorker = (
         },
         stdio: ["ignore", "ignore", "pipe"],
       });
+
       if (child.pid !== undefined) spawnedPids.push(child.pid);
       let stderr = "";
       let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
@@ -112,6 +119,7 @@ const startSoakWorker = (
       child.once("exit", (code, signal) => {
         exited = { code, signal };
       });
+
       const worker: SoakWorker = {
         pid: child.pid,
         kill: () => {
@@ -120,6 +128,7 @@ const startSoakWorker = (
         exited: () => exited,
         stderrText: () => stderr,
       };
+
       return worker;
     }),
     (worker) => Effect.sync(() => worker.kill()),
@@ -130,6 +139,7 @@ const awaitWorkerExit = (worker: SoakWorker) =>
     () => `soak worker exit (stderr: ${worker.stderrText()})`,
     Effect.sync(() => {
       const exit = worker.exited();
+
       return exit === undefined ? Option.none() : Option.some(exit);
     }),
     20_000,
@@ -146,6 +156,7 @@ const submitAll = (db: string) =>
       const runtime = yield* DurableAgentRuntime;
       const receipts: Array<Receipt> = [];
       const delegationReceipts: Array<Receipt> = [];
+
       for (let lane = 0; lane < PLAIN_LANES; lane++) {
         for (let member = 0; member < PLAIN_PER_LANE; member++) {
           receipts.push(
@@ -164,10 +175,12 @@ const submitAll = (db: string) =>
             { mission: `soak ${lane}/${member}` },
             soakSubmitOptions(delegationLane(lane), `soak-d${lane}-${member}`),
           );
+
           receipts.push(receipt);
           delegationReceipts.push(receipt);
         }
       }
+
       return { receipts, delegationReceipts };
     }),
   );
@@ -178,10 +191,12 @@ const awaitConvergence = (db: string, budgetMillis: number) =>
     db,
     Effect.gen(function* () {
       const ledger = yield* SubmissionLedger;
+
       yield* waitUntil(
         () => "soak convergence (all lanes settled)",
         Effect.gen(function* () {
           const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal).pipe(Effect.orDie);
+
           return Array.from(nonterminal).length === 0 ? Option.some(undefined) : Option.none();
         }),
         budgetMillis,
@@ -198,9 +213,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
         Effect.scoped(
           Effect.gen(function* () {
             const fileSystem = yield* FileSystem.FileSystem;
+
             const directory = yield* fileSystem.makeTempDirectoryScoped({
               prefix: "effect-agent-soak-",
             });
+
             const db = `${directory}/soak.sqlite`;
             const random = mulberry32(SOAK_SEED);
             const handleBaseline = process.getActiveResourcesInfo().length;
@@ -212,19 +229,24 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             // crash recovery plus epoch supersession without inventing a multi-owner topology
             // the deployment does not claim.
             let workerSerial = 0;
+
             const spawnNext = () => {
               workerSerial += 1;
+
               return startSoakWorker(db, `producer-soak-w${workerSerial}`);
             };
+
             let worker = yield* spawnNext();
 
             const { receipts, delegationReceipts } = yield* submitAll(db);
+
             expect(receipts).toHaveLength(TOTAL_SUBMISSIONS);
 
             for (let kill = 0; kill < KILLS; kill++) {
               yield* Effect.sleep(Duration.millis(800 + Math.floor(random() * 1_500)));
               worker.kill();
               const exit = yield* awaitWorkerExit(worker);
+
               // A SIGKILLed worker never exits cleanly — the kill was a real crash.
               expect(
                 exit.signal === "SIGKILL" || exit.code === SOAK_KILL_EXIT_CODE,
@@ -246,21 +268,26 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const host = yield* NodeDurableHost;
                 const ledger = yield* SubmissionLedger;
+
                 // Accepted-work contract: every Receipt settled, none disappeared.
                 for (const receipt of receipts) {
                   const row = yield* ledger.lookup(
                     SubmissionLookupById.make({ submissionId: receipt.submissionId }),
                   );
+
                   expect(Option.isSome(row)).toBe(true);
                   if (Option.isSome(row)) expect(row.value.state).toBe("settled");
                 }
+
                 // The shared integrity claims for every parent lane and child Thread.
                 const threads = [
                   ...Array.from({ length: PLAIN_LANES }, (_, lane) => plainLane(lane)),
                   ...Array.from({ length: DELEGATION_LANES }, (_, lane) => delegationLane(lane)),
                 ].map((name) => decodeThreadId(name));
+
                 for (const threadId of threads) {
                   const report = yield* host.verify(threadId);
+
                   expect(
                     report.ok,
                     `integrity report for ${threadId}: ${JSON.stringify(report.checks)}`,
@@ -270,15 +297,18 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // own a child Thread (DUR-016), so only materialized children are
                 // verified — and every delegation lane's host Run established at least one.
                 let verifiedChildren = 0;
+
                 for (const receipt of delegationReceipts) {
                   const child = childThreadIdFor(
                     receipt.submissionId,
                     decodeToolCallId(SOAK_DELEGATE_CALL_ID),
                   );
+
                   const report = yield* host.verify(child).pipe(
                     Effect.map(Option.some),
                     Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(Option.none())),
                   );
+
                   if (Option.isSome(report)) {
                     expect(
                       report.value.ok,
@@ -288,10 +318,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   }
                 }
                 expect(verifiedChildren).toBeGreaterThanOrEqual(DELEGATION_LANES);
+
                 // DUR-017 surface agrees: nothing is aged, blocked, or invisibly stuck.
                 const obligations = yield* host.scanObligations(
                   ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }),
                 );
+
                 expect(obligations.entries).toHaveLength(0);
               }),
             );
@@ -303,6 +335,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               Effect.gen(function* () {
                 const ledger = yield* SubmissionLedger;
                 const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+
                 expect(Array.from(nonterminal)).toHaveLength(0);
               }),
             );
@@ -312,11 +345,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               const alive = ((): boolean => {
                 try {
                   process.kill(pid, 0);
+
                   return true;
                 } catch {
                   return false;
                 }
               })();
+
               expect(alive, `worker pid ${pid} is still alive`).toBe(false);
             }
 
@@ -324,9 +359,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             // near its baselines (bounds are lenient against allocator noise, strict against
             // leaks proportional to 500 submissions).
             const heapFinal = heapAfterGc();
+
             expect(heapFinal).toBeLessThanOrEqual(heapBaseline + 48 * 1024 * 1024);
             expect(heapFinal).toBeLessThanOrEqual(heapAfterRun + 16 * 1024 * 1024);
             const handleFinal = process.getActiveResourcesInfo().length;
+
             expect(handleFinal).toBeLessThanOrEqual(handleBaseline + 8);
           }),
         ),

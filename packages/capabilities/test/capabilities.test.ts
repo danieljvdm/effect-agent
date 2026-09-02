@@ -69,9 +69,11 @@ const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
 
 const textMessage = (role: "system" | "user" | "assistant", content: string): Prompt.Message => {
   const [message] = Prompt.make([{ role, content }]).content;
+
   if (message === undefined) {
     throw new Error("Expected Prompt.make to preserve its single input message");
   }
+
   return message;
 };
 
@@ -99,6 +101,7 @@ describe("capability contracts", () => {
     () =>
       Effect.gen(function* () {
         const threads = yield* EphemeralThreads;
+
         yield* threads.create(threadId);
         yield* threads.append(
           threadId,
@@ -107,12 +110,14 @@ describe("capability contracts", () => {
             message: textMessage("user", "Find a hotel"),
           }),
         );
+
         const snapshot = yield* threads.append(
           threadId,
           ThreadAppend.make({
             message: textMessage("assistant", "Which dates?"),
           }),
         );
+
         const exported = yield* threads.export(threadId);
 
         expect(snapshot.messages.map((message) => message.sequence)).toEqual([0, 1]);
@@ -130,7 +135,9 @@ describe("capability contracts", () => {
   it.effect("round-trips structured Effect AI Prompt history through the engine adapter", () =>
     Effect.gen(function* () {
       const threads = yield* EphemeralThreads;
+
       yield* threads.create(threadId);
+
       const richAssistant = Prompt.assistantMessage({
         options: { provider: { trace: "native-option" } },
         content: [
@@ -150,9 +157,11 @@ describe("capability contracts", () => {
           }),
         ],
       });
+
       yield* threads.append(threadId, ThreadAppend.make({ runId, message: richAssistant }));
 
       const options = yield* toRunThreadOptions(threads, threadId, runId);
+
       expect(yield* Schema.encodeEffect(Prompt.Prompt)(options.history ?? Prompt.empty)).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(Prompt.fromMessages([richAssistant])),
       );
@@ -168,10 +177,13 @@ describe("capability contracts", () => {
           }),
         ],
       });
+
       const extended = Prompt.fromMessages([richAssistant, toolMessage]);
+
       expect(options.onHistory).toBeDefined();
       if (options.onHistory !== undefined) yield* options.onHistory(extended);
       const snapshot = yield* threads.snapshot(threadId);
+
       expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(extended),
       );
@@ -181,11 +193,13 @@ describe("capability contracts", () => {
   it.effect("bounds the aggregate number of process-local threads", () =>
     Effect.gen(function* () {
       const threads = yield* EphemeralThreads;
+
       for (let index = 0; index < 256; index += 1) {
         yield* threads.create(yield* Schema.decodeEffect(ThreadId)(`bounded-${index}`));
       }
       const overflowId = yield* Schema.decodeEffect(ThreadId)("bounded-overflow");
       const exit = yield* threads.create(overflowId).pipe(Effect.exit);
+
       expect(Exit.isFailure(exit)).toBe(true);
     }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
@@ -193,15 +207,20 @@ describe("capability contracts", () => {
   it.effect("commits exactly one of two concurrently recorded diverging histories", () =>
     Effect.gen(function* () {
       const threads = yield* EphemeralThreads;
+
       yield* threads.create(threadId);
+
       const base = yield* threads.append(
         threadId,
         ThreadAppend.make({ message: textMessage("user", "shared base") }),
       );
+
       const extend = (content: string) =>
         Prompt.fromMessages([...threadPrompt(base).content, textMessage("assistant", content)]);
+
       const historyA = extend("suffix A");
       const historyB = extend("suffix B");
+
       const record = (label: "A" | "B", history: Prompt.Prompt) =>
         threads.recordHistory(threadId, runId, history).pipe(
           Effect.map(() => ({ _tag: "committed" as const, label })),
@@ -209,9 +228,11 @@ describe("capability contracts", () => {
             Effect.succeed({ _tag: "diverged" as const, label }),
           ),
         );
+
       const outcomes = yield* Effect.all([record("A", historyA), record("B", historyB)], {
         concurrency: 2,
       });
+
       const committed = outcomes.filter((outcome) => outcome._tag === "committed");
       const diverged = outcomes.filter((outcome) => outcome._tag === "diverged");
 
@@ -219,6 +240,7 @@ describe("capability contracts", () => {
       expect(diverged).toHaveLength(1);
       const snapshot = yield* threads.snapshot(threadId);
       const winnerHistory = committed[0]?.label === "A" ? historyA : historyB;
+
       expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(winnerHistory),
       );
@@ -228,16 +250,20 @@ describe("capability contracts", () => {
   it.effect("commits no suffix message when a recorded history exceeds content bounds", () =>
     Effect.gen(function* () {
       const threads = yield* EphemeralThreads;
+
       yield* threads.create(threadId);
+
       const base = yield* threads.append(
         threadId,
         ThreadAppend.make({ message: textMessage("user", "bounded base") }),
       );
+
       const oversized = Prompt.fromMessages([
         ...threadPrompt(base).content,
         textMessage("assistant", "a".repeat(3 * 1024 * 1024)),
         textMessage("assistant", "b".repeat(3 * 1024 * 1024)),
       ]);
+
       const error = yield* threads.recordHistory(threadId, runId, oversized).pipe(Effect.flip);
 
       expect(error).toBeInstanceOf(ThreadLimitExceeded);
@@ -250,18 +276,23 @@ describe("capability contracts", () => {
     () =>
       Effect.gen(function* () {
         const threads = yield* EphemeralThreads;
+
         yield* threads.create(threadId);
+
         const official = yield* threads.append(
           threadId,
           ThreadAppend.make({ message: textMessage("user", "official input") }),
         );
+
         const rewritten = Prompt.fromMessages([
           textMessage("user", "rewritten input"),
           textMessage("assistant", "suffix built on a rewritten base"),
         ]);
+
         const rewrittenError = yield* threads
           .recordHistory(threadId, runId, rewritten)
           .pipe(Effect.flip);
+
         const truncatedError = yield* threads
           .recordHistory(threadId, runId, Prompt.empty)
           .pipe(Effect.flip);
@@ -281,6 +312,7 @@ describe("capability contracts", () => {
             runId,
             RunCommandQueueConfig.make({ capacity: 2 }),
           );
+
           yield* queue.offer(
             SteeringCommand.make({
               id: "steer-1",
@@ -314,6 +346,7 @@ describe("capability contracts", () => {
       const queue = yield* Effect.scoped(
         makeRunCommandQueue(runId, RunCommandQueueConfig.make({ capacity: 1 })),
       );
+
       const exit = yield* queue
         .offer(
           SteeringCommand.make({
@@ -336,11 +369,13 @@ describe("capability contracts", () => {
     () =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
+
         const request = yield* makeApprovalRequest(approvalDraft("approval-1", at(now - 1)), {
           hotel: "beach resort",
           password: "must-not-appear",
           nested: { apiKey: "also-secret" },
         });
+
         const decision = yield* requestApproval(request);
         const audit = yield* ApprovalAudit;
         const events = yield* audit.events;
@@ -381,10 +416,12 @@ describe("capability contracts", () => {
         sequence: 0,
         timestamp: DateTime.toUtc(DateTime.makeUnsafe(1_000)),
       };
+
       const lines = yield* redactedTranscript([
         RunStarted.make(base),
         TextDelta.make({ ...base, sequence: 1, text: "secret itinerary sk-live-key" }),
       ]);
+
       expect(lines).toHaveLength(2);
       for (const line of lines) {
         expect(line).not.toContain("sk-live-key");
@@ -397,10 +434,12 @@ describe("capability contracts", () => {
   it.effect("fails closed when an approval resolver returns another requestId", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
+
       const request = yield* makeApprovalRequest(
         approvalDraft("approval-correlation", at(now + 1_000)),
         { note: "ordinary-key-secret" },
       );
+
       const error = yield* requestApproval(request).pipe(Effect.flip);
       const audit = yield* ApprovalAudit;
       const events = yield* audit.events;
@@ -408,6 +447,7 @@ describe("capability contracts", () => {
       expect(error).toBeInstanceOf(ApprovalDecisionMismatch);
       expect(events).toHaveLength(2);
       const recorded = events[1];
+
       expect(recorded?._tag).toBe("ApprovalDecisionRecorded");
       if (recorded?._tag === "ApprovalDecisionRecorded") {
         expect(recorded.decision.requestId).toBe(request.requestId);
@@ -439,10 +479,12 @@ describe("capability contracts", () => {
   it.effect("audits a synthetic denial and releases the reservation when the resolver fails", () =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
+
       const request = yield* makeApprovalRequest(
         approvalDraft("approval-resolver-error", at(now + 1_000)),
         { note: "infrastructure-secret" },
       );
+
       const error = yield* requestApproval(request).pipe(Effect.flip);
       const audit = yield* ApprovalAudit;
       const events = yield* audit.events;
@@ -453,6 +495,7 @@ describe("capability contracts", () => {
         "ApprovalDecisionRecorded",
       ]);
       const recorded = events[1];
+
       expect(recorded?._tag).toBe("ApprovalDecisionRecorded");
       if (recorded?._tag === "ApprovalDecisionRecorded") {
         expect(recorded.decision._tag).toBe("ApprovalDenied");
@@ -489,7 +532,9 @@ describe("capability contracts", () => {
       const request = yield* makeApprovalRequest(approvalDraft("audit-pair", at(1)), {
         note: "secret",
       });
+
       const audit = yield* ApprovalAudit;
+
       const decision = ApprovalDenied.make({
         requestId: request.requestId,
         decidedAt: at(1),
@@ -497,11 +542,13 @@ describe("capability contracts", () => {
         reason: "test",
         timedOut: false,
       });
+
       for (let index = 0; index < 1_024; index += 1) {
         yield* audit.recordRequest(request);
         yield* audit.recordDecision(decision);
       }
       const exit = yield* audit.recordRequest(request).pipe(Effect.exit);
+
       expect(Exit.isFailure(exit)).toBe(true);
       expect(yield* audit.events).toHaveLength(2_048);
     }).pipe(Effect.provide(Layer.merge(StructuralRedactorLive, ApprovalAuditMemoryLive))),
@@ -512,10 +559,13 @@ describe("capability contracts", () => {
     () =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
+
         const request = yield* makeApprovalRequest(approvalDraft("approval-2", at(now + 1_000)), {
           hotel: "beach resort",
         });
+
         const fiber = yield* requestApproval(request).pipe(Effect.forkChild);
+
         yield* TestClock.adjust("1 second");
         const decision = yield* Fiber.join(fiber);
         const audit = yield* ApprovalAudit;
@@ -558,16 +608,19 @@ describe("capability contracts", () => {
 
   it.effect("applies the approval adapter policy Schema before invoking policy callbacks", () => {
     let callbackInvoked = false;
+
     const hook = toRunApprovalHook({
       expiresInMillis: -1,
       risk: "high",
       denial: "terminal",
       actionSummary: () => {
         callbackInvoked = true;
+
         return "must not run";
       },
       resourceTargets: () => [],
     });
+
     return hook
       .request({
         request: Response.toolApprovalRequestPart({
@@ -609,6 +662,7 @@ describe("capability contracts", () => {
       actionSummary: () => "Place a temporary itinerary hold",
       resourceTargets: () => ["quote:quote-sfo-lhr-001"],
     });
+
     return Effect.gen(function* () {
       const decision = yield* hook.request({
         request: Response.toolApprovalRequestPart({
@@ -655,6 +709,7 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({ maxInputTokens: 4 }),
         }),
       );
+
       const tenantBudget = yield* globalBudget.child(
         UsageBudgetNodeConfig.make({
           level: "tenant",
@@ -662,6 +717,7 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({ maxInputTokens: 10 }),
         }),
       );
+
       yield* tenantBudget.consume(
         UsageDelta.make({
           modelCalls: 1,
@@ -673,6 +729,7 @@ describe("capability contracts", () => {
           costMicrousd: 0,
         }),
       );
+
       const exit = yield* tenantBudget
         .consume(
           UsageDelta.make({
@@ -702,6 +759,7 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({}),
         }),
       );
+
       const first = yield* globalBudget.child(
         UsageBudgetNodeConfig.make({
           level: "run",
@@ -709,6 +767,7 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({ maxToolCalls: 1 }),
         }),
       );
+
       yield* first.consume(
         UsageDelta.make({
           modelCalls: 0,
@@ -720,6 +779,7 @@ describe("capability contracts", () => {
           costMicrousd: 0,
         }),
       );
+
       const reattached = yield* globalBudget.child(
         UsageBudgetNodeConfig.make({
           level: "run",
@@ -727,7 +787,9 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({ maxToolCalls: 1 }),
         }),
       );
+
       expect((yield* reattached.snapshot).toolCalls).toBe(1);
+
       const exceeded = yield* reattached
         .consume(
           UsageDelta.make({
@@ -741,6 +803,7 @@ describe("capability contracts", () => {
           }),
         )
         .pipe(Effect.flip);
+
       const conflict = yield* globalBudget
         .child(
           UsageBudgetNodeConfig.make({
@@ -757,6 +820,7 @@ describe("capability contracts", () => {
         const decoded = yield* Schema.decodeEffect(BudgetNodeConflict)(
           yield* Schema.encodeEffect(BudgetNodeConflict)(conflict),
         );
+
         expect(decoded).toBeInstanceOf(BudgetNodeConflict);
         expect(decoded.scopeLevel).toBe("run");
         expect(decoded.scopeId).toBe("run-1");
@@ -775,12 +839,14 @@ describe("capability contracts", () => {
             limits: UsageBudgetLimits.make({}),
           }),
         );
+
         const config = (id: string) =>
           UsageBudgetNodeConfig.make({
             level: "run",
             id,
             limits: UsageBudgetLimits.make({}),
           });
+
         const delta = UsageDelta.make({
           modelCalls: 1,
           inputTokens: 1,
@@ -804,6 +870,7 @@ describe("capability contracts", () => {
         ).pipe(Effect.ignore);
 
         const started = yield* Deferred.make<void>();
+
         const interrupted = yield* Effect.scoped(
           globalBudget.childScoped(config("interruption")).pipe(
             Effect.flatMap((node) => node.consume(delta)),
@@ -811,12 +878,14 @@ describe("capability contracts", () => {
             Effect.andThen(Effect.never),
           ),
         ).pipe(Effect.forkChild);
+
         yield* Deferred.await(started);
         yield* Fiber.interrupt(interrupted);
 
         expect((yield* globalBudget.snapshot).inputTokens).toBe(3);
         for (const id of ["success", "failure", "interruption"]) {
           const fresh = yield* globalBudget.child(config(id));
+
           expect((yield* fresh.snapshot).inputTokens).toBe(0);
           yield* fresh.retire;
         }
@@ -843,6 +912,7 @@ describe("capability contracts", () => {
             limits: UsageBudgetLimits.make({}),
           }),
         );
+
         const parent = yield* root.child(
           UsageBudgetNodeConfig.make({
             level: "tenant",
@@ -850,6 +920,7 @@ describe("capability contracts", () => {
             limits: UsageBudgetLimits.make({ maxToolCalls: 0 }),
           }),
         );
+
         const [childExit] = yield* Effect.all(
           [
             parent
@@ -868,6 +939,7 @@ describe("capability contracts", () => {
 
         if (Exit.isSuccess(childExit)) {
           const consumeExit = yield* childExit.value.consume(delta).pipe(Effect.exit);
+
           expect(Exit.isFailure(consumeExit)).toBe(true);
           yield* childExit.value.retire;
         }
@@ -879,10 +951,12 @@ describe("capability contracts", () => {
             limits: UsageBudgetLimits.make({ maxToolCalls: 0 }),
           }),
         );
+
         const [consumeExit] = yield* Effect.all(
           [secondParent.consume(delta).pipe(Effect.exit), secondParent.retire],
           { concurrency: "unbounded" },
         );
+
         expect(Exit.isFailure(consumeExit)).toBe(true);
         yield* root.retire;
       }
@@ -898,6 +972,7 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({ maxDurationMillis: 1_000 }),
         }),
       );
+
       const runBudget = yield* globalBudget.child(
         UsageBudgetNodeConfig.make({
           level: "run",
@@ -905,7 +980,9 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({ maxDurationMillis: 5_000 }),
         }),
       );
+
       const fiber = yield* runBudget.guard(Effect.never).pipe(Effect.forkChild);
+
       yield* TestClock.adjust("1 second");
       const exit = yield* Fiber.await(fiber);
 
@@ -922,7 +999,9 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({ maxDurationMillis: 1_000 }),
         }),
       );
+
       const hook = toRunBudgetHook(budget);
+
       const consumed: void = yield* hook.consume({
         modelCalls: 1,
         inputTokens: 3,
@@ -935,6 +1014,7 @@ describe("capability contracts", () => {
           outputTokens: { total: 2 },
         }),
       });
+
       expect(consumed).toBeUndefined();
       expect(yield* budget.snapshot).toMatchObject({
         inputTokens: 3,
@@ -943,6 +1023,7 @@ describe("capability contracts", () => {
         costMicrousd: 7,
       });
       const fiber = yield* hook.guard(Effect.never).pipe(Effect.forkChild);
+
       yield* TestClock.adjust("1 second");
       expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
     }),
@@ -957,6 +1038,7 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({}),
         }),
       );
+
       yield* budget.consume(
         UsageDelta.make({
           modelCalls: 1,
@@ -1020,6 +1102,7 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({}),
         }),
       );
+
       const runBudget = yield* globalBudget.child(
         UsageBudgetNodeConfig.make({
           level: "run",
@@ -1027,7 +1110,9 @@ describe("capability contracts", () => {
           limits: UsageBudgetLimits.make({}),
         }),
       );
+
       const hook = toRunBudgetHook(runBudget);
+
       yield* hook.consume({
         modelCalls: 1,
         inputTokens: 9,
@@ -1067,6 +1152,7 @@ describe("capability contracts", () => {
     () =>
       Effect.gen(function* () {
         const threads = yield* EphemeralThreads;
+
         yield* threads.create(threadId);
         for (const content of ["Original first", "Compact this", "Original last"]) {
           yield* threads.append(
@@ -1075,6 +1161,7 @@ describe("capability contracts", () => {
           );
         }
         const snapshot = yield* threads.snapshot(threadId);
+
         const context = yield* prepareModelContext(snapshot, [
           {
             id: "model-view-only",
@@ -1082,7 +1169,9 @@ describe("capability contracts", () => {
             apply: (messages) => Effect.succeed(messages),
           },
         ]);
+
         const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
+
         const artifact = CompactionArtifact.make({
           version: 1,
           threadId,
@@ -1098,6 +1187,7 @@ describe("capability contracts", () => {
           sourceDigest,
           compactorVersion: "test-1",
         });
+
         const compacted = yield* applyCompaction(context, artifact);
 
         expect(compacted.source).toEqual(snapshot);
@@ -1113,6 +1203,7 @@ describe("capability contracts", () => {
   it.effect("keeps transform-synthesized and partially covered model-view messages visible", () =>
     Effect.gen(function* () {
       const threads = yield* EphemeralThreads;
+
       yield* threads.create(threadId);
       for (const content of ["first", "second", "third"]) {
         yield* threads.append(
@@ -1121,6 +1212,7 @@ describe("capability contracts", () => {
         );
       }
       const snapshot = yield* threads.snapshot(threadId);
+
       const context = yield* prepareModelContext(snapshot, [
         {
           id: "merge-and-synthesize",
@@ -1141,7 +1233,9 @@ describe("capability contracts", () => {
             ]),
         },
       ]);
+
       const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
+
       const artifact = CompactionArtifact.make({
         version: 1,
         threadId,
@@ -1157,6 +1251,7 @@ describe("capability contracts", () => {
         sourceDigest,
         compactorVersion: "test-1",
       });
+
       const compacted = yield* applyCompaction(context, artifact);
 
       expect(compacted.messages.map((message) => message.content)).toEqual([
@@ -1171,12 +1266,16 @@ describe("capability contracts", () => {
   it.effect("rejects a compaction artifact whose exact source digest mismatches", () =>
     Effect.gen(function* () {
       const threads = yield* EphemeralThreads;
+
       yield* threads.create(threadId);
+
       const snapshot = yield* threads.append(
         threadId,
         ThreadAppend.make({ message: textMessage("user", "Canonical source") }),
       );
+
       const context = yield* prepareModelContext(snapshot);
+
       const artifact = CompactionArtifact.make({
         version: 1,
         threadId,
@@ -1192,6 +1291,7 @@ describe("capability contracts", () => {
         sourceDigest: `sha256:${"0".repeat(64)}`,
         compactorVersion: "test-1",
       });
+
       const exit = yield* applyCompaction(context, artifact).pipe(Effect.exit);
 
       expect(Exit.isFailure(exit)).toBe(true);
@@ -1201,13 +1301,17 @@ describe("capability contracts", () => {
   it.effect("rejects compaction provenance outside the exact covered source range", () =>
     Effect.gen(function* () {
       const threads = yield* EphemeralThreads;
+
       yield* threads.create(threadId);
       yield* threads.append(threadId, ThreadAppend.make({ message: textMessage("user", "first") }));
+
       const snapshot = yield* threads.append(
         threadId,
         ThreadAppend.make({ message: textMessage("user", "second") }),
       );
+
       const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
+
       const artifact = CompactionArtifact.make({
         version: 1,
         threadId,
@@ -1223,9 +1327,11 @@ describe("capability contracts", () => {
         sourceDigest,
         compactorVersion: "test-1",
       });
+
       const exit = yield* applyCompaction(yield* prepareModelContext(snapshot), artifact).pipe(
         Effect.exit,
       );
+
       expect(Exit.isFailure(exit)).toBe(true);
     }).pipe(Effect.provide(Layer.merge(EphemeralThreadsLive, NodeCrypto.layer))),
   );
@@ -1235,11 +1341,14 @@ describe("capability contracts", () => {
     () =>
       Effect.gen(function* () {
         const threads = yield* EphemeralThreads;
+
         yield* threads.create(threadId);
+
         const snapshot = yield* threads.append(
           threadId,
           ThreadAppend.make({ message: textMessage("user", "Official history") }),
         );
+
         const context = yield* prepareModelContext(snapshot, [
           {
             id: "empty-view",
@@ -1265,6 +1374,7 @@ describe("capability contracts", () => {
         maxDiscoveryBytes: 4_096,
         connectTimeoutMillis: 1_000,
       });
+
       const identity = McpServerIdentity.make({
         serverId: "travel-mcp",
         implementation: McpSchema.Implementation.make({
@@ -1272,6 +1382,7 @@ describe("capability contracts", () => {
           version: "2.4.0",
         }),
       });
+
       const tools = ["one", "two"].map((name) =>
         McpSchema.Tool.make({
           name,
@@ -1279,6 +1390,7 @@ describe("capability contracts", () => {
           inputSchema: { type: "object" },
         }),
       );
+
       const exit = yield* validateMcpDiscovery(request, {
         identity,
         capabilities: McpSchema.ServerCapabilities.make({}),
@@ -1296,7 +1408,9 @@ describe("capability contracts", () => {
         parameters: Schema.Struct({ query: Schema.String }),
         success: Schema.Struct({ answer: Schema.String }),
       });
+
       const toolkit = Toolkit.make(Search);
+
       const request = McpConnectionRequest.make({
         serverId: "travel-mcp",
         maxToolCount: 1,
@@ -1304,6 +1418,7 @@ describe("capability contracts", () => {
         maxDiscoveryBytes: 8_192,
         connectTimeoutMillis: 1_000,
       });
+
       const identity = McpServerIdentity.make({
         serverId: "travel-mcp",
         implementation: McpSchema.Implementation.make({
@@ -1311,18 +1426,21 @@ describe("capability contracts", () => {
           version: "2.4.0",
         }),
       });
+
       const matching = McpSchema.Tool.make({
         name: "search",
         description: "bounded",
         inputSchema: Tool.getJsonSchema(Search),
         outputSchema: Tool.getJsonSchemaFromSchema(Search.successSchema),
       });
+
       const discovery = yield* validateMcpDiscovery(request, {
         identity,
         capabilities: McpSchema.ServerCapabilities.make({}),
         tools: [matching],
         toolkit,
       });
+
       expect(discovery.toolkitSchemaDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
 
       const wrongSchemaExit = yield* validateMcpDiscovery(request, {
@@ -1337,6 +1455,7 @@ describe("capability contracts", () => {
         ],
         toolkit,
       }).pipe(Effect.exit);
+
       expect(Exit.isFailure(wrongSchemaExit)).toBe(true);
 
       const wrongOutputSchemaExit = yield* validateMcpDiscovery(request, {
@@ -1355,6 +1474,7 @@ describe("capability contracts", () => {
         ],
         toolkit,
       }).pipe(Effect.exit);
+
       expect(Exit.isFailure(wrongOutputSchemaExit)).toBe(true);
 
       const nonJsonSchemaError = yield* validateMcpDiscovery(request, {
@@ -1373,6 +1493,7 @@ describe("capability contracts", () => {
         ],
         toolkit,
       }).pipe(Effect.flip);
+
       expect(nonJsonSchemaError).toMatchObject({
         _tag: "McpToolkitMismatch",
         message: expect.stringContaining("not canonical JSON"),
@@ -1388,6 +1509,7 @@ describe("capability contracts", () => {
         tools: [matching],
         toolkit,
       }).pipe(Effect.exit);
+
       expect(Exit.isFailure(wrongIdentityExit)).toBe(true);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
@@ -1402,7 +1524,9 @@ describe("capability contracts", () => {
           maxDiscoveryBytes: 4_096,
           connectTimeoutMillis: 1_000,
         });
+
         const finalized = yield* Deferred.make<void>();
+
         const connector = Layer.succeed(McpConnector)({
           connect: () =>
             Effect.acquireUseRelease(
@@ -1411,10 +1535,12 @@ describe("capability contracts", () => {
               () => Deferred.succeed(finalized, undefined),
             ),
         });
+
         const fiber = yield* connectMcp(request).pipe(
           Effect.provide(Layer.merge(connector, NodeCrypto.layer)),
           Effect.forkChild,
         );
+
         yield* TestClock.adjust("1 second");
         const exit = yield* Fiber.await(fiber);
 

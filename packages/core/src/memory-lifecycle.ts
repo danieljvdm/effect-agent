@@ -20,6 +20,7 @@ export type MemoryKey<Namespace extends MemoryNamespace.Any = MemoryNamespace.An
   MemoryKeyWire,
   "namespace"
 > & { readonly namespace: Namespace };
+
 export const MemoryKey = {
   Wire: MemoryKeyWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -32,12 +33,14 @@ const KnownSource = Schema.Struct({
   ...MemorySourceReference.fields,
   revision: Identity,
 });
+
 const AccessScopes = Schema.Array(MemoryScope).check(
   Schema.isMaxLength(128),
   Schema.makeFilter((scopes) => new Set(scopes).size === scopes.length, {
     expected: "unique access scopes",
   }),
 );
+
 const DocumentFields = {
   version: Schema.Literal(1),
   key: MemoryKey.Wire,
@@ -68,6 +71,7 @@ class WithdrawnMemoryDocumentWire extends Schema.TaggedClass<WithdrawnMemoryDocu
 
 export type ActiveMemoryDocument<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> =
   Omit<ActiveMemoryDocumentWire, "key"> & { readonly key: MemoryKey<Namespace> };
+
 export const ActiveMemoryDocument = {
   Wire: ActiveMemoryDocumentWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -83,8 +87,10 @@ export const ActiveMemoryDocument = {
       { key: MemoryKey.make(fields.key) },
     ),
 };
+
 export type WithdrawnMemoryDocument<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> =
   Omit<WithdrawnMemoryDocumentWire, "key"> & { readonly key: MemoryKey<Namespace> };
+
 export const WithdrawnMemoryDocument = {
   Wire: WithdrawnMemoryDocumentWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -104,6 +110,7 @@ export const WithdrawnMemoryDocument = {
 export type MemoryDocument<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> =
   | ActiveMemoryDocument<Namespace>
   | WithdrawnMemoryDocument<Namespace>;
+
 export const MemoryDocument = {
   Wire: Schema.Union([ActiveMemoryDocument.Wire, WithdrawnMemoryDocument.Wire]),
   restore: Effect.fn("MemoryDocument.restore")(function* <Namespace extends MemoryNamespace.Any>(
@@ -115,12 +122,14 @@ export const MemoryDocument = {
         MemoryStorageError.make({ operation: "restore memory document", reason: "corrupt" }),
       ),
     );
+
     if (!MemoryNamespace.equals(namespace, document.key.namespace))
       return yield* MemoryStorageError.make({
         operation: "restore memory namespace",
         reason: "corrupt",
       });
     const key = MemoryKey.make({ ...document.key, namespace });
+
     return document._tag === "ActiveMemoryDocument"
       ? ActiveMemoryDocument.make({ ...document, key })
       : WithdrawnMemoryDocument.make({ ...document, key });
@@ -147,10 +156,12 @@ const MemoryWriteWire = Schema.Union([
     reason: WithdrawnMemoryDocument.Wire.fields.reason,
   }),
 ]);
+
 export type MemoryWrite<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> = (
   | Omit<(typeof MemoryWriteWire.members)[0]["Type"], "key">
   | Omit<(typeof MemoryWriteWire.members)[1]["Type"], "key">
 ) & { readonly key: MemoryKey<Namespace> };
+
 export const MemoryWrite = {
   Wire: MemoryWriteWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -196,6 +207,7 @@ export const MemoryMutationPoint = Schema.Literals([
   "memory:change:after-receipt",
   "memory:change:after",
 ]);
+
 export type MemoryMutationPoint = typeof MemoryMutationPoint.Type;
 
 export class MemoryMutationFailure extends Schema.TaggedError<MemoryMutationFailure>()(
@@ -243,6 +255,7 @@ export class MemoryReader extends Context.Service<
         key: MemoryKey<Namespace>,
       ) {
         const document = yield* adapter.get(key);
+
         return document === null ? null : yield* MemoryDocument.restore(key.namespace, document);
       }),
     };
@@ -273,6 +286,7 @@ export class MemoryWriter extends Context.Service<
         write: MemoryWrite<Namespace>,
       ) {
         const document = yield* adapter.change(write);
+
         return yield* MemoryDocument.restore(write.key.namespace, document);
       }),
     };
@@ -306,6 +320,7 @@ export const applyMemoryWrite = Effect.fn("applyMemoryWrite")(function* <
     return yield* MemoryWithdrawn.make({ key: write.key, revision: current.source.revision });
   }
   const actualRevision = current?.source.revision ?? null;
+
   if (actualRevision !== write.expectedRevision) {
     return yield* MemoryConflict.make({
       key: write.key,
@@ -314,6 +329,7 @@ export const applyMemoryWrite = Effect.fn("applyMemoryWrite")(function* <
     });
   }
   const generation = (current?.generation ?? 0) + 1;
+
   const fields = {
     version: 1 as const,
     key: write.key,
@@ -326,6 +342,7 @@ export const applyMemoryWrite = Effect.fn("applyMemoryWrite")(function* <
     predecessor: current?.source ?? null,
     modifiedAt,
   };
+
   const next =
     write._tag === "Put"
       ? {
@@ -335,10 +352,12 @@ export const applyMemoryWrite = Effect.fn("applyMemoryWrite")(function* <
           scopes: write.scopes,
         }
       : { _tag: "WithdrawnMemoryDocument" as const, ...fields, reason: write.reason };
+
   const document = yield* Schema.decodeUnknownEffect(MemoryDocument.Wire)(next).pipe(
     Effect.mapError(() =>
       MemoryStorageError.make({ operation: "memory transition", reason: "invalid-input" }),
     ),
   );
+
   return yield* MemoryDocument.restore(write.key.namespace, document);
 });

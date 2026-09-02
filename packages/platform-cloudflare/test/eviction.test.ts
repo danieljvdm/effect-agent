@@ -70,6 +70,7 @@ import {
  */
 
 let laneCounter = 0;
+
 const lane = (location: string): string =>
   `cf-ev-${location.replaceAll(":", "-")}-${laneCounter++}`;
 
@@ -96,6 +97,7 @@ const submitFixture = (fixture: Fixture, thread: string, key: string) =>
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.submit(
         { definition: definitionFor(fixture) },
         { question: "converge across eviction", ref: thread },
@@ -108,6 +110,7 @@ const submitFixtureExit = (fixture: Fixture, thread: string, key: string) =>
   runClientExit(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.submit(
         { definition: definitionFor(fixture) },
         { question: "converge across eviction", ref: thread },
@@ -129,14 +132,17 @@ const armConsumed = (thread: string): boolean => armedEvictionsRemaining(thread)
 
 const modelResponseCount = async (thread: string): Promise<number> => {
   const records = await readCanonical(thread);
+
   return records.filter((envelope) => envelope.record.payload._tag === "ModelResponseRecorded")
     .length;
 };
 
 const settlementOutcome = async (thread: string): Promise<string | undefined> => {
   const records = await readCanonical(thread);
+
   const settled = records.find((envelope) => envelope.record.payload._tag === "SubmissionSettled")
     ?.record.payload;
+
   return settled !== undefined && "outcome" in settled && typeof settled.outcome === "string"
     ? settled.outcome
     : undefined;
@@ -154,9 +160,11 @@ const submitPathRow = async (
 ): Promise<void> => {
   const thread = lane(target.location);
   const key = `${thread}-key`;
+
   arm(thread, target);
 
   const first = await submitFixtureExit("planner", thread, key);
+
   expect(first.ok, "the armed eviction must kill the submit call").toBe(false);
   expect(armConsumed(thread), "the armed location must actually have fired").toBe(true);
 
@@ -164,14 +172,18 @@ const submitPathRow = async (
     // Nothing was admitted, so nothing is owed: alarms (if any) settle to an empty lane.
     await drainAlarmsUntil(thread, async () => {
       const rows = await laneRows(thread);
+
       return rows.length === 0 && (await scheduledAlarm(thread)) === null;
     });
     // The client legitimately retries the refused call; the lane then converges normally.
     const receipt = await submitFixture("planner", thread, key);
+
     await drainAlarmsUntil(thread, allSettled(thread));
     const rows = await laneRows(thread);
+
     expect(rows.map((row) => row.submission_id)).toEqual([receipt.submissionId]);
     await assertConvergence(thread);
+
     return;
   }
 
@@ -182,6 +194,7 @@ const submitPathRow = async (
   // … and the same idempotency key resumes with the ORIGINAL durable identity.
   const rows = await laneRows(thread);
   const replayed = await submitFixture("planner", thread, key);
+
   expect(replayed.submissionId).toBe(rows[0]?.submission_id);
 };
 
@@ -200,17 +213,20 @@ const passRow = async (
 ): Promise<{ readonly thread: string; readonly receipt: Receipt }> => {
   const thread = lane(target.location);
   const key = `${thread}-key`;
+
   arm(thread, target);
   const receipt = await submitFixture(fixture, thread, key);
 
   const predicate =
     expectation === "settled" ? allSettled(thread) : anyInState(thread, expectation);
+
   await drainAlarmsUntil(thread, predicate);
   expect(armConsumed(thread), "the armed location must actually have fired").toBe(true);
 
   if (expectation === "settled") {
     await assertConvergence(thread, { supplier: options?.supplier });
   }
+
   return { thread, receipt };
 };
 
@@ -218,6 +234,7 @@ const approveBooking = (thread: string, receipt: Receipt, decision: "approved" |
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.resolveApproval(
         decodeThreadId(thread),
         ApprovalDecisionCommand.make({
@@ -235,6 +252,7 @@ const resolveNeverHappened = (thread: string, receipt: Receipt) =>
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.resolveUnknown(
         decodeThreadId(thread),
         UnknownResolutionCommand.make({
@@ -352,6 +370,7 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
 
   it("eviction at input:after-canonical-append: the marker is repaired and FIFO holds for the queued Submission", async () => {
     const thread = lane("input:after-canonical-append");
+
     arm(thread, { kind: "runtime", location: "input:after-canonical-append" });
     await submitFixture("planner", thread, `${thread}-k1`);
     await submitFixture("planner", thread, `${thread}-k2`);
@@ -391,6 +410,7 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
       { kind: "runtime", location: "turn:after-response-append" },
       "settled",
     );
+
     // Exactly two model responses ever became canonical: the declared batch resumed from
     // canonical history, and only the post-batch request re-invoked the model.
     expect(await modelResponseCount(thread)).toBe(2);
@@ -402,6 +422,7 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
       { kind: "runtime", location: "turn:after-results-append" },
       "settled",
     );
+
     expect(await modelResponseCount(thread)).toBe(2);
   }, 30_000);
 
@@ -419,6 +440,7 @@ describe("DC eviction matrix — maintenance pass (abort mid-pass, alarm-only co
       { kind: "runtime", location: "terminalize:after-reserve" },
       "settled",
     );
+
     expect(await settlementOutcome(thread)).toBe("completed");
   }, 30_000);
 
@@ -466,6 +488,7 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
+
     // The unresolved ordinary call is never auto-replayed: alarm passes grant nothing.
     expect(supplierCountsFor(thread)).toEqual({});
     await resolveNeverHappened(thread, receipt);
@@ -479,9 +502,11 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
     // The Unknown mark is only crossed by the RECOVERY of a stranded prepared call, so the
     // whole chain arms up front: tools abort first, then the mark eviction.
     const thread = lane("ledger:mark-unknown:before");
+
     armRuntimeEviction(thread, "tools:after-prepared-append");
     armStorageEviction(thread, "ledger:mark-unknown:before");
     const receipt = await submitFixture("book", thread, `${thread}-key`);
+
     await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
     expect(armConsumed(thread)).toBe(true);
     await resolveNeverHappened(thread, receipt);
@@ -493,9 +518,11 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
 
   it("eviction at ledger:mark-unknown:after: the durable Unknown mark is never re-applied", async () => {
     const thread = lane("ledger:mark-unknown:after");
+
     armRuntimeEviction(thread, "tools:after-prepared-append");
     armStorageEviction(thread, "ledger:mark-unknown:after");
     const receipt = await submitFixture("book", thread, `${thread}-key`);
+
     await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
     expect(armConsumed(thread)).toBe(true);
     await resolveNeverHappened(thread, receipt);
@@ -509,9 +536,11 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
     // Chain: first strand the prepared call (tools abort), then evict the RECOVERY pass at
     // the release that follows its Unknown mark.
     const thread = lane("ledger:release:before");
+
     armRuntimeEviction(thread, "tools:after-prepared-append");
     armStorageEviction(thread, "ledger:release:before");
     const receipt = await submitFixture("book", thread, `${thread}-key`);
+
     await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
     expect(armConsumed(thread)).toBe(true);
     await resolveNeverHappened(thread, receipt);
@@ -523,9 +552,11 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
 
   it("eviction at ledger:release:after: the released claim is not double-released", async () => {
     const thread = lane("ledger:release:after");
+
     armRuntimeEviction(thread, "tools:after-prepared-append");
     armStorageEviction(thread, "ledger:release:after");
     const receipt = await submitFixture("book", thread, `${thread}-key`);
+
     await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
     expect(armConsumed(thread)).toBe(true);
     await resolveNeverHappened(thread, receipt);
@@ -541,6 +572,7 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
       { kind: "runtime", location: "approval:after-request-append" },
       "suspended",
     );
+
     expect(supplierCountsFor(thread)).toEqual({});
     await approveBooking(thread, receipt, "approved");
     await drainAlarmsUntil(thread, allSettled(thread));
@@ -555,6 +587,7 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
+
     await approveBooking(thread, receipt, "approved");
     await drainAlarmsUntil(thread, allSettled(thread));
     await assertConvergence(thread, {
@@ -568,6 +601,7 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
+
     await approveBooking(thread, receipt, "denied");
     await drainAlarmsUntil(thread, allSettled(thread));
     expect(await settlementOutcome(thread)).toBe("failed");
@@ -581,6 +615,7 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
       { kind: "storage", location: "ledger:suspend:before" },
       "suspended",
     );
+
     await approveBooking(thread, receipt, "approved");
     await drainAlarmsUntil(thread, allSettled(thread));
     await assertConvergence(thread, {
@@ -594,6 +629,7 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
       { kind: "storage", location: "ledger:suspend:after" },
       "suspended",
     );
+
     await approveBooking(thread, receipt, "approved");
     await drainAlarmsUntil(thread, allSettled(thread));
     await assertConvergence(thread, {
@@ -607,6 +643,7 @@ describe("DC eviction matrix — uncertainty, approval, and durable steps", () =
       { kind: "runtime", location: "step:after-step-append" },
       "settled",
     );
+
     // The handler is honestly re-entered; each Step's external effect happened exactly once
     // because step 1 replayed from its exactly-once record (durability §10).
     expect(supplierCountsFor(thread)).toEqual({
@@ -631,10 +668,13 @@ describe("DC eviction matrix — client mutation entry points", () => {
   it("eviction at abort:after-intent: ready work settles aborted without an Attempt", async () => {
     const thread = lane("abort:after-intent");
     const receipt = await submitFixture("planner", thread, `${thread}-key`);
+
     arm(thread, { kind: "runtime", location: "abort:after-intent" });
+
     const aborted = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.abort(
           decodeThreadId(thread),
           AbortCommand.make({
@@ -645,6 +685,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(aborted.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     await drainAlarmsUntil(thread, allSettled(thread));
@@ -654,10 +695,13 @@ describe("DC eviction matrix — client mutation entry points", () => {
   it("eviction at ledger:request-abort:after: the durable intent settles the lane aborted", async () => {
     const thread = lane("ledger:request-abort:after");
     const receipt = await submitFixture("planner", thread, `${thread}-key`);
+
     arm(thread, { kind: "storage", location: "ledger:request-abort:after" });
+
     const aborted = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.abort(
           decodeThreadId(thread),
           AbortCommand.make({
@@ -668,6 +712,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(aborted.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     await drainAlarmsUntil(thread, allSettled(thread));
@@ -681,12 +726,15 @@ describe("DC eviction matrix — client mutation entry points", () => {
     // order; DUR-012 permits settling inactive accepted work without an Attempt).
     const thread = lane("abort-queued-non-head");
     const head = await submitFixture("approval", thread, `${thread}-head`);
+
     await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
 
     const queued = await submitFixture("planner", thread, `${thread}-queued`);
+
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.abort(
           decodeThreadId(thread),
           AbortCommand.make({
@@ -699,6 +747,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
     );
     await drainAlarmsUntil(thread, async () => {
       const rows = await laneRows(thread);
+
       return rows.some(
         (row) => row.submission_id === queued.submissionId && row.state === "settled",
       );
@@ -706,16 +755,19 @@ describe("DC eviction matrix — client mutation entry points", () => {
 
     // The aborted non-head settled while the head is still durably suspended.
     const rows = await laneRows(thread);
+
     expect(
       rows.find((row) => row.submission_id === head.submissionId)?.state,
       "the suspended head must remain unsettled",
     ).toBe("suspended");
     const records = await readCanonical(thread);
+
     const queuedSettlement = records.find(
       (envelope) =>
         envelope.record.payload._tag === "SubmissionSettled" &&
         envelope.record.payload.submissionId === queued.submissionId,
     )?.record.payload;
+
     expect(
       queuedSettlement !== undefined &&
         "outcome" in queuedSettlement &&
@@ -741,10 +793,13 @@ describe("DC eviction matrix — client mutation entry points", () => {
   it("eviction at ledger:request-abort:before: no intent exists, so the accepted work completes", async () => {
     const thread = lane("ledger:request-abort:before");
     const receipt = await submitFixture("planner", thread, `${thread}-key`);
+
     arm(thread, { kind: "storage", location: "ledger:request-abort:before" });
+
     const aborted = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.abort(
           decodeThreadId(thread),
           AbortCommand.make({
@@ -755,6 +810,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(aborted.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     await drainAlarmsUntil(thread, allSettled(thread));
@@ -768,11 +824,14 @@ describe("DC eviction matrix — client mutation entry points", () => {
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
+
     // The suspension row above consumed its arm; now evict the DECISION write itself.
     arm(thread, { kind: "storage", location: "ledger:approval-decision:before" });
+
     const decided = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -785,6 +844,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(decided.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     // No decision committed: alarm passes keep the suspension honestly durable.
@@ -802,10 +862,13 @@ describe("DC eviction matrix — client mutation entry points", () => {
       { kind: "runtime", location: "approval:after-suspend" },
       "suspended",
     );
+
     arm(thread, { kind: "storage", location: "ledger:approval-decision:after" });
+
     const decided = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -818,6 +881,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(decided.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     // The decision committed before the abort: alarms alone resume and settle the lane.
@@ -833,10 +897,13 @@ describe("DC eviction matrix — client mutation entry points", () => {
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
+
     arm(thread, { kind: "storage", location: "ledger:unknown-resolution:before" });
+
     const resolved = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveUnknown(
           decodeThreadId(thread),
           UnknownResolutionCommand.make({
@@ -849,6 +916,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(resolved.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
@@ -865,10 +933,13 @@ describe("DC eviction matrix — client mutation entry points", () => {
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
+
     arm(thread, { kind: "storage", location: "ledger:unknown-resolution:after" });
+
     const resolved = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveUnknown(
           decodeThreadId(thread),
           UnknownResolutionCommand.make({
@@ -881,6 +952,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(resolved.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     await drainAlarmsUntil(thread, allSettled(thread));
@@ -895,10 +967,13 @@ describe("DC eviction matrix — client mutation entry points", () => {
       { kind: "runtime", location: "tools:after-prepared-append" },
       "unknown",
     );
+
     arm(thread, { kind: "runtime", location: "resolve:after-intent" });
+
     const resolved = await runClientExit(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveUnknown(
           decodeThreadId(thread),
           UnknownResolutionCommand.make({
@@ -911,6 +986,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
         );
       }),
     );
+
     expect(resolved.ok).toBe(false);
     expect(armConsumed(thread)).toBe(true);
     await drainAlarmsUntil(thread, allSettled(thread));
@@ -929,10 +1005,13 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
     const thread = lane(target.location);
     // S1's model hangs on the gate, so the pass stays active while S2 queues.
     const receipt1 = await submitFixture("join", thread, `${thread}-k1`);
+
     void receipt1;
+
     const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
+
     await submitFixture("join", thread, `${thread}-k2`);
     arm(thread, target);
     releaseGate(thread);
@@ -940,6 +1019,7 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
     expect(armConsumed(thread)).toBe(true);
     expect(await laneRows(thread)).toHaveLength(2);
     await assertConvergence(thread);
+
     return thread;
   };
 
@@ -971,10 +1051,13 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
     // Chain: strand a joining Submission (claim-joining:after), then evict the recovery
     // pass INSIDE its RevertJoining repair — first before the revert commits, then after.
     const thread = lane("ledger:revert-joining");
+
     await submitFixture("join", thread, `${thread}-k1`);
+
     const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
+
     await submitFixture("join", thread, `${thread}-k2`);
     // The whole chain up front: the recovery pass after each abort runs within milliseconds
     // (due alarms auto-fire), so post-abort arming would always lose the race.
@@ -993,13 +1076,16 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
 
   it("eviction at ledger:renew:before: the unrenewed lease lapses and the next incarnation reclaims", async () => {
     const thread = lane("ledger:renew:before");
+
     arm(thread, { kind: "storage", location: "ledger:renew:before" });
     await submitFixture("join", thread, `${thread}-key`);
+
     // The hung model keeps the Attempt alive until the renewal cadence crosses the armed
     // location; the abort then kills the incarnation mid-lease.
     const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
+
     await new Promise((resolve) => setTimeout(resolve, 300));
     releaseGate(thread);
     await passPromise;
@@ -1009,11 +1095,14 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
 
   it("eviction at ledger:renew:after: the extended lease still lapses with its incarnation", async () => {
     const thread = lane("ledger:renew:after");
+
     arm(thread, { kind: "storage", location: "ledger:renew:after" });
     await submitFixture("join", thread, `${thread}-key`);
+
     const passPromise = drainAlarmsUntil(thread, allSettled(thread), {
       rounds: 1_200,
     });
+
     await new Promise((resolve) => setTimeout(resolve, 300));
     releaseGate(thread);
     await passPromise;
@@ -1029,15 +1118,19 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
 describe("DC eviction matrix — checkpoints and export", () => {
   const settledLane = async (): Promise<string> => {
     const thread = lane("derivative");
+
     await submitFixture("planner", thread, `${thread}-key`);
     await drainAlarmsUntil(thread, allSettled(thread));
+
     return thread;
   };
 
   it("eviction at export:after-thread-read: the read-only export dies without a trace", async () => {
     const thread = await settledLane();
     const before = await readCanonical(thread);
+
     armStorageEviction(thread, "export:after-thread-read");
+
     const request = await Effect.runPromise(
       encodePortRequest(
         StoreExportCall.make({
@@ -1047,15 +1140,18 @@ describe("DC eviction matrix — checkpoints and export", () => {
         }),
       ),
     );
+
     const failure = await runInDurableObject(stubFor(thread), (instance) =>
       instance.portCall(request),
     ).then(
       () => undefined,
       (error: unknown) => error,
     );
+
     expect(failure).toBeDefined();
     expect(armConsumed(thread)).toBe(true);
     const after = await readCanonical(thread);
+
     expect(after).toEqual(before);
     await assertConvergence(thread);
   }, 30_000);
@@ -1063,17 +1159,21 @@ describe("DC eviction matrix — checkpoints and export", () => {
   const checkpointRow = async (location: DoStorageFailpointLocation): Promise<void> => {
     const thread = await settledLane();
     const before = await readCanonical(thread);
+
     armStorageEviction(thread, location);
+
     const attempted = await runInDurableObject(stubFor(thread), async (_instance, state) => {
       // Drive the checkpoint through the adapter with THIS incarnation's abort lever;
       // checkpoints are disposable derivatives, so an eviction here must never matter.
       const program = Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         const tail = yield* store.inspectTail(
           ThreadTailRequest.make({
             threadId: decodeThreadId(thread),
           }),
         );
+
         const checkpoint = ThreadCheckpoint.make({
           schemaVersion: 1,
           threadId: decodeThreadId(thread),
@@ -1086,6 +1186,7 @@ describe("DC eviction matrix — checkpoints and export", () => {
           state: {},
           createdAt: DateTime.toUtc(DateTime.makeUnsafe(Date.now())),
         });
+
         yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
       }).pipe(
         Effect.provide(
@@ -1095,14 +1196,17 @@ describe("DC eviction matrix — checkpoints and export", () => {
           }),
         ),
       );
+
       return Effect.runPromise(program).then(
         () => "completed" as const,
         () => "aborted" as const,
       );
     }).catch(() => "aborted" as const);
+
     expect(attempted).toBe("aborted");
     expect(armConsumed(thread)).toBe(true);
     const after = await readCanonical(thread);
+
     expect(after).toEqual(before);
     await assertConvergence(thread);
   };

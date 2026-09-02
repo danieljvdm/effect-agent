@@ -60,9 +60,11 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Travel Planner run to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure");
   }
+
   return failure.value;
 };
 
@@ -73,11 +75,14 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         const controlled = yield* ReverseCompletionToolkitLayer;
         const runId = yield* Schema.decodeEffect(RunId)("run-1");
         const threadId = yield* Schema.decodeEffect(ThreadId)("thread-1");
+
         const queue = yield* makeRunCommandQueue(
           runId,
           RunCommandQueueConfig.make({ capacity: 4 }),
         );
+
         let secondPrompt = "";
+
         const turns: ReadonlyArray<ScriptedTurnInput> = [
           phase1HappyPathTurns[0],
           {
@@ -87,6 +92,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
             },
           },
         ];
+
         const layer = Layer.mergeAll(
           RunContextPreparationPassthrough,
           ThreadHistory.layerTransient,
@@ -97,6 +103,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           TravelGuidanceLayer,
           DeterministicIdGeneratorLayer,
         ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
+
         const fiber = yield* AgentRuntime.run(makeTravelAgent(turns), phase1Trip, {
           input: toRunInputHook(queue),
         }).pipe(Effect.provide(layer), Effect.forkChild);
@@ -129,6 +136,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         );
 
         const result = yield* Fiber.join(fiber);
+
         expect(result.output).toEqual(expectedTravelPlan);
         expect(secondPrompt).toContain("2026-09-21");
         expect(secondPrompt).toContain("quote-sfo-lhr-001");
@@ -153,10 +161,12 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
       Effect.gen(function* () {
         const runId = yield* Schema.decodeEffect(RunId)("run-1");
         const threadId = yield* Schema.decodeEffect(ThreadId)("thread-1");
+
         const queue = yield* makeRunCommandQueue(
           runId,
           RunCommandQueueConfig.make({ capacity: 2 }),
         );
+
         yield* queue.offer(
           FollowUpCommand.make({
             id: "preference-1",
@@ -169,6 +179,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         );
         const prompts: Array<string> = [];
         const stopTurn = phase1HappyPathTurns[1];
+
         const turns: ReadonlyArray<ScriptedTurnInput> = [
           {
             ...stopTurn,
@@ -201,6 +212,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
       const budget = yield* makeUsageBudget({
         maxInputTokens: 1,
       });
+
       const exit = yield* AgentRuntime.run(makeTravelAgent(phase1HappyPathTurns), phase1Trip, {
         budget: toRunBudgetHook(budget),
       }).pipe(Effect.provide(TravelPlannerRuntimeLayer), Effect.exit);
@@ -216,6 +228,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
     Effect.gen(function* () {
       const sourceSizes = yield* Ref.make<ReadonlyArray<number>>([]);
       const receivedPrompts: Array<string> = [];
+
       const turns: ReadonlyArray<ScriptedTurnInput> = phase1HappyPathTurns.map((turn) => ({
         ...turn,
         assertRequest: (request) => {
@@ -230,6 +243,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           receivedPrompts.push(JSON.stringify(request.prompt.content));
         },
       }));
+
       yield* AgentRuntime.run(makeTravelAgent(turns), phase1Trip, {
         context: {
           prepare: ({ source }) =>
@@ -240,6 +254,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
       }).pipe(Effect.provide(TravelPlannerRuntimeLayer));
 
       const sizes = yield* Ref.get(sourceSizes);
+
       expect(sizes).toHaveLength(2);
       expect(sizes[1]).toBeGreaterThan(sizes[0] ?? 0);
       // The model must receive exactly the prepared compacted prompt, never
@@ -256,6 +271,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
   it.effect("never starts a denied or unresolved itinerary-hold handler", () =>
     Effect.gen(function* () {
       const handlerStarts = yield* Ref.make(0);
+
       const holdLayer = Layer.succeed(
         ItineraryHoldGateway,
         ItineraryHoldGateway.of({
@@ -271,6 +287,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
             ),
         }),
       );
+
       const runtimeLayer = Layer.mergeAll(
         RunContextPreparationPassthrough,
         ThreadHistory.layerTransient,
@@ -282,6 +299,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         TravelGuidanceLayer,
         DeterministicIdGeneratorLayer,
       ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
+
       const holdTurn: ScriptedTurnInput = {
         _tag: "Stream",
         parts: [
@@ -310,7 +328,9 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         const exit = yield* AgentRuntime.run(makePhase2Agent([holdTurn]), phase1Trip, {
           approval: { request: () => Effect.succeed(decision) },
         }).pipe(Effect.provide(runtimeLayer), Effect.exit);
+
         const failure = failureFrom(exit);
+
         expect(
           failure instanceof AgentApprovalDenied || failure instanceof AgentApprovalPending,
         ).toBe(true);

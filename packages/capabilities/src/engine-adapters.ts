@@ -94,7 +94,9 @@ export const toRunApprovalHook = (
           }),
         ),
       );
+
       const now = yield* Clock.currentTimeMillis;
+
       const metadata = yield* Effect.try({
         try: () => ({
           actionSummary: policy.actionSummary(engineRequest),
@@ -105,6 +107,7 @@ export const toRunApprovalHook = (
             message: "Approval policy failed while describing the native Tool request",
           }),
       });
+
       const draft = yield* Schema.decodeUnknownEffect(ApprovalRequestDraft)({
         requestId: engineRequest.request.approvalId,
         runId: engineRequest.runId,
@@ -125,8 +128,10 @@ export const toRunApprovalHook = (
           }),
         ),
       );
+
       const request = yield* makeApprovalRequest(draft, engineRequest.parameters);
       const decision = yield* requestApproval(request);
+
       if (decision._tag === "ApprovalApproved") {
         return { _tag: "approved" as const };
       }
@@ -136,6 +141,7 @@ export const toRunApprovalHook = (
           reason: decision.reason,
         };
       }
+
       return {
         _tag: "denied" as const,
         reason: decision.reason,
@@ -167,6 +173,7 @@ export const toDurableRunApprovalHook = Effect.fn("toDurableRunApprovalHook")(fu
 > {
   const services = yield* Effect.context<ApprovalResolver | ApprovalAudit | Redactor>();
   const hook = toRunApprovalHook(policy);
+
   return {
     request: (request) =>
       hook.request(request).pipe(
@@ -232,6 +239,7 @@ export const toRunThreadOptions = Effect.fn("toRunThreadOptions")(function* (
   ThreadNotFound
 > {
   const snapshot = yield* threads.snapshot(threadId);
+
   return {
     threadId,
     history: threadPrompt(snapshot),
