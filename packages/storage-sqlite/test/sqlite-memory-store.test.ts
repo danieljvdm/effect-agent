@@ -12,6 +12,7 @@ import {
   MemoryWrite,
   MemoryWriter,
 } from "@effect-agent/core";
+import { SqlMemoryLimits } from "@effect-agent/thread/sql-memory";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -164,6 +165,58 @@ const runRaw = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientSer
   effect.pipe(Effect.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 describe("SQLite memory store", () => {
+  for (const limit of ["maxDocuments", "maxReceipts", "maxStorageBytes"] as const) {
+    it.effect(`enforces ${limit} independently without a row byte limit`, () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const defaults = yield* SqlMemoryLimits;
+          const bounded = storeLayer(filename).pipe(
+            Layer.provide(
+              Layer.succeed(SqlMemoryLimits, {
+                ...defaults,
+                [limit]: limit === "maxStorageBytes" ? 16_384 : 1,
+              }),
+            ),
+          );
+          const first = put("first", null, "x".repeat(4_096));
+          const secondKey = MemoryKey.make({ namespace: key.namespace, id: "source-2" });
+          // Corrections add receipts but not documents. Each byte-limited write fits alone.
+          const rejected =
+            limit === "maxReceipts"
+              ? put("second", "1", "correction")
+              : putFor(secondKey, "second", null, "x".repeat(4_096));
+          yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+            const reader = yield* MemoryReader;
+            const stored = yield* writer.change(first);
+            expect(yield* writer.change(rejected).pipe(Effect.flip)).toEqual(
+              MemoryStorageError.make({
+                operation: "memory storage limit",
+                reason: "invalid-input",
+              }),
+            );
+            expect(yield* reader.get(key)).toEqual(stored);
+            expect(yield* reader.get(secondKey)).toBeNull();
+            expect(yield* writer.change(first)).toEqual(stored);
+            if (limit === "maxDocuments") {
+              expect(yield* writer.change(put("correction", "1", "corrected"))).toMatchObject({
+                generation: 2,
+              });
+            }
+          }).pipe(Effect.provide(bounded));
+          // Reopen without the capacity limit: a rejected command must not retain a receipt.
+          yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+            const reader = yield* MemoryReader;
+            const retried = yield* writer.change(rejected);
+            expect(retried.generation).toBe(limit === "maxReceipts" ? 2 : 1);
+            expect(yield* reader.get(rejected.key)).toEqual(retried);
+          }).pipe(Effect.provide(storeLayer(filename)));
+        }),
+      ),
+    );
+  }
+
   it.effect(
     "isolates structured namespace documents, receipts, and tombstones across restart",
     () =>

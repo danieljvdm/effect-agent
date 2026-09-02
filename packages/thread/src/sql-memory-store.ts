@@ -29,7 +29,10 @@ const EncodedMemoryChange = Schema.Struct({
 const equivalentContent = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.content);
 const equivalentScopes = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.scopes);
 
-/** Adapter limits. Counts and encoded bytes include durable operation receipts. */
+/**
+ * Independent adapter limits. Counts and encoded bytes include durable operation receipts.
+ * Accounting is skipped only when all limits retain their unbounded defaults.
+ */
 export const SqlMemoryLimits = Context.Reference("@effect-agent/thread/SqlMemoryLimits", {
   defaultValue: () => ({
     maxRowBytes: Number.MAX_SAFE_INTEGER,
@@ -438,7 +441,12 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
           const documentJson = resultJson;
           yield* validateEncodedChange({ commandJson, documentJson, resultJson }, operation);
 
-          if (limits.maxRowBytes !== Number.MAX_SAFE_INTEGER) {
+          if (
+            limits.maxRowBytes !== Number.MAX_SAFE_INTEGER ||
+            limits.maxStorageBytes !== Number.MAX_SAFE_INTEGER ||
+            limits.maxDocuments !== Number.MAX_SAFE_INTEGER ||
+            limits.maxReceipts !== Number.MAX_SAFE_INTEGER
+          ) {
             const bytes = (value: string) => Encoding.encodeHex(value).length / 2;
             const identityBytes = bytes(next.key.namespace.address) + bytes(next.key.id);
             const documentBytes = identityBytes + bytes(documentJson) + 128;
