@@ -1,6 +1,12 @@
 import { Effect, Encoding, Schema } from "effect";
 
-import { MemoryDocument, MemoryKey, MemoryReader, MemoryStorageError } from "./memory-lifecycle.ts";
+import {
+  MemoryDocument,
+  MemoryKey,
+  MemoryReader,
+  MemoryScope,
+  MemoryStorageError,
+} from "./memory-lifecycle.ts";
 import type { MemoryNamespace } from "./memory-namespace.ts";
 import { MemoryLookup, MemoryPassage, MemoryRecallError, MemoryRecallLimits } from "./memory.ts";
 
@@ -14,7 +20,7 @@ class MemoryAccessWire extends Schema.Class<MemoryAccessWire>(
   "@effect-agent/capabilities/MemoryAccess",
 )({
   namespace: MemoryKey.Wire.fields.namespace,
-  scope: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
+  scope: MemoryScope,
 }) {}
 
 export type MemoryAccess<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> = Omit<

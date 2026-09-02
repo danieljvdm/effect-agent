@@ -11,6 +11,7 @@ import {
   MemoryRpcError,
   memoryWireBytes,
 } from "@effect-agent/storage-cloudflare";
+import { Principal } from "@effect-agent/thread";
 import { Clock, Effect, Layer, Schema } from "effect";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 
@@ -19,6 +20,7 @@ import {
   candidates,
   command,
   limits,
+  memoryScope,
   Projects,
   Sample,
   sourceCount,
@@ -73,8 +75,8 @@ export class ProjectMemory extends MemoryObject.make(policy) {
 const memoryClient = Effect.fn("benchmark.client")(function* (name: BenchmarkCase) {
   const env = yield* WorkerEnvironment;
   return yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
-    access: MemoryAccess.make({ namespace: Projects.make(name), scope: "benchmark" }),
-    principal: "benchmark",
+    access: MemoryAccess.make({ namespace: Projects.make(name), scope: memoryScope }),
+    principal: Principal.make("benchmark"),
   });
 });
 

@@ -10,6 +10,7 @@ import {
   MemoryIndexSource,
   MemoryKey,
   MemoryNamespace,
+  MemoryScope,
   type MemoryNamespaceError,
   MemoryReader,
   type MemoryStorageError,
@@ -34,7 +35,7 @@ const userId = UserId.make("user");
 const namespace = Conversations.make({ tenantId, userId });
 type Namespace = typeof namespace;
 const key = MemoryKey.make({ namespace, id: "source" });
-const access = MemoryAccess.make({ namespace, scope: "private" });
+const access = MemoryAccess.make({ namespace, scope: MemoryScope.make("private") });
 const content = {
   text: "memory",
   attributions: [
@@ -121,6 +122,9 @@ const workflow = Effect.gen(function* () {
 });
 type Workflow = Effect.Success<typeof workflow>;
 type Proofs = [
+  Assert<Equal<typeof access.scope, MemoryScope>>,
+  Assert<Equal<(typeof document.scopes)[number], MemoryScope>>,
+  Assert<Equal<Extract<MemoryWrite, { readonly _tag: "Put" }>["scopes"][number], MemoryScope>>,
   Assert<Equal<typeof key.namespace, Namespace>>,
   Assert<Equal<typeof access.namespace, Namespace>>,
   Assert<Equal<typeof write.key.namespace, Namespace>>,
@@ -151,7 +155,13 @@ const negativeCases = () => {
   // @ts-expect-error Raw namespace strings are not namespace values.
   MemoryKey.make({ namespace: "tenant", id: "source" });
   // @ts-expect-error Access constructors reject strings too.
-  MemoryAccess.make({ namespace: "tenant", scope: "private" });
+  MemoryAccess.make({ namespace: "tenant", scope: access.scope });
+  // @ts-expect-error A raw string cannot stand in for a host-bound scope.
+  MemoryAccess.make({ namespace, scope: "private" });
+  // @ts-expect-error Unrelated branded identities cannot become memory scopes.
+  MemoryAccess.make({ namespace, scope: userId });
+  // @ts-expect-error Persisted document construction requires branded scopes too.
+  ActiveMemoryDocument.make({ ...document, scopes: ["private"] });
   const other = Other.make({ tenantId, userId });
   const newer = V2.make({ tenantId, userId });
   const acceptKey = (_key: MemoryKey<Namespace>) => undefined;
@@ -165,7 +175,7 @@ const negativeCases = () => {
   const otherKey = MemoryKey.make({ namespace: other, id: key.id });
   const acceptAccess = (_access: MemoryAccess<Namespace>) => undefined;
   // @ts-expect-error Access construction retains the incompatible family.
-  acceptAccess(MemoryAccess.make({ namespace: other, scope: "private" }));
+  acceptAccess(MemoryAccess.make({ namespace: other, scope: access.scope }));
   const acceptQuery = (_query: MemoryIndexQuery<Namespace>) => undefined;
   // @ts-expect-error Query construction retains the incompatible version.
   acceptQuery(MemoryIndexQuery.make({ ...query, namespace: newer }));
@@ -210,7 +220,30 @@ it("retains namespace types through public construction and operations", () => {
     true,
     true,
     true,
+    true,
+    true,
+    true,
   ];
   expect(proofs.every(Boolean)).toBe(true);
   expect(typeof negativeCases).toBe("function");
+  for (const value of ["private", "x".repeat(1_024)]) {
+    const decodedAccess = Schema.decodeUnknownSync(MemoryAccess.Wire)({ ...access, scope: value });
+    expect(Schema.encodeSync(MemoryAccess.Wire)(decodedAccess).scope).toBe(value);
+    const decodedDocument = Schema.decodeUnknownSync(ActiveMemoryDocument.Wire)({
+      ...document,
+      scopes: [value],
+    });
+    expect(Schema.encodeSync(ActiveMemoryDocument.Wire)(decodedDocument).scopes).toEqual([value]);
+  }
+  for (const value of ["", "x".repeat(1_025)]) {
+    expect(() => Schema.decodeUnknownSync(MemoryAccess.Wire)({ ...access, scope: value })).toThrow(
+      /Expected/,
+    );
+    expect(() =>
+      Schema.decodeUnknownSync(ActiveMemoryDocument.Wire)({ ...document, scopes: [value] }),
+    ).toThrow(/Expected/);
+    expect(() => Schema.decodeUnknownSync(MemoryWrite.Wire)({ ...write, scopes: [value] })).toThrow(
+      /Expected/,
+    );
+  }
 });

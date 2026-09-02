@@ -1,5 +1,6 @@
 import {
   MemoryNamespace,
+  MemoryScope,
   ActiveMemoryDocument,
   type MemoryDocument,
   MemoryIndexCandidate,
@@ -46,7 +47,7 @@ const TestNamespace = MemoryNamespace.define({
 });
 
 const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
-const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
+const access = MemoryAccess.make({ namespace: key.namespace, scope: MemoryScope.make("channel") });
 const profile = SemanticMemoryProfile.make({
   version: 1,
   provider: "test",

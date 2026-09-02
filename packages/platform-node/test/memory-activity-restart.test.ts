@@ -1,6 +1,7 @@
 import { recallMemory, revalidateMemoryLookup } from "@effect-agent/capabilities";
 import {
   MemoryNamespace,
+  MemoryScope,
   Agent,
   AgentPolicy,
   IdGenerator,
@@ -428,7 +429,7 @@ it.live(
         }).pipe(Effect.provide(readerLayer(filename)));
         const wrongScope = yield* revalidateMemoryLookup(staleCandidates, {
           namespace: MEMORY_NAMESPACE,
-          scope: "unshared-channel",
+          scope: MemoryScope.make("unshared-channel"),
         }).pipe(Effect.provide(readerLayer(filename)));
         expect(wrongNamespace).toEqual({ _tag: "NoMatch" });
         expect(wrongScope).toEqual({ _tag: "NoMatch" });

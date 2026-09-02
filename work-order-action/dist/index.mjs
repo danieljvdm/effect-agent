@@ -32841,6 +32841,7 @@ var MemoryNamespace;
 // packages/core/src/memory-lifecycle.ts
 var Identity2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var Timestamp2 = exports_Schema.Finite.check(exports_Schema.isGreaterThanOrEqualTo(0));
+var MemoryScope = Identity2.pipe(exports_Schema.brand("@effect-agent/core/MemoryScope"));
 
 class MemoryKeyWire extends exports_Schema.Class("@effect-agent/core/MemoryKey")({
   namespace: MemoryNamespace.Any,
@@ -32855,7 +32856,7 @@ var KnownSource = exports_Schema.Struct({
   ...MemorySourceReference.fields,
   revision: Identity2
 });
-var AccessScopes = exports_Schema.Array(Identity2).check(exports_Schema.isMaxLength(128), exports_Schema.makeFilter((scopes) => new Set(scopes).size === scopes.length, {
+var AccessScopes = exports_Schema.Array(MemoryScope).check(exports_Schema.isMaxLength(128), exports_Schema.makeFilter((scopes) => new Set(scopes).size === scopes.length, {
   expected: "unique access scopes"
 }));
 var DocumentFields = {
@@ -33035,7 +33036,7 @@ var RevalidationLimits = exports_Schema.Struct({
 
 class MemoryAccessWire extends exports_Schema.Class("@effect-agent/capabilities/MemoryAccess")({
   namespace: MemoryKey.Wire.fields.namespace,
-  scope: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024))
+  scope: MemoryScope
 }) {
 }
 var MemoryAccess = {

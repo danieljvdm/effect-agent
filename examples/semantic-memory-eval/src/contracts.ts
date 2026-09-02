@@ -1,4 +1,4 @@
-import { MemoryNamespace } from "@effect-agent/core";
+import { MemoryNamespace, MemoryScope } from "@effect-agent/core";
 import { Schema } from "effect";
 
 export const MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
@@ -9,7 +9,7 @@ export const MEMORY_NAMESPACE = MemoryNamespace.define({
   version: 1,
   identity: Schema.Null,
 }).make(null);
-export const MEMORY_SCOPE = "evaluation-reader";
+export const MEMORY_SCOPE = MemoryScope.make("evaluation-reader");
 
 export const CorpusDocument = Schema.Struct({
   id: Schema.NonEmptyString,

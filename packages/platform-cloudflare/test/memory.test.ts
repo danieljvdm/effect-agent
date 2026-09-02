@@ -1,5 +1,6 @@
 import {
   MemoryWrite,
+  MemoryScope,
   MemoryMutationPoint,
   MemoryIndexCandidate,
   MemoryIndexSearch,
@@ -20,13 +21,16 @@ import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
 } from "@effect-agent/storage-cloudflare";
+import { Principal } from "@effect-agent/thread";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
+import type { cloudflareMemoryWriterLayer } from "../src/index.ts";
 import { CloudflareMemoryClient, MemoryObjectNamespace } from "../src/index.ts";
 import {
   memoryAccess,
+  memoryPrincipal,
   memoryCalls,
   memoryCandidates,
   memoryFaults,
@@ -49,7 +53,7 @@ declare global {
 let counter = 0;
 const project = () => `memory-${counter++}`;
 const stub = (name: string) => env.MEMORIES.getByName(MemoryProjects.make(name).address);
-const client = (name: string, principal = "application") =>
+const client = (name: string, principal = memoryPrincipal) =>
   CloudflareMemoryClient.fromBinding(env.MEMORIES, { access: memoryAccess(name), principal });
 const decode = (encoded: string) =>
   Schema.decodeSync(Schema.fromJsonString(MemoryOwnerResponse))(encoded);
@@ -77,7 +81,7 @@ describe("shared Cloudflare memory owner", () => {
             _tag: "Revalidate",
             version: 1,
             access: memoryAccess(name),
-            principal: "application",
+            principal: memoryPrincipal,
             lookup: memoryCandidates(["source", "source"]),
             limits: memoryRecallLimits,
             deadlineMillis: (yield* Clock.currentTimeMillis) + 1000,
@@ -211,7 +215,7 @@ describe("shared Cloudflare memory owner", () => {
             _tag: "RevalidateSemantic",
             version: 1,
             access: memoryAccess(name),
-            principal: "application",
+            principal: memoryPrincipal,
             deadlineMillis: (yield* Clock.currentTimeMillis) + 1000,
             profile: SemanticMemoryProfile.make({
               version: 1,
@@ -357,13 +361,28 @@ describe("shared Cloudflare memory owner", () => {
   it("denies cross-namespace, cross-scope and unauthenticated requests at the owner", () =>
     Effect.runPromise(
       Effect.gen(function* () {
+        expectTypeOf<MemoryOwnerRequest["principal"]>().toEqualTypeOf<Principal>();
+        expectTypeOf<MemoryOwnerRequest["access"]["scope"]>().toEqualTypeOf<MemoryScope>();
+        expectTypeOf<
+          Parameters<typeof CloudflareMemoryClient.make>[1]
+        >().toEqualTypeOf<Principal>();
+        expectTypeOf<
+          Parameters<typeof CloudflareMemoryClient.fromBinding>[1]["principal"]
+        >().toEqualTypeOf<Principal>();
+        expectTypeOf<
+          Parameters<typeof cloudflareMemoryWriterLayer>[1]
+        >().toEqualTypeOf<Principal>();
+        expectTypeOf<string>().not.toExtend<Principal>();
+        expectTypeOf<string>().not.toExtend<MemoryScope>();
+        expectTypeOf<MemoryScope>().not.toExtend<Principal>();
+        expectTypeOf<Principal>().not.toExtend<MemoryScope>();
         const name = project();
         const foreign = project();
         const request: MemoryOwnerRequest = {
           _tag: "Revalidate",
           version: 1,
           access: memoryAccess(foreign),
-          principal: "application",
+          principal: memoryPrincipal,
           lookup: { _tag: "NoMatch" },
           limits: memoryRecallLimits,
           deadlineMillis: (yield* Clock.currentTimeMillis) + 1000,
@@ -374,13 +393,37 @@ describe("shared Cloudflare memory owner", () => {
           _tag: "Failed",
           failure: { _tag: "MemoryRpcError", reason: "denied" },
         });
-        const denied = yield* client(name, "untrusted");
+        const localRequest = { ...request, access: memoryAccess(name) };
+        for (const malformed of [
+          { ...localRequest, principal: "" },
+          { ...localRequest, principal: "x".repeat(257) },
+          { ...localRequest, access: { ...localRequest.access, scope: "" } },
+          { ...localRequest, access: { ...localRequest.access, scope: "x".repeat(1_025) } },
+        ]) {
+          const rejected = yield* Effect.promise(() =>
+            stub(name).memory(JSON.stringify(malformed)),
+          );
+          expect(decode(rejected)).toMatchObject({
+            _tag: "Failed",
+            failure: { _tag: "MemoryRpcError", reason: "protocol" },
+          });
+        }
+        const boundedIdentity = yield* Effect.promise(() =>
+          stub(name).memory(
+            JSON.stringify({
+              ...localRequest,
+              principal: "x".repeat(256),
+            }),
+          ),
+        );
+        expect(decode(boundedIdentity)).toMatchObject({ failure: { reason: "denied" } });
+        const denied = yield* client(name, Principal.make("untrusted"));
         expect(
           yield* denied.revalidate({ _tag: "NoMatch" }, memoryRecallLimits).pipe(Effect.flip),
         ).toMatchObject({ reason: "denied" });
         const scope = yield* CloudflareMemoryClient.make(
-          { ...memoryAccess(name), scope: "foreign" },
-          "application",
+          { ...memoryAccess(name), scope: MemoryScope.make("foreign") },
+          memoryPrincipal,
         ).pipe(Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }));
         expect(
           yield* scope
@@ -406,11 +449,11 @@ describe("shared Cloudflare memory owner", () => {
         expect(memoryCalls.get(MemoryProjects.make(name).address)).toBe(1);
         const bounded = CloudflareMemoryClient.fromBinding(env.MEMORIES, {
           access: memoryAccess(name),
-          principal: "application",
+          principal: memoryPrincipal,
           rpcLimits: { ...defaultMemoryRpcLimits, maxRequestBytes: 256 },
         });
         expectTypeOf<Effect.Services<typeof bounded>>().toEqualTypeOf<never>();
-        const injected = CloudflareMemoryClient.make(memoryAccess(name), "application");
+        const injected = CloudflareMemoryClient.make(memoryAccess(name), memoryPrincipal);
         expectTypeOf<Effect.Services<typeof injected>>().toEqualTypeOf<MemoryObjectNamespace>();
         const tiny = yield* bounded;
         expect(
@@ -423,7 +466,7 @@ describe("shared Cloudflare memory owner", () => {
           _tag: "Revalidate",
           version: 1,
           access: memoryAccess(name),
-          principal: "application",
+          principal: memoryPrincipal,
           lookup: { _tag: "NoMatch" },
           limits: memoryRecallLimits,
           deadlineMillis: 0,
@@ -533,7 +576,7 @@ describe("shared Cloudflare memory owner", () => {
         const finished = yield* Deferred.make<void>();
         slowStarted.set(address, started);
         slowFinished.set(address, finished);
-        const memory = yield* client(name, "slow");
+        const memory = yield* client(name, Principal.make("slow"));
         const pending = yield* memory
           .revalidate({ _tag: "NoMatch" }, { ...memoryRecallLimits, timeoutMillis: 100 })
           .pipe(Effect.forkChild);
@@ -554,7 +597,7 @@ describe("shared Cloudflare memory owner", () => {
   it("fails closed when authorization defects", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const memory = yield* client(project(), "defect");
+        const memory = yield* client(project(), Principal.make("defect"));
         expect(
           yield* memory.revalidate({ _tag: "NoMatch" }, memoryRecallLimits).pipe(Effect.flip),
         ).toMatchObject({ _tag: "MemoryRpcError", reason: "unavailable" });

@@ -1,5 +1,6 @@
 import {
   MemoryNamespace,
+  MemoryScope,
   ActiveMemoryDocument,
   MemoryAttribution,
   MemoryContent,
@@ -35,7 +36,7 @@ const TestNamespace = MemoryNamespace.define({
 const key = MemoryKey.make({ namespace: TestNamespace.make("team-a"), id: "queue-discussion" });
 const access = MemoryAccess.make({
   namespace: TestNamespace.make("team-a"),
-  scope: "participating-channels",
+  scope: MemoryScope.make("participating-channels"),
 });
 const document = ActiveMemoryDocument.make({
   version: 1,

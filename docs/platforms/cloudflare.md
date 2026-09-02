@@ -185,9 +185,11 @@ import {
   MemoryLookup,
   MemoryNamespace,
   MemoryRecallLimits,
+  MemoryScope,
 } from "@effect-agent/core";
 import { recallMemory } from "@effect-agent/capabilities";
 import { CloudflareMemoryClient, type MemoryObjectRpc } from "@effect-agent/platform-cloudflare";
+import { Principal } from "@effect-agent/thread";
 import { Effect, Schema } from "effect";
 
 const Projects = MemoryNamespace.define({
@@ -197,7 +199,7 @@ const Projects = MemoryNamespace.define({
 });
 const access = MemoryAccess.make({
   namespace: Projects.make("authorized-project"),
-  scope: "project",
+  scope: MemoryScope.make("project"),
 });
 const limits = MemoryRecallLimits.make({
   maxSources: 16,
@@ -215,7 +217,7 @@ export const recall = (
   Effect.gen(function* () {
     const client = yield* CloudflareMemoryClient.fromBinding(binding, {
       access,
-      principal: "authenticated-principal",
+      principal: Principal.make("authenticated-principal"),
     });
     return yield* recallMemory(
       [{ id: "project", essential: true, read: client.revalidate(candidates, limits) }],
@@ -229,6 +231,12 @@ Durable Object. It provisions `MemoryObjectNamespace` internally; constructing t
 make an RPC. Applications that provide that service once through their Effect Layers can use
 `CloudflareMemoryClient.make(access, principal)` instead. Both return the same Effect-native client
 with the same validation and budgets.
+
+Access and document scopes share the `MemoryScope` brand from core. Clients and owner authorizers
+use the existing `Principal` brand from thread. Decode external values with their Effect Schemas
+after authentication; `.make` is suitable for trusted constants. Scopes are nonempty strings of at
+most 1,024 characters, and principals are nonempty strings of at most 256 characters. Both encode
+as ordinary strings on the wire. Brands prevent category mix-ups; they do not grant authorization.
 
 One `revalidate` sends all admitted candidates in one RPC to `namespace.address`. The owner verifies
 its name, request namespace, principal, and scope; it then reads each distinct source locally once.

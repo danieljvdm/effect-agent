@@ -22,6 +22,7 @@ import {
   SemanticCandidateResult,
   revalidateSemanticMemoryCandidates,
 } from "@effect-agent/core";
+import { Principal } from "@effect-agent/thread";
 import { Clock, Context, Effect, Encoding, Schema } from "effect";
 
 export class MemoryRpcError extends Schema.TaggedError<MemoryRpcError>()("MemoryRpcError", {
@@ -50,7 +51,7 @@ const RequestFields = {
   version: Schema.Literal(1),
   access: MemoryAccess.Wire,
   /** Host-authenticated identity, never copied from model input. The owner still authorizes it. */
-  principal: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
+  principal: Principal,
   deadlineMillis: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
 };
 

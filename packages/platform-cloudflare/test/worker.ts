@@ -39,6 +39,7 @@ import {
   memoryFailpoints,
   memoryCalls,
   memoryAccess,
+  memoryPrincipal,
   memoryRecallLimits,
   MemoryProjects,
 } from "./memory-fixtures.ts";
@@ -274,7 +275,7 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
         const env = yield* WorkerEnvironment;
         const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
           access: memoryAccess(project),
-          principal: "application",
+          principal: memoryPrincipal,
         });
         const write = yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)(encoded);
         const document = yield* client.change({
@@ -295,7 +296,7 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
         const env = yield* WorkerEnvironment;
         const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
           access: memoryAccess(project),
-          principal: "application",
+          principal: memoryPrincipal,
         });
         const lookup = yield* Schema.decodeUnknownEffect(MemoryLookup)(encoded);
         return yield* recallMemory(

@@ -307,7 +307,7 @@ and identity type. Definitions with the same identity fields but different names
 not interchangeable.
 
 ```ts twoslash
-import { MemoryKey, MemoryNamespace } from "@effect-agent/core";
+import { MemoryKey, MemoryNamespace, MemoryScope } from "@effect-agent/core";
 import { MemoryAccess } from "@effect-agent/capabilities";
 import { Schema } from "effect";
 
@@ -325,7 +325,7 @@ declare const session: {
 };
 const conversations = UserConversations.make(session);
 const key = MemoryKey.make({ namespace: conversations, id: "conversation-42" });
-const access = MemoryAccess.make({ namespace: conversations, scope: "private" });
+const access = MemoryAccess.make({ namespace: conversations, scope: MemoryScope.make("private") });
 ```
 
 `make` takes decoded identity values and throws on invalid construction. `decode(unknown)`
@@ -404,7 +404,13 @@ The usual recall budget can omit a replacement that no longer fits. Source failu
 the consumer must explicitly choose any optional fallback.
 
 ```ts twoslash
-import { MemoryContent, MemoryKey, MemoryNamespace, MemoryWriter } from "@effect-agent/core";
+import {
+  MemoryContent,
+  MemoryKey,
+  MemoryNamespace,
+  MemoryScope,
+  MemoryWriter,
+} from "@effect-agent/core";
 import { Effect, Schema } from "effect";
 
 const TeamMemory = MemoryNamespace.define({
@@ -427,7 +433,7 @@ export const correctDiscussion = Effect.fn("correctDiscussion")(function* (
     expectedRevision,
     locator: "chat://engineering/42",
     content,
-    scopes: ["participating-channels"],
+    scopes: [MemoryScope.make("participating-channels")],
   });
 });
 
@@ -539,6 +545,7 @@ import {
   MemoryContent,
   MemoryKey,
   MemoryNamespace,
+  MemoryScope,
   MemoryWrite,
   MemoryWriter,
   ThreadId,
@@ -608,7 +615,7 @@ const apply = Effect.fn("applyDiscussion")(function* (work: PreparedActivity) {
       ...content,
       metadata: { ...content.metadata, sourceRecordDigest: work.recordDigest },
     },
-    scopes: ["dan-approved-chad-and-tim"],
+    scopes: [MemoryScope.make("dan-approved-chad-and-tim")],
   });
   yield* writer.change(command);
 });
@@ -693,6 +700,7 @@ import {
   MemoryKey,
   MemoryNamespace,
   MemoryRecallLimits,
+  MemoryScope,
   SemanticMemoryProfile,
 } from "@effect-agent/core";
 import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
@@ -729,7 +737,7 @@ export const recall = (query: string) =>
           query,
           MemoryAccess.make({
             namespace,
-            scope: "participating-channels",
+            scope: MemoryScope.make("participating-channels"),
           }),
           SemanticQueryLimits.make({
             maxQueryBytes: 8_192,

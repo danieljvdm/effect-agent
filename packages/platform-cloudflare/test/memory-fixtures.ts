@@ -1,6 +1,7 @@
-import type { MemoryLookup } from "@effect-agent/core";
 import {
+  type MemoryLookup,
   MemoryAccess,
+  MemoryScope,
   MemoryMutationFailpoint,
   MemoryMutationFailure,
   MemoryNamespace,
@@ -14,6 +15,7 @@ import {
   MemoryOwnerIdentity,
   MemoryRpcError,
 } from "@effect-agent/storage-cloudflare";
+import { Principal } from "@effect-agent/thread";
 import { Deferred, Effect, Layer, Schema } from "effect";
 import { DurableObjectState } from "effect-cf";
 
@@ -22,8 +24,10 @@ export const MemoryProjects = MemoryNamespace.define({
   version: 1,
   identity: Schema.String,
 });
+export const memoryScope = MemoryScope.make("team");
+export const memoryPrincipal = Principal.make("application");
 export const memoryAccess = (project: string) =>
-  MemoryAccess.make({ namespace: MemoryProjects.make(project), scope: "team" });
+  MemoryAccess.make({ namespace: MemoryProjects.make(project), scope: memoryScope });
 export const memoryRecallLimits = MemoryRecallLimits.make({
   maxSources: 16,
   maxItems: 128,
@@ -45,7 +49,7 @@ export const memoryPut = (
     operationId,
     expectedRevision,
     locator: `memory://${id}`,
-    scopes: ["team"],
+    scopes: [memoryScope],
     content: {
       text,
       attributions: [
@@ -106,7 +110,7 @@ export const memoryAuthorizer = Layer.effect(
               }),
           );
         }
-        if (request.principal !== "application" || request.access.scope !== "team")
+        if (request.principal !== memoryPrincipal || request.access.scope !== memoryScope)
           return yield* MemoryRpcError.make({ reason: "denied" });
       }),
     };

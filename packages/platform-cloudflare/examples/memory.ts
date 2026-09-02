@@ -1,10 +1,11 @@
 import type { MemoryWrite } from "@effect-agent/core";
-import { MemoryAccess, MemoryNamespace } from "@effect-agent/core";
+import { MemoryAccess, MemoryNamespace, MemoryScope } from "@effect-agent/core";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
 } from "@effect-agent/storage-cloudflare";
+import { Principal } from "@effect-agent/thread";
 import { Effect, Layer, Schema } from "effect";
 
 import { MemoryObject, CloudflareMemoryClient } from "../src/memory.ts";
@@ -39,8 +40,8 @@ export const correctProjectMemory = Effect.fn("example.correctProjectMemory")(fu
   write: MemoryWrite<ReturnType<typeof Projects.make>>,
 ) {
   const client = yield* CloudflareMemoryClient.make(
-    MemoryAccess.make({ namespace, scope: "project" }),
-    `tenant:${namespace.identity.tenantId}`,
+    MemoryAccess.make({ namespace, scope: MemoryScope.make("project") }),
+    yield* Schema.decodeUnknownEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
   );
   return yield* client.change(write);
 });

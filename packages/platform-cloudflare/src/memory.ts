@@ -30,6 +30,7 @@ import {
   MemoryRpcLimits,
   type MemoryOwnerFailure,
 } from "@effect-agent/storage-cloudflare";
+import { Principal } from "@effect-agent/thread";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
@@ -61,13 +62,16 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
   Namespace extends MemoryNamespace.Any,
 >(
   access: MemoryAccess<Namespace>,
-  principal: string,
+  principal: Principal,
   rpcLimits: MemoryRpcLimits = defaultMemoryRpcLimits,
 ) {
   const validated = yield* Schema.decodeUnknownEffect(MemoryRpcLimits)(rpcLimits).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
   const bound = yield* Schema.decodeUnknownEffect(MemoryAccess.Wire)(access).pipe(
+    Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
+  );
+  principal = yield* Schema.decodeUnknownEffect(Principal)(principal).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
   const { namespace } = yield* MemoryObjectNamespace;
@@ -171,7 +175,7 @@ export const CloudflareMemoryClient = {
     binding: DurableObjectNamespace<MemoryObjectRpc>,
     options: {
       readonly access: MemoryAccess<Namespace>;
-      readonly principal: string;
+      readonly principal: Principal;
       readonly rpcLimits?: MemoryRpcLimits;
     },
   ) {
@@ -188,7 +192,7 @@ export const CloudflareMemoryClient = {
  */
 export const cloudflareMemoryWriterLayer = (
   access: MemoryAccess,
-  principal: string,
+  principal: Principal,
   limits: MemoryRpcLimits = defaultMemoryRpcLimits,
 ) =>
   Layer.effect(

@@ -1,5 +1,6 @@
 import {
   MemoryNamespace,
+  MemoryScope,
   MemoryConflict,
   MemoryKey,
   MemoryMutationFailpoint,
@@ -49,7 +50,7 @@ const putFor = <Namespace extends MemoryNamespace.Any>(
   operationId: string,
   expectedRevision: string | null,
   text: string,
-  scopes: ReadonlyArray<string> = ["team"],
+  scopes: ReadonlyArray<MemoryScope> = [MemoryScope.make("team")],
 ) =>
   MemoryWrite.make({
     _tag: "Put",
@@ -80,7 +81,7 @@ const put = (
   operationId: string,
   expectedRevision: string | null,
   text: string,
-  scopes: ReadonlyArray<string> = ["team"],
+  scopes: ReadonlyArray<MemoryScope> = [MemoryScope.make("team")],
 ) => putFor(key, operationId, expectedRevision, text, scopes);
 
 const withdraw = (operationId: string, expectedRevision: string) =>
@@ -339,8 +340,11 @@ describe("SQLite memory store", () => {
   it.effect("persists corrections, exact receipts, scopes, and a terminal withdrawal", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const firstPut = put("put-1", null, "prefers tea", ["profile"]);
-        const correction = put("put-2", "1", "prefers coffee", ["private", "profile"]);
+        const firstPut = put("put-1", null, "prefers tea", [MemoryScope.make("profile")]);
+        const correction = put("put-2", "1", "prefers coffee", [
+          MemoryScope.make("private"),
+          MemoryScope.make("profile"),
+        ]);
         const withdrawal = withdraw("withdraw-1", "2");
 
         const initial = yield* Effect.gen(function* () {
@@ -354,7 +358,7 @@ describe("SQLite memory store", () => {
           expect(replayed).toEqual(first);
           expect(yield* reader.get(key)).toEqual(corrected);
           const divergent = yield* writer
-            .change(put("put-1", null, "different command", ["profile"]))
+            .change(put("put-1", null, "different command", [MemoryScope.make("profile")]))
             .pipe(Effect.flip);
           expect(divergent).toEqual(MemoryOperationConflict.make({ key, operationId: "put-1" }));
           return { first, corrected };
@@ -747,8 +751,10 @@ describe("SQLite memory store", () => {
   it.effect("rejects canonical receipt results forged independently of their commands", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const created = put("forged-created", null, "created", ["created-scope"]);
-        const corrected = put("forged-corrected", "1", "corrected", ["corrected-scope"]);
+        const created = put("forged-created", null, "created", [MemoryScope.make("created-scope")]);
+        const corrected = put("forged-corrected", "1", "corrected", [
+          MemoryScope.make("corrected-scope"),
+        ]);
         const withdrawn = withdraw("forged-withdrawn", "2");
         yield* Effect.gen(function* () {
           const writer = yield* MemoryWriter;

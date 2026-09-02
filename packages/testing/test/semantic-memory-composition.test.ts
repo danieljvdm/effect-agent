@@ -6,6 +6,7 @@ import {
 } from "@effect-agent/capabilities";
 import {
   MemoryNamespace,
+  MemoryScope,
   MemoryKey,
   MemoryWriter,
   SemanticMemoryIndex,
@@ -27,7 +28,7 @@ const TestNamespace = MemoryNamespace.define({
 });
 
 const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
-const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
+const access = MemoryAccess.make({ namespace: key.namespace, scope: MemoryScope.make("channel") });
 const profile = SemanticMemoryProfile.make({
   version: 1,
   provider: "deterministic-port-fixture",
