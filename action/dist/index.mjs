@@ -45508,6 +45508,7 @@ class ReviewUsage extends exports_Schema.Class("@effect-agent/pr-review/ReviewUs
 
 class ReviewCostSnapshot extends exports_Schema.Class("@effect-agent/pr-review/ReviewCostSnapshot")({
   stopped: exports_Schema.Boolean,
+  inputLimitExceeded: exports_Schema.optionalKey(exports_Schema.Literal(true)),
   modelCalls: exports_Schema.Natural,
   usage: ReviewUsage
 }) {
@@ -45783,7 +45784,8 @@ var makeReviewer = (options3) => {
       }).pipe(exports_Effect.provide(recordingLayer(batch)), exports_Effect.result);
       const saved = yield* exports_Ref.get(recorded);
       const cost2 = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
-      const preserveAttempt = cost2?.stopped === true || (cost2?.modelCalls ?? 0) > 0 || saved.length > 0;
+      const inputLimitExceeded = cost2?.inputLimitExceeded === true || exports_Result.isFailure(result4) && result4.failure._tag === "ContextBudgetError";
+      const preserveAttempt = inputLimitExceeded || cost2?.stopped === true || (cost2?.modelCalls ?? 0) > 0 || saved.length > 0;
       if (exports_Result.isFailure(result4) && !preserveAttempt) {
         return yield* result4.failure;
       }
@@ -45807,7 +45809,7 @@ var makeReviewer = (options3) => {
         }
       }
       const incomplete2 = exports_Result.isFailure(result4) || exports_Result.isFailure(submitted) || combined2.length > 24 || result4.success.output.incomplete === true;
-      const exhausted2 = cost2?.stopped === true ? "cost" : exports_Result.isSuccess(result4) ? result4.success.exhausted : undefined;
+      const exhausted2 = inputLimitExceeded ? "tokens" : cost2?.stopped === true ? "cost" : exports_Result.isSuccess(result4) ? result4.success.exhausted : undefined;
       yield* exports_Ref.set(recorded, combined2.slice(0, 24));
       return {
         incomplete: incomplete2,
@@ -51476,6 +51478,7 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
   }
   const state = yield* exports_Ref.make({
     stopped: false,
+    inputLimitExceeded: false,
     closed: false,
     modelCalls: 0,
     pending: new Map,
@@ -51543,6 +51546,12 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
     }, options3.cacheKey);
     const inputTokens = yield* count2(payload).pipe(exports_Effect.catch(() => refuse("Unable to count the review input before paid inference.")));
     if (inputTokens > MAX_INPUT_TOKENS) {
+      yield* exports_Ref.update(state, (current2) => ({ ...current2, inputLimitExceeded: true }));
+      yield* exports_Effect.logInfo("Review input-token limit reached before dispatch", {
+        modelCalls: before.modelCalls,
+        inputTokens,
+        inputTokenLimit: MAX_INPUT_TOKENS
+      });
       return yield* refuse("The counted review input exceeds the 128,000-token price boundary.");
     }
     const requestedOutputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
@@ -51646,6 +51655,7 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
   const costControl = {
     snapshot: exports_Effect.map(exports_Ref.get(state), (current) => ReviewCostSnapshot.make({
       stopped: current.stopped,
+      ...current.inputLimitExceeded ? { inputLimitExceeded: true } : {},
       modelCalls: current.modelCalls,
       usage: ReviewUsage.make({
         inputTokens: current.input,
@@ -52129,6 +52139,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     })).pipe(exports_Effect.provideService(ReviewRepository, reviewRepository), exports_Effect.provideService(exports_OpenAiClient.OpenAiClient, provider.client), exports_Effect.onExit(() => provider.costControl.snapshot.pipe(exports_Effect.flatMap((snapshot3) => exports_Effect.logInfo("Review accounting totals", {
       modelCalls: snapshot3.modelCalls,
       costLimited: snapshot3.stopped,
+      inputLimited: snapshot3.inputLimitExceeded === true,
       ...snapshot3.usage,
       costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD
     })))));

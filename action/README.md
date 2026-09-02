@@ -92,6 +92,12 @@ reasoning. Admission never assumes a cache hit. The ledger releases unused reser
 validating the response's usage, model, tier, and counted bounds. Failed, interrupted, or unmetered
 requests retain their possible charge; the transport does not automatically retry them.
 
+Character admission does not guarantee a token fit. If the engine's context estimate or the
+provider's exact count exceeds the input limit, the Action publishes an incomplete token-budget
+result, preserves earlier findings, and lists batches that never started as unreviewed. A refusal
+before the first model call reports zero spend and reserves nothing. The attempt stops without
+truncating patches or retrying paid inference.
+
 The non-inference token count has a 10-second timeout per attempt and retries at most once for
 timeouts, transport failures, or HTTP 408, 429, 500, 502, 503, and 504. Other HTTP failures and
 malformed counts fail immediately. Exhausted preflight fails closed before spending admission;

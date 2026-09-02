@@ -741,6 +741,7 @@ export const reviewActionProgram = Effect.gen(function* () {
               Effect.logInfo("Review accounting totals", {
                 modelCalls: snapshot.modelCalls,
                 costLimited: snapshot.stopped,
+                inputLimited: snapshot.inputLimitExceeded === true,
                 ...snapshot.usage,
                 costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
               }),

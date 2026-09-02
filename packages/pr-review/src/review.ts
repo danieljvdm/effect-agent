@@ -129,7 +129,10 @@ export class ReviewUsage extends Schema.Class<ReviewUsage>("@effect-agent/pr-rev
 export class ReviewCostSnapshot extends Schema.Class<ReviewCostSnapshot>(
   "@effect-agent/pr-review/ReviewCostSnapshot",
 )({
+  /** Spending admission stopped; distinct from the per-request input-token limit. */
   stopped: Schema.Boolean,
+  /** The host refused a counted input before paid inference. */
+  inputLimitExceeded: Schema.optionalKey(Schema.Literal(true)),
   /** Admitted provider attempts, including failed or still-unmetered requests. */
   modelCalls: Schema.Natural,
   usage: ReviewUsage,
@@ -142,6 +145,7 @@ export class ReviewCostSnapshot extends Schema.Class<ReviewCostSnapshot>(
  * Supplying it replaces the cumulative token quota with the host's admission;
  * per-context, turn, tool, and duration limits still apply. Accounted attempts
  * return incomplete outcomes on expected failure, even without findings.
+ * Input-token refusals also return incomplete outcomes without a paid attempt.
  * Capped hosts own model-visible spending feedback at their provider boundary;
  * the reviewer's generic turn/tool status is disabled for these runs.
  */
@@ -496,8 +500,14 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         const saved = yield* Ref.get(recorded);
         const cost =
           options.costControl === undefined ? undefined : yield* options.costControl.snapshot;
+        const inputLimitExceeded =
+          cost?.inputLimitExceeded === true ||
+          (Result.isFailure(result) && result.failure._tag === "ContextBudgetError");
         const preserveAttempt =
-          cost?.stopped === true || (cost?.modelCalls ?? 0) > 0 || saved.length > 0;
+          inputLimitExceeded ||
+          cost?.stopped === true ||
+          (cost?.modelCalls ?? 0) > 0 ||
+          saved.length > 0;
         if (Result.isFailure(result) && !preserveAttempt) {
           return yield* result.failure;
         }
@@ -532,8 +542,9 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           Result.isFailure(submitted) ||
           combined.length > 24 ||
           result.success.output.incomplete === true;
-        const exhausted: ReviewOutcome["exhausted"] =
-          cost?.stopped === true
+        const exhausted: ReviewOutcome["exhausted"] = inputLimitExceeded
+          ? "tokens"
+          : cost?.stopped === true
             ? "cost"
             : Result.isSuccess(result)
               ? result.success.exhausted

@@ -85,6 +85,9 @@ disclosed separately and do not by themselves mark the admitted patches unfinish
 complete result is not proof that the repository is defect-free.
 With `costControl`, an accounted provider attempt also returns an incomplete outcome after an
 expected failure, even without findings, so hosts can publish its usage and outstanding charges.
+An engine context-limit failure or the host's
+`costControl.snapshot.inputLimitExceeded` returns an incomplete `exhausted: "tokens"` outcome,
+even before any paid attempt. Batches that never started remain in `pendingPaths`.
 Otherwise failures without recorded findings remain typed. Defects and interruption still
 propagate, and these records belong to the current run's Scope, not persistent storage.
 The report retains recorded findings before adding newly submitted findings, removes exact

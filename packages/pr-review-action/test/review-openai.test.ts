@@ -1289,6 +1289,79 @@ describe("review provider boundary", () => {
       }),
   );
 
+  it.effect.each(["estimate", "count", "after-finding"] as const)(
+    "preserves an input-token refusal at %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const recorded = mode === "after-finding";
+        const densePatch = request.changes[0]!.patch.padEnd(
+          256_000,
+          mode === "estimate" ? "漢" : "a漢a",
+        );
+        const input = ReviewRequest.make({
+          ...request,
+          changes: [
+            ReviewChange.make({ path: finding.path, patch: densePatch }),
+            ReviewChange.make({ path: "src/later.ts", patch: "@@ -0,0 +1 @@\n+later" }),
+          ],
+        });
+        let counts = 0;
+        let sends = 0;
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens")) {
+                counts += 1;
+                expect(JSON.stringify(decodeWire(httpRequest).input)).toContain(
+                  densePatch.slice(-100),
+                );
+                return json(httpRequest, {
+                  object: "response.input_tokens",
+                  input_tokens: recorded && sends === 0 ? 128_000 : 128_001,
+                });
+              }
+              sends += 1;
+              return sse(httpRequest, sends, [record], rawUsage(100_000, 1_000));
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "input-token-limit",
+        });
+        const result = yield* makeReviewer({ model, costControl: provider.costControl })
+          .review(input)
+          .pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+            Effect.provideService(ReviewRepository, repository),
+          );
+
+        expect(sends).toBe(recorded ? 1 : 0);
+        expect(counts).toBe(mode === "estimate" ? 0 : recorded ? 2 : 1);
+        expect(result).toMatchObject({
+          incomplete: true,
+          exhausted: "tokens",
+          turns: sends,
+          pendingPaths: recorded ? ["src/later.ts"] : [finding.path, "src/later.ts"],
+          usage: { estimatedCostMicrousd: recorded ? 520_000 : 0, reservedCostMicrousd: 0 },
+        });
+        expect(result.report.findings.map(({ title }) => title)).toEqual(
+          recorded ? [finding.title] : [],
+        );
+        expect(result.resolutions).toBeUndefined();
+        expect(
+          reviewPublicationFailure({
+            blockingFindings: 0,
+            unreviewedPaths: result.pendingPaths?.length ?? 0,
+            unresolvedChangeRequests: 0,
+            exhausted: result.exhausted,
+            incomplete: result.incomplete,
+          }),
+        ).toMatchObject({ _tag: "IncompleteReview" });
+      }),
+  );
+
   it.effect.each(["http", "stream-eof", "timeout", "malformed-count"] as const)(
     "preserves an unmetered review after %s while leaving pre-dispatch failures typed",
     (failure) =>
