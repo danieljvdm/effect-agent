@@ -28,11 +28,13 @@ Before 1.0, APIs and stored data may change without a migration path.
 | Run generated JavaScript               | [Code Mode](../guide/code-mode)                                 | Read-only tools and an isolated executor           |
 | Run trusted local commands             | [Sandbox execution](../guide/sandbox)                           | Executable, environment, output and time limits    |
 | Capture, crawl, or interact with pages | [Browser tools](../guide/browser)                               | Browser binding or credentials, target policy      |
+| Call tools on an MCP server            | [MCP servers](../guide/tools#mcp)                               | Transport, `HttpClient` or process spawner, bounds |
 
 ### Limits and unsupported features {#compaction-and-unsupported-capabilities}
 
-MCP validates connections and tool discovery through `McpConnector` and `connectMcp`.
-Your application implements the transport and remote handlers; no stdio or HTTP client is bundled.
+[MCP servers](../guide/tools#mcp) connect through `McpClient.layer` over Streamable HTTP or stdio;
+`connectMcp` bounds discovery and returns dynamic tools. Server-initiated sampling, elicitation,
+resources, and prompts are not served.
 
 Nested delegation, handoff, detached subagents, runtime Skills, a framework-owned memory
 extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
