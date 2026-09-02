@@ -9,7 +9,7 @@ vp run semantic-memory-eval --offline --output /tmp/kom18-evaluation-offline.jso
 
 The first command may download the exact pinned fp32 model revision into `/tmp/effect-agent-semantic-model`. The offline command proves that the cached files are sufficient. `--cache`, `--output`, `--offline`, `--environment`, and `--git-revision` are explicit CLI inputs.
 
-The corpus contains 20 documents and 16 queries. Its labels, the lexical overlap rule, semantic top-three limit, and 0.35 score threshold were fixed before embeddings were run. The evaluator first commits each source through the canonical SQLite Thread store, processes committed activity into the SQLite `MemoryWriter`, and indexes the initial version. It then applies real corrections and withdrawals, probes the stale index through authoritative filtering, refreshes the index, and runs three methods through the same `recallMemory` bounds.
+The corpus contains 20 documents and 16 queries. Its labels, the lexical overlap rule, semantic top-three limit, and 0.35 score threshold were fixed before embeddings were run. The evaluator first commits each source through the canonical SQLite Thread store, processes committed activity into the SQLite `MemoryWriter`, and indexes the initial version. It then applies real corrections and withdrawals, probes the stale index through authoritative filtering, refreshes the index, and runs three methods through the same `Memory.recall` bounds.
 
 - Explicit locator loading accepts one exact `memory://evaluation/<id>` locator. Natural-language input returns `NoMatch`.
 - Lexical retrieval counts shared lowercased letter-or-number terms and breaks ties by source ID.

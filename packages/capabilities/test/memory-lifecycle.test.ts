@@ -1,5 +1,6 @@
 import {
   MemoryNamespace,
+  MemoryScope,
   ActiveMemoryDocument,
   MemoryAttribution,
   MemoryContent,
@@ -24,7 +25,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 
-import { MemoryAccess, recallMemory, revalidateMemoryLookup } from "../src/index.ts";
+import { MemoryAccess, Memory, revalidateMemoryLookup } from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",
@@ -35,7 +36,7 @@ const TestNamespace = MemoryNamespace.define({
 const key = MemoryKey.make({ namespace: TestNamespace.make("team-a"), id: "queue-discussion" });
 const access = MemoryAccess.make({
   namespace: TestNamespace.make("team-a"),
-  scope: "participating-channels",
+  scope: MemoryScope.make("participating-channels"),
 });
 const document = ActiveMemoryDocument.make({
   version: 1,
@@ -78,7 +79,7 @@ const limits = MemoryRecallLimits.make({
 });
 
 const recall = (lookup = candidates) =>
-  recallMemory(
+  Memory.recall(
     [
       {
         id: "stale-cache",
@@ -119,7 +120,7 @@ describe("authoritative memory validation", () => {
             },
           }),
         );
-        const result = yield* recallMemory(
+        const result = yield* Memory.recall(
           accesses.map((bound, index) => ({
             id: `reader-${index}`,
             essential: true,
@@ -371,7 +372,7 @@ describe("authoritative memory validation", () => {
             () => Ref.update(releases, (n) => n + 1),
           ),
         );
-        const fiber = yield* recallMemory(
+        const fiber = yield* Memory.recall(
           [
             {
               id: "slow-view",

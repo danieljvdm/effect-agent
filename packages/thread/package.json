@@ -18,7 +18,8 @@
     "./history": "./src/history.ts",
     "./durability": "./src/durability.ts",
     "./testing": "./src/testing.ts",
-    "./github": "./src/github-workflow-source.ts"
+    "./github": "./src/github-workflow-source.ts",
+    "./sql-memory": "./src/sql-memory-store.ts"
   },
   "publishConfig": {
     "access": "public"

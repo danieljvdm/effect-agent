@@ -36,7 +36,7 @@ Your application implements the transport and remote handlers; no stdio or HTTP 
 
 Nested delegation, handoff, detached subagents, runtime Skills, a framework-owned memory
 extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
-Applications own domain state. `recallMemory` reads bounded passages from sources they select; it
+Applications own domain state. `Memory.recall` reads bounded passages from sources they select; it
 does not store them. Thread history and compaction summaries do not replace application state.
 
 Automatic compaction uses `ContextCompactor`. The separate
@@ -56,7 +56,8 @@ Provider clients, storage, hosts, sandbox adapters, and testing remain separate 
 
 ### `@effect-agent/core`
 
-Agent definitions and bindings, schemas, identifiers, errors, and run events.
+Agent definitions and bindings, schemas, identifiers, errors, and run events. Shared memory
+contracts and `Memory.recall` compose host-selected readers without a storage or platform dependency.
 Start with `Agent`, `AgentPolicy`, and `IdGenerator`.
 
 ### `@effect-agent/engine`
@@ -73,8 +74,8 @@ recovered tool failures locally. Observations are not stored or exported automat
 
 ### `@effect-agent/capabilities`
 
-Adds thread queues, approval, audit, budgets, context utilities, bounded `recallMemory`, scheduling
-overrides, MCP, redaction, and subagents to the engine. `recallMemory` reads ranked
+Adds thread queues, approval, audit, budgets, context utilities, scheduling
+overrides, MCP, redaction, and subagents to the engine. Re-exports core's `Memory.recall`, which reads ranked
 `MemoryPassage` values from host-selected sources and returns a transient `RecalledMemory` view;
 it supplies no store. Optional `indexMemorySource` and `querySemanticMemory` use upstream
 Effect AI `EmbeddingModel` with an application-selected index and authoritative reader. See
@@ -151,6 +152,9 @@ Accepts injected Object handles without importing `cloudflare:workers`.
 Rejects incompatible stored versions; `CurrentDoStorageVersion` identifies the supported version.
 Failpoints and eviction helpers are in `@effect-agent/storage-cloudflare/testing`.
 
+`doMemoryStoreLayer` supplies optional memory ports using storage-backed SQLite transactions.
+The separate memory protocol defines bounded batch requests, responses, and typed errors.
+
 ### `@effect-agent/platform-cloudflare`
 
 Assembles the durable host, RPC client, alarms, and Code Mode executor.
@@ -158,6 +162,9 @@ See the [Cloudflare guide](../platforms/cloudflare) for bindings, service lifeti
 The [Code Mode guide](../guide/code-mode#run-generated-code-on-cloudflare) covers the independent
 Dynamic Worker executor and Worker Loader binding.
 `ThreadObject.Options.toolFailureObserver` installs a local tool-failure observer.
+
+`MemoryObject.make` and `CloudflareMemoryClient` share namespace-owned memory across
+Threads, with one authoritative batch RPC per recall. See [shared memory](../platforms/cloudflare#shared-memory).
 
 Browser adapters use separate imports:
 

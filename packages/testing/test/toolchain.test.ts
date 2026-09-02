@@ -98,6 +98,7 @@ const privatePackageNames = ["pr-review-action"] as const;
 const providerConsumingPackages = new Set<string>();
 const exampleNames = [
   "browser-run-worker-proof",
+  "cloudflare-memory",
   "code-mode-cloudflare",
   "demo",
   "pr-work-order-ingress",

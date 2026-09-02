@@ -6,6 +6,10 @@ import { MemoryContent, MemorySourceReference } from "./memory.ts";
 const Identity = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 
+/** Host-defined recall visibility label. A scope identifies access policy; it does not grant it. */
+export const MemoryScope = Identity.pipe(Schema.brand("@effect-agent/core/MemoryScope"));
+export type MemoryScope = typeof MemoryScope.Type;
+
 /** A host-selected namespace prevents accidental cross-tenant document lookup. */
 class MemoryKeyWire extends Schema.Class<MemoryKeyWire>("@effect-agent/core/MemoryKey")({
   namespace: MemoryNamespace.Any,
@@ -28,7 +32,7 @@ const KnownSource = Schema.Struct({
   ...MemorySourceReference.fields,
   revision: Identity,
 });
-const AccessScopes = Schema.Array(Identity).check(
+const AccessScopes = Schema.Array(MemoryScope).check(
   Schema.isMaxLength(128),
   Schema.makeFilter((scopes) => new Set(scopes).size === scopes.length, {
     expected: "unique access scopes",

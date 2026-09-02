@@ -1,4 +1,4 @@
 interface:
-  display_name: "Open Pull Request"
-  short_description: "Open PRs with concise, useful descriptions"
-  default_prompt: "Use $open-pull-request to prepare and open a pull request with a description proportional to the change."
+  display_name: "Pull Requests"
+  short_description: "Open PRs with short summaries and useful visuals"
+  default_prompt: "Use $open-pull-request to prepare this PR with a brief summary and a screenshot or video when useful."

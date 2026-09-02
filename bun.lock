@@ -64,6 +64,29 @@
         "wrangler": "catalog:",
       },
     },
+    "examples/cloudflare-memory": {
+      "name": "@effect-agent/example-cloudflare-memory",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/capabilities": "workspace:*",
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect-agent/storage-cloudflare": "workspace:*",
+        "@effect-agent/thread": "workspace:*",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+        "effect-cf": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "catalog:",
+        "@types/node": "catalog:",
+        "esbuild": "catalog:",
+        "miniflare": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+        "wrangler": "catalog:",
+      },
+    },
     "examples/code-mode-cloudflare": {
       "name": "@effect-agent/example-code-mode-cloudflare",
       "version": "0.0.0",
@@ -439,6 +462,7 @@
       "name": "@effect-agent/storage-cloudflare",
       "version": "0.1.0-beta.40",
       "dependencies": {
+        "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
@@ -817,6 +841,8 @@
     "@effect-agent/engine": ["@effect-agent/engine@workspace:packages/engine"],
 
     "@effect-agent/example-browser-run-worker-proof": ["@effect-agent/example-browser-run-worker-proof@workspace:examples/browser-run-worker-proof"],
+
+    "@effect-agent/example-cloudflare-memory": ["@effect-agent/example-cloudflare-memory@workspace:examples/cloudflare-memory"],
 
     "@effect-agent/example-code-mode-cloudflare": ["@effect-agent/example-code-mode-cloudflare@workspace:examples/code-mode-cloudflare"],
 

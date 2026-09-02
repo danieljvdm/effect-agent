@@ -80,7 +80,7 @@ Transforms change the model prompt, not stored input or history. Use
 
 ## Recall application-owned sources {#recall-memory}
 
-`recallMemory` turns readable, application-selected sources into a bounded transient model view.
+`Memory.recall` turns readable, application-selected sources into a bounded transient model view.
 The framework does not own a memory database, write recalled material, or build an embedding
 index. An Agent that does not need context loading requires no context service, memory reader,
 or store. `RunContextPreparationPassthrough` remains available to explicitly disable inherited
@@ -104,7 +104,7 @@ unknown.
 This source reads a known Markdown note without a store or adapter:
 
 ```ts twoslash
-import { recallMemory } from "@effect-agent/capabilities";
+import { Memory } from "@effect-agent/capabilities";
 import {
   MemoryAttribution,
   MemoryContent,
@@ -156,7 +156,7 @@ const lookup: MemoryLookup = { _tag: "Found", passages: [note] };
 
 export const projectNotes: RunTransientContextHook<MemoryRecallError> = {
   load: () =>
-    recallMemory(
+    Memory.recall(
       [{ id: "project-notes", essential: true, read: Effect.succeed(lookup) }],
       limits,
     ).pipe(
@@ -196,7 +196,7 @@ and `RunOptions.transientContext` hooks override the corresponding service field
 Other service fields remain active. Attached children inherit the host context service, not the
 parent's per-Run overrides.
 
-`recallMemory` renders positional `memory:N` reference IDs and provenance for that one result.
+`Memory.recall` renders positional `memory:N` reference IDs and provenance for that one result.
 `RecalledMemory.outcomes` separately reports what happened at each source. The rendered envelope
 and every citation remain untrusted model input. Validate model claims against
 `RecalledMemory.passages` before presenting them as sourced facts.
@@ -230,7 +230,7 @@ Keep authorization, credentials, and query policy inside an application service.
 one read method; it does not create a durable copy, write to the corpus, or create embeddings:
 
 ```ts twoslash
-import { recallMemory } from "@effect-agent/capabilities";
+import { Memory } from "@effect-agent/capabilities";
 import { type MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "@effect-agent/core";
 import { RunContextPreparation, type RunTransientContextHook } from "@effect-agent/engine";
 import { Context, Effect, Layer } from "effect";
@@ -257,7 +257,7 @@ export const ExternalCorpusMemoryLive = Layer.effect(
     const corpus = yield* ExternalCorpus;
     const transientContext: RunTransientContextHook<MemoryRecallError> = {
       load: () =>
-        recallMemory(
+        Memory.recall(
           [
             {
               id: "team-corpus",
@@ -307,7 +307,7 @@ and identity type. Definitions with the same identity fields but different names
 not interchangeable.
 
 ```ts twoslash
-import { MemoryKey, MemoryNamespace } from "@effect-agent/core";
+import { MemoryKey, MemoryNamespace, MemoryScope } from "@effect-agent/core";
 import { MemoryAccess } from "@effect-agent/capabilities";
 import { Schema } from "effect";
 
@@ -325,7 +325,7 @@ declare const session: {
 };
 const conversations = UserConversations.make(session);
 const key = MemoryKey.make({ namespace: conversations, id: "conversation-42" });
-const access = MemoryAccess.make({ namespace: conversations, scope: "private" });
+const access = MemoryAccess.make({ namespace: conversations, scope: MemoryScope.make("private") });
 ```
 
 `make` takes decoded identity values and throws on invalid construction. `decode(unknown)`
@@ -387,7 +387,7 @@ corpus into a framework store.
 The host selects a namespace and access scope. A document explicitly lists the scopes allowed to
 recall it; an empty list grants none. No scope name, shared persona, channel, or DM is enabled by
 default. Call `revalidateMemoryLookup(candidates, access, limits)` inside the reader supplied to
-`recallMemory`, immediately before composition. It requires only `MemoryReader`. The optional
+`Memory.recall`, immediately before composition. It requires only `MemoryReader`. The optional
 third argument accepts `maxInputBytes` from the recall limits, defaulting to 16 MiB and capped
 at 64 MiB. Revalidation reads one authoritative source at a time and checks aggregate UTF-8
 replacement JSON before retaining it, including duplicate passages. Exceeding this bound fails
@@ -404,7 +404,13 @@ The usual recall budget can omit a replacement that no longer fits. Source failu
 the consumer must explicitly choose any optional fallback.
 
 ```ts twoslash
-import { MemoryContent, MemoryKey, MemoryNamespace, MemoryWriter } from "@effect-agent/core";
+import {
+  MemoryContent,
+  MemoryKey,
+  MemoryNamespace,
+  MemoryScope,
+  MemoryWriter,
+} from "@effect-agent/core";
 import { Effect, Schema } from "effect";
 
 const TeamMemory = MemoryNamespace.define({
@@ -427,7 +433,7 @@ export const correctDiscussion = Effect.fn("correctDiscussion")(function* (
     expectedRevision,
     locator: "chat://engineering/42",
     content,
-    scopes: ["participating-channels"],
+    scopes: [MemoryScope.make("participating-channels")],
   });
 });
 
@@ -492,6 +498,8 @@ units. `memoryStoreLayerWithFailpoints` accepts a `MemoryMutationFailpoint` serv
 and lost-acknowledgement tests. Replayed receipts must match their original command's predecessor,
 result kind, content, locator, scopes, and withdrawal reason; mismatches fail as corrupt data.
 Recall and validation helpers add named Effect spans without source text or metadata annotations.
+For shared Worker memory, use the [Cloudflare memory owner](../platforms/cloudflare#shared-memory).
+It validates an entire candidate batch locally and returns one attributed response over one RPC.
 `RecalledMemory.outcomes` reports source availability and selected, deduplicated, and omitted counts;
 the host decides which diagnostics to retain and who can inspect them.
 
@@ -537,6 +545,7 @@ import {
   MemoryContent,
   MemoryKey,
   MemoryNamespace,
+  MemoryScope,
   MemoryWrite,
   MemoryWriter,
   ThreadId,
@@ -606,7 +615,7 @@ const apply = Effect.fn("applyDiscussion")(function* (work: PreparedActivity) {
       ...content,
       metadata: { ...content.metadata, sourceRecordDigest: work.recordDigest },
     },
-    scopes: ["dan-approved-chad-and-tim"],
+    scopes: [MemoryScope.make("dan-approved-chad-and-tim")],
   });
   yield* writer.change(command);
 });
@@ -685,12 +694,13 @@ import {
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  recallMemory,
+  Memory,
 } from "@effect-agent/capabilities";
 import {
   MemoryKey,
   MemoryNamespace,
   MemoryRecallLimits,
+  MemoryScope,
   SemanticMemoryProfile,
 } from "@effect-agent/core";
 import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
@@ -718,7 +728,7 @@ export const refresh = (key: MemoryKey<typeof namespace>) =>
   );
 
 export const recall = (query: string) =>
-  recallMemory(
+  Memory.recall(
     [
       {
         id: "team-semantic",
@@ -727,7 +737,7 @@ export const recall = (query: string) =>
           query,
           MemoryAccess.make({
             namespace,
-            scope: "participating-channels",
+            scope: MemoryScope.make("participating-channels"),
           }),
           SemanticQueryLimits.make({
             maxQueryBytes: 8_192,
@@ -753,9 +763,13 @@ Provide the same index instance, `MemoryReader`, and native `EmbeddingModel` to 
 Refresh also requires Effect `Crypto`. The provider Layer owns its resources; the index belongs
 to its Layer's Scope. Captured index methods fail after that Scope closes. Put `recall` in the
 transient-context hook above. The final envelope, including attribution and citations, must fit
-`recallMemory`'s item, UTF-8 byte, and token limits; the engine separately admits the full prompt.
+`Memory.recall`'s item, UTF-8 byte, and token limits; the engine separately admits the full prompt.
 `essential: false` permits explicitly returned unavailable outcomes. It does not swallow errors.
 Map only intended expected failures to an `Unavailable` lookup in application policy.
+`SemanticQueryLimits.maxOutputBytes` bounds aggregate UTF-8 JSON passage output before retention,
+including repeated attribution and metadata. It defaults to 16 MiB, accepts at most 64 MiB, and
+fails with `SemanticMemoryError` reason `budget`. Source-byte limits count each distinct source
+once; they do not substitute for this output bound or the final rendered recall limits.
 
 Chunking greedily packs complete Unicode codepoints up to `maxChunkBytes`. It neither summarizes
 nor silently drops a source suffix. Chunk IDs include a digest of the whole profile and the
@@ -962,7 +976,7 @@ stores, and applies the artifact.
 
 `RetainedFact` values remain artifact metadata. They do not enter the prompt or a separate memory
 store automatically. This path is separate from `ContextCompactor`; the interpreter does not call
-`applyCompaction`. `recallMemory` is the optional read path for application-owned sources; it does
+`applyCompaction`. `Memory.recall` is the optional read path for application-owned sources; it does
 not persist passages or turn compaction artifacts into memory.
 
 ## Track usage {#observing-usage}
