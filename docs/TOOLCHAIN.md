@@ -264,6 +264,28 @@ The remaining-workspace job includes every other package and runs one package ta
 The verified generated Changesets PR uses the release flow above.
 Explicit `@effect-agent review` comments still request review.
 
+PR Review uses `pull_request_target` and runs only trusted default-branch code.
+Fork reviews wait for approval before checkout, token creation, or model execution.
+Open the PR Review run from the PR's checks, select **Review deployments**, select
+`pr-review-forks`, then **Approve and deploy**. GitHub uses deployment wording for
+this approval gate, but the job does not deploy anything or create deployment records.
+Approving an ordinary fork workflow does not grant it repository secrets.
+
+Before enabling this workflow, configure **Settings → Environments → pr-review-forks**
+with repository maintainers as required reviewers. The current reviewer is `danieljvdm`;
+update this list when maintainers change. Allow self-review so a maintainer can approve
+their own fork PR. Keep this environment and its required-reviewer rule in place;
+a missing environment is automatically created without protection by GitHub.
+The separate `pr-review` environment has no approval requirement and is used for
+same-repository PRs and authorized review comments. Both environments use
+`deployment: false` to avoid adding review runs to deployment history.
+
+Each fork PR update requires approval. The Action's expected-head check skips an
+approved run if its PR head has since changed. Comment-triggered reviews retain their
+existing maintainer authorization and do not require a second approval. Never check
+out, install dependencies from, or execute the PR head in this secret-bearing workflow;
+the reviewer reads untrusted source through GitHub's API instead.
+
 Each test-matrix job has its own task-cache key. Successful task results are saved even when
 another task fails. Main pushes run static checks, tests, and builds to populate shared caches
 and validate Action releases. The `ready` fan-in runs only on PRs. Main runs are not cancelled

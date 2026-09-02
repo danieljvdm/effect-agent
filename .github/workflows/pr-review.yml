@@ -1,10 +1,12 @@
 name: PR Review
 
 on:
-  pull_request:
+  # Run trusted code with repository secrets, including for fork PRs. The
+  # pr-review-forks environment requires maintainer approval before any step.
+  pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
-    # Match CI's generated-release filter before GitHub creates a run that
-    # needs approval. The Release workflow owns the release PR's ready check.
+    # Match CI's generated-release filter. The Release workflow owns the
+    # release PR's ready check.
     paths-ignore:
       - ".changeset/**"
       - "bun.lock"
@@ -15,8 +17,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
 
 concurrency:
   group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
@@ -25,7 +25,7 @@ concurrency:
 jobs:
   review:
     if: >-
-      (github.event_name == 'pull_request' && !github.event.pull_request.draft) ||
+      (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
         (github.event.comment.author_association == 'OWNER' ||
          github.event.comment.author_association == 'MEMBER' ||
@@ -33,11 +33,18 @@ jobs:
         startsWith(github.event.comment.body, '@effect-agent review'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      # Configure required reviewers in repository settings before enabling
+      # this workflow. Same-repository PRs and authorized comments need no gate.
+      name: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository && 'pr-review-forks' || 'pr-review' }}
+      deployment: false
     steps:
       - name: Check out the trusted review channel
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # Never check out or execute PR-head code in this privileged job.
           ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
       - name: Mint the Effect Agent GitHub App token
         id: app-token
@@ -56,7 +63,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           pull-request: ${{ github.event.pull_request.number || github.event.issue.number }}
           review-author: effect-agent[bot]
-          mode: ${{ github.event_name == 'pull_request' && 'auto' || 'incremental' }}
+          mode: ${{ github.event_name == 'pull_request_target' && 'auto' || 'incremental' }}
           command: ${{ github.event_name == 'issue_comment' && github.event.comment.body || '' }}
           comment-id: ${{ github.event.comment.id || 0 }}
           automatic-review-limit: 5
