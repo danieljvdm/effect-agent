@@ -25,6 +25,7 @@ import {
   decodeThreadId,
   holdScheduleAuthorizationFailures,
   observedCommittedPrepareBeforeEviction,
+  observeScheduleIdle,
   observeSchedulePolicyResources,
   plannerDefinition,
 } from "./fixtures.ts";
@@ -94,14 +95,6 @@ const snapshotFor = (data: ReturnType<typeof fixture>) =>
 
       return yield* client.get(data.scope, data.scheduleId);
     }),
-  );
-
-const runAlarmExit = (owner: ScheduleOwner) =>
-  Effect.runPromise(
-    Effect.tryPromise({
-      try: () => runDurableObjectAlarm(scheduleStubFor(owner)),
-      catch: () => "alarm-failed" as const,
-    }).pipe(Effect.exit),
   );
 
 const runAlarmDirectExit = (owner: ScheduleOwner) =>
@@ -434,26 +427,26 @@ describe("Cloudflare Schedule Owner", () => {
 
   it("recovers after admission succeeds but the Schedule Owner incarnation loses the reply", async () => {
     const data = fixture("lost-reply");
+    const idle = observeScheduleIdle(data.owner);
+    // Eviction is consumed before this gate, so only the replacement can reach it.
+    const admissionGate = armScheduleAdmissionPause(data.owner);
 
     armScheduleAdmissionEviction(data.owner);
     await manage(data, Date.now(), "survive owner eviction after admission");
 
-    await runAlarmExit(data.owner);
+    await admissionGate.reached;
+    const pending = await snapshotFor(data);
+
+    expect(pending.pending).not.toBeNull();
+    expect(pending.lastReceipt).toBeNull();
+    expect(await laneRows(data.thread)).toHaveLength(1);
     expect(await alarmRows(data.owner)).toHaveLength(1);
 
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await Effect.runPromise(Effect.sleep("110 millis"));
-      await runAlarmExit(data.owner);
-      const rows = await laneRows(data.thread);
-
-      if (rows.length === 1) {
-        const snapshot = await snapshotFor(data);
-
-        if (snapshot.lastReceipt !== null) break;
-      }
-    }
+    admissionGate.release();
+    await idle;
     const recovered = await snapshotFor(data);
 
+    expect(recovered.pending).toBeNull();
     expect(recovered.lastReceipt).not.toBeNull();
     expect(await laneRows(data.thread)).toHaveLength(1);
     expect(await alarmRows(data.owner)).toEqual([]);
@@ -461,24 +454,16 @@ describe("Cloudflare Schedule Owner", () => {
 
   it("recovers a committed pending occurrence after eviction immediately after prepare", async () => {
     const data = fixture("prepare-eviction");
+    const idle = observeScheduleIdle(data.owner);
     const admissionGate = armScheduleAdmissionPause(data.owner);
 
     armScheduleEviction(data.owner, "schedule:prepare:after");
     await manage(data, Date.now(), "recover committed prepare");
-    const alarm = runAlarmExit(data.owner);
-
     await admissionGate.reached;
 
     expect(observedCommittedPrepareBeforeEviction(data.owner)).toBe(true);
     admissionGate.release();
-    await alarm;
-
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await Effect.runPromise(Effect.sleep("20 millis"));
-      const recovered = await snapshotFor(data);
-
-      if (recovered.lastReceipt !== null) break;
-    }
+    await idle;
     const recovered = await snapshotFor(data);
 
     expect(recovered.pending).toBeNull();
@@ -486,18 +471,17 @@ describe("Cloudflare Schedule Owner", () => {
     expect(await laneRows(data.thread)).toHaveLength(1);
   });
 
-  it("keeps a recovery wake through Cloudflare's six native retry attempts", async () => {
+  it("keeps recovery wakes through repeated processing failures", async () => {
     const data = fixture("retry-exhaustion");
+    const idle = observeScheduleIdle(data.owner);
     const authorizationFailures = holdScheduleAuthorizationFailures(data.owner);
 
     await manage(data, Date.now(), "recover beyond bounded native retries");
-    await runAlarmExit(data.owner);
     expect(await authorizationFailures.reached(6)).toBeGreaterThanOrEqual(6);
     expect(await alarmRows(data.owner)).toHaveLength(1);
 
     authorizationFailures.release();
-    await Effect.runPromise(Effect.sleep("110 millis"));
-    await runAlarmExit(data.owner);
+    await idle;
     const recovered = await snapshotFor(data);
 
     expect(recovered.lastReceipt).not.toBeNull();

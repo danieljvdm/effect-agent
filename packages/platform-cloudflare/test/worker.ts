@@ -35,6 +35,7 @@ import {
   registrationDefinitions,
   testRuntimeLayer,
   runtimeEvictionFailpoint,
+  notifyScheduleAlarmCompleted,
   scheduleAuthorizer,
   scheduleFailpoint,
   storageEvictionFailpoint,
@@ -126,7 +127,12 @@ export class TestScheduleOwnerObject extends makeScheduleOwnerObjectClass(schedu
   retryMaxMillis: 100,
   admissionTimeoutMillis: 5_000,
   recoveryPollMillis: 100,
-}) {}
+}) {
+  override async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await super.alarm(alarmInfo);
+    notifyScheduleAlarmCompleted(this.ctx);
+  }
+}
 
 const subscriptionHostLayer = Layer.mergeAll(
   subscriptionAuthorizerLayer,
