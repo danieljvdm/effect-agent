@@ -23,6 +23,7 @@ export const browserRunProtectedBindingLayer = (options: {
     Effect.gen(function* () {
       const lifecycle = yield* BrowserRunSessionLifecycle;
       const crypto = yield* Crypto.Crypto;
+
       const open = Effect.fn("BrowserRunProtectedTransport.open")(function* (
         policy: InteractiveBrowserPolicy,
       ): Effect.fn.Return<ProtectedBrowserTransport, ProtectedBrowserError, Scope.Scope> {
@@ -34,6 +35,7 @@ export const browserRunProtectedBindingLayer = (options: {
             observation: "closed",
             cleanup: "unconfirmed",
           });
+
         let sessionId: Redacted.Redacted<string> | undefined;
         let browser: Browser | undefined;
         let driver: ProtectedBrowserTransport | undefined;
@@ -41,10 +43,12 @@ export const browserRunProtectedBindingLayer = (options: {
         // SDK acquisition may finish after interruption. Its late-reply callback must await cleanup,
         // using this pass's clock rather than starting an Effect runtime with default services.
         const runCleanup = Effect.runPromiseWith(Context.make(Clock.Clock, yield* Clock.Clock));
+
         const terminate = Effect.gen(function* () {
           invalid = true;
           driver?.invalidate();
           if (sessionId === undefined) return "unconfirmed" as const;
+
           const cleanup = yield* lifecycle.close(sessionId).pipe(
             Effect.as("confirmed" as const),
             Effect.catchCause(() => Effect.succeed("unconfirmed" as const)),
@@ -54,17 +58,22 @@ export const browserRunProtectedBindingLayer = (options: {
               orElse: () => Effect.succeed("unconfirmed" as const),
             }),
           );
+
           // Local disconnect is not remote-closure evidence. Do it even when confirmation fails.
           const connected = browser;
+
           if (connected !== undefined)
             yield* Effect.promise(() => connected.disconnect()).pipe(
               Effect.catchCause(() => Effect.void),
               Effect.interruptible,
               Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.void }),
             );
+
           return cleanup;
         });
+
         const close = yield* Effect.cached(terminate);
+
         yield* Effect.addFinalizer(() =>
           close.pipe(
             Effect.flatMap((state) =>
@@ -74,25 +83,32 @@ export const browserRunProtectedBindingLayer = (options: {
             ),
           ),
         );
+
         const acquired = yield* Effect.tryPromise({
           try: async (signal) => {
             let recordingDisabled = false;
+
             const binding = {
               fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
                 const request = new Request(input, init);
                 const url = new URL(request.url);
+
                 if (url.pathname === "/v1/devtools/browser" && request.method === "POST") {
                   url.searchParams.set("recording", "false");
                   recordingDisabled = url.searchParams.get("recording") === "false";
+
                   return options.browser.fetch(new Request(url, request));
                 }
+
                 return options.browser.fetch(request);
               },
             };
+
             const acquired = await puppeteer.acquire(binding, {
               recording: false,
               keep_alive: Math.max(10_000, policy.maxElapsedMillis),
             });
+
             sessionId = Redacted.make(
               Schema.decodeUnknownSync(Schema.String.check(Schema.isUUID()))(acquired.sessionId),
             );
@@ -108,12 +124,15 @@ export const browserRunProtectedBindingLayer = (options: {
             }
             const context = await browser.createBrowserContext();
             const page = await context.newPage();
+
             await page.setBypassServiceWorker(true);
             await page.setRequestInterception(true);
             page.on("request", (request) => {
               let allowed = policy.network._tag === "Unrestricted";
+
               try {
                 const url = new URL(request.url());
+
                 allowed ||=
                   policy.network._tag === "ExactHosts" &&
                   url.protocol === "https:" &&
@@ -134,6 +153,7 @@ export const browserRunProtectedBindingLayer = (options: {
               await runCleanup(terminate);
               throw new ProtectedTransportError({ reason: "stale-reference" });
             }
+
             return ProtectedNativeSession.of({ browser, page, close });
           },
           catch: failure,
@@ -151,12 +171,15 @@ export const browserRunProtectedBindingLayer = (options: {
             ),
           ),
         );
+
         driver = yield* makeProtectedNativeTransport(policy).pipe(
           Effect.provideService(ProtectedNativeSession, acquired),
           Effect.provideService(Crypto.Crypto, crypto),
         );
+
         return driver;
       }, Effect.withTracerEnabled(false));
+
       return { open };
     }),
   );

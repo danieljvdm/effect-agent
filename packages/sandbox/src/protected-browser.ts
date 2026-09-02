@@ -8,8 +8,10 @@ export const CredentialOrigin = Schema.String.check(
     (value) => value.startsWith("https://") && Schema.is(InteractiveBrowserHost)(value.slice(8)),
   ),
 );
+
 export const BrowserReference = Schema.String.check(Schema.isUUID());
 export const CredentialKind = Schema.Literals(["login", "card"]);
+
 export const CredentialFieldRole = Schema.Literals([
   "username",
   "password",
@@ -20,6 +22,7 @@ export const CredentialFieldRole = Schema.Literals([
   "card-expiry-year",
   "card-security-code",
 ]);
+
 const Label = Schema.String.check(Schema.isMaxLength(200));
 
 export class CredentialTarget extends Schema.Class<CredentialTarget>("CredentialTarget")({
@@ -61,17 +64,20 @@ export class CredentialOfferMetadata extends Schema.Class<CredentialOfferMetadat
   brand: Schema.optionalKey(Label),
   lastFour: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^\d{4}$/))),
 }) {}
+
 export class CredentialOffer extends Schema.Class<CredentialOffer>("CredentialOffer")({
   ref: BrowserReference,
   kind: CredentialKind,
   metadata: CredentialOfferMetadata,
 }) {}
+
 export class ListCredentialOffers extends Schema.Class<ListCredentialOffers>(
   "ListCredentialOffers",
 )({
   kind: CredentialKind,
   target: BrowserReference,
 }) {}
+
 export class UseCredential extends Schema.Class<UseCredential>("UseCredential")({
   offer: BrowserReference,
   fields: Schema.Array(Schema.Struct({ ref: BrowserReference, role: CredentialFieldRole })).check(
@@ -80,11 +86,13 @@ export class UseCredential extends Schema.Class<UseCredential>("UseCredential")(
   ),
   submit: Schema.optionalKey(BrowserReference),
 }) {}
+
 export class ProtectedBrowserNavigate extends Schema.Class<ProtectedBrowserNavigate>(
   "ProtectedBrowserNavigate",
 )({
   url: Schema.String.check(Schema.isMaxLength(8192)),
 }) {}
+
 export class ProtectedBrowserClick extends Schema.Class<ProtectedBrowserClick>(
   "ProtectedBrowserClick",
 )({
@@ -96,25 +104,30 @@ export const CredentialDispatch = Schema.Literals([
   "possibly-dispatched",
   "dispatched",
 ]);
+
 export const CredentialMilestone = Schema.Literals([
   "none",
   "partial-fill",
   "filled",
   "submission-dispatched",
 ]);
+
 export const ProtectedObservationState = Schema.Literals([
   "before-exposure",
   "protected",
   "approved-after-exposure",
   "closed",
 ]);
+
 export const ProtectedCleanup = Schema.Literals(["not-requested", "confirmed", "unconfirmed"]);
+
 const Evidence = {
   dispatch: CredentialDispatch,
   milestone: CredentialMilestone,
   observation: ProtectedObservationState,
   cleanup: ProtectedCleanup,
 };
+
 /** No foreign message/cause or page data may enter this failure. Closure does not undo dispatch. */
 export class ProtectedBrowserError extends Schema.TaggedError<ProtectedBrowserError>()(
   "ProtectedBrowserError",
@@ -137,17 +150,20 @@ export class ProtectedBrowserError extends Schema.TaggedError<ProtectedBrowserEr
     ...Evidence,
   },
 ) {}
+
 export class CredentialUseResult extends Schema.Class<CredentialUseResult>("CredentialUseResult")({
   ...Evidence,
   authentication: Schema.Literal("unverified"),
 }) {}
 
 const SecretText = Schema.Redacted(Schema.NonEmptyString.check(Schema.isMaxLength(1024)));
+
 /** Host-only material. Never encode it into Tool results, checkpoints, or storage. */
 export const LoginCredential = Schema.TaggedStruct("LoginCredential", {
   username: SecretText,
   password: SecretText,
 });
+
 /** Security codes are transient, never persisted. Dummy tests are not PCI compliance evidence. */
 export const CardCredential = Schema.TaggedStruct("CardCredential", {
   name: SecretText,
@@ -159,6 +175,7 @@ export const CardCredential = Schema.TaggedStruct("CardCredential", {
     Schema.Redacted(Schema.String.check(Schema.isPattern(/^\d{3,4}$/))),
   ),
 });
+
 export const BrowserCredentialMaterial = Schema.Union([LoginCredential, CardCredential]);
 export type BrowserCredentialMaterial = typeof BrowserCredentialMaterial.Type;
 
@@ -168,16 +185,19 @@ export class CredentialAccessError extends Schema.TaggedError<CredentialAccessEr
     reason: Schema.Literals(["denied", "missing-credential", "needs-attention", "resolver"]),
   },
 ) {}
+
 export interface CredentialAccessRequest {
   readonly caller: Redacted.Redacted<string>;
   readonly kind: typeof CredentialKind.Type;
   readonly target: CredentialTarget;
 }
+
 export interface CredentialUseAuthorization extends CredentialAccessRequest {
   readonly key: Redacted.Redacted<string>;
   readonly roles: ReadonlyArray<typeof CredentialFieldRole.Type>;
   readonly submit: boolean;
 }
+
 /**
  * Host-only vault and grant port. Derive caller from the authorized invocation, never Tool input.
  * Recheck account ownership, current grants, merchant/frame/recipient pairing, and any side
@@ -230,6 +250,7 @@ export interface ProtectedBrowserHandle {
   ) => Effect.Effect<CredentialUseResult, ProtectedBrowserError>;
   readonly close: Effect.Effect<typeof ProtectedCleanup.Type>;
 }
+
 export class ProtectedBrowser extends Context.Service<
   ProtectedBrowser,
   {
@@ -256,6 +277,7 @@ export class ProtectedBrowserSession extends Context.Service<
         const browser = yield* ProtectedBrowser;
         const access = yield* BrowserCredentialAccess;
         const scope = yield* Effect.scope;
+
         const cached = yield* Effect.cached(
           browser
             .open(policy)
@@ -264,6 +286,7 @@ export class ProtectedBrowserSession extends Context.Service<
               Effect.provideService(Scope.Scope, scope),
             ),
         );
+
         return {
           get: Effect.suspend(() =>
             scope.state._tag === "Closed"

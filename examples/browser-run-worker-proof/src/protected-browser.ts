@@ -48,9 +48,11 @@ export const protectedTools = Toolkit.make(
     failureMode: "error",
   }),
 );
+
 export const protectedHandlers = protectedTools.toLayer(
   Effect.gen(function* () {
     const session = yield* ProtectedBrowserSession;
+
     return {
       protected_navigate: (request) =>
         Effect.flatMap(session.get, (handle) => handle.navigate(request)),
@@ -67,6 +69,7 @@ class ProtectedProofFailure extends Schema.TaggedError<ProtectedProofFailure>()(
   "ProtectedProofFailure",
   {},
 ) {}
+
 const final = <A, E, R, E2, R2>(
   response: Effect.Effect<
     Stream.Stream<
@@ -86,11 +89,13 @@ const final = <A, E, R, E2, R2>(
     Effect.flatMap((last): Effect.Effect<A, ProtectedBrowserError | ProtectedProofFailure> => {
       if (Option.isNone(last) || last.value.preliminary)
         return Effect.fail(new ProtectedProofFailure());
+
       return Schema.is(ProtectedBrowserError)(last.value.result)
         ? Effect.fail(last.value.result)
         : Effect.succeed(last.value.result);
     }),
   );
+
 const requireProof = (condition: boolean) =>
   condition ? Effect.void : Effect.fail(new ProtectedProofFailure());
 
@@ -99,6 +104,7 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
   let granted = true;
   const crypto = yield* Crypto.Crypto;
   const principal = Redacted.make(yield* crypto.randomUUIDv4);
+
   const permitted = (request: {
     readonly caller: Redacted.Redacted<string>;
     readonly target: {
@@ -112,6 +118,7 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
     request.target.topOrigin === origin &&
     request.target.frameOrigin === origin &&
     request.target.recipientOrigin === origin;
+
   const access = BrowserCredentialAccess.of({
     caller: Effect.succeed(principal),
     list: (request) =>
@@ -158,6 +165,7 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
           : "deny",
       ),
   });
+
   const session = ProtectedBrowserSession.layer(
     InteractiveBrowserPolicy.make({
       network: { _tag: "ExactHosts", allowedHosts: [new URL(origin).host] },
@@ -166,8 +174,10 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
       maxReturnedBytes: 16_384,
     }),
   ).pipe(Layer.provide(Layer.succeed(BrowserCredentialAccess)(access)));
+
   return yield* Effect.gen(function* () {
     const toolkit = yield* protectedTools;
+
     for (const layout of ["a", "b"]) {
       yield* final(
         toolkit.handle("protected_navigate", { url: `${origin}/protected/login-${layout}` }),
@@ -176,11 +186,15 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
       const username = observed.controls.find((control) => control.role === "username");
       const password = observed.controls.find((control) => control.role === "password");
       const submit = observed.controls.find((control) => control.role === "submit");
+
       if (!username || !password || !submit) return yield* new ProtectedProofFailure();
+
       const offers = yield* final(
         toolkit.handle("credential_offers", { kind: "login", target: username.ref }),
       );
+
       if (!offers[0]) return yield* new ProtectedProofFailure();
+
       const result = yield* final(
         toolkit.handle("credential_use", {
           offer: offers[0].ref,
@@ -191,11 +205,14 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
           submit: submit.ref,
         }),
       );
+
       yield* requireProof(result.milestone === "submission-dispatched");
       // Wait using observations, never retry submission. Keep the authenticated private context.
       let authenticated = false;
+
       for (let attempt = 0; attempt < 30 && !authenticated; attempt++) {
         yield* Effect.sleep("100 millis");
+
         const next = yield* final(toolkit.handle("protected_observe", {})).pipe(
           Effect.map(Option.some),
           Effect.catch((error) =>
@@ -204,6 +221,7 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
               : Effect.fail(error),
           ),
         );
+
         authenticated =
           Option.isSome(next) && next.value.text.includes("Authenticated dummy dashboard");
       }
@@ -212,11 +230,15 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
     yield* final(toolkit.handle("protected_navigate", { url: `${origin}/protected/payment` }));
     const observed = yield* final(toolkit.handle("protected_observe", {}));
     const fields = observed.controls.filter((control) => control.role.startsWith("card-"));
+
     if (fields.length !== 4 || !fields[0]) return yield* new ProtectedProofFailure();
+
     const offers = yield* final(
       toolkit.handle("credential_offers", { kind: "card", target: fields[0].ref }),
     );
+
     if (!offers[0]) return yield* new ProtectedProofFailure();
+
     const request = UseCredential.make({
       offer: offers[0].ref,
       fields: fields.map((field) => ({
@@ -224,8 +246,10 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
         role: Schema.decodeUnknownSync(CredentialFieldRole)(field.role),
       })),
     });
+
     granted = false;
     const denied = yield* final(toolkit.handle("credential_use", request)).pipe(Effect.flip);
+
     yield* requireProof(
       Schema.is(ProtectedBrowserError)(denied) &&
         denied.reason === "denied" &&
@@ -233,11 +257,15 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
     );
     granted = true;
     const filled = yield* final(toolkit.handle("credential_use", request));
+
     yield* requireProof(filled.milestone === "filled");
     const after = yield* final(toolkit.handle("protected_observe", {}));
+
     yield* requireProof(!JSON.stringify(after).includes("4111111111111111"));
     const handle = yield* (yield* ProtectedBrowserSession).get;
+
     yield* requireProof((yield* handle.close) === "confirmed");
+
     return Schema.decodeUnknownSync(BrowserRunWorkerProofResult.fields.protectedBrowser)({
       loginLayouts: 2,
       authenticatedContinuation: true,
@@ -252,17 +280,21 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
 export const protectedFixture = (request: Request) =>
   Effect.gen(function* () {
     const path = new URL(request.url).pathname;
+
     const html = (body: string) =>
       new Response(body, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
+
     if (path === "/protected/accept" && request.method === "POST") {
       const data = yield* Effect.tryPromise({
         try: () => request.formData(),
         catch: () => new ProtectedProofFailure(),
       });
+
       if (data.get("u") !== "dummy@example.test" || data.get("p") !== "dummy-proof-password")
         return new Response("Denied", { status: 403 });
+
       return new Response(null, {
         status: 303,
         headers: {
@@ -292,5 +324,6 @@ export const protectedFixture = (request: Request) =>
       return html(
         '<input form="login" name="u" type="email" autocomplete="username"><form id="login" action="/protected/accept" method="post"><input name="p" type="password"><input type="submit" value="Continue"></form>',
       );
+
     return new Response("Not found", { status: 404 });
   });

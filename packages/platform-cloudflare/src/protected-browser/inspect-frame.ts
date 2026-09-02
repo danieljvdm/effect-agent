@@ -1,6 +1,7 @@
 // This fixed program runs in an isolated world. Pages cannot replace its native DOM methods.
 // Handles retain actual nodes; a selector is never reconstructed from an opaque reference.
 export const maxAttributeLength = 2048;
+
 export const inspectFrame = `(() => {
   const doc = document;
   const forms = [];

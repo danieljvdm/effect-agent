@@ -31,7 +31,9 @@ const Description = Schema.Struct({
   action: Schema.String.check(Schema.isMaxLength(maxAttributeLength)),
   label: Schema.String.check(Schema.isMaxLength(200)),
 });
+
 const Descriptions = Schema.Array(Schema.NullOr(Description)).check(Schema.isMaxLength(65));
+
 interface FrameState {
   readonly frame: Frame;
   readonly handle: JSHandle<unknown>;
@@ -58,8 +60,10 @@ export class ProtectedNativeSession extends Context.Service<
 
 const transportError = (reason: ProtectedTransportError["reason"]) =>
   new ProtectedTransportError({ reason });
+
 const decode = <A>(schema: Schema.Codec<A>, value: unknown) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => transportError("provider")));
+
 // Attach rejection handling inside the SDK callback before workerd can report foreign diagnostics.
 const remote = <A>(run: (signal: AbortSignal) => Promise<A>) =>
   Effect.tryPromise({
@@ -95,78 +99,100 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
   let documentRef: string | undefined;
   const frames = new Map<Frame, FrameState>();
   const controls = new Map<string, ControlState>();
+
   const origin = (value: string) =>
     Effect.try({
       try: () => {
         const url = new URL(value);
+
         if (url.username || url.password) throw transportError("stale-reference");
         if (!Schema.is(CredentialOrigin)(url.origin)) throw transportError("unsupported");
         if (policy.network._tag === "ExactHosts" && !policy.network.allowedHosts.includes(url.host))
           throw transportError("stale-reference");
+
         return url.origin;
       },
       catch: (cause) =>
         Schema.is(ProtectedTransportError)(cause) ? cause : transportError("provider"),
     });
+
   const check = Effect.suspend(() =>
     closed || violation || !browser.isConnected()
       ? Effect.fail(transportError("stale-reference"))
       : Effect.void,
   );
+
   const clear = () => {
     controls.clear();
     // Browser event callbacks only invalidate. The next Effect operation allocates the new identity.
     documentRef = undefined;
   };
+
   const onNavigated = () => {
     clear();
   };
+
   const onTarget = (target: { type(): string }) => {
     if (target.type() !== "page") return;
     // No popup or additional page may inherit an observation channel.
     violation = true;
     clear();
   };
+
   const invalidate = () => {
     closed = true;
     clear();
   };
+
   const context = Effect.gen(function* () {
     yield* check;
     const list = page.frames();
+
     if (list.length > 16) return yield* transportError("unsupported");
     const topOrigin = yield* origin(page.url());
     const frameOrigins = yield* Effect.forEach(list, (frame) => origin(frame.url()));
+
     if (documentRef === undefined) documentRef = yield* uuid;
+
     return yield* decode(ProtectedPageContext, { document: documentRef, topOrigin, frameOrigins });
   });
+
   const isCurrent = Effect.fn("ProtectedNativeTransport.isCurrent")(function* (state: FrameState) {
     if (state.frame.detached) return false;
+
     return yield* remote(() =>
       state.handle.evaluate((held) => {
         if (typeof held !== "object" || held === null) return false;
+
         return Reflect.get(held, "doc") === Reflect.get(globalThis, "document");
       }),
     );
   });
+
   const get = Effect.fn("ProtectedNativeTransport.get")(function* (ref: string) {
     yield* check;
     const state = controls.get(ref);
+
     if (
       !state ||
       state.expires <= (yield* clock.currentTimeMillis) ||
       !(yield* isCurrent(state.frame))
     )
       return yield* transportError("stale-reference");
+
     const current = yield* remote(() =>
       state.frame.handle.evaluate((held, index) => {
         if (typeof held !== "object" || held === null) return null;
+
         return Reflect.apply(Reflect.get(held, "validate"), held, [index]);
       }, state.index),
     );
+
     const description = yield* decode(Schema.NullOr(Description), current);
+
     if (description === null) return yield* transportError("stale-reference");
     const ctx = yield* context;
+
     if (
       ctx.topOrigin !== state.control.target.topOrigin ||
       (yield* origin(state.frame.frame.url())) !== state.control.target.frameOrigin ||
@@ -174,11 +200,14 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       description.role !== state.control.role
     )
       return yield* transportError("stale-reference");
+
     return state;
   });
+
   const close = yield* Effect.cached(
     Effect.gen(function* () {
       invalidate();
+
       return yield* session.close;
     }).pipe(
       Effect.ensuring(
@@ -192,6 +221,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       ),
     ),
   );
+
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       page.on("framenavigated", onNavigated);
@@ -200,6 +230,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
     }),
     () => close,
   );
+
   return {
     context,
     invalidate,
@@ -214,15 +245,18 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
     target: (ref) => get(ref).pipe(Effect.map((state) => state.control)),
     discover: Effect.gen(function* () {
       const before = yield* context;
+
       controls.clear();
       for (const state of frames.values()) yield* remote(() => state.handle.dispose());
       frames.clear();
       const discovered: Array<ProtectedBrowserControl> = [];
       let text = "";
       let truncated = false;
+
       for (const frame of page.frames()) {
         if (typeof frame.isolatedRealm !== "function") return yield* transportError("unsupported");
         const handle = yield* remote(() => frame.isolatedRealm().evaluateHandle(inspectFrame));
+
         const state: FrameState = {
           frame,
           handle,
@@ -230,29 +264,38 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
           document: yield* uuid,
           forms: new Map(),
         };
+
         frames.set(frame, state);
+
         const raw = yield* remote(() =>
           handle.evaluate((held) => {
             if (typeof held !== "object" || held === null) return null;
+
             return Reflect.get(held, "original");
           }),
         );
+
         const descriptions = yield* decode(Descriptions, raw);
+
         for (let index = 0; index < descriptions.length; index++) {
           const desc = descriptions[index];
+
           if (!desc) continue;
           if (discovered.length === 64) {
             truncated = true;
             break;
           }
           let form = state.forms.get(desc.formIndex);
+
           if (form === undefined) {
             form = yield* uuid;
             state.forms.set(desc.formIndex, form);
           }
           // Unsupported destinations/controls are not offered as credential targets.
           const recipient = yield* origin(desc.action).pipe(Effect.result);
+
           if (recipient._tag === "Failure") continue;
+
           const control = ProtectedBrowserControl.make({
             ref: yield* uuid,
             role: desc.role,
@@ -266,6 +309,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
               form,
             }),
           });
+
           controls.set(control.ref, {
             frame: state,
             index,
@@ -274,12 +318,15 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
           });
           discovered.push(control);
         }
+
         const rawText = yield* remote(() =>
           handle.evaluate((held) => {
             if (typeof held !== "object" || held === null) return null;
+
             return Reflect.apply(Reflect.get(held, "text"), held, []);
           }),
         );
+
         text += yield* decode(Schema.String.check(Schema.isMaxLength(65536)), rawText);
         if (text.length > 65536) {
           text = text.slice(0, 65536);
@@ -288,6 +335,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       }
       if ((yield* context).document !== before.document)
         return yield* transportError("stale-reference");
+
       return yield* decode(ProtectedDiscovery, {
         ...before,
         text,
@@ -298,12 +346,15 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
     fill: Effect.fn("ProtectedNativeTransport.fill")(function* (ref, role, value) {
       const dispatch = yield* ProtectedBrowserDispatch;
       const state = yield* get(ref);
+
       // CDP dispatch may mutate before its reply is lost, so uncertainty starts here.
       yield* dispatch.mark;
+
       const filled = yield* remote(() =>
         state.frame.handle.evaluate(
           (held, index, expectedRole, secret) => {
             if (typeof held !== "object" || held === null) return false;
+
             return Reflect.apply(Reflect.get(held, "fill"), held, [index, expectedRole, secret]);
           },
           state.index,
@@ -311,17 +362,21 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
           Redacted.value(value),
         ),
       );
+
       if (filled === "unsupported") return yield* transportError("unsupported");
       if (filled !== true) return yield* transportError("stale-reference");
     }),
     click: Effect.fn("ProtectedNativeTransport.click")(function* (ref) {
       const state = yield* get(ref);
+
       const clicked = yield* remote(() =>
         state.frame.handle.evaluate((held, index) => {
           if (typeof held !== "object" || held === null) return false;
+
           return Reflect.apply(Reflect.get(held, "click"), held, [index]);
         }, state.index),
       );
+
       if (clicked === "needs-attention") return yield* transportError("needs-attention");
       if (clicked !== true) return yield* transportError("stale-reference");
     }),
