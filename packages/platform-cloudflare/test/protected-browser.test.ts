@@ -739,7 +739,7 @@ it.effect.each(["interrupt", "timeout"] as const)(
           yield* (yield* ProtectedBrowserDispatch).mark;
           writes++;
           yield* Deferred.succeed(entered, undefined);
-          yield* Effect.never;
+          return yield* Effect.never;
         }),
       );
       const handle = yield* f.open;
