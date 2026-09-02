@@ -45432,10 +45432,11 @@ var reviewToolkitLayer = reviewToolkit.toLayer(exports_Effect.gen(function* () {
 // packages/pr-review/src/review.ts
 var ReviewPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512));
 var Revision2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(128));
+var MAX_REVIEW_PATCH_CHARS = 256000;
 
 class ReviewChange extends exports_Schema.Class("@effect-agent/pr-review/ReviewChange")({
   path: ReviewPath,
-  patch: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(80000))
+  patch: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_PATCH_CHARS))
 }) {
 }
 
@@ -45666,7 +45667,7 @@ var batchChanges = (changes2) => {
   let batch = [];
   let chars = 0;
   for (const change of changes2) {
-    if (batch.length > 0 && chars + change.patch.length > 256000) {
+    if (batch.length > 0 && chars + change.patch.length > MAX_REVIEW_PATCH_CHARS) {
       batches.push(batch);
       batch = [];
       chars = 0;
@@ -51206,7 +51207,7 @@ var exclusionReason = {
   "unsupported-entry": "Not a regular file",
   "source-read-failed": "Source could not be read as bounded UTF-8 text",
   "patch-unavailable": "Exact patch could not be generated within the diff bounds",
-  "patch-limit": "Patch exceeds 80,000 characters",
+  "patch-limit": `Patch exceeds ${formatNumber(MAX_REVIEW_PATCH_CHARS)} characters`,
   "review-stopped": "Review stopped before this batch started"
 };
 var renderCoverage = (input) => [
@@ -51682,7 +51683,6 @@ var makeReviewOpenAi = exports_Effect.fn("makeReviewOpenAi")(function* (options3
 });
 
 // packages/pr-review-action/src/action.ts
-var MAX_PATCH_CHARS = 80000;
 var MAX_REVIEW_FILES = 100;
 var MAX_HYDRATED_SOURCE_BYTES = 8000000;
 var ACTION_INPUT_BY_CONFIG = {
@@ -51903,8 +51903,8 @@ var hydrateExactChanges = exports_Effect.fn("hydrateExactChanges")(function* (in
       patch3
     ].join(`
 `) : patch3;
-    if (exactPatch === undefined || exactPatch.length === 0 || exactPatch.length > MAX_PATCH_CHARS) {
-      exclude(unreviewedPaths, file2, basePath, exactPatch !== undefined && exactPatch.length > MAX_PATCH_CHARS ? "patch-limit" : "patch-unavailable");
+    if (exactPatch === undefined || exactPatch.length === 0 || exactPatch.length > MAX_REVIEW_PATCH_CHARS) {
+      exclude(unreviewedPaths, file2, basePath, exactPatch !== undefined && exactPatch.length > MAX_REVIEW_PATCH_CHARS ? "patch-limit" : "patch-unavailable");
       continue;
     }
     changes2.push(ReviewChange.make({ path: file2.path, patch: exactPatch }));

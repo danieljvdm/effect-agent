@@ -62,7 +62,8 @@ estimator alone does not disable the token quota. Capped hosts own model-visible
 at their provider boundary; the generic turn/tool status is disabled for these runs. The Action
 counts its outgoing spending status before admission and keeps it outside the reusable cache prefix.
 With `costControl`, large requests run in sequential batches of at most 256,000 patch characters,
-preserving the host's file order and keeping each patch complete. Each batch has a fresh context
+preserving the host's file order and keeping each patch complete. One patch may use the full
+256,000-character batch capacity. Each batch has a fresh context
 and the same source service. All batches share the host ledger, turn and tool allowances, deadline,
 and 24-finding capacity. They stop on an incomplete result or exhaustion. `pendingPaths` identifies
 admitted patches never sent to a model, including a batch refused before paid inference. Hosts

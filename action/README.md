@@ -147,7 +147,8 @@ the research tool definitions and their order in the encoded request.
 Compaction can change prefixes, and routing and cache availability still affect hits. See
 [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 
-Input admission allows at most 100 candidate files, 80,000 characters per patch, and 8 MB of hydrated
-base/head source. The batch size does not exclude later patches. A file that exceeds the remaining
+Input admission allows at most 100 candidate files, 256,000 characters per patch, and 8 MB of hydrated
+base/head source. A complete patch may occupy an entire batch; there is no smaller per-file cap.
+The batch size does not exclude later patches. A file that exceeds the remaining
 source allowance is excluded without preventing smaller later files from fitting. These bounds
 limit input preparation independently of the shared inference spending ceiling.

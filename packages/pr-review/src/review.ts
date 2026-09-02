@@ -21,12 +21,15 @@ export type { RunCostEstimator };
 const ReviewPath = Schema.NonEmptyString.check(Schema.isMaxLength(512));
 const Revision = Schema.NonEmptyString.check(Schema.isMaxLength(128));
 
+/** Maximum patch text per batch; one complete file may occupy the entire batch. */
+export const MAX_REVIEW_PATCH_CHARS = 256_000;
+
 /** One complete textual patch supplied by the host. */
 export class ReviewChange extends Schema.Class<ReviewChange>(
   "@effect-agent/pr-review/ReviewChange",
 )({
   path: ReviewPath,
-  patch: Schema.NonEmptyString.check(Schema.isMaxLength(80_000)),
+  patch: Schema.NonEmptyString.check(Schema.isMaxLength(MAX_REVIEW_PATCH_CHARS)),
 }) {}
 
 /** Complete prior feedback selected by the host for fix verification, not new defect discovery. */
@@ -354,7 +357,7 @@ const batchChanges = (changes: ReadonlyArray<ReviewChange>): Array<Array<ReviewC
   let batch: Array<ReviewChange> = [];
   let chars = 0;
   for (const change of changes) {
-    if (batch.length > 0 && chars + change.patch.length > 256_000) {
+    if (batch.length > 0 && chars + change.patch.length > MAX_REVIEW_PATCH_CHARS) {
       batches.push(batch);
       batch = [];
       chars = 0;
