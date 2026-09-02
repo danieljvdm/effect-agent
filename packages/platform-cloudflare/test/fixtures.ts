@@ -302,6 +302,26 @@ interface SchedulePauseGate {
 }
 
 const schedulePauseGates = new Map<string, SchedulePauseGate>();
+const scheduleIdleWaiters = new Map<string, () => void>();
+
+/** Observe native alarm completion without racing it with a manually invoked handler. */
+export const observeScheduleIdle = (owner: ScheduleOwner): Promise<void> =>
+  new Promise((resolve) => scheduleIdleWaiters.set(scheduleOwnerKey(owner), resolve));
+
+export const notifyScheduleAlarmCompleted = (ctx: DurableObjectState): void => {
+  const name = ctx.id.name;
+  if (name === undefined || !scheduleIdleWaiters.has(name)) return;
+  if (
+    ctx.storage.sql.exec("SELECT storage_id FROM effect_cf_scheduled_alarms LIMIT 1").toArray()
+      .length !== 0
+  ) {
+    return;
+  }
+  const resolve = scheduleIdleWaiters.get(name);
+  scheduleIdleWaiters.delete(name);
+  resolve?.();
+};
+
 const scheduleEvictions = new Map<string, string>();
 interface ScheduleAuthorizationFailureHold {
   held: boolean;
