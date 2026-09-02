@@ -310,7 +310,12 @@ export const layer = <const Entries extends ReadonlyArray<AgentRegistration>>(
   registrations: Entries,
 ) => Layer.unwrap(Effect.map(compileRegistrations(registrations), layerFromBindings));
 
-/** Internal assembly shared by registration compilation and low-level adapter fixtures. */
+/**
+ * Assemble the durable runtime from already-resolved Agent Bindings.
+ * Use `ThreadObject.layer` to compile typed Agent registrations instead.
+ * Supply host services through `ThreadObject.make` or `ThreadObject.layerConfig` and
+ * the Durable Object context and namespace Layers when composing a custom host.
+ */
 export const layerFromBindings = (
   bindings: ReadonlyArray<ResolvedBinding>,
 ): Layer.Layer<

@@ -19,7 +19,7 @@ export * from "./alarm.ts";
 export * from "./wake-scheduler.ts";
 export * from "./progress-wait.ts";
 export * from "./transport.ts";
-export { ThreadObjectPorts } from "./layers.ts";
+export { layerFromBindings, ThreadObjectPorts } from "./layers.ts";
 export * as ThreadObject from "./thread-object.ts";
 export * from "./client.ts";
 export * from "./prepared-admission.ts";

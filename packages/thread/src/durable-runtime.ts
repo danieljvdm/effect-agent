@@ -1284,7 +1284,7 @@ const make = Effect.gen(function* () {
         }
         case "SubagentLineageRecorded": {
           // Thread-level fact (one lineage record per child Thread, spec §11):
-          // its presence gates the P7 §7(a) AwaitParentEstablishment row for parent-linked
+          // its presence gates the AwaitParentEstablishment row for parent-linked
           // Submissions; root Threads never carry it and never consult it.
           subagentLineageRecorded = true;
           break;
@@ -5940,11 +5940,11 @@ const make = Effect.gen(function* () {
           });
         }
         const submission = found.value;
-        // P7 §7(a): the claim head rule legally grants an `admitted` head, so the WORKER path
+        // The claim head rule legally grants an `admitted` head, so the worker path
         // enforces the same AwaitParentEstablishment discipline as the recovery classifier —
         // a parent-linked child whose Thread lacks its canonical lineage record is not
         // runnable yet (the parent's idempotent establishment appends lineage BEFORE
-        // readiness, SUB-016; model-checked in `formal/SubagentEstablishmentFix.cfg`).
+        // readiness, SUB-016).
         // Release the claim, nudge the parent lane, and leave the child to establishment.
         if (submission.parentLinkage !== undefined && submission.state === "admitted") {
           const read = yield* readAllTolerant(threadId);
@@ -6927,10 +6927,9 @@ const make = Effect.gen(function* () {
           return "deferred";
         }
         case "AwaitParentEstablishment": {
-          // P7 §7(a): the child lane defers its own materialization/readiness repair until the
+          // The child lane defers its own materialization/readiness repair until the
           // parent's idempotent establishment appends the immutable lineage record — a child
-          // never runs a Turn before its lineage is canonical (model-checked,
-          // `formal/SubagentEstablishmentFix.cfg`). Liveness: a droppable wake hint nudges the
+          // never runs a Turn before its lineage is canonical. A droppable wake hint nudges the
           // parent lane, whose own recovery re-drives establishment (CompleteChildAdmission /
           // RepairSubagentStartLink); the deterministic child identity makes every replay
           // converge on this one child (SUB-016).

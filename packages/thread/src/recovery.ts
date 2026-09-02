@@ -132,12 +132,12 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
   /** Joined-side view of the host's canonical settlement record, when it exists. */
   hostSettlementOutcome: Schema.optionalKey(SettlementOutcome),
   /**
-   * The Thread carries its canonical `SubagentLineageRecorded` record (P7 §7(a)). Only
+   * The Thread carries its canonical `SubagentLineageRecorded` record. Only
    * consulted for a parent-linked Submission: a child whose lineage is not yet canonical defers
    * its own materialization/readiness repair to the parent's idempotent establishment
    * (`AwaitParentEstablishment`). Defaults to `false` so an assembler that does not compute it
-   * stays fail-closed — deferring is safe (the parent's establishment completes the child),
-   * running a Turn before lineage is the model-checked race (`formal/SubagentEstablishmentRace.cfg`).
+   * stays fail-closed: deferring is safe because the parent's establishment completes the child;
+   * running a Turn before lineage is recorded would violate the child establishment ordering.
    */
   subagentLineageRecorded: Schema.Boolean.pipe(
     Schema.withConstructorDefault(Effect.succeed(false)),
@@ -380,12 +380,9 @@ export class ReleaseOrphanChildReservation extends Schema.TaggedClass<ReleaseOrp
  * A parent-linked `admitted` Submission whose Thread lacks the canonical
  * `SubagentLineageRecorded` record: the child lane DEFERS its own materialization/readiness
  * repair — the parent's idempotent establishment (admit → materialize → lineage → ready)
- * completes it, so a child never runs a Turn before its lineage record is canonical (P7 §7(a)).
- * Model-checked before implementation: under the pre-P7 discipline TLC reaches the
- * lineage-less child Turn (`formal/SubagentEstablishmentRace.cfg`); under this decision the
- * race is eliminated and liveness is preserved (`formal/SubagentEstablishmentFix.cfg`,
- * `AwaitParentEstablishment = TRUE`). Ordering/liveness hygiene, not a safety repair — the
- * join already fails closed without lineage (SUB-019).
+ * completes it, so a child never runs a Turn before its lineage record is canonical.
+ * This preserves the child establishment ordering. It is ordering/liveness hygiene, not a
+ * safety repair — the join already fails closed without lineage (SUB-019).
  */
 export class AwaitParentEstablishment extends Schema.TaggedClass<AwaitParentEstablishment>(
   "@effect-agent/thread/AwaitParentEstablishment",
@@ -813,8 +810,8 @@ const classifyDelegationAbort = (
  * 10. declared-but-unprepared tool batch → ResumePendingToolBatch — no handler ran (no prepared
  *     records), so the batch resumes with no model re-invocation and no Unknown (§15).
  * 11. `admitted` → a parent-linked Submission whose Thread lacks the canonical lineage
- *     record defers (AwaitParentEstablishment, P7 §7(a) — the parent's idempotent establishment
- *     completes it; model-checked in `formal/SubagentEstablishmentFix.cfg`); otherwise
+ *     record defers (AwaitParentEstablishment: the parent's idempotent establishment
+ *     completes it); otherwise
  *     CompleteMaterialization / RepairReadiness by Thread durability.
  * 12. otherwise → ApplyInput / RepairInputMarker / ResumeFromTurnBoundary by canonical input
  *     evidence, with the ledger marker repaired from history, never the reverse.
@@ -937,10 +934,9 @@ export const classifyRecovery = (
     });
   }
   if (state === "admitted") {
-    // P7 §7(a): a parent-linked child never self-repairs readiness before its immutable
+    // A parent-linked child never self-repairs readiness before its immutable
     // lineage record is canonical — the parent's establishment appends lineage BEFORE
-    // markReady, so deferring here is the exact fix discipline TLC verified
-    // (`formal/SubagentEstablishmentFix.cfg`); the parent completes the child idempotently.
+    // markReady, so the parent completes the child idempotently.
     const linkage = snapshot.submission.parentLinkage ?? snapshot.parentLinkage;
     if (linkage !== undefined && !evidence.subagentLineageRecorded) {
       return AwaitParentEstablishment.make({
