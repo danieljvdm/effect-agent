@@ -32,15 +32,18 @@ describe("demo failure mapping", () => {
     expect(mapped.message).not.toContain("sk-");
 
     const oversized = toDemoRunFailure({ _tag: "AiError", message: "x".repeat(5_000) });
+
     expect(oversized.message.length).toBe(1_000);
   });
 
   it("falls back to the generic tag for untagged defects and plain values", () => {
     const fromDefect = toDemoRunFailure(new Error("The supplier catalog crashed."));
+
     expect(fromDefect.errorTag).toBe("DemoRunError");
     expect(fromDefect.message).toContain("crashed");
 
     const fromString = toDemoRunFailure("plain failure");
+
     expect(fromString.errorTag).toBe("DemoRunError");
     expect(fromString.message).toBe("plain failure");
   });

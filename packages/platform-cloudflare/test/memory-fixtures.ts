@@ -24,10 +24,13 @@ export const MemoryProjects = MemoryNamespace.define({
   version: 1,
   identity: Schema.String,
 });
+
 export const memoryScope = MemoryScope.make("team");
 export const memoryPrincipal = Principal.make("application");
+
 export const memoryAccess = (project: string) =>
   MemoryAccess.make({ namespace: MemoryProjects.make(project), scope: memoryScope });
+
 export const memoryRecallLimits = MemoryRecallLimits.make({
   maxSources: 16,
   maxItems: 128,
@@ -36,6 +39,7 @@ export const memoryRecallLimits = MemoryRecallLimits.make({
   maxInputBytes: 1_000_000,
   timeoutMillis: 1_000,
 });
+
 export const memoryPut = (
   project: string,
   id: string,
@@ -66,9 +70,12 @@ export const memoryPut = (
       recordedAt: 2,
     },
   });
+
   if (write._tag !== "Put") throw new Error("Expected Put fixture");
+
   return write;
 };
+
 export const memoryCandidates = (ids: ReadonlyArray<string>): MemoryLookup => ({
   _tag: "Found",
   passages: ids.map((id) =>
@@ -82,17 +89,22 @@ export const memoryCandidates = (ids: ReadonlyArray<string>): MemoryLookup => ({
 });
 
 export const memoryCalls = new Map<string, number>();
+
 export const memoryFaults = new Map<
   string,
   { point: MemoryMutationPoint; kind: "fail" | "abort" }
 >();
+
 export const slowStarted = new Map<string, Deferred.Deferred<void>>();
 export const slowFinished = new Map<string, Deferred.Deferred<void>>();
+
 export const memoryAuthorizer = Layer.effect(
   MemoryOwnerAuthorizer,
   Effect.gen(function* () {
     const { namespace } = yield* MemoryOwnerIdentity;
+
     yield* MemoryProjects.restore(namespace.address);
+
     return {
       authorize: Effect.fn("test.memory.authorize")(function* (request) {
         if (request.principal === "defect") return yield* Effect.die("authorization defect");
@@ -100,12 +112,14 @@ export const memoryAuthorizer = Layer.effect(
           return yield* Effect.acquireUseRelease(
             Effect.gen(function* () {
               const started = slowStarted.get(namespace.address);
+
               if (started) yield* Deferred.succeed(started, undefined);
             }),
             () => Effect.never,
             () =>
               Effect.gen(function* () {
                 const finished = slowFinished.get(namespace.address);
+
                 if (finished) yield* Deferred.succeed(finished, undefined);
               }),
           );
@@ -116,17 +130,21 @@ export const memoryAuthorizer = Layer.effect(
     };
   }),
 );
+
 export const memoryFailpoints = Layer.effect(
   MemoryMutationFailpoint,
   Effect.gen(function* () {
     const state = yield* DurableObjectState.DurableObjectState;
+
     return {
       hit: (point: MemoryMutationPoint) =>
         Effect.suspend(() => {
           const name = state.raw.id.name ?? "";
           const fault = memoryFaults.get(name);
+
           if (!fault || fault.point !== point) return Effect.void;
           memoryFaults.delete(name);
+
           return fault.kind === "fail"
             ? Effect.fail(MemoryMutationFailure.make({ point }))
             : Effect.sync(() => state.raw.abort(`memory fault ${point}`));

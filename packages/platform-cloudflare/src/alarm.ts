@@ -98,6 +98,7 @@ export class DurableAlarmService extends Context.Service<
          * on top of the already-committed pre-armed alarm.
          */
         const runningPasses = yield* Ref.make(0);
+
         const scheduled = Effect.tryPromise({
           try: () => ctx.storage.getAlarm(),
           catch: alarmFailure("get alarm"),
@@ -106,11 +107,13 @@ export class DurableAlarmService extends Context.Service<
             deadline === null ? Option.none<number>() : Option.some(deadline),
           ),
         );
+
         const scheduleAt = (epochMillis: number) =>
           Effect.tryPromise({
             try: () => ctx.storage.setAlarm(epochMillis),
             catch: alarmFailure("set alarm"),
           });
+
         const ensureScheduledBy = (epochMillis: number) =>
           scheduled.pipe(
             Effect.flatMap((existing) =>
@@ -119,21 +122,26 @@ export class DurableAlarmService extends Context.Service<
                 : scheduleAt(epochMillis),
             ),
           );
+
         const armNow = Clock.currentTimeMillis.pipe(
           Effect.flatMap((now) => ensureScheduledBy(now)),
         );
+
         const scheduleNow = Ref.get(runningPasses).pipe(
           Effect.flatMap((passes) => (passes > 0 ? Effect.void : armNow)),
         );
+
         const withWakesDeferred = <A, E, R>(body: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
           Ref.update(runningPasses, (passes) => passes + 1).pipe(
             Effect.andThen(body),
             Effect.ensuring(Ref.update(runningPasses, (passes) => passes - 1)),
           );
+
         const cancel = Effect.tryPromise({
           try: () => ctx.storage.deleteAlarm(),
           catch: alarmFailure("delete alarm"),
         });
+
         return DurableAlarmService.of({
           scheduled,
           scheduleAt,
@@ -221,6 +229,7 @@ const readMaintenanceState = async (
   transaction: DurableObjectTransaction,
 ): Promise<{ readonly state: ThreadMaintenanceState; readonly initialized: boolean }> => {
   const encoded = await transaction.get(MAINTENANCE_STATE_KEY);
+
   return encoded === undefined
     ? { state: initialMaintenanceState(), initialized: false }
     : { state: decodeMaintenanceState(encoded), initialized: true };
@@ -231,6 +240,7 @@ const ensureTransactionAlarmBy = async (
   deadline: number,
 ): Promise<void> => {
   const scheduled = await transaction.getAlarm();
+
   if (scheduled === null || scheduled > deadline) {
     await transaction.setAlarm(deadline);
   }
@@ -241,6 +251,7 @@ const stableExternalWait = (
   reports: ReadonlyMap<string, RecoveryReport>,
 ): boolean => {
   const decision = reports.get(snapshot.submissionId)?.decision._tag;
+
   // An accepted abort still owes cleanup/settlement even if its claim was deferred this pass.
   if (decision === "SettleAborted") return false;
   switch (snapshot.state) {
@@ -353,13 +364,16 @@ export class ThreadMaintenance extends Context.Service<
         const beginMutation = Effect.fn("ThreadMaintenance.beginMutation")(function* () {
           yield* failpoint.hit("maintenance:dirty:before");
           const now = yield* Clock.currentTimeMillis;
+
           yield* runTransaction("advance maintenance generation", () =>
             ctx.storage.transaction(async (transaction) => {
               const { state } = await readMaintenanceState(transaction);
+
               const next = ThreadMaintenanceState.make({
                 ...state,
                 dirty: state.dirty + 1n,
               });
+
               await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
               // The earliest configured retry bounds a newly actionable mutation without relying
               // on its best-effort immediate wake hint.
@@ -390,9 +404,11 @@ export class ThreadMaintenance extends Context.Service<
         const ensureAlarm = Effect.fn("ThreadMaintenance.ensureAlarm")(function* () {
           yield* failpoint.hit("maintenance:ensure:before");
           const now = yield* Clock.currentTimeMillis;
+
           yield* runTransaction("ensure maintenance alarm", () =>
             ctx.storage.transaction(async (transaction) => {
               const { state, initialized } = await readMaintenanceState(transaction);
+
               if (!initialized) {
                 await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
               }
@@ -407,23 +423,29 @@ export class ThreadMaintenance extends Context.Service<
         const beginPass = Effect.fn("ThreadMaintenance.beginPass")(function* () {
           yield* failpoint.hit("maintenance:begin:before");
           const now = yield* Clock.currentTimeMillis;
+
           const result = yield* runTransaction("begin maintenance pass", () =>
             ctx.storage.transaction(async (transaction) => {
               const { state, initialized } = await readMaintenanceState(transaction);
+
               if (!initialized) {
                 await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
               }
               if (state.processed >= state.dirty) {
                 await transaction.deleteAlarm();
+
                 return { _tag: "CaughtUp" as const, nonterminal: state.nonterminal };
               }
               // Pre-arm the earliest retry before recovery. A successful finish may move this slot
               // LATER to its bounded backoff, which does not cancel the running handler.
               await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
+
               return { _tag: "Actionable" as const, generation: state.dirty };
             }),
           );
+
           yield* failpoint.hit("maintenance:begin:after");
+
           return result;
         });
 
@@ -433,6 +455,7 @@ export class ThreadMaintenance extends Context.Service<
           const priorStalls = yield* Ref.getAndUpdate(stalls, (count) =>
             progressed ? 0 : count + 1,
           );
+
           if (progressed) return config.alarmBackoffBase;
           const exponent = Math.min(priorStalls, 30);
           const backoff = Math.min(config.alarmBackoffCap, config.alarmBackoffBase * 2 ** exponent);
@@ -440,6 +463,7 @@ export class ThreadMaintenance extends Context.Service<
           // Full jitter over [backoff/2, backoff]: desynchronizes retry storms without ever
           // waiting longer than the deterministic bound.
           const jittered = Math.ceil(backoff / 2 + (backoff / 2) * jitter);
+
           return Math.min(jittered, config.wakeScanInterval);
         });
 
@@ -460,9 +484,11 @@ export class ThreadMaintenance extends Context.Service<
             Effect.gen(function* () {
               const activeAtStart = yield* Ref.get(activeMutations);
               const generation = yield* beginPass();
+
               return { ...generation, activeAtStart };
             }),
           );
+
           if (started._tag === "CaughtUp") {
             return yield* annotate(
               MaintenancePassReport.make({
@@ -483,6 +509,7 @@ export class ThreadMaintenance extends Context.Service<
           const reports = new Map(recovered.map((report) => [report.submissionId, report]));
           const head = remaining[0];
           const headWaiting = head !== undefined && stableExternalWait(head, reports);
+
           const autonomous = remaining.some((snapshot, index) => {
             // FIFO followers cannot execute through a stable external wait. Only plain queued
             // input is dormant here; admission repairs and accepted aborts still need a pass.
@@ -493,19 +520,26 @@ export class ThreadMaintenance extends Context.Service<
               reports.get(snapshot.submissionId)?.decision._tag === "ApplyInput"
             )
               return false;
+
             return !stableExternalWait(snapshot, reports);
           });
+
           const progressed =
             settlements.length > 0 || recovered.some((report) => report.disposition === "repaired");
+
           const delay = autonomous ? yield* rearmDelay(progressed) : 0;
           const now = yield* Clock.currentTimeMillis;
+
           yield* failpoint.hit("maintenance:finish:before");
+
           const alarmDisposition = yield* generationGate.withPermit(
             Effect.gen(function* () {
               const active = yield* Ref.get(activeMutations);
+
               return yield* runTransaction("finish maintenance pass", () =>
                 ctx.storage.transaction(async (transaction) => {
                   const { state } = await readMaintenanceState(transaction);
+
                   // Autonomous work and in-flight mutations intentionally leave the observed
                   // generation dirty. Otherwise acknowledge only the pass-start generation.
                   const processed =
@@ -514,17 +548,20 @@ export class ThreadMaintenance extends Context.Service<
                       : state.processed > started.generation
                         ? state.processed
                         : started.generation;
+
                   const next = ThreadMaintenanceState.make({
                     ...state,
                     processed,
                     nonterminal: remaining.length,
                   });
+
                   await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
                   if (autonomous) {
                     // Replace the crash-fallback slot with this pass's bounded backoff. The target
                     // is never earlier than the begin-pass fallback, so workerd does not cancel
                     // this running alarm handler before its report/span can complete.
                     await transaction.setAlarm(now + delay);
+
                     return "rearmed" as const;
                   }
                   if (started.activeAtStart > 0 || active > 0 || next.dirty > next.processed) {
@@ -534,18 +571,22 @@ export class ThreadMaintenance extends Context.Service<
                     // from inside the current handler: workerd cancels a running handler when it
                     // writes an earlier slot.
                     await ensureTransactionAlarmBy(transaction, now + config.wakeScanInterval);
+
                     return "rearmed" as const;
                   }
                   await transaction.deleteAlarm();
+
                   return "cleared" as const;
                 }),
               );
             }),
           );
+
           yield* failpoint.hit("maintenance:finish:after");
           if (alarmDisposition === "cleared") {
             yield* Ref.set(stalls, 0);
           }
+
           return yield* annotate(
             MaintenancePassReport.make({
               phase: "actionable",

@@ -51,12 +51,15 @@ export const unserializableToolResult = (
   cause: unknown,
 ): typeof UnserializableToolResult.Encoded => {
   let reason: string;
+
   try {
     const message = cause instanceof Error ? cause.message : cause;
+
     reason = typeof message === "string" ? message : String(message);
   } catch {
     reason = "unserializable value";
   }
+
   const build = (clipped: string): typeof UnserializableToolResult.Encoded =>
     Schema.encodeSync(UnserializableToolResult)(
       UnserializableToolResult.make({
@@ -64,15 +67,19 @@ export const unserializableToolResult = (
         reason: clipped,
       }),
     );
+
   // JSON escaping inflates bytes, so shrink by whole code points until the
   // encoded sentinel fits the floor; the empty reason always fits.
   let clipped = takePrefixWithinBytes(reason, 128);
   let sentinel = build(clipped);
+
   while (clipped.length > 0 && utf8ByteLength(JSON.stringify(sentinel)) > 256) {
     const last = clipped.codePointAt(clipped.length - 1);
+
     clipped = clipped.slice(0, clipped.length - (last !== undefined && last > 0xffff ? 2 : 1));
     sentinel = build(clipped);
   }
+
   return sentinel;
 };
 
@@ -80,46 +87,56 @@ const codePointUtf8Length = (codePoint: number): number => {
   if (codePoint < 0x80) return 1;
   if (codePoint < 0x800) return 2;
   if (codePoint < 0x10000) return 3;
+
   return 4;
 };
 
 const utf8ByteLength = (value: string): number => {
   let bytes = 0;
   let index = 0;
+
   while (index < value.length) {
     const codePoint = value.codePointAt(index) ?? 0;
+
     bytes += codePointUtf8Length(codePoint);
     index += codePoint > 0xffff ? 2 : 1;
   }
+
   return bytes;
 };
 
 const takePrefixWithinBytes = (value: string, maxBytes: number): string => {
   let bytes = 0;
   let index = 0;
+
   while (index < value.length) {
     const codePoint = value.codePointAt(index) ?? 0;
     const width = codePointUtf8Length(codePoint);
+
     if (bytes + width > maxBytes) break;
     bytes += width;
     index += codePoint > 0xffff ? 2 : 1;
   }
+
   return value.slice(0, index);
 };
 
 const takeSuffixWithinBytes = (value: string, maxBytes: number): string => {
   let bytes = 0;
   let index = value.length;
+
   while (index > 0) {
     const unit = value.charCodeAt(index - 1);
     const isLowSurrogate = unit >= 0xdc00 && unit <= 0xdfff;
     const pairStart = isLowSurrogate && index >= 2 ? index - 2 : index - 1;
     const codePoint = value.codePointAt(pairStart) ?? 0;
     const width = codePointUtf8Length(codePoint);
+
     if (bytes + width > maxBytes) break;
     bytes += width;
     index = pairStart;
   }
+
   return value.slice(index);
 };
 
@@ -140,26 +157,33 @@ const takeSuffixWithinBytes = (value: string, maxBytes: number): string => {
  */
 export const applyToolResultBounds = (encodedJson: string, bounds: ToolResultBounds): string => {
   const originalBytes = utf8ByteLength(encodedJson);
+
   if (originalBytes <= bounds.maxBytes) return encodedJson;
+
   const render = (head: string, tail: string): string =>
     JSON.stringify(
       Schema.encodeSync(TruncatedToolResult)(
         TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head, tail }),
       ),
     );
+
   const minimal = render("", "");
   const contentBudget = bounds.maxBytes - utf8ByteLength(minimal);
+
   if (contentBudget <= 0) return minimal;
   let headBudget = Math.floor(contentBudget / 2);
   let tailBudget = contentBudget - headBudget;
+
   for (;;) {
     const head = takePrefixWithinBytes(encodedJson, headBudget);
     const tail = takeSuffixWithinBytes(encodedJson, tailBudget);
     const output = render(head, tail);
     const outputBytes = utf8ByteLength(output);
+
     if (outputBytes <= bounds.maxBytes) return output;
     if (headBudget === 0 && tailBudget === 0) return minimal;
     const shrink = Math.max(1, Math.ceil((outputBytes - bounds.maxBytes) / 2));
+
     headBudget = Math.max(0, headBudget - shrink);
     tailBudget = Math.max(0, tailBudget - shrink);
   }

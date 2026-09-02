@@ -29,9 +29,11 @@ const withTemporaryDirectory = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-travel-planner-p6-",
       });
+
       return yield* use(directory);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -60,6 +62,7 @@ describe("TEST-014 P6 Travel Planner DN/DC equivalence — the DN half", () => {
     const decoded = Schema.decodeUnknownSync(TravelPlannerCloudflareProfile)(
       Schema.encodeSync(TravelPlannerCloudflareProfile)(phase6TravelPlannerProfile),
     );
+
     expect(decoded).toEqual(phase6TravelPlannerProfile);
     expect(phase6TravelPlannerProfile).toEqual({
       deploymentClass: "DC",
@@ -87,13 +90,16 @@ describe("TEST-014 P6 Travel Planner DN/DC equivalence — the DN half", () => {
             phase1Trip,
             phase4TravelPlannerSubmitOptions(threadId, decodeIdempotencyKey("p6-golden-dn-1")),
           );
+
           const settlements = yield* runtime.processThread(agent, threadId);
+
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.outcome).toBe("completed");
 
           const records = yield* Stream.runCollect(
             store.read(ThreadRead.make({ threadId, limit: 1_024 })),
           );
+
           expect(yield* travelPlanFromDurableSettlement(records)).toEqual(expectedTravelPlan);
 
           const normalized = yield* normalizeCrossPlatformTravelPlannerEvidence(records, receipt, {
@@ -101,6 +107,7 @@ describe("TEST-014 P6 Travel Planner DN/DC equivalence — the DN half", () => {
             deploymentId: phase4TravelPlannerDeploymentId,
             producerId: phase4TravelPlannerProducerId,
           });
+
           expect(normalized).toEqual(phase6TravelPlannerGoldenEvidence);
         }).pipe(Effect.provide(dnLayer(runtimeOptions(`${directory}/p6-golden.sqlite`)))),
       ),

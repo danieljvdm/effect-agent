@@ -73,11 +73,14 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
         const plans = generateChaosPlans({ seed: ROOT_SEED, count: PLAN_COUNT });
         // Determinism of the generator itself: the same root seed always derives the same plans.
         const regenerated = generateChaosPlans({ seed: ROOT_SEED, count: PLAN_COUNT });
+
         expect(JSON.stringify(plans)).toBe(JSON.stringify(regenerated));
 
         let verifiedLanes = 0;
+
         for (const [planIndex, plan] of plans.entries()) {
           const exit = yield* Effect.exit(runChaosPlan(plan).pipe(Effect.provide(freshLayer())));
+
           if (Exit.isFailure(exit)) {
             throw new Error(
               `chaos plan failed — ${replayHint(planIndex, plan)}\n${Cause.pretty(exit.cause)}`,
@@ -100,15 +103,19 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
   it.effect("the ChaosPlan and ChaosPlanReport Schemas round-trip their encoded form", () =>
     Effect.gen(function* () {
       const [plan] = generateChaosPlans({ seed: ROOT_SEED, count: 1 });
+
       expect(plan).toBeDefined();
       if (plan === undefined) return;
       const encoded = yield* Schema.encodeEffect(ChaosPlan)(plan);
       const decoded = yield* Schema.decodeUnknownEffect(ChaosPlan)(encoded);
+
       expect(JSON.stringify(decoded)).toBe(JSON.stringify(plan));
+
       // Invalid shapes fail typed instead of decoding incorrectly (TEST-001).
       const invalid = yield* Effect.exit(
         Schema.decodeUnknownEffect(ChaosPlan)({ ...encoded, lanes: 0 }),
       );
+
       expect(Exit.isFailure(invalid)).toBe(true);
     }),
   );

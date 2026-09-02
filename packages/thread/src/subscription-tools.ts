@@ -27,6 +27,7 @@ export const SubscriptionToolRegistration = Schema.Struct({
   expiresAtMillis: Schema.Int,
   recovery: SubscriptionSnapshot.fields.recovery,
 });
+
 export type SubscriptionToolRegistration = typeof SubscriptionToolRegistration.Type;
 
 export const SubscribeToEventParameters = Schema.Struct({
@@ -57,6 +58,7 @@ export const SubscriptionToolSourceCatalogEntry = Schema.Struct({
   parametersJsonSchema: Schema.Json,
   contextJsonSchema: Schema.Json,
 });
+
 export type SubscriptionToolSourceCatalogEntry = typeof SubscriptionToolSourceCatalogEntry.Type;
 
 const SubscriptionToolFailure = Schema.Union([
@@ -173,20 +175,25 @@ export const subscriptionToolsLayer = (
     _tag: "ExistingThread",
     threadId: options.currentThreadId,
   };
+
   const build = Effect.gen(function* () {
     const duplicate = options.permittedSources.find(
       (candidate, index, all) =>
         all.findIndex((item) => sameSource(item.source, candidate.source)) !== index,
     );
+
     if (duplicate !== undefined) {
       return yield* toolFailure("validation", "duplicate-source-catalog-entry");
     }
+
     const mismatched = options.permittedSources.find(
       (candidate) => candidate.agentId !== options.agentId,
     );
+
     if (mismatched !== undefined) {
       return yield* toolFailure("validation", "source-agent-mismatch");
     }
+
     const catalog = yield* Effect.forEach(options.permittedSources, (candidate) =>
       Effect.gen(function* () {
         const description = yield* Schema.decodeUnknownEffect(
@@ -194,6 +201,7 @@ export const subscriptionToolsLayer = (
         )(candidate.description).pipe(
           Effect.mapError(() => toolFailure("validation", "source-catalog-description")),
         );
+
         return SubscriptionToolSourceCatalogEntry.make({
           source: candidate.source,
           description,
@@ -208,10 +216,13 @@ export const subscriptionToolsLayer = (
         });
       }),
     );
+
     const subscriptions = yield* Subscriptions;
     const crypto = yield* Crypto.Crypto;
+
     const permitted = (source: EventSourceVersion) =>
       options.permittedSources.some((candidate) => sameSource(candidate.source, source));
+
     const subscribe = Effect.fn("SubscriptionTools.subscribe")(function* (parameters: {
       readonly source: EventSourceVersion;
       readonly parameters: PersistedJson;
@@ -223,6 +234,7 @@ export const subscriptionToolsLayer = (
         return yield* toolFailure("unauthorized", "source-catalog");
       }
       const step = yield* DurableStep;
+
       // The first committed Step creates one identity per Tool Call. Re-entry observes the same
       // value, while a separate identical call receives a distinct identity.
       const subscriptionId = yield* step
@@ -239,6 +251,7 @@ export const subscriptionToolsLayer = (
             Effect.fail(toolFailure("storage", `durable-step-${error.reason}`)),
           ),
         );
+
       return yield* step
         .do(
           "register-subscription",
@@ -264,6 +277,7 @@ export const subscriptionToolsLayer = (
           ),
         );
     });
+
     const list = Effect.fn("SubscriptionTools.list")(function* (parameters: {
       readonly after?: number | undefined;
       readonly limit?: number | undefined;
@@ -273,12 +287,15 @@ export const subscriptionToolsLayer = (
         parameters.after,
         parameters.limit,
       );
+
       return { items: page.items.map(registration), next: page.next };
     });
+
     const cancel = Effect.fn("SubscriptionTools.cancel")(function* (parameters: {
       readonly subscriptionId: string;
     }) {
       const step = yield* DurableStep;
+
       return yield* step
         .do(
           "cancel-subscription",
@@ -297,6 +314,7 @@ export const subscriptionToolsLayer = (
           ),
         );
     });
+
     return SubscriptionTools.of({
       list_event_sources: () => Effect.succeed(catalog),
       subscribe_to_event: subscribe,
@@ -304,5 +322,6 @@ export const subscriptionToolsLayer = (
       cancel_event_subscription: cancel,
     });
   });
+
   return SubscriptionTools.toLayer(build);
 };

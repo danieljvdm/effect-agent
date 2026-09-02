@@ -104,10 +104,12 @@ const offsetSequence = Effect.fn("MemoryThreadStore.offsetSequence")((
   if (offset === undefined) return Effect.succeed(ZERO_CANONICAL_SEQUENCE);
   const prefix = `memory:v1:${Encoding.encodeBase64(threadId)}:`;
   const encodedSequence = offset.startsWith(prefix) ? offset.slice(prefix.length) : "";
+
   if (!/^\d+$/.test(encodedSequence)) {
     return Effect.fail(storeError("observe", "Malformed observation offset"));
   }
   const sequence = Number(encodedSequence);
+
   return Number.isSafeInteger(sequence)
     ? Schema.decodeUnknownEffect(CanonicalSequence)(sequence).pipe(
         Effect.mapError(() => storeError("observe", "Malformed observation offset")),
@@ -123,6 +125,7 @@ const findThread = Effect.fn("MemoryThreadStore.findThread")((
   threadId: ThreadId,
 ): Effect.Effect<StoredThread, ThreadNotMaterialized> => {
   const thread = state.threads.get(threadId);
+
   return thread === undefined
     ? Effect.fail(ThreadNotMaterialized.make({ threadId }))
     : Effect.succeed(thread);
@@ -140,6 +143,7 @@ const validateCheckpointVersion = Effect.fn("MemoryThreadStore.validateCheckpoin
     const envelope = yield* Schema.decodeUnknownEffect(CheckpointVersionEnvelope)(value).pipe(
       Effect.mapError(() => storeError("saveCheckpoint", "Invalid saveCheckpoint request")),
     );
+
     if (envelope.checkpoint.schemaVersion !== 1) {
       return yield* CheckpointRejected.make({
         threadId: envelope.checkpoint.threadId,
@@ -153,6 +157,7 @@ const makeThreadStore = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const state = yield* Ref.make<MemoryState>({ threads: new Map() });
   const updates = yield* PubSub.sliding<void>(1);
+
   yield* Effect.addFinalizer(() => PubSub.shutdown(updates));
 
   const materialize: ThreadStore["Service"]["materialize"] = Effect.fn(
@@ -160,10 +165,12 @@ const makeThreadStore = Effect.gen(function* () {
   )((unvalidated) =>
     Effect.gen(function* () {
       const request = yield* validate(ThreadMaterialization, "materialize", unvalidated);
+
       const decision = yield* Ref.modify(
         state,
         (current): readonly [MaterializeDecision, MemoryState] => {
           const existing = current.threads.get(request.threadId);
+
           if (existing !== undefined) {
             if (request.producerEpoch < existing.producerEpoch) {
               return [
@@ -182,10 +189,12 @@ const makeThreadStore = Effect.gen(function* () {
               return [{ _tag: "success" }, current];
             }
             const threads = new Map(current.threads);
+
             threads.set(request.threadId, {
               ...existing,
               producerEpoch: request.producerEpoch,
             });
+
             return [{ _tag: "success" }, { threads }];
           }
           if (current.threads.size >= MAX_THREADS) {
@@ -198,6 +207,7 @@ const makeThreadStore = Effect.gen(function* () {
             ];
           }
           const threads = new Map(current.threads);
+
           threads.set(request.threadId, {
             producerEpoch: request.producerEpoch,
             tailSequence: ZERO_CANONICAL_SEQUENCE,
@@ -208,9 +218,11 @@ const makeThreadStore = Effect.gen(function* () {
             tailDigests: new Map([[ZERO_CANONICAL_SEQUENCE, EMPTY_TAIL_DIGEST]]),
             checkpoints: new Map(),
           });
+
           return [{ _tag: "success" }, { threads }];
         },
       );
+
       if (decision._tag === "failure") return yield* decision.error;
     }),
   );
@@ -219,6 +231,7 @@ const makeThreadStore = Effect.gen(function* () {
     (unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(FencedAppendRequest, "append", unvalidated);
+
         const digest = yield* digestCanonicalBatch(request.expectedTailDigest, request.batch).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError((error) => storeError("append", error.message, error)),
@@ -227,6 +240,7 @@ const makeThreadStore = Effect.gen(function* () {
         const decision = yield* Effect.uninterruptible(
           Ref.modify(state, (current): readonly [AppendDecision, MemoryState] => {
             const thread = current.threads.get(request.threadId);
+
             if (thread === undefined) {
               return [
                 {
@@ -252,6 +266,7 @@ const makeThreadStore = Effect.gen(function* () {
               ];
             }
             const previous = thread.batches.get(request.batch.batchId);
+
             if (previous !== undefined) {
               if (previous.digest !== digest) {
                 return [
@@ -266,6 +281,7 @@ const makeThreadStore = Effect.gen(function* () {
                   current,
                 ];
               }
+
               return [
                 {
                   _tag: "success",
@@ -312,6 +328,7 @@ const makeThreadStore = Effect.gen(function* () {
             }
 
             const batchRecordIds = new Set<RecordId>();
+
             for (const record of request.batch.records) {
               if (thread.recordIds.has(record.recordId) || batchRecordIds.has(record.recordId)) {
                 return [
@@ -331,6 +348,7 @@ const makeThreadStore = Effect.gen(function* () {
 
             const records = request.batch.records.map((record, index) => {
               const sequence = decodeCanonicalSequence(thread.tailSequence + index + 1);
+
               return CanonicalRecordEnvelope.make({
                 threadId: request.threadId,
                 batchId: request.batch.batchId,
@@ -339,20 +357,27 @@ const makeThreadStore = Effect.gen(function* () {
                 record,
               });
             });
+
             const lastSequence = decodeCanonicalSequence(thread.tailSequence + records.length);
+
             const result = AppendResult.make({
               firstSequence: decodeCanonicalSequence(thread.tailSequence + 1),
               lastSequence,
               tailDigest: digest,
               replayed: false,
             });
+
             const batches = new Map(thread.batches);
+
             batches.set(request.batch.batchId, { digest, result });
             const recordIds = new Set(thread.recordIds);
+
             for (const recordId of batchRecordIds) recordIds.add(recordId);
             const tailDigests = new Map(thread.tailDigests);
+
             tailDigests.set(lastSequence, digest);
             const threads = new Map(current.threads);
+
             threads.set(request.threadId, {
               ...thread,
               tailSequence: lastSequence,
@@ -362,6 +387,7 @@ const makeThreadStore = Effect.gen(function* () {
               batches,
               tailDigests,
             });
+
             return [{ _tag: "success", result, records }, { threads }];
           }).pipe(
             Effect.tap((decision) =>
@@ -371,7 +397,9 @@ const makeThreadStore = Effect.gen(function* () {
             ),
           ),
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.result;
       }),
   );
@@ -393,6 +421,7 @@ const makeThreadStore = Effect.gen(function* () {
       Effect.gen(function* () {
         const request = yield* validate(ThreadRead, "read", unvalidated);
         const records = yield* readSnapshot(request.threadId, request.afterSequence, request.limit);
+
         return Stream.fromIterable(records);
       }),
     );
@@ -402,16 +431,20 @@ const makeThreadStore = Effect.gen(function* () {
       Effect.gen(function* () {
         const request = yield* validate(ThreadObservation, "observe", unvalidated);
         const afterSequence = yield* offsetSequence(request.threadId, request.afterOffset);
+
         return Stream.unwrap(
           Effect.gen(function* () {
             const subscription = yield* PubSub.subscribe(updates);
+
             const initial = yield* readSnapshot(
               request.threadId,
               afterSequence,
               MAX_RECORDS_PER_THREAD,
             );
+
             const highWater =
               initial.length === 0 ? afterSequence : (initial.at(-1)?.sequence ?? afterSequence);
+
             const live = Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
               Stream.mapAccumEffect(
                 () => highWater,
@@ -423,6 +456,7 @@ const makeThreadStore = Effect.gen(function* () {
                   ),
               ),
             );
+
             return Stream.fromIterable(initial).pipe(Stream.concat(live));
           }),
         );
@@ -433,9 +467,11 @@ const makeThreadStore = Effect.gen(function* () {
     (unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(ThreadExportRequest, "export", unvalidated);
+
         const thread = yield* Ref.get(state).pipe(
           Effect.flatMap((current) => findThread(current, request.threadId)),
         );
+
         return ThreadExport.make({
           format: "effect-agent/thread@1",
           threadId: request.threadId,
@@ -451,9 +487,11 @@ const makeThreadStore = Effect.gen(function* () {
   )((unvalidated) =>
     Effect.gen(function* () {
       const request = yield* validate(ThreadTailRequest, "inspectTail", unvalidated);
+
       const thread = yield* Ref.get(state).pipe(
         Effect.flatMap((current) => findThread(current, request.threadId)),
       );
+
       return ThreadTail.make({
         threadId: request.threadId,
         tailSequence: thread.tailSequence,
@@ -468,11 +506,13 @@ const makeThreadStore = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* validateCheckpointVersion(unvalidated);
         const request = yield* validate(SaveCheckpointRequest, "saveCheckpoint", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [CheckpointDecision, MemoryState] => {
             const checkpoint = request.checkpoint;
             const thread = current.threads.get(checkpoint.threadId);
+
             if (thread === undefined) {
               return [
                 {
@@ -524,12 +564,16 @@ const makeThreadStore = Effect.gen(function* () {
               ];
             }
             const checkpoints = new Map(thread.checkpoints);
+
             checkpoints.set(checkpoint.throughSequence, checkpoint);
             const threads = new Map(current.threads);
+
             threads.set(checkpoint.threadId, { ...thread, checkpoints });
+
             return [{ _tag: "success" }, { threads }];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
       }),
   );
@@ -538,11 +582,14 @@ const makeThreadStore = Effect.gen(function* () {
     (unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(LoadCheckpointRequest, "loadCheckpoint", unvalidated);
+
         const thread = yield* Ref.get(state).pipe(
           Effect.flatMap((current) => findThread(current, request.threadId)),
         );
+
         const maximum = request.atOrBeforeSequence ?? thread.tailSequence;
         let selected: ThreadCheckpoint | undefined;
+
         for (const [sequence, checkpoint] of thread.checkpoints) {
           if (
             sequence <= maximum &&
@@ -560,6 +607,7 @@ const makeThreadStore = Effect.gen(function* () {
             reason: "digest-mismatch",
           });
         }
+
         return Option.fromNullishOr(selected);
       }),
   );

@@ -32,18 +32,22 @@ import {
 import { laneRows, runScheduleClient, scheduleStubFor } from "./harness.ts";
 
 const AlarmRow = Schema.Struct({ run_at: Schema.Number, payload: Schema.String });
+
 const StoreProbe = Schema.Struct({
   schedule_count: Schema.Natural,
   alarm_generation: Schema.Natural,
 });
 
 let identity = 0;
+
 const fixture = (label: string) => {
   const suffix = identity++;
+
   const owner: ScheduleOwner = {
     tenantId: `cf-schedule-tenant-${label}-${suffix}`,
     ownerId: `cf-schedule-owner-${label}-${suffix}`,
   };
+
   return {
     owner,
     scope: { owner, principal: TEST_PRINCIPAL },
@@ -59,10 +63,13 @@ const alarmRows = (owner: ScheduleOwner) =>
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_cf_scheduled_alarms'",
       )
       .toArray();
+
     if (tables.length === 0) return [];
+
     const rows = state.storage.sql
       .exec("SELECT run_at, payload FROM effect_cf_scheduled_alarms ORDER BY storage_id")
       .toArray();
+
     return Schema.decodeUnknownSync(Schema.Array(AlarmRow))(rows);
   });
 
@@ -77,6 +84,7 @@ const storeProbe = (owner: ScheduleOwner) =>
          WHERE singleton = 1`,
       )
       .toArray();
+
     return Schema.decodeUnknownSync(Schema.Array(StoreProbe))(rows)[0];
   });
 
@@ -84,6 +92,7 @@ const snapshotFor = (data: ReturnType<typeof fixture>) =>
   runScheduleClient(
     Effect.gen(function* () {
       const client = yield* Scheduling;
+
       return yield* client.get(data.scope, data.scheduleId);
     }),
   );
@@ -107,6 +116,7 @@ const manage = (
   runScheduleClient(
     Effect.gen(function* () {
       const client = yield* Scheduling;
+
       const options = {
         scope: data.scope,
         scheduleId: data.scheduleId,
@@ -118,6 +128,7 @@ const manage = (
         deliveryPrincipal: TEST_PRINCIPAL,
         definitions: TEST_DIGESTS,
       };
+
       return expectedRevision === undefined
         ? yield* client.create(
             { definition: plannerDefinition },
@@ -138,9 +149,11 @@ describe("Cloudflare Schedule Owner", () => {
     type Ports = ScheduleAuthorizer | ThreadObjectNamespace;
     const policyRequired: Layer.Layer<ThreadObjectNamespace> extends Host ? false : true = true;
     const routingRequired: Layer.Layer<ScheduleAuthorizer> extends Host ? false : true = true;
+
     const applicationDependenciesRequired: Layer.Layer<Ports, never, Scheduling> extends Host
       ? false
       : true = true;
+
     const nativeDependenciesAccepted: Layer.Layer<
       Ports,
       "host-initialization-failed",
@@ -160,18 +173,21 @@ describe("Cloudflare Schedule Owner", () => {
   it("stays idle without work and cancels its only alarm", async () => {
     const data = fixture("idle");
     const stub = scheduleStubFor(data.owner);
+
     expect(
       await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm()),
     ).toBeNull();
 
     const deadline = Date.now() + 60_000;
     const created = await manage(data, deadline, "first configuration");
+
     expect(created.configurationRevision).toBe(1);
     expect(await alarmRows(data.owner)).toHaveLength(1);
 
     await runScheduleClient(
       Effect.gen(function* () {
         const client = yield* Scheduling;
+
         return yield* client.cancel(data.scope, data.scheduleId, created.configurationRevision);
       }),
     );
@@ -184,6 +200,7 @@ describe("Cloudflare Schedule Owner", () => {
   it("delivers healthy work beside a corrupt record and retains a future recovery alarm", async () => {
     const broken = fixture("corrupt-a");
     const healthy = { ...fixture("healthy-b"), owner: broken.owner, scope: broken.scope };
+
     await manage(broken, Date.now() + 60_000, "corrupt this record");
     await manage(healthy, Date.now() + 60_000, "deliver this record");
     await runInDurableObject(scheduleStubFor(broken.owner), (_instance, state) => {
@@ -199,16 +216,19 @@ describe("Cloudflare Schedule Owner", () => {
     });
     const passStartedAt = Date.now();
     const result = await runAlarmDirectExit(broken.owner);
+
     expect(result._tag).toBe("Success");
     expect((await snapshotFor(healthy)).lastReceipt).not.toBeNull();
     expect(await laneRows(healthy.thread)).toHaveLength(1);
     const alarms = await alarmRows(broken.owner);
+
     expect(alarms).toHaveLength(1);
     expect(alarms[0]?.run_at).toBeGreaterThan(passStartedAt);
   });
 
   it("rolls back the schedule row and logical/native alarm when alarm mutation fails", async () => {
     const data = fixture("alarm-rollback");
+
     armScheduleFailure(data.owner, "schedule:alarm:after");
     await expect(manage(data, Date.now() + 60_000, "must roll back")).rejects.toMatchObject({
       _tag: "ScheduleFailpointError",
@@ -224,18 +244,22 @@ describe("Cloudflare Schedule Owner", () => {
     ).toBeNull();
 
     const retried = await manage(data, Date.now() + 60_000, "must roll back");
+
     expect(retried.configurationRevision).toBe(1);
   });
 
   it("rejects an invalid recovery deadline before changing the persisted wake", async () => {
     const data = fixture("invalid-recovery-deadline");
+
     await manage(data, Date.now() + 60_000, "retain the valid wake");
     const before = await alarmRows(data.owner);
     const beforeState = await storeProbe(data.owner);
+
     const error = await runInDurableObject(scheduleStubFor(data.owner), (instance) =>
       instance[DurableObject.RunSymbol](
         Effect.gen(function* () {
           const alarms = yield* DoScheduleAlarmControl;
+
           return yield* alarms.prearm(Number.MAX_SAFE_INTEGER).pipe(Effect.flip);
         }),
       ),
@@ -250,6 +274,7 @@ describe("Cloudflare Schedule Owner", () => {
     const data = fixture("policy-resource-scope");
     const resources = observeSchedulePolicyResources(data.owner);
     const created = await manage(data, Date.now() + 60_000, "scoped policy");
+
     expect(resources.acquired).toBeGreaterThan(0);
     expect(resources.released).toBe(resources.acquired);
 
@@ -273,15 +298,18 @@ describe("Cloudflare Schedule Owner", () => {
   it("replays a create whose reply was lost after its atomic commit without replacing the alarm", async () => {
     const data = fixture("create-lost-reply");
     const deadline = Date.now() + 60_000;
+
     armScheduleFailure(data.owner, "schedule:insert:after");
     await expect(manage(data, deadline, "commit before reply loss")).rejects.toMatchObject({
       _tag: "ScheduleFailpointError",
       point: "schedule:insert:after",
     });
     const committedAlarm = await alarmRows(data.owner);
+
     expect(await storeProbe(data.owner)).toEqual({ schedule_count: 1, alarm_generation: 1 });
 
     const replay = await manage(data, deadline, "commit before reply loss");
+
     expect(replay.configurationRevision).toBe(1);
     expect(await storeProbe(data.owner)).toEqual({ schedule_count: 1, alarm_generation: 1 });
     expect(await alarmRows(data.owner)).toEqual(committedAlarm);
@@ -299,6 +327,7 @@ describe("Cloudflare Schedule Owner", () => {
       "replacement at the identical deadline",
       created.configurationRevision,
     );
+
     const after = await alarmRows(data.owner);
 
     expect(updated.configurationRevision).toBe(2);
@@ -310,17 +339,20 @@ describe("Cloudflare Schedule Owner", () => {
 
   it("admits one due occurrence and quiesces after replayed alarm delivery", async () => {
     const data = fixture("due");
+
     await manage(data, Date.now(), "deliver exactly one occurrence");
     const stub = scheduleStubFor(data.owner);
 
     for (let attempt = 0; attempt < 10; attempt++) {
       await runDurableObjectAlarm(stub);
       const snapshot = await snapshotFor(data);
+
       if (snapshot.lastReceipt !== null) break;
       await Effect.runPromise(Effect.yieldNow);
     }
 
     const rows = await laneRows(data.thread);
+
     expect(rows).toHaveLength(1);
     await runDurableObjectAlarm(stub);
     expect(await laneRows(data.thread)).toHaveLength(1);
@@ -333,11 +365,13 @@ describe("Cloudflare Schedule Owner", () => {
       const gate = armScheduleAdmissionPause(data.owner);
       const created = await manage(data, Date.now(), `${operation} after Thread accepts`);
       const alarm = runDurableObjectAlarm(scheduleStubFor(data.owner));
+
       await gate.reached;
 
       const controlled = await runScheduleClient(
         Effect.gen(function* () {
           const client = yield* Scheduling;
+
           return yield* client[operation](
             data.scope,
             data.scheduleId,
@@ -345,6 +379,7 @@ describe("Cloudflare Schedule Owner", () => {
           );
         }),
       );
+
       expect(controlled.state).toBe(operation === "pause" ? "paused" : "cancelled");
       expect(controlled.pending).not.toBeNull();
       expect(await alarmRows(data.owner)).toHaveLength(1);
@@ -352,6 +387,7 @@ describe("Cloudflare Schedule Owner", () => {
       gate.release();
       await alarm;
       const recovered = await snapshotFor(data);
+
       expect(recovered.pending).toBeNull();
       expect(recovered.lastReceipt).not.toBeNull();
       expect(await laneRows(data.thread)).toHaveLength(1);
@@ -364,10 +400,12 @@ describe("Cloudflare Schedule Owner", () => {
     const gate = armScheduleAdmissionPause(data.owner);
     const created = await manage(data, Date.now(), "old occurrence");
     const alarm = runDurableObjectAlarm(scheduleStubFor(data.owner));
+
     await gate.reached;
     const beforeUpdate = await alarmRows(data.owner);
 
     const replacementDeadline = Date.now() + 120_000;
+
     await manage(
       data,
       replacementDeadline,
@@ -375,11 +413,13 @@ describe("Cloudflare Schedule Owner", () => {
       created.configurationRevision,
     );
     const afterUpdate = await alarmRows(data.owner);
+
     expect(afterUpdate[0]?.payload).not.toBe(beforeUpdate[0]?.payload);
 
     gate.release();
     await alarm;
     const afterOldAcknowledgement = await alarmRows(data.owner);
+
     expect(afterOldAcknowledgement).toHaveLength(1);
     expect(afterOldAcknowledgement[0]?.run_at).toBe(replacementDeadline);
     expect(await laneRows(data.thread)).toHaveLength(1);
@@ -390,11 +430,13 @@ describe("Cloudflare Schedule Owner", () => {
     const idle = observeScheduleIdle(data.owner);
     // Eviction is consumed before this gate, so only the replacement can reach it.
     const admissionGate = armScheduleAdmissionPause(data.owner);
+
     armScheduleAdmissionEviction(data.owner);
     await manage(data, Date.now(), "survive owner eviction after admission");
 
     await admissionGate.reached;
     const pending = await snapshotFor(data);
+
     expect(pending.pending).not.toBeNull();
     expect(pending.lastReceipt).toBeNull();
     expect(await laneRows(data.thread)).toHaveLength(1);
@@ -403,6 +445,7 @@ describe("Cloudflare Schedule Owner", () => {
     admissionGate.release();
     await idle;
     const recovered = await snapshotFor(data);
+
     expect(recovered.pending).toBeNull();
     expect(recovered.lastReceipt).not.toBeNull();
     expect(await laneRows(data.thread)).toHaveLength(1);
@@ -413,6 +456,7 @@ describe("Cloudflare Schedule Owner", () => {
     const data = fixture("prepare-eviction");
     const idle = observeScheduleIdle(data.owner);
     const admissionGate = armScheduleAdmissionPause(data.owner);
+
     armScheduleEviction(data.owner, "schedule:prepare:after");
     await manage(data, Date.now(), "recover committed prepare");
     await admissionGate.reached;
@@ -421,6 +465,7 @@ describe("Cloudflare Schedule Owner", () => {
     admissionGate.release();
     await idle;
     const recovered = await snapshotFor(data);
+
     expect(recovered.pending).toBeNull();
     expect(recovered.lastReceipt).not.toBeNull();
     expect(await laneRows(data.thread)).toHaveLength(1);
@@ -430,6 +475,7 @@ describe("Cloudflare Schedule Owner", () => {
     const data = fixture("retry-exhaustion");
     const idle = observeScheduleIdle(data.owner);
     const authorizationFailures = holdScheduleAuthorizationFailures(data.owner);
+
     await manage(data, Date.now(), "recover beyond bounded native retries");
     expect(await authorizationFailures.reached(6)).toBeGreaterThanOrEqual(6);
     expect(await alarmRows(data.owner)).toHaveLength(1);
@@ -437,6 +483,7 @@ describe("Cloudflare Schedule Owner", () => {
     authorizationFailures.release();
     await idle;
     const recovered = await snapshotFor(data);
+
     expect(recovered.lastReceipt).not.toBeNull();
     expect(await laneRows(data.thread)).toHaveLength(1);
     expect(await alarmRows(data.owner)).toEqual([]);
@@ -445,6 +492,7 @@ describe("Cloudflare Schedule Owner", () => {
   for (const corruption of ["tag", "version"] as const) {
     it(`fails closed on an unknown alarm ${corruption}`, async () => {
       const data = fixture(`unknown-${corruption}`);
+
       await manage(data, Date.now() + 60_000, "invalid alarm protocol row");
       await runInDurableObject(scheduleStubFor(data.owner), async (_instance, state) => {
         if (corruption === "tag") {
@@ -463,6 +511,7 @@ describe("Cloudflare Schedule Owner", () => {
       });
 
       const result = await runAlarmDirectExit(data.owner);
+
       expect(result._tag).toBe("Failure");
       expect(await alarmRows(data.owner)).toHaveLength(1);
     });

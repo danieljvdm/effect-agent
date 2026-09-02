@@ -150,11 +150,13 @@ const envelopeAt = (sequence: number, record: RecordEnvelope): CanonicalRecordEn
 
 const envelopesOf = (batches: ReadonlyArray<CanonicalBatch>): Array<CanonicalRecordEnvelope> => {
   const envelopes: Array<CanonicalRecordEnvelope> = [];
+
   for (const batch of batches) {
     for (const record of batch.records) {
       envelopes.push(envelopeAt(envelopes.length + 1, record));
     }
   }
+
   return envelopes;
 };
 
@@ -192,6 +194,7 @@ describe("run journal batch split (plan §2.1)", () => {
     it.effect("splits a tool Turn into response and results batches with stable identities", () =>
       Effect.gen(function* () {
         const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+
         expect(response.batchId).toBe(turnResponseBatchId(RUN_ID, 1));
         expect(response.batchId).toBe(`turn-response:${RUN_ID}:1`);
         expect(response.records.map((record) => record.recordId)).toEqual([
@@ -200,6 +203,7 @@ describe("run journal batch split (plan §2.1)", () => {
         expect(response.records[0]?.payload._tag).toBe("ModelResponseRecorded");
 
         const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+
         expect(results.batchId).toBe(turnResultsBatchId(RUN_ID, 1));
         expect(results.batchId).toBe(`turn-results:${RUN_ID}:1`);
         // Declaration order, record identity unchanged from the P4 single-batch shape.
@@ -216,6 +220,7 @@ describe("run journal batch split (plan §2.1)", () => {
         const responseAgain = yield* turnResponseBatch(turnInput(toolTurnAppended));
         const encodedAgain = yield* Schema.encodeEffect(RecordEnvelope)(responseAgain.records[0]!);
         const encodedFirst = yield* Schema.encodeEffect(RecordEnvelope)(response.records[0]!);
+
         expect(encodedAgain).toEqual(encodedFirst);
       }),
     );
@@ -285,6 +290,7 @@ describe("run journal batch split (plan §2.1)", () => {
         const records = envelopesOf([failedResponse]);
 
         const recovering = yield* projectRunJournal(records, RUN_ID);
+
         expect(
           recovering.prompt.content.some(
             (message) =>
@@ -294,6 +300,7 @@ describe("run journal batch split (plan §2.1)", () => {
         ).toBe(true);
 
         const later = yield* projectRunJournal(records, LATER_RUN_ID);
+
         expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
         expect(
           later.prompt.content.some(
@@ -313,6 +320,7 @@ describe("run journal batch split (plan §2.1)", () => {
         const records = envelopesOf([response]);
 
         const recovering = yield* projectRunJournal(records, RUN_NONE_ID);
+
         expect(recovering.prompt.content.map((message) => message.role)).toEqual([
           "system",
           "user",
@@ -320,6 +328,7 @@ describe("run journal batch split (plan §2.1)", () => {
         ]);
 
         const canonicalPrompt = yield* promptFromCanonicalRecords(records);
+
         expect(canonicalPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
       }),
     );
@@ -338,9 +347,11 @@ describe("run journal batch split (plan §2.1)", () => {
             ],
           }),
         ];
+
         const response = yield* turnResponseBatch(turnInput(malformedTurn));
 
         const error = yield* promptFromCanonicalRecords(envelopesOf([response])).pipe(Effect.flip);
+
         expect(isRunJournalError(error)).toBe(true);
         expect(error.message).toBe("Failed to decode a declared Tool Call ID");
       }),
@@ -353,14 +364,17 @@ describe("run journal batch split (plan §2.1)", () => {
           const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
           const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
           const firstSettled = results.records[0]!;
+
           const partialRecords = [response.records[0]!, firstSettled].map((record, index) =>
             envelopeAt(index + 1, record),
           );
 
           const recovering = yield* projectRunJournal(partialRecords, RUN_ID);
+
           const recoveringAssistant = recovering.prompt.content.find(
             (message) => message.role === "assistant",
           );
+
           expect(
             recoveringAssistant?.role === "assistant"
               ? recoveringAssistant.content
@@ -368,9 +382,11 @@ describe("run journal batch split (plan §2.1)", () => {
                   .map((part) => part.id)
               : [],
           ).toEqual([CALL_ONE, CALL_TWO]);
+
           const recoveringTool = recovering.prompt.content.find(
             (message) => message.role === "tool",
           );
+
           expect(
             recoveringTool?.role === "tool"
               ? recoveringTool.content
@@ -380,6 +396,7 @@ describe("run journal batch split (plan §2.1)", () => {
           ).toEqual([CALL_ONE]);
 
           const later = yield* projectRunJournal(partialRecords, LATER_RUN_ID);
+
           expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
           expect(later.prompt.content.some((message) => message.role === "assistant")).toBe(false);
           expect(later.prompt.content.some((message) => message.role === "tool")).toBe(false);
@@ -400,11 +417,14 @@ describe("run journal batch split (plan §2.1)", () => {
               ],
             }),
           ];
+
           const providerResponse = yield* turnResponseBatch(turnInput(providerTurn));
+
           const providerLater = yield* projectRunJournal(
             envelopesOf([providerResponse]),
             LATER_RUN_ID,
           );
+
           expect(providerLater.prompt.content.map((message) => message.role)).toEqual([
             "system",
             "user",
@@ -442,6 +462,7 @@ describe("run journal batch split (plan §2.1)", () => {
             ],
           }),
         ];
+
         const secondTurn: ReadonlyArray<Prompt.Message> = [
           Prompt.makeMessage("assistant", {
             content: [
@@ -461,6 +482,7 @@ describe("run journal batch split (plan §2.1)", () => {
         const records = envelopesOf([firstResponse, firstResults, secondResponse]);
 
         const recovering = yield* projectRunJournal(records, RUN_ID);
+
         expect(recovering.prompt.content.map((message) => message.role)).toEqual([
           "system",
           "user",
@@ -470,6 +492,7 @@ describe("run journal batch split (plan §2.1)", () => {
         ]);
 
         const later = yield* projectRunJournal(records, LATER_RUN_ID);
+
         expect(later.prompt.content.map((message) => message.role)).toEqual([
           "system",
           "user",
@@ -497,7 +520,9 @@ describe("run journal batch split (plan §2.1)", () => {
             ...turnInput(toolTurnAppended),
             runScopedPrefixLength: 2,
           });
+
           const firstResults = yield* turnResultsBatch(turnInput(toolTurnAppended));
+
           const chatTurn: ReadonlyArray<Prompt.Message> = [
             Prompt.makeMessage("user", {
               content: [
@@ -510,15 +535,18 @@ describe("run journal batch split (plan §2.1)", () => {
               ],
             }),
           ];
+
           const secondResponse = yield* turnResponseBatch(turnInput(chatTurn, 2));
           const records = envelopesOf([firstResponse, firstResults, secondResponse]);
 
           const recovering = yield* projectRunJournal(records, RUN_ID);
+
           expect(textOfPrompt(recovering.prompt)).toContain("Answer as JSON.");
           expect(textOfPrompt(recovering.prompt)).toContain("book?");
 
           const later = yield* projectRunJournal(records, LATER_RUN_ID);
           const laterText = textOfPrompt(later.historyBefore);
+
           expect(laterText).not.toContain("Answer as JSON.");
           expect(laterText).not.toContain("book?");
           expect(laterText).toContain("Please mention the cancellation terms.");
@@ -546,6 +574,7 @@ describe("run journal batch split (plan §2.1)", () => {
           parameters: { destination: "Kyoto" },
           parametersDigest: "a".repeat(64),
         });
+
         const approvalRequested = auditRecord(`approval-request:${RUN_ID}:1:call-1`, {
           _tag: "ToolApprovalRequested",
           runId: RUN_ID,
@@ -555,6 +584,7 @@ describe("run journal batch split (plan §2.1)", () => {
           toolName: "book_flight",
           parametersDigest: "a".repeat(64),
         });
+
         const approvalDecided = auditRecord(`approval-decision:${RUN_ID}:1:call-1`, {
           _tag: "ToolApprovalDecided",
           runId: RUN_ID,
@@ -564,6 +594,7 @@ describe("run journal batch split (plan §2.1)", () => {
           resolver: "operator",
           reason: "reviewed",
         });
+
         const step = auditRecord(`step:${RUN_ID}:call-1:reserve-flight`, {
           _tag: "ToolStepSettled",
           runId: RUN_ID,
@@ -572,6 +603,7 @@ describe("run journal batch split (plan §2.1)", () => {
           output: { bookingRef: "flight-42" },
           outputDigest: "b".repeat(64),
         });
+
         const unknown = auditRecord(`tool-unknown:${RUN_ID}:1:call-2`, {
           _tag: "ToolCallUnknown",
           runId: RUN_ID,
@@ -580,6 +612,7 @@ describe("run journal batch split (plan §2.1)", () => {
           toolName: "book_lodging",
           reason: "worker lost mid-handler",
         });
+
         const resolved = auditRecord(`tool-resolved:${RUN_ID}:1:call-2`, {
           _tag: "ToolCallResolved",
           runId: RUN_ID,
@@ -588,6 +621,7 @@ describe("run journal batch split (plan §2.1)", () => {
           author: "operator",
           reason: "supplier store shows the booking",
         });
+
         const interrupted = auditRecord(`interrupted:${RUN_ID}:2`, {
           _tag: "ModelResponseInterrupted",
           runId: RUN_ID,
@@ -625,6 +659,7 @@ describe("run journal batch split (plan §2.1)", () => {
           "tool",
         ]);
         const toolMessage = transparent.prompt.content.at(-1);
+
         expect(toolMessage?.role === "tool" ? toolMessage.content.length : undefined).toBe(2);
       }),
     );
@@ -653,6 +688,7 @@ describe("run journal batch split (plan §2.1)", () => {
           childPrincipal: "tenant-a",
           childIdempotencyKey: childIdempotencyKeyFor(RUN_ID, CALL_ONE),
         });
+
         const started = auditRecord(`subagent-started:${RUN_ID}:call-1`, {
           _tag: "SubagentStarted",
           runId: RUN_ID,
@@ -662,6 +698,7 @@ describe("run journal batch split (plan §2.1)", () => {
           childReceiptId: "receipt-child-1",
           childRunId: "run:submission-child-1",
         });
+
         const joined = auditRecord(`subagent-joined:${RUN_ID}:call-1`, {
           _tag: "SubagentJoined",
           runId: RUN_ID,
@@ -675,6 +712,7 @@ describe("run journal batch split (plan §2.1)", () => {
           reservationId: "reservation-1",
           finalAccounting: { consumed: { turns: 1 }, released: { turns: 3 } },
         });
+
         const lineage = auditRecord(`subagent-lineage:${THREAD_ID}`, {
           _tag: "SubagentLineageRecorded",
           parentLink: {
@@ -716,6 +754,7 @@ describe("run journal batch split (plan §2.1)", () => {
         expect(transparent.committedTurns).toBe(plain.committedTurns);
         expect(transparent.prompt).toEqual(plain.prompt);
         const toolMessage = transparent.prompt.content.at(-1);
+
         expect(toolMessage?.role === "tool" ? toolMessage.content.length : undefined).toBe(2);
       }),
     );
@@ -727,7 +766,9 @@ describe("run journal batch split (plan §2.1)", () => {
             content: [Prompt.makePart("text", { text: '{"answer":"done"}' })],
           }),
         ];
+
         const failure = yield* Effect.flip(turnResultsBatch(turnInput(noToolTurn)));
+
         expect(failure._tag).toBe("RunJournalError");
 
         // And the response builder rejects a Turn with no model-visible messages at all.
@@ -744,10 +785,13 @@ describe("run journal batch split (plan §2.1)", () => {
             ],
           }),
         ];
+
         const responseFailure = yield* Effect.flip(turnResponseBatch(turnInput(onlyTools)));
+
         expect(responseFailure._tag).toBe("RunJournalError");
 
         const badTurn = yield* Effect.flip(turnResponseBatch(turnInput(toolTurnAppended, 0)));
+
         expect(badTurn._tag).toBe("RunJournalError");
       }),
     );
@@ -800,6 +844,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
     overrides: CompactionOverrides,
   ): (typeof RecordEnvelope.Encoded)["payload"] => {
     const summary = "summary" in overrides ? overrides.summary : "Goal: book the Kyoto trip";
+
     return {
       _tag: "CompactionCreated",
       runId: `${LATER_RUN_ID}`,
@@ -839,6 +884,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
   it("RUN-026: CompactionCreated round-trips its reshaped payload and rejects the legacy shape", () => {
     const record = auditRecord("compaction-roundtrip", compactionPayload({}));
     const encoded = Schema.encodeSync(RecordEnvelope)(record);
+
     expect(encoded.payload).toEqual(compactionPayload({}));
     expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
 
@@ -846,6 +892,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
       "compaction-clear",
       compactionPayload({ kind: "clear-tool-results", summary: undefined }),
     );
+
     expect(Schema.encodeSync(RecordEnvelope)(clear).payload).toMatchObject({
       kind: "clear-tool-results",
     });
@@ -864,6 +911,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
         summary: "legacy",
       },
     });
+
     expect(legacy._tag).toBe("Failure");
   });
 
@@ -872,12 +920,15 @@ describe("engine compaction records and projection (RUN-026)", () => {
       Effect.gen(function* () {
         const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
         const envelopes = envelopesOf([turnOne]);
+
         const compaction = envelopeAt(
           envelopes.length + 1,
           auditRecord("compaction-fold", compactionPayload({ coversThrough: envelopes.length })),
         );
+
         const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
         const text = promptText(projection.historyBefore);
+
         expect(text).toContain("The prior thread was compacted into this summary:");
         expect(text).toContain("Goal: book the Kyoto trip");
         expect(text).not.toContain("book?");
@@ -891,13 +942,16 @@ describe("engine compaction records and projection (RUN-026)", () => {
         const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
         const turnTwo = yield* turnCanonicalBatch(turnInput(secondToolTurn, 2));
         const envelopes = envelopesOf([turnOne, turnTwo]);
+
         // Covers exactly Turn 1's three records; Turn 2 is the kept tail.
         const compaction = envelopeAt(
           envelopes.length + 1,
           auditRecord("compaction-tail", compactionPayload({ coversThrough: 3 })),
         );
+
         const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
         const text = promptText(projection.historyBefore);
+
         expect(text).toContain("Goal: book the Kyoto trip");
         expect(toolResults(projection.historyBefore)).toEqual([{ bookingRef: "lodging-7" }]);
       }),
@@ -910,6 +964,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
           const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
           const turnTwo = yield* turnCanonicalBatch(turnInput(secondToolTurn, 2));
           const envelopes = envelopesOf([turnOne, turnTwo]);
+
           const compaction = envelopeAt(
             envelopes.length + 1,
             auditRecord(
@@ -921,8 +976,10 @@ describe("engine compaction records and projection (RUN-026)", () => {
               }),
             ),
           );
+
           const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
           const results = toolResults(projection.historyBefore);
+
           expect(results).toEqual([
             "[tool result cleared by compaction]",
             "[tool result cleared by compaction]",
@@ -930,6 +987,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
           ]);
           // The assistant declarations stay: pairing structure is preserved.
           const text = promptText(projection.historyBefore);
+
           expect(text).not.toContain("compacted into this summary");
         }),
     );
@@ -938,6 +996,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
       Effect.gen(function* () {
         const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
         const envelopes = envelopesOf([turnOne]);
+
         // coversThrough at or beyond the record's own sequence is invalid.
         const beyond = envelopeAt(
           envelopes.length + 1,
@@ -946,6 +1005,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
             compactionPayload({ coversThrough: envelopes.length + 1 }),
           ),
         );
+
         const missingSummary = envelopeAt(
           envelopes.length + 2,
           auditRecord(
@@ -953,10 +1013,12 @@ describe("engine compaction records and projection (RUN-026)", () => {
             compactionPayload({ summary: undefined, coversThrough: 1 }),
           ),
         );
+
         const projection = yield* projectRunJournal(
           [...envelopes, beyond, missingSummary],
           LATER_RUN_ID,
         );
+
         expect(promptText(projection.historyBefore)).toContain("book?");
         expect(toolResults(projection.historyBefore)).toEqual([
           { bookingRef: "flight-42" },
@@ -972,14 +1034,17 @@ describe("engine compaction records and projection (RUN-026)", () => {
           const priorTurn = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
           const ownerTurn = yield* turnCanonicalBatch(turnInput(secondToolTurn, 1, LATER_RUN_ID));
           const envelopes = envelopesOf([priorTurn, ownerTurn]);
+
           // coversThrough reaches into LATER_RUN_ID's own records (sequences 4+):
           // valid by the below-own-sequence rule alone, invalid by owner precedence.
           const compaction = envelopeAt(
             envelopes.length + 1,
             auditRecord("compaction-covers-owner", compactionPayload({ coversThrough: 5 })),
           );
+
           const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
           const text = promptText(projection.prompt);
+
           expect(text).not.toContain("compacted into this summary");
           expect(text).toContain("book?");
           expect(toolResults(projection.prompt)).toEqual([
@@ -996,12 +1061,14 @@ describe("engine compaction records and projection (RUN-026)", () => {
         Effect.gen(function* () {
           const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
           const envelopes = envelopesOf([turnOne]);
+
           // Sequence 1 is Turn 1's ModelResponseRecorded; its settled results
           // sit at sequences 2-3. A bound of 1 would orphan the tool message.
           const splitSummarize = envelopeAt(
             envelopes.length + 1,
             auditRecord("compaction-split-summarize", compactionPayload({ coversThrough: 1 })),
           );
+
           const splitClear = envelopeAt(
             envelopes.length + 2,
             auditRecord(
@@ -1013,11 +1080,14 @@ describe("engine compaction records and projection (RUN-026)", () => {
               }),
             ),
           );
+
           const projection = yield* projectRunJournal(
             [...envelopes, splitSummarize, splitClear],
             LATER_RUN_ID,
           );
+
           const text = promptText(projection.historyBefore);
+
           expect(text).not.toContain("compacted into this summary");
           expect(text).toContain("book?");
           expect(toolResults(projection.historyBefore)).toEqual([
@@ -1032,6 +1102,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
         const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
         const turnTwo = yield* turnCanonicalBatch(turnInput(secondToolTurn, 2));
         const envelopes = envelopesOf([turnOne, turnTwo]);
+
         const first = envelopeAt(
           envelopes.length + 1,
           auditRecord(
@@ -1039,6 +1110,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
             compactionPayload({ coversThrough: 3, summary: "Goal: early summary" }),
           ),
         );
+
         const second = envelopeAt(
           envelopes.length + 2,
           auditRecord(
@@ -1046,8 +1118,10 @@ describe("engine compaction records and projection (RUN-026)", () => {
             compactionPayload({ coversThrough: 5, summary: "Goal: later summary" }),
           ),
         );
+
         const projection = yield* projectRunJournal([...envelopes, first, second], LATER_RUN_ID);
         const text = promptText(projection.historyBefore);
+
         expect(text).toContain("Goal: later summary");
         expect(text).not.toContain("Goal: early summary");
         expect(toolResults(projection.historyBefore)).toEqual([]);
@@ -1059,13 +1133,17 @@ describe("engine compaction records and projection (RUN-026)", () => {
         const turnOne = yield* turnCanonicalBatch(
           turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 100, outputTokens: 10 }),
         );
+
         const turnTwo = yield* turnCanonicalBatch(
           turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 250, outputTokens: 20 }),
         );
+
         const other = yield* turnCanonicalBatch(
           turnInput(toolTurnAppended, 1, LATER_RUN_ID, { inputTokens: 999, outputTokens: 99 }),
         );
+
         const projection = yield* projectRunJournal(envelopesOf([turnOne, turnTwo, other]), RUN_ID);
+
         expect(projection.usage).toEqual({
           modelCalls: 2,
           inputTokens: 350,
@@ -1088,18 +1166,23 @@ describe("engine compaction records and projection (RUN-026)", () => {
             turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: Number.NaN, outputTokens: 5 }),
           ),
         );
+
         expect(nan._tag).toBe("RunJournalError");
+
         const negative = yield* Effect.flip(
           turnCanonicalBatch(
             turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: -5, outputTokens: 5 }),
           ),
         );
+
         expect(negative._tag).toBe("RunJournalError");
+
         const fractional = yield* Effect.flip(
           turnCanonicalBatch(
             turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 10.5, outputTokens: 5 }),
           ),
         );
+
         expect(fractional._tag).toBe("RunJournalError");
       }),
     );

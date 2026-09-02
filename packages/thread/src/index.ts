@@ -1,6 +1,7 @@
 export * from "./admin.ts";
 export * from "./activity.ts";
 export * from "./committed-activity.ts";
+
 export {
   BindingUnavailable,
   BindingDigestMismatch,
@@ -12,6 +13,7 @@ export {
   type DurableBindingFailure,
   type ResolvedBinding,
 } from "./agent-registration.ts";
+
 export * from "./digest.ts";
 export * from "./durable-failpoint.ts";
 export * from "./durable-runtime.ts";

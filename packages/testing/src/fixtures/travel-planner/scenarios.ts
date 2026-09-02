@@ -4,6 +4,7 @@ import type { ScriptedTurnInput } from "../../scripted-model.ts";
 import { TravelPlan, TripRequest, type TravelPlan as TravelPlanValue } from "./definition.ts";
 
 const usage = { inputTokens: { total: 128 }, outputTokens: { total: 96 } };
+
 export const phase1Trip = Schema.decodeSync(TripRequest)({
   request:
     "Plan a review-only London trip using the deterministic flight, lodging, and activity searches.",
@@ -15,6 +16,7 @@ export const phase1Trip = Schema.decodeSync(TripRequest)({
   budgetCents: 350_000,
   currency: "USD",
 });
+
 export const expectedTravelPlan: TravelPlanValue = Schema.decodeSync(TravelPlan)({
   itineraries: [
     {

@@ -70,21 +70,25 @@ import {
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PARENT_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
+
 const CHILD_DIGEST_STRINGS = {
   agent: "b".repeat(64),
   model: "c".repeat(64),
   tools: "d".repeat(64),
 } as const;
+
 const CHILD_DIGESTS = DefinitionDigests.make({
   agent: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.agent),
   model: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.model),
   tools: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.tools),
 });
+
 const WRONG_CHILD_DIGESTS = DefinitionDigests.make({
   agent: Schema.decodeSync(Digest)("e".repeat(64)),
   model: Schema.decodeSync(Digest)("e".repeat(64)),
   tools: Schema.decodeSync(Digest)("e".repeat(64)),
 });
+
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-subagents");
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
@@ -126,6 +130,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts: Array<Prompt.Prompt> = [];
+
     const model = Model.make(
       "scripted",
       "durable-subagents-test",
@@ -138,6 +143,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
               Ref.getAndUpdate(calls, (call) => call + 1).pipe(
                 Effect.map((call) => {
                   prompts.push(request.prompt);
+
                   return Stream.fromIterable(script(call));
                 }),
               ),
@@ -145,6 +151,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
         }),
       ),
     );
+
     return { model, prompts, calls: Ref.get(calls) };
   });
 
@@ -292,6 +299,7 @@ const baseLayer = (ledger: Layer.Layer<SubmissionLedger>) =>
   );
 
 const testLayer = baseLayer(MemorySubmissionLedgerLive);
+
 const faultTestLayer = baseLayer(
   memorySubmissionLedgerLayer({
     resolveAdmissionFault: Effect.sync(() =>
@@ -303,6 +311,7 @@ const faultTestLayer = baseLayer(
 const makeChildFixture = Effect.gen(function* () {
   const childScripted = yield* makeScriptedModel(() => finalParts('{"answer":"child-answer"}'));
   const childBinding = Agent.withModel(childDefinition, childScripted.model);
+
   return { childScripted, childBinding };
 });
 
@@ -311,10 +320,12 @@ const identifiers = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
     const counter = yield* Ref.make(0);
+
     const next = <A>(decode: (value: string) => A, prefix: string) =>
       Ref.getAndUpdate(counter, (value) => value + 1).pipe(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
+
     return {
       nextThreadId: next(decodeThreadId, "fixture-thread"),
       nextRunId: next(Schema.decodeSync(RunId), "fixture-run"),
@@ -335,12 +346,14 @@ const submitParentWith =
   (thread: string, key: string) =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const receipt = yield* runtime.submit(
         // The structural submit slice only needs identity + input schema.
         { definition: { id: definition.id, input: coordinatorDefinition.input } },
         { mission: "plan" },
         submitOptions(thread, key),
       );
+
       return { submissionId: receipt.submissionId, threadId: receipt.threadId };
     });
 
@@ -353,24 +366,30 @@ const submitParentWith =
 const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionDigests }) =>
   Effect.gen(function* () {
     const { childScripted, childBinding } = yield* makeChildFixture;
+
     const parentScripted = yield* makeScriptedModel((call) =>
       call === 0
         ? toolTurn(toolCall("delegate-1", "delegate_research", { topic: "paris" }))
         : finalParts('{"report":"done"}'),
     );
+
     const parentBinding = Agent.withModel(coordinatorDefinition, parentScripted.model);
+
     const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
       mapChildFailure,
       durable: { targetDigests: CHILD_DIGEST_STRINGS },
     }).pipe(Layer.provide(delegationSupport));
+
     const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       parentBinding,
       PARENT_DIGESTS,
     ).pipe(Effect.provide(delegationLayer));
+
     const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       options?.childRegistrationDigests ?? CHILD_DIGESTS,
     );
+
     return {
       bindings: [parentResolved, childResolved],
       childInvocations: childScripted.calls,
@@ -384,6 +403,7 @@ const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionD
 const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true) =>
   Effect.gen(function* () {
     const { childScripted, childBinding } = yield* makeChildFixture;
+
     const parentScripted = yield* makeScriptedModel((call) =>
       call === 0
         ? toolTurn(
@@ -392,10 +412,12 @@ const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true)
           )
         : finalParts('{"report":"done"}'),
     );
+
     const lookupTool =
       pendingSibling && retryableSibling
         ? Lookup.annotate(ToolExecutionClass, "idempotent")
         : Lookup;
+
     const definition = Agent.make(mixedCoordinatorDefinition.id, {
       input: mixedCoordinatorDefinition.input,
       output: mixedCoordinatorDefinition.output,
@@ -403,13 +425,16 @@ const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true)
       toolkit: Toolkit.make(researchDelegation.tool, lookupTool),
       policy: mixedCoordinatorDefinition.policy,
     });
+
     const parentBinding = Agent.withModel(definition, parentScripted.model);
     const lookupInvocations = yield* Ref.make(0);
     const lookupFinalizers = yield* Ref.make(0);
+
     const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
       mapChildFailure,
       durable: { targetDigests: CHILD_DIGEST_STRINGS },
     }).pipe(Layer.provide(delegationSupport));
+
     const lookupLayer = Toolkit.make(lookupTool).toLayer({
       lookup: ({ key }) =>
         Ref.update(lookupInvocations, (count) => count + 1).pipe(
@@ -417,14 +442,17 @@ const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true)
           Effect.ensuring(Ref.update(lookupFinalizers, (count) => count + 1)),
         ),
     });
+
     const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       parentBinding,
       PARENT_DIGESTS,
     ).pipe(Effect.provide(Layer.mergeAll(delegationLayer, lookupLayer)));
+
     const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       CHILD_DIGESTS,
     );
+
     return {
       bindings: [parentResolved, childResolved],
       childInvocations: childScripted.calls,
@@ -443,12 +471,14 @@ const drive =
   (harness: { readonly bindings: ReadonlyArray<ResolvedBinding> }) => (threadId: ThreadId) =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       return yield* runtime.processThreadResolved(threadId, harness.bindings);
     });
 
 const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1_024 })));
   });
 
@@ -456,23 +486,28 @@ const parentState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value;
   });
 
 const parentReservations = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
+
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId }),
     );
+
     return snapshot.childReservations;
   });
 
 const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
   Effect.gen(function* () {
     const control = yield* DurableRuntimeFailpointTestControl;
+
     yield* control.setHandler((hitLocation) =>
       hitLocation === location
         ? Effect.fail(DurableRuntimeFailpointError.make({ location: hitLocation }))
@@ -482,6 +517,7 @@ const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
 
 const clearFailpoint = Effect.gen(function* () {
   const control = yield* DurableRuntimeFailpointTestControl;
+
   yield* control.clear;
 });
 
@@ -489,9 +525,11 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
   const error: unknown = failure.value;
+
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -514,27 +552,34 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         yield* clearFailpoint;
         const runtime = yield* DurableAgentRuntime;
         const ledger = yield* SubmissionLedger;
+
         const exactScripted = yield* makeScriptedModel((call) =>
           call === 0
             ? toolTurn(toolCall("lookup-version", "lookup", { key: "version-a" }))
             : finalParts('{"report":"version-a"}'),
         );
+
         const wrongScripted = yield* makeScriptedModel(() => finalParts('{"report":"wrong"}'));
         const toolInvocations = yield* Ref.make(0);
+
         const lookupLayer = Toolkit.make(Lookup).toLayer({
           lookup: ({ key }) =>
             Ref.update(toolInvocations, (count) => count + 1).pipe(
               Effect.as({ value: `found-${key}` }),
             ),
         });
+
         const exactAgent = Agent.withModel(versionedRootDefinition, exactScripted.model);
         const wrongAgent = Agent.withModel(versionedRootDefinition, wrongScripted.model);
+
         const exactBinding = yield* DurableWorkerBinding.make(exactAgent, PARENT_DIGESTS).pipe(
           Effect.provide(lookupLayer),
         );
+
         const wrongBinding = yield* DurableWorkerBinding.make(wrongAgent, WRONG_CHILD_DIGESTS).pipe(
           Effect.provide(lookupLayer),
         );
+
         const receipt = yield* runtime.submit(
           exactAgent,
           { mission: "select version A" },
@@ -543,12 +588,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
         const assertClaimReleased = Effect.gen(function* () {
           expect((yield* parentState(receipt.submissionId)).state).toBe("running");
+
           const reclaimed = yield* ledger.claim(
             ClaimRequest.make({
               threadId: receipt.threadId,
               producerId: Schema.decodeSync(ProducerId)("producer-versioned-root-proof"),
             }),
           );
+
           expect(Option.isSome(reclaimed)).toBe(true);
           if (Option.isNone(reclaimed))
             throw new Error("Expected the refused root claim to release");
@@ -582,6 +629,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           wrongBinding,
           exactBinding,
         ]);
+
         expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
         expect((yield* parentState(receipt.submissionId)).state).toBe("settled");
         expect(yield* exactScripted.calls).toBe(2);
@@ -604,47 +652,58 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
         // Phase 1: establishment + waitingForChild suspension.
         const first = yield* run(parent.threadId);
+
         expect(first).toHaveLength(0);
         expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
         // The waiting lane holds no worker permit and is not claimable (SUB-030).
         const ledger = yield* SubmissionLedger;
+
         const claimed = yield* ledger.claim(
           ClaimRequest.make({
             threadId: parent.threadId,
             producerId: Schema.decodeSync(ProducerId)("producer-durable-subagents"),
           }),
         );
+
         expect(Option.isNone(claimed)).toBe(true);
         // The child never ran in-process while the parent waited.
         expect(yield* harness.childInvocations).toBe(0);
         const afterEstablish = yield* readLog(parent.threadId);
+
         expect(recordIds(afterEstablish)).toContain(`subagent-requested:${parentRunId}:delegate-1`);
         expect(recordIds(afterEstablish)).toContain(`subagent-started:${parentRunId}:delegate-1`);
         const reservations = yield* parentReservations(parent.submissionId);
+
         expect(reservations).toHaveLength(1);
         expect(reservations[0]?.status).toBe("reserved");
 
         // Phase 2: the child lane runs to Settlement and wakes the parent durably.
         const childSettlements = yield* run(childThreadId);
+
         expect(childSettlements).toHaveLength(1);
         expect(childSettlements[0]?.outcome).toBe("completed");
         expect(yield* harness.childInvocations).toBe(1);
         expect((yield* parentState(parent.submissionId)).state).toBe("input-applied");
         const childLog = yield* readLog(childThreadId);
+
         expect(recordIds(childLog)).toContain(`subagent-lineage:${childThreadId}`);
 
         // Phase 3: the woken parent joins the verified child Settlement atomically.
         const settlements = yield* run(parent.threadId);
+
         expect(settlements).toHaveLength(1);
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* harness.childInvocations).toBe(1);
         const log = yield* readLog(parent.threadId);
         const joined = payloadsOf(log, "SubagentJoined");
+
         expect(joined).toHaveLength(1);
         expect(joined[0]?.batchId).toBe(`subagent-join:${parentRunId}:delegate-1`);
+
         const joinSettle = log.find(
           (envelope) => envelope.record.recordId === `tool-settled:${parentRunId}:1:delegate-1`,
         );
+
         expect(joinSettle?.batchId).toBe(`subagent-join:${parentRunId}:delegate-1`);
         expect(
           joinSettle?.record.payload._tag === "ToolCallSettled"
@@ -652,13 +711,16 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             : undefined,
         ).toEqual({ summary: "finding:child-answer" });
         const released = yield* parentReservations(parent.submissionId);
+
         expect(released[0]?.status).toBe("released");
         // Task #12: the resumed Attempt's next model request still carries the
         // Turn-1 leading messages (instructions + input) before the assistant
         // tool-call message.
         const finalPrompt = harness.parentPrompts.at(-1);
+
         expect(finalPrompt).toBeDefined();
         const roles = (finalPrompt?.content ?? []).map((message) => message.role);
+
         expect(roles.indexOf("user")).toBeGreaterThanOrEqual(0);
         expect(roles.indexOf("user")).toBeLessThan(roles.indexOf("assistant"));
       }),
@@ -674,6 +736,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
 
       const first = yield* run(parent.threadId);
+
       expect(first).toHaveLength(0);
       expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
 
@@ -683,20 +746,24 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       yield* TestClock.adjust(Duration.seconds(31));
 
       const childSettlements = yield* run(childThreadId);
+
       expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
       expect((yield* parentState(parent.submissionId)).state).toBe("input-applied");
 
       const parentSettlements = yield* run(parent.threadId);
+
       expect(parentSettlements.map((settlement) => settlement.outcome)).toEqual(["failed"]);
       expect(yield* harness.childInvocations).toBe(1);
       expect(harness.parentPrompts).toHaveLength(1);
 
       const log = yield* readLog(parent.threadId);
+
       expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
       expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
         "released",
       ]);
       const settled = payloadsOf(log, "SubmissionSettled")[0]?.record.payload;
+
       if (settled?._tag !== "SubmissionSettled") throw new Error("Expected SubmissionSettled");
       expect(settled.policyLimit).toBe("duration");
       expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
@@ -713,16 +780,20 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           "subagent:after-release-pending",
           "subagent:after-release",
         ];
+
         for (const location of locations) {
           yield* clearFailpoint;
           const harness = yield* makeSiblingHarnessWith(true);
           const run = drive(harness);
+
           const parent = yield* harness.submitParent(
             `expired-mixed-${location ?? "complete"}`,
             "parent",
           );
+
           const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
           const firstAttempt = yield* Effect.forkChild(run(parent.threadId));
+
           yield* TestClock.adjust(Duration.seconds(31));
           expect(yield* Fiber.join(firstAttempt)).toEqual([]);
           expect(yield* harness.lookupInvocations).toBe(1);
@@ -743,6 +814,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           expect(yield* harness.childInvocations).toBe(1);
           expect(harness.parentPrompts).toHaveLength(1);
           const records = yield* readLog(parent.threadId);
+
           expect(payloadsOf(records, "SubagentJoined")).toHaveLength(1);
           expect(
             payloadsOf(records, "ToolCallSettled").map(({ record }) => record.payload),
@@ -775,18 +847,21 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         const run = drive(harness);
         const parent = yield* harness.submitParent("expired-uncertain-mixed", "parent");
         const firstAttempt = yield* Effect.forkChild(run(parent.threadId));
+
         yield* TestClock.adjust(Duration.seconds(31));
         expect(yield* Fiber.join(firstAttempt)).toEqual([]);
         expect(yield* run(parent.threadId)).toEqual([]);
         yield* runtime.runRecovery;
         expect((yield* parentState(parent.submissionId)).state).not.toBe("unknown");
         const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
+
         expect((yield* run(childThreadId)).map((entry) => entry.outcome)).toEqual(["completed"]);
         yield* runtime.runRecovery;
         expect((yield* parentState(parent.submissionId)).state).not.toBe("unknown");
         expect(yield* run(parent.threadId)).toEqual([]);
         expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
         const records = yield* readLog(parent.threadId);
+
         expect(payloadsOf(records, "SubagentJoined")).toHaveLength(1);
         expect(
           payloadsOf(records, "ToolCallUnknown").map(({ record }) => record.payload),
@@ -817,6 +892,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const ledger = yield* SubmissionLedger;
+
         for (const scenario of [
           { location: "subagent:after-reserve" as const, requested: false },
           { location: "subagent:after-request-append" as const, requested: true },
@@ -825,11 +901,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             yield* clearFailpoint;
             const harness = yield* makeSiblingHarnessWith(true, false);
             const run = drive(harness);
+
             const parent = yield* harness.submitParent(
               `expired-unstarted-${scenario.location.replaceAll(":", "-")}-${order}`,
               "parent",
             );
+
             const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
+
             const childLookup = SubmissionLookupByKey.make({
               threadId: childThreadId,
               principal: PRINCIPAL,
@@ -845,6 +924,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             yield* clearFailpoint;
             const lookupStarts = yield* harness.lookupInvocations;
             const lookupFinalizers = yield* harness.lookupFinalizers;
+
             expect(
               (yield* parentReservations(parent.submissionId)).map((row) => row.status),
             ).toEqual(["reserved"]);
@@ -876,6 +956,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             for (let pass = 0; pass < 4; pass += 1) {
               const state = yield* parentState(parent.submissionId);
               const reservations = yield* parentReservations(parent.submissionId);
+
               if (
                 state.state === "unknown" &&
                 reservations.every((row) => row.status === "released")
@@ -891,6 +972,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             ).toEqual(["released"]);
             expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
             const beforeResolution = yield* readLog(parent.threadId);
+
             expect(payloadsOf(beforeResolution, "SubagentStarted")).toHaveLength(0);
             expect(payloadsOf(beforeResolution, "SubagentJoined")).toHaveLength(0);
             expect(
@@ -908,8 +990,10 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
               }),
             );
             expect((yield* run(parent.threadId)).map((entry) => entry.outcome)).toEqual(["failed"]);
+
             const settled = payloadsOf(yield* readLog(parent.threadId), "SubmissionSettled")[0]
               ?.record.payload;
+
             expect(settled).toMatchObject({ outcome: "failed", policyLimit: "duration" });
             expect(yield* harness.childInvocations).toBe(0);
             expect(yield* harness.lookupInvocations).toBe(lookupStarts);
@@ -929,10 +1013,12 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const ledger = yield* SubmissionLedger;
+
         for (const order of ["worker-first", "recovery-first"] as const) {
           yield* clearFailpoint;
           const harness = yield* makeSiblingHarnessWith(true, false);
           const run = drive(harness);
+
           const parent = yield* harness.submitParent(
             `expired-admitted-before-start-${order}`,
             "parent",
@@ -945,17 +1031,22 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           yield* clearFailpoint;
           const lookupStarts = yield* harness.lookupInvocations;
           const lookupFinalizers = yield* harness.lookupFinalizers;
+
           const requested = payloadsOf(yield* readLog(parent.threadId), "SubagentRequested")[0]
             ?.record.payload;
+
           if (requested?._tag !== "SubagentRequested") {
             throw new Error("Expected SubagentRequested");
           }
+
           const lookup = SubmissionLookupByKey.make({
             threadId: requested.childThreadId,
             principal: PRINCIPAL,
             idempotencyKey: decodeIdempotencyKey(requested.childIdempotencyKey),
           });
+
           const admittedBefore = yield* ledger.resolveAdmission(lookup);
+
           expect(admittedBefore._tag).toBe("Admitted");
           if (admittedBefore._tag !== "Admitted") throw new Error("Expected admitted child");
           expect(payloadsOf(yield* readLog(parent.threadId), "SubagentStarted")).toHaveLength(0);
@@ -967,6 +1058,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           } else {
             yield* runtime.runRecovery;
             const admittedAfterRecovery = yield* ledger.resolveAdmission(lookup);
+
             expect(admittedAfterRecovery._tag).toBe("Admitted");
             if (admittedAfterRecovery._tag !== "Admitted") {
               throw new Error("Expected admitted child");
@@ -992,6 +1084,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           }
           const repairedLog = yield* readLog(parent.threadId);
           const started = payloadsOf(repairedLog, "SubagentStarted")[0]?.record.payload;
+
           if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
           expect(started.childSubmissionId).toBe(admittedBefore.submission.submissionId);
           expect(started.childReceiptId).toBe(admittedBefore.submission.receiptId);
@@ -1004,6 +1097,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           for (let pass = 0; pass < 4; pass += 1) {
             const state = yield* parentState(parent.submissionId);
             const reservations = yield* parentReservations(parent.submissionId);
+
             if (
               state.state === "unknown" &&
               reservations.every((row) => row.status === "released")
@@ -1019,12 +1113,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           );
           expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
           const joinedLog = yield* readLog(parent.threadId);
+
           expect(payloadsOf(joinedLog, "SubagentStarted")).toHaveLength(1);
           expect(payloadsOf(joinedLog, "SubagentJoined")).toHaveLength(1);
           expect(
             payloadsOf(joinedLog, "ToolCallUnknown").map(({ record }) => record.payload),
           ).toMatchObject([{ toolCallId: "lookup-1" }]);
           const admittedAfter = yield* ledger.resolveAdmission(lookup);
+
           expect(admittedAfter._tag).toBe("Admitted");
           if (admittedAfter._tag !== "Admitted") throw new Error("Expected admitted child");
           expect(admittedAfter.submission.submissionId).toBe(
@@ -1042,8 +1138,10 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             }),
           );
           expect((yield* run(parent.threadId)).map((entry) => entry.outcome)).toEqual(["failed"]);
+
           const settled = payloadsOf(yield* readLog(parent.threadId), "SubmissionSettled")[0]
             ?.record.payload;
+
           expect(settled).toMatchObject({ outcome: "failed", policyLimit: "duration" });
           expect(yield* harness.childInvocations).toBe(1);
           expect(yield* harness.lookupInvocations).toBe(lookupStarts);
@@ -1065,20 +1163,24 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
 
       const firstAttempt = yield* Effect.forkChild(run(parent.threadId));
+
       yield* TestClock.adjust(Duration.seconds(31));
       expect(yield* Fiber.join(firstAttempt)).toEqual([]);
       expect(yield* run(parent.threadId)).toEqual([]);
       expect((yield* run(childThreadId)).map((entry) => entry.outcome)).toEqual(["completed"]);
 
       const beforeRecords = yield* readLog(parent.threadId);
+
       const canonicalStart = beforeRecords.find(
         ({ record }) => record.payload._tag === "RunStarted",
       )?.record.payload;
+
       if (canonicalStart?._tag !== "RunStarted") throw new Error("Expected RunStarted");
       expect(payloadsOf(beforeRecords, "SubagentJoined")).toHaveLength(0);
       expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
         "reserved",
       ]);
+
       const beforeSnapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
       );
@@ -1101,6 +1203,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             ),
           ),
       });
+
       const rejected = yield* Effect.exit(
         DurableAgentRuntime.pipe(
           Effect.flatMap((hostileRuntime) => hostileRuntime.runRecovery),
@@ -1108,6 +1211,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           Effect.provideService(ThreadStore, conflicting),
         ),
       );
+
       expect(failureTag(rejected)).toBe("RunJournalError");
       if (Exit.isSuccess(rejected)) throw new Error("Expected conflicting recovery to fail");
       expect(Option.getOrUndefined(Cause.findErrorOption(rejected.cause))).toMatchObject({
@@ -1117,8 +1221,10 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       const afterSnapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
       );
+
       expect(afterSnapshot).toEqual(beforeSnapshot);
       const afterRejected = yield* readLog(parent.threadId);
+
       expect(afterRejected).toEqual(beforeRecords);
       expect(payloadsOf(afterRejected, "SubagentJoined")).toHaveLength(0);
       expect(payloadsOf(afterRejected, "ToolCallUnknown")).toHaveLength(0);
@@ -1137,14 +1243,17 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
   it.effect("RUN-030: expired cleanup rejects missing or mismatched canonical Tool identity", () =>
     Effect.gen(function* () {
       const store = yield* ThreadStore;
+
       for (const corrupt of ["missing", "mismatched"] as const) {
         yield* clearFailpoint;
         const harness = yield* makeHarness();
         const run = drive(harness);
         const parent = yield* harness.submitParent(`expired-identity-${corrupt}`, "parent");
+
         yield* run(parent.threadId);
         yield* run(childThreadIdFor(parent.submissionId, DELEGATE_CALL));
         yield* TestClock.adjust(Duration.seconds(31));
+
         const faulty = ThreadStore.of({
           ...store,
           read: (request) =>
@@ -1169,12 +1278,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
               ),
             ),
         });
+
         const rejected = yield* Effect.exit(
           run(parent.threadId).pipe(
             Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
             Effect.provideService(ThreadStore, faulty),
           ),
         );
+
         expect(failureTag(rejected)).toBe(
           corrupt === "missing" ? "RunJournalError" : "LedgerError",
         );
@@ -1194,6 +1305,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         const harness = yield* makeHarness();
         const run = drive(harness);
         const parent = yield* harness.submitParent("expired-before-attachment-marker", "parent");
+
         yield* armFailpoint("subagent:after-start-append");
         expect(failureTag(yield* Effect.exit(run(parent.threadId)))).toBe(
           "DurableRuntimeFailpointError",
@@ -1217,10 +1329,12 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
     () =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         for (const classification of ["missing", "conflicting"] as const) {
           yield* clearFailpoint;
           const harness = yield* makeHarness();
           const parent = yield* harness.submitParent(`classification-${classification}`, "parent");
+
           yield* armFailpoint(
             classification === "missing"
               ? "tools:after-prepared-append"
@@ -1230,6 +1344,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             "DurableRuntimeFailpointError",
           );
           yield* clearFailpoint;
+
           const corruptStore = ThreadStore.of({
             ...store,
             read: (request) =>
@@ -1241,6 +1356,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
                   )
                     return envelope;
                   const { executionKind: _kind, ...prepared } = envelope.record.payload;
+
                   return {
                     ...envelope,
                     record: RecordEnvelope.make({
@@ -1254,12 +1370,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
                 }),
               ),
           });
+
           const result = yield* Effect.exit(
             drive(harness)(parent.threadId).pipe(
               Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
               Effect.provideService(ThreadStore, corruptStore),
             ),
           );
+
           if (classification === "conflicting") expect(failureTag(result)).toBe("RunJournalError");
           else {
             expect(result).toMatchObject({ _tag: "Success", value: [] });
@@ -1276,16 +1394,20 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const harness = yield* makeHarness();
       const parent = yield* harness.submitParent("changed-delegation-binding", "parent");
+
       yield* armFailpoint("tools:after-prepared-append");
       expect(failureTag(yield* Effect.exit(drive(harness)(parent.threadId)))).toBe(
         "DurableRuntimeFailpointError",
       );
       yield* clearFailpoint;
+
       const replacement = Tool.make("delegate_research", {
         parameters: Schema.Struct({ topic: Schema.String }),
         success: Schema.Struct({ summary: Schema.String }),
       });
+
       const toolkit = Toolkit.make(replacement);
+
       const definition = Agent.make(coordinatorDefinition.id, {
         input: coordinatorDefinition.input,
         output: coordinatorDefinition.output,
@@ -1293,8 +1415,10 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         toolkit,
         policy: coordinatorDefinition.policy,
       });
+
       const scripted = yield* makeScriptedModel(() => finalParts('{"report":"unexpected"}'));
       const calls = yield* Ref.make(0);
+
       const exit = yield* Effect.exit(
         runtime.processThread(Agent.withModel(definition, scripted.model), parent.threadId).pipe(
           Effect.provide(
@@ -1305,6 +1429,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           ),
         ),
       );
+
       expect(failureTag(exit)).toBe("RunJournalError");
       expect(yield* Ref.get(calls)).toBe(0);
       expect(payloadsOf(yield* readLog(parent.threadId), "SubagentRequested")).toHaveLength(0);
@@ -1323,6 +1448,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         "subagent:after-start-append",
         "subagent:after-suspend",
       ];
+
       for (const location of locations) {
         yield* clearFailpoint;
         const harness = yield* makeHarness();
@@ -1333,32 +1459,40 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
         yield* armFailpoint(location);
         const exit = yield* Effect.exit(run(parent.threadId));
+
         expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         // Idempotent re-entry converges: one child, one Receipt, one start link.
         if (location === "tools:after-prepared-append") {
           const prepared = payloadsOf(yield* readLog(parent.threadId), "ToolCallPrepared");
+
           expect(prepared[0]?.record.payload).toMatchObject({ executionKind: "delegation" });
           expect(payloadsOf(yield* readLog(parent.threadId), "SubagentRequested")).toHaveLength(0);
         }
         yield* run(parent.threadId);
         const childSettlements = yield* run(childThreadId);
+
         expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
         const settlements = yield* run(parent.threadId);
+
         expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
         expect(yield* harness.childInvocations).toBe(1);
         const log = yield* readLog(parent.threadId);
+
         expect(payloadsOf(log, "SubagentRequested")).toHaveLength(1);
         expect(payloadsOf(log, "SubagentStarted")).toHaveLength(1);
         expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
         const childLog = yield* readLog(childThreadId);
+
         expect(payloadsOf(childLog, "ThreadCreated")).toHaveLength(1);
         expect(payloadsOf(childLog, "SubagentLineageRecorded")).toHaveLength(1);
         // SUB-016/SUB-017: the one recorded Receipt matches the one admitted child.
         const started = payloadsOf(log, "SubagentStarted")[0]?.record.payload;
+
         if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
         const child = yield* parentState(started.childSubmissionId);
+
         expect(child.receiptId).toBe(started.childReceiptId);
         expect(child.state).toBe("settled");
       }
@@ -1387,16 +1521,20 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
           yield* armFailpoint(location);
           const exit = yield* Effect.exit(run(parent.threadId));
+
           expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
           const settlements = yield* run(parent.threadId);
+
           expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
           // The completed child was never re-executed on the lost join acknowledgment.
           expect(yield* harness.childInvocations).toBe(1);
           const log = yield* readLog(parent.threadId);
+
           expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
           const reservations = yield* parentReservations(parent.submissionId);
+
           expect(reservations.map((row) => row.status)).toEqual(["released"]);
         }
       }),
@@ -1415,27 +1553,33 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           // A child whose model emits invalid output: its lane settles FAILED.
           const childScripted = yield* makeScriptedModel(() => finalParts("not-json"));
           const childBinding = Agent.withModel(childDefinition, childScripted.model);
+
           const parentScripted = yield* makeScriptedModel((call) =>
             call === 0
               ? toolTurn(toolCall("delegate-1", "delegate_research_contained", { topic: "paris" }))
               : finalParts('{"report":"handled"}'),
           );
+
           const parentBinding = Agent.withModel(
             containedCoordinatorDefinition,
             parentScripted.model,
           );
+
           const delegationLayer = SubagentRuntime.layer(containedResearchDelegation, childBinding, {
             mapChildFailure,
             durable: { targetDigests: CHILD_DIGEST_STRINGS },
           }).pipe(Layer.provide(delegationSupport));
+
           const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
             parentBinding,
             PARENT_DIGESTS,
           ).pipe(Effect.provide(delegationLayer));
+
           const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
             childBinding,
             CHILD_DIGESTS,
           );
+
           const harness = {
             bindings: [parentResolved, childResolved],
             childInvocations: childScripted.calls,
@@ -1443,6 +1587,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             submitParent: submitParentWith(containedCoordinatorDefinition),
             lookupInvocations: Effect.succeed(0),
           };
+
           const run = drive(harness);
           const thread = `thread-s2-contained-${location.replaceAll(":", "-")}`;
           const parent = yield* harness.submitParent(thread, `contained-${location}`);
@@ -1451,11 +1596,13 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
           yield* run(parent.threadId);
           const childSettlements = yield* run(childThreadId);
+
           expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["failed"]);
           expect(yield* harness.childInvocations).toBe(1);
 
           yield* armFailpoint(location);
           const exit = yield* Effect.exit(run(parent.threadId));
+
           expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
@@ -1463,17 +1610,22 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           // result data, exactly one non-failure Tool settlement exists, and
           // the child was never re-executed.
           const settlements = yield* run(parent.threadId);
+
           expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
           expect(yield* harness.childInvocations).toBe(1);
           const log = yield* readLog(parent.threadId);
+
           expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
+
           const joinSettles = log.filter(
             (envelope) =>
               envelope.record.payload._tag === "ToolCallSettled" &&
               envelope.record.recordId === `tool-settled:${parentRunId}:1:delegate-1`,
           );
+
           expect(joinSettles).toHaveLength(1);
           const settled = joinSettles[0]?.record.payload;
+
           if (settled?._tag === "ToolCallSettled") {
             expect(settled.isFailure).toBe(false);
             expect(settled.result).toMatchObject({
@@ -1484,6 +1636,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           // The rebuilt model context carries the contained failure as an
           // ordinary (non-error) tool result: the parent's final prompt saw it.
           const finalPrompt = JSON.stringify(harness.parentPrompts.at(-1));
+
           expect(finalPrompt).toContain("SubagentExecutionFailure");
         }
       }),
@@ -1503,6 +1656,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         if (armed) {
           yield* armFailpoint("subagent:after-sibling-settle");
           const exit = yield* Effect.exit(run(parent.threadId));
+
           expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
         }
@@ -1510,15 +1664,18 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         // The sibling's terminal result is canonical as a per-call late-settle batch even
         // though the batch suspended before its results commit.
         const log = yield* readLog(parent.threadId);
+
         const siblingSettle = log.find(
           (envelope) => envelope.record.recordId === `tool-settled:${parentRunId}:1:lookup-1`,
         );
+
         expect(siblingSettle?.batchId).toBe(`turn-results:${parentRunId}:1:lookup-1`);
         expect(yield* harness.lookupInvocations).toBe(1);
         expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
 
         yield* run(childThreadId);
         const settlements = yield* run(parent.threadId);
+
         expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
         // The settled sibling was injected on resume, never re-executed.
         expect(yield* harness.lookupInvocations).toBe(1);
@@ -1540,8 +1697,10 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
       yield* run(parent.threadId);
       expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
+
       const started = payloadsOf(yield* readLog(parent.threadId), "SubagentStarted")[0]?.record
         .payload;
+
       if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
       yield* runtime.abort(
         AbortCommand.make({
@@ -1555,40 +1714,52 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       // order: the child settles after the parent propagates its abort, without running code.
       const reports = [...(yield* runtime.runRecovery), ...(yield* runtime.runRecovery)];
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
+
       expect(parentReport?.decision._tag).toBe("PropagateChildAbort");
       expect(parentReport?.disposition).toBe("repaired");
+
       const childReport = reports.find(
         (report) =>
           report.submissionId === started.childSubmissionId &&
           report.decision._tag === "SettleAborted",
       );
+
       expect(childReport?.decision._tag).toBe("SettleAborted");
       const child = yield* parentState(started.childSubmissionId);
+
       expect(child.state).toBe("settled");
       expect(child.settledOutcome).toBe("aborted");
       expect(yield* harness.childInvocations).toBe(0);
       // Replaying the propagation is a no-op repair: the recorded child abort intent IS the
       // marker (DUR-012), and the settled child now classifies as a pending join.
       const secondReports = yield* runtime.runRecovery;
+
       const secondParentReport = secondReports.find(
         (report) => report.submissionId === parent.submissionId,
       );
+
       expect(secondParentReport?.decision._tag).toBe("ResumeWaitingParent");
       void childThreadId;
 
       const settlements = yield* run(parent.threadId);
+
       expect(settlements.map((settlement) => settlement.outcome)).toEqual(["aborted"]);
       const log = yield* readLog(parent.threadId);
       const joined = payloadsOf(log, "SubagentJoined");
+
       expect(joined).toHaveLength(1);
       const joinedPayload = joined[0]?.record.payload;
+
       if (joinedPayload?._tag !== "SubagentJoined") throw new Error("Expected SubagentJoined");
       expect(joinedPayload.childOutcome).toBe("aborted");
+
       // The join committed BEFORE the aborted parent settlement (spec §13.1).
       const settledEnvelope = log.find(
         (envelope) => envelope.record.recordId === `settlement:${parent.submissionId}`,
       );
+
       const joinedEnvelope = joined[0];
+
       expect(joinedEnvelope !== undefined && settledEnvelope !== undefined).toBe(true);
       if (joinedEnvelope !== undefined && settledEnvelope !== undefined) {
         expect(Number(joinedEnvelope.sequence)).toBeLessThan(Number(settledEnvelope.sequence));
@@ -1613,37 +1784,45 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
       yield* armFailpoint("subagent:after-request-append");
       const exit = yield* Effect.exit(run(parent.threadId));
+
       expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       // Pass 1: the canonical request alone admits the one intended child (D3, SUB-016).
       const first = yield* runtime.runRecovery;
       const admissionReport = first.find((report) => report.submissionId === parent.submissionId);
+
       expect(admissionReport?.decision._tag).toBe("CompleteChildAdmission");
       expect(admissionReport?.disposition).toBe("repaired");
       const childLog = yield* readLog(childThreadId);
+
       expect(payloadsOf(childLog, "ThreadCreated")).toHaveLength(1);
       expect(payloadsOf(childLog, "SubagentLineageRecorded")).toHaveLength(1);
 
       // Pass 2: the exact deterministic start link is appended for the same Receipt.
       const second = yield* runtime.runRecovery;
       const startReport = second.find((report) => report.submissionId === parent.submissionId);
+
       expect(startReport?.decision._tag).toBe("RepairSubagentStartLink");
       expect(startReport?.disposition).toBe("repaired");
 
       // Pass 3: the waitingForChild checkpoint is restored; the lane holds no permit.
       const third = yield* runtime.runRecovery;
       const waitingReport = third.find((report) => report.submissionId === parent.submissionId);
+
       expect(waitingReport?.decision._tag).toBe("EnsureWaitingForChild");
       expect(waitingReport?.disposition).toBe("repaired");
       expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
 
       const childSettlements = yield* run(childThreadId);
+
       expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
       const settlements = yield* run(parent.threadId);
+
       expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
       expect(yield* harness.childInvocations).toBe(1);
       const log = yield* readLog(parent.threadId);
+
       expect(payloadsOf(log, "SubagentStarted")).toHaveLength(1);
     }),
   );
@@ -1660,14 +1839,17 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       const ledger = yield* SubmissionLedger;
 
       yield* run(parent.threadId);
+
       const started = payloadsOf(yield* readLog(parent.threadId), "SubagentStarted")[0]?.record
         .payload;
+
       if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
 
       // The child's settlement record commits but the finalize/notify never runs (a crash
       // between the canonical append and the cross-lane wake).
       yield* armFailpoint("terminalize:after-canonical-append");
       const exit = yield* Effect.exit(run(childThreadId));
+
       expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       // Finalize the child directly WITHOUT the coordinator's drive-forward notification.
@@ -1681,11 +1863,13 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
       const reports = yield* runtime.runRecovery;
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
+
       expect(parentReport?.decision._tag).toBe("ResumeWaitingParent");
       expect(parentReport?.disposition).toBe("repaired");
       expect((yield* parentState(parent.submissionId)).state).toBe("input-applied");
 
       const settlements = yield* run(parent.threadId);
+
       expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
       expect(yield* harness.childInvocations).toBe(1);
     }),
@@ -1702,6 +1886,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
       yield* armFailpoint("subagent:after-reserve");
       const exit = yield* Effect.exit(run(parent.threadId));
+
       expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
@@ -1717,6 +1902,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       );
       const first = yield* runtime.runRecovery;
       const orphanReport = first.find((report) => report.submissionId === parent.submissionId);
+
       expect(orphanReport?.decision._tag).toBe("ReleaseOrphanChildReservation");
       expect(orphanReport?.disposition).toBe("repaired");
       expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
@@ -1725,12 +1911,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
       const second = yield* runtime.runRecovery;
       const settleReport = second.find((report) => report.submissionId === parent.submissionId);
+
       expect(settleReport?.decision._tag).toBe("SettleAborted");
       expect(settleReport?.disposition).toBe("repaired");
       expect((yield* parentState(parent.submissionId)).state).toBe("settled");
       // No child was ever admitted for the orphaned reservation.
       const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
       const ledger = yield* SubmissionLedger;
+
       const resolution = yield* ledger.resolveAdmission(
         SubmissionLookupByKey.make({
           threadId: childThreadId,
@@ -1740,9 +1928,11 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           ),
         }),
       );
+
       expect(resolution._tag).toBe("NotAdmitted");
       // The delegation call was never marked Unknown (spec §13 vs. DUR-009).
       const log = yield* readLog(parent.threadId);
+
       expect(payloadsOf(log, "ToolCallUnknown")).toHaveLength(0);
     }),
   );
@@ -1764,10 +1954,12 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         // The child lane's claimed head cannot resolve its exact stored Binding: framework
         // code writes the Schema-stable ChildCompatibilityFailure Settlement (SUB-023/SUB-032).
         const childSettlements = yield* run(childThreadId);
+
         expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["failed"]);
         expect(yield* harness.childInvocations).toBe(0);
         const childLog = yield* readLog(childThreadId);
         const settled = payloadsOf(childLog, "SubmissionSettled")[0]?.record.payload;
+
         if (settled?._tag !== "SubmissionSettled") throw new Error("Expected SubmissionSettled");
         expect(
           typeof settled.result === "object" &&
@@ -1779,10 +1971,12 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
         // The woken parent joins the bounded compatibility failure and settles failed.
         const settlements = yield* run(parent.threadId);
+
         expect(settlements.map((settlement) => settlement.outcome)).toEqual(["failed"]);
         expect(yield* harness.childInvocations).toBe(0);
         const log = yield* readLog(parent.threadId);
         const joined = payloadsOf(log, "SubagentJoined")[0]?.record.payload;
+
         if (joined?._tag !== "SubagentJoined") throw new Error("Expected SubagentJoined");
         expect(joined.childOutcome).toBe("failed");
         expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
@@ -1807,10 +2001,12 @@ layer(faultTestLayer)("S2 durable Subagents under indeterminate admission (SUB-0
       admissionFault = "the authoritative child owner is unreachable";
       // The Attempt aborts typed: an indeterminate answer never permits an admission attempt.
       const exit = yield* Effect.exit(run(parent.threadId));
+
       expect(failureTag(exit)).toBe("LedgerError");
       // Recovery classifies the wait honestly and defers — no second admission either.
       const reports = yield* runtime.runRecovery;
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
+
       expect(parentReport?.decision._tag).toBe("AwaitChildAdmissionResolution");
       expect(parentReport?.disposition).toBe("deferred");
 
@@ -1818,11 +2014,14 @@ layer(faultTestLayer)("S2 durable Subagents under indeterminate admission (SUB-0
       // The authoritative owner answers: exactly one child is admitted and joined.
       yield* run(parent.threadId);
       const childSettlements = yield* run(childThreadId);
+
       expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
       const settlements = yield* run(parent.threadId);
+
       expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
       expect(yield* harness.childInvocations).toBe(1);
       const childLog = yield* readLog(childThreadId);
+
       expect(payloadsOf(childLog, "ThreadCreated")).toHaveLength(1);
     }),
   );

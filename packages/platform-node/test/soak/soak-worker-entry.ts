@@ -47,6 +47,7 @@ const tolerateTyped = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<v
     Effect.flatMap((exit) => {
       if (Exit.isSuccess(exit)) return Effect.void;
       if (Option.isSome(Cause.findErrorOption(exit.cause))) return Effect.void;
+
       return Effect.die(new Error(`soak worker step died: ${Cause.pretty(exit.cause)}`));
     }),
   );
@@ -56,14 +57,18 @@ const workerLoop = Effect.gen(function* () {
   const ledger = yield* SubmissionLedger;
   const bindings = yield* makeSoakBindings();
   const driveResolved = (thread: ThreadId) => runtime.processThreadResolved(thread, bindings);
+
   while (true) {
     // Heal what a killed sibling left behind, then drive every discovered lane once.
     yield* tolerateTyped(runtime.runRecovery);
+
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal).pipe(
       Effect.exit,
       Effect.map((exit) => (Exit.isSuccess(exit) ? Array.from(exit.value) : [])),
     );
+
     const seen = new Set<ThreadId>();
+
     for (const submission of nonterminal) {
       if (seen.has(submission.threadId)) continue;
       seen.add(submission.threadId);

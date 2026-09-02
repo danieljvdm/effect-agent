@@ -31,6 +31,7 @@ const open = (script: string, path: string) =>
     }),
     (runtime) => Effect.promise(() => runtime.dispose()),
   );
+
 const request = (runtime: Miniflare, path: string) =>
   Effect.tryPromise({
     try: () =>
@@ -47,6 +48,7 @@ it(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "kom19-memory-" });
+
         const bundle = yield* Effect.tryPromise({
           try: () =>
             build({
@@ -60,13 +62,17 @@ it(
             }),
           catch: () => ProbeFailure.make({ operation: "bundle" }),
         });
+
         const script = bundle.outputFiles[0]?.text;
+
         if (script === undefined) return yield* ProbeFailure.make({ operation: "bundle output" });
         yield* Effect.gen(function* () {
           const runtime = yield* open(script, directory);
+
           const denied = yield* Effect.promise(() =>
             runtime.dispatchFetch("http://benchmark/seed?case=4"),
           );
+
           expect(denied.status).toBe(401);
           expect((yield* request(runtime, "seed?case=4&caller=a")).status).toBe(200);
         }).pipe(Effect.scoped);
@@ -75,6 +81,7 @@ it(
           const response = yield* request(runtime, "sample?case=4&caller=b");
           const raw = yield* Effect.promise(() => response.json());
           const sample = yield* Schema.decodeUnknownEffect(Sample)(raw);
+
           expect(sample).toMatchObject({
             status: "ok",
             sourceCount: 4,

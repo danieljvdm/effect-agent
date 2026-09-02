@@ -27,6 +27,7 @@ export type MemoryAccess<Namespace extends MemoryNamespace.Any = MemoryNamespace
   MemoryAccessWire,
   "namespace"
 > & { readonly namespace: Namespace };
+
 export const MemoryAccess = {
   Wire: MemoryAccessWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -60,24 +61,30 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       MemoryRecallError.make({ reason: "invalid-input", message: "Invalid revalidation limits" }),
     ),
   );
+
   const decodedAccess = yield* Schema.decodeUnknownEffect(MemoryAccess.Wire)(access).pipe(
     Effect.mapError(() =>
       MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" }),
     ),
   );
+
   const decoded = yield* Schema.decodeUnknownEffect(MemoryLookup)(lookup).pipe(
     Effect.mapError(() =>
       MemoryRecallError.make({ reason: "invalid-input", message: "Malformed memory candidates" }),
     ),
   );
+
   if (decoded._tag !== "Found") return decoded;
   const reader = yield* MemoryReader;
+
   const groups = new Map<
     string,
     Array<{ readonly candidate: MemoryPassage; readonly index: number }>
   >();
+
   for (const [index, candidate] of decoded.passages.entries()) {
     const group = groups.get(candidate.source.id);
+
     if (group === undefined) groups.set(candidate.source.id, [{ candidate, index }]);
     else group.push({ candidate, index });
   }
@@ -85,9 +92,11 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
   const maxInputBytes = decodedLimits.maxInputBytes ?? 16_777_216;
   let inputBytes = 0;
   let sourceBytes = 0;
+
   for (const [sourceId, group] of groups) {
     yield* Effect.yieldNow;
     const key = MemoryKey.make({ namespace: decodedAccess.namespace, id: sourceId });
+
     const document = yield* reader
       .get(key)
       .pipe(
@@ -99,6 +108,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
           ),
         ),
       );
+
     if (
       document !== null &&
       (document.key.namespace.address !== key.namespace.address ||
@@ -129,6 +139,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       const sameExcerpt =
         document.source.revision === candidate.source.revision &&
         document.content.text.includes(candidate.content.text);
+
       const passage = MemoryPassage.make({
         version: 1,
         authority: decodedAccess.namespace.address,
@@ -139,10 +150,13 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
           text: sameExcerpt ? candidate.content.text : document.content.text,
         },
       });
+
       const encoded = JSON.stringify(passage);
       const remaining = maxInputBytes - inputBytes;
+
       const encodedBytes =
         encoded.length <= remaining ? Encoding.encodeHex(encoded).length / 2 : undefined;
+
       if (encodedBytes === undefined || encodedBytes > remaining) {
         return yield* MemoryRecallError.make({
           reason: "budget",
@@ -154,6 +168,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       passages.push({ passage, index });
     }
   }
+
   return passages.length === 0
     ? { _tag: "NoMatch" as const }
     : {

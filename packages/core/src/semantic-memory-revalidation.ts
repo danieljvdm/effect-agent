@@ -47,8 +47,10 @@ export class SemanticCandidateResult extends Schema.Class<SemanticCandidateResul
 }) {}
 
 const byteLength = (text: string): number => Encoding.encodeHex(text).length / 2;
+
 const readDocument = Effect.fn("semanticCandidates.readDocument")(function* (key: MemoryKey) {
   const reader = yield* MemoryReader;
+
   const document = yield* reader.get(key).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.NullOr(MemoryDocument.Wire))),
     Effect.catchTag("SchemaError", () =>
@@ -57,6 +59,7 @@ const readDocument = Effect.fn("semanticCandidates.readDocument")(function* (key
       ),
     ),
   );
+
   if (
     document !== null &&
     (document.key.namespace.address !== key.namespace.address ||
@@ -67,6 +70,7 @@ const readDocument = Effect.fn("semanticCandidates.readDocument")(function* (key
       operation: "validate semantic source identity",
       reason: "corrupt",
     });
+
   return document;
 });
 
@@ -95,6 +99,7 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
         MemoryIndexError.make({ operation: "validate candidates", reason: "corrupt" }),
       ),
     );
+
     found = input.found;
     access = input.access;
     profile = input.profile;
@@ -109,6 +114,7 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
         reason: "corrupt",
       });
     }
+
     const groups = new Map<
       string,
       {
@@ -119,9 +125,11 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
         }>;
       }
     >();
+
     const rankedPassages: Array<{ readonly rank: number; readonly passage: MemoryPassage }> = [];
     let staleExcluded = 0;
     let unauthorizedExcluded = 0;
+
     for (const [rank, candidate] of found.candidates.entries()) {
       if (
         candidate.key.namespace.address !== access.namespace.address ||
@@ -134,6 +142,7 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
         });
       }
       const group = groups.get(candidate.key.id);
+
       if (group === undefined) {
         groups.set(candidate.key.id, { key: candidate.key, candidates: [{ rank, candidate }] });
       } else group.candidates.push({ rank, candidate });
@@ -142,9 +151,11 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
     const maxOutputBytes = limits.maxOutputBytes ?? 16_777_216;
     let sourceBytes = 0;
     let outputBytes = 0;
+
     for (const group of groups.values()) {
       yield* Effect.yieldNow;
       const document = yield* readDocument(group.key);
+
       if (document === null || document._tag === "WithdrawnMemoryDocument") {
         staleExcluded += group.candidates.length;
         continue;
@@ -153,17 +164,20 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
         unauthorizedExcluded += group.candidates.length;
         continue;
       }
+
       const current = group.candidates.filter(
         ({ candidate }) =>
           document.generation === candidate.sourceGeneration &&
           document.source.revision === candidate.source.revision &&
           document.source.locator === candidate.source.locator,
       );
+
       staleExcluded += group.candidates.length - current.length;
       if (current.length === 0) continue;
       const encoded = JSON.stringify(document);
       const remainingSourceBytes = maxSourceBytes - sourceBytes;
       const encodedBytes = encoded.length <= remainingSourceBytes ? byteLength(encoded) : undefined;
+
       if (encodedBytes === undefined || encodedBytes > remainingSourceBytes) {
         return yield* SemanticMemoryError.make({
           operation: "query source bytes",
@@ -172,11 +186,13 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
       }
       sourceBytes += encodedBytes;
       const encodedDocument = Encoding.encodeHex(document.content.text);
+
       for (const { rank, candidate } of current) {
         if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
           staleExcluded += 1;
           continue;
         }
+
         const passage = MemoryPassage.make({
           version: 1,
           authority: access.namespace.address,
@@ -184,10 +200,13 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
           passageId: candidate.passageId,
           content: { ...document.content, text: candidate.text },
         });
+
         const encodedPassage = JSON.stringify(passage);
         const remainingOutputBytes = maxOutputBytes - outputBytes;
+
         const passageBytes =
           encodedPassage.length <= remainingOutputBytes ? byteLength(encodedPassage) : undefined;
+
         if (passageBytes === undefined || passageBytes > remainingOutputBytes) {
           return yield* SemanticMemoryError.make({
             operation: "query output bytes",
@@ -198,6 +217,7 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
         rankedPassages.push({ rank, passage });
       }
     }
+
     const passages = rankedPassages
       .sort((left, right) => left.rank - right.rank)
       .map(({ passage }) => passage);
@@ -221,6 +241,7 @@ const sameExcerpt = (
   maxChunkBytes: number,
 ): boolean => {
   const hex = Encoding.encodeHex(candidate.text);
+
   return (
     candidate.startByte < candidate.endByte &&
     hex.length / 2 === candidate.endByte - candidate.startByte &&

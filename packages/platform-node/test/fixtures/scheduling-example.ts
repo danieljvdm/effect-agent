@@ -31,6 +31,8 @@ export const runScheduledHost = Effect.fn("Example.runScheduledHost")(function* 
 ) {
   const scheduling = yield* Scheduling;
   const host = yield* NodeDurableHost;
+
   yield* scheduling.create(agent, input, options);
+
   return yield* host.runResolvedWorkers;
 });

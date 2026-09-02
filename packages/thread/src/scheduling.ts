@@ -97,6 +97,7 @@ const notFound = (key: ScheduleKey) => ScheduleNotFound.make({ key });
 
 const asSnapshot = (record: ScheduleRecord, observedAtMillis: number): ScheduleSnapshot => {
   const intendedAtMillis = record.pending?.envelope.intendedAtMillis ?? record.nextAtMillis;
+
   return {
     owner: record.owner,
     scheduleId: record.scheduleId,
@@ -168,6 +169,7 @@ const resolveInput = Effect.fn("Scheduling.resolveInput")(function* <
       ScheduleValidationError.make({ message: "Unable to encode Agent input" }),
     ),
   );
+
   const payload = yield* Schema.decodeUnknownEffect(PersistedJson)(encoded).pipe(
     Effect.mapError(() =>
       ScheduleValidationError.make({
@@ -175,22 +177,26 @@ const resolveInput = Effect.fn("Scheduling.resolveInput")(function* <
       }),
     ),
   );
+
   if (inputByteLength(payload) > maximumBytes) {
     return yield* ScheduleValidationError.make({
       message: `Encoded Agent input exceeds the configured ${maximumBytes} byte limit`,
     });
   }
+
   const digest = yield* digestJson(payload).pipe(
     Effect.mapError(() =>
       ScheduleValidationError.make({ message: "Unable to digest encoded Agent input" }),
     ),
   );
+
   return { payload, digest };
 });
 
 const makeManagement = (limits: SchedulingLimits) =>
   Effect.gen(function* () {
     const nowMillis = yield* currentMillis;
+
     yield* Schema.decodeUnknownEffect(ScheduleInstant)(nowMillis + limits.recoveryPollMillis).pipe(
       Effect.mapError(() =>
         ScheduleValidationError.make({
@@ -214,16 +220,19 @@ const makeManagement = (limits: SchedulingLimits) =>
       const timing = yield* Schema.encodeEffect(ScheduleTimingRequestSchema)(options.timing).pipe(
         Effect.mapError(() => ScheduleValidationError.make({ message: "Invalid timing request" })),
       );
+
       const destination = yield* Schema.encodeEffect(ScheduleDestinationSchema)(
         options.destination,
       ).pipe(
         Effect.mapError(() => ScheduleValidationError.make({ message: "Invalid destination" })),
       );
+
       const definitions = yield* Schema.encodeEffect(DefinitionDigests)(options.definitions).pipe(
         Effect.mapError(() =>
           ScheduleValidationError.make({ message: "Invalid definition digests" }),
         ),
       );
+
       return yield* withCrypto(
         digestJson({
           schemaVersion: 1,
@@ -270,14 +279,17 @@ const makeManagement = (limits: SchedulingLimits) =>
       InputSchema["EncodingServices"]
     > {
       const nowMillis = yield* currentMillis;
+
       const resolvedInput = yield* resolveInput(agent, input, limits.maxInputBytes).pipe(
         Effect.provideService(Crypto.Crypto, crypto),
       );
+
       const creationFingerprint = yield* fingerprint(
         agent.definition.id,
         resolvedInput.digest,
         options,
       );
+
       const key = keyOf(options.scope, options.scheduleId);
 
       yield* authorizer.manage({
@@ -286,6 +298,7 @@ const makeManagement = (limits: SchedulingLimits) =>
         scheduleId: options.scheduleId,
       });
       const existing = yield* store.get(key);
+
       if (existing !== null) {
         if (existing.creationFingerprint !== creationFingerprint) {
           return yield* ScheduleConflict.make({ reason: "creation", key });
@@ -296,16 +309,20 @@ const makeManagement = (limits: SchedulingLimits) =>
           scheduleId: options.scheduleId,
           configuration: existing.configuration,
         });
+
         return asSnapshot(existing, nowMillis);
       }
 
       const timing = yield* Effect.fromResult(
         normalizeScheduleTiming(options.timing, nowMillis, limits.minIntervalMillis),
       );
+
       const nextAtMillis = yield* Effect.fromResult(scheduleInitialCursor(timing, nowMillis));
+
       if (nextAtMillis === null) {
         return yield* ScheduleValidationError.make({ message: "Timing has no next occurrence" });
       }
+
       const nextConfiguration = configuration(
         agent.definition.id,
         resolvedInput.payload,
@@ -313,12 +330,14 @@ const makeManagement = (limits: SchedulingLimits) =>
         options,
         timing,
       );
+
       yield* authorizer.manage({
         operation: "create",
         scope: options.scope,
         scheduleId: options.scheduleId,
         configuration: nextConfiguration,
       });
+
       const record: ScheduleRecord = {
         schemaVersion: 1,
         owner: options.scope.owner,
@@ -337,8 +356,11 @@ const makeManagement = (limits: SchedulingLimits) =>
         lastRefusal: null,
         lastSkippedRange: null,
       };
+
       const inserted = yield* store.insert(record, limits.maxSchedulesPerOwner);
+
       yield* wake.notify;
+
       return asSnapshot(inserted, nowMillis);
     });
 
@@ -353,6 +375,7 @@ const makeManagement = (limits: SchedulingLimits) =>
     > {
       const nowMillis = yield* currentMillis;
       const key = keyOf(options.scope, options.scheduleId);
+
       yield* authorizer.manage({
         operation: "update",
         scope: options.scope,
@@ -360,13 +383,16 @@ const makeManagement = (limits: SchedulingLimits) =>
       });
       yield* validateRequestedFields(options);
       const existing = yield* store.get(key);
+
       if (existing === null) return yield* notFound(key);
       if (existing.configurationRevision !== options.expectedRevision) {
         return yield* ScheduleConflict.make({ reason: "revision", key });
       }
+
       const resolvedInput = yield* resolveInput(agent, input, limits.maxInputBytes).pipe(
         Effect.provideService(Crypto.Crypto, crypto),
       );
+
       const timingRequest =
         options.timing._tag === "Interval" &&
         options.timing.anchorMillis === undefined &&
@@ -374,16 +400,20 @@ const makeManagement = (limits: SchedulingLimits) =>
         existing.configuration.timing.everyMillis === options.timing.everyMillis
           ? { ...options.timing, anchorMillis: existing.configuration.timing.anchorMillis }
           : options.timing;
+
       const timing = yield* Effect.fromResult(
         normalizeScheduleTiming(timingRequest, nowMillis, limits.minIntervalMillis),
       );
+
       const nextAtMillis =
         timing._tag === "At"
           ? timing.atMillis
           : yield* Effect.fromResult(scheduleNextAfter(timing, nowMillis));
+
       if (nextAtMillis === null) {
         return yield* ScheduleValidationError.make({ message: "Timing has no next occurrence" });
       }
+
       const nextConfiguration = configuration(
         agent.definition.id,
         resolvedInput.payload,
@@ -391,12 +421,14 @@ const makeManagement = (limits: SchedulingLimits) =>
         options,
         timing,
       );
+
       yield* authorizer.manage({
         operation: "update",
         scope: options.scope,
         scheduleId: options.scheduleId,
         configuration: nextConfiguration,
       });
+
       const changed = yield* store.change(
         key,
         {
@@ -408,7 +440,9 @@ const makeManagement = (limits: SchedulingLimits) =>
         },
         limits.maxSchedulesPerOwner,
       );
+
       yield* wake.notify;
+
       return asSnapshot(changed, nowMillis);
     });
 
@@ -419,7 +453,9 @@ const makeManagement = (limits: SchedulingLimits) =>
       yield* authorizer.manage({ operation: "get", scope, scheduleId });
       const key = keyOf(scope, scheduleId);
       const record = yield* store.get(key);
+
       if (record === null) return yield* notFound(key);
+
       return asSnapshot(record, yield* currentMillis);
     });
 
@@ -429,17 +465,21 @@ const makeManagement = (limits: SchedulingLimits) =>
     ) {
       yield* authorizer.manage({ operation: "list", scope });
       const limit = options.limit ?? 50;
+
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
         return yield* ScheduleValidationError.make({
           message: "Schedule page limit must be an integer from 1 through 100",
         });
       }
+
       const page = yield* store.list({
         owner: scope.owner,
         ...(options.after === undefined ? {} : { after: options.after }),
         limit,
       });
+
       const nowMillis = yield* currentMillis;
+
       return { items: page.items.map((record) => asSnapshot(record, nowMillis)), next: page.next };
     });
 
@@ -451,16 +491,19 @@ const makeManagement = (limits: SchedulingLimits) =>
     ): Effect.fn.Return<ScheduleSnapshot, ScheduleManagementFailure> {
       yield* authorizer.manage({ operation, scope, scheduleId });
       const key = keyOf(scope, scheduleId);
+
       const attempt = (): Effect.Effect<ScheduleRecord, ScheduleManagementFailure> =>
         Effect.suspend(() =>
           Effect.gen(function* () {
             const record = yield* store.get(key);
+
             if (record === null) return yield* notFound(key);
             if (record.configurationRevision !== expectedRevision) {
               return yield* ScheduleConflict.make({ reason: "revision", key });
             }
             if (operation === "resume" && record.state === "active") return record;
             const nowMillis = yield* currentMillis;
+
             const nextAtMillis =
               operation === "resume"
                 ? yield* Effect.fromResult(
@@ -473,6 +516,7 @@ const makeManagement = (limits: SchedulingLimits) =>
                 : operation === "cancel"
                   ? null
                   : record.nextAtMillis;
+
             const skippedRange =
               operation === "resume" &&
               record.configuration.timing._tag !== "At" &&
@@ -481,6 +525,7 @@ const makeManagement = (limits: SchedulingLimits) =>
               nextAtMillis > record.nextAtMillis
                 ? { fromMillis: record.nextAtMillis, toMillis: nextAtMillis }
                 : null;
+
             return yield* store
               .change(
                 key,
@@ -502,8 +547,11 @@ const makeManagement = (limits: SchedulingLimits) =>
               );
           }),
         );
+
       const changed = yield* attempt();
+
       yield* wake.notify;
+
       return asSnapshot(changed, yield* currentMillis);
     });
 
@@ -526,6 +574,7 @@ const makeDriver = (limits: SchedulingLimits) =>
     const failpoint = yield* ScheduleFailpoint;
     const crypto = yield* Crypto.Crypto;
     const admissionSemaphore = yield* Semaphore.make(limits.admissionConcurrency);
+
     const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
       Effect.provideService(effect, Crypto.Crypto, crypto);
 
@@ -537,10 +586,12 @@ const makeDriver = (limits: SchedulingLimits) =>
     ) {
       if (record.pending === null) return record;
       const current = record.pending.retry;
+
       const delay = Math.min(
         limits.retryBaseMillis * 2 ** Math.min(current.attempts, 52),
         limits.retryMaxMillis,
       );
+
       return yield* store.change(key, {
         _tag: "Retry",
         occurrenceId: record.pending.envelope.occurrenceId,
@@ -559,8 +610,10 @@ const makeDriver = (limits: SchedulingLimits) =>
       record: ScheduleRecord,
     ) {
       const pending = record.pending;
+
       if (pending === null) return;
       const envelope = pending.envelope;
+
       const occurrenceId = yield* withCrypto(
         digestJson({
           schemaVersion: 1,
@@ -570,19 +623,24 @@ const makeDriver = (limits: SchedulingLimits) =>
           intendedAtMillis: envelope.intendedAtMillis,
         }),
       ).pipe(Effect.mapError(() => corrupt("process")));
+
       const usesCurrentConfiguration =
         envelope.configurationRevision === record.configurationRevision;
+
       const expectedThreadId = usesCurrentConfiguration
         ? record.configuration.destination._tag === "ExistingThread"
           ? record.configuration.destination.threadId
           : Schema.decodeSync(ThreadId)(`schedule-thread:${envelope.occurrenceId}`)
         : null;
+
       const expectedAdmissionKey = Schema.decodeSync(IdempotencyKey)(
         `schedule-occurrence:${envelope.occurrenceId}`,
       );
+
       const digest = yield* withCrypto(digestJson(envelope.input)).pipe(
         Effect.mapError(() => corrupt("process")),
       );
+
       if (
         envelope.schemaVersion !== 1 ||
         envelope.owner.tenantId !== key.owner.tenantId ||
@@ -614,6 +672,7 @@ const makeDriver = (limits: SchedulingLimits) =>
       }
       yield* verifyPending(key, record);
       const envelope = record.pending.envelope;
+
       const outcome = yield* admissionSemaphore.withPermit(
         admitPreparedInput(admission.submit(envelope), limits.admissionTimeoutMillis).pipe(
           Effect.tap((outcome) =>
@@ -621,11 +680,14 @@ const makeDriver = (limits: SchedulingLimits) =>
           ),
         ),
       );
+
       const completedAtMillis = yield* currentMillis;
+
       if (outcome._tag === "Receipt") {
         if (outcome.receipt.threadId !== envelope.threadId) {
           return yield* corrupt("admission");
         }
+
         return yield* store
           .change(key, {
             _tag: "Complete",
@@ -649,6 +711,7 @@ const makeDriver = (limits: SchedulingLimits) =>
           phase: "admission",
           code: outcome.error.code,
         };
+
         return yield* store
           .change(key, {
             _tag: "Refuse",
@@ -664,6 +727,7 @@ const makeDriver = (limits: SchedulingLimits) =>
             ),
           );
       }
+
       return yield* retry(key, record, outcome.reason, completedAtMillis);
     });
 
@@ -686,6 +750,7 @@ const makeDriver = (limits: SchedulingLimits) =>
           ScheduleStorageError.make({ operation: "prepare", reason: "unavailable" }),
         ),
       );
+
       if (currentInputDigest !== initial.configuration.inputDigest) {
         return yield* corrupt("prepare");
       }
@@ -693,7 +758,9 @@ const makeDriver = (limits: SchedulingLimits) =>
       const due = yield* Effect.fromResult(
         scheduleDueOccurrence(initial.configuration.timing, initial.nextAtMillis, nowMillis),
       );
+
       if (due === null) return initial;
+
       const occurrenceId = yield* withCrypto(
         digestJson({
           schemaVersion: 1,
@@ -703,6 +770,7 @@ const makeDriver = (limits: SchedulingLimits) =>
           intendedAtMillis: due.intendedAtMillis,
         }),
       ).pipe(Effect.mapError(() => corrupt("prepare")));
+
       const occurrence = {
         key,
         configurationRevision: initial.configurationRevision,
@@ -710,11 +778,14 @@ const makeDriver = (limits: SchedulingLimits) =>
         intendedAtMillis: due.intendedAtMillis,
         occurrenceId,
       };
+
       const authorization = yield* authorizer.prepare(occurrence).pipe(Effect.result);
+
       if (Result.isFailure(authorization)) {
         if (authorization.failure._tag === "ScheduleStorageError") {
           return yield* authorization.failure;
         }
+
         return yield* store.change(key, {
           _tag: "DenyPreparation",
           expectedRevision: initial.configurationRevision,
@@ -729,11 +800,14 @@ const makeDriver = (limits: SchedulingLimits) =>
           nowMillis,
         });
       }
+
       const threadId =
         initial.configuration.destination._tag === "ExistingThread"
           ? initial.configuration.destination.threadId
           : Schema.decodeSync(ThreadId)(`schedule-thread:${occurrenceId}`);
+
       const admissionKey = Schema.decodeSync(IdempotencyKey)(`schedule-occurrence:${occurrenceId}`);
+
       const prepared = yield* store.change(key, {
         _tag: "Prepare",
         expectedRevision: initial.configurationRevision,
@@ -759,13 +833,16 @@ const makeDriver = (limits: SchedulingLimits) =>
         skippedRange: due.skippedRange,
         nowMillis,
       });
+
       return yield* deliverPending(key, prepared, nowMillis);
     });
 
     const process = Effect.fn("Scheduling.process")(function* (key: ScheduleKey) {
       const nowMillis = yield* currentMillis;
       const record = yield* store.get(key);
+
       if (record === null) return yield* notFound(key);
+
       const processed = yield* processRecord(key, record, nowMillis).pipe(
         Effect.catchTag("ScheduleConflict", () =>
           store
@@ -779,6 +856,7 @@ const makeDriver = (limits: SchedulingLimits) =>
             ),
         ),
       );
+
       return processed;
     });
 
@@ -787,8 +865,10 @@ const makeDriver = (limits: SchedulingLimits) =>
       let after: ScheduleDueCursor | undefined;
       let processed = 0;
       let failed = 0;
+
       while (true) {
         const due = yield* store.due(nowMillis, limits.dueBatchSize, owner, after);
+
         if (due.length === 0) break;
         yield* Effect.forEach(
           due,
@@ -820,6 +900,7 @@ const makeDriver = (limits: SchedulingLimits) =>
         after = due.at(-1);
         if (due.length < limits.dueBatchSize) break;
       }
+
       return { processed, failed };
     });
 

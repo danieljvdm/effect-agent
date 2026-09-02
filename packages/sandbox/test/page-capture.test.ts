@@ -34,11 +34,13 @@ describe("Page capture and screenshot schemas", () => {
       limits: PageScreenshotLimits.make({ maxOutputBytes: 1024 }),
       fullPage: true,
     });
+
     const result = PageScreenshotResult.make({
       implementation,
       mediaType: "image/png",
       bytes: new Uint8Array([137, 80, 78, 71]),
     });
+
     expect(
       Schema.decodeSync(PageScreenshotRequest)(Schema.encodeSync(PageScreenshotRequest)(request)),
     ).toEqual(request);
@@ -116,6 +118,7 @@ describe("Page capture and screenshot schemas", () => {
       engine: "chromium",
       limits: { maxOutputBytes: 128 * 1024 },
     });
+
     const output = PageScrapeCaptured.make({
       groups: [
         {
@@ -163,6 +166,7 @@ describe("Page capture and screenshot schemas", () => {
       width: 1,
       height: 1,
     };
+
     for (const groups of [
       [{ selector: ".item", results: Array.from({ length: 4_097 }, () => element) }],
       [
@@ -196,18 +200,22 @@ describe("Page capture and screenshot schemas", () => {
         inference: { provider: "cloudflare-workers-ai", modelCalls: 1 },
       },
     });
+
     const failure = PageCaptureRateLimitedError.make({
       implementation,
       reason: "rate",
       retryAfterMillis: 7_000,
       message: "429 Too many requests",
     });
+
     const foreignCause = new Error("browser RPC failed");
+
     const protocolFailure = PageCaptureProtocolError.make({
       implementation,
       message: "The browser RPC failed",
       cause: foreignCause,
     });
+
     const inferenceFailure = PageCaptureInferencePolicyError.make({
       implementation,
       provider: "cloudflare-workers-ai",
@@ -310,6 +318,7 @@ describe("Page capture and screenshot schemas", () => {
     ];
 
     let tooDeep: unknown = { type: "string" };
+
     for (let depth = 0; depth < 40; depth++) {
       tooDeep = { type: "object", properties: { nested: tooDeep } };
     }
@@ -318,6 +327,7 @@ describe("Page capture and screenshot schemas", () => {
       type: "object",
       properties: {},
     };
+
     cyclic.properties.self = cyclic;
 
     for (const responseFormat of [...invalidDocuments, tooDeep, cyclic]) {

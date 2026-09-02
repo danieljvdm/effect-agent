@@ -45,6 +45,7 @@ export const warehouseHandlersLayer: Layer.Layer<
 > = warehouseToolkit.toLayer(
   Effect.gen(function* () {
     const warehouse = yield* Warehouse;
+
     return {
       query_warehouse: ({
         sql,

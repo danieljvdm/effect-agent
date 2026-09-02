@@ -56,12 +56,14 @@ const FindingQualityFields = Schema.Struct({
   Schema.makeFilter(
     (quality) => {
       const denominator = quality.valid + quality.invalid;
+
       const expectedStatus =
         quality.unclear + quality.unjudged > 0
           ? "unresolved"
           : denominator === 0
             ? "not-applicable"
             : "measured";
+
       return (
         quality.precision.numerator === quality.valid &&
         quality.precision.denominator === denominator &&
@@ -85,8 +87,10 @@ const BlockingFindingQualityFields = Schema.Struct({
   Schema.makeFilter(
     (quality) => {
       const denominator = quality.aligned + quality.overstated;
+
       const expectedStatus =
         quality.unresolved > 0 ? "unresolved" : denominator === 0 ? "not-applicable" : "measured";
+
       return (
         quality.precision.numerator === quality.aligned &&
         quality.precision.denominator === denominator &&
@@ -131,6 +135,7 @@ const ResourceSummaryFields = Schema.Struct({
   Schema.makeFilter(
     (resources) => {
       const failureTags = resources.failuresByTag.map((failure) => failure.errorTag);
+
       return (
         resources.attemptedTrials ===
           resources.succeededTrials + resources.incompleteTrials + resources.failedTrials &&
@@ -182,6 +187,7 @@ export const EvalBlockerCaseStatus = Schema.Literals([
   "unresolved",
   "not-applicable",
 ]);
+
 export type EvalBlockerCaseStatus = typeof EvalBlockerCaseStatus.Type;
 
 export class EvalCaseQualityReport extends Schema.Class<EvalCaseQualityReport>(
@@ -307,7 +313,9 @@ export const digestObservationSet = Effect.fn("PrReviewEval.digestObservationSet
       EvalReportError.make({ message: "Eval observations failed canonical encoding" }),
     ),
   );
+
   const digest = yield* digestText(encoded);
+
   return yield* Schema.decodeUnknownEffect(EvalObservationSetDigest)(digest).pipe(
     Effect.mapError(() =>
       EvalReportError.make({ message: "Observation set digest failed validation" }),
@@ -327,6 +335,7 @@ const findingQuality = (findings: ReadonlyArray<IndexedFinding>): EvalFindingQua
   let invalid = 0;
   let unclear = 0;
   let unjudged = 0;
+
   for (const indexed of findings) {
     switch (indexed.judgment?.label) {
       case "matches-expected":
@@ -344,6 +353,7 @@ const findingQuality = (findings: ReadonlyArray<IndexedFinding>): EvalFindingQua
         break;
     }
   }
+
   return EvalFindingQuality.make({
     valid,
     invalid,
@@ -360,9 +370,11 @@ const blockingFindingQuality = (
   const expectedSeverity = new Map(
     evalCase.expectedDefects.map((defect) => [defect.id, defect.severity] as const),
   );
+
   let aligned = 0;
   let overstated = 0;
   let unresolved = 0;
+
   for (const indexed of findings) {
     if (indexed.reference.finding.severity !== "blocking") continue;
     switch (indexed.judgment?.label) {
@@ -387,6 +399,7 @@ const blockingFindingQuality = (
         break;
     }
   }
+
   return EvalBlockingFindingQuality.make({
     aligned,
     overstated,
@@ -430,9 +443,11 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
       continue;
     }
     const incomplete = isIncompleteReview(observation.result.outcome);
+
     if (incomplete) incompleteTrials += 1;
     else succeededTrials += 1;
     const { usage } = observation.result.outcome;
+
     turns += observation.result.outcome.turns;
     inputTokens += usage.inputTokens;
     uncachedInputTokens += usage.uncachedInputTokens;
@@ -496,6 +511,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
       EvalReportError.make({ message: "Declare the expected trial count between 1 and 20" }),
     ),
   );
+
   if (observations.length === 0) {
     return yield* EvalReportError.make({ message: "At least one eval observation is required" });
   }
@@ -508,6 +524,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
 
   for (const observation of observations) {
     const evalCase = cases.get(observation.caseId);
+
     if (
       evalCase === undefined ||
       observation.caseVersion !== evalCase.version ||
@@ -519,6 +536,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
       });
     }
     const key = observationKey(observation);
+
     if (byKey.has(key)) {
       return yield* EvalReportError.make({ message: `Duplicate eval observation ${key}` });
     }
@@ -528,7 +546,9 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     const encoded = JSON.stringify(
       Schema.encodeSync(EvalVariantConfiguration)(observation.variant),
     );
+
     const existing = encodedConfigurations.get(observation.variant.id);
+
     if (existing !== undefined && existing !== encoded) {
       return yield* EvalReportError.make({
         message: `Variant ${observation.variant.id} has incompatible model configurations`,
@@ -553,6 +573,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
         )
         .map((observation) => observation.trial)
         .sort((left, right) => left - right);
+
       if (trials.length !== trialCount || trials.some((trial, index) => trial !== index + 1)) {
         return yield* EvalReportError.make({
           message: `Variant ${variantId} does not have the expected ${trialCount} trials for ${evalCase.id}`,
@@ -562,6 +583,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   }
 
   const observationSetDigest = yield* digestObservationSet(observations);
+
   if (judgmentSet !== undefined && judgmentSet.observationSetDigest !== observationSetDigest) {
     return yield* EvalReportError.make({
       message: "Judgments do not match the exact eval observation set",
@@ -569,9 +591,11 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   }
 
   const judgments = new Map<string, EvalFindingJudgment>();
+
   for (const judgment of judgmentSet?.judgments ?? []) {
     const key = judgmentKey(judgment);
     const matchedIds = judgment.matchedDefectIds;
+
     if (
       judgments.has(key) ||
       !Number.isSafeInteger(judgment.trial) ||
@@ -587,6 +611,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     }
     const observation = byKey.get(trialKey(judgment.caseId, judgment.variantId, judgment.trial));
     const evalCase = cases.get(judgment.caseId);
+
     if (
       observation === undefined ||
       evalCase === undefined ||
@@ -600,6 +625,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
       });
     }
     const expectedIds = new Set(evalCase.expectedDefects.map((defect) => defect.id));
+
     if (
       judgment.label === "matches-expected" &&
       judgment.matchedDefectIds.some((id) => !expectedIds.has(id))
@@ -612,6 +638,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   }
 
   const runnerVersion = runnerVersions.values().next().value;
+
   if (runnerVersion === undefined) {
     return yield* EvalReportError.make({ message: "Eval observation grid is empty" });
   }
@@ -632,6 +659,7 @@ const indexFindings = (
   judgments: ReadonlyMap<string, EvalFindingJudgment>,
 ): ReadonlyArray<IndexedFinding> => {
   if (observation.result._tag === "Failed") return [];
+
   return observation.result.outcome.report.findings.map((finding, findingIndex) => {
     const key = findingKey(
       observation.caseId,
@@ -639,6 +667,7 @@ const indexFindings = (
       observation.trial,
       findingIndex,
     );
+
     return {
       reference: EvalFindingReference.make({
         caseId: observation.caseId,
@@ -664,7 +693,9 @@ const matchedBlockingDefects = (
       .filter((defect) => defect.severity === "blocking")
       .map((defect) => defect.id),
   );
+
   const matched = new Set<EvalDefectId>();
+
   for (const indexed of findings) {
     if (
       (requireBlockingSeverity && indexed.reference.finding.severity !== "blocking") ||
@@ -676,6 +707,7 @@ const matchedBlockingDefects = (
       if (blockers.has(defectId)) matched.add(defectId);
     }
   }
+
   return matched;
 };
 
@@ -689,29 +721,37 @@ const caseReport = (
   const firstFindings = indexed.filter((finding) => finding.reference.trial === 1);
   const firstDetected = matchedBlockingDefects(firstFindings, evalCase, false);
   const firstMatched = matchedBlockingDefects(firstFindings, evalCase, true);
+
   const expectedBlockers = evalCase.expectedDefects.filter(
     (defect) => defect.severity === "blocking",
   );
+
   const firstQuality = findingQuality(firstFindings);
+
   const unresolvedBlockingFindings = firstFindings.filter(
     (finding) =>
       finding.reference.finding.severity === "blocking" &&
       (finding.judgment === undefined || finding.judgment.label === "unclear"),
   );
+
   const firstUnresolved =
     firstMatched.size < expectedBlockers.length &&
     firstObservation.result._tag === "Succeeded" &&
     unresolvedBlockingFindings.length > 0;
+
   const unresolvedDetectionFindings = firstFindings.filter(
     (finding) => finding.judgment === undefined || finding.judgment.label === "unclear",
   );
+
   const firstDetectionUnresolved =
     firstDetected.size < expectedBlockers.length &&
     firstObservation.result._tag === "Succeeded" &&
     unresolvedDetectionFindings.length > 0;
+
   const firstIncomplete =
     firstObservation.result._tag === "Succeeded" &&
     isIncompleteReview(firstObservation.result.outcome);
+
   const blockerStatus: EvalBlockerCaseStatus =
     expectedBlockers.length === 0
       ? "not-applicable"
@@ -724,10 +764,12 @@ const caseReport = (
             : "incomplete";
 
   const laterOnlyBlockingDefects: Array<EvalLaterBlocker> = [];
+
   const firstTrialIsResolved =
     firstObservation.result._tag === "Failed" ||
     unresolvedBlockingFindings.length === 0 ||
     firstMatched.size === expectedBlockers.length;
+
   if (firstTrialIsResolved) {
     for (const defect of expectedBlockers) {
       if (firstMatched.has(defect.id)) continue;
@@ -737,6 +779,7 @@ const caseReport = (
           evalCase,
           true,
         );
+
         if (trialMatched.has(defect.id)) {
           laterOnlyBlockingDefects.push(
             EvalLaterBlocker.make({
@@ -795,6 +838,7 @@ const aggregateFindingQuality = (
     }),
     { valid: 0, invalid: 0, unclear: 0, unjudged: 0 },
   );
+
   return EvalFindingQuality.make({
     ...totals,
     precision: makeRate(
@@ -816,6 +860,7 @@ const aggregateBlockingFindingQuality = (
     }),
     { aligned: 0, overstated: 0, unresolved: 0 },
   );
+
   return EvalBlockingFindingQuality.make({
     ...totals,
     precision: makeRate(totals.aligned, totals.aligned + totals.overstated, totals.unresolved > 0),
@@ -839,12 +884,16 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
     const variantObservations = sortedObservations(
       observations.filter((observation) => observation.variant.id === variantId),
     );
+
     const cases: Array<EvalCaseQualityReport> = [];
+
     for (const evalCase of validated.cases) {
       const caseObservations = variantObservations.filter(
         (observation) => observation.caseId === evalCase.id,
       );
+
       const firstObservation = caseObservations[0];
+
       if (firstObservation === undefined) {
         return yield* EvalReportError.make({
           message: `Variant ${variantId} has no observations for ${evalCase.id}`,
@@ -865,15 +914,20 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
       (total, report) => total + report.blockerDetection.numerator,
       0,
     );
+
     const blockerFound = cases.reduce((total, report) => total + report.blockerRecall.numerator, 0);
+
     const blockerTotal = cases.reduce(
       (total, report) => total + report.blockerRecall.denominator,
       0,
     );
+
     const blockerUnresolved = cases.some((report) => report.blockerRecall.status === "unresolved");
+
     const detectionUnresolved = cases.some(
       (report) => report.blockerDetection.status === "unresolved",
     );
+
     const eligibleCases = cases.filter((report) => report.blockerStatus !== "not-applicable");
     const cleanControls = cases.filter((report) => report.kind === "clean-control");
 
@@ -937,6 +991,7 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
     .map((variant) => {
       const quality = variant.firstTrialFindings;
       const blockingQuality = variant.firstTrialBlockingFindings;
+
       return [
         `${variant.configuration.id}: blocking-recall ${renderRate(variant.blockerRecall)}`,
         `detected ${renderRate(variant.blockerDetection)}`,

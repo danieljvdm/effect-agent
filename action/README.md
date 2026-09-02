@@ -10,8 +10,23 @@ owns the source and tests. The public
 and transport-neutral.
 
 Rebuild the committed bundle with `vp run action:build`.
+`vp run action:build --check` compares a fresh esbuild bundle byte-for-byte without
+changing tracked files. Only changes that affect the emitted JavaScript require a
+bundle update, including changes in shared framework dependencies. After resolving
+source conflicts, rebuild the bundle instead of hand-merging generated JavaScript.
 
 ## Review behavior
+
+The reviewer automatically ignores known binary asset formats, including raster images,
+fonts, audio/video, archives, PDFs, and compiled binaries, before fetching their contents.
+Other bounded blobs containing NUL bytes are also ignored. These files count as ignored,
+not incomplete coverage, and are unavailable to source tools. A binary-only PR needs no
+model call. SVG, JSON, XML, and other text assets remain reviewable. API failures, malformed
+responses, invalid UTF-8 without NUL bytes, and source-size limits still fail coverage checks.
+Binary detection by content retains the existing file and byte read limits.
+When a rename or content replacement crosses between binary and text, the textual side
+is still reviewed as an addition or deletion. Explicit ignore rules continue to exclude
+an entire rename when either path matches.
 
 One bounded review run assesses every admitted patch before using immutable base and head source
 to resolve specific questions about plausible defects. Straightforward changes can finish from

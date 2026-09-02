@@ -32,6 +32,7 @@ export const projectToolTraces = (events: ReadonlyArray<RunEvent>): ReadonlyArra
       }
       case "ToolCallStarted": {
         const current = traces.get(event.toolCallId);
+
         if (current !== undefined) {
           traces.set(event.toolCallId, { ...current, state: "input-available" });
         }
@@ -39,6 +40,7 @@ export const projectToolTraces = (events: ReadonlyArray<RunEvent>): ReadonlyArra
       }
       case "ToolProgress": {
         const current = traces.get(event.toolCallId);
+
         if (current !== undefined) {
           traces.set(event.toolCallId, {
             ...current,
@@ -50,6 +52,7 @@ export const projectToolTraces = (events: ReadonlyArray<RunEvent>): ReadonlyArra
       }
       case "ToolCallSucceeded": {
         const current = traces.get(event.toolCallId);
+
         if (current !== undefined) {
           traces.set(event.toolCallId, {
             ...current,
@@ -61,6 +64,7 @@ export const projectToolTraces = (events: ReadonlyArray<RunEvent>): ReadonlyArra
       }
       case "ToolCallFailed": {
         const current = traces.get(event.toolCallId);
+
         if (current !== undefined) {
           traces.set(event.toolCallId, {
             ...current,

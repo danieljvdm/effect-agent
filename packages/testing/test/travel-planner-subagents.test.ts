@@ -80,10 +80,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -152,20 +154,24 @@ const conservationDimensions = [
 const expectParentConservation = (snapshot: SubagentParentBudgetView): void => {
   for (const [capKey, amountKey] of conservationDimensions) {
     const cap = snapshot.caps[capKey];
+
     if (cap === undefined) {
       continue;
     }
     const available = snapshot.available[amountKey] ?? 0;
+
     const openReservations = snapshot.reservations
       .filter((view) => view.status !== "released")
       .reduce(
         (total, view) => total + view.allocated[amountKey] - view.coveredConsumed[amountKey],
         0,
       );
+
     const observed = snapshot.reservations.reduce(
       (total, view) => total + (view.observedConsumed[amountKey] ?? 0),
       0,
     );
+
     expect(cap + snapshot.cumulativeOverrun[amountKey]).toBe(
       available + openReservations + observed,
     );
@@ -215,6 +221,7 @@ const SpawnTravelDesk = Tool.make("spawn_travel_desk", {
 })
   .addDependency(AgentSpawner)
   .addDependency(IdGenerator);
+
 const spawnDeskToolkit = Toolkit.make(SpawnTravelDesk);
 
 const nestedProbeDefinition = Agent.make("nested-delegation-probe", {
@@ -239,6 +246,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         const researcher = yield* makeDestinationResearcherModel(["LHR", "CDG"]);
         const childBinding = Agent.withModel(DestinationResearcher, researcher.model);
         let secondPrompt = "";
+
         const turns: ReadonlyArray<ScriptedTurnInput> = [
           coordinatorResearchTurn([
             { id: "research-lhr-1", destination: "LHR", focus: "museums" },
@@ -251,6 +259,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
             },
           },
         ];
+
         const runId = decodeRunId("coordinator-run-happy");
 
         const detached = yield* AgentRuntime.start(makeCoordinator(turns), researchMission, {
@@ -262,7 +271,9 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
             ),
           ),
         );
+
         const cdgCompleted = yield* Deferred.make<void>();
+
         yield* detached.observe.pipe(
           Stream.tap((event) =>
             event._tag === "SubagentCompleted" && event.toolCallId === "research-cdg-1"
@@ -290,6 +301,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         const completedCalls = events.flatMap((event) =>
           event._tag === "SubagentCompleted" ? [event.toolCallId] : [],
         );
+
         expect(completedCalls).toEqual(["research-cdg-1", "research-lhr-1"]);
         for (const toolCallId of ["research-lhr-1", "research-cdg-1"]) {
           expect(subagentLifecycle(events, toolCallId)).toEqual([
@@ -310,6 +322,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         );
 
         const snapshot = yield* reservations.parentSnapshot(runId);
+
         expect(snapshot.totalChildInvocations).toBe(2);
         expect(snapshot.reservations).toHaveLength(2);
         for (const view of snapshot.reservations) {
@@ -329,10 +342,12 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
           ScriptedModel.layer(researcherHappyPathTurns("LHR")),
         ),
       );
+
       const turns: ReadonlyArray<ScriptedTurnInput> = [
         coordinatorResearchTurn([{ id: "research-lhr-1", destination: "LHR", focus: "museums" }]),
         coordinatorShortlistTurn(lhrShortlist),
       ];
+
       const runId = decodeRunId("coordinator-run-events");
 
       const detached = yield* AgentRuntime.start(makeCoordinator(turns), researchMission, {
@@ -344,6 +359,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
           ),
         ),
       );
+
       const result = yield* detached.await;
       const events = yield* detached.events;
 
@@ -359,6 +375,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       const started = findEvent(events, "SubagentStarted");
       const completed = findEvent(events, "SubagentCompleted");
       const joined = findEvent(events, "SubagentJoined");
+
       for (const event of [requested, started, completed, joined]) {
         // Base identity is the parent's; delegation lineage names the child.
         expect(event).toMatchObject({
@@ -400,6 +417,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       // sibling's SubagentStarted event has surfaced on the parent stream, so
       // the batch failure always interrupts a running attached sibling.
       const lhrStartedEvent = yield* Deferred.make<void>();
+
       const gatedGuideLayer = Layer.succeed(
         DestinationGuide,
         DestinationGuide.of({
@@ -409,12 +427,14 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
               : destinationLookup(query),
         }),
       );
+
       const turns: ReadonlyArray<ScriptedTurnInput> = [
         coordinatorResearchTurn([
           { id: "research-lhr-1", destination: "LHR", focus: "museums" },
           { id: "research-zzz-1", destination: "ZZZ", focus: "fog" },
         ]),
       ];
+
       const runId = decodeRunId("coordinator-run-child-failure");
 
       const detached = yield* AgentRuntime.start(makeCoordinator(turns), researchMission, {
@@ -426,6 +446,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
           ),
         ),
       );
+
       yield* detached.observe.pipe(
         Stream.tap((event) =>
           event._tag === "SubagentStarted" && event.toolCallId === "research-lhr-1"
@@ -441,6 +462,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       // The child's expected failure is total-mapped to the declared Tool
       // failure (SUB-028) and fails the parent batch.
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(DestinationResearchFailed);
       expect(failure).toMatchObject({ childErrorTag: "DestinationGuideUnavailable" });
 
@@ -467,6 +489,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       expect(yield* lifecycle.counts).toEqual({ acquired: 2, finalized: 2 });
 
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expect(snapshot.totalChildInvocations).toBe(2);
       expect(snapshot.reservations).toHaveLength(2);
       for (const view of snapshot.reservations) {
@@ -482,12 +505,14 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       const reservations = yield* SubagentReservations;
       const researcher = yield* makeDestinationResearcherModel(["LHR", "CDG"]);
       const childBinding = Agent.withModel(DestinationResearcher, researcher.model);
+
       const turns: ReadonlyArray<ScriptedTurnInput> = [
         coordinatorResearchTurn([
           { id: "research-lhr-1", destination: "LHR", focus: "museums" },
           { id: "research-cdg-1", destination: "CDG", focus: "galleries" },
         ]),
       ];
+
       const runId = decodeRunId("coordinator-run-interrupted");
 
       const fiber = yield* AgentRuntime.run(makeCoordinator(turns), researchMission, {
@@ -501,6 +526,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         Effect.scoped,
         Effect.forkChild,
       );
+
       yield* researcher.controls.awaitStarted("LHR");
       yield* researcher.controls.awaitStarted("CDG");
       // The guide Layer plus one model Layer per attached child are live.
@@ -514,6 +540,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       expect(yield* lifecycle.counts).toEqual({ acquired: 3, finalized: 3 });
 
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expect(snapshot.totalChildInvocations).toBe(2);
       expect(snapshot.reservations).toHaveLength(2);
       for (const view of snapshot.reservations) {
@@ -530,10 +557,12 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
   it.effect("rejects the child's nested delegation attempt at preflight (SUB-029)", () =>
     Effect.gen(function* () {
       const reservations = yield* SubagentReservations;
+
       const grandchildBinding = Agent.withModel(
         DestinationResearcher,
         Model.make("scripted", "grandchild-unused", ScriptedModel.layer([])),
       );
+
       // The travel desk runs at depth one with the delegation Tool in its own
       // Toolkit; its delegation attempt must be denied before any reservation
       // or child identity exists.
@@ -549,9 +578,11 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
           ]),
         ),
       );
+
       const dependencies = yield* Effect.context<
         SubagentReservations | IdGenerator | CatalogLifecycle | ResearchDispatchGate
       >();
+
       const deskDelegationLayer = destinationResearchHandlersLayer(grandchildBinding).pipe(
         Layer.provide(
           Layer.mergeAll(
@@ -563,25 +594,31 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
 
       const capturedDenial = yield* Ref.make<unknown>(undefined);
       const capturedDeskRunId = yield* Ref.make<RunId | undefined>(undefined);
+
       const spawnDeskLayer = spawnDeskToolkit.toLayer({
         spawn_travel_desk: () =>
           Effect.gen(function* () {
             const spawner = yield* AgentSpawner;
+
             const desk = yield* spawner.spawn(travelDeskBinding, encodedDeskBrief, {
               delegationId: destinationResearchDelegation.delegationId,
               parentToolCallId: decodeToolCallId("desk-call-1"),
             });
+
             yield* Ref.set(capturedDeskRunId, desk.runId);
             const exit = yield* Effect.exit(desk.await);
+
             if (Exit.isFailure(exit)) {
               yield* Ref.set(
                 capturedDenial,
                 Option.getOrUndefined(Cause.findErrorOption(exit.cause)),
               );
             }
+
             return { denied: Exit.isFailure(exit) };
           }).pipe(Effect.provide(deskDelegationLayer), Effect.scoped),
       });
+
       const probe = Agent.withModel(
         nestedProbeDefinition,
         Model.make(
@@ -611,9 +648,11 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       );
 
       const result = yield* AgentRuntime.run(probe, {}).pipe(Effect.provide(spawnDeskLayer));
+
       expect(result.output).toEqual({ denied: true });
 
       const denial = yield* Ref.get(capturedDenial);
+
       expect(denial).toBeInstanceOf(SubagentPrestartDenied);
       expect(denial).toMatchObject({
         reason: "nested-delegation",
@@ -627,10 +666,12 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       // Fail-closed preflight ran before any reservation: the desk Run never
       // registered a delegation budget.
       const deskRunId = yield* Ref.get(capturedDeskRunId);
+
       if (deskRunId === undefined) {
         throw new Error("The travel desk child Run was never spawned");
       }
       const snapshotExit = yield* Effect.exit(reservations.parentSnapshot(deskRunId));
+
       expect(failureFrom(snapshotExit)._tag).toBe("SubagentParentBudgetUnknown");
     }).pipe(Effect.provide(TestSupportLayer)),
   );
@@ -643,6 +684,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       // Hold only the third preflight so the denial deterministically happens
       // while both admitted children are still running.
       const amsDispatch = yield* Deferred.make<void>();
+
       const dispatchLayer = Layer.succeed(
         ResearchDispatchGate,
         ResearchDispatchGate.of({
@@ -650,6 +692,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
             destination === "AMS" ? Deferred.await(amsDispatch) : Effect.void,
         }),
       );
+
       const turns: ReadonlyArray<ScriptedTurnInput> = [
         coordinatorResearchTurn([
           { id: "research-lhr-1", destination: "LHR", focus: "museums" },
@@ -657,6 +700,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
           { id: "research-ams-1", destination: "AMS", focus: "canals" },
         ]),
       ];
+
       const runId = decodeRunId("coordinator-run-budget");
 
       const fiber = yield* AgentRuntime.run(makeCoordinator(turns), researchMission, {
@@ -671,12 +715,14 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         Effect.exit,
         Effect.forkChild,
       );
+
       yield* researcher.controls.awaitStarted("LHR");
       yield* researcher.controls.awaitStarted("CDG");
       yield* Deferred.succeed(amsDispatch, undefined);
       const exit = yield* Fiber.join(fiber);
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentBudgetExhausted);
       expect(failure).toMatchObject({
         dimension: "total-child-invocations",
@@ -686,6 +732,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
 
       // Conservation after the run: two settled reservations, no third.
       const snapshot = yield* reservations.parentSnapshot(runId);
+
       expect(snapshot.totalChildInvocations).toBe(2);
       expect(snapshot.reservations).toHaveLength(2);
       for (const view of snapshot.reservations) {
@@ -695,12 +742,15 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
 
       // Double release is impossible: releasing again changes nothing.
       const [view] = snapshot.reservations;
+
       if (view === undefined) {
         throw new Error("Expected a settled reservation view");
       }
       const releasedAgain = yield* reservations.release(view.reservationId);
+
       expect(releasedAgain.released).toEqual(view.released);
       const after = yield* reservations.parentSnapshot(runId);
+
       expect(after.available).toEqual(snapshot.available);
     }).pipe(Effect.provide(TestSupportLayer)),
   );
@@ -708,10 +758,12 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
   it.effect("isolates the child prompt from the parent transcript and vice versa", () =>
     Effect.gen(function* () {
       let childPromptChecks = 0;
+
       const childTurns = researcherHappyPathTurns("LHR").map((turn): ScriptedTurnInput => ({
         ...turn,
         assertRequest: (request) => {
           const prompt = JSON.stringify(request.prompt.content);
+
           // The child sees exactly the projected input (SUB-006)...
           expect(prompt).toContain("LHR");
           expect(prompt).toContain("research:museums");
@@ -721,11 +773,14 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
           childPromptChecks += 1;
         },
       }));
+
       const childBinding = Agent.withModel(
         DestinationResearcher,
         Model.make("scripted", "destination-researcher-isolated", ScriptedModel.layer(childTurns)),
       );
+
       let parentSecondPrompt = "";
+
       const turns: ReadonlyArray<ScriptedTurnInput> = [
         coordinatorResearchTurn([{ id: "research-lhr-1", destination: "LHR", focus: "museums" }]),
         {

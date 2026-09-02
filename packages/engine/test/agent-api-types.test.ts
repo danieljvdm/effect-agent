@@ -31,6 +31,7 @@ const Lookup = Tool.make("lookup", {
 });
 
 const toolkit = Toolkit.make(Lookup);
+
 const Input = Schema.Struct({
   city: Schema.String,
   days: Schema.NumberFromString.pipe(
@@ -48,7 +49,9 @@ const planner = Agent.make("typed-planner", {
     Effect.gen(function* () {
       expectTypeOf(days).toEqualTypeOf<number>();
       const prefix = yield* Instructions;
+
       if (prefix === "") return yield* new InstructionError({});
+
       return `${prefix} ${city} ${days}`;
     }),
   toolkit,
@@ -59,6 +62,7 @@ const planner = Agent.make("typed-planner", {
     toolConcurrency: 1,
   }),
 });
+
 const model = Model.make(
   "test",
   "typed-model",
@@ -66,6 +70,7 @@ const model = Model.make(
     LanguageModel.LanguageModel,
     Effect.gen(function* () {
       yield* ProviderClient;
+
       return yield* LanguageModel.make({
         generateText: () => Effect.succeed([]),
         streamText: () => Stream.empty,
@@ -78,6 +83,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   const input = { city: "Lisbon", days: "2" };
   const run = AgentRuntime.run(planner, input);
   const provided = run.pipe(Effect.provide(model));
+
   type DefinitionServices =
     | ThreadHistory
     | Instructions
@@ -101,10 +107,12 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<AgentRuntimeFailure<typeof planner>>();
 
   const stream = AgentRuntime.stream(planner, input);
+
   expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<
     DefinitionServices | NativeServices | IdGenerator
   >();
   const start = AgentRuntime.start(planner, input);
+
   expectTypeOf<Effect.Services<typeof start>>().toEqualTypeOf<
     Effect.Services<typeof run> | Scope.Scope
   >();
@@ -112,14 +120,18 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
 
   const captured = Effect.gen(function* () {
     const modelLayer = yield* model.captureRequirements;
+
     return yield* AgentRuntime.run(planner, input).pipe(Effect.provide(modelLayer));
   });
+
   expectTypeOf<Effect.Services<typeof captured>>().toEqualTypeOf<
     Effect.Services<typeof provided>
   >();
+
   const composed = AgentRuntime.run(planner, input).pipe(
     Effect.provide(Layer.mergeAll(model, IdGenerator.layer)),
   );
+
   expectTypeOf<Effect.Services<typeof composed>>().toEqualTypeOf<
     DefinitionServices | ProviderClient
   >();
@@ -127,6 +139,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   // These Effects are never executed. Their signatures must reject incomplete composition.
   expectTypeOf<typeof run>().not.toMatchTypeOf<Effect.Effect<unknown, unknown>>();
   expectTypeOf<typeof provided>().not.toMatchTypeOf<Effect.Effect<unknown, unknown>>();
+
   const cannotRun = () => {
     // @ts-expect-error All required input fields must be present.
     const missing = AgentRuntime.run(planner, { city: "Lisbon" });
@@ -142,6 +155,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
     const externalRun = AgentRuntime.runUnknown(planner, external);
     const externalStream = AgentRuntime.streamUnknown(planner, external);
     const externalStart = AgentRuntime.startUnknown(planner, external);
+
     const languageOnly = Layer.effect(
       LanguageModel.LanguageModel,
       LanguageModel.make({
@@ -149,8 +163,10 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
         streamText: () => Stream.empty,
       }),
     );
+
     // @ts-expect-error A binding needs both model identity services too.
     const missingIdentity = Agent.withModel(planner, languageOnly);
+
     return {
       missing,
       decoded,
@@ -163,6 +179,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
       missingIdentity,
     };
   };
+
   expectTypeOf(cannotRun).toBeFunction();
 });
 
@@ -175,6 +192,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
     "union/TopicInstructions",
   ) {}
   class TopicFailure extends Schema.TaggedError<TopicFailure>()("TopicFailure", {}) {}
+
   const Complete = Tool.make("complete", {
     parameters: Schema.Struct({
       text: Schema.String.pipe(
@@ -193,14 +211,18 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
     failure: TopicFailure,
     failureMode: "error",
   });
+
   const topicTools = Toolkit.make(Complete);
+
   const topic = Agent.make("topic-agent", {
     input: Schema.Struct({ topic: Schema.String }),
     output: Schema.String,
     instructions: ({ topic }) =>
       Effect.gen(function* () {
         const prefix = yield* TopicInstructions;
+
         if (prefix === "") return yield* TopicFailure.make({});
+
         return `${prefix}: ${topic}`;
       }),
     inputPrompt: ({ topic }) => Effect.map(TopicInstructions, (prefix) => `${prefix}: ${topic}`),
@@ -208,6 +230,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
     policy: planner.policy,
     completion: { tool: "complete", project: ({ result }) => result },
   });
+
   type Selected = typeof planner | typeof topic;
   type ExpectedServices =
     | Instructions
@@ -230,6 +253,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
   const select = (useTopic: boolean) => (useTopic ? topic : planner);
   const binding = Agent.withModel(select(true), model);
   const execution = AgentRuntime.run(binding, { topic: "Lisbon" });
+
   expectTypeOf<Effect.Services<typeof execution>>().toEqualTypeOf<
     ExpectedServices | ProviderClient | ThreadHistory | IdGenerator
   >();
@@ -249,9 +273,11 @@ it("retains every branch's tool requirements and failures across execution views
     toolkit: Toolkit.empty,
     policy: planner.policy,
   });
+
   const select = (withTools: boolean) => (withTools ? planner : withoutTools);
   const selected = select(false);
   const input = { city: "Lisbon", days: "2" };
+
   type DefinitionServices =
     | Instructions
     | Decoder
@@ -277,6 +303,7 @@ it("retains every branch's tool requirements and failures across execution views
   const streamUnknown = AgentRuntime.streamUnknown(selected, input);
   const start = AgentRuntime.start(selected, input);
   const startUnknown = AgentRuntime.startUnknown(selected, input);
+
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<RuntimeServices>();
   expectTypeOf<Effect.Services<typeof runUnknown>>().toEqualTypeOf<RuntimeServices>();
   expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<RuntimeServices>();
@@ -297,9 +324,12 @@ it("retains every branch's tool requirements and failures across execution views
   >().toEqualTypeOf<ExpectedFailure>();
 
   const bindSelected = Agent.withModel(selected, model);
+
   const selectBinding = (withTools: boolean) =>
     withTools ? Agent.withModel(planner, model) : Agent.withModel(withoutTools, model);
+
   const binding = selectBinding(false);
+
   type BoundServices = DefinitionServices | ProviderClient;
   expectTypeOf<Agent.Requirements<typeof bindSelected>>().toEqualTypeOf<BoundServices>();
   expectTypeOf<Agent.Requirements<typeof binding>>().toEqualTypeOf<BoundServices>();
@@ -309,6 +339,7 @@ it("retains every branch's tool requirements and failures across execution views
   expectTypeOf<Agent.ToolUnion<typeof binding>>().toEqualTypeOf<typeof Lookup>();
   const boundRun = AgentRuntime.run(binding, input);
   const selectedRun = AgentRuntime.run(bindSelected, input);
+
   expectTypeOf<Effect.Services<typeof boundRun>>().toEqualTypeOf<
     BoundServices | ThreadHistory | IdGenerator
   >();

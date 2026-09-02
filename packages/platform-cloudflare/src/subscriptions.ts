@@ -70,6 +70,7 @@ export const validateCloudflareSubscriptionLimits = (
 ): Effect.Effect<void, CloudflareSubscriptionConfigError> => {
   const worstCaseMillis =
     4 * Math.ceil(limits.batchSize / limits.concurrency) * limits.operationTimeoutMillis;
+
   return worstCaseMillis <= MAX_ALARM_WALL_MILLIS
     ? Effect.void
     : Effect.fail(
@@ -146,16 +147,19 @@ const SubscriptionPartitionRequest = Schema.Union([
   AcceptRequest,
   StatusRequest,
 ]);
+
 type SubscriptionPartitionRequest = typeof SubscriptionPartitionRequest.Type;
 
 const SubscriptionPage = Schema.Struct({
   items: Schema.Array(SubscriptionSnapshot),
   next: Schema.NullOr(Schema.Natural),
 });
+
 const DeliveryPage = Schema.Struct({
   items: Schema.Array(SubscriptionDeliverySnapshot),
   next: Schema.NullOr(Schema.String),
 });
+
 const IntakeStatus = Schema.Struct({
   ...EventAcknowledgement.fields,
   routingComplete: Schema.Boolean,
@@ -169,6 +173,7 @@ const SubscriptionPartitionFailure = Schema.Union([
   SubscriptionFailpointError,
   SubscriptionPartitionProtocolError,
 ]);
+
 type SubscriptionPartitionFailure = typeof SubscriptionPartitionFailure.Type;
 
 const SubscriptionPartitionResponse = Schema.Union([
@@ -179,6 +184,7 @@ const SubscriptionPartitionResponse = Schema.Union([
   Schema.TaggedStruct("Status", { value: IntakeStatus }),
   Schema.TaggedStruct("Failed", { failure: SubscriptionPartitionFailure }),
 ]);
+
 type SubscriptionPartitionResponse = typeof SubscriptionPartitionResponse.Type;
 
 const decodeRequest = Schema.decodeUnknownEffect(SubscriptionPartitionRequest);
@@ -205,6 +211,7 @@ export class SubscriptionPartitionNamespace extends Context.Service<
 
 const storageFailure = (code: string): SubscriptionError =>
   SubscriptionError.make({ reason: "storage", code });
+
 const corruptFailure = (code: string): SubscriptionError =>
   SubscriptionError.make({ reason: "corrupt", code });
 
@@ -224,9 +231,11 @@ export class CloudflareSubscriptionsClient {
           if (!samePartition(partition, addressedPartition)) {
             return yield* SubscriptionError.make({ reason: "unauthorized", code: "partition" });
           }
+
           const encoded = yield* encodeRequest(request).pipe(
             Effect.mapError(() => corruptFailure("subscription-partition-protocol")),
           );
+
           const raw = yield* Effect.tryPromise({
             try: () =>
               namespace
@@ -234,6 +243,7 @@ export class CloudflareSubscriptionsClient {
                 .subscription(encoded),
             catch: () => storageFailure("call-subscription-partition"),
           });
+
           return yield* decodeResponse(raw).pipe(
             Effect.mapError(() => corruptFailure("subscription-partition-protocol")),
           );
@@ -245,6 +255,7 @@ export class CloudflareSubscriptionsClient {
             : SubscriptionPartitionProtocolError.make({
                 message: "Unexpected subscription response",
               });
+
         const asProtocolError = (): SubscriptionError =>
           corruptFailure("subscription-partition-protocol");
 
@@ -257,14 +268,17 @@ export class CloudflareSubscriptionsClient {
                 scope,
                 options,
               });
+
               if (response._tag === "Snapshot") return response.value;
               const failure = failed(response);
+
               if (
                 failure._tag === "SubscriptionError" ||
                 failure._tag === "SubscriptionSourceError" ||
                 failure._tag === "SubscriptionFailpointError"
               )
                 return yield* failure;
+
               return yield* asProtocolError();
             }),
           listSubscriptions: (scope, after, limit) =>
@@ -276,8 +290,10 @@ export class CloudflareSubscriptionsClient {
                 ...(after === undefined ? {} : { after }),
                 ...(limit === undefined ? {} : { limit }),
               });
+
               if (response._tag === "SubscriptionPage") return response.value;
               const failure = failed(response);
+
               return yield* failure._tag === "SubscriptionError" ? failure : asProtocolError();
             }),
           cancelSubscription: (scope, key) =>
@@ -288,13 +304,16 @@ export class CloudflareSubscriptionsClient {
                 scope,
                 key,
               });
+
               if (response._tag === "Snapshot") return response.value;
               const failure = failed(response);
+
               if (
                 failure._tag === "SubscriptionError" ||
                 failure._tag === "SubscriptionFailpointError"
               )
                 return yield* failure;
+
               return yield* asProtocolError();
             }),
           listDeliveries: (scope, key, after, limit) =>
@@ -307,8 +326,10 @@ export class CloudflareSubscriptionsClient {
                 ...(after === undefined ? {} : { after }),
                 ...(limit === undefined ? {} : { limit }),
               });
+
               if (response._tag === "DeliveryPage") return response.value;
               const failure = failed(response);
+
               return yield* failure._tag === "SubscriptionError" ? failure : asProtocolError();
             }),
         });
@@ -328,15 +349,19 @@ export class CloudflareSubscriptionsClient {
                   SubscriptionError.make({ reason: "validation", code: "event-payload" }),
                 ),
               );
+
               const response = yield* call(request.partition, request);
+
               if (response._tag === "Acknowledgement") return response.value;
               const failure = failed(response);
+
               if (
                 failure._tag === "SubscriptionError" ||
                 failure._tag === "SubscriptionSourceError" ||
                 failure._tag === "SubscriptionFailpointError"
               )
                 return yield* failure;
+
               return yield* asProtocolError();
             }),
           status: (principal, source, eventId) =>
@@ -349,8 +374,10 @@ export class CloudflareSubscriptionsClient {
                 source,
                 eventId,
               });
+
               if (response._tag === "Status") return response.value;
               const failure = failed(response);
+
               return yield* failure._tag === "SubscriptionError" ? failure : asProtocolError();
             }),
         });
@@ -376,6 +403,7 @@ const decodePartitionName = Effect.fn("decodeSubscriptionPartitionName")(functio
       message: "Subscription Partition objects require an idFromName identity",
     });
   }
+
   const tuple = yield* Schema.decodeUnknownEffect(
     Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String])),
   )(name).pipe(
@@ -385,6 +413,7 @@ const decodePartitionName = Effect.fn("decodeSubscriptionPartitionName")(functio
       }),
     ),
   );
+
   return yield* Schema.decodeUnknownEffect(SourcePartition)({
     tenantId: tuple[0],
     address: tuple[1],
@@ -398,6 +427,7 @@ const decodePartitionName = Effect.fn("decodeSubscriptionPartitionName")(functio
 });
 
 const samePartition = Schema.toEquivalence(SourcePartition);
+
 const requestPartition = (request: SubscriptionPartitionRequest): SourcePartition =>
   request._tag === "Accept" || request._tag === "Status"
     ? request.partition
@@ -407,6 +437,7 @@ const handleRequest = Effect.fn("SubscriptionPartition.handleRequest")(function*
   encoded: unknown,
 ) {
   const decoded = yield* decodeRequest(encoded).pipe(Effect.result);
+
   if (decoded._tag === "Failure") {
     return yield* encodeResponse(
       protocolFailure("The subscription request could not be decoded"),
@@ -414,6 +445,7 @@ const handleRequest = Effect.fn("SubscriptionPartition.handleRequest")(function*
   }
   const request = decoded.success;
   const { partition } = yield* SubscriptionPartitionIdentity;
+
   if (!samePartition(partition, requestPartition(request))) {
     return yield* encodeResponse(
       protocolFailure("The request partition does not match the addressed object"),
@@ -421,6 +453,7 @@ const handleRequest = Effect.fn("SubscriptionPartition.handleRequest")(function*
   }
   const subscriptions = yield* Subscriptions;
   const intake = yield* SubscriptionIntake;
+
   const response = yield* Effect.gen(function* (): Effect.fn.Return<
     SubscriptionPartitionResponse,
     SubscriptionPartitionFailure
@@ -473,6 +506,7 @@ const handleRequest = Effect.fn("SubscriptionPartition.handleRequest")(function*
         : Effect.succeed(protocolFailure("The subscription operation failed outside its contract")),
     ),
   );
+
   return yield* encodeResponse(response).pipe(Effect.orDie);
 });
 
@@ -486,10 +520,12 @@ const transactionLayer: Layer.Layer<
   DoSubscriptionTransaction,
   Effect.gen(function* () {
     const alarms = yield* DurableObjectAlarm.DurableObjectAlarm;
+
     return DoSubscriptionTransaction.of({
       run: (body) =>
         Effect.gen(function* () {
           const nowMillis = yield* Clock.currentTimeMillis;
+
           return yield* alarms
             .transaction((transaction) =>
               body((replacement) =>
@@ -542,7 +578,9 @@ const alarmHandler = (limits: SubscriptionLimits) =>
         );
         const driver = yield* SubscriptionDriver;
         const alarmControl = yield* DoSubscriptionAlarmControl;
+
         yield* alarmControl.prearm((yield* Clock.currentTimeMillis) + limits.retryMillis);
+
         const pass = yield* driver.runDue.pipe(
           Effect.catchCause((cause) =>
             Cause.hasInterrupts(cause)
@@ -553,6 +591,7 @@ const alarmHandler = (limits: SubscriptionLimits) =>
                 ),
           ),
         );
+
         if (pass.failed > 0) {
           yield* alarmControl.prearm((yield* Clock.currentTimeMillis) + limits.retryMillis);
         } else {
@@ -596,20 +635,24 @@ export const makeSubscriptionPartitionObjectClass = <E>(
   limits: SubscriptionLimits = defaultSubscriptionLimits,
 ): SubscriptionPartitionObjectClass => {
   const cloudflareLimitsLayer = Layer.effectDiscard(validateCloudflareSubscriptionLimits(limits));
+
   const identityLayer = Layer.effect(
     SubscriptionPartitionIdentity,
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
+
       return SubscriptionPartitionIdentity.of({
         partition: yield* decodePartitionName(state.raw.id.name),
       });
     }),
   );
+
   const sqlLayer = Layer.unwrap(
     Effect.map(EffectCfDurableObjectState.DurableObjectState, (state) =>
       SqliteClient.layer({ storage: state.raw.storage }),
     ),
   );
+
   const partitionStore = Layer.unwrap(
     Effect.map(SubscriptionPartitionIdentity, ({ partition }) =>
       doSubscriptionStoreLayer(partition).pipe(
@@ -618,6 +661,7 @@ export const makeSubscriptionPartitionObjectClass = <E>(
       ),
     ),
   );
+
   const application = Layer.mergeAll(
     Subscriptions.layer(limits),
     SubscriptionIntake.layer(limits),
@@ -633,6 +677,7 @@ export const makeSubscriptionPartitionObjectClass = <E>(
     Layer.provide(host),
     Layer.provideMerge(identityLayer),
   );
+
   const runtime: Layer.Layer<
     SubscriptionRuntimeServices,
     E | SubscriptionError | SubscriptionPartitionProtocolError | CloudflareSubscriptionConfigError,
@@ -641,21 +686,26 @@ export const makeSubscriptionPartitionObjectClass = <E>(
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
       const scope = yield* Effect.scope;
+
       return yield* state.blockConcurrencyWhile(Layer.buildWithScope(application, scope));
     }),
   );
+
   const rpc = {
     subscription: (encoded: unknown) => handleRequest(encoded),
   } satisfies EffectCfDurableObject.DurableObjectRpc<SubscriptionRuntimeServices>;
+
   const Base = EffectCfDurableObject.make(runtime, {
     initialize: Effect.void,
     rpc,
     alarms: alarmHandler(limits),
   });
+
   class SubscriptionPartitionObject extends Base {
     override alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> | void {
       return super.alarm?.(alarmInfo);
     }
   }
+
   return SubscriptionPartitionObject;
 };

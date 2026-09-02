@@ -50,6 +50,7 @@ export const DurableRuntimeFailpointLocation = Schema.Literals([
   "subagent:after-release-pending",
   "subagent:after-release",
 ]);
+
 export type DurableRuntimeFailpointLocation = typeof DurableRuntimeFailpointLocation.Type;
 
 /** Injected coordinator fault. Reaching the caller means the preceding durable step committed. */

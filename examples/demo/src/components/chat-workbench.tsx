@@ -60,9 +60,11 @@ const statusForMessage = (
 ): ChatStatus => {
   if (message.id === activeAssistantId) return current;
   const events = message.events ?? [];
+
   if (events.some((event) => event._tag === "RunCompleted")) return "succeeded";
   if (events.some((event) => event._tag === "RunFailed")) return "failed";
   if (events.some((event) => event._tag === "RunInterrupted")) return "interrupted";
+
   return "idle";
 };
 
@@ -79,6 +81,7 @@ function GeneralChatTrace({
     () => (message.events ?? []).filter((event): event is RunEvent => Schema.is(RunEvent)(event)),
     [message.events],
   );
+
   const activity = useMemo(() => projectRunActivity(events, mode), [events, mode]);
   const tools = useMemo(() => projectToolTraces(events), [events]);
 
@@ -121,13 +124,17 @@ export function ChatWorkbench() {
   const [prompt, setPrompt] = useState<string>(primaryCapabilityRecipes[0]?.message ?? examples[0]);
   const running = state.status === "running";
   const canQueue = running && state.activeExperience === "capability" && state.handle !== null;
+
   const hasQueuedSteering = state.events.some(
     (event) => event._tag === "DemoCommandStateChanged" && event.kind === "steering",
   );
+
   const quickUpdate = hasQueuedSteering
     ? "Prefer a quiet room away from the lift."
     : "Move the departure date to 2026-09-22.";
+
   const activeAssistantId = `assistant-${state.runNumber}`;
+
   const submitStatus: AiChatStatus = running
     ? "streaming"
     : state.status === "failed"
@@ -152,6 +159,7 @@ export function ChatWorkbench() {
 
   const submitMessage = (candidate: string, recipe?: CapabilityRecipe) => {
     const message = candidate.trim();
+
     if (message.length > 0 && !running) {
       if (state.mode === "deterministic" && recipe === undefined) {
         run({
@@ -168,6 +176,7 @@ export function ChatWorkbench() {
 
   const submitPrompt = () => {
     const message = prompt.trim();
+
     if (message.length === 0) return;
     if (canQueue) {
       queueUpdate({ content: message });
@@ -267,7 +276,9 @@ export function ChatWorkbench() {
               {state.messages.map((message) => {
                 const activeAssistant =
                   message.role === "assistant" && message.id === activeAssistantId;
+
                 const messageStatus = statusForMessage(message, activeAssistantId, state.status);
+
                 return (
                   <Message from={message.role} key={message.id}>
                     <span className="font-mono text-[9px] tracking-[0.12em] text-muted-foreground uppercase">
@@ -433,6 +444,7 @@ export function ChatWorkbench() {
                       disabled={running}
                       onValueChange={(modes) => {
                         const mode = modes[0];
+
                         if (mode !== undefined) selectMode(mode);
                       }}
                       value={[state.mode]}

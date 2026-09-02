@@ -14,19 +14,23 @@ it.each([false, true])(
   "RUN-036 Cloudflare observer option owns installation (configured=%s)",
   (configured) => {
     const thread = `cf-tool-failure-observer-${configured}`;
+
     // The platform test API owns this Promise boundary. The Run and observer stay in Effect and
     // observations are asserted inside the Object, never encoded into an RPC or stored record.
     return runInDurableObject(stubFor(thread), (_instance, state) => {
       const observations: Array<ToolFailureObservation> = [];
       const ambient: Array<ToolFailureObservation> = [];
+
       const Failed = Tool.make("failed", {
         parameters: Schema.Struct({}),
         success: Schema.String,
         failure: Schema.String,
         failureMode: "return",
       });
+
       const tools = Toolkit.make(Failed);
       const usage = { inputTokens: {}, outputTokens: {} };
+
       const runtimeLayer = ThreadObject.layer([]).pipe(
         Layer.provide(
           ThreadObject.layerConfig({
@@ -53,9 +57,11 @@ it.each([false, true])(
           }),
         ]),
       );
+
       return Effect.runPromise(
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           const model = Model.make(
             "scripted",
             "observer-test",
@@ -92,6 +98,7 @@ it.each([false, true])(
               }),
             ),
           );
+
           const agent = Agent.withModel(
             Agent.make("cloudflare-observer", {
               input: Schema.Struct({ question: Schema.String, ref: Schema.String }),
@@ -107,12 +114,15 @@ it.each([false, true])(
             }),
             model,
           );
+
           const runtime = yield* DurableAgentRuntime;
+
           const receipt = yield* runtime.submit(
             agent,
             { question: "try", ref: "observer" },
             submitOptions(thread, "observer"),
           );
+
           yield* runtime
             .processThread(agent, ThreadId.make(thread))
             .pipe(Effect.provide(tools.toLayer({ failed: () => Effect.fail("unavailable") })));

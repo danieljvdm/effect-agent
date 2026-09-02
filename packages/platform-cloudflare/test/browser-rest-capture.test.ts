@@ -61,6 +61,7 @@ const scrapeRequest = PageCaptureRequest.make({
 const captureWith = (client: HttpClient.HttpClient, input = request()) =>
   Effect.gen(function* () {
     const capture = yield* PageCapture;
+
     return yield* capture.capture(input);
   }).pipe(
     Effect.provide(
@@ -82,18 +83,23 @@ describe("Browser Run REST PageCapture adapter", () => {
           urls: ["docs.example.com"],
           schema: Schema.Struct({ name: Schema.String }),
         });
+
         const calls: Array<string> = [];
+
         const client = HttpClient.make((request) =>
           Effect.sync(() => {
             calls.push("request");
+
             return HttpClientResponse.fromWeb(
               request,
               response('{"success":true,"result":{"name":"Pro"}}'),
             );
           }),
         );
+
         const options = { accountId: "account", apiToken: Redacted.make("token") };
         const denied = CloudflareBrowserRest.layer(definition, options);
+
         const allowed = CloudflareBrowserRest.layer(definition, {
           ...options,
           workersAi: {
@@ -103,23 +109,30 @@ describe("Browser Run REST PageCapture adapter", () => {
               }),
           },
         });
+
         expectTypeOf<Layer.Services<typeof allowed>>().toEqualTypeOf<HttpClient.HttpClient>();
+
         const invoke = Effect.gen(function* () {
           const toolkit = yield* Toolkit.make(definition.tool);
+
           return yield* Stream.runCollect(
             yield* toolkit.handle("extract_plan", { url: "https://docs.example.com/" }),
           );
         });
+
         const refused = yield* invoke.pipe(
           Effect.provide(denied),
           Effect.provideService(HttpClient.HttpClient, client),
         );
+
         expect(refused).toMatchObject([{ result: { errorTag: "PageCaptureUnsupportedError" } }]);
         expect(calls).toEqual([]);
+
         const result = yield* invoke.pipe(
           Effect.provide(allowed),
           Effect.provideService(HttpClient.HttpClient, client),
         );
+
         expect(result).toMatchObject([{ result: { name: "Pro" } }]);
         expect(calls).toEqual(["authorize", "request"]);
       }),
@@ -127,6 +140,7 @@ describe("Browser Run REST PageCapture adapter", () => {
   it("keeps its Node-safe Layer requirements visible", () => {
     const httpClient: RestRequiresHttpClient = true;
     const workersAi: RestWorkersAiRequiresVisibleAuthorities = true;
+
     expect(httpClient && workersAi).toBe(true);
   });
   it.effect(
@@ -134,6 +148,7 @@ describe("Browser Run REST PageCapture adapter", () => {
     () =>
       Effect.gen(function* () {
         const urls = yield* Ref.make<ReadonlyArray<string>>([]);
+
         const client = HttpClient.make((request, url) =>
           Ref.update(urls, (current) => [...current, url.href]).pipe(
             Effect.as(
@@ -141,6 +156,7 @@ describe("Browser Run REST PageCapture adapter", () => {
             ),
           ),
         );
+
         yield* captureWith(client, request("chromium"));
         yield* captureWith(client, request("kitesurf"));
         expect(yield* Ref.get(urls)).toEqual([
@@ -155,13 +171,16 @@ describe("Browser Run REST PageCapture adapter", () => {
       const seen = yield* Ref.make<{ readonly url: string; readonly body: unknown } | undefined>(
         undefined,
       );
+
       const client = HttpClient.make((request, url) =>
         Effect.gen(function* () {
           const body =
             request.body._tag === "Uint8Array"
               ? JSON.parse(new TextDecoder().decode(request.body.body))
               : undefined;
+
           yield* Ref.set(seen, { url: url.href, body });
+
           return HttpClientResponse.fromWeb(request, response('{"success":true,"result":[]}'));
         }),
       );
@@ -180,10 +199,13 @@ describe("Browser Run REST PageCapture adapter", () => {
   it.effect("keeps the token at the fixed origin Authorization boundary", () =>
     Effect.gen(function* () {
       const logs: Array<string> = [];
+
       const logger = Logger.make<unknown, void>(({ cause, message }) => {
         logs.push(`${String(message)} ${String(cause)}`);
       });
+
       const calls = yield* Ref.make(0);
+
       const seen = yield* Ref.make<
         | {
             readonly url: string;
@@ -192,14 +214,17 @@ describe("Browser Run REST PageCapture adapter", () => {
           }
         | undefined
       >(undefined);
+
       const client = HttpClient.make((request, url) =>
         Effect.gen(function* () {
           const call = yield* Ref.getAndUpdate(calls, (count) => count + 1);
+
           yield* Ref.set(seen, {
             url: url.href,
             authorization: request.headers.authorization,
             body: JSON.stringify(request.body),
           });
+
           return HttpClientResponse.fromWeb(
             request,
             call === 0
@@ -208,11 +233,14 @@ describe("Browser Run REST PageCapture adapter", () => {
           );
         }),
       );
+
       const result = yield* captureWith(client).pipe(Effect.provide(Logger.layer([logger])));
+
       const error = yield* captureWith(client).pipe(
         Effect.flip,
         Effect.provide(Logger.layer([logger])),
       );
+
       expect(yield* Ref.get(seen)).toEqual({
         url: "https://api.cloudflare.com/client/v4/accounts/account-id/browser-rendering/markdown",
         authorization: "Bearer secret-rest-token",
@@ -245,14 +273,17 @@ describe("Browser Run REST PageCapture adapter", () => {
           limit: 1,
         },
       ] as const;
+
       for (const scenario of cases) {
         const client = HttpClient.make((request) =>
           Effect.succeed(HttpClientResponse.fromWeb(request, scenario.response)),
         );
+
         const exit = yield* captureWith(
           client,
           request("chromium", "limit" in scenario ? scenario.limit : 1_024),
         ).pipe(Effect.exit);
+
         expect(exit._tag).toBe("Failure");
         if (exit._tag === "Failure") expect(String(exit.cause)).toContain(scenario.tag);
       }
@@ -272,7 +303,9 @@ describe("Browser Run REST PageCapture adapter", () => {
           ),
         ),
       );
+
       const error = yield* captureWith(client).pipe(Effect.flip);
+
       expect(error.message).toContain("JSON response envelope");
       expect(error.message).not.toContain("secret-rest-token");
     }),
@@ -281,23 +314,28 @@ describe("Browser Run REST PageCapture adapter", () => {
   it.effect("requires Workers AI authorization before structured REST capture", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
+
       const client = HttpClient.make((request) =>
         Ref.update(calls, (count) => count + 1).pipe(
           Effect.as(HttpClientResponse.fromWeb(request, response('{"success":true,"result":{}}'))),
         ),
       );
+
       const input = PageCaptureRequest.make({
         target: PageUrlTarget.make({ url: "https://docs.example.com/page" }),
         action: CapturePageStructured.make({ responseFormat: { type: "object" } }),
         engine: "kitesurf",
         limits: PageCaptureLimits.make({ maxOutputBytes: 1_024 }),
       });
+
       const denied = BrowserQuickActionWorkersAiPolicyError.make({
         reason: "authorization",
         message: "tenant denied",
       });
+
       const exit = yield* Effect.gen(function* () {
         const capture = yield* PageCapture;
+
         return yield* capture.capture(input);
       }).pipe(
         Effect.provide(
@@ -312,6 +350,7 @@ describe("Browser Run REST PageCapture adapter", () => {
         }),
         Effect.exit,
       );
+
       expect(exit._tag).toBe("Failure");
       expect(yield* Ref.get(calls)).toBe(0);
       if (exit._tag === "Failure")
@@ -321,6 +360,7 @@ describe("Browser Run REST PageCapture adapter", () => {
 
   it("loads as a Node-safe subpath", async () => {
     const module = await import("@effect-agent/platform-cloudflare/browser-rest-capture");
+
     expect(module.browserRestCaptureImplementation).toBe(browserRestCaptureImplementation);
   });
 });

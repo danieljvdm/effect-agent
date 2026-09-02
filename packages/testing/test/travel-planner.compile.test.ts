@@ -72,11 +72,14 @@ const ContextualCompletionResult = Schema.String.pipe(
     encode: SchemaGetter.transform((value) => value),
   }),
 );
+
 const Complete = Tool.make("complete", {
   parameters: Schema.Struct({ answer: Schema.String }),
   success: ContextualCompletionResult,
 });
+
 const completionToolkit = Toolkit.make(Complete);
+
 const completionDefinition = Agent.make("completion-requirements-proof", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -93,6 +96,7 @@ const completionDefinition = Agent.make("completion-requirements-proof", {
     project: ({ result }) => ({ answer: result }),
   },
 });
+
 const completionAgent = Agent.withModel(completionDefinition, model);
 
 type ExpectedRequirements =
@@ -142,10 +146,13 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
       "@effect-agent/testing/ScopedCallerService",
     ) {}
     class HookFailure extends Schema.TaggedError<HookFailure>()("ScopedHookFailure", {}) {}
+
     const scopedText = Effect.gen(function* () {
       yield* Scope.Scope;
+
       return (yield* CallerService).text;
     });
+
     const config = {
       input: Schema.String,
       output: Schema.String,
@@ -158,7 +165,9 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
         toolConcurrency: 1,
       }),
     };
+
     const plain = Agent.withModel(Agent.make("scope-free", config), model);
+
     const selfContained = AgentRuntime.run(plain, "question").pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -168,6 +177,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
         ),
       ),
     );
+
     const instructionAgent = Agent.withModel(
       Agent.make("scoped-instructions", {
         ...config,
@@ -175,16 +185,22 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
       }),
       model,
     );
+
     const instructionRun = AgentRuntime.run(instructionAgent, "question");
+
     const projectionAgent = Agent.withModel(
       Agent.make("scoped-input-projection", { ...config, inputPrompt: () => scopedText }),
       model,
     );
+
     const projectionRun = AgentRuntime.run(projectionAgent, "question");
+
     const options: RunOptions<HookFailure, CallerService | Scope.Scope> = {
       onHistory: () => scopedText.pipe(Effect.andThen(Effect.fail(new HookFailure()))),
     };
+
     const hookRun = AgentRuntime.run(plain, "question", options);
+
     // run re-decodes this output after the inner stream has closed.
     const scopedOutput = Schema.String.pipe(
       Schema.decode({
@@ -192,16 +208,20 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
         encode: SchemaGetter.transform((value) => value),
       }),
     );
+
     const outputAgent = Agent.withModel(
       Agent.make("scoped-terminal-decoder", { ...config, output: scopedOutput }),
       model,
     );
+
     const outputRun = AgentRuntime.run(outputAgent, "question");
+
     type ScopedRequirements = IdGenerator | ThreadHistory | CallerService | Scope.Scope;
     type BaseFailure = Exclude<
       ExpectedFailure,
       FlightUnavailable | LodgingUnavailable | ActivityUnavailable | GuidanceFailure
     >;
+
     const proofs: {
       selfContained: Assert<Equal<Effect.Services<typeof selfContained>, never>>;
       instructionsNoExtraServices: Assert<
@@ -227,6 +247,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
       outputFailure: true,
       outputSuccess: true,
     };
+
     expect(Object.values(proofs).every((proof) => proof)).toBe(true);
   });
 
@@ -237,6 +258,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     const publicFailureProof: PublicFailureProof = true;
     const completionRuntimeRequirementsProof: CompletionRuntimeRequirementsProof = true;
     const completionDurableRequirementsProof: CompletionDurableRequirementsProof = true;
+
     const entrypointProofs: {
       runSuccess: Assert<
         Equal<Effect.Success<typeof program>, AgentResult<Agent.Output<typeof agent>>>
@@ -278,6 +300,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
       awaitFailure: true,
       awaitRequirements: true,
     };
+
     expect(Object.values(entrypointProofs).every((proof) => proof)).toBe(true);
 
     expect({

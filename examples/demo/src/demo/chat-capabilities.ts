@@ -62,6 +62,7 @@ export const secondaryCapabilityRecipes: ReadonlyArray<CapabilityRecipe> = [
 
 export const formatTravelPlanForChat = (plan: TravelPlan): string => {
   const itinerary = plan.itineraries[0];
+
   if (itinerary === undefined) {
     return "The run completed, but the deterministic fixture returned no itinerary.";
   }
@@ -88,6 +89,7 @@ export const capabilityFailureMessage = (
   fallback: string,
 ): string => {
   const rejection = events.findLast((event) => event._tag === "DemoBudgetRejected");
+
   if (rejection?._tag === "DemoBudgetRejected") {
     const limitNames = {
       "input-tokens": "input-token",
@@ -96,12 +98,14 @@ export const capabilityFailureMessage = (
       cost: "spending",
       duration: "time",
     } as const;
+
     return `The run stopped safely at its **${limitNames[rejection.limit]} limit** (${rejection.observedValue} requested; ${rejection.limitValue} allowed). The rejected action did not start.`;
   }
 
   const denied = events.some(
     (event) => event._tag === "DemoApprovalSettled" && event.choice === "deny",
   );
+
   if (denied) {
     return "You denied the itinerary hold, so the risky tool never started. Nothing was placed on hold.";
   }

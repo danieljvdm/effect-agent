@@ -92,6 +92,7 @@ export const ChaosScenarioKind = Schema.Literals([
   "join",
   "delegation",
 ]);
+
 export type ChaosScenarioKind = typeof ChaosScenarioKind.Type;
 
 const LaneIndex = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(7));
@@ -117,6 +118,7 @@ export const ChaosResolutionKind = Schema.Literals([
   /** Unresolvable: route into the abort path (settles aborted, audit retained). */
   "abort-submission",
 ]);
+
 export type ChaosResolutionKind = typeof ChaosResolutionKind.Type;
 
 export const ChaosApprovalDecision = Schema.Literals(["approved", "denied"]);
@@ -191,7 +193,9 @@ const decodeChaosSeedFromEnvironment = Schema.decodeUnknownOption(ChaosSeedFromE
 /** The root seed for this run: `CHAOS_SEED` when set to an integer, the default otherwise. */
 export const chaosSeedFromEnv = (env: Record<string, string | undefined>): number => {
   const raw = env["CHAOS_SEED"];
+
   if (raw === undefined || raw === "") return DEFAULT_CHAOS_SEED;
+
   return Option.getOrElse(decodeChaosSeedFromEnvironment(raw), () => DEFAULT_CHAOS_SEED);
 };
 
@@ -268,9 +272,12 @@ const planShapeArbitrary = (
         ChaosSubmissionSpec.make({ lane: index, kind: lane.kind }),
       ),
     );
+
     const [first, ...rest] = submissions;
+
     // `lanes` >= 1 and every lane has depth >= 1, so `first` always exists.
     if (first === undefined) throw new Error("chaos generator produced an empty plan");
+
     return {
       lanes: shape.lanes.length,
       submissions: [first, ...rest] as const,
@@ -292,6 +299,7 @@ export const generateChaosPlans = (options: ChaosGeneratorOptions): ReadonlyArra
     seed: options.seed,
     numRuns: options.count,
   });
+
   return sampled.map((shape, index) =>
     ChaosPlan.make({ ...shape, seed: (Math.imul(options.seed, 31) + index) | 0 }),
   );
@@ -300,10 +308,13 @@ export const generateChaosPlans = (options: ChaosGeneratorOptions): ReadonlyArra
 /** Deterministic PRNG for the runner's small ordering choices (lane drive order). */
 const mulberry32 = (seed: number): (() => number) => {
   let state = seed | 0;
+
   return () => {
     state = (state + 0x6d2b79f5) | 0;
     let t = Math.imul(state ^ (state >>> 15), 1 | state);
+
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 };
@@ -382,7 +393,9 @@ const BookUncertain = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 });
+
 const bookTools = Toolkit.make(BookUncertain);
+
 const bookDefinition = Agent.make("chaos-book", {
   input: PlainInput,
   output: PlainOutput,
@@ -396,7 +409,9 @@ const BookApproval = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
   needsApproval: true,
 });
+
 const approvalTools = Toolkit.make(BookApproval);
+
 const approvalDefinition = Agent.make("chaos-approval", {
   input: PlainInput,
   output: PlainOutput,
@@ -411,7 +426,9 @@ const Itinerary = Tool.make("itinerary", {
   failure: DurableStepError,
   dependencies: [DurableStep],
 }).annotate(ToolExecutionClass, "uncertain");
+
 const itineraryTools = Toolkit.make(Itinerary);
+
 const itineraryDefinition = Agent.make("chaos-itinerary", {
   input: PlainInput,
   output: PlainOutput,
@@ -467,16 +484,22 @@ const DELEGATE_CALL_ID = "chaos-delegate-1";
 
 const HEX = "0123456789abcdef";
 const decodeDigest = Schema.decodeSync(Digest);
+
 const laneDigests = (lane: number): DefinitionDigests => {
   const digest = decodeDigest(HEX.charAt(lane % 8).repeat(64));
+
   return DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 };
+
 const childDigestStrings = (lane: number) => {
   const char = HEX.charAt(8 + (lane % 8));
+
   return { agent: char.repeat(64), model: char.repeat(64), tools: char.repeat(64) } as const;
 };
+
 const childLaneDigests = (lane: number): DefinitionDigests => {
   const strings = childDigestStrings(lane);
+
   return DefinitionDigests.make({
     agent: decodeDigest(strings.agent),
     model: decodeDigest(strings.model),
@@ -496,10 +519,12 @@ const chaosIdentifiers = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
     const counter = yield* Ref.make(0);
+
     const next = <A>(decode: (value: string) => A, prefix: string) =>
       Ref.getAndUpdate(counter, (value) => value + 1).pipe(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
+
     return {
       nextThreadId: next(decodeThreadId, "chaos-fixture-thread"),
       nextRunId: next(decodeRunId, "chaos-fixture-run"),
@@ -521,6 +546,7 @@ interface ChaosDesk {
 
 const makeChaosDesk: Effect.Effect<ChaosDesk> = Effect.gen(function* () {
   const produced = yield* Ref.make<ReadonlySet<string>>(new Set());
+
   return {
     produced: Ref.get(produced),
     record: (value: string) => Ref.update(produced, (current) => new Set(current).add(value)),
@@ -564,6 +590,7 @@ const tolerateTyped = <A, E, R>(
       if (Option.isSome(Cause.findErrorOption(exit.cause))) {
         return Effect.succeed(Option.none<A>());
       }
+
       return Effect.die(new Error(`chaos step died: ${Cause.pretty(exit.cause)}`));
     }),
   );
@@ -666,12 +693,14 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
     case "plain":
     case "join": {
       const agent = Agent.withModel(plainDefinition, model);
+
       return plainLaneFixture(false, runtime.processThread(agent, threadId), (flatIndex) =>
         runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
       );
     }
     case "uncertain-tool": {
       const agent = Agent.withModel(bookDefinition, model);
+
       return plainLaneFixture(
         true,
         runtime.processThread(agent, threadId).pipe(Effect.provide(bookToolLayerFor(bookTools))),
@@ -681,6 +710,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
     }
     case "approval": {
       const agent = Agent.withModel(approvalDefinition, model);
+
       return plainLaneFixture(
         true,
         runtime
@@ -692,23 +722,28 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
     }
     case "durable-steps": {
       const agent = Agent.withModel(itineraryDefinition, model);
+
       const toolLayer = itineraryTools.toLayer({
         itinerary: ({ ref: called }) =>
           Effect.gen(function* () {
             const step = yield* DurableStep;
+
             const flight = yield* step.do(
               "reserve-flight",
               Schema.String,
               desk.record(flightValue(called)).pipe(Effect.as(flightValue(called))),
             );
+
             const lodging = yield* step.do(
               "reserve-lodging",
               Schema.String,
               desk.record(lodgingValue(called)).pipe(Effect.as(lodgingValue(called))),
             );
+
             return { state: `${flight}+${lodging}` };
           }),
       });
+
       return plainLaneFixture(
         true,
         runtime.processThread(agent, threadId).pipe(Effect.provide(toolLayer)),
@@ -718,24 +753,31 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
     }
     case "delegation": {
       const parentBinding = Agent.withModel(coordinatorDefinition, model);
+
       const childModel = promptScriptedModel(`chaos-child-${laneIndex}`, () =>
         finalParts('{"answer":"child"}'),
       );
+
       const childBinding = Agent.withModel(childDefinition, childModel);
+
       const delegationLayer = SubagentRuntime.layer(chaosDelegation, childBinding, {
         mapChildFailure: (failure) => ChaosDelegationFailed.make({ childErrorTag: failure._tag }),
         durable: { targetDigests: childDigestStrings(laneIndex) },
       }).pipe(Layer.provide(delegationSupport));
+
       const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
         parentBinding,
         digests,
       ).pipe(Effect.provide(delegationLayer));
+
       const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
         childBinding,
         childLaneDigests(laneIndex),
       );
+
       const bindings = [parentResolved, childResolved];
       const driveResolved = (thread: ThreadId) => runtime.processThreadResolved(thread, bindings);
+
       const fixture: LaneFixture = {
         index: laneIndex,
         kind,
@@ -753,6 +795,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
           const drives: Array<
             Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>
           > = [driveResolved(threadId)];
+
           if (firstReceipt !== undefined) {
             drives.push(
               driveResolved(
@@ -760,11 +803,13 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
               ),
             );
           }
+
           return drives;
         },
         childThreadOf: (firstReceipt) =>
           childThreadIdFor(firstReceipt.submissionId, decodeToolCallId(DELEGATE_CALL_ID)),
       };
+
       return fixture;
     }
   }
@@ -773,7 +818,9 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
 /** Stable per-call index into an injection list (identical across resolution passes). */
 const injectionIndex = (submissionFlatIndex: number, callId: string, length: number): number => {
   let hash = submissionFlatIndex + 1;
+
   for (const char of callId) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
+
   return ((hash % length) + length) % length;
 };
 
@@ -803,6 +850,7 @@ const resolutionFor = (
           isFailure: false,
         });
       }
+
       // The desk never produced a value for this call — resolving "completed" would fabricate.
       return ResolutionNeverHappened.make();
     }
@@ -821,8 +869,10 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
   const ledger = yield* SubmissionLedger;
   const produced = yield* desk.produced;
   const nonterminal = yield* tolerateTyped(Stream.runCollect(ledger.scanNonterminal));
+
   if (Option.isNone(nonterminal)) return;
   const byId = new Map<SubmissionId, SubmissionState>();
+
   for (const state of states) {
     if (state.receipt !== undefined) byId.set(state.receipt.submissionId, state);
   }
@@ -830,18 +880,22 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
     if (row.state !== "unknown" && row.state !== "suspended") continue;
     const state = byId.get(row.submissionId);
     const explanation = yield* tolerateTyped(runtime.explain(row.submissionId));
+
     if (Option.isNone(explanation)) continue;
     const flatIndex = state?.flatIndex ?? 0;
     const ref = state?.lane.ref ?? "ref-child";
+
     if (row.state === "unknown") {
       for (const call of explanation.value.evidence.unknownCalls) {
         if (call.resolved) continue;
+
         const kind =
           plan.resolutionInjections.length === 0
             ? "never-happened"
             : (plan.resolutionInjections.at(
                 injectionIndex(flatIndex, call.toolCallId, plan.resolutionInjections.length),
               ) ?? "never-happened");
+
         yield* tolerateTyped(
           runtime.resolveUnknown(
             UnknownResolutionCommand.make({
@@ -862,6 +916,7 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
             : (plan.approvalDecisions.at(
                 injectionIndex(flatIndex, pending.toolCallId, plan.approvalDecisions.length),
               ) ?? "approved");
+
         yield* tolerateTyped(
           runtime.resolveApproval(
             ApprovalDecisionCommand.make({
@@ -882,8 +937,10 @@ const submissionIdsNamedBy = (
   records: ReadonlyArray<CanonicalRecordEnvelope>,
 ): ReadonlySet<SubmissionId> => {
   const named = new Set<SubmissionId>();
+
   for (const envelope of records) {
     const payload = envelope.record.payload;
+
     if (
       payload._tag === "UserInputRecorded" ||
       payload._tag === "SubmissionSettled" ||
@@ -892,6 +949,7 @@ const submissionIdsNamedBy = (
       if (payload.submissionId !== undefined) named.add(payload.submissionId);
     }
   }
+
   return named;
 };
 
@@ -911,18 +969,23 @@ const assertNoFabrication = (
   produced: ReadonlySet<string>,
 ): Effect.Effect<void, ChaosConvergenceFailure> => {
   const fabricated: Array<string> = [];
+
   const requireProduced = (value: string, label: string): void => {
     if (!produced.has(value)) fabricated.push(`${label} "${value}"`);
   };
+
   for (const envelope of records) {
     const payload = envelope.record.payload;
+
     if (payload._tag === "ToolCallSettled" && !payload.isFailure) {
       if (payload.toolName === "book") {
         const result = decodeBookResult(payload.result);
+
         if (Option.isSome(result)) requireProduced(result.value.confirmation, "book result");
       }
       if (payload.toolName === "itinerary") {
         const result = decodeItineraryResult(payload.result);
+
         if (Option.isSome(result)) {
           for (const part of result.value.state.split("+")) {
             requireProduced(part, "itinerary step result");
@@ -932,9 +995,11 @@ const assertNoFabrication = (
     }
     if (payload._tag === "ToolStepSettled") {
       const output = decodeStepOutput(payload.output);
+
       if (Option.isSome(output)) requireProduced(output.value, "step output");
     }
   }
+
   return fabricated.length === 0
     ? Effect.void
     : Effect.fail(
@@ -964,23 +1029,29 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
   // Lane fixtures: the FIRST spec of each lane fixes the lane's agent kind.
   const laneKinds = new Map<number, ChaosScenarioKind>();
   const laneSubmissions = new Map<number, Array<number>>();
+
   plan.submissions.forEach((spec, flatIndex) => {
     const lane = spec.lane % plan.lanes;
+
     if (!laneKinds.has(lane)) laneKinds.set(lane, spec.kind);
     const list = laneSubmissions.get(lane) ?? [];
+
     list.push(flatIndex);
     laneSubmissions.set(lane, list);
   });
   const lanes: Array<LaneFixture> = [];
+
   for (const [lane, kind] of laneKinds) {
     lanes.push(yield* makeLaneFixture(plan, lane, kind, laneSubmissions.get(lane) ?? [], desk));
   }
 
   const lanesByIndex = new Map(lanes.map((lane) => [lane.index, lane]));
   const states: Array<SubmissionState> = [];
+
   for (const [flatIndex, spec] of plan.submissions.entries()) {
     const laneIndex = spec.lane % plan.lanes;
     const lane = lanesByIndex.get(laneIndex);
+
     if (lane === undefined) {
       return yield* ChaosConvergenceFailure.make({
         seed: plan.seed,
@@ -994,6 +1065,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
   type ArmEntry =
     | { readonly family: "coordinator"; readonly location: DurableRuntimeFailpointLocation }
     | { readonly family: "adapter"; readonly location: string };
+
   const armQueue: Array<ArmEntry> = [
     ...plan.failpointArms.map((location): ArmEntry => ({ family: "coordinator", location })),
     ...plan.adapterArms.map((location): ArmEntry => ({ family: "adapter", location })),
@@ -1002,17 +1074,21 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
   const allSettled = Effect.gen(function* () {
     if (states.some((state) => state.receipt === undefined)) return false;
     const nonterminal = yield* tolerateTyped(Stream.runCollect(ledger.scanNonterminal));
+
     return Option.isSome(nonterminal) && Array.from(nonterminal.value).length === 0;
   });
 
   const maxRounds = armQueue.length + states.length * 2 + 12;
   let rounds = 0;
   let converged = false;
+
   for (let round = 0; round < maxRounds; round++) {
     rounds = round + 1;
     const arm = armQueue[round];
+
     if (arm?.family === "coordinator") {
       const location = arm.location;
+
       yield* failpoints.setHandler((hit) =>
         hit === location
           ? Effect.fail(DurableRuntimeFailpointError.make({ location: hit }))
@@ -1027,6 +1103,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     for (const state of states) {
       if (state.receipt !== undefined) continue;
       const receipt = yield* tolerateTyped(state.lane.submitOne(state.flatIndex));
+
       if (Option.isSome(receipt)) state.receipt = receipt.value;
     }
 
@@ -1035,9 +1112,11 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
       .map((lane) => ({ lane, rank: random() }))
       .sort((left, right) => left.rank - right.rank || left.lane.index - right.lane.index)
       .map(({ lane }) => lane);
+
     for (const lane of order) {
       const firstFlat = lane.submissionIndexes[0];
       const firstReceipt = firstFlat === undefined ? undefined : states[firstFlat]?.receipt;
+
       for (const drive of lane.drives(firstReceipt)) {
         yield* tolerateTyped(drive);
       }
@@ -1047,8 +1126,10 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     if (round >= 1) {
       for (const rawIndex of plan.abortInjections) {
         const index = rawIndex % states.length;
+
         if (appliedAborts.has(index)) continue;
         const receipt = states[index]?.receipt;
+
         if (receipt === undefined) continue;
         appliedAborts.add(index);
         yield* tolerateTyped(
@@ -1082,11 +1163,13 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
 
   if (!converged) {
     const nonterminal = yield* tolerateTyped(Stream.runCollect(ledger.scanNonterminal));
+
     const detail = Option.isSome(nonterminal)
       ? Array.from(nonterminal.value)
           .map((row: SubmissionSnapshot) => `${row.submissionId}(${row.state})`)
           .join(", ")
       : "ledger scan failed";
+
     return yield* ChaosConvergenceFailure.make({
       seed: plan.seed,
       message: `plan did not converge within ${maxRounds} rounds; nonterminal: [${detail}]; pending receipts: ${states.filter((state) => state.receipt === undefined).length}`,
@@ -1097,6 +1180,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
   // with the full digest chain (single known producer), plus the desk non-fabrication sweep.
   const produced = yield* desk.produced;
   const laneReports: Array<ChaosLaneReport> = [];
+
   const verifyThread = Effect.fn("Chaos.verifyThread")(function* (
     threadId: ThreadId,
     kind: ChaosScenarioKind,
@@ -1110,7 +1194,9 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
         }),
       ),
     );
+
     const rows: Array<SubmissionSnapshot> = [];
+
     for (const submissionId of submissionIdsNamedBy(exported.records)) {
       const found = yield* ledger.lookup(SubmissionLookupById.make({ submissionId })).pipe(
         Effect.mapError((error) =>
@@ -1120,22 +1206,27 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
           }),
         ),
       );
+
       if (Option.isSome(found)) rows.push(found.value);
     }
+
     const batchProducers = new Map<BatchId, ProducerId>(
       exported.records.map((envelope) => [envelope.batchId, config.producerId]),
     );
+
     const report = yield* verifyThreadInvariants({
       export: exported,
       submissions: rows,
       batchProducers,
       requireAllSettled: true,
     });
+
     if (!report.ok) {
       const failed = report.checks
         .filter((check) => check.status === "failed")
         .map((check) => `${check.name}: ${check.detail ?? "failed"}`)
         .join("; ");
+
       return yield* ChaosConvergenceFailure.make({
         seed: plan.seed,
         message: `invariants failed for ${threadId} (${kind}): ${failed}`,
@@ -1159,12 +1250,16 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     // Delegation lanes: verify every materialized child Thread too.
     for (const flatIndex of lane.submissionIndexes) {
       const receipt = states[flatIndex]?.receipt;
+
       if (receipt === undefined) continue;
       const child = lane.childThreadOf(receipt);
+
       if (child === undefined) continue;
+
       const childExport = yield* Effect.exit(
         store.export(ThreadExportRequest.make({ threadId: child })),
       );
+
       if (Exit.isSuccess(childExport) && childExport.value.records.length > 0) {
         yield* verifyThread(child, "plain", false);
       }
@@ -1181,6 +1276,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
         }),
       ),
     );
+
   if (obligations.entries.length > 0) {
     return yield* ChaosConvergenceFailure.make({
       seed: plan.seed,

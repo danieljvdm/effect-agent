@@ -187,9 +187,11 @@ const withTemporaryDatabase = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-storage-sqlite-",
       });
+
       return yield* use(`${directory}/thread.sqlite`);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -231,6 +233,7 @@ describe("SqliteThreadStore", () => {
             ? Effect.fail(SqliteStorageFailpointError.make({ location }))
             : Effect.void,
         );
+
         const injected = yield* store
           .materialize(
             ThreadMaterialization.make({
@@ -239,6 +242,7 @@ describe("SqliteThreadStore", () => {
             }),
           )
           .pipe(Effect.exit);
+
         expect(Exit.isFailure(injected)).toBe(true);
 
         yield* failpoints.clear;
@@ -263,15 +267,18 @@ describe("SqliteThreadStore", () => {
         expect(Exit.isFailure(opened)).toBe(true);
         if (Exit.isFailure(opened)) {
           const error = Cause.squash(opened.cause);
+
           expect(error).toBeInstanceOf(SqliteStorageError);
           if (isSqliteStorageError(error)) {
             expect(error.operation).toBe("configure SQLite storage");
             expect(error.cause).toBeDefined();
           }
         }
+
         const databaseExists = yield* FileSystem.FileSystem.use((fs) => fs.exists(filename)).pipe(
           Effect.provide(NodeFileSystem.layer),
         );
+
         expect(databaseExists).toBe(false);
       }),
     ),
@@ -286,13 +293,16 @@ describe("SqliteThreadStore", () => {
             filename,
             Effect.gen(function* () {
               const store = yield* ThreadStore;
+
               yield* store.materialize(
                 ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
               );
+
               const appended = yield* append(
                 store,
                 batch("persist-1", [inputRecord("persist-record-1", "Kyoto")]),
               );
+
               const checkpoint = ThreadCheckpoint.make({
                 schemaVersion: 1,
                 threadId,
@@ -305,7 +315,9 @@ describe("SqliteThreadStore", () => {
                 state: { destination: "Kyoto" },
                 createdAt: at(2),
               });
+
               yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
+
               return appended;
             }),
           );
@@ -315,6 +327,7 @@ describe("SqliteThreadStore", () => {
             Effect.gen(function* () {
               const store = yield* ThreadStore;
               const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
+
               const checkpoint = yield* store.checkpoints!.load(
                 LoadCheckpointRequest.make({ threadId }),
               );
@@ -323,13 +336,17 @@ describe("SqliteThreadStore", () => {
               expect(exported.tailSequence).toBe(first.lastSequence);
               expect(exported.tailDigest).toBe(first.tailDigest);
               expect(Option.isSome(checkpoint)).toBe(true);
+
               const reread = yield* store
                 .read(ThreadRead.make({ threadId, limit: 1_024 }))
                 .pipe(Stream.runCollect);
+
               expect(reread).toHaveLength(1);
+
               const reobserved = yield* store
                 .observe(ThreadObservation.make({ threadId }))
                 .pipe(Stream.take(1), Stream.runCollect);
+
               expect(reobserved).toHaveLength(1);
             }),
           );
@@ -343,27 +360,34 @@ describe("SqliteThreadStore", () => {
         filename,
         Effect.gen(function* () {
           const store = yield* ThreadStore;
+
           yield* store.materialize(
             ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
           );
+
           const first = yield* append(
             store,
             batch("observe-1", [inputRecord("observe-record-1", "first")]),
           );
+
           yield* append(
             store,
             batch("observe-2", [inputRecord("observe-record-2", "second")]),
             first,
           );
+
           const existing = yield* store
             .read(ThreadRead.make({ threadId, limit: 1_024 }))
             .pipe(Stream.runCollect);
+
           const [firstExisting, secondExisting] = existing;
+
           if (firstExisting === undefined || secondExisting === undefined) {
             return yield* Effect.die(
               new Error("Expected both canonical records before resuming observation"),
             );
           }
+
           const resumed = yield* store
             .observe(
               ThreadObservation.make({
@@ -372,6 +396,7 @@ describe("SqliteThreadStore", () => {
               }),
             )
             .pipe(Stream.take(1), Stream.runCollect);
+
           expect(resumed.map((record) => record.record.recordId)).toEqual([
             secondExisting.record.recordId,
           ]);
@@ -391,6 +416,7 @@ describe("SqliteThreadStore", () => {
               producerEpoch: epoch(1),
             }),
           );
+
           const foreign = yield* store
             .read(
               ThreadRead.make({
@@ -399,12 +425,15 @@ describe("SqliteThreadStore", () => {
               }),
             )
             .pipe(Stream.runCollect);
+
           const [foreignRecord] = foreign;
+
           if (foreignRecord === undefined) {
             return yield* Effect.die(
               new Error("Expected the foreign Thread to contain one canonical record"),
             );
           }
+
           const foreignExit = yield* store
             .observe(
               ThreadObservation.make({
@@ -413,10 +442,12 @@ describe("SqliteThreadStore", () => {
               }),
             )
             .pipe(Stream.take(1), Stream.runCollect, Effect.exit);
+
           expect(Exit.isFailure(foreignExit)).toBe(true);
 
           const malformedOffset =
             yield* Schema.decodeUnknownEffect(ObservationOffset)("foreign-adapter:1");
+
           const malformedExit = yield* store
             .observe(
               ThreadObservation.make({
@@ -425,6 +456,7 @@ describe("SqliteThreadStore", () => {
               }),
             )
             .pipe(Stream.take(1), Stream.runCollect, Effect.exit);
+
           expect(Exit.isFailure(malformedExit)).toBe(true);
         }),
       ),
@@ -435,9 +467,11 @@ describe("SqliteThreadStore", () => {
     Effect.forEach([-1, 1.5, Number.NaN], (sequence) =>
       Effect.gen(function* () {
         const exit = yield* observationOffsetAt(threadId, sequence).pipe(Effect.exit);
+
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
+
           expect(error).toBeInstanceOf(ThreadStoreError);
           if (isThreadStoreError(error)) {
             expect(error.operation).toBe("encode observation offset");
@@ -454,11 +488,13 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`PRAGMA user_version = 99`;
           }),
         );
 
         const opened = yield* withStorage(filename, ThreadStore).pipe(Effect.exit);
+
         expect(Exit.isFailure(opened)).toBe(true);
         if (Exit.isFailure(opened)) {
           expect(Cause.squash(opened.cause)).toBeInstanceOf(SqliteStorageCompatibilityError);
@@ -468,6 +504,7 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             return yield* sql<Record<string, unknown>>`
               SELECT name
               FROM sqlite_master
@@ -476,6 +513,7 @@ describe("SqliteThreadStore", () => {
             `;
           }),
         );
+
         expect(tables).toEqual([]);
       }),
     ),
@@ -488,6 +526,7 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             yield* store.materialize(
               ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
@@ -498,6 +537,7 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             yield* sql`
               UPDATE effect_agent_canonical_records
               SET record_json = '{"schemaVersion":2}'
@@ -512,6 +552,7 @@ describe("SqliteThreadStore", () => {
           Effect.provide(layer({ filename, observationPollInterval: 1, verifyOnOpen: true })),
           Effect.exit,
         );
+
         expect(Exit.isFailure(verified)).toBe(true);
         if (Exit.isFailure(verified)) {
           expect(Cause.squash(verified.cause)).toBeInstanceOf(SqliteStorageCorruptionError);
@@ -522,14 +563,17 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             return yield* store
               .read(ThreadRead.make({ threadId, limit: 1_024 }))
               .pipe(Stream.runCollect);
           }),
         ).pipe(Effect.exit);
+
         expect(Exit.isFailure(lazyRead)).toBe(true);
         if (Exit.isFailure(lazyRead)) {
           const error = Cause.squash(lazyRead.cause);
+
           expect(error).toBeInstanceOf(ThreadStoreError);
           if (isThreadStoreError(error)) {
             expect(error.operation).toBe("decode canonical record");
@@ -540,6 +584,7 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             return yield* sql<Record<string, unknown>>`
               SELECT sequence, record_json
               FROM effect_agent_canonical_records
@@ -547,6 +592,7 @@ describe("SqliteThreadStore", () => {
             `;
           }),
         );
+
         expect(rows).toEqual([{ sequence: 1, record_json: '{"schemaVersion":2}' }]);
       }),
     ),
@@ -559,18 +605,23 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             yield* store.materialize(
               ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
+
             const first = yield* append(
               store,
               batch("restart-1", [inputRecord("restart-record-1", "Nara")]),
             );
+
             const completed = canonicalRecord(
               "restart-record-2",
               RunCompleted.make({ runId, output: { itinerary: "Nara" } }),
             );
+
             yield* append(store, batch("restart-2", [completed]), first);
+
             return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
         );
@@ -580,9 +631,11 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
         );
+
         expect(reopened).toEqual(expected);
       }),
     ),
@@ -595,20 +648,25 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             yield* store.materialize(
               ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
+
             return yield* append(
               store,
               batch("snapshot-1", [inputRecord("snapshot-record-1", "before")]),
             );
           }),
         );
+
         const exportStarted = yield* Deferred.make<void>();
         const releaseExport = yield* Deferred.make<void>();
+
         const exportFiber = yield* Effect.provide(
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
           layer({
@@ -629,6 +687,7 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             yield* append(
               store,
               batch("snapshot-2", [inputRecord("snapshot-record-2", "after")]),
@@ -639,6 +698,7 @@ describe("SqliteThreadStore", () => {
         yield* Deferred.succeed(releaseExport, undefined);
 
         const snapshot = yield* Fiber.join(exportFiber);
+
         expect(snapshot.tailSequence).toBe(first.lastSequence);
         expect(snapshot.tailDigest).toBe(first.tailDigest);
         expect(snapshot.records).toHaveLength(1);
@@ -647,9 +707,11 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             return yield* store.export(ThreadExportRequest.make({ threadId }));
           }),
         );
+
         expect(current.records).toHaveLength(2);
       }),
     ),
@@ -661,6 +723,7 @@ describe("SqliteThreadStore", () => {
         filename,
         Effect.gen(function* () {
           const store = yield* ThreadStore;
+
           yield* store.materialize(
             ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
           );
@@ -668,6 +731,7 @@ describe("SqliteThreadStore", () => {
           const observerFiber = yield* store
             .observe(ThreadObservation.make({ threadId }))
             .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
+
           // Let the observer reach its first empty poll before anything is committed.
           yield* Effect.yieldNow;
 
@@ -680,6 +744,7 @@ describe("SqliteThreadStore", () => {
               TestClock.adjust(1).pipe(Effect.andThen(Effect.yieldNow), Effect.forever),
             ),
           );
+
           expect(observed.map((record) => record.record.recordId)).toEqual(["live-record-1"]);
         }),
       ),
@@ -693,33 +758,41 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             yield* store.materialize(
               ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
+
             return yield* append(store, batch("busy-1", [inputRecord("busy-record-1", "before")]));
           }),
         );
 
         const contendedBatch = batch("busy-2", [inputRecord("busy-record-2", "after")]);
+
         yield* withSql(
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
+
             // Hold the write lock on a separate connection, as a transiently coexisting
             // producer would.
             yield* sql`BEGIN IMMEDIATE`;
+
             const contended = yield* Effect.provide(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 return yield* append(store, contendedBatch, first);
               }),
               layer({ filename, observationPollInterval: 1, busyTimeout: 0 }),
             ).pipe(Effect.exit);
+
             yield* sql`ROLLBACK`;
 
             expect(Exit.isFailure(contended)).toBe(true);
             if (Exit.isFailure(contended)) {
               const error = Cause.squash(contended.cause);
+
               expect(error).toBeInstanceOf(ThreadStoreError);
               if (isThreadStoreError(error)) {
                 expect(error.cause).toBeInstanceOf(SqliteWriteContention);
@@ -733,9 +806,11 @@ describe("SqliteThreadStore", () => {
           filename,
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             return yield* append(store, contendedBatch, first);
           }),
         );
+
         expect(recovered.replayed).toBe(false);
         expect(recovered.firstSequence).toBe(first.lastSequence + 1);
       }),
@@ -746,6 +821,7 @@ describe("SqliteThreadStore", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const active = yield* Ref.make<SqliteStorageFailpointLocation | undefined>(undefined);
+
         const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ThreadStore>) =>
           Effect.provide(
             effect,
@@ -762,6 +838,7 @@ describe("SqliteThreadStore", () => {
                 ),
             }),
           );
+
         const select = (location: SqliteStorageFailpointLocation | undefined) =>
           Ref.set(active, location);
 
@@ -771,6 +848,7 @@ describe("SqliteThreadStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 yield* store.materialize(
                   ThreadMaterialization.make({
                     threadId,
@@ -788,6 +866,7 @@ describe("SqliteThreadStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 yield* store.export(ThreadExportRequest.make({ threadId }));
               }),
             ).pipe(Effect.exit),
@@ -799,6 +878,7 @@ describe("SqliteThreadStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 yield* store.materialize(
                   ThreadMaterialization.make({
                     threadId,
@@ -814,18 +894,21 @@ describe("SqliteThreadStore", () => {
           (yield* withFailpoints(
             Effect.gen(function* () {
               const store = yield* ThreadStore;
+
               return yield* store.export(ThreadExportRequest.make({ threadId }));
             }),
           )).records,
         ).toEqual([]);
 
         const firstBatch = batch("failpoint-append", [inputRecord("failpoint-record", "Sapporo")]);
+
         yield* select("append:before");
         expect(
           Exit.isFailure(
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 yield* append(store, firstBatch);
               }),
             ).pipe(Effect.exit),
@@ -836,6 +919,7 @@ describe("SqliteThreadStore", () => {
           (yield* withFailpoints(
             Effect.gen(function* () {
               const store = yield* ThreadStore;
+
               return yield* store.export(ThreadExportRequest.make({ threadId }));
             }),
           )).records,
@@ -850,15 +934,19 @@ describe("SqliteThreadStore", () => {
           (location) =>
             Effect.gen(function* () {
               yield* select(location);
+
               const exit = yield* withFailpoints(
                 Effect.gen(function* () {
                   const store = yield* ThreadStore;
+
                   yield* append(store, firstBatch);
                 }),
               ).pipe(Effect.exit);
+
               expect(Exit.isFailure(exit)).toBe(true);
               if (Exit.isFailure(exit)) {
                 const error = Cause.squash(exit.cause);
+
                 expect(error).toBeInstanceOf(ThreadStoreError);
                 if (isThreadStoreError(error)) {
                   expect(error.operation).toBe("append canonical batch");
@@ -866,12 +954,15 @@ describe("SqliteThreadStore", () => {
                 }
               }
               yield* select(undefined);
+
               const exported = yield* withFailpoints(
                 Effect.gen(function* () {
                   const store = yield* ThreadStore;
+
                   return yield* store.export(ThreadExportRequest.make({ threadId }));
                 }),
               );
+
               expect(exported.records).toEqual([]);
               expect(exported.tailSequence).toBe(0);
               expect(exported.tailDigest).toBe(EMPTY_TAIL_DIGEST);
@@ -884,18 +975,22 @@ describe("SqliteThreadStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 yield* append(store, firstBatch);
               }),
             ).pipe(Effect.exit),
           ),
         ).toBe(true);
         yield* select(undefined);
+
         const recoveredAppend = yield* withFailpoints(
           Effect.gen(function* () {
             const store = yield* ThreadStore;
+
             return yield* append(store, firstBatch);
           }),
         );
+
         expect(recoveredAppend.replayed).toBe(true);
 
         const checkpoint = ThreadCheckpoint.make({
@@ -910,8 +1005,10 @@ describe("SqliteThreadStore", () => {
           state: { destination: "Sapporo" },
           createdAt: at(3),
         });
+
         const save = Effect.gen(function* () {
           const store = yield* ThreadStore;
+
           yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
         });
 
@@ -923,6 +1020,7 @@ describe("SqliteThreadStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 return yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }));
               }),
             ),
@@ -937,6 +1035,7 @@ describe("SqliteThreadStore", () => {
             yield* withFailpoints(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
+
                 return yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }));
               }),
             ),

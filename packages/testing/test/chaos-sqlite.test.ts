@@ -72,6 +72,7 @@ const makeSqliteArm = (): {
   readonly failpoints: ChaosAdapterFailpoints;
 } => {
   let active: SqliteStorageFailpointLocation | undefined;
+
   return {
     handler: (location) =>
       Effect.suspend(() =>
@@ -126,18 +127,23 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (SQLite adapters)", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem;
+
           const directory = yield* fileSystem.makeTempDirectoryScoped({
             prefix: "effect-agent-chaos-sqlite-",
           });
+
           const plans = generateChaosPlans({
             seed: ROOT_SEED,
             count: PLAN_COUNT,
             adapterArms: SQLITE_ARM_POOL,
           });
+
           let adapterArmedPlans = 0;
+
           for (const [planIndex, plan] of plans.entries()) {
             if (plan.adapterArms.length > 0) adapterArmedPlans += 1;
             const arm = makeSqliteArm();
+
             const exit = yield* Effect.exit(
               runChaosPlan(plan, {
                 adapterFailpoints: arm.failpoints,
@@ -149,6 +155,7 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (SQLite adapters)", () => {
                 Effect.provide(freshLayer(`${directory}/plan-${plan.seed}.sqlite`, arm.handler)),
               ),
             );
+
             if (Exit.isFailure(exit)) {
               throw new Error(
                 `sqlite chaos plan failed — ${replayHint(planIndex, plan)}\n${Cause.pretty(exit.cause)}`,

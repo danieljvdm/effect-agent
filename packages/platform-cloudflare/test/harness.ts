@@ -68,20 +68,24 @@ export type TestNamespace =
 /** A FRESH stub for the named Thread (never cache stubs across aborts). */
 export const stubFor = (thread: string, namespace: TestNamespace = "THREADS") => {
   const binding = env[namespace];
+
   return binding.get(binding.idFromName(thread));
 };
 
 let nextProgressWaitIdentity = 0;
+
 const deterministicClientCrypto = Layer.succeed(
   Crypto.Crypto,
   Crypto.make({
     randomBytes: (size) => {
       let identity = ++nextProgressWaitIdentity;
       const bytes = new Uint8Array(size);
+
       for (let index = size - 1; index >= 0 && identity > 0; index--) {
         bytes[index] = identity & 0xff;
         identity = Math.floor(identity / 0x100);
       }
+
       return bytes;
     },
     digest: (_algorithm, data) => Effect.succeed(data),
@@ -140,11 +144,13 @@ export const awaitReconstructedProgressWaiter = async (
   expected: number,
 ): Promise<number> => {
   let lastReset: unknown;
+
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
       const incarnation = await (
         stubFor(thread) as DurableObjectStub<TestThreadObject>
       ).awaitProgressWaiterCountAfter(previousIncarnation, expected);
+
       if (incarnation !== null) return incarnation;
     } catch (cause) {
       if (!isDurableObjectReset(cause)) throw cause;
@@ -183,6 +189,7 @@ const sleep = (millis: number) => new Promise((resolve) => setTimeout(resolve, m
  */
 const withAbortedInstanceRetry = async <A>(probe: () => Promise<A>): Promise<A> => {
   let lastError: unknown;
+
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
       return await probe();
@@ -204,6 +211,7 @@ export const laneRows = (
       Effect.runPromise(
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
+
           return yield* sql<LaneRow>`
             SELECT submission_id, state, queue_sequence
             FROM effect_agent_submissions
@@ -242,9 +250,11 @@ export const drainAlarmsUntil = async (
   const namespace = options?.namespace ?? "THREADS";
   const rounds = options?.rounds ?? 600;
   let consecutiveIdleWithWork = 0;
+
   for (let round = 0; round < rounds; round++) {
     if (await predicate()) return;
     let fired = false;
+
     try {
       fired = await runDurableObjectAlarm(stubFor(thread, namespace));
     } catch {
@@ -254,9 +264,11 @@ export const drainAlarmsUntil = async (
     }
     if (!fired) {
       const rows = await laneRows(thread, namespace);
+
       const actionable = rows.some((row) =>
         ["ready", "input-applied", "running", "joining", "terminalizing"].includes(row.state),
       );
+
       if (actionable) {
         consecutiveIdleWithWork += 1;
         // Actionable committed work implies a committed alarm. Allow a few rounds for a
@@ -275,6 +287,7 @@ export const drainAlarmsUntil = async (
     await sleep(10);
   }
   const rows = await laneRows(thread, namespace);
+
   throw new Error(`Alarm drain did not converge for ${thread}; lane: ${JSON.stringify(rows)}`);
 };
 
@@ -283,6 +296,7 @@ export const allSettled =
   (thread: string, namespace: TestNamespace = "THREADS") =>
   async (): Promise<boolean> => {
     const rows = await laneRows(thread, namespace);
+
     return rows.length > 0 && rows.every((row) => row.state === "settled");
   };
 
@@ -291,6 +305,7 @@ export const anyInState =
   (thread: string, state: string, namespace: TestNamespace = "THREADS") =>
   async (): Promise<boolean> => {
     const rows = await laneRows(thread, namespace);
+
     return rows.some((row) => row.state === state);
   };
 
@@ -304,6 +319,7 @@ export const readCanonical = (
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.readAll(decodeThreadId(thread));
     }),
     namespace,
@@ -333,30 +349,38 @@ export const assertConvergence = async (
 ): Promise<void> => {
   const namespace = options?.namespace ?? "THREADS";
   const rows = await laneRows(thread, namespace);
+
   expect(rows.length).toBeGreaterThan(0);
   for (const row of rows) {
     expect(row.state, `submission ${row.submission_id}`).toBe("settled");
   }
   const records = await readCanonical(thread, namespace);
   const recordIds = records.map((envelope) => envelope.record.recordId);
+
   expect(new Set(recordIds).size).toBe(recordIds.length);
   const ordered = [...rows].sort((left, right) => left.queue_sequence - right.queue_sequence);
+
   for (const row of ordered) {
     const settled = records.filter(
       (envelope) =>
         envelope.record.recordId ===
         submissionSettlementRecordId(decodeSubmissionId(row.submission_id)),
     );
+
     expect(settled, `settlement record for ${row.submission_id}`).toHaveLength(1);
     expect(settled[0]?.record.payload._tag).toBe("SubmissionSettled");
   }
+
   const expectedInputs = ordered.map((row) =>
     submissionInputRecordId(decodeSubmissionId(row.submission_id)),
   );
+
   const inputOrder = recordIds.filter((recordId) =>
     expectedInputs.some((expected) => expected === recordId),
   );
+
   expect(inputOrder).toEqual(expectedInputs.filter((expected) => inputOrder.includes(expected)));
+
   // P7 §7(c) exemption: an ABORTED settlement for never-run work (no canonical `input:{sid}`
   // record) settles immediately by design — without waiting for the head — so it is excluded
   // from the FIFO settlement comparison. DUR-004 bounds EXECUTION order, which never-run work
@@ -370,20 +394,26 @@ export const assertConvergence = async (
         envelope.record.payload._tag === "SubmissionSettled" &&
         envelope.record.payload.outcome === "aborted",
     );
+
   const expectedSettlements = ordered
     .filter((row) => !abortedNeverRan(row.submission_id))
     .map((row) => submissionSettlementRecordId(decodeSubmissionId(row.submission_id)));
+
   const settlementOrder = recordIds.filter((recordId) =>
     expectedSettlements.some((expected) => expected === recordId),
   );
+
   expect(settlementOrder).toEqual(expectedSettlements);
 
   if (options?.supplier !== undefined) {
     const produced = supplierValuesFor(options.supplier.ref);
+
     for (const envelope of records) {
       const payload = envelope.record.payload;
+
       if (payload._tag === "ToolCallSettled" && payload.isFailure === false) {
         const result: unknown = payload.result;
+
         if (
           typeof result === "object" &&
           result !== null &&
@@ -412,6 +442,7 @@ export const assertConvergence = async (
       }
       if (payload._tag === "ToolStepSettled") {
         const output: unknown = payload.output;
+
         if (typeof output === "string") {
           expect(
             produced.has(output),

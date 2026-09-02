@@ -91,12 +91,15 @@ export const threadNamespaceFromEnv = Effect.fn("threadNamespaceFromEnv")(functi
       message: "The Worker environment is not an object; no bindings are available.",
     });
   }
+
   const candidate = yield* Effect.try({
     try: () => {
       const value: unknown = Reflect.get(env, binding);
+
       if (!Predicate.isObjectKeyword(value)) return undefined;
       const idFromName: unknown = Reflect.get(value, "idFromName");
       const get: unknown = Reflect.get(value, "get");
+
       return typeof idFromName === "function" && typeof get === "function" ? value : undefined;
     },
     catch: () =>
@@ -105,11 +108,13 @@ export const threadNamespaceFromEnv = Effect.fn("threadNamespaceFromEnv")(functi
         message: `env.${binding} could not be inspected as a DurableObjectNamespace binding.`,
       }),
   });
+
   if (candidate !== undefined) {
     // The structural probe above is the entire runtime contract this package relies on;
     // the assertion records that `idFromName`/`get` name a DurableObjectNamespace.
     return candidate as unknown as DurableObjectNamespace<ThreadObjectRpc>;
   }
+
   return yield* CloudflareBindingError.make({
     binding,
     message:

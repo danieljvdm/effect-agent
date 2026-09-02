@@ -48,6 +48,7 @@ const failureMessage = (error: unknown): string =>
 const failControl = (context: Atom.FnContext, error: unknown): Effect.Effect<void> =>
   Effect.sync(() => {
     const current = context(demoStateAtom);
+
     context.set(demoStateAtom, {
       ...current,
       controlError: failureMessage(error),
@@ -57,6 +58,7 @@ const failControl = (context: Atom.FnContext, error: unknown): Effect.Effect<voi
 /** Starts one bounded Phase 2 scenario and projects its streamed evidence. */
 export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scenario, context) => {
   const previous = context(demoStateAtom);
+
   context.set(demoStateAtom, {
     ...previous,
     status: "running",
@@ -87,6 +89,7 @@ export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scen
         break;
       case "RunCompleted": {
         const candidate: unknown = event.output;
+
         output = yield* Schema.decodeUnknownEffect(TravelPlan)(candidate);
         status = "succeeded";
         break;
@@ -118,6 +121,7 @@ export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scen
   return Stream.unwrap(
     Effect.gen(function* () {
       const client = yield* DemoRunRpcClient;
+
       return client.StreamOperationalRun({ scenario });
     }),
   ).pipe(
@@ -126,6 +130,7 @@ export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scen
     Effect.tap(() =>
       Effect.sync(() => {
         const current = context(demoStateAtom);
+
         if (current.status === "running") {
           context.set(demoStateAtom, {
             ...current,
@@ -138,6 +143,7 @@ export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scen
     Effect.tapError((cause) =>
       Effect.sync(() => {
         const current = context(demoStateAtom);
+
         context.set(demoStateAtom, {
           ...current,
           status: "failed",
@@ -148,6 +154,7 @@ export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scen
     Effect.onInterrupt(() =>
       Effect.sync(() => {
         const current = context(demoStateAtom);
+
         context.set(demoStateAtom, {
           ...current,
           status: "interrupted",
@@ -165,6 +172,7 @@ export interface QueueDemoCommand {
 /** Offers a command without interrupting the active stream or Tool batch. */
 export const queueDemoCommandAtom = DemoRunRpcRuntime.fn<QueueDemoCommand>()((request, context) => {
   const handle = context(demoStateAtom).handle;
+
   if (handle === null) {
     return failControl(context, "No active Run is ready to accept input.");
   }
@@ -172,8 +180,10 @@ export const queueDemoCommandAtom = DemoRunRpcRuntime.fn<QueueDemoCommand>()((re
     ...context(demoStateAtom),
     controlError: null,
   });
+
   return Effect.gen(function* () {
     const client = yield* DemoRunRpcClient;
+
     yield* client.QueueRunCommand({
       handle,
       kind: request.kind,
@@ -196,6 +206,7 @@ export const resolveDemoApprovalAtom = DemoRunRpcRuntime.fn<ResolveDemoApproval>
   context,
 ) => {
   const handle = context(demoStateAtom).handle;
+
   if (handle === null) {
     return failControl(context, "No active Run has a pending approval.");
   }
@@ -203,8 +214,10 @@ export const resolveDemoApprovalAtom = DemoRunRpcRuntime.fn<ResolveDemoApproval>
     ...context(demoStateAtom),
     controlError: null,
   });
+
   return Effect.gen(function* () {
     const client = yield* DemoRunRpcClient;
+
     yield* client.ResolveRunApproval({
       handle,
       requestId: request.requestId,

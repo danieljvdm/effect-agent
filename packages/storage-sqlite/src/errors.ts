@@ -149,6 +149,7 @@ export const SqliteStorageFailpointLocation = Schema.Literals([
   "ledger:child-settled:before",
   "ledger:child-settled:after",
 ]);
+
 export type SqliteStorageFailpointLocation = typeof SqliteStorageFailpointLocation.Type;
 
 /** Deterministic test-only fault or pause injected at a SQLite operation boundary. */

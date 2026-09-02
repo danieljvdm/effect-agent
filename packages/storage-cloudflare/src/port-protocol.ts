@@ -177,6 +177,7 @@ export const PortRequest = Schema.Union([
   StoreInspectTailCall,
   StoreExportCall,
 ]);
+
 export type PortRequest = typeof PortRequest.Type;
 
 /** The wire form of one port request (what a transport actually carries). */
@@ -264,6 +265,7 @@ export const PortResult = Schema.Union([
   StoreInspectTailResult,
   StoreExportResult,
 ]);
+
 export type PortResult = typeof PortResult.Type;
 
 // ---------------------------------------------------------------------------
@@ -286,6 +288,7 @@ export const PortFailure = Schema.Union([
   FenceRejected,
   PortProtocolError,
 ]);
+
 export type PortFailure = typeof PortFailure.Type;
 
 /** The routed operation succeeded on its owning Object. */

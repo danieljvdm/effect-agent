@@ -8,6 +8,7 @@ import tokyoNightLight from "./theme/tokyo-night-light.json";
 
 const siteUrl = "https://effect-agent.com";
 const socialImage = `${siteUrl}/social-card.png`;
+
 const socialImageAlt =
   "Effect Agent. An agent harness toolkit for TypeScript. Built on Effect and Effect AI.";
 

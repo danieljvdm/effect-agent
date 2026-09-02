@@ -14,7 +14,9 @@ describe("manual TestClock.layer() inside the workers pool (WP0 probe 3 fallback
         const fiber = yield* Effect.forkChild(
           Effect.as(Effect.sleep(Duration.seconds(30)), "woke"),
         );
+
         yield* TestClock.adjust("31 seconds");
+
         return yield* Fiber.join(fiber);
       }).pipe(Effect.provide(TestClock.layer())),
     );

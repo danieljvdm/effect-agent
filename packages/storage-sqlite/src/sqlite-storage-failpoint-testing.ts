@@ -19,6 +19,7 @@ export class SqliteStorageFailpointTestControl extends Context.Service<
   static readonly layer = Layer.effectContext(
     Effect.gen(function* () {
       const handler = yield* Ref.make<SqliteStorageFailpointHandler>(noFailpoint);
+
       return Context.make(
         SqliteStorageFailpoint,
         SqliteStorageFailpoint.of({

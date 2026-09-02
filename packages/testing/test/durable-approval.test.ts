@@ -98,6 +98,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts: Array<Prompt.Prompt> = [];
+
     const model = Model.make(
       "scripted",
       "durable-approval-test",
@@ -110,6 +111,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
               Ref.getAndUpdate(calls, (call) => call + 1).pipe(
                 Effect.map((call) => {
                   prompts.push(request.prompt);
+
                   return Stream.fromIterable(script(call));
                 }),
               ),
@@ -117,6 +119,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
         }),
       ),
     );
+
     return { model, prompts };
   });
 
@@ -133,7 +136,9 @@ const BookApproval = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
   needsApproval: true,
 });
+
 const approvalTools = Toolkit.make(BookApproval);
+
 const approvalDefinition = Agent.make("durable-approval-book", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -145,13 +150,16 @@ const approvalDefinition = Agent.make("durable-approval-book", {
 /** Per-ref supplier call counters that survive Tool-Layer rebuilds across Attempts. */
 const makeBookDesk = Effect.gen(function* () {
   const calls = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
+
   const toolLayer = approvalTools.toLayer({
     book: ({ ref }) =>
       Ref.update(calls, (current) => new Map(current).set(ref, (current.get(ref) ?? 0) + 1)).pipe(
         Effect.as({ confirmation: `confirmed-${ref}` }),
       ),
   });
+
   const count = (ref: string) => Ref.get(calls).pipe(Effect.map((m) => m.get(ref) ?? 0));
+
   return { toolLayer, count };
 });
 
@@ -197,9 +205,11 @@ const approvalDelegateLayer = Layer.effectContext(
       yield* Ref.make<(request: RunApprovalRequest) => Effect.Effect<RunApprovalDecision>>(
         unresolvedDelegate,
       );
+
     const hook: RunApprovalHook<never, never> = {
       request: (request) => Ref.get(handler).pipe(Effect.flatMap((current) => current(request))),
     };
+
     return Context.make(DurableApprovalResolver, hook).pipe(
       Context.add(
         ApprovalDelegateTestControl,
@@ -219,6 +229,7 @@ const delegateTestLayer = DurableAgentRuntime.layer.pipe(
 const readLog = (threadId: string) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(
       store.read(
         ThreadRead.make({
@@ -239,14 +250,17 @@ const lookupState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value.state;
   });
 
 const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
   Effect.gen(function* () {
     const control = yield* DurableRuntimeFailpointTestControl;
+
     yield* control.setHandler((hitLocation) =>
       hitLocation === location
         ? Effect.fail(DurableRuntimeFailpointError.make({ location: hitLocation }))
@@ -256,6 +270,7 @@ const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
 
 const clearFailpoint = Effect.gen(function* () {
   const control = yield* DurableRuntimeFailpointTestControl;
+
   yield* control.clear;
 });
 
@@ -263,9 +278,11 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
   const error: unknown = failure.value;
+
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -290,11 +307,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const ledger = yield* SubmissionLedger;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-suspend" }))
           : finalParts('{"answer":"never"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-suspend";
 
@@ -303,6 +322,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         { question: "book it" },
         submitOptions(thread, "suspend-1"),
       );
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
@@ -320,10 +340,12 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
           producerId: PRODUCER_ID,
         }),
       );
+
       expect(Option.isNone(claimed)).toBe(true);
 
       const runId = runIdForSubmission(receipt.submissionId);
       const records = yield* readLog(thread);
+
       // The response committed BEFORE approval preflight (the durable boundary), the request is
       // canonical (durability §8), and nothing was prepared or executed.
       expect(logTags(records)).toEqual([
@@ -335,6 +357,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       ]);
       const byId = recordsById(records);
       const request = byId.get(`approval-request:${runId}:1:book-1`);
+
       expect(request?.batchId).toBe(`turn-approvals:${runId}:1`);
       if (request?.record.payload._tag === "ToolApprovalRequested") {
         expect(request.record.payload.toolName).toBe("book");
@@ -348,11 +371,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const desk = yield* makeBookDesk;
+
         const scripted = yield* makeScriptedModel((call) =>
           call === 0
             ? toolTurn(toolCall("book-1", "book", { ref: "r-approve" }))
             : finalParts('{"answer":"booked"}'),
         );
+
         const agent = Agent.withModel(approvalDefinition, scripted.model);
         const thread = "thread-approval-approve";
 
@@ -361,15 +386,18 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
           { question: "book it" },
           submitOptions(thread, "approve-1"),
         );
+
         const first = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
+
         expect(first).toHaveLength(0);
         expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
 
         const intent = yield* runtime.resolveApproval(
           approveCommand(receipt.submissionId, "approved", "reviewed and approved"),
         );
+
         expect(intent.decision).toBe("approved");
         // The covering decision wakes the lane: suspended → input-applied (plan §2.6).
         expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
@@ -377,6 +405,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         const settlements = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
+
         expect(settlements).toHaveLength(1);
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-approve")).toBe(1);
@@ -390,6 +419,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         const byId = recordsById(records);
         // The resuming Attempt appended the canonical decision BEFORE honoring it.
         const decision = byId.get(`approval-decision:${runId}:1:book-1`);
+
         expect(decision?.batchId).toBe(`approval-decision:${receipt.submissionId}:book-1`);
         if (decision?.record.payload._tag === "ToolApprovalDecided") {
           expect(decision.record.payload.decision).toBe("approved");
@@ -412,11 +442,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-deny" }))
           : finalParts('{"answer":"never"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-deny";
 
@@ -425,17 +457,21 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         { question: "book it" },
         submitOptions(thread, "deny-1"),
       );
+
       const first = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(first).toHaveLength(0);
 
       yield* runtime.resolveApproval(
         approveCommand(receipt.submissionId, "denied", "policy forbids this booking"),
       );
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(settlements).toHaveLength(1);
       // Denial-terminal (P2 policy default): the Run fails through `AgentApprovalDenied` with
       // the denial already canonical; the handler never started.
@@ -446,6 +482,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       const records = yield* readLog(thread);
       const byId = recordsById(records);
       const decision = byId.get(`approval-decision:${runId}:1:book-1`);
+
       if (decision?.record.payload._tag === "ToolApprovalDecided") {
         expect(decision.record.payload.decision).toBe("denied");
       } else {
@@ -453,6 +490,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       }
       expect(byId.has(`tool-prepared:${runId}:1:book-1`)).toBe(false);
       const settled = yield* runtime.awaitSettlement(receipt);
+
       expect(settled.outcome).toBe("failed");
     }),
   );
@@ -461,11 +499,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-idem" }))
           : finalParts('{"answer":"never"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-idempotent";
 
@@ -474,6 +514,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         { question: "book it" },
         submitOptions(thread, "idem-1"),
       );
+
       yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
@@ -481,16 +522,19 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       const original = yield* runtime.resolveApproval(
         approveCommand(receipt.submissionId, "approved", "first decision"),
       );
+
       // The replay returns the stored intent unchanged (original resolver/reason/decidedAt).
       const replayed = yield* runtime.resolveApproval(
         approveCommand(receipt.submissionId, "approved", "first decision"),
       );
+
       expect(replayed.reason).toBe(original.reason);
       expect(replayed.decidedAt).toStrictEqual(original.decidedAt);
 
       const divergent = yield* Effect.exit(
         runtime.resolveApproval(approveCommand(receipt.submissionId, "denied", "changed my mind")),
       );
+
       expect(failureTag(divergent)).toBe("ApprovalConflict");
     }),
   );
@@ -499,11 +543,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-abort" }))
           : finalParts('{"answer":"never"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-abort";
 
@@ -512,6 +558,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         { question: "book it" },
         submitOptions(thread, "abort-1"),
       );
+
       yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
@@ -528,16 +575,19 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       // recovery pass (durability §13: inactive accepted work settles aborted).
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
       expect(report?.decision._tag).toBe("SettleAborted");
       expect(report?.disposition).toBe("repaired");
 
       const settled = yield* runtime.awaitSettlement(receipt);
+
       expect(settled.outcome).toBe("aborted");
       expect(yield* lookupState(receipt.submissionId)).toBe("settled");
       expect(yield* desk.count("r-abort")).toBe(0);
 
       const records = yield* readLog(thread);
       const byId = recordsById(records);
+
       expect(byId.has(`abort:${receipt.submissionId}`)).toBe(true);
       // Nothing was prepared, so abort records no ToolCallUnknown audit for this Run.
       expect(logTags(records)).not.toContain("ToolCallPrepared");
@@ -549,11 +599,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-fp-request" }))
           : finalParts('{"answer":"booked"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-fp-request";
 
@@ -562,10 +614,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         { question: "book it" },
         submitOptions(thread, "fp-request-1"),
       );
+
       yield* armFailpoint("approval:after-request-append");
+
       const killed = yield* Effect.exit(
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
       );
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
@@ -574,6 +629,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
       expect(report?.decision._tag).toBe("AwaitApprovalDecision");
       expect(report?.disposition).toBe("repaired");
       expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
@@ -583,13 +639,16 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       yield* runtime.resolveApproval(
         approveCommand(receipt.submissionId, "approved", "approved after repair"),
       );
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.count("r-fp-request")).toBe(1);
 
       const records = yield* readLog(thread);
+
       expect(
         records.filter((envelope) => envelope.record.payload._tag === "ToolApprovalRequested"),
       ).toHaveLength(1);
@@ -600,6 +659,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(
@@ -608,6 +668,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
             )
           : finalParts('{"answer":"booked both"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-multi";
 
@@ -616,18 +677,22 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         { question: "book both" },
         submitOptions(thread, "multi-1"),
       );
+
       // The engine resolves approvals in declaration order and fails the batch on the FIRST
       // unresolved call, so each undecided approval suspends the lane one at a time.
       const first = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(first).toHaveLength(0);
       expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
 
       yield* runtime.resolveApproval(approveCommand(receipt.submissionId, "approved", "first ok"));
+
       const second = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(second).toHaveLength(0);
       expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
       // Nothing executed while any approval of the batch is undecided.
@@ -643,9 +708,11 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
           reason: "second ok",
         }),
       );
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.count("r-multi-1")).toBe(1);
@@ -656,6 +723,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       const runId = runIdForSubmission(receipt.submissionId);
       const records = yield* readLog(thread);
       const byId = recordsById(records);
+
       // Batch identity across suspension cycles: the Turn's FIRST canonical approval append
       // owns the shared turn-approvals batch; the later request of the same Turn commits under
       // its deterministic per-call batch so the committed batch is never contradicted.
@@ -676,11 +744,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const desk = yield* makeBookDesk;
+
         const scripted = yield* makeScriptedModel((call) =>
           call === 0
             ? toolTurn(toolCall("book-1", "book", { ref: "r-fp-suspend" }))
             : finalParts('{"answer":"booked"}'),
         );
+
         const agent = Agent.withModel(approvalDefinition, scripted.model);
         const thread = "thread-approval-fp-suspend";
 
@@ -689,10 +759,13 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
           { question: "book it" },
           submitOptions(thread, "fp-suspend-1"),
         );
+
         yield* armFailpoint("approval:after-suspend");
+
         const killed = yield* Effect.exit(
           runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
+
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
@@ -701,6 +774,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
         const reports = yield* runtime.runRecovery;
         const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
         expect(report?.decision._tag).toBe("AwaitApprovalDecision");
         expect(report?.disposition).toBe("deferred");
         expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
@@ -708,9 +782,11 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         yield* runtime.resolveApproval(
           approveCommand(receipt.submissionId, "approved", "approved after crash"),
         );
+
         const settlements = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(desk.toolLayer));
+
         expect(settlements).toHaveLength(1);
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-fp-suspend")).toBe(1);
@@ -722,16 +798,19 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
   it.effect("a policy-auto approval becomes canonical in one atomic batch and proceeds", () =>
     Effect.gen(function* () {
       const control = yield* ApprovalDelegateTestControl;
+
       yield* control.set(() =>
         Effect.succeed({ _tag: "approved", reason: "auto-approved by policy" }),
       );
       const runtime = yield* DurableAgentRuntime;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-auto" }))
           : finalParts('{"answer":"booked"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-auto";
 
@@ -740,9 +819,11 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
         { question: "book it" },
         submitOptions(thread, "auto-1"),
       );
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.count("r-auto")).toBe(1);
@@ -753,6 +834,7 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
       // The immediate decision committed atomically WITH its request in the Turn batch.
       const request = byId.get(`approval-request:${runId}:1:book-1`);
       const decision = byId.get(`approval-decision:${runId}:1:book-1`);
+
       expect(request?.batchId).toBe(`turn-approvals:${runId}:1`);
       expect(decision?.batchId).toBe(`turn-approvals:${runId}:1`);
       if (decision?.record.payload._tag === "ToolApprovalDecided") {
@@ -766,16 +848,19 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
   it.effect("a policy-auto denial settles failed with canonical request and decision", () =>
     Effect.gen(function* () {
       const control = yield* ApprovalDelegateTestControl;
+
       yield* control.set(() =>
         Effect.succeed({ _tag: "denied", reason: "policy denies this booking" }),
       );
       const runtime = yield* DurableAgentRuntime;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-auto-deny" }))
           : finalParts('{"answer":"never"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-auto-deny";
 
@@ -784,9 +869,11 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
         { question: "book it" },
         submitOptions(thread, "auto-deny-1"),
       );
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("failed");
       expect(yield* desk.count("r-auto-deny")).toBe(0);
@@ -794,8 +881,10 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
       const runId = runIdForSubmission(receipt.submissionId);
       const records = yield* readLog(thread);
       const byId = recordsById(records);
+
       expect(byId.has(`approval-request:${runId}:1:book-1`)).toBe(true);
       const decision = byId.get(`approval-decision:${runId}:1:book-1`);
+
       if (decision?.record.payload._tag === "ToolApprovalDecided") {
         expect(decision.record.payload.decision).toBe("denied");
       } else {
@@ -812,11 +901,13 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
       const runtime = yield* DurableAgentRuntime;
       const ledger = yield* SubmissionLedger;
       const desk = yield* makeBookDesk;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolTurn(toolCall("book-1", "book", { ref: "r-race" }))
           : finalParts('{"answer":"booked"}'),
       );
+
       const agent = Agent.withModel(approvalDefinition, scripted.model);
       const thread = "thread-approval-race";
 
@@ -825,6 +916,7 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
         { question: "book it" },
         submitOptions(thread, "race-1"),
       );
+
       // Deterministic construction of the plan §2.6 race: the delegate records the durable
       // decision intent AFTER the Attempt's snapshot read but reports unresolved, so the
       // decision lands strictly between the recorded-decision lookup and the suspend
@@ -847,6 +939,7 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(desk.toolLayer));
+
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.count("r-race")).toBe(1);
@@ -857,6 +950,7 @@ layer(delegateTestLayer)("DUR P5 policy-auto approval delegation (plan §2.6 ste
       const records = yield* readLog(thread);
       const byId = recordsById(records);
       const decision = byId.get(`approval-decision:${runId}:1:book-1`);
+
       if (decision?.record.payload._tag === "ToolApprovalDecided") {
         expect(decision.record.payload.resolver).toBe("operator");
       } else {
@@ -896,6 +990,7 @@ describe("toDurableRunApprovalHook (capabilities durable adapter)", () => {
     Effect.gen(function* () {
       const hook = yield* toDurableRunApprovalHook(adapterPolicy);
       const decision = yield* hook.request(adapterRequest);
+
       expect(decision._tag).toBe("approved");
     }).pipe(
       Effect.provide(
@@ -923,6 +1018,7 @@ describe("toDurableRunApprovalHook (capabilities durable adapter)", () => {
     Effect.gen(function* () {
       const hook = yield* toDurableRunApprovalHook(adapterPolicy);
       const decision = yield* hook.request(adapterRequest);
+
       // Fail-closed: a policy fault must never approve, deny, or crash the Attempt — the
       // decision defers to the durable suspension + resolveApproval path.
       expect(decision._tag).toBe("unresolved");

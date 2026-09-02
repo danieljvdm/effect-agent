@@ -35,6 +35,7 @@ export const CertificationSuite = Schema.Literals([
   "thread-store",
   "real-loss",
 ]);
+
 export type CertificationSuite = typeof CertificationSuite.Type;
 
 /** One executed certification case: a conformance contract case or a Tier-3 lever row. */
@@ -60,6 +61,7 @@ export const CertificationScenario = Schema.Literals([
   "join",
   "delegation",
 ]);
+
 export type CertificationScenario = typeof CertificationScenario.Type;
 
 /**
@@ -104,6 +106,7 @@ export const CertificationTierThreeStatus = Schema.Literals([
   "not-exercised",
   "not-applicable",
 ]);
+
 export type CertificationTierThreeStatus = typeof CertificationTierThreeStatus.Type;
 
 /** The Tier-3 (real loss lever) section of a certificate. */
@@ -144,17 +147,22 @@ export class CertificationReport extends Schema.Class<CertificationReport>(
 /** Bounded operator-readable rendering of one failure Cause for a certification detail. */
 const causeDetail = (cause: Cause.Cause<unknown>): string => {
   const failure = Cause.findErrorOption(cause);
+
   if (Option.isSome(failure)) {
     const diagnostic = inspectForeignDiagnostic(failure.value);
+
     if (diagnostic.tag !== undefined || diagnostic.message !== undefined) {
       const tag = diagnostic.tag ?? "Error";
+
       return `${tag}${diagnostic.message === undefined ? "" : `: ${diagnostic.message}`}`.slice(
         0,
         4_096,
       );
     }
+
     return safeUnknownString(failure.value, "Unknown foreign failure").slice(0, 4_096);
   }
+
   return `defect: ${safeUnknownString(cause, "Unknown defect")}`.slice(0, 4_096);
 };
 
@@ -186,13 +194,17 @@ export const certifyPorts = Effect.fn("Thread.certifyPorts")(function* (): Effec
   SubmissionLedger | ThreadStore | Crypto.Crypto
 > {
   const results: Array<CertificationCaseResult> = [];
+
   for (const contractCase of submissionLedgerConformanceCases) {
     const exit = yield* Effect.exit(contractCase.run);
+
     results.push(caseResult("submission-ledger", contractCase.name, exit));
   }
   for (const contractCase of threadStoreConformanceCases) {
     const exit = yield* Effect.exit(contractCase.run);
+
     results.push(caseResult("thread-store", contractCase.name, exit));
   }
+
   return results;
 });

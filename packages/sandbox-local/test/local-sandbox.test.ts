@@ -61,10 +61,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the sandbox stream to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed sandbox error");
   }
+
   return failure.value;
 };
 
@@ -89,6 +91,7 @@ const isProcessAlive = (pid: number): Effect.Effect<boolean> =>
   Effect.sync(() => {
     try {
       process.kill(pid, 0);
+
       return true;
     } catch {
       return false;
@@ -99,6 +102,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("labels streamed stdout and successful completion as unisolated", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const events = yield* sandbox
         .execute(request(["-e", "process.stdout.write('hello'); process.stderr.write('warning')"]))
         .pipe(Stream.runCollect);
@@ -130,6 +134,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("surfaces trailing incomplete UTF-8 stdout with byte accounting intact", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const events = yield* sandbox
         .execute(request(["-e", "process.stdout.write(Buffer.from([0xe2, 0x82]))"]))
         .pipe(Stream.runCollect);
@@ -137,6 +142,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
       const stdout = events.flatMap((event) =>
         event._tag === "SandboxOutput" && event.stream === "stdout" ? [event] : [],
       );
+
       expect(stdout.map((event) => event.text).join("")).toBe("\uFFFD");
       expect(stdout.reduce((total, event) => total + event.bytes, 0)).toBe(2);
       expect(events.at(-1)).toMatchObject({
@@ -151,6 +157,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
       const events = yield* Ref.make<ReadonlyArray<SandboxEvent>>([]);
+
       const exit = yield* sandbox
         .execute(request(["-e", "process.stderr.write('failed'); process.exit(3)"]))
         .pipe(
@@ -171,6 +178,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
       Effect.gen(function* () {
         const sandbox = yield* Sandbox;
         const pidFile = path.join(directory, "pid");
+
         const exit = yield* sandbox
           .execute(
             request(
@@ -195,6 +203,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
           observed: 5,
         });
         const pid = yield* readRecordedPid(pidFile);
+
         expect(yield* isProcessAlive(pid)).toBe(false);
       }),
     ),
@@ -203,6 +212,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("applies the output limit across stdout and stderr together", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const exit = yield* sandbox
         .execute(
           request(["-e", "process.stdout.write('1234'); process.stderr.write('5678')"], {
@@ -222,6 +232,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("rejects request features the unisolated adapter cannot enforce", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const exit = yield* sandbox
         .execute(
           request(["-e", "process.exit(0)"], {
@@ -240,6 +251,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("rejects a runtime identity the local adapter cannot honor", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const exit = yield* sandbox
         .execute(
           request(["-e", "process.exit(0)"], {
@@ -258,6 +270,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("returns a typed spawn failure for a missing executable", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const exit = yield* sandbox
         .execute(
           request([], {
@@ -276,10 +289,12 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("copies only explicitly allowed environment variables", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const provider = ConfigProvider.fromEnvRecord({
         EFFECT_AGENT_ALLOWED: "visible",
         EFFECT_AGENT_HIDDEN: "hidden",
       });
+
       const events = yield* sandbox
         .execute(
           request(
@@ -291,11 +306,13 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
           ),
         )
         .pipe(Stream.runCollect, Effect.provide(ConfigProvider.layer(provider)));
+
       const stdout = events
         .flatMap((event) =>
           event._tag === "SandboxOutput" && event.stream === "stdout" ? [event.text] : [],
         )
         .join("");
+
       const result = yield* Schema.decodeEffect(Schema.fromJsonString(AllowedEnvironmentResult))(
         stdout,
       );
@@ -310,6 +327,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("maps configuration source failures to typed spawn errors", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+
       const failingProvider = ConfigProvider.make(() =>
         Effect.fail(
           new ConfigProvider.SourceError({
@@ -317,6 +335,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
           }),
         ),
       );
+
       const exit = yield* sandbox
         .execute(
           request(["-e", "process.exit(0)"], {
@@ -340,6 +359,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
         Effect.gen(function* () {
           const sandbox = yield* Sandbox;
           const pidFile = path.join(directory, "pid");
+
           const exit = yield* sandbox
             .execute(
               request(["-e", recordPidThen(pidFile, "setInterval(() => undefined, 1_000)")], {
@@ -350,6 +370,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
 
           expect(failureFrom(exit)).toMatchObject({ _tag: "SandboxTimeoutError" });
           const pid = yield* readRecordedPid(pidFile);
+
           expect(yield* isProcessAlive(pid)).toBe(false);
         }),
       ),
@@ -359,6 +380,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
       const startedPid = yield* Deferred.make<number>();
+
       const fiber = yield* Effect.forkChild(
         sandbox
           .execute(
@@ -375,7 +397,9 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
             ),
           ),
       );
+
       const pid = yield* Deferred.await(startedPid);
+
       yield* Fiber.interrupt(fiber);
       const exit = yield* Fiber.await(fiber);
       const processAlive = yield* isProcessAlive(pid);
@@ -424,6 +448,7 @@ describe("unisolated local Sandbox with an injected spawner double", () => {
       const stdout = events.flatMap((event) =>
         event._tag === "SandboxOutput" && event.stream === "stdout" ? [event] : [],
       );
+
       expect(stdout.map((event) => event.text).join("")).toBe("\u20AC\uFFFD");
       expect(stdout.reduce((total, event) => total + event.bytes, 0)).toBe(5);
       expect(events.at(-1)).toMatchObject({
@@ -458,6 +483,7 @@ describe("unisolated local Sandbox with an injected spawner double", () => {
         description: "x".repeat(16 * 1024),
       }),
     );
+
     return Effect.gen(function* () {
       const sandbox = yield* Sandbox;
       const exit = yield* sandbox.execute(request([])).pipe(Stream.runDrain, Effect.exit);

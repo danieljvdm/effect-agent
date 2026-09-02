@@ -43,6 +43,7 @@ describe("InteractiveBrowser schemas", () => {
       isolation: "isolated",
       identity: "interactive-test",
     });
+
     for (const network of [
       { _tag: "ExactHosts", allowedHosts: ["example.com", "example.com:8443"] },
       { _tag: "PublicWeb" },
@@ -54,6 +55,7 @@ describe("InteractiveBrowser schemas", () => {
         maxElapsedMillis: 1_000,
         maxReturnedBytes: 1_024,
       });
+
       expect(
         Schema.decodeSync(InteractiveBrowserPolicy)(
           Schema.encodeSync(InteractiveBrowserPolicy)(policy),
@@ -73,12 +75,14 @@ describe("InteractiveBrowser schemas", () => {
     expect(BrowserFillRequest.make({ selector: "#q", value: "value" }).value).toBe("value");
     expect(BrowserClickRequest.make({ selector: "button" }).selector).toBe("button");
     const screenshot = BrowserScreenshotRequest.make({ fullPage: false });
+
     expect(
       Schema.decodeSync(BrowserScreenshotRequest)(
         Schema.encodeSync(BrowserScreenshotRequest)(screenshot),
       ),
     ).toEqual(screenshot);
     const scroll = BrowserScrollRequest.make({ deltaX: -100_000, deltaY: 100_000 });
+
     expect(
       Schema.decodeSync(BrowserScrollRequest)(Schema.encodeSync(BrowserScrollRequest)(scroll)),
     ).toEqual(scroll);
@@ -89,6 +93,7 @@ describe("InteractiveBrowser schemas", () => {
       "https://example.com/after",
     );
     expect(BrowserTextResult.make({ text: "page" }).text).toBe("page");
+
     const errors: ReadonlyArray<BrowserError> = [
       InteractiveBrowserPolicyDeniedError.make({
         implementation,
@@ -116,8 +121,10 @@ describe("InteractiveBrowser schemas", () => {
         message: "click unsupported",
       }),
     ];
+
     for (const error of errors) {
       const encoded = Schema.encodeSync(InteractiveBrowserError)(error);
+
       expect(Schema.decodeSync(InteractiveBrowserError)(encoded)._tag).toBe(error._tag);
     }
   });
@@ -134,12 +141,14 @@ describe("InteractiveBrowser schemas", () => {
       "example.*",
     ])
       expect(Schema.decodeUnknownExit(InteractiveBrowserHost)(host)._tag).toBe("Failure");
+
     const valid = {
       network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
       maxActions: 1,
       maxElapsedMillis: 1,
       maxReturnedBytes: 1,
     };
+
     for (const value of [
       { ...valid, allowedHosts: ["other.example"] },
       { ...valid, network: undefined },
@@ -207,6 +216,7 @@ describe("InteractiveBrowser schemas", () => {
 
   it("rejects malformed values for every expected error shape", () => {
     const implementation = { isolation: "isolated", identity: "test" };
+
     const values: ReadonlyArray<unknown> = [
       { _tag: "UnknownInteractiveBrowserError", implementation, message: "unknown" },
       {
@@ -239,6 +249,7 @@ describe("InteractiveBrowser schemas", () => {
         message: "unsupported",
       },
     ];
+
     for (const value of values) {
       expect(Schema.decodeUnknownExit(InteractiveBrowserError)(value)._tag).toBe("Failure");
     }
@@ -246,23 +257,29 @@ describe("InteractiveBrowser schemas", () => {
 
   it("pins scoped open and a non-Schema handle", () => {
     const result: Equal<OpenResult, [BrowserHandle, BrowserError, Scope.Scope]> = true;
+
     const handleIsNotSchema: Equal<
       BrowserHandle extends typeof InteractiveBrowserError.Type ? true : false,
       false
     > = true;
+
     const screenshot: Equal<
       ReturnType<BrowserHandle["screenshot"]>,
       Effect.Effect<PageScreenshotResult, BrowserError>
     > = true;
+
     const scroll: Equal<
       ReturnType<BrowserHandle["scroll"]>,
       Effect.Effect<BrowserActionResult, BrowserError>
     > = true;
+
     const close: Equal<BrowserHandle["close"], Effect.Effect<void, BrowserError>> = true;
+
     const hasNoHostControls: Equal<
       Extract<keyof BrowserHandle, "sessionId" | "getLiveView" | "handoff" | "getHandoffState">,
       never
     > = true;
+
     expect(result && handleIsNotSchema && screenshot && scroll && close && hasNoHostControls).toBe(
       true,
     );

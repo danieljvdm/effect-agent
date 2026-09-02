@@ -49,14 +49,18 @@ const WireRequest = Schema.Struct({
   prompt_cache_key: Schema.optional(Schema.String),
   prompt_cache_options: Schema.optional(Schema.Json),
 });
+
 type WireRequest = typeof WireRequest.Type;
 type HttpRequest = Parameters<typeof HttpClientResponse.fromWeb>[0];
+
 const decodeWire = (request: HttpRequest) => {
   if (request.body._tag !== "Uint8Array") throw new Error("Expected encoded JSON request");
+
   return Schema.decodeUnknownSync(Schema.fromJsonString(WireRequest))(
     new TextDecoder().decode(request.body.body),
   );
 };
+
 const json = (request: HttpRequest, body: unknown, status = 200) =>
   HttpClientResponse.fromWeb(
     request,
@@ -74,12 +78,15 @@ const finding = {
   body: "Returning zero loses the acknowledged value on the supported caller. Return the saved value.",
   priority: 1,
 };
+
 const read = {
   name: "read_file",
   parameters: { path: "src/value.ts", revision: "head", startLine: 1, lineCount: 3 },
 };
+
 const record = { name: "record_finding", parameters: finding };
 const submit = { name: "submit_review", parameters: { findings: [] } };
+
 const request = ReviewRequest.make({
   title: "Preserve values",
   description: "",
@@ -93,6 +100,7 @@ const request = ReviewRequest.make({
   ],
   unreviewedPaths: [],
 });
+
 const repository = ReviewRepository.of({
   readFile: (input) =>
     Effect.succeed(
@@ -101,6 +109,7 @@ const repository = ReviewRepository.of({
   findFiles: () =>
     Effect.succeed(ReviewFileList.make({ paths: ["src/value.ts"], truncated: false })),
 });
+
 const rawUsage = (input: number, output: number, read = 0, write = input - read) => ({
   input_tokens: input,
   input_tokens_details: { cached_tokens: read, cache_write_tokens: write },
@@ -108,6 +117,7 @@ const rawUsage = (input: number, output: number, read = 0, write = input - read)
   output_tokens_details: { reasoning_tokens: output - 10 },
   total_tokens: input + output,
 });
+
 const response = (usage: unknown) => ({
   id: "resp_fixture",
   object: "response",
@@ -117,6 +127,7 @@ const response = (usage: unknown) => ({
   output: [],
   usage,
 });
+
 const sse = (
   httpRequest: HttpRequest,
   call: number,
@@ -130,6 +141,7 @@ const sse = (
     summary: [],
     encrypted_content: `opaque-fixture-${call}`,
   };
+
   const output = calls.map((tool, index) => ({
     type: "function_call",
     id: `fc_${call}_${index}`,
@@ -138,6 +150,7 @@ const sse = (
     arguments: JSON.stringify(tool.parameters),
     status: "completed",
   }));
+
   const events = [
     { type: "response.created", response: response(null) },
     { type: "response.output_item.added", output_index: 0, item: reasoning },
@@ -161,6 +174,7 @@ const sse = (
       },
     },
   ];
+
   return HttpClientResponse.fromWeb(
     httpRequest,
     new globalThis.Response(
@@ -178,6 +192,7 @@ const makeNative = (http: HttpClient.HttpClient) =>
   OpenAiClient.make({ apiKey: Redacted.make("test-key-never-log") }).pipe(
     Effect.provideService(HttpClient.HttpClient, http),
   );
+
 const model = OpenAiLanguageModel.model("gpt-5.6-sol", {
   max_output_tokens: 32_000,
   service_tier: "default",
@@ -185,6 +200,7 @@ const model = OpenAiLanguageModel.model("gpt-5.6-sol", {
   strictJsonSchema: true,
   reasoning: { effort: "xhigh" },
 });
+
 const payload: OpenAiSchema.CreateResponse = {
   model: "gpt-5.6-sol",
   input: [{ role: "user", content: "fixture" }],
@@ -209,12 +225,15 @@ describe("review provider boundary", () => {
         rawUsage(33_219, 286, 31_475, 1_512),
         rawUsage(34_000, 200, 32_987, 788),
       ];
+
       const researchBatches = [4, 4, 4, 4, 1, 1, 4, 1, 1];
       const sent: Array<WireRequest> = [];
+
       const native = yield* makeNative(
         HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
             const current = usage[sent.length];
+
             if (current === undefined) throw new Error("Unexpected additional model request");
             if (url.pathname.endsWith("/input_tokens"))
               return json(httpRequest, {
@@ -223,7 +242,9 @@ describe("review provider boundary", () => {
               });
             const wire = decodeWire(httpRequest);
             const batch = researchBatches[sent.length];
+
             sent.push(wire);
+
             return sse(
               httpRequest,
               sent.length,
@@ -235,17 +256,20 @@ describe("review provider boundary", () => {
           }),
         ),
       );
+
       const provider = yield* makeReviewOpenAi({
         client: native,
         model: "gpt-5.6-sol",
         cacheKey: "pr-291-turns",
       });
+
       const result = yield* makeReviewer({ model, costControl: provider.costControl })
         .review(request)
         .pipe(
           Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
           Effect.provideService(ReviewRepository, repository),
         );
+
       expect(sent).toHaveLength(10);
       expect(sent[8]?.tool_choice).toEqual(sent[0]?.tool_choice);
       expect(result.exhausted).toBeUndefined();
@@ -266,16 +290,19 @@ describe("review provider boundary", () => {
   it.effect("continues research with the remaining allowance after PR #252's usage", () =>
     Effect.gen(function* () {
       const sent: Array<WireRequest> = [];
+
       // Production counts and usage for the first two calls; the third is scripted continuation.
       const usage = [
         rawUsage(39_532, 430, 0, 39_351),
         rawUsage(51_735, 1_647, 39_338, 12_163),
         rawUsage(60_000, 1_000, 51_500, 8_000),
       ];
+
       const native = yield* makeNative(
         HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
             const current = usage[sent.length];
+
             if (current === undefined) throw new Error("Unexpected additional model request");
             if (url.pathname.endsWith("/input_tokens"))
               return json(httpRequest, {
@@ -283,6 +310,7 @@ describe("review provider boundary", () => {
                 input_tokens: current.input_tokens,
               });
             sent.push(decodeWire(httpRequest));
+
             return sse(
               httpRequest,
               sent.length,
@@ -292,11 +320,13 @@ describe("review provider boundary", () => {
           }),
         ),
       );
+
       const provider = yield* makeReviewOpenAi({
         client: native,
         model: "gpt-5.6-sol",
         cacheKey: "affordable-research",
       });
+
       const result = yield* makeReviewer({ model, costControl: provider.costControl })
         .review(request)
         .pipe(
@@ -330,6 +360,7 @@ describe("review provider boundary", () => {
     (cache) =>
       Effect.gen(function* () {
         const sent: Array<WireRequest> = [];
+
         // The first six usage reports and batch sizes are from the live review.
         // The remaining research and completion are scripted, not measured improvement.
         const usage = [
@@ -342,11 +373,14 @@ describe("review provider boundary", () => {
           cache === "hit" ? rawUsage(80_000, 800, 71_053, 8_764) : rawUsage(80_000, 800),
           rawUsage(81_000, 200, 79_817, 1_000),
         ];
+
         const researchBatches = [8, 9, 10, 10, 10, 10];
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.sync(() => {
               const current = usage[sent.length];
+
               if (current === undefined) throw new Error("Unexpected additional model request");
               if (url.pathname.endsWith("/input_tokens"))
                 return json(httpRequest, {
@@ -354,7 +388,9 @@ describe("review provider boundary", () => {
                   input_tokens: current.input_tokens,
                 });
               const batchSize = researchBatches[sent.length];
+
               sent.push(decodeWire(httpRequest));
+
               return sse(
                 httpRequest,
                 sent.length,
@@ -368,11 +404,13 @@ describe("review provider boundary", () => {
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "cached-research",
         });
+
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
           .pipe(
@@ -411,20 +449,24 @@ describe("review provider boundary", () => {
             }),
           ),
         ];
+
         const sent: Array<WireRequest> = [];
         const input = outcome === "cost" ? 70_000 : 20_000;
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.sync(() => {
               if (url.pathname.endsWith("/input_tokens"))
                 return json(httpRequest, { object: "response.input_tokens", input_tokens: input });
               sent.push(decodeWire(httpRequest));
+
               const calls =
                 sent.length === 1
                   ? [{ name: "submit_review", parameters: { findings: [finding] } }]
                   : outcome === "protocol"
                     ? [{ name: "unknown_tool", parameters: {} }]
                     : [submit];
+
               return sse(
                 httpRequest,
                 sent.length,
@@ -434,17 +476,20 @@ describe("review provider boundary", () => {
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "large-review",
         });
+
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(ReviewRequest.make({ ...request, changes }))
           .pipe(
             Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
             Effect.provideService(ReviewRepository, repository),
           );
+
         expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
         expect(result.turns).toBe(sent.length);
         expect(result.usage).toEqual((yield* provider.costControl.snapshot).usage);
@@ -473,13 +518,16 @@ describe("review provider boundary", () => {
   it.effect("preserves cached tool schemas through the required completion turn", () =>
     Effect.gen(function* () {
       const sent: Array<WireRequest> = [];
+
       const native = yield* makeNative(
         HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
             const input = 20_000 + sent.length * 1_000;
+
             if (url.pathname.endsWith("/input_tokens"))
               return json(httpRequest, { object: "response.input_tokens", input_tokens: input });
             sent.push(decodeWire(httpRequest));
+
             return sse(
               httpRequest,
               sent.length,
@@ -493,11 +541,13 @@ describe("review provider boundary", () => {
           }),
         ),
       );
+
       const provider = yield* makeReviewOpenAi({
         client: native,
         model: "gpt-5.6-sol",
         cacheKey: "completion-prefix",
       });
+
       const result = yield* makeReviewer({ model, costControl: provider.costControl })
         .review(request)
         .pipe(
@@ -508,6 +558,7 @@ describe("review provider boundary", () => {
       expect(sent).toHaveLength(9);
       const research = sent[7];
       const completion = sent[8];
+
       if (research === undefined || completion === undefined)
         throw new Error("Missing research or completion request");
       expect(completion.tools).toEqual(research.tools);
@@ -539,6 +590,7 @@ describe("review provider boundary", () => {
         const mutations: Array<string> = [];
         const published: Array<string> = [];
         const user = { login: "github-actions[bot]", type: "Bot" };
+
         const prior = {
           id: 2,
           body: `One blocking defect.\n${reviewMarker(true)}`,
@@ -547,7 +599,9 @@ describe("review provider boundary", () => {
           state: "CHANGES_REQUESTED",
           user,
         };
+
         const evidence = "src/value.ts now returns the saved value instead of zero.";
+
         const client = HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
             if (url.pathname.endsWith("/input_tokens"))
@@ -555,9 +609,11 @@ describe("review provider boundary", () => {
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
               const input = JSON.stringify(decodeWire(httpRequest).input);
+
               expect(input).toContain("reviewed-head");
               expect(input).toContain("incremental");
               expect(input).toContain("Returning zero loses the acknowledged value");
+
               return sse(
                 httpRequest,
                 modelCalls,
@@ -615,15 +671,18 @@ describe("review provider boundary", () => {
             if (url.pathname.endsWith("/reviews/2")) return json(httpRequest, prior);
             if (url.pathname.endsWith("/reviews/2/dismissals")) {
               expect(httpRequest.method).toBe("PUT");
+
               const encoded =
                 httpRequest.body._tag === "Uint8Array"
                   ? new TextDecoder().decode(httpRequest.body.body)
                   : "";
+
               expect(encoded).toContain("Verified addressed at head");
               expect(encoded).toContain(evidence);
               mutations.push("dismiss");
               if (mode === "dismiss-failure") return json(httpRequest, {}, 403);
               dismissed = true;
+
               return json(httpRequest, { id: 2, state: "DISMISSED" });
             }
             if (url.pathname.endsWith("/files"))
@@ -640,11 +699,14 @@ describe("review provider boundary", () => {
               return json(httpRequest, { merge_base_commit: { sha: "base" } });
             if (url.pathname.includes("/git/commits/")) {
               const revision = url.pathname.split("/").at(-1);
+
               expect(["reviewed-head", "head"]).toContain(revision);
+
               return json(httpRequest, { sha: revision, tree: { sha: `${revision}-tree` } });
             }
             if (url.pathname.includes("/git/trees/")) {
               const tree = url.pathname.split("/").at(-1);
+
               return json(httpRequest, {
                 sha: tree,
                 truncated: false,
@@ -662,6 +724,7 @@ describe("review provider boundary", () => {
             if (url.pathname.includes("/git/blobs/")) {
               const sha = url.pathname.split("/").at(-1);
               const source = `export const value = 1;\nreturn ${sha?.startsWith("reviewed-head") ? "0" : "value"};\n`;
+
               return json(httpRequest, {
                 sha,
                 size: source.length,
@@ -671,14 +734,18 @@ describe("review provider boundary", () => {
             }
             if (url.pathname.endsWith("/reviews") && httpRequest.method === "POST") {
               mutations.push("publish");
+
               const encoded =
                 httpRequest.body._tag === "Uint8Array"
                   ? new TextDecoder().decode(httpRequest.body.body)
                   : "";
+
               const body = Schema.decodeUnknownSync(
                 Schema.fromJsonString(Schema.Struct({ body: Schema.String })),
               )(encoded);
+
               published.push(body.body);
+
               return json(
                 httpRequest,
                 { html_url: "https://github.test/fixtures/example/pull/12#review" },
@@ -688,6 +755,7 @@ describe("review provider boundary", () => {
             throw new Error(`Unexpected fixture request: ${httpRequest.method} ${url.pathname}`);
           }),
         );
+
         const exit = yield* reviewActionProgram.pipe(
           Effect.provideService(
             ConfigProvider.ConfigProvider,
@@ -706,6 +774,7 @@ describe("review provider boundary", () => {
           Effect.provide(NodeServices.layer),
           Effect.exit,
         );
+
         expect(modelCalls).toBe(1);
         expect(Exit.isSuccess(exit)).toBe(mode === "addressed");
         expect(dismissed).toBe(mode === "addressed" || mode === "publish-failure");
@@ -737,6 +806,7 @@ describe("review provider boundary", () => {
         const protocolFailure = outcome.startsWith("protocol");
         const hasFinding = outcome.endsWith("finding");
         const logs: Array<unknown> = [];
+
         // Accounted usage from PR #257, with a scripted invalid final response.
         const protocolUsage = [
           rawUsage(52_260, 542, 0, 52_079),
@@ -744,17 +814,21 @@ describe("review provider boundary", () => {
           rawUsage(93_225, 770, 72_843, 20_199),
           rawUsage(68_587, 166, 0, 68_391),
         ];
+
         const published: Array<{
           readonly commit_id: string;
           readonly event: string;
           readonly body: string;
           readonly comments: ReadonlyArray<unknown>;
         }> = [];
+
         let modelCalls = 0;
+
         const sources = {
           base: "export const value = 1;\nreturn value;\n",
           head: "export const value = 1;\nreturn 0;\n",
         };
+
         const client = HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
             if (url.pathname === "/v1/responses/input_tokens")
@@ -764,12 +838,16 @@ describe("review provider boundary", () => {
               });
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
+
               const input = Schema.decodeUnknownSync(
                 Schema.Struct({ content: Schema.Array(Schema.Struct({ text: Schema.String })) }),
               )(decodeWire(httpRequest).input.find((item) => item.role === "user"));
+
               const text = input.content.map((part) => part.text).join("\n");
+
               expect(text).toContain('"baseRevision":"base"');
               expect(text).toContain('"scope":"full"');
+
               return sse(
                 httpRequest,
                 modelCalls,
@@ -828,11 +906,14 @@ describe("review provider boundary", () => {
                 : url.pathname.endsWith("/head")
                   ? "head"
                   : undefined;
+
               if (revision === undefined) throw new Error("Unexpected review revision");
+
               return json(httpRequest, { sha: revision, tree: { sha: `${revision}-tree` } });
             }
             if (url.pathname.includes("/git/trees/")) {
               const revision = url.pathname.endsWith("/base-tree") ? "base" : "head";
+
               return json(httpRequest, {
                 sha: `${revision}-tree`,
                 truncated: false,
@@ -850,6 +931,7 @@ describe("review provider boundary", () => {
             if (url.pathname.includes("/git/blobs/")) {
               const revision = url.pathname.endsWith("/base-blob") ? "base" : "head";
               const text = sources[revision];
+
               return json(httpRequest, {
                 sha: `${revision}-blob`,
                 encoding: "base64",
@@ -871,6 +953,7 @@ describe("review provider boundary", () => {
                   ),
                 )(new TextDecoder().decode(httpRequest.body.body)),
               );
+
               return json(httpRequest, {
                 html_url: "https://github.test/fixtures/example/pull/12#review",
               });
@@ -878,6 +961,7 @@ describe("review provider boundary", () => {
             throw new Error(`Unexpected fixture request: ${httpRequest.method} ${url.pathname}`);
           }),
         );
+
         const exit = yield* reviewActionProgram.pipe(
           Effect.provideService(
             ConfigProvider.ConfigProvider,
@@ -902,6 +986,7 @@ describe("review provider boundary", () => {
           ]),
           Effect.exit,
         );
+
         expect(Exit.isSuccess(exit)).toBe(complete);
         if (Exit.isFailure(exit)) {
           expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
@@ -948,12 +1033,15 @@ describe("review provider boundary", () => {
           const sent: Array<WireRequest> = [];
           const counted: Array<WireRequest> = [];
           const logs: Array<unknown> = [];
+
           const native = yield* makeNative(
             HttpClient.make((httpRequest, url) =>
               Effect.sync(() => {
                 const wire = decodeWire(httpRequest);
+
                 if (url.pathname === "/v1/responses/input_tokens") {
                   counted.push(wire);
+
                   return json(httpRequest, {
                     object: "response.input_tokens",
                     input_tokens: 20_000 + sent.length * 1_000,
@@ -962,6 +1050,7 @@ describe("review provider boundary", () => {
                 expect(url.pathname).toBe("/v1/responses");
                 sent.push(wire);
                 const call = sent.length;
+
                 const tools =
                   call === 1
                     ? [read]
@@ -971,19 +1060,23 @@ describe("review provider boundary", () => {
                           { name: "find_files", parameters: { query: "value", revision: "head" } },
                         ]
                       : [submit];
+
                 const usage =
                   call === 1
                     ? rawUsage(20_000, 1_000, 0, 19_800)
                     : rawUsage(19_000 + call * 1_000, 1_000, 18_000 + call * 1_000, 800);
+
                 return sse(httpRequest, call, tools, usage);
               }),
             ),
           );
+
           const provider = yield* makeReviewOpenAi({
             client: native,
             model: "gpt-5.6-sol",
             cacheKey: "review-fixture",
           });
+
           const result = yield* makeReviewer({
             model,
             ...(guarded ? { costControl: provider.costControl } : {}),
@@ -1001,14 +1094,19 @@ describe("review provider boundary", () => {
                 ]),
               ),
             );
+
           expect(sent).toHaveLength(3);
           const [first, second, third] = sent;
+
           if (first === undefined || second === undefined || third === undefined)
             throw new Error("Missing model request");
+
           const input = Schema.decodeUnknownSync(
             Schema.Struct({ content: Schema.Array(Schema.Struct({ text: Schema.String })) }),
           )(first.input.find((item) => item.role === "user"));
+
           const inputText = input.content.map((part) => part.text).join("\n");
+
           expect(inputText).toContain(request.changes[0]?.patch);
           expect(inputText).not.toContain("__new hunk__");
           expect(first.tools).toEqual(second.tools);
@@ -1069,12 +1167,14 @@ describe("review provider boundary", () => {
     (recorded) =>
       Effect.gen(function* () {
         const sent: Array<WireRequest> = [];
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.sync(() => {
               if (url.pathname.endsWith("/input_tokens"))
                 return json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 });
               sent.push(decodeWire(httpRequest));
+
               return sse(
                 httpRequest,
                 sent.length,
@@ -1084,17 +1184,20 @@ describe("review provider boundary", () => {
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "misses",
         });
+
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
           .pipe(
             Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
             Effect.provideService(ReviewRepository, repository),
           );
+
         expect(sent).toHaveLength(1);
         expect(result.exhausted).toBe("cost");
         expect(result.report.findings).toHaveLength(recorded ? 1 : 0);
@@ -1116,6 +1219,7 @@ describe("review provider boundary", () => {
     (completion) =>
       Effect.gen(function* () {
         const sent: Array<WireRequest> = [];
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.sync(() => {
@@ -1125,7 +1229,9 @@ describe("review provider boundary", () => {
                   input_tokens: sent.length === 0 ? 70_000 : 72_000,
                 });
               const wire = decodeWire(httpRequest);
+
               sent.push(wire);
+
               return sse(
                 httpRequest,
                 sent.length,
@@ -1139,12 +1245,15 @@ describe("review provider boundary", () => {
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "final",
         });
+
         let reads = 0;
+
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
           .pipe(
@@ -1154,15 +1263,18 @@ describe("review provider boundary", () => {
               readFile: (input) =>
                 Effect.suspend(() => {
                   reads += 1;
+
                   return repository.readFile(input);
                 }),
             }),
           );
+
         expect(sent).toHaveLength(2);
         expect(sent[1]?.max_output_tokens).toBe(13_499);
         expect(sent[1]?.tool_choice).toEqual(sent[0]?.tool_choice);
         expect(sent[1]?.tools).toEqual(sent[0]?.tools);
         expect(result.exhausted).toBe(completion === "submit" ? undefined : "cost");
+
         const failure = reviewPublicationFailure({
           blockingFindings: 0,
           unreviewedPaths: 0,
@@ -1170,6 +1282,7 @@ describe("review provider boundary", () => {
           exhausted: result.exhausted,
           incomplete: result.incomplete,
         });
+
         if (completion === "submit") expect(failure).toBeUndefined();
         else expect(failure).toMatchObject({ _tag: "ReviewAttemptIncomplete" });
         expect(result.report.findings).toHaveLength(1);
@@ -1186,6 +1299,7 @@ describe("review provider boundary", () => {
     (responseModel) =>
       Effect.gen(function* () {
         let calls = 0;
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.sync(() => {
@@ -1193,22 +1307,28 @@ describe("review provider boundary", () => {
                 return json(httpRequest, { object: "response.input_tokens", input_tokens: 20_000 });
               calls += 1;
               const usage = rawUsage(20_000, 1_000);
+
               return decodeWire(httpRequest).stream === true
                 ? sse(httpRequest, calls, [submit], usage)
                 : json(httpRequest, { ...response(usage), model: responseModel });
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6",
           cacheKey: "alias",
         });
+
         const aliasPayload = { ...payload, model: "gpt-5.6" };
+
         yield* provider.client.createResponse(aliasPayload);
         const [, stream] = yield* provider.client.createResponseStream(aliasPayload);
+
         yield* Stream.runDrain(stream);
         const snapshot = yield* provider.costControl.snapshot;
+
         expect(calls).toBe(2);
         expect(snapshot).toMatchObject({
           stopped: false,
@@ -1232,6 +1352,7 @@ describe("review provider boundary", () => {
         const sent: Array<WireRequest> = [];
         const logs: Array<unknown> = [];
         const recoverable = failure === 503 || failure === 429 || failure === "transport";
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.gen(function* () {
@@ -1246,24 +1367,29 @@ describe("review provider boundary", () => {
                       }),
                     });
                   if (failure === "malformed") return json(httpRequest, { input_tokens: -1 });
+
                   return json(
                     httpRequest,
                     { error: "private-preflight-data" },
                     failure === "persistent-503" ? 503 : failure,
                   );
                 }
+
                 return json(httpRequest, { object: "response.input_tokens", input_tokens: 20_000 });
               }
               sent.push(decodeWire(httpRequest));
+
               return json(httpRequest, response(rawUsage(20_000, 1_000)));
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "preflight-retry",
         });
+
         const exit = yield* provider.client
           .createResponse(payload)
           .pipe(
@@ -1272,6 +1398,7 @@ describe("review provider boundary", () => {
               Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
             ),
           );
+
         expect(Exit.isSuccess(exit)).toBe(recoverable);
         expect(counted).toHaveLength(recoverable || failure === "persistent-503" ? 2 : 1);
         expect(sent).toHaveLength(recoverable ? 1 : 0);
@@ -1288,6 +1415,7 @@ describe("review provider boundary", () => {
           usage: { estimatedCostMicrousd: recoverable ? 120_000 : 0, reservedCostMicrousd: 0 },
         });
         const diagnostic = JSON.stringify(logs);
+
         expect(diagnostic).toContain('"phase":"input-token-count"');
         if (typeof failure === "number") expect(diagnostic).toContain(`"status":${failure}`);
         expect(diagnostic).not.toContain("private-preflight-data");
@@ -1305,6 +1433,7 @@ describe("review provider boundary", () => {
         let counts = 0;
         let finalized = 0;
         let sends = 0;
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.gen(function* () {
@@ -1312,25 +1441,31 @@ describe("review provider boundary", () => {
                 counts += 1;
                 if (counts === 2 && mode === "recover") {
                   expect(finalized).toBe(1);
+
                   return json(httpRequest, {
                     object: "response.input_tokens",
                     input_tokens: 20_000,
                   });
                 }
                 yield* Deferred.succeed(counts === 1 ? firstStarted : secondStarted, undefined);
+
                 return yield* Effect.never.pipe(Effect.ensuring(Effect.sync(() => finalized++)));
               }
               sends += 1;
+
               return json(httpRequest, response(rawUsage(20_000, 1_000)));
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "preflight-timeout",
         });
+
         const pending = yield* provider.client.createResponse(payload).pipe(Effect.forkChild);
+
         yield* Deferred.await(firstStarted);
         if (mode === "interrupt") {
           yield* Fiber.interrupt(pending);
@@ -1343,6 +1478,7 @@ describe("review provider boundary", () => {
           }
         }
         const exit = yield* Fiber.await(pending);
+
         expect(Exit.isSuccess(exit)).toBe(mode === "recover");
         expect(Exit.hasInterrupts(exit)).toBe(mode === "interrupt");
         expect(counts).toBe(mode === "interrupt" ? 1 : 2);
@@ -1367,10 +1503,12 @@ describe("review provider boundary", () => {
     (mode) =>
       Effect.gen(function* () {
         const recorded = mode === "after-finding";
+
         const densePatch = request.changes[0]!.patch.padEnd(
           256_000,
           mode === "estimate" ? "漢" : "a漢a",
         );
+
         const input = ReviewRequest.make({
           ...request,
           changes: [
@@ -1378,8 +1516,10 @@ describe("review provider boundary", () => {
             ReviewChange.make({ path: "src/later.ts", patch: "@@ -0,0 +1 @@\n+later" }),
           ],
         });
+
         let counts = 0;
         let sends = 0;
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.sync(() => {
@@ -1388,21 +1528,25 @@ describe("review provider boundary", () => {
                 expect(JSON.stringify(decodeWire(httpRequest).input)).toContain(
                   densePatch.slice(-100),
                 );
+
                 return json(httpRequest, {
                   object: "response.input_tokens",
                   input_tokens: recorded && sends === 0 ? 128_000 : 128_001,
                 });
               }
               sends += 1;
+
               return sse(httpRequest, sends, [record], rawUsage(100_000, 1_000));
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "input-token-limit",
         });
+
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(input)
           .pipe(
@@ -1441,6 +1585,7 @@ describe("review provider boundary", () => {
       Effect.gen(function* () {
         let sends = 0;
         const requestStarted = yield* Deferred.make<void>();
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.gen(function* () {
@@ -1452,6 +1597,7 @@ describe("review provider boundary", () => {
               sends += 1;
               yield* Deferred.succeed(requestStarted, undefined);
               if (failure === "timeout") return yield* Effect.never;
+
               return failure === "http"
                 ? json(httpRequest, { error: { message: "private-provider-fixture" } }, 500)
                 : HttpClientResponse.fromWeb(
@@ -1463,11 +1609,13 @@ describe("review provider boundary", () => {
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "unmetered-review",
         });
+
         const pending = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
           .pipe(
@@ -1476,12 +1624,14 @@ describe("review provider boundary", () => {
             Effect.exit,
             Effect.forkChild,
           );
+
         if (failure === "timeout") {
           yield* Deferred.await(requestStarted);
           yield* TestClock.adjust("5 minutes");
         }
         const exit = yield* Fiber.join(pending);
         const dispatched = failure !== "malformed-count";
+
         expect(sends).toBe(dispatched ? 1 : 0);
         expect(Exit.isSuccess(exit)).toBe(dispatched);
         if (Exit.isSuccess(exit)) {
@@ -1516,6 +1666,7 @@ describe("review provider boundary", () => {
     (failure) =>
       Effect.gen(function* () {
         let sends = 0;
+
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) =>
             Effect.sync(() => {
@@ -1533,22 +1684,27 @@ describe("review provider boundary", () => {
                   httpRequest,
                   new globalThis.Response("", { headers: { "content-type": "text/event-stream" } }),
                 );
+
               return json(httpRequest, response(null));
             }),
           ),
         );
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "failed",
         });
+
         if (failure === "stream-eof") {
           const [, stream] = yield* provider.client.createResponseStream(payload);
+
           yield* Stream.runDrain(stream);
         } else {
           yield* provider.client.createResponse(payload).pipe(Effect.flip);
         }
         const snapshot = yield* provider.costControl.snapshot;
+
         expect(snapshot.stopped).toBe(false);
         expect(snapshot.modelCalls).toBe(failure === "malformed-count" ? 0 : 1);
         expect(snapshot.usage.estimatedCostMicrousd).toBe(0);
@@ -1564,6 +1720,7 @@ describe("review provider boundary", () => {
     Effect.gen(function* () {
       const dispatched = yield* Deferred.make<void>();
       let sends = 0;
+
       const native = yield* makeNative(
         HttpClient.make((httpRequest, url) => {
           if (url.pathname.endsWith("/input_tokens"))
@@ -1571,19 +1728,24 @@ describe("review provider boundary", () => {
               json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 }),
             );
           sends += 1;
+
           return Deferred.succeed(dispatched, undefined).pipe(Effect.andThen(Effect.never));
         }),
       );
+
       const provider = yield* makeReviewOpenAi({
         client: native,
         model: "gpt-5.6-sol",
         cacheKey: "concurrent",
       });
+
       const first = yield* Effect.forkChild(provider.client.createResponse(payload));
+
       yield* Deferred.await(dispatched);
       yield* provider.client.createResponse(payload).pipe(Effect.flip);
       yield* Fiber.interrupt(first);
       const snapshot = yield* provider.costControl.snapshot;
+
       expect(sends).toBe(1);
       expect(snapshot.usage.reservedCostMicrousd).toBe(990_000);
       expect(
@@ -1597,12 +1759,15 @@ describe("review provider boundary", () => {
     () =>
       Effect.gen(function* () {
         let calls = 0;
+
         const native = yield* makeNative(
           HttpClient.make(() => {
             calls += 1;
+
             return Effect.die("Must not dispatch");
           }),
         );
+
         for (const name of ["custom-model", "toString", "__proto__"]) {
           yield* makeReviewOpenAi({ client: native, model: name, cacheKey: "config" }).pipe(
             Effect.flip,
@@ -1619,14 +1784,17 @@ describe("review provider boundary", () => {
             model: "gpt-5.6-sol",
             cacheKey: "config",
           });
+
           yield* provider.client.createResponse({ ...payload, ...change }).pipe(Effect.flip);
         }
         yield* TestClock.setTime(1_795_305_600_000);
+
         const provider = yield* makeReviewOpenAi({
           client: native,
           model: "gpt-5.6-sol",
           cacheKey: "expired",
         });
+
         yield* provider.client.createResponse(payload).pipe(Effect.flip);
         expect(calls).toBe(0);
       }),

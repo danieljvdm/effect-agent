@@ -62,10 +62,13 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       external: ["cloudflare:*", "node:*"],
       logLevel: "silent",
     });
+
     const output = bundled.outputFiles[0];
+
     if (output === undefined) {
       throw new Error("esbuild produced no worker bundle");
     }
+
     // A transitive dependency ships a dead-code `import(<computed>)` that
     // single-script Miniflare's static module locator rejects even though it
     // never runs on the demo's path. Neutralize the dynamic-import
@@ -74,6 +77,7 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     // Miniflare restart lane.
     const disabled =
       'const __disabledDynamicImport = () => Promise.reject(new Error("dynamic import is disabled in the demo bundle"));\n';
+
     workerScript = `${disabled}${output.text.replaceAll(/\bimport\s*\(/g, "__disabledDynamicImport(")}`;
     runtime = openRuntime();
     cleanups.push(() => runtime.dispose());
@@ -90,7 +94,9 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       method: "POST",
       body: JSON.stringify({ question: "Which customers have more than $10,000 in revenue?" }),
     });
+
     const rawBody = await response.text();
+
     expect(response.ok, `unexpected status ${response.status}: ${rawBody}`).toBe(true);
     const result = JSON.parse(rawBody) as AskResult;
 
@@ -125,11 +131,15 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       method: "POST",
       body: JSON.stringify({ question: "try to zero out revenue" }),
     });
+
     const rawBody = await response.text();
+
     expect(response.ok, `unexpected status ${response.status}: ${rawBody}`).toBe(true);
+
     const result = JSON.parse(rawBody) as {
       readonly codeMode: { readonly result?: { readonly writeDenied: boolean } };
     };
+
     expect(result.codeMode.result?.writeDenied).toBe(true);
   });
 
@@ -138,6 +148,7 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     // statement that merely does not START with a write keyword. The row
     // count is unchanged afterward.
     const warehouse = await runtime.getDurableObjectNamespace("WAREHOUSE");
+
     const stub = warehouse.get(warehouse.idFromName("acme")) as unknown as {
       query: (
         sql: string,
@@ -151,6 +162,7 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
 
     // Seed and confirm the baseline read works.
     const before = await stub.query("SELECT COUNT(*) AS n FROM invoice_summary", []);
+
     expect(before.ok).toBe(true);
     expect(before.rows[0]?.n).toBe(5);
 
@@ -160,10 +172,12 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       "WITH doomed AS (SELECT customer FROM invoice_summary) DELETE FROM invoice_summary",
       [],
     );
+
     expect(bypass.ok).toBe(false);
     expect(bypass.reason).toMatch(/DELETE|read-only/i);
 
     const after = await stub.query("SELECT COUNT(*) AS n FROM invoice_summary", []);
+
     expect(after.ok).toBe(true);
     expect(after.rows[0]?.n).toBe(5);
   });

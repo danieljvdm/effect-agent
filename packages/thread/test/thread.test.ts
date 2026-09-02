@@ -120,7 +120,9 @@ describe("thread canonical contracts", () => {
       maxDurationMillis: 30_000,
       policyAccountingVersion: 1,
     };
+
     const start = Schema.decodeUnknownSync(RunStartedRecord)(encoded);
+
     expect(Schema.encodeSync(RunStartedRecord)(start)).toEqual(encoded);
     for (const maxDurationMillis of [0, -1, NaN, Infinity, -Infinity, "30000", undefined]) {
       expect(
@@ -158,6 +160,7 @@ describe("thread canonical contracts", () => {
             tools: [{ name: "search" }, { name: "hold" }],
           }),
         );
+
         const reorderedDefinitions = yield* digestDefinitions(
           DefinitionDigestInput.make({
             agent: { revision: 1, name: "travel-planner" },
@@ -169,11 +172,13 @@ describe("thread canonical contracts", () => {
         expect(reorderedDefinitions).toEqual(firstDefinitions);
 
         const encodedCreatedRecord = yield* Schema.encodeEffect(RecordEnvelope)(createdRecord);
+
         const batch = yield* Schema.decodeEffect(CanonicalBatch)({
           batchId: "travel-batch",
           producerId: "travel-producer",
           records: [encodedCreatedRecord],
         });
+
         const firstBatchDigest = yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, batch);
         const repeatedBatchDigest = yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, batch);
 
@@ -188,6 +193,7 @@ describe("thread canonical contracts", () => {
           alpha: 1,
           beta: { gamma: [true, null], delta: "d" },
         });
+
         const reordered = yield* digestJson({
           beta: { delta: "d", gamma: [true, null] },
           alpha: 1,
@@ -215,6 +221,7 @@ describe("thread canonical contracts", () => {
 
   it("rejects unsupported canonical versions, families, and payload tags", () => {
     const encoded = Schema.encodeSync(RecordEnvelope)(createdRecord);
+
     for (const incompatible of [
       { ...encoded, schemaVersion: 2 },
       { ...encoded, family: "invalid" },
@@ -230,10 +237,13 @@ describe("thread canonical contracts", () => {
       dates: ["2026-10-10", "2026-10-15"],
       preferences: { quiet: true, budget: 2_000 },
     };
+
     const decoded = Schema.decodeUnknownSync(PersistedJson)(valid);
+
     expect(Schema.encodeSync(PersistedJson)(decoded)).toEqual(valid);
 
     let tooDeep: unknown = "leaf";
+
     for (let depth = 0; depth <= MAX_PERSISTED_JSON_DEPTH; depth++) {
       tooDeep = { next: tooDeep };
     }
@@ -243,6 +253,7 @@ describe("thread canonical contracts", () => {
     ).toBe("Failure");
 
     const cyclic: Record<string, unknown> = {};
+
     cyclic.self = cyclic;
     expect(Schema.decodeUnknownExit(PersistedJson)(cyclic)._tag).toBe("Failure");
   });
@@ -257,6 +268,7 @@ describe("thread canonical contracts", () => {
         input: { destination: "Kyoto", dates: ["2026-10-10", "2026-10-15"] },
       }),
     );
+
     const modelCompleted = decodeEnvelope(
       3,
       decodeRecord("record-model-completed", {
@@ -265,6 +277,7 @@ describe("thread canonical contracts", () => {
         output: { itinerary: ["Kyoto"], nextAction: "review" },
       }),
     );
+
     const runCompleted = decodeEnvelope(
       4,
       decodeRecord("record-run-completed", {
@@ -273,9 +286,11 @@ describe("thread canonical contracts", () => {
         output: { itinerary: ["Kyoto"], nextAction: "review" },
       }),
     );
+
     const finalDigest = Schema.decodeSync(Digest)(
       "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     );
+
     const records = [createdEnvelope, userInput, modelCompleted, runCompleted];
 
     const full = replayThread(
@@ -285,6 +300,7 @@ describe("thread canonical contracts", () => {
       records,
       finalDigest,
     );
+
     const checkpoint = replayThread(full.threadId, records.slice(0, 2), EMPTY_TAIL_DIGEST);
     const resumed = replayThreadFromCheckpoint(checkpoint, records.slice(2), finalDigest);
 
@@ -302,6 +318,7 @@ describe("phase 4 durable canonical payloads", () => {
     author: "operator",
     reason: "user cancelled the trip",
   } as const;
+
   const encodedSubmissionSettled = {
     _tag: "SubmissionSettled",
     submissionId: "submission-1",
@@ -311,6 +328,7 @@ describe("phase 4 durable canonical payloads", () => {
     runId: "run-1",
     result: { itinerary: ["Kyoto"] },
   } as const;
+
   const encodedModelResponseRecorded = {
     _tag: "ModelResponseRecorded",
     runId: "run-1",
@@ -326,10 +344,13 @@ describe("phase 4 durable canonical payloads", () => {
       encodedSubmissionSettled,
       encodedModelResponseRecorded,
     ] as const;
+
     for (const [index, payload] of payloads.entries()) {
       const record = decodeRecord(`record-p4-${index}`, payload);
+
       expect(record.schemaVersion).toBe(1);
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
+
       expect(encoded.payload).toEqual(payload);
       expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
     }
@@ -338,6 +359,7 @@ describe("phase 4 durable canonical payloads", () => {
   it("decodes a settlement without a run or result", () => {
     const { runId: _runId, result: _result, ...withoutOptional } = encodedSubmissionSettled;
     const record = decodeRecord("record-p4-minimal-settlement", withoutOptional);
+
     expect(Schema.encodeSync(RecordEnvelope)(record).payload).toEqual(withoutOptional);
   });
 
@@ -350,10 +372,12 @@ describe("phase 4 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const diagnostic = {
       errorTag: "AgentOutputError",
       message: "The final output did not satisfy the Agent output Schema",
     };
+
     const failed = {
       ...encodedSubmissionSettled,
       outcome: "failed",
@@ -363,12 +387,14 @@ describe("phase 4 durable canonical payloads", () => {
     const roundTripped = Schema.encodeSync(RecordEnvelope)(
       Schema.decodeUnknownSync(RecordEnvelope)(envelope(failed)),
     );
+
     expect(roundTripped.payload).toEqual(failed);
 
     const malformed: ReadonlyArray<unknown> = [
       // The filed legacy shape: a failed outcome with no diagnostic is not trustworthy history.
       (() => {
         const { result: _result, ...withoutResult } = failed;
+
         return withoutResult;
       })(),
       { ...failed, result: { message: diagnostic.message } },
@@ -377,6 +403,7 @@ describe("phase 4 durable canonical payloads", () => {
       { ...failed, result: { ...diagnostic, errorTag: "x".repeat(257) } },
       { ...failed, result: { ...diagnostic, message: "x".repeat(16 * 1024 + 1) } },
     ];
+
     for (const payload of malformed) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
     }
@@ -391,6 +418,7 @@ describe("phase 4 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const failures: ReadonlyArray<unknown> = [
       { ...encodedSubmissionSettled, outcome: "cancelled" },
       { ...encodedSubmissionSettled, settlementId: "" },
@@ -401,6 +429,7 @@ describe("phase 4 durable canonical payloads", () => {
       { ...encodedModelResponseRecorded, turn: 1.5 },
       { ...encodedModelResponseRecorded, messagesDigest: "not-a-digest" },
     ];
+
     for (const payload of failures) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
     }
@@ -415,6 +444,7 @@ describe("phase 4 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const response = {
       ...encodedModelResponseRecorded,
       messages: {
@@ -466,6 +496,7 @@ describe("phase 4 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const completed = {
       _tag: "RunCompleted",
       runId: "run-budget-completed",
@@ -530,10 +561,13 @@ describe("phase 4 durable canonical payloads", () => {
       // Histories persisted before budget metadata retain both fields as absent.
       encodedSubmissionSettled,
     ];
+
     for (const [index, payload] of payloads.entries()) {
       const record = decodeRecord(`record-run011-${index}`, payload);
+
       expect(record.schemaVersion).toBe(1);
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
+
       expect(encoded.payload).toEqual(payload);
       expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
     }
@@ -548,10 +582,12 @@ describe("phase 4 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const policyFailureResult = {
       errorTag: "AgentPolicyError",
       message: "Agent exceeded its 100 token budget",
     };
+
     const failures: ReadonlyArray<unknown> = [
       { ...encodedSubmissionSettled, outcome: "failed", finishReason: "budget-exhausted" },
       { ...encodedSubmissionSettled, exhausted: "turns" },
@@ -575,9 +611,11 @@ describe("phase 4 durable canonical payloads", () => {
       // A policyLimit without any recorded failure projection fails closed too.
       (() => {
         const { result: _result, ...withoutResult } = encodedSubmissionSettled;
+
         return { ...withoutResult, outcome: "failed", policyLimit: "tokens" };
       })(),
     ];
+
     for (const payload of failures) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
     }
@@ -588,6 +626,7 @@ describe("phase 4 durable canonical payloads", () => {
       ...encodedSubmissionSettled,
       runDisposition: "application-complete",
     } as const;
+
     const record = decodeRecord("record-run029", payload);
 
     expect(Schema.encodeSync(RecordEnvelope)(record).payload).toEqual(payload);
@@ -605,6 +644,7 @@ describe("phase 4 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const failures: ReadonlyArray<unknown> = [
       {
         ...encodedSubmissionSettled,
@@ -624,10 +664,12 @@ describe("phase 4 durable canonical payloads", () => {
       },
       (() => {
         const { runId: _runId, ...withoutRun } = encodedSubmissionSettled;
+
         return { ...withoutRun, runDisposition: "application-complete" };
       })(),
       (() => {
         const { result: _result, ...withoutResult } = encodedSubmissionSettled;
+
         return { ...withoutResult, runDisposition: "application-complete" };
       })(),
     ];
@@ -646,14 +688,17 @@ describe("phase 4 durable canonical payloads", () => {
         definitions: Schema.encodeSync(DefinitionDigests)(definitionDigests),
       }),
     );
+
     const response = decodeEnvelope(
       2,
       decodeRecord("record-p4-response", encodedModelResponseRecorded),
     );
+
     const abort = decodeEnvelope(3, decodeRecord("record-p4-abort", encodedAbortRequested));
     const settled = decodeEnvelope(4, decodeRecord("record-p4-settled", encodedSubmissionSettled));
 
     const afterResponse = replayThread(created.threadId, [created, response]);
+
     expect(afterResponse.throughSequence).toBe(2);
     expect(afterResponse.inputs).toEqual([]);
     expect(afterResponse.modelOutputs).toEqual([]);
@@ -661,11 +706,13 @@ describe("phase 4 durable canonical payloads", () => {
     expect(afterResponse.abortRequests).toEqual([]);
 
     const full = replayThread(created.threadId, [created, response, abort, settled]);
+
     expect(full.throughSequence).toBe(4);
     expect(full.abortRequests).toEqual([abort.record.payload]);
     expect(full.settlements).toEqual([settled.record.payload]);
 
     const resumed = replayThreadFromCheckpoint(afterResponse, [abort, settled]);
+
     expect(resumed).toEqual(full);
     expect(Schema.decodeSync(ThreadProjection)(Schema.encodeSync(ThreadProjection)(full))).toEqual(
       full,
@@ -682,12 +729,14 @@ describe("phase 4 durable canonical payloads", () => {
       completedRuns: [],
       failedRuns: [],
     };
+
     expect(Schema.decodeUnknownExit(ThreadProjection)(phase3State)._tag).toBe("Failure");
   });
 });
 
 describe("SubmissionLedger port schemas", () => {
   const submissionId = Schema.decodeSync(SubmissionId)("submission-1");
+
   const encodedAdmissionRequest = {
     threadId: "travel-thread",
     principal: "tenant-a",
@@ -698,6 +747,7 @@ describe("SubmissionLedger port schemas", () => {
     inputPayload: { destination: "Kyoto" },
     inputDigest: SHA_256_A,
   } as const;
+
   const encodedAdmissionResult = {
     submissionId: "submission-1",
     receiptId: "receipt-1",
@@ -705,6 +755,7 @@ describe("SubmissionLedger port schemas", () => {
     state: "admitted",
     replayed: false,
   } as const;
+
   const encodedSubmissionSnapshot = {
     ...encodedAdmissionRequest,
     submissionId: "submission-1",
@@ -716,8 +767,10 @@ describe("SubmissionLedger port schemas", () => {
 
   it("round-trips admission values and rejects malformed ones", () => {
     const request = Schema.decodeUnknownSync(AdmissionRequest)(encodedAdmissionRequest);
+
     expect(Schema.encodeSync(AdmissionRequest)(request)).toEqual(encodedAdmissionRequest);
     const result = Schema.decodeUnknownSync(AdmissionResult)(encodedAdmissionResult);
+
     expect(Schema.encodeSync(AdmissionResult)(result)).toEqual(encodedAdmissionResult);
 
     const requestFailures: ReadonlyArray<unknown> = [
@@ -725,13 +778,16 @@ describe("SubmissionLedger port schemas", () => {
       { ...encodedAdmissionRequest, principal: "x".repeat(257) },
       { ...encodedAdmissionRequest, inputDigest: "not-a-digest" },
     ];
+
     for (const encoded of requestFailures) {
       expect(Schema.decodeUnknownExit(AdmissionRequest)(encoded)._tag).toBe("Failure");
     }
+
     const resultFailures: ReadonlyArray<unknown> = [
       { ...encodedAdmissionResult, state: "unknown-state" },
       { ...encodedAdmissionResult, queueSequence: -1 },
     ];
+
     for (const encoded of resultFailures) {
       expect(Schema.decodeUnknownExit(AdmissionResult)(encoded)._tag).toBe("Failure");
     }
@@ -742,12 +798,14 @@ describe("SubmissionLedger port schemas", () => {
       _tag: "SubmissionLookupById",
       submissionId: "submission-1",
     });
+
     const byKey = Schema.decodeUnknownSync(SubmissionLookup)({
       _tag: "SubmissionLookupByKey",
       threadId: "travel-thread",
       principal: "tenant-a",
       idempotencyKey: "client-key-1",
     });
+
     expect(byId._tag).toBe("SubmissionLookupById");
     expect(byKey._tag).toBe("SubmissionLookupByKey");
     expect(Schema.decodeUnknownExit(SubmissionLookup)({ _tag: "LookupByGuess" })._tag).toBe(
@@ -762,11 +820,14 @@ describe("SubmissionLedger port schemas", () => {
       leaseExpiresAt: "2026-08-12T00:00:30.000Z",
       inputPayload: { destination: "Kyoto" },
     } as const;
+
     const claim = Schema.decodeUnknownSync(Claim)(encodedClaim);
+
     expect(Schema.encodeSync(Claim)(claim)).toEqual(encodedClaim);
     expect(Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION)).toBe(30_000);
 
     const snapshot = Schema.decodeUnknownSync(SubmissionSnapshot)(encodedSubmissionSnapshot);
+
     expect(Schema.encodeSync(SubmissionSnapshot)(snapshot)).toEqual(encodedSubmissionSnapshot);
 
     const encodedRecovery = {
@@ -830,8 +891,11 @@ describe("SubmissionLedger port schemas", () => {
         parentToolCallId: "call-0",
       },
     };
+
     const recovery = Schema.decodeUnknownSync(RecoverySnapshot)(encodedRecovery);
+
     expect(Schema.encodeSync(RecoverySnapshot)(recovery)).toEqual(encodedRecovery);
+
     const minimalRecovery = Schema.decodeUnknownSync(RecoverySnapshot)({
       submission: encodedSubmissionSnapshot,
       joins: [],
@@ -840,6 +904,7 @@ describe("SubmissionLedger port schemas", () => {
       childReservations: [],
       childAttachments: [],
     });
+
     expect(minimalRecovery.ownership).toBeUndefined();
     expect(minimalRecovery.reservation).toBeUndefined();
     expect(minimalRecovery.abortIntent).toBeUndefined();
@@ -860,6 +925,7 @@ describe("SubmissionLedger port schemas", () => {
         unknownResolutions: [],
       })._tag,
     ).toBe("Failure");
+
     // A WaitingForChild suspension round-trips through the additive reason union (spec §12).
     const waitingRecovery = Schema.decodeUnknownSync(RecoverySnapshot)({
       ...encodedRecovery,
@@ -871,6 +937,7 @@ describe("SubmissionLedger port schemas", () => {
         suspendedAt: "2026-08-12T00:00:15.000Z",
       },
     });
+
     expect(waitingRecovery.suspension?.reason._tag).toBe("WaitingForChild");
   });
 
@@ -884,6 +951,7 @@ describe("SubmissionLedger port schemas", () => {
       runId: "run-1",
       result: { itinerary: ["Kyoto"] },
     });
+
     const encodedReservation = {
       submissionId: "submission-1",
       ownershipToken: "token-1",
@@ -892,7 +960,9 @@ describe("SubmissionLedger port schemas", () => {
       record: Schema.encodeSync(RecordEnvelope)(settledRecord),
       recordDigest: SHA_256_B,
     };
+
     const reservation = Schema.decodeUnknownSync(SettlementReservation)(encodedReservation);
+
     expect(Schema.encodeSync(SettlementReservation)(reservation)).toEqual(encodedReservation);
     expect(reservation.record).toEqual(settledRecord);
 
@@ -904,6 +974,7 @@ describe("SubmissionLedger port schemas", () => {
       recordDigest: SHA_256_B,
       replayed: true,
     });
+
     expect(reserved.replayed).toBe(true);
 
     const settlement = Schema.decodeUnknownSync(Settlement)({
@@ -914,6 +985,7 @@ describe("SubmissionLedger port schemas", () => {
       runDisposition: "application-complete",
       settledAt: "2026-08-12T00:01:00.000Z",
     });
+
     expect(settlement.outcome).toBe("completed");
     expect(settlement.runDisposition).toBe("application-complete");
     expect(
@@ -953,6 +1025,7 @@ describe("SubmissionLedger port schemas", () => {
       author: "operator",
       reason: "user cancelled the trip",
     });
+
     expect(command.author).toBe("operator");
     expect(
       Schema.decodeUnknownExit(AbortCommand)({
@@ -969,7 +1042,9 @@ describe("SubmissionLedger port schemas", () => {
       requestedAt: "2026-08-12T00:00:10.000Z",
       canonicalRecordId: "abort:submission-1",
     };
+
     const intent = Schema.decodeUnknownSync(AbortIntent)(encodedIntent);
+
     expect(Schema.encodeSync(AbortIntent)(intent)).toEqual(encodedIntent);
 
     expect(Schema.decodeUnknownSync(LedgerCapabilities)({ durability: "durable-node" })).toEqual({
@@ -989,18 +1064,23 @@ describe("SubmissionLedger port schemas", () => {
       existingInputDigest: Schema.decodeSync(Digest)(SHA_256_A),
       attemptedInputDigest: Schema.decodeSync(Digest)(SHA_256_B),
     });
+
     const encodedConflict = Schema.encodeSync(AdmissionConflict)(conflict);
+
     expect(Schema.decodeUnknownSync(AdmissionConflict)(encodedConflict)).toEqual(conflict);
 
     const lost = OwnershipLost.make({
       submissionId,
       actualEpoch: Schema.decodeSync(ProducerEpoch)(3),
     });
+
     expect(lost.actualEpoch).toBe(3);
+
     const settlementConflict = SettlementConflict.make({
       submissionId,
       existingOutcome: "completed",
     });
+
     expect(settlementConflict.existingOutcome).toBe("completed");
   });
 
@@ -1019,6 +1099,7 @@ describe("SubmissionLedger port schemas", () => {
   it.effect("accepts wake notifications on the noop scheduler without failing", () =>
     Effect.gen(function* () {
       const scheduler = yield* WakeScheduler;
+
       yield* scheduler.notify(wakeThreadId);
       yield* scheduler.notify(wakeThreadId);
     }).pipe(Effect.provide(WakeScheduler.layerNoop)),
@@ -1036,6 +1117,7 @@ describe("phase 5 durable canonical payloads", () => {
     parameters: { destination: "Kyoto", travelerRef: "traveler-7" },
     parametersDigest: SHA_256_A,
   } as const;
+
   const encodedToolCallUnknown = {
     _tag: "ToolCallUnknown",
     runId: "run-1",
@@ -1044,6 +1126,7 @@ describe("phase 5 durable canonical payloads", () => {
     toolName: "book_flight",
     reason: "worker lost after preparation without a canonical outcome",
   } as const;
+
   const encodedToolCallResolved = {
     _tag: "ToolCallResolved",
     runId: "run-1",
@@ -1052,6 +1135,7 @@ describe("phase 5 durable canonical payloads", () => {
     author: "operator",
     reason: "supplier store shows the booking",
   } as const;
+
   const encodedToolStepSettled = {
     _tag: "ToolStepSettled",
     runId: "run-1",
@@ -1060,6 +1144,7 @@ describe("phase 5 durable canonical payloads", () => {
     output: { bookingRef: "booking-42" },
     outputDigest: SHA_256_B,
   } as const;
+
   const encodedApprovalRequested = {
     _tag: "ToolApprovalRequested",
     runId: "run-1",
@@ -1069,6 +1154,7 @@ describe("phase 5 durable canonical payloads", () => {
     toolName: "book_flight",
     parametersDigest: SHA_256_A,
   } as const;
+
   const encodedApprovalDecided = {
     _tag: "ToolApprovalDecided",
     runId: "run-1",
@@ -1078,6 +1164,7 @@ describe("phase 5 durable canonical payloads", () => {
     resolver: "operator",
     reason: "reviewed and approved",
   } as const;
+
   const encodedInterrupted = {
     _tag: "ModelResponseInterrupted",
     runId: "run-1",
@@ -1099,8 +1186,10 @@ describe("phase 5 durable canonical payloads", () => {
   it("round-trips the seven new payload tags through the version-1 record envelope", () => {
     for (const [index, payload] of payloads.entries()) {
       const record = decodeRecord(`record-p5-${index}`, payload);
+
       expect(record.schemaVersion).toBe(1);
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
+
       expect(encoded.payload).toEqual(payload);
       expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
     }
@@ -1115,6 +1204,7 @@ describe("phase 5 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const failures: ReadonlyArray<unknown> = [
       { ...encodedToolCallPrepared, turn: 0 },
       { ...encodedToolCallPrepared, parametersDigest: "not-a-digest" },
@@ -1127,6 +1217,7 @@ describe("phase 5 durable canonical payloads", () => {
       { ...encodedApprovalDecided, decision: "maybe" },
       { ...encodedInterrupted, supersededEpoch: -1 },
     ];
+
     for (const payload of failures) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
     }
@@ -1141,17 +1232,22 @@ describe("phase 5 durable canonical payloads", () => {
         definitions: Schema.encodeSync(DefinitionDigests)(definitionDigests),
       }),
     );
+
     const prepared = decodeEnvelope(2, decodeRecord("record-p5-prepared", encodedToolCallPrepared));
+
     const preparedTwo = decodeEnvelope(
       3,
       decodeRecord("record-p5-prepared-2", { ...encodedToolCallPrepared, toolCallId: "call-2" }),
     );
+
     const requested = decodeEnvelope(
       4,
       decodeRecord("record-p5-requested", encodedApprovalRequested),
     );
+
     const decided = decodeEnvelope(5, decodeRecord("record-p5-decided", encodedApprovalDecided));
     const unknown = decodeEnvelope(6, decodeRecord("record-p5-unknown", encodedToolCallUnknown));
+
     const settled = decodeEnvelope(
       7,
       decodeRecord("record-p5-settled", {
@@ -1163,6 +1259,7 @@ describe("phase 5 durable canonical payloads", () => {
         isFailure: false,
       }),
     );
+
     const resolved = decodeEnvelope(8, decodeRecord("record-p5-resolved", encodedToolCallResolved));
 
     const afterPrepared = replayThread(created.threadId, [
@@ -1173,6 +1270,7 @@ describe("phase 5 durable canonical payloads", () => {
       decided,
       unknown,
     ]);
+
     expect(afterPrepared.openToolCalls.map((call) => call.toolCallId)).toEqual([
       "call-1",
       "call-2",
@@ -1191,9 +1289,11 @@ describe("phase 5 durable canonical payloads", () => {
       settled,
       resolved,
     ]);
+
     expect(full.openToolCalls).toEqual([]);
 
     const resumed = replayThreadFromCheckpoint(afterPrepared, [settled, resolved]);
+
     expect(resumed).toEqual(full);
     expect(Schema.decodeSync(ThreadProjection)(Schema.encodeSync(ThreadProjection)(full))).toEqual(
       full,
@@ -1212,6 +1312,7 @@ describe("phase 5 durable canonical payloads", () => {
       settlements: [],
       abortRequests: [],
     };
+
     expect(Schema.decodeUnknownExit(ThreadProjection)(phase4State)._tag).toBe("Failure");
   });
 });
@@ -1235,6 +1336,7 @@ describe("S2 durable subagent canonical payloads", () => {
     childPrincipal: "tenant-a",
     childIdempotencyKey: "subagent:run:submission-parent:call-delegate-1",
   } as const;
+
   const encodedSubagentStarted = {
     _tag: "SubagentStarted",
     runId: "run:submission-parent",
@@ -1244,6 +1346,7 @@ describe("S2 durable subagent canonical payloads", () => {
     childReceiptId: "receipt-child-1",
     childRunId: "run:submission-child-1",
   } as const;
+
   const encodedSubagentJoined = {
     _tag: "SubagentJoined",
     runId: "run:submission-parent",
@@ -1257,6 +1360,7 @@ describe("S2 durable subagent canonical payloads", () => {
     reservationId: "run%3Asubmission-parent:call-delegate-1",
     finalAccounting: { consumed: { turns: 1 }, released: { turns: 3 } },
   } as const;
+
   const encodedSubagentLineage = {
     _tag: "SubagentLineageRecorded",
     parentLink: {
@@ -1280,10 +1384,13 @@ describe("S2 durable subagent canonical payloads", () => {
       encodedSubagentJoined,
       encodedSubagentLineage,
     ] as const;
+
     for (const [index, payload] of payloads.entries()) {
       const record = decodeRecord(`record-s2-${index}`, payload);
+
       expect(record.schemaVersion).toBe(1);
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
+
       expect(encoded.payload).toEqual(payload);
       expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
     }
@@ -1298,6 +1405,7 @@ describe("S2 durable subagent canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+
     const failures: ReadonlyArray<unknown> = [
       { ...encodedSubagentRequested, turn: 0 },
       { ...encodedSubagentRequested, childInputDigest: "not-a-digest" },
@@ -1315,6 +1423,7 @@ describe("S2 durable subagent canonical payloads", () => {
         parentLink: { ...encodedSubagentLineage.parentLink, parentToolCallId: "" },
       },
     ];
+
     for (const payload of failures) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
     }
@@ -1329,16 +1438,20 @@ describe("S2 durable subagent canonical payloads", () => {
         definitions: Schema.encodeSync(DefinitionDigests)(definitionDigests),
       }),
     );
+
     const requested = decodeEnvelope(
       2,
       decodeRecord("record-s2-requested", encodedSubagentRequested),
     );
+
     const started = decodeEnvelope(3, decodeRecord("record-s2-started", encodedSubagentStarted));
     const joined = decodeEnvelope(4, decodeRecord("record-s2-joined", encodedSubagentJoined));
 
     const afterStarted = replayThread(created.threadId, [created, requested, started]);
+
     expect(afterStarted.subagentInvocations).toHaveLength(1);
     const invocation = afterStarted.subagentInvocations[0];
+
     expect(invocation?.toolCallId).toBe("call-delegate-1");
     expect(invocation?.requested).toEqual(requested.record.payload);
     expect(invocation?.started).toEqual(started.record.payload);
@@ -1346,10 +1459,12 @@ describe("S2 durable subagent canonical payloads", () => {
     expect(afterStarted.parentLink).toBeUndefined();
 
     const full = replayThread(created.threadId, [created, requested, started, joined]);
+
     expect(full.subagentInvocations[0]?.joined).toEqual(joined.record.payload);
 
     // Checkpoint replay equals full replay, and the projection round-trips through its Schema.
     const resumed = replayThreadFromCheckpoint(afterStarted, [joined]);
+
     expect(resumed).toEqual(full);
     expect(Schema.decodeSync(ThreadProjection)(Schema.encodeSync(ThreadProjection)(full))).toEqual(
       full,
@@ -1358,6 +1473,7 @@ describe("S2 durable subagent canonical payloads", () => {
     // Child-side lineage: the first canonical record wins forever (immutable Parent Link).
     const lineage = decodeEnvelope(2, decodeRecord("record-s2-lineage", encodedSubagentLineage));
     const child = replayThread(created.threadId, [created, lineage]);
+
     expect(child.parentLink).toEqual(lineage.record.payload);
     expect(child.subagentInvocations).toEqual([]);
   });
@@ -1377,6 +1493,7 @@ describe("S2 durable subagent canonical payloads", () => {
       unknownToolCalls: [],
       approvals: [],
     };
+
     expect(Schema.decodeUnknownExit(ThreadProjection)(phase5State)._tag).toBe("Failure");
   });
 });
@@ -1393,7 +1510,9 @@ describe("phase 5 ledger port schemas", () => {
       ownershipToken: "token-1",
       maxCount: 1,
     } as const;
+
     const request = Schema.decodeUnknownSync(ClaimJoiningRequest)(encodedClaimJoining);
+
     expect(Schema.encodeSync(ClaimJoiningRequest)(request)).toEqual(encodedClaimJoining);
     expect(
       Schema.decodeUnknownExit(ClaimJoiningRequest)({ ...encodedClaimJoining, maxCount: 0 })._tag,
@@ -1404,6 +1523,7 @@ describe("phase 5 ledger port schemas", () => {
       queueSequence: 2,
       inputPayload: { note: "also add a museum day" },
     });
+
     expect(claim.queueSequence).toBe(2);
 
     const marked = Schema.decodeUnknownSync(MarkJoinedRequest)({
@@ -1412,6 +1532,7 @@ describe("phase 5 ledger port schemas", () => {
       recordId: "input:submission-2",
       sequence: 9,
     });
+
     expect(marked.recordId).toBe("input:submission-2");
     expect(
       Schema.decodeUnknownSync(RevertJoiningRequest)({ submissionId: "submission-2" }).submissionId,
@@ -1424,7 +1545,9 @@ describe("phase 5 ledger port schemas", () => {
       ownershipToken: "token-1",
       reason: { _tag: "ApprovalPending", toolCallIds: ["call-1", "call-2"] },
     } as const;
+
     const suspend = Schema.decodeUnknownSync(SuspendRequest)(encodedSuspend);
+
     expect(Schema.encodeSync(SuspendRequest)(suspend)).toEqual(encodedSuspend);
     expect(
       Schema.decodeUnknownExit(SuspendRequest)({
@@ -1440,7 +1563,9 @@ describe("phase 5 ledger port schemas", () => {
       resolver: "operator",
       reason: "reviewed",
     } as const;
+
     const command = Schema.decodeUnknownSync(ApprovalDecisionCommand)(encodedCommand);
+
     expect(Schema.encodeSync(ApprovalDecisionCommand)(command)).toEqual(encodedCommand);
     expect(
       Schema.decodeUnknownExit(ApprovalDecisionCommand)({
@@ -1454,7 +1579,9 @@ describe("phase 5 ledger port schemas", () => {
       decidedAt: "2026-08-12T00:00:10.000Z",
       canonicalRecordId: "approval-decision:run-1:2:call-1",
     };
+
     const intent = Schema.decodeUnknownSync(ApprovalDecisionIntent)(encodedIntent);
+
     expect(Schema.encodeSync(ApprovalDecisionIntent)(intent)).toEqual(encodedIntent);
 
     const conflict = ApprovalConflict.make({
@@ -1462,6 +1589,7 @@ describe("phase 5 ledger port schemas", () => {
       toolCallId,
       existingDecision: "denied",
     });
+
     expect(conflict.existingDecision).toBe("denied");
   });
 
@@ -1471,6 +1599,7 @@ describe("phase 5 ledger port schemas", () => {
       toolCallIds: ["call-1"],
       reason: "prepared without a canonical outcome",
     });
+
     expect(marked.toolCallIds).toEqual(["call-1"]);
     expect(
       Schema.decodeUnknownExit(MarkUnknownRequest)({
@@ -1486,8 +1615,10 @@ describe("phase 5 ledger port schemas", () => {
       { _tag: "SafeToRetry" },
       { _tag: "AbortSubmission" },
     ];
+
     for (const encoded of resolutions) {
       const resolution = Schema.decodeUnknownSync(UnknownResolution)(encoded);
+
       expect(Schema.encodeSync(UnknownResolution)(resolution)).toEqual(encoded);
     }
     expect(Schema.decodeUnknownExit(UnknownResolution)({ _tag: "JustGuess" })._tag).toBe("Failure");
@@ -1503,23 +1634,29 @@ describe("phase 5 ledger port schemas", () => {
         isFailure: false,
       },
     } as const;
+
     const command = Schema.decodeUnknownSync(UnknownResolutionCommand)(encodedCommand);
+
     expect(Schema.encodeSync(UnknownResolutionCommand)(command)).toEqual(encodedCommand);
 
     const intent = Schema.decodeUnknownSync(UnknownResolutionIntent)({
       ...encodedCommand,
       resolvedAt: "2026-08-12T00:00:30.000Z",
     });
+
     expect(intent.resolution._tag).toBe("CompletedWithResult");
 
     const conflict = UnknownResolutionConflict.make({ submissionId, toolCallId });
+
     expect(conflict.toolCallId).toBe("call-1");
     const joined = JoinedToHost.make({ submissionId, hostSubmissionId });
+
     expect(joined.hostSubmissionId).toBe("submission-host");
   });
 
   it("derives the deterministic Phase 5 identities shared by adapters and the coordinator", () => {
     const runId = Schema.decodeSync(RunId)("run:submission-1");
+
     expect(turnResponseBatchId(runId, 2)).toBe("turn-response:run:submission-1:2");
     expect(turnResultsBatchId(runId, 2)).toBe("turn-results:run:submission-1:2");
     expect(turnPreparedBatchId(runId, 2)).toBe("turn-prepared:run:submission-1:2");
@@ -1582,8 +1719,10 @@ describe("ToolReconciler", () => {
       { _tag: "SafeToRetry" },
       { _tag: "Uncertain", reason: "supplier unreachable" },
     ];
+
     for (const encoded of decisions) {
       const decision = Schema.decodeUnknownSync(ReconciliationDecision)(encoded);
+
       expect(Schema.encodeSync(ReconciliationDecision)(decision)).toEqual(encoded);
     }
     expect(Schema.decodeUnknownExit(ReconciliationDecision)({ _tag: "Probably" })._tag).toBe(
@@ -1595,6 +1734,7 @@ describe("ToolReconciler", () => {
     Effect.gen(function* () {
       const reconciler = yield* ToolReconciler;
       const decision = yield* reconciler.reconcile(preparedEvidence);
+
       expect(decision._tag).toBe("Uncertain");
     }).pipe(Effect.provide(ToolReconciler.uncertain)),
   );

@@ -33,9 +33,11 @@ const V2 = MemoryNamespace.define({ name: "app/conversations", version: 2, ident
 const tenantId = TenantId.make("tenant");
 const userId = UserId.make("user");
 const namespace = Conversations.make({ tenantId, userId });
+
 type Namespace = typeof namespace;
 const key = MemoryKey.make({ namespace, id: "source" });
 const access = MemoryAccess.make({ namespace, scope: MemoryScope.make("private") });
+
 const content = {
   text: "memory",
   attributions: [
@@ -52,6 +54,7 @@ const content = {
   recordedAt: 0,
   extractedAt: 0,
 };
+
 const write = MemoryWrite.make({
   _tag: "Put",
   key,
@@ -61,6 +64,7 @@ const write = MemoryWrite.make({
   content,
   scopes: [access.scope],
 });
+
 const document = ActiveMemoryDocument.make({
   version: 1,
   key,
@@ -71,7 +75,9 @@ const document = ActiveMemoryDocument.make({
   content,
   scopes: [access.scope],
 });
+
 const source = MemoryIndexSource.make({ key, source: document.source, sourceGeneration: 1 });
+
 const query = MemoryIndexQuery.make({
   namespace,
   vector: [1],
@@ -79,6 +85,7 @@ const query = MemoryIndexQuery.make({
   minScore: 0,
   maxScannedChunks: 1,
 });
+
 const candidate = MemoryIndexCandidate.make({
   ...source,
   passageId: "passage",
@@ -89,7 +96,9 @@ const candidate = MemoryIndexCandidate.make({
   score: 1,
   indexedAt: 0,
 });
+
 const search = MemoryIndexSearch.make({ candidates: [candidate], scannedChunks: 1 });
+
 const replacement = (profile: SemanticMemoryProfile) =>
   MemoryIndexReplacement.make({
     source,
@@ -112,14 +121,18 @@ const workflow = Effect.gen(function* () {
   const read = reader.get(key);
   const changed = writer.change(write);
   const found = index.search(query);
+
   const indexed = indexMemorySource(
     key,
     SemanticIndexLimits.make({ maxSourceBytes: 100, maxChunks: 1, timeoutMillis: 100 }),
   );
+
   const changedDocument = yield* changed;
   const foundCandidates = yield* found;
+
   return { read, changed, found, indexed, changedDocument, foundCandidates };
 });
+
 type Workflow = Effect.Success<typeof workflow>;
 type Proofs = [
   Assert<Equal<typeof access.scope, MemoryScope>>,
@@ -165,6 +178,7 @@ const negativeCases = () => {
   const other = Other.make({ tenantId, userId });
   const newer = V2.make({ tenantId, userId });
   const acceptKey = (_key: MemoryKey<Namespace>) => undefined;
+
   // @ts-expect-error Same identity shape does not make families interchangeable.
   acceptKey(MemoryKey.make({ namespace: other, id: "source" }));
   // @ts-expect-error Definition versions select different namespace families.
@@ -174,31 +188,40 @@ const negativeCases = () => {
   const acceptWrite = (_write: MemoryWrite<Namespace>) => undefined;
   const otherKey = MemoryKey.make({ namespace: other, id: key.id });
   const acceptAccess = (_access: MemoryAccess<Namespace>) => undefined;
+
   // @ts-expect-error Access construction retains the incompatible family.
   acceptAccess(MemoryAccess.make({ namespace: other, scope: access.scope }));
   const acceptQuery = (_query: MemoryIndexQuery<Namespace>) => undefined;
+
   // @ts-expect-error Query construction retains the incompatible version.
   acceptQuery(MemoryIndexQuery.make({ ...query, namespace: newer }));
   const otherWrite = MemoryWrite.make({ ...write, key: otherKey });
+
   // @ts-expect-error Write construction preserves the incompatible namespace.
   acceptWrite(otherWrite);
+
   const transition = applyMemoryWrite(
     // @ts-expect-error Paired transition arguments do not infer a union namespace.
     document,
     otherWrite,
     1,
   );
+
   const acceptSource = (_source: MemoryIndexSource<Namespace>) => undefined;
   const otherSource = MemoryIndexSource.make({ ...source, key: otherKey });
+
   // @ts-expect-error Index constructors must not erase a different family.
   acceptSource(otherSource);
   const acceptDocument = (_document: MemoryDocument<Namespace>) => undefined;
+
   const newerDocument = ActiveMemoryDocument.make({
     ...document,
     key: MemoryKey.make({ namespace: newer, id: key.id }),
   });
+
   // @ts-expect-error Document constructors preserve their actual namespace.
   acceptDocument(newerDocument);
+
   return { widened, transition };
 };
 
@@ -224,15 +247,19 @@ it("retains namespace types through public construction and operations", () => {
     true,
     true,
   ];
+
   expect(proofs.every(Boolean)).toBe(true);
   expect(typeof negativeCases).toBe("function");
   for (const value of ["private", "x".repeat(1_024)]) {
     const decodedAccess = Schema.decodeUnknownSync(MemoryAccess.Wire)({ ...access, scope: value });
+
     expect(Schema.encodeSync(MemoryAccess.Wire)(decodedAccess).scope).toBe(value);
+
     const decodedDocument = Schema.decodeUnknownSync(ActiveMemoryDocument.Wire)({
       ...document,
       scopes: [value],
     });
+
     expect(Schema.encodeSync(ActiveMemoryDocument.Wire)(decodedDocument).scopes).toEqual([value]);
   }
   for (const value of ["", "x".repeat(1_025)]) {

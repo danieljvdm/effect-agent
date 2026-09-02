@@ -127,12 +127,15 @@ export { ContextCompactor } from "@effect-agent/engine";
 
 const messageText = (message: Prompt.Message): string => {
   if (message.role === "system") return message.content;
+
   const content = message.content
     .map((part) => {
       if (part.type === "text" || part.type === "reasoning") return part.text;
+
       return `[${part.type}]`;
     })
     .join("\n");
+
   return content.slice(0, 64 * 1024);
 };
 
@@ -158,6 +161,7 @@ const validateModelView = (
     );
   }
   const bytes = messages.reduce((total, message) => total + encodedBytes(message.content), 0);
+
   return bytes > MAX_CONTEXT_MESSAGE_BYTES
     ? Effect.fail(
         ContextTransformError.make({
@@ -204,10 +208,13 @@ const exactSourceRange = (
       }),
     );
   }
+
   const selected = snapshot.messages.filter(
     (message) => message.sequence >= coversFrom && message.sequence <= coversThrough,
   );
+
   const expectedCount = coversThrough - coversFrom + 1;
+
   if (
     selected.length !== expectedCount ||
     selected[0]?.sequence !== coversFrom ||
@@ -219,15 +226,18 @@ const exactSourceRange = (
       }),
     );
   }
+
   return Effect.succeed(selected);
 };
 
 const utf8Bytes = (value: string): Uint8Array => {
   const hex = Encoding.encodeHex(value);
   const bytes = new Uint8Array(hex.length / 2);
+
   for (let index = 0; index < bytes.length; index += 1) {
     bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   }
+
   return bytes;
 };
 
@@ -238,6 +248,7 @@ export const digestCompactionSource = Effect.fn("digestCompactionSource")(functi
   coversThrough: number,
 ) {
   const selected = yield* exactSourceRange(snapshot, coversFrom, coversThrough);
+
   const encoded = yield* Schema.encodeEffect(Schema.Array(ThreadMessage))(selected).pipe(
     Effect.mapError((error) =>
       CompactionDigestError.make({
@@ -245,7 +256,9 @@ export const digestCompactionSource = Effect.fn("digestCompactionSource")(functi
       }),
     ),
   );
+
   const crypto = yield* Crypto.Crypto;
+
   const digest = yield* crypto.digest("SHA-256", utf8Bytes(JSON.stringify(encoded))).pipe(
     Effect.mapError((error) =>
       CompactionDigestError.make({
@@ -253,6 +266,7 @@ export const digestCompactionSource = Effect.fn("digestCompactionSource")(functi
       }),
     ),
   );
+
   return `sha256:${Encoding.encodeHex(digest)}`;
 });
 
@@ -274,21 +288,25 @@ export const applyCompaction = Effect.fn("applyCompaction")(function* (
       message: "Compaction artifact belongs to another Thread",
     });
   }
+
   const actualDigest = yield* digestCompactionSource(
     context.source,
     artifact.coversFrom,
     artifact.coversThrough,
   );
+
   if (actualDigest !== artifact.sourceDigest) {
     return yield* InvalidCompactionArtifact.make({
       message: "Compaction source digest does not match authoritative history",
     });
   }
+
   const provenanceInRange = (sequences: ReadonlyArray<number>): boolean =>
     sequences.length > 0 &&
     sequences.every(
       (sequence) => sequence >= artifact.coversFrom && sequence <= artifact.coversThrough,
     );
+
   if (
     !provenanceInRange(artifact.summary.sourceSequences) ||
     artifact.retainedFacts.some((fact) => !provenanceInRange(fact.sourceSequences))
@@ -310,18 +328,22 @@ export const applyCompaction = Effect.fn("applyCompaction")(function* (
     message.sourceSequences.every(
       (sequence) => sequence >= artifact.coversFrom && sequence <= artifact.coversThrough,
     );
+
   const kept = context.messages.filter((message) => !fullyCovered(message));
+
   const summaryAt = kept.findIndex(
     (message) =>
       message.sourceSequences.length > 0 &&
       message.sourceSequences.every((sequence) => sequence > artifact.coversThrough),
   );
+
   const messages = yield* validateModelView(
     summaryAt === -1
       ? [...kept, artifact.summary]
       : [...kept.slice(0, summaryAt), artifact.summary, ...kept.slice(summaryAt)],
     `compaction:${artifact.compactorVersion}`,
   );
+
   return PreparedModelContext.make({
     source: context.source,
     messages,

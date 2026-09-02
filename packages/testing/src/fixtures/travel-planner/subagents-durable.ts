@@ -79,9 +79,11 @@ export const s2TravelPlannerProfile = TravelPlannerSubagentDurabilityProfile.mak
 export const s2TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-s2-deployment",
 );
+
 export const s2TravelPlannerProducerId = Schema.decodeSync(ProducerId)(
   "travel-planner-s2-producer",
 );
+
 export const s2TravelPlannerPrincipal = Schema.decodeSync(Principal)("travel-planner-s2-principal");
 
 const digestOf = (character: string) => Schema.decodeSync(Digest)(character.repeat(64));
@@ -168,6 +170,7 @@ export const durableResearchShortlist = (destination: string): DestinationShortl
  */
 export const encodedDestinationFacts = (destination: string): unknown => {
   const report = destinationReportFor(destination);
+
   return Schema.encodeSync(DestinationFacts)(
     DestinationFacts.make({
       destination: report.destination,
@@ -195,6 +198,7 @@ export const makeInvocationCountingModel = (
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+
     const model = Model.make(
       "scripted",
       name,
@@ -206,16 +210,19 @@ export const makeInvocationCountingModel = (
             Stream.unwrap(
               Effect.gen(function* () {
                 const call = yield* Ref.getAndUpdate(calls, (value) => value + 1);
+
                 yield* Ref.update(prompts, (previous) => [
                   ...previous,
                   JSON.stringify(request.prompt.content),
                 ]);
+
                 return Stream.fromIterable(script(call));
               }),
             ),
         }),
       ),
     );
+
     return { model, calls: Ref.get(calls), prompts: Ref.get(prompts) };
   });
 
@@ -336,6 +343,7 @@ export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptio
     const focus = options?.focus ?? "museums";
 
     const guideInvocations = yield* Ref.make(0);
+
     const guideLayer = Layer.succeed(
       DestinationGuide,
       DestinationGuide.of({
@@ -345,6 +353,7 @@ export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptio
           ),
       }),
     );
+
     const childToolkitLayer = DestinationResearcherToolkitLayer.pipe(
       Layer.provideMerge(guideLayer),
     );
@@ -352,6 +361,7 @@ export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptio
     const childModel = yield* makeInvocationCountingModel("destination-researcher-s2", (call) =>
       call === 0 ? researcherLookupParts(destination) : researcherReportParts(destination),
     );
+
     const childBinding = Agent.withModel(DestinationResearcher, childModel.model);
 
     const parentModel = yield* makeInvocationCountingModel("travel-coordinator-s2", (call) =>
@@ -359,6 +369,7 @@ export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptio
         ? delegationTurnParts(durableResearchCallId, destination, focus)
         : shortlistParts(durableResearchShortlist(destination)),
     );
+
     const parentBinding = Agent.withModel(TravelCoordinator, parentModel.model);
 
     const delegationLayer = durableDestinationResearchHandlersLayer(childBinding).pipe(
@@ -376,6 +387,7 @@ export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptio
       parentBinding,
       s2CoordinatorDigests,
     ).pipe(Effect.provide(delegationLayer));
+
     const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       options?.childRegistrationDigests ?? s2ResearcherDigests,
@@ -389,5 +401,6 @@ export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptio
       childPrompts: childModel.prompts,
       guideInvocations: Ref.get(guideInvocations),
     };
+
     return harness;
   });

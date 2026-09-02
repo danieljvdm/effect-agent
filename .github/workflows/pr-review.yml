@@ -63,4 +63,4 @@ jobs:
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
           effort: xhigh
           guidance-file: .github/review-guidance.md
-          ignore: "bun.lock,action/dist/**,work-order-action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
+          ignore: "bun.lock,action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"

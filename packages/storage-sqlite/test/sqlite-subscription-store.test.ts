@@ -39,9 +39,11 @@ const withTemporaryDatabase = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-subscription-sqlite-",
       });
+
       return yield* use(`${directory}/subscriptions.sqlite`);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));

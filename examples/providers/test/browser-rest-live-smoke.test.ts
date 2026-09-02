@@ -13,6 +13,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 const ACCOUNT = "CLOUDFLARE_ACCOUNT_ID";
 const TOKEN = "CLOUDFLARE_API_TOKEN";
+
 const enabled =
   phase7LiveProfileEnabled(process.env) && !!process.env[ACCOUNT] && !!process.env[TOKEN];
 
@@ -22,8 +23,10 @@ describe.skipIf(!enabled)("Browser Run REST Kitesurf smoke (opt-in)", () => {
       Effect.gen(function* () {
         const accountId = yield* Config.nonEmptyString(ACCOUNT);
         const apiToken = yield* Config.redacted(TOKEN);
+
         return yield* Effect.gen(function* () {
           const capture = yield* PageCapture;
+
           const result = yield* capture.capture(
             PageCaptureRequest.make({
               target: PageUrlTarget.make({ url: "https://example.com/" }),
@@ -32,6 +35,7 @@ describe.skipIf(!enabled)("Browser Run REST Kitesurf smoke (opt-in)", () => {
               limits: PageCaptureLimits.make({ maxOutputBytes: 16 * 1_024 }),
             }),
           );
+
           expect(result.output._tag).toBe("PageMarkdownCaptured");
           if (result.output._tag === "PageMarkdownCaptured") {
             expect(result.output.markdown).toContain("Example Domain");

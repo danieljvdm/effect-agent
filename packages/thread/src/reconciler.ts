@@ -62,6 +62,7 @@ export const ReconciliationDecision = Schema.Union([
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
 ]);
+
 export type ReconciliationDecision = typeof ReconciliationDecision.Type;
 
 /** The reconciliation policy itself failed (supplier unreachable, corrupt lookup, ...). The

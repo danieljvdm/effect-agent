@@ -36,15 +36,18 @@ export const makeWakeSubscriptionHub: Effect.Effect<WakeSubscriptionHub> = Effec
   const remove = (threadId: ThreadId, id: number) =>
     Ref.update(registrations, (current) => {
       const existing = current.get(threadId);
+
       if (existing === undefined || !existing.has(id)) return current;
       const next = new Map(current);
       const thread = new Map(existing);
+
       thread.delete(id);
       if (thread.size === 0) {
         next.delete(threadId);
       } else {
         next.set(threadId, thread);
       }
+
       return next;
     });
 
@@ -54,14 +57,18 @@ export const makeWakeSubscriptionHub: Effect.Effect<WakeSubscriptionHub> = Effec
         const deferred = yield* Deferred.make<void>();
         const id = yield* Ref.getAndUpdate(nextId, (current) => current + 1);
         const registration: WakeRegistration = { id, deferred };
+
         yield* Effect.addFinalizer(() => remove(threadId, registration.id));
         yield* Ref.update(registrations, (current) => {
           const next = new Map(current);
           const thread = new Map(current.get(threadId) ?? []);
+
           thread.set(registration.id, registration.deferred);
           next.set(threadId, thread);
+
           return next;
         });
+
         return registration.deferred;
       }).pipe(Effect.map((deferred) => Deferred.await(deferred))),
   );
@@ -69,11 +76,15 @@ export const makeWakeSubscriptionHub: Effect.Effect<WakeSubscriptionHub> = Effec
   const notify = Effect.fn("WakeSubscriptionHub.notify")(function* (threadId: ThreadId) {
     const waiters = yield* Ref.modify(registrations, (current) => {
       const thread = current.get(threadId);
+
       if (thread === undefined) return [[], current] as const;
       const next = new Map(current);
+
       next.delete(threadId);
+
       return [[...thread.values()], next] as const;
     });
+
     yield* Effect.forEach(waiters, (waiter) => Deferred.succeed(waiter, undefined), {
       discard: true,
     });

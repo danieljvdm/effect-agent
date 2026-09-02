@@ -80,16 +80,20 @@ const runCommand = Effect.fn("verifyChangesetsRelease.runCommand")(function* (
   args: ReadonlyArray<string>,
 ) {
   const rendered = [command, ...args].join(" ");
+
   const child = yield* ChildProcess.make(command, args, {
     cwd,
     stderr: "pipe",
     stdout: "pipe",
   });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+
   const trimmed = output.trim();
+
   if (exitCode !== 0) {
     return yield* VerificationCommandError.make({
       command: rendered,
@@ -97,12 +101,14 @@ const runCommand = Effect.fn("verifyChangesetsRelease.runCommand")(function* (
       output: trimmed,
     });
   }
+
   return trimmed;
 });
 
 const findRepositoryRoot = Effect.fn("verifyChangesetsRelease.findRepositoryRoot")(function* () {
   const path = yield* Path.Path;
   const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
+
   return path.resolve(path.dirname(scriptPath), "..");
 });
 
@@ -124,9 +130,11 @@ const cleanupError = (operation: string) => (cause: unknown) =>
 const cleanupExpectedWorktree = Effect.fn("verifyChangesetsRelease.cleanupExpectedWorktree")(
   function* (root: string, temporaryRoot: string, worktree: string) {
     const fs = yield* FileSystem.FileSystem;
+
     const worktreeExistsExit = yield* fs
       .exists(worktree)
       .pipe(Effect.mapError(cleanupError("worktree existence check")), Effect.exit);
+
     const cleanupEffects = [
       ...(Exit.isSuccess(worktreeExistsExit) && worktreeExistsExit.value
         ? [
@@ -143,14 +151,17 @@ const cleanupExpectedWorktree = Effect.fn("verifyChangesetsRelease.cleanupExpect
         Effect.mapError(cleanupError("git worktree prune")),
       ),
     ];
+
     const exits = yield* Effect.forEach(cleanupEffects, (cleanup) => cleanup.pipe(Effect.exit), {
       concurrency: 1,
     });
+
     let combined: Cause.Cause<VerificationCleanupError> | undefined = Exit.isFailure(
       worktreeExistsExit,
     )
       ? worktreeExistsExit.cause
       : undefined;
+
     for (const exit of exits) {
       if (Exit.isSuccess(exit)) continue;
       combined = combined === undefined ? exit.cause : Cause.combine(combined, exit.cause);
@@ -168,17 +179,22 @@ const withExpectedWorktree = <A, E, R>(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+
       const temporaryRoot = yield* fs.makeTempDirectory({
         prefix: "effect-agent-changesets-release-",
       });
+
       const worktree = path.join(temporaryRoot, "expected");
+
       const acquisitionExit = yield* restore(
         runCommand(root, "git", ["worktree", "add", "--detach", worktree, baseSha]),
       ).pipe(Effect.exit);
+
       if (Exit.isFailure(acquisitionExit)) {
         const cleanupExit = yield* cleanupExpectedWorktree(root, temporaryRoot, worktree).pipe(
           Effect.exit,
         );
+
         return yield* Effect.failCause(
           Exit.isFailure(cleanupExit)
             ? Cause.combine(acquisitionExit.cause, cleanupExit.cause)
@@ -187,9 +203,11 @@ const withExpectedWorktree = <A, E, R>(
       }
 
       const useExit = yield* restore(use(worktree)).pipe(Effect.exit);
+
       const cleanupExit = yield* cleanupExpectedWorktree(root, temporaryRoot, worktree).pipe(
         Effect.exit,
       );
+
       if (Exit.isFailure(useExit)) {
         return yield* Effect.failCause(
           Exit.isFailure(cleanupExit)
@@ -198,6 +216,7 @@ const withExpectedWorktree = <A, E, R>(
         );
       }
       if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause);
+
       return useExit.value;
     }),
   );
@@ -221,6 +240,7 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
   const expectedTree = yield* withExpectedWorktree(root, baseSha, (expectedWorktree) =>
     Effect.gen(function* () {
       const bunBinary = options.bunBinary ?? "bun";
+
       if (options.changesetBinary === undefined) {
         yield* runCommand(expectedWorktree, bunBinary, [
           "install",
@@ -228,11 +248,14 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
           "--ignore-scripts",
         ]);
       }
+
       const changesetBinary =
         options.changesetBinary ?? path.join(expectedWorktree, "node_modules", ".bin", "changeset");
+
       yield* runCommand(expectedWorktree, changesetBinary, ["version"]);
       yield* runCommand(expectedWorktree, bunBinary, ["install", "--ignore-scripts"]);
       yield* runCommand(expectedWorktree, "git", ["add", "--all"]);
+
       return yield* runCommand(expectedWorktree, "git", ["write-tree"]);
     }),
   );
@@ -244,6 +267,7 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
       expectedTree,
       actualTree,
     ]);
+
     return yield* ReleaseTreeMismatch.make({ expectedTree, actualTree, changedPaths });
   }
 
@@ -271,19 +295,23 @@ export const classifyChangesetsRelease = Effect.fn("classifyChangesetsRelease")(
 
     yield* runCommand(root, "git", ["cat-file", "-e", `${baseSha}^{commit}`]);
     yield* runCommand(root, "git", ["cat-file", "-e", `${headSha}^{commit}`]);
+
     const changedPathOutput = yield* runCommand(root, "git", [
       "diff",
       "--name-only",
       baseSha,
       headSha,
     ]);
+
     const changedPaths = changedPathOutput.length === 0 ? [] : changedPathOutput.split("\n");
+
     const isReleaseCandidate =
       changedPaths.some(isReleaseMetadataPath) && changedPaths.every(isGeneratedReleasePath);
 
     if (!isReleaseCandidate) return false;
 
     yield* verifyChangesetsRelease(options);
+
     return true;
   },
 );
@@ -291,9 +319,11 @@ export const classifyChangesetsRelease = Effect.fn("classifyChangesetsRelease")(
 const baseSha = Flag.string("base-sha").pipe(
   Flag.withDescription("Trusted pull-request base commit SHA."),
 );
+
 const headSha = Flag.string("head-sha").pipe(
   Flag.withDescription("Generated Changesets pull-request head commit SHA."),
 );
+
 const classificationOutput = Flag.string("classification-output").pipe(
   Flag.optional,
   Flag.withDescription(
@@ -315,6 +345,7 @@ const command = CliCommand.make(
 
     const isReleaseCommit = yield* classifyChangesetsRelease({ baseSha, headSha });
     const fs = yield* FileSystem.FileSystem;
+
     yield* fs.writeFileString(
       classificationOutput.value,
       `is-release-commit=${String(isReleaseCommit)}\n`,

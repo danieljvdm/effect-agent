@@ -49,17 +49,21 @@ import { Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
 const threadId = Schema.decodeSync(ThreadId)("retained-history");
 const options = { threadId };
+
 const policy = AgentPolicy.make({
   maxTurns: 3,
   maxToolCalls: 3,
   maxDuration: "30 seconds",
   toolConcurrency: 1,
 });
+
 const Lookup = Tool.make("lookup", {
   parameters: Schema.Struct({ name: Schema.String }),
   success: Schema.String,
 });
+
 const toolkit = Toolkit.make(Lookup);
+
 const definition = Agent.make("retained-history", {
   input: Schema.String,
   output: Schema.String,
@@ -67,8 +71,10 @@ const definition = Agent.make("retained-history", {
   toolkit,
   policy,
 });
+
 const agent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   Agent.withModel(definition, Model.make("scripted", "history", ScriptedModel.layer(turns)));
+
 const answer = (text: string): ScriptedTurnInput => ({
   _tag: "Stream",
   parts: [
@@ -83,6 +89,7 @@ const answer = (text: string): ScriptedTurnInput => ({
   ],
   termination: { _tag: "Complete" },
 });
+
 const lookup: ScriptedTurnInput = {
   _tag: "Stream",
   parts: [
@@ -99,27 +106,34 @@ const lookup: ScriptedTurnInput = {
   ],
   termination: { _tag: "Complete" },
 };
+
 const services = Layer.mergeAll(
   RunContextPreparationPassthrough,
   IdGenerator.layer,
   NodeCrypto.layer,
   toolkit.toLayer({ lookup: () => Effect.succeed("Kyoto") }),
 );
+
 const memory = PersistentHistory.layer.pipe(
   Layer.provideMerge(MemoryThreadStoreLive),
   Layer.provideMerge(services),
 );
+
 const sqliteLayer = (options: Parameters<typeof sqliteStore>[0]) =>
   PersistentHistory.layer.pipe(Layer.provideMerge(sqliteStore(options)));
+
 const loadHistory = (id: ThreadId) => Effect.flatMap(ThreadHistory, (history) => history.load(id));
+
 const exported = Effect.flatMap(ThreadStore, (store) =>
   store.export(ThreadExportRequest.make({ threadId })),
 );
+
 const withDatabase = <A, E, R>(use: (filename: string) => Effect.Effect<A, E, R>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "retained-history-" });
+
       return yield* use(`${directory}/history.sqlite`);
     }),
   ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, services)));
@@ -130,9 +144,11 @@ describe("persistent threads", () => {
       yield* AgentRuntime.run(agent([answer("retained")]), "prior", options);
       const before = yield* exported;
       const calls = yield* Ref.make(0);
+
       const binding = agent([
         { ...answer("not retained"), onStreamStart: Ref.update(calls, (n) => n + 1) },
       ]);
+
       for (const hooks of [
         { history: Prompt.empty },
         { onHistory: () => Effect.die("Competing history callback must not run") },
@@ -141,6 +157,7 @@ describe("persistent threads", () => {
           ...options,
           ...hooks,
         }).pipe(Effect.flip);
+
         expect(rejected).toMatchObject({
           _tag: "ThreadHistoryError",
           reason: "incompatible",
@@ -154,6 +171,7 @@ describe("persistent threads", () => {
   it.effect("does not commit or publish completion when final result decoding fails", () =>
     Effect.gen(function* () {
       const decodes = yield* Ref.make(0);
+
       const output = Schema.String.pipe(
         Schema.decode({
           decode: SchemaGetter.transformOrFail((value) =>
@@ -170,6 +188,7 @@ describe("persistent threads", () => {
           encode: SchemaGetter.transform((value) => value),
         }),
       );
+
       const binding = Agent.withModel(
         Agent.make("history-result-codec", {
           input: Schema.String,
@@ -180,7 +199,9 @@ describe("persistent threads", () => {
         }),
         Model.make("scripted", "result-codec", ScriptedModel.layer([answer("reply")])),
       );
+
       const started = yield* AgentRuntime.start(binding, "request", options);
+
       expect((yield* started.await.pipe(Effect.flip))._tag).toBe("AgentOutputError");
       expect(yield* Ref.get(decodes)).toBe(2);
       expect((yield* started.events).some((event) => event._tag === "RunCompleted")).toBe(false);
@@ -196,10 +217,12 @@ describe("persistent threads", () => {
         const finalized = yield* Ref.make(0);
         const commits = yield* Ref.make(0);
         const clientLifetime = yield* Ref.make<ReadonlyArray<string>>([]);
+
         class SharedClient extends Context.Service<
           SharedClient,
           { readonly request: Effect.Effect<void> }
         >()("test/persistent-threads/SharedClient") {}
+
         const clientLayer = Layer.effect(
           SharedClient,
           Effect.acquireRelease(
@@ -211,6 +234,7 @@ describe("persistent threads", () => {
             () => Ref.update(clientLifetime, (events) => [...events, "released"]),
           ),
         );
+
         const history = PersistentHistory.layer.pipe(
           Layer.provide(
             Layer.succeed(ThreadStore, {
@@ -222,12 +246,15 @@ describe("persistent threads", () => {
                   ...Array.replicate("request", (yield* Ref.get(commits)) + 1),
                 ]);
                 const result = yield* store.append(request);
+
                 yield* Ref.update(commits, (n) => n + 1);
+
                 return result;
               }),
             }),
           ),
         );
+
         const binding = Agent.withModel(
           definition,
           Model.make(
@@ -237,6 +264,7 @@ describe("persistent threads", () => {
               Layer.unwrap(
                 Effect.gen(function* () {
                   const client = yield* SharedClient;
+
                   return ScriptedModel.layer([
                     { ...answer("retained"), onStreamStart: client.request },
                   ]);
@@ -246,14 +274,17 @@ describe("persistent threads", () => {
             ),
           ),
         );
+
         yield* Effect.gen(function* () {
           const application = yield* Layer.build(clientLayer);
+
           yield* Effect.gen(function* () {
             yield* AgentRuntime.run(binding, "run", options);
             expect(yield* Ref.get(commits)).toBe(1);
             expect(yield* Ref.get(finalized)).toBe(1);
             expect(yield* Ref.get(clientLifetime)).toEqual(["acquired", "request"]);
             const started = yield* AgentRuntime.start(binding, "start", options);
+
             yield* started.observe.pipe(
               Stream.runForEach((event) =>
                 Effect.gen(function* () {
@@ -293,6 +324,7 @@ describe("persistent threads", () => {
     Effect.gen(function* () {
       const decodes = yield* Ref.make(0);
       const seenInput = yield* Ref.make("");
+
       const input = Schema.String.pipe(
         Schema.decode({
           decode: SchemaGetter.transformOrFail((value) =>
@@ -303,12 +335,14 @@ describe("persistent threads", () => {
           encode: SchemaGetter.transform((value) => value),
         }),
       );
+
       const output = Schema.String.pipe(
         Schema.decode({
           decode: SchemaGetter.transform((value) => value),
           encode: SchemaGetter.transform((value) => `reencoded:${value}`),
         }),
       );
+
       const transformed = Agent.make("history-codecs", {
         input,
         output,
@@ -317,21 +351,26 @@ describe("persistent threads", () => {
         toolkit: Toolkit.empty,
         policy,
       });
+
       const binding = Agent.withModel(
         transformed,
         Model.make("scripted", "codecs", ScriptedModel.layer([answer("reply")])),
       );
+
       const result = yield* AgentRuntime.run(binding, "request", options);
       const log = yield* exported;
       const projection = replayThread(threadId, log.records);
+
       expect(yield* Ref.get(decodes)).toBe(1);
       expect(yield* Ref.get(seenInput)).toBe("request:1");
       expect(projection.inputs).toEqual(["request:1"]);
       expect(projection.modelOutputs).toEqual(["reply"]);
       expect(result.output).toBe("reply");
+
       const refused = yield* AgentRuntime.run(agent([]), "x".repeat(1_048_577), options).pipe(
         Effect.flip,
       );
+
       expect(refused._tag).toBe("ThreadHistoryError");
       expect(yield* exported).toEqual(log);
     }).pipe(Effect.provide(memory)),
@@ -373,12 +412,15 @@ describe("persistent threads", () => {
           toolkit: Toolkit.empty,
           policy,
         });
+
         const bound = Agent.withModel(
           examples,
           Model.make("scripted", "examples", ScriptedModel.layer([answer("actual answer")])),
         );
+
         const result = yield* AgentRuntime.run(bound, "Actual question", options);
         const log = yield* exported;
+
         expect(result.turns).toBe(1);
         expect(
           log.records.flatMap(({ record }) =>
@@ -406,9 +448,11 @@ describe("persistent threads", () => {
             "Find my city",
             options,
           ).pipe(Effect.provide(sqliteLayer({ filename })));
+
           const before = yield* loadHistory(threadId).pipe(
             Effect.provide(sqliteLayer({ filename })),
           );
+
           const second = yield* AgentRuntime.run(
             agent([
               {
@@ -432,12 +476,14 @@ describe("persistent threads", () => {
             "Where was I?",
             options,
           ).pipe(Effect.provide(sqliteLayer({ filename })));
+
           const restored = yield* Effect.gen(function* () {
             return {
               prompt: yield* loadHistory(threadId),
               log: yield* exported,
             };
           }).pipe(Effect.provide(sqliteLayer({ filename, verifyOnOpen: true })));
+
           expect(first.output).toBe("Kyoto");
           expect(second.output).toBe("Welcome back to Kyoto");
           expect(restored.prompt.content.map((message) => message.role)).toEqual([
@@ -451,6 +497,7 @@ describe("persistent threads", () => {
             "assistant",
           ]);
           const projection = replayThread(threadId, restored.log.records, restored.log.tailDigest);
+
           expect(projection.inputs).toEqual(["Find my city", "Where was I?"]);
           expect(projection.modelOutputs).toEqual(["Kyoto", "Welcome back to Kyoto"]);
           expect(projection.completedRuns).toEqual([first.runId, second.runId]);
@@ -471,10 +518,12 @@ describe("persistent threads", () => {
       Effect.gen(function* () {
         const store = yield* ThreadStore;
         const producerEpoch = Schema.decodeSync(ProducerEpoch)(0);
+
         yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch }));
         const createdAt = yield* DateTime.now;
         let tailSequence = Schema.decodeSync(CanonicalSequence)(0);
         let tailDigest = EMPTY_TAIL_DIGEST;
+
         // Seed through the store's public append contract without thousands of model calls.
         for (let start = 0; start < 65_532; start += 256) {
           const records = Array.makeBy(Math.min(256, 65_532 - start), (offset) =>
@@ -487,11 +536,13 @@ describe("persistent threads", () => {
               payload: RepairAnnotated.make({ reason: "history seed", details: {} }),
             }),
           );
+
           const batch = yield* CanonicalBatch.makeEffect({
             batchId: Schema.decodeSync(BatchId)(`seed:${start}`),
             producerId: Schema.decodeSync(ProducerId)("history-limit-test"),
             records,
           });
+
           const appended = yield* store.append(
             FencedAppendRequest.make({
               threadId,
@@ -501,17 +552,20 @@ describe("persistent threads", () => {
               expectedTailDigest: tailDigest,
             }),
           );
+
           tailSequence = appended.lastSequence;
           tailDigest = appended.tailDigest;
         }
         const modelCalls = yield* Ref.make(0);
         const toolCalls = yield* Ref.make(0);
+
         const binding = agent(
           [lookup, answer("retained")].map((turn) => ({
             ...turn,
             onStreamStart: Ref.update(modelCalls, (n) => n + 1),
           })),
         );
+
         const run = (input: string) =>
           AgentRuntime.run(binding, input, options).pipe(
             Effect.provide(
@@ -520,9 +574,11 @@ describe("persistent threads", () => {
               }),
             ),
           );
+
         expect((yield* run("last fitting Run")).output).toBe("retained");
         const before = yield* exported;
         const prompt = yield* loadHistory(threadId);
+
         expect(before.records).toHaveLength(65_535);
         expect(prompt.content.map((message) => message.role)).toEqual([
           "system",
@@ -552,6 +608,7 @@ describe("persistent threads", () => {
         const releaseFirst = yield* Deferred.make<void>();
         const releaseSecond = yield* Deferred.make<void>();
         const calls = yield* Ref.make(0);
+
         const first = yield* AgentRuntime.run(
           agent([
             {
@@ -565,7 +622,9 @@ describe("persistent threads", () => {
           "first",
           options,
         ).pipe(Effect.forkChild);
+
         yield* Deferred.await(firstStarted);
+
         const second = yield* AgentRuntime.run(
           agent([
             {
@@ -579,15 +638,19 @@ describe("persistent threads", () => {
           "second",
           options,
         ).pipe(Effect.forkChild);
+
         yield* Deferred.await(secondStarted);
         yield* Deferred.succeed(releaseFirst, undefined);
         const winner = yield* Fiber.join(first);
+
         yield* Deferred.succeed(releaseSecond, undefined);
         const loser = yield* Fiber.await(second);
+
         expect(Exit.isFailure(loser) && Cause.findErrorOption(loser.cause)).toMatchObject({
           value: { _tag: "ThreadHistoryError", reason: "conflict" },
         });
         const log = yield* exported;
+
         expect(replayThread(threadId, log.records).completedRuns).toEqual([winner.runId]);
         expect(yield* Ref.get(calls)).toBe(2);
         expect(JSON.stringify(yield* loadHistory(threadId))).not.toContain("loser");
@@ -600,6 +663,7 @@ describe("persistent threads", () => {
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
+
         const running = yield* AgentRuntime.run(
           agent([
             {
@@ -612,8 +676,10 @@ describe("persistent threads", () => {
           "input",
           options,
         ).pipe(Effect.forkChild);
+
         yield* Deferred.await(started);
         const store = yield* ThreadStore;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId,
@@ -622,10 +688,12 @@ describe("persistent threads", () => {
         );
         yield* Deferred.succeed(release, undefined);
         const stale = yield* Fiber.await(running);
+
         expect(Exit.isFailure(stale) && Cause.findErrorOption(stale.cause)).toMatchObject({
           value: { _tag: "ThreadHistoryError", reason: "fenced" },
         });
         const next = yield* AgentRuntime.run(agent([]), "next", options).pipe(Effect.flip);
+
         expect(next).toMatchObject({ _tag: "ThreadHistoryError", reason: "fenced" });
         expect((yield* exported).records).toEqual([]);
       }).pipe(Effect.provide(memory)),
@@ -640,6 +708,7 @@ describe("persistent threads", () => {
         const finalized = yield* Ref.make(0);
         const modelFinalized = yield* Ref.make(0);
         const finalize = Ref.update(finalized, (n) => n + 1);
+
         const interruptedTurn: ScriptedTurnInput = {
           _tag: "Stream",
           parts: [],
@@ -652,6 +721,7 @@ describe("persistent threads", () => {
           ),
           onStreamFinalize: finalize,
         };
+
         const binding = Agent.withModel(
           definition,
           Model.make(
@@ -665,13 +735,16 @@ describe("persistent threads", () => {
             ),
           ),
         );
+
         const fiber = yield* AgentRuntime.run(binding, "not retained", options).pipe(
           Effect.forkChild,
         );
+
         yield* Deferred.await(started);
         if (ending === "timeout") yield* TestClock.adjust("31 seconds");
         if (ending === "interruption") yield* Fiber.interrupt(fiber);
         const exit = yield* Fiber.await(fiber);
+
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
           if (ending === "failure")
@@ -699,6 +772,7 @@ describe("persistent threads", () => {
             Effect.gen(function* () {
               const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
               const binding = agent([lookup, answer("Kyoto")]);
+
               const execution =
                 entrypoint === "run"
                   ? AgentRuntime.run(binding, "city", options)
@@ -709,12 +783,14 @@ describe("persistent threads", () => {
                       )
                     : Effect.gen(function* () {
                         const started = yield* AgentRuntime.start(binding, "city", options);
+
                         return yield* started.await.pipe(
                           Effect.onExit(() =>
                             started.events.pipe(Effect.flatMap((all) => Ref.set(events, all))),
                           ),
                         );
                       });
+
               const failure = yield* execution.pipe(
                 Effect.provide(
                   sqliteLayer({
@@ -727,22 +803,27 @@ describe("persistent threads", () => {
                 ),
                 Effect.flip,
               );
+
               expect(failure).toMatchObject({
                 _tag: "ThreadHistoryError",
                 reason: "storage",
               });
               if (entrypoint !== "run") {
                 const observed = yield* Ref.get(events);
+
                 expect(observed.some((event) => event._tag === "RunCompleted")).toBe(false);
                 expect(observed.at(-1)).toMatchObject({
                   _tag: "RunFailed",
                   errorTag: "ThreadHistoryError",
                 });
               }
+
               const log = yield* exported.pipe(
                 Effect.provide(sqliteLayer({ filename, verifyOnOpen: true })),
               );
+
               const projection = replayThread(threadId, log.records, log.tailDigest);
+
               expect(projection.inputs).toEqual(location === "append:after" ? ["city"] : []);
               expect(projection.modelOutputs).toEqual(location === "append:after" ? ["Kyoto"] : []);
               expect(projection.completedRuns).toHaveLength(location === "append:after" ? 1 : 0);

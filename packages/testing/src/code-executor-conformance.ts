@@ -88,12 +88,14 @@ const respondingHost = (
   respond: (call: CodeHostCall) => CodeHostCallResult,
 ): { readonly host: CodeExecutionHost["Service"]; readonly calls: Array<CodeHostCall> } => {
   const calls: Array<CodeHostCall> = [];
+
   return {
     calls,
     host: {
       call: (call) =>
         Effect.sync(() => {
           calls.push(call);
+
           return respond(call);
         }),
     },
@@ -106,6 +108,7 @@ const runPass = (
 ): Effect.Effect<CodeExecutionResult, CodeExecutionError, CodeExecutor> =>
   Effect.gen(function* () {
     const executor = yield* CodeExecutor;
+
     return yield* executor
       .execute(request)
       .pipe(Effect.provideService(CodeExecutionHost, CodeExecutionHost.of(host)));
@@ -134,6 +137,7 @@ const expectSuccess = (
     ),
     Effect.flatMap((result) => {
       const complaint = check(result);
+
       return complaint === undefined ? Effect.void : Effect.fail(violation(caseName, complaint));
     }),
   );
@@ -157,6 +161,7 @@ const expectFailure = (
         );
       }
       const complaint = check?.(error);
+
       return complaint === undefined ? Effect.void : Effect.fail(violation(caseName, complaint));
     }),
   );
@@ -165,6 +170,7 @@ export const codeExecutorConformanceCases = (
   options: CodeExecutorConformanceOptions,
 ): ReadonlyArray<CodeExecutorConformanceCase> => {
   const posture = options.implementation;
+
   return [
     {
       name: "TEST-015 executes bounded JSON computation and returns the program value",
@@ -184,9 +190,11 @@ export const codeExecutorConformanceCases = (
       name: "CAP-015 reports its isolation posture honestly in results and errors",
       run: Effect.gen(function* () {
         const caseName = "CAP-015 reports its isolation posture honestly in results and errors";
+
         const result = yield* runPass(makeRequest("async () => 1"), unusedHost).pipe(
           Effect.mapError((error) => violation(caseName, `expected success, got ${error._tag}`)),
         );
+
         if (
           result.implementation.isolation !== posture.isolation ||
           result.implementation.identity !== posture.identity
@@ -196,10 +204,12 @@ export const codeExecutorConformanceCases = (
             `result posture ${preview(result.implementation)} does not match the declared ${preview(posture)}`,
           );
         }
+
         const error = yield* runPass(makeRequest("async () => {"), unusedHost).pipe(
           Effect.flip,
           Effect.mapError(() => violation(caseName, "expected the invalid-source pass to fail")),
         );
+
         // Every expected execution failure carries the posture; an adapter
         // omitting the field must fail this case, not slip past a probe.
         if (
@@ -219,11 +229,13 @@ export const codeExecutorConformanceCases = (
       run: Effect.gen(function* () {
         const caseName =
           "TEST-015 routes host calls through the CodeExecutionHost in program order";
+
         const { host, calls } = respondingHost((call) =>
           call.method === "query"
             ? CodeHostCallSuccess.make({ value: { rows: [1, 2, 3] } })
             : CodeHostCallSuccess.make({ value: 3 }),
         );
+
         const result = yield* runPass(
           makeRequest(
             "async () => { const q = await warehouse.query({ sql: 'select' }); const c = await warehouse.count({ table: 't' }); return { rows: q.rows, count: c }; }",
@@ -235,10 +247,12 @@ export const codeExecutorConformanceCases = (
             violation(caseName, `expected success, got ${error._tag}: ${preview(error)}`),
           ),
         );
+
         if (JSON.stringify(result.value) !== JSON.stringify({ rows: [1, 2, 3], count: 3 })) {
           return yield* violation(caseName, `unexpected value ${preview(result.value)}`);
         }
         const observed = calls.map((call) => `${call.namespace}.${call.method}`);
+
         if (JSON.stringify(observed) !== JSON.stringify(["warehouse.query", "warehouse.count"])) {
           return yield* violation(caseName, `unexpected host call order ${preview(observed)}`);
         }
@@ -376,6 +390,7 @@ export const codeExecutorConformanceCases = (
       run: Effect.gen(function* () {
         const caseName = "TEST-015 fails typed when host calls exceed the executor cap";
         const { host, calls } = respondingHost(() => CodeHostCallSuccess.make({ value: null }));
+
         yield* expectFailure(
           caseName,
           makeRequest(
@@ -462,6 +477,7 @@ export const codeExecutorConformanceCases = (
         const caseName = "TEST-015 interruption reaches in-flight host calls and pass teardown";
         const started = yield* Deferred.make<void>();
         const witness = { hostCallInterrupted: false };
+
         const host: CodeExecutionHost["Service"] = {
           call: () =>
             Deferred.succeed(started, undefined).pipe(
@@ -473,16 +489,19 @@ export const codeExecutorConformanceCases = (
               ),
             ),
         };
+
         const fiber = yield* runPass(
           makeRequest("async () => warehouse.query({})", { namespaces: [warehouseNamespace] }),
           host,
         ).pipe(Effect.forkChild);
+
         // Guard against a broken adapter that settles the pass without ever
         // reaching the host: the case must report a violation, not hang.
         const winner = yield* Effect.raceFirst(
           Deferred.await(started).pipe(Effect.as("started" as const)),
           Fiber.join(fiber).pipe(Effect.exit, Effect.as("exited" as const)),
         );
+
         if (winner === "exited") {
           return yield* violation(
             caseName,

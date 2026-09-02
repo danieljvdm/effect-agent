@@ -111,31 +111,40 @@ const inspectDatabase = (filename: string) =>
   Effect.scoped(
     Effect.gen(function* () {
       const sql = yield* SqlClientService.SqlClient;
+
       const scheduleCounts = yield* sql<Record<string, unknown>>`
         SELECT COUNT(*) AS row_count FROM effect_agent_schedules
       `;
+
       const submissionCounts = yield* sql<Record<string, unknown>>`
         SELECT COUNT(*) AS row_count FROM effect_agent_submissions
       `;
+
       const scheduleRows = yield* sql<Record<string, unknown>>`
         SELECT record_json FROM effect_agent_schedules
       `;
+
       const submissionRows = yield* sql<Record<string, unknown>>`
         SELECT state FROM effect_agent_submissions
       `;
+
       const decodedScheduleCounts = yield* decodeRows(Schema.Array(CountRow), scheduleCounts);
       const decodedSubmissionCounts = yield* decodeRows(Schema.Array(CountRow), submissionCounts);
       const decodedSchedules = yield* decodeRows(Schema.Array(StoredScheduleRow), scheduleRows);
+
       const decodedSubmissions = yield* decodeRows(
         Schema.Array(SubmissionStateRow),
         submissionRows,
       );
+
       const records = yield* Effect.forEach(decodedSchedules, (row) =>
         Schema.decodeEffect(Schema.fromJsonString(ScheduleRecord))(row.record_json),
       );
+
       if (decodedScheduleCounts.length !== 1 || decodedSubmissionCounts.length !== 1) {
         return yield* Effect.die("SQLite count query returned an invalid shape");
       }
+
       return {
         scheduleCount: decodedScheduleCounts[0].row_count,
         submissionCount: decodedSubmissionCounts[0].row_count,
@@ -172,6 +181,7 @@ const waitForCompletion = (scheduling: Scheduling["Service"]) =>
   Effect.gen(function* () {
     while (true) {
       const snapshot = yield* scheduling.get(schedulingCrashScope, schedulingCrashScheduleId);
+
       if (snapshot.pending === null && snapshot.lastReceipt !== null) return snapshot;
       yield* Effect.yieldNow;
     }
@@ -183,15 +193,18 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+
         const directory = yield* fs.makeTempDirectoryScoped({
           prefix: "effect-agent-node-scheduling-crash-",
         });
+
         const childCwd = (yield* fs.exists("test/crash/scheduling-worker-entry.ts"))
           ? "."
           : "packages/platform-node";
 
         for (const [boundary, expected] of cases) {
           const filename = `${directory}/${boundary.replaceAll(":", "-")}.sqlite`;
+
           const child = yield* ChildProcess.make(
             process.execPath,
             ["--experimental-transform-types", "test/crash/scheduling-worker-entry.ts"],
@@ -207,17 +220,21 @@ it.live(
               stderr: "pipe",
             },
           );
+
           const stderrFiber = yield* Effect.forkScoped(
             Stream.mkString(Stream.decodeText(child.stderr)),
           );
+
           yield* awaitMarker(child, boundary);
           yield* child.kill({ killSignal: "SIGKILL" });
           const exit = yield* child.exitCode.pipe(Effect.result);
+
           yield* Fiber.join(stderrFiber);
           expect({ boundary, killed: Result.isFailure(exit) }).toEqual({ boundary, killed: true });
 
           const crashed = yield* inspectDatabase(filename);
           const crashedRecord = crashed.records[0];
+
           expect({
             boundary,
             scheduleCount: crashed.scheduleCount,
@@ -240,12 +257,14 @@ it.live(
             Effect.gen(function* () {
               const context = yield* Layer.build(recoveryLayer(filename));
               const scheduling = Context.get(context, Scheduling);
+
               yield* scheduling.create(
                 schedulingCrashAgent,
                 { question: "survive SIGKILL" },
                 schedulingCrashCreateOptions,
               );
               const completedOption = yield* waitForCompletion(scheduling);
+
               expect({ boundary, completed: Option.isSome(completedOption) }).toEqual({
                 boundary,
                 completed: true,
@@ -254,6 +273,7 @@ it.live(
           );
 
           const recovered = yield* inspectDatabase(filename);
+
           expect({
             boundary,
             scheduleCount: recovered.scheduleCount,

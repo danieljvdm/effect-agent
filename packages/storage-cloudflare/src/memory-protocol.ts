@@ -60,7 +60,9 @@ const RevalidateRequest = Schema.TaggedStruct("Revalidate", {
   lookup: MemoryLookup,
   limits: MemoryRecallLimits,
 });
+
 const ChangeRequest = Schema.TaggedStruct("Change", { ...RequestFields, write: MemoryWrite.Wire });
+
 const SemanticRequest: Schema.TaggedStruct<
   "RevalidateSemantic",
   typeof RequestFields & {
@@ -74,9 +76,11 @@ const SemanticRequest: Schema.TaggedStruct<
   profile: SemanticMemoryProfile,
   limits: SemanticCandidateLimits,
 });
+
 export const MemoryOwnerRequest: Schema.Union<
   [typeof RevalidateRequest, typeof ChangeRequest, typeof SemanticRequest]
 > = Schema.Union([RevalidateRequest, ChangeRequest, SemanticRequest]);
+
 export type MemoryOwnerRequest = typeof MemoryOwnerRequest.Type;
 
 export const MemoryOwnerFailure = Schema.Union([
@@ -90,6 +94,7 @@ export const MemoryOwnerFailure = Schema.Union([
   MemoryIndexError,
   SemanticMemoryError,
 ]);
+
 export type MemoryOwnerFailure = typeof MemoryOwnerFailure.Type;
 
 export const MemoryOwnerResponse = Schema.Union([
@@ -98,6 +103,7 @@ export const MemoryOwnerResponse = Schema.Union([
   Schema.TaggedStruct("Semantic", { access: MemoryAccess.Wire, result: SemanticCandidateResult }),
   Schema.TaggedStruct("Failed", { failure: MemoryOwnerFailure }),
 ]);
+
 export type MemoryOwnerResponse = typeof MemoryOwnerResponse.Type;
 
 /** Fail-closed application policy. Authorize the namespace, principal, scope, and full command. */
@@ -126,8 +132,10 @@ export const decodeMemoryWire = Effect.fn("decodeMemoryWire")(function* <A, I>(
   const text = yield* Schema.decodeUnknownEffect(Schema.String)(raw).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
+
   if (text.length > maxBytes || memoryWireBytes(text) > maxBytes)
     return yield* MemoryRpcError.make({ reason: "budget" });
+
   return yield* Schema.decodeEffect(Schema.fromJsonString(schema))(text).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
@@ -141,8 +149,10 @@ export const encodeMemoryWire = Effect.fn("encodeMemoryWire")(function* <A, I>(
   const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(schema))(value).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
+
   if (encoded.length > maxBytes || memoryWireBytes(encoded) > maxBytes)
     return yield* MemoryRpcError.make({ reason: "budget" });
+
   return encoded;
 });
 
@@ -165,6 +175,7 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
     );
     const request = yield* decodeMemoryWire(MemoryOwnerRequest, raw, limits.maxRequestBytes);
     const { namespace } = yield* MemoryOwnerIdentity;
+
     if (
       !MemoryNamespace.equals(namespace, request.access.namespace) ||
       (request._tag === "Change" &&
@@ -175,20 +186,25 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
         ))
     )
       return yield* MemoryRpcError.make({ reason: "denied" });
+
     const remaining = Math.min(
       limits.timeoutMillis,
       request.deadlineMillis - (yield* Clock.currentTimeMillis),
     );
+
     if (remaining <= 0) return yield* MemoryRpcError.make({ reason: "timeout" });
+
     return yield* Effect.gen(function* (): Effect.fn.Return<
       MemoryOwnerResponse,
       MemoryOwnerFailure,
       MemoryOwnerAuthorizer | MemoryReader | MemoryWriter
     > {
       const authorizer = yield* MemoryOwnerAuthorizer;
+
       yield* authorizer.authorize(request);
       if (request._tag === "Change") {
         const writer = yield* MemoryWriter;
+
         return {
           _tag: "Changed",
           access: request.access,
@@ -201,6 +217,7 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
           limits.maxSources
         )
           return yield* MemoryRpcError.make({ reason: "budget" });
+
         const result = yield* revalidateSemanticMemoryCandidates(
           request.found,
           request.access,
@@ -217,18 +234,23 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
             ),
           },
         );
+
         return { _tag: "Semantic", access: request.access, result };
       }
+
       const count =
         request.lookup._tag === "Found"
           ? new Set(request.lookup.passages.map((passage) => passage.source.id)).size
           : 0;
+
       if (count > Math.min(limits.maxSources, request.limits.maxSources))
         return yield* MemoryRpcError.make({ reason: "budget" });
+
       const lookup = yield* revalidateMemoryLookup(request.lookup, request.access, {
         maxSourceBytes: limits.maxSourceBytes,
         maxInputBytes: Math.min(limits.maxSourceBytes, request.limits.maxInputBytes ?? 16_777_216),
       });
+
       return { _tag: "Lookup", access: request.access, lookup };
     }).pipe(
       Effect.scoped,
@@ -243,7 +265,9 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
     ),
     Effect.result,
   );
+
   if (result._tag === "Success") return result.success;
+
   return yield* encodeMemoryWire(
     MemoryOwnerResponse,
     {

@@ -32,6 +32,7 @@ const reviewerFailure = (error: unknown, estimatedCostMicrousd?: number): EvalRe
         }),
         onSome: (view) => ({ errorTag: view._tag, message: view.message?.trim() || view._tag }),
       });
+
   return EvalReviewerFailure.make({
     ...diagnostic,
     ...(estimatedCostMicrousd === undefined ? {} : { estimatedCostMicrousd }),
@@ -51,8 +52,10 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
   function* (options: CurrentOpenAiVariantOptions) {
     const trimmedGuidance = options.guidance?.trim();
     const effectiveGuidance = trimmedGuidance === "" ? undefined : trimmedGuidance;
+
     const guidanceDigest =
       effectiveGuidance === undefined ? undefined : yield* digestText(effectiveGuidance);
+
     const configuration = EvalVariantConfiguration.make({
       id: options.id,
       reviewerProfile: "diff-review-v5-capped",
@@ -65,6 +68,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
       costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
       ...(guidanceDigest === undefined ? {} : { guidanceDigest }),
     });
+
     return {
       configuration,
       review: Effect.fn("PrReviewEval.review")(function* (request: ReviewRequest) {
@@ -74,6 +78,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
           model: configuration.model,
           cacheKey: `pr-review-v2:${request.headRevision}`,
         }).pipe(Effect.mapError((error) => reviewerFailure(error)));
+
         const reviewer = makeReviewer({
           model: OpenAiLanguageModel.model(configuration.model, {
             max_output_tokens: configuration.maxOutputTokens,
@@ -86,6 +91,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
           costControl: provider.costControl,
           ...(effectiveGuidance === undefined ? {} : { guidance: effectiveGuidance }),
         });
+
         return yield* reviewer.review(request).pipe(
           Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
           Effect.catch((error) =>

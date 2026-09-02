@@ -47,14 +47,11 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `examples/demo`                     | Local browser app                                     |
 | `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
 | `examples/providers`                | Provider bindings and persistent-history example      |
-| `examples/pr-work-orders`           | Trusted local work-order implementation               |
-| `examples/pr-work-order-ingress`    | GitHub dispatch and isolated publication              |
 | `examples/repo-ops`                 | Repository evidence auditor                           |
 | `examples/browser-run-worker-proof` | Opt-in hosted Browser Run verification; owns Wrangler |
 | `examples/pr-review-eval`           | Opt-in live review evaluation                         |
 | `examples/code-mode-cloudflare`     | Generated JavaScript over a SQLite DO warehouse       |
 | `action/`                           | Distributed PR-review Action and bundle               |
-| `work-order-action/`                | Distributed work-order Action and bundle              |
 
 Framework code stays in `packages/*`. Examples are leaf workspaces.
 Provider integrations come from upstream Effect AI Layers.
@@ -274,3 +271,11 @@ Tests are reused only when task inputs match, never solely because paths did not
 
 The pre-commit hook runs `vp check --fix` on staged JavaScript and TypeScript.
 CI runs the full gate, including package type checks and Action bundle freshness.
+
+Action bundles use the catalog-pinned esbuild and stay committed so SHA-pinned Actions
+run without an install step. `vp run action:build --check` rebuilds in a temporary
+directory and compares the JavaScript byte-for-byte. No input-hash manifests are
+committed: unrelated lockfile, package metadata, and tree-shaken source edits do not
+require bundle updates. If shared framework or Action code changes the output, run
+`vp run action:build` and commit the affected bundles. Resolve source conflicts first,
+then rebuild rather than hand-merging generated JavaScript.

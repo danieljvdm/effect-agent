@@ -72,6 +72,7 @@ export interface CommittedActivityProcessor<E = never, R = never, EApply = never
 
 const invalid = (message: string) =>
   ActivityProcessingError.make({ reason: "invalid-input", message });
+
 const contiguous = () =>
   ActivityProcessingError.make({
     reason: "noncontiguous",
@@ -125,19 +126,24 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
   const key = yield* Schema.decodeUnknownEffect(ActivityProcessorKey)(processor.key).pipe(
     Effect.mapError(() => invalid("Invalid activity processor key")),
   );
+
   const limits = yield* Schema.decodeUnknownEffect(ActivityPassLimits)(processor.limits).pipe(
     Effect.mapError(() => invalid("Invalid activity pass limits")),
   );
+
   if (limits.leaseMillis < limits.timeoutMillis + 1_000) {
     return yield* invalid("The activity lease must exceed the pass timeout by at least 1000ms");
   }
+
   const request = yield* ActivityClaimRequest.makeEffect({
     key,
     owner: processor.owner,
     leaseMillis: limits.leaseMillis,
   }).pipe(Effect.mapError(() => invalid("Invalid activity worker identity")));
+
   const progress = yield* ActivityProcessorStore;
   const threads = yield* ThreadStore;
+
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const acquired = yield* Effect.acquireRelease(
@@ -147,15 +153,18 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             .release(claim)
             .pipe(Effect.interruptible, Effect.timeoutOption(500), Effect.ignore),
       );
+
       let claim = yield* Schema.decodeUnknownEffect(ActivityClaim)(acquired).pipe(
         Effect.mapError(() => invalid("Malformed activity claim")),
       );
+
       if (
         !Schema.toEquivalence(ActivityProcessorKey)(claim.key, key) ||
         claim.owner !== request.owner
       )
         return yield* invalid("Activity claim identity does not match its request");
       const startedAt = yield* Clock.currentTimeMillis;
+
       const tail = yield* threads
         .inspectTail(ThreadTailRequest.make({ threadId: key.threadId }))
         .pipe(
@@ -163,6 +172,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             Schema.decodeUnknownEffect(ThreadTail)(value).pipe(Effect.mapError(contiguous)),
           ),
         );
+
       if (
         tail.threadId !== key.threadId ||
         tail.tailSequence < claim.throughSequence ||
@@ -172,8 +182,10 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
       }
       const through = Math.min(tail.tailSequence, claim.throughSequence + limits.maxRecords);
       let processed = 0;
+
       while (claim.throughSequence < through) {
         const limit = Math.min(limits.pageSize, through - claim.throughSequence);
+
         const page = yield* threads
           .read(
             ThreadRead.make({
@@ -183,20 +195,25 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             }),
           )
           .pipe(Stream.take(limit + 1), Stream.runCollect);
+
         if (page.length !== limit) return yield* contiguous();
         for (const rawRecord of page) {
           const record = yield* Schema.decodeUnknownEffect(Schema.toType(CanonicalRecordEnvelope))(
             rawRecord,
           ).pipe(Effect.mapError(contiguous));
+
           if (record.threadId !== key.threadId || record.sequence !== claim.throughSequence + 1) {
             return yield* contiguous();
           }
           const workId = yield* activityWorkId(key, record.sequence);
+
           const encodedRecord = yield* Schema.encodeEffect(RecordEnvelope)(record.record).pipe(
             Effect.mapError(contiguous),
           );
+
           const recordDigest = yield* digestJson(encodedRecord);
           let work = claim.pending;
+
           if (work === null) {
             const output = yield* Effect.scoped(processor.extract(record)).pipe(
               Effect.flatMap((value) =>
@@ -205,6 +222,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
                 ),
               ),
             );
+
             work = yield* progress.prepare({
               claim,
               work: PreparedActivity.make({
@@ -218,9 +236,11 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
               }),
             });
           }
+
           const prepared = yield* Schema.decodeUnknownEffect(PreparedActivity)(work).pipe(
             Effect.mapError(() => invalid("Malformed prepared activity")),
           );
+
           if (
             !Schema.toEquivalence(ActivityProcessorKey)(prepared.key, key) ||
             prepared.sequence !== record.sequence ||
@@ -230,6 +250,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
           )
             return yield* contiguous();
           yield* Effect.scoped(processor.apply(prepared));
+
           const next = yield* progress
             .advance({ claim, workId })
             .pipe(
@@ -239,6 +260,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
                 ),
               ),
             );
+
           if (
             !Schema.toEquivalence(ActivityProcessorKey)(next.key, key) ||
             next.owner !== claim.owner ||
@@ -251,6 +273,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
           processed += 1;
         }
       }
+
       return ActivityPassResult.make({
         key,
         capturedTail: tail.tailSequence,

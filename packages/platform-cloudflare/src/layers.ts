@@ -256,6 +256,7 @@ export const layerConfig = (
       const { ctx } = yield* DurableObjectContext;
       const config = yield* configFromOptions(options);
       const threadId = yield* threadIdFromState(ctx);
+
       const producerId = yield* decodeProducerId(`${config.producerPrefix}:${threadId}`).pipe(
         Effect.mapError((error) =>
           CloudflarePlatformConfigError.make({
@@ -264,6 +265,7 @@ export const layerConfig = (
           }),
         ),
       );
+
       return Layer.mergeAll(
         Layer.succeed(CloudflareDurableRuntimeConfig, config),
         Layer.succeed(ThreadObjectIdentity, { threadId, producerId }),
@@ -328,6 +330,7 @@ export const layerFromBindings = (
       const { ctx } = yield* DurableObjectContext;
       const config = yield* CloudflareDurableRuntimeConfig;
       const { threadId } = yield* ThreadObjectIdentity;
+
       const storageOptions: DoStorageOptions = {
         storage: ctx.storage,
         observationPollInterval: config.observationPollInterval,
@@ -335,6 +338,7 @@ export const layerFromBindings = (
         maxStoredValueBytes: config.maxStoredValueBytes,
         verifyOnOpen: config.verifyOnOpen,
       };
+
       const infrastructure = Layer.mergeAll(
         storageConfigLayer(storageOptions),
         SqliteClient.layer({ storage: ctx.storage }),
@@ -345,24 +349,30 @@ export const layerFromBindings = (
       const localPorts = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
         Layer.provide(infrastructure),
       );
+
       const portsEndpointLayer = Layer.effect(ThreadObjectPorts)(
         Effect.gen(function* () {
           const local = yield* Effect.context<SubmissionLedger | ThreadStore>();
+
           return ThreadObjectPorts.of({
             handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
           });
         }),
       ).pipe(Layer.provide(localPorts));
+
       const routedPorts = Layer.mergeAll(
         routedSubmissionLedgerLayer({ localThreadId: threadId }),
         routedThreadStoreLayer({ localThreadId: threadId }),
       ).pipe(Layer.provide(localPorts), Layer.provide(threadPortTransportLayer));
+
       const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
+
       const runtimeStack = DurableAgentRuntime.layerWithServices.pipe(
         Layer.provideMerge(routedPorts),
         Layer.provideMerge(cloudflareWakeSchedulerLayer),
         Layer.provideMerge(base),
       );
+
       return Layer.mergeAll(
         runtimeStack,
         ThreadMaintenance.layer(bindings).pipe(Layer.provide(runtimeStack)),

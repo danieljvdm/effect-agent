@@ -21,6 +21,7 @@ export const AuthorizedOperation = Schema.Literals([
   "resolveUnknown",
   "resolveApproval",
 ]);
+
 export type AuthorizedOperation = typeof AuthorizedOperation.Type;
 
 /**

@@ -50,12 +50,14 @@ describe("CAP-015 CodeExecutor schemas", () => {
       method: "query",
       argument: { sql: "select 1", parameters: [1, true, null] },
     });
+
     expect(Schema.decodeSync(CodeHostCall)(Schema.encodeSync(CodeHostCall)(call))).toEqual(call);
 
     const outcomes: ReadonlyArray<unknown> = [
       { _tag: "CodeHostCallSuccess", value: { rows: [] } },
       { _tag: "CodeHostCallFailure", error: { _tag: "ToolInputError", message: "bad" } },
     ];
+
     for (const outcome of outcomes) {
       expect(() => Schema.decodeUnknownSync(CodeHostCallResult)(outcome)).not.toThrow();
     }
@@ -71,6 +73,7 @@ describe("CAP-015 CodeExecutor schemas", () => {
         resultBytes: 13,
       },
     });
+
     expect(
       Schema.decodeSync(CodeExecutionResult)(Schema.encodeSync(CodeExecutionResult)(result)),
     ).toEqual(result);
@@ -113,6 +116,7 @@ describe("CAP-015 CodeExecutor schemas", () => {
       { _tag: "CodeExecutionProtocolError", implementation, message: "malformed envelope" },
       { _tag: "CodeExecutorTerminatedError", implementation, message: "isolate evicted" },
     ];
+
     for (const failure of failures) {
       expect(() => Schema.decodeUnknownSync(CodeExecutionError)(failure)).not.toThrow();
     }

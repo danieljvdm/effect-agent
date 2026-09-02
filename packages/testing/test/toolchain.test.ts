@@ -20,6 +20,7 @@ import {
 } from "../../../scripts/verify-changesets-release.ts";
 
 const Dependencies = Schema.Record(Schema.String, Schema.String);
+
 const PackageManifest = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   version: Schema.optionalKey(Schema.String),
@@ -33,6 +34,7 @@ const PackageManifest = Schema.Struct({
   overrides: Schema.optionalKey(Dependencies),
   peerDependencies: Schema.optionalKey(Dependencies),
 });
+
 type PackageManifest = typeof PackageManifest.Type;
 
 const ChangesetConfig = Schema.Struct({
@@ -49,6 +51,7 @@ const WorkflowStep = Schema.Struct({
   env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   run: Schema.optionalKey(Schema.String),
 });
+
 const WorkflowJob = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   if: Schema.optionalKey(Schema.String),
@@ -58,6 +61,7 @@ const WorkflowJob = Schema.Struct({
   permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   steps: Schema.optionalKey(Schema.Array(WorkflowStep)),
 });
+
 const WorkflowFile = Schema.Struct({
   on: Schema.Record(Schema.String, Schema.Unknown),
   concurrency: Schema.optionalKey(
@@ -69,6 +73,7 @@ const WorkflowFile = Schema.Struct({
   permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   jobs: Schema.Record(Schema.String, WorkflowJob),
 });
+
 type WorkflowFile = typeof WorkflowFile.Type;
 
 // Vite+ runs this package test from packages/testing; Bun is the pinned test runtime in CI and locally.
@@ -76,6 +81,7 @@ type WorkflowFile = typeof WorkflowFile.Type;
 // nested git worktrees (.worktrees/<branch>) into the primary checkout and
 // silently audits the wrong tree.
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
+
 const packageNames = [
   "capabilities",
   "core",
@@ -92,22 +98,23 @@ const packageNames = [
   "storage-sqlite",
   "testing",
 ] as const;
+
 const privatePackageNames = ["pr-review-action"] as const;
 
 /** Provider bindings belong to leaf applications, never framework packages. */
 const providerConsumingPackages = new Set<string>();
+
 const exampleNames = [
   "browser-run-worker-proof",
   "cloudflare-memory",
   "code-mode-cloudflare",
   "demo",
-  "pr-work-order-ingress",
-  "pr-work-orders",
   "pr-review-eval",
   "providers",
   "repo-ops",
   "semantic-memory-eval",
 ] as const;
+
 const effectTestPackageNames = [
   "capabilities",
   "engine",
@@ -121,6 +128,7 @@ const effectTestPackageNames = [
   "storage-sqlite",
   "testing",
 ] as const;
+
 const productionPackageNames = [
   "capabilities",
   "core",
@@ -136,16 +144,20 @@ const productionPackageNames = [
   "storage-memory",
   "storage-sqlite",
 ] as const;
+
 // Only these two packages may carry Cloudflare dependencies. The shared
 // allowance is types plus the in-workerd test harness; provider SDKs are
 // admitted separately to the outward adapter that owns them. Wrangler and
 // application scaffolds stay banned everywhere.
 const cloudflarePackageNames: ReadonlyArray<string> = ["platform-cloudflare", "storage-cloudflare"];
+
 const allowedCloudflareToolchainDependencies = new Set([
   "@cloudflare/vitest-pool-workers",
   "@cloudflare/workers-types",
 ]);
+
 const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]);
+
 // Phase 6 exit gate "Agent/core/engine packages import no Cloudflare platform
 // types", audited at the manifest layer: only the two Cloudflare packages may
 // depend on @cloudflare/* or the Durable Object SqlClient, in ANY dependency
@@ -161,13 +173,16 @@ const inwardPackageNames = [
   "storage-memory",
   "storage-sqlite",
 ] as const;
+
 const cloudflareOnlyDependencies = new Set(["@effect/sql-sqlite-do"]);
+
 const dependencySections = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
   "peerDependencies",
 ] as const;
+
 const forbiddenScaffoldDependencies = new Set([
   "@cloudflare/workers-types",
   "@types/react",
@@ -177,7 +192,9 @@ const forbiddenScaffoldDependencies = new Set([
   "react-dom",
   "wrangler",
 ]);
+
 const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"] as const;
+
 /**
  * The documented inward-only package graph (AGENTS.md "Package dependency direction"):
  * every `@effect-agent/*` edge a framework
@@ -225,36 +242,43 @@ const readManifest = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const contents = yield* fs.readFileString(path);
+
     return yield* Schema.decodeEffect(Schema.fromJsonString(PackageManifest))(contents);
   });
 
 const readChangesetConfig = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const contents = yield* fs.readFileString(`${repositoryRoot}/.changeset/config.json`);
+
   return yield* Schema.decodeEffect(Schema.fromJsonString(ChangesetConfig))(contents);
 });
 
 const readRepositoryFile = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+
     return yield* fs.readFileString(`${repositoryRoot}/${path}`);
   });
 
 const readWorkflow = (path: string) =>
   Effect.gen(function* () {
     const contents = yield* readRepositoryFile(path);
+
     return yield* Schema.decodeUnknownEffect(WorkflowFile)(Yaml.parse(contents));
   });
 
 const workflowStep = (workflow: WorkflowFile, jobName: string, stepName: string) => {
   const step = workflow.jobs[jobName]?.steps?.find((candidate) => candidate.name === stepName);
+
   expect(step, `${jobName} must contain the ${stepName} step`).toBeDefined();
+
   return step;
 };
 
 const readDirectory = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+
     return yield* fs.readDirectory(path);
   });
 
@@ -262,11 +286,13 @@ const readWorkspaceNames = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const names: Array<string> = [];
+
     for (const entry of yield* fs.readDirectory(path)) {
       if (yield* fs.exists(`${path}/${entry}/package.json`)) {
         names.push(entry);
       }
     }
+
     return names;
   });
 
@@ -280,15 +306,18 @@ const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function*
     stderr: "pipe",
     stdout: "pipe",
   });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+
   if (exitCode !== 0) {
     return yield* Effect.die(
       new Error(`${[command, ...args].join(" ")} exited with ${exitCode}:\n${output}`),
     );
   }
+
   return output.trim();
 });
 
@@ -311,15 +340,18 @@ const runReleaseWorkflowStep = Effect.fn("toolchainTest.runReleaseWorkflowStep")
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+
   const temporaryRoot = yield* fs.makeTempDirectoryScoped({
     prefix: "effect-agent-release-check-test-",
   });
+
   const binDirectory = path.join(temporaryRoot, "bin");
   const capturePath = path.join(temporaryRoot, "check-run-arguments");
   const outputPath = path.join(temporaryRoot, "step-output");
   const fetchPath = path.join(temporaryRoot, "fetch-arguments");
   const ghPath = path.join(binDirectory, "gh");
   const gitPath = path.join(binDirectory, "git");
+
   yield* fs.makeDirectory(binDirectory, { recursive: true });
   yield* fs.writeFileString(
     ghPath,
@@ -431,13 +463,16 @@ esac
     stderr: "pipe",
     stdout: "pipe",
   });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+
   const invocation = (yield* fs.exists(capturePath)) ? yield* fs.readFileString(capturePath) : "";
   const stepOutput = (yield* fs.exists(outputPath)) ? yield* fs.readFileString(outputPath) : "";
   const fetchInvocation = (yield* fs.exists(fetchPath)) ? yield* fs.readFileString(fetchPath) : "";
+
   return { exitCode, fetchInvocation, invocation, output, stepOutput } as const;
 });
 
@@ -455,9 +490,11 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+
   const temporaryRoot = yield* fs.makeTempDirectoryScoped({
     prefix: "effect-agent-release-publisher-test-",
   });
+
   const artifactDirectory = path.join(temporaryRoot, "artifact-source");
   const binDirectory = path.join(temporaryRoot, "bin");
   const expectedSumsPath = path.join(temporaryRoot, "expected-SHA256SUMS");
@@ -466,6 +503,7 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
   const trustedManifestDirectory = path.join(temporaryRoot, "trusted-manifests");
   const version = "0.0.1-beta.7";
   const publishablePackages = options.publishablePackages ?? ["capabilities"];
+
   yield* fs.makeDirectory(path.join(artifactDirectory, "packages"), { recursive: true });
   yield* fs.makeDirectory(binDirectory, { recursive: true });
   yield* fs.makeDirectory(tarballManifestDirectory, { recursive: true });
@@ -477,8 +515,10 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
     readonly tarball: string | null;
     readonly version: string;
   }> = [];
+
   for (const directory of packageNames) {
     const manifest = yield* readManifest(`${repositoryRoot}/packages/${directory}/package.json`);
+
     if (manifest.name === undefined) {
       return yield* Effect.die(new Error(`Release package ${directory} must have a name.`));
     }
@@ -487,11 +527,13 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
       `${JSON.stringify({ name: manifest.name, version })}\n`,
     );
     const publishable = publishablePackages.includes(directory);
+
     const tarball = publishable
       ? directory === "capabilities"
         ? (options.tarball ?? "packages/capabilities.tgz")
         : `packages/${directory}.tgz`
       : null;
+
     if (publishable) {
       yield* fs.writeFileString(
         path.join(tarballManifestDirectory, `${directory}.tgz.json`),
@@ -513,12 +555,14 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
     path.join(artifactDirectory, "release-manifest.json"),
     `${JSON.stringify({ version: 1, packages: releases })}\n`,
   );
+
   const expectedSums = [
     "fixture-sha  npm-12.0.2.tgz",
     ...publishablePackages.map((directory) => `fixture-sha  packages/${directory}.tgz`),
     "fixture-sha  release-manifest.json",
     "",
   ].join("\n");
+
   yield* fs.writeFileString(path.join(artifactDirectory, "SHA256SUMS"), expectedSums);
   yield* fs.writeFileString(expectedSumsPath, expectedSums);
   yield* fs.writeFileString(path.join(artifactDirectory, "npm-12.0.2.tgz"), "fixture\n");
@@ -526,9 +570,11 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
   const writeExecutable = (name: string, contents: string) =>
     Effect.gen(function* () {
       const file = path.join(binDirectory, name);
+
       yield* fs.writeFileString(file, contents);
       yield* fs.chmod(file, 0o755);
     });
+
   yield* Effect.all([
     writeExecutable(
       "gh",
@@ -686,10 +732,12 @@ printf 'fixture-integrity'
     stderr: "pipe",
     stdout: "pipe",
   });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+
   const publishInvocations = (yield* fs.exists(publishCaptureDirectory))
     ? yield* Effect.forEach(
         [...(yield* fs.readDirectory(publishCaptureDirectory))].sort(),
@@ -699,6 +747,7 @@ printf 'fixture-integrity'
           ),
       )
     : [];
+
   return {
     exitCode,
     output,
@@ -745,6 +794,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
+
         if (manifest.private !== true && manifest.name !== undefined) {
           publicPackageNames.push(manifest.name);
         }
@@ -766,6 +816,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           description: "preserved package metadata",
           dependencies: { "@effect-agent/core": "workspace:*" },
         });
+
         expect(decoded.description).toBe("preserved package metadata");
         expect(decoded.dependencies).toEqual({ "@effect-agent/core": "workspace:*" });
 
@@ -792,12 +843,15 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+
       const temporaryRoot = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-manifest-swap-test-",
       });
+
       const manifestPath = path.join(temporaryRoot, "package.json");
       const originalBytes = '{"name":"fixture","version":"1.0.0"}\n';
       const publishBytes = '{"name":"fixture","version":"1.0.0","exports":{}}\n';
+
       yield* fs.writeFileString(manifestPath, originalBytes);
 
       const installCause = PlatformError.systemError({
@@ -806,8 +860,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         method: "writeFileString",
         pathOrDescriptor: manifestPath,
       });
+
       let writes = 0;
       let useStarted = false;
+
       const installFailingFileSystem = FileSystem.FileSystem.of({
         ...fs,
         writeFileString: (target, contents) => {
@@ -818,9 +874,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               .writeFileString(target, "partial\n")
               .pipe(Effect.andThen(Effect.fail(installCause)));
           }
+
           return fs.writeFileString(target, contents);
         },
       });
+
       const installFailure = yield* Effect.flip(
         withTemporaryManifest(
           manifestPath,
@@ -831,6 +889,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           }),
         ).pipe(Effect.provideService(FileSystem.FileSystem, installFailingFileSystem)),
       );
+
       expect(installFailure).toMatchObject({
         _tag: "ReleaseManifestSwapError",
         operation: "install",
@@ -845,7 +904,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         method: "writeFileString",
         pathOrDescriptor: manifestPath,
       });
+
       writes = 0;
+
       const installAndRestoreFailingFileSystem = FileSystem.FileSystem.of({
         ...fs,
         writeFileString: (target, contents) => {
@@ -856,9 +917,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               .writeFileString(target, "partial-again\n")
               .pipe(Effect.andThen(Effect.fail(installCause)));
           }
+
           return Effect.fail(restoreCause);
         },
       });
+
       const combinedExit = yield* withTemporaryManifest(
         manifestPath,
         originalBytes,
@@ -868,10 +931,12 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         Effect.provideService(FileSystem.FileSystem, installAndRestoreFailingFileSystem),
         Effect.exit,
       );
+
       expect(Exit.isFailure(combinedExit)).toBe(true);
       if (Exit.isFailure(combinedExit)) {
         expect(Cause.hasDies(combinedExit.cause)).toBe(false);
         const diagnostics = Cause.pretty(combinedExit.cause);
+
         expect(diagnostics).toContain("Could not install temporary publish manifest");
         expect(diagnostics).toContain("WriteZero: FileSystem.writeFileString");
         expect(diagnostics).toContain("Could not restore temporary publish manifest");
@@ -888,6 +953,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         readWorkflow(".github/workflows/release.yml"),
         readManifest(`${repositoryRoot}/package.json`),
       ]);
+
       const generatedPaths = [
         ".changeset/**",
         "bun.lock",
@@ -905,9 +971,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(ciWorkflow.jobs["release-integrity"]).toBeUndefined();
 
       const readyJob = ciWorkflow.jobs.ready;
+
       expect(readyJob?.needs).toEqual(["checks", "test", "build"]);
       expect(readyJob?.if).toBe("${{ always() && github.event_name == 'pull_request' }}");
       const readyStep = workflowStep(ciWorkflow, "ready", "Verify all ordinary gates passed");
+
       expect(readyStep?.env).toEqual({
         BUILD_RESULT: "${{ needs.build.result }}",
         CHECKS_RESULT: "${{ needs.checks.result }}",
@@ -930,6 +998,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       );
       expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
       const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
+
       expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@main");
       expect(reviewStep?.with?.mode).toContain("'auto'");
       expect(reviewStep?.with?.mode).toContain("'incremental'");
@@ -938,16 +1007,19 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
       expect(releaseWorkflow.permissions).toEqual({});
       const versionJob = releaseWorkflow.jobs["version-release"];
+
       expect(versionJob?.permissions).toEqual({
         contents: "write",
         "pull-requests": "write",
       });
       expect(versionJob?.permissions?.checks).toBeUndefined();
       expect(versionJob?.permissions?.["id-token"]).toBeUndefined();
+
       const externalActionReferences = Object.values(releaseWorkflow.jobs).flatMap((job) => [
         ...(job.uses === undefined ? [] : [job.uses]),
         ...(job.steps ?? []).flatMap((step) => (step.uses === undefined ? [] : [step.uses])),
       ]);
+
       expect(externalActionReferences).not.toHaveLength(0);
       expect(externalActionReferences.every((uses) => /^[^@]+@[0-9a-f]{40}$/.test(uses))).toBe(
         true,
@@ -962,11 +1034,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           ]);
         }
       }
+
       const changesetsStep = workflowStep(
         releaseWorkflow,
         "version-release",
         "Create or update the version PR",
       );
+
       expect(changesetsStep?.id).toBe("changesets");
       expect(changesetsStep?.uses).toBe(
         "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
@@ -978,11 +1052,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(versionJob?.outputs?.["is-release-commit"]).toBe(
         "${{ steps.classify-release.outputs.is-release-commit }}",
       );
+
       const classifyReleaseStep = workflowStep(
         releaseWorkflow,
         "version-release",
         "Classify exact generated release commit",
       );
+
       expect(classifyReleaseStep?.id).toBe("classify-release");
       expect(classifyReleaseStep?.if).toBe(
         "${{ steps.changesets.outputs.hasChangesets == 'false' }}",
@@ -993,16 +1069,19 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(classifyReleaseStep?.run).toContain('--classification-output "$GITHUB_OUTPUT"');
 
       const verifyJob = releaseWorkflow.jobs["verify-release"];
+
       expect(verifyJob?.needs).toBe("version-release");
       expect(verifyJob?.permissions).toEqual({
         contents: "read",
         "pull-requests": "read",
       });
+
       const trustedCheckout = workflowStep(
         releaseWorkflow,
         "verify-release",
         "Check out trusted base",
       );
+
       expect(trustedCheckout?.with).toMatchObject({ ref: "${{ github.sha }}" });
 
       const verifyStep = workflowStep(
@@ -1010,6 +1089,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         "verify-release",
         "Regenerate and verify the release tree",
       );
+
       expect(verifyStep?.id).toBe("verify-release");
       expect(verifyStep?.env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
       expect(verifyStep?.run).toContain("vp run verify:changesets-release");
@@ -1019,7 +1099,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         "report-release-check",
         "Report the generated release check",
       );
+
       const reportJob = releaseWorkflow.jobs["report-release-check"];
+
       expect(reportJob?.needs).toEqual(["version-release", "verify-release"]);
       expect(reportJob?.if).toBe(
         "${{ always() && needs.version-release.outputs.release-pr-number != '' }}",
@@ -1033,20 +1115,24 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(reportStep?.run).toBeDefined();
 
       const prepareJob = releaseWorkflow.jobs["prepare-publish"];
+
       expect(prepareJob?.needs).toBe("version-release");
       expect(prepareJob?.if).toBe(
         "${{ needs.version-release.outputs.is-release-commit == 'true' }}",
       );
       expect(prepareJob?.permissions).toEqual({ contents: "read" });
+
       const prepareStep = workflowStep(
         releaseWorkflow,
         "prepare-publish",
         "Prepare package and npm CLI artifacts",
       );
+
       expect(prepareStep?.run).toContain("vp run release:prepare");
       expect(prepareStep?.run).toContain("sha256sum --check --strict");
 
       const publishJob = releaseWorkflow.jobs["publish-packages"];
+
       expect(publishJob?.if).toBe(
         "${{ needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.outputs.publish-count != '0' }}",
       );
@@ -1057,11 +1143,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       });
       expect(publishJob?.steps).toHaveLength(1);
       expect(publishJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
+
       const publishStep = workflowStep(
         releaseWorkflow,
         "publish-packages",
         "Verify and publish prepared tarballs",
       );
+
       expect(publishStep?.run).toContain("sha256sum --check --strict SHA256SUMS");
       expect(publishStep?.run).toContain("([.packages[].name] | unique | length) == 14");
       expect(publishStep?.run).toContain("([.packages[].version] | unique) == [$expectedVersion]");
@@ -1086,16 +1174,19 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(publishStep?.run).not.toContain("vp run");
 
       const tagJob = releaseWorkflow.jobs["tag-release"];
+
       expect(tagJob?.if).toBe(
         "${{ always() && needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.result == 'success' && (needs.publish-packages.result == 'success' || needs.publish-packages.result == 'skipped') }}",
       );
       expect(tagJob?.permissions).toEqual({ actions: "read", contents: "write" });
       expect(tagJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
+
       const tagStep = workflowStep(
         releaseWorkflow,
         "tag-release",
         "Verify manifest and create package tags",
       );
+
       expect(tagStep?.run).toContain("([.packages[].name] | unique | length) == 14");
       expect(tagStep?.run).toContain("([.packages[].version] | unique) == [$expectedVersion]");
       expect(tagStep?.run).toContain('.distTag == "beta"');
@@ -1118,8 +1209,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageDirectory}/package.json`,
         );
+
         expect(manifest.name).toBeDefined();
         const trustedPolicyEntry = `${packageDirectory}\t${manifest.name}`;
+
         expect(publishStep?.run).toContain(trustedPolicyEntry);
         expect(tagStep?.run).toContain(trustedPolicyEntry);
       }
@@ -1148,17 +1241,20 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     () =>
       Effect.gen(function* () {
         const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+
         const resolveScript = workflowStep(
           releaseWorkflow,
           "verify-release",
           "Resolve the generated release head",
         )?.run;
+
         if (resolveScript === undefined) {
           return yield* Effect.die(new Error("Release resolver must have an executable body."));
         }
 
         const baseSha = "1111111111111111111111111111111111111111";
         const headSha = "2222222222222222222222222222222222222222";
+
         const defaults = {
           baseRef: "main",
           currentBaseSha: baseSha,
@@ -1172,6 +1268,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         };
 
         const success = yield* runReleaseWorkflowStep(resolveScript, defaults);
+
         expect({ exitCode: success.exitCode, output: success.output }).toMatchObject({
           exitCode: 0,
         });
@@ -1195,6 +1292,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             ...defaults,
             ...overrides,
           });
+
           expect({ fixture: overrides, exitCode: failure.exitCode }).not.toMatchObject({
             exitCode: 0,
           });
@@ -1211,11 +1309,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     () =>
       Effect.gen(function* () {
         const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+
         const reportScript = workflowStep(
           releaseWorkflow,
           "report-release-check",
           "Report the generated release check",
         )?.run;
+
         if (reportScript === undefined) {
           return yield* Effect.die(
             new Error("Release check reporter must have an executable body."),
@@ -1226,6 +1326,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const verifiedHeadSha = "2222222222222222222222222222222222222222";
         const changedHeadSha = "3333333333333333333333333333333333333333";
         const changedBaseSha = "4444444444444444444444444444444444444444";
+
         const run = (overrides: {
           readonly baseRef?: string;
           readonly currentBaseSha?: string;
@@ -1253,6 +1354,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           });
 
         const success = yield* run({});
+
         expect({ exitCode: success.exitCode, output: success.output }).toMatchObject({
           exitCode: 0,
         });
@@ -1265,6 +1367,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(success.invocation).toContain("output[title]=Generated release tree verified\n");
 
         const verificationFailure = yield* run({ verifyOutcome: "failure" });
+
         expect({
           exitCode: verificationFailure.exitCode,
           output: verificationFailure.output,
@@ -1275,6 +1378,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         );
 
         const changedHead = yield* run({ currentHeadSha: changedHeadSha });
+
         expect({ exitCode: changedHead.exitCode, output: changedHead.output }).toMatchObject({
           exitCode: 0,
         });
@@ -1285,6 +1389,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         );
 
         const changedBase = yield* run({ currentBaseSha: changedBaseSha });
+
         expect({ exitCode: changedBase.exitCode, output: changedBase.output }).toMatchObject({
           exitCode: 0,
         });
@@ -1294,33 +1399,39 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         );
 
         const nonStrictRule = yield* run({ strictReady: "false" });
+
         expect(nonStrictRule.invocation).toContain("conclusion=failure\n");
         expect(nonStrictRule.invocation).toContain(
           "output[title]=Strict required-check policy is missing\n",
         );
 
         const forkHead = yield* run({ headRepository: "someone-else/effect-agent" });
+
         expect(forkHead.invocation).toContain("conclusion=failure\n");
         expect(forkHead.invocation).toContain(
           "output[title]=Generated release source changed during verification\n",
         );
 
         const wrongHeadRef = yield* run({ headRef: "untrusted-release" });
+
         expect(wrongHeadRef.invocation).toContain("conclusion=failure\n");
         expect(wrongHeadRef.invocation).toContain(
           "output[title]=Generated release source changed during verification\n",
         );
 
         const wrongBaseRef = yield* run({ baseRef: "release-target" });
+
         expect(wrongBaseRef.invocation).toContain("conclusion=failure\n");
         expect(wrongBaseRef.invocation).toContain(
           "output[title]=Generated release target changed during verification\n",
         );
 
         const closedPr = yield* run({ prState: "closed" });
+
         expect(closedPr.invocation).toContain("conclusion=failure\n");
 
         const skippedVerification = yield* run({ verifyOutcome: "skipped" });
+
         expect(skippedVerification.invocation).toContain("conclusion=failure\n");
         expect(skippedVerification.invocation).toContain(
           "output[summary]=Exact-tree verification did not complete successfully.",
@@ -1331,6 +1442,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             verifiedHeadSha: unresolvedSha,
             verifyOutcome: "skipped",
           });
+
           expect(unresolvedHead.exitCode).not.toBe(0);
           expect(unresolvedHead.invocation).toBe("");
           expect(unresolvedHead.output).toContain("no ready check can be attached safely");
@@ -1339,6 +1451,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const apiFailure = yield* run({
           failingEndpoint: "repos/effect-agent/release-check-fixture/git/ref/heads/main",
         });
+
         expect(apiFailure.exitCode).not.toBe(0);
         expect(apiFailure.invocation).toBe("");
       }),
@@ -1350,11 +1463,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     () =>
       Effect.gen(function* () {
         const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+
         const publishScript = workflowStep(
           releaseWorkflow,
           "publish-packages",
           "Verify and publish prepared tarballs",
         )?.run;
+
         if (publishScript === undefined) {
           return yield* Effect.die(new Error("Release publisher must have an executable body."));
         }
@@ -1362,14 +1477,17 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const validVersionMetadata = JSON.stringify({
           dist: { integrity: "sha512-fixture-integrity" },
         });
+
         const validPackageMetadata = JSON.stringify({
           "dist-tags": { beta: "0.0.1-beta.7" },
         });
+
         const existingVersion = yield* runReleasePublisher(publishScript, {
           packageMetadata: validPackageMetadata,
           registryStatus: "200",
           versionMetadata: validVersionMetadata,
         });
+
         expect(existingVersion).toMatchObject({ exitCode: 0, publishInvoked: false });
 
         const invalidMetadata = [
@@ -1390,12 +1508,14 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             versionMetadata: validVersionMetadata,
           },
         ];
+
         for (const fixture of invalidMetadata) {
           const result = yield* runReleasePublisher(publishScript, {
             packageMetadata: fixture.packageMetadata,
             registryStatus: "200",
             versionMetadata: fixture.versionMetadata,
           });
+
           expect(result.exitCode).not.toBe(0);
           expect(result.publishInvoked).toBe(false);
         }
@@ -1405,6 +1525,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           registryStatus: "404",
           versionMetadata: validVersionMetadata,
         });
+
         expect(unpublishedVersion).toMatchObject({ exitCode: 0, publishInvoked: true });
         expect(unpublishedVersion.publishInvocations).toHaveLength(1);
         expect(unpublishedVersion.publishInvocations[0]?.[0]).toMatch(
@@ -1432,6 +1553,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             registryStatus: "404",
             versionMetadata: validVersionMetadata,
           });
+
           expect(checksumResult.exitCode).not.toBe(0);
           expect(checksumResult.publishInvoked).toBe(false);
         }
@@ -1442,6 +1564,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           tarball: "../outside.tgz",
           versionMetadata: validVersionMetadata,
         });
+
         expect(unsafeTarball.exitCode).not.toBe(0);
         expect(unsafeTarball.publishInvoked).toBe(false);
       }),
@@ -1453,11 +1576,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     () =>
       Effect.gen(function* () {
         const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+
         const publishScript = workflowStep(
           releaseWorkflow,
           "publish-packages",
           "Verify and publish prepared tarballs",
         )?.run;
+
         if (publishScript === undefined) {
           return yield* Effect.die(new Error("Release publisher must have an executable body."));
         }
@@ -1465,6 +1590,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const validVersionMetadata = JSON.stringify({
           dist: { integrity: "sha512-fixture-integrity" },
         });
+
         const validPackageMetadata = JSON.stringify({
           "dist-tags": { beta: "0.0.1-beta.7" },
         });
@@ -1475,6 +1601,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           registryStatus: "404",
           versionMetadata: validVersionMetadata,
         });
+
         expect(bothPublished).toMatchObject({ exitCode: 0, publishInvoked: true });
         expect(bothPublished.publishInvocations.map((invocation) => invocation[2])).toEqual([
           "./packages/capabilities.tgz",
@@ -1490,6 +1617,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           registryStatus: "404",
           versionMetadata: validVersionMetadata,
         });
+
         expect(isolatedFailure.exitCode).not.toBe(0);
         expect(isolatedFailure.publishInvocations.map((invocation) => invocation[2])).toContain(
           "./packages/sandbox.tgz",
@@ -1506,9 +1634,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+
       const temporaryRoot = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-release-artifact-test-",
       });
+
       const destination = path.join(temporaryRoot, "release-artifacts");
       let failedStaging = "";
 
@@ -1517,10 +1647,12 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           Effect.gen(function* () {
             failedStaging = staging;
             yield* fs.writeFileString(path.join(failedStaging, "partial"), "incomplete\n");
+
             return yield* Effect.fail("fixture-failure" as const);
           }),
         ),
       );
+
       expect(failure).toBe("fixture-failure");
       expect(yield* fs.exists(failedStaging)).toBe(false);
       expect(yield* fs.exists(destination)).toBe(false);
@@ -1546,25 +1678,30 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         method: "rename",
         pathOrDescriptor: destination,
       });
+
       const cleanupCause = PlatformError.systemError({
         _tag: "Busy",
         module: "FileSystem",
         method: "remove",
         pathOrDescriptor: failedStaging,
       });
+
       const failingFileSystem = FileSystem.FileSystem.of({
         ...fs,
         remove: () => Effect.fail(cleanupCause),
         rename: () => Effect.fail(commitCause),
       });
+
       const cleanupExit = yield* prepareReleaseArtifactDirectory(
         path.join(temporaryRoot, "cleanup-failure"),
         () => Effect.void,
       ).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.exit);
+
       expect(Exit.isFailure(cleanupExit)).toBe(true);
       if (Exit.isFailure(cleanupExit)) {
         expect(Cause.hasDies(cleanupExit.cause)).toBe(false);
         const diagnostics = Cause.pretty(cleanupExit.cause);
+
         expect(diagnostics).toContain("Could not commit release artifacts");
         expect(diagnostics).toContain("PermissionDenied: FileSystem.rename");
         expect(diagnostics).toContain("Could not cleanup release artifacts");
@@ -1579,9 +1716,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
+
         const temporaryRoot = yield* fs.makeTempDirectoryScoped({
           prefix: "effect-agent-release-verifier-test-",
         });
+
         const fixtureRoot = path.join(temporaryRoot, "repository");
         const packageDirectory = path.join(fixtureRoot, "packages", "fixture");
         const changesetDirectory = path.join(fixtureRoot, ".changeset");
@@ -1689,11 +1828,13 @@ Exercise the generated release verifier.
             repositoryRoot: fixtureRoot,
           }),
         ).toBe(true);
+
         const worktreesAfterSuccess = yield* runFixtureCommand(fixtureRoot, "git", [
           "worktree",
           "list",
           "--porcelain",
         ]);
+
         expect(worktreesAfterSuccess.match(/^worktree /gm)).toHaveLength(1);
 
         yield* fs.writeFileString(commandCapture, "");
@@ -1703,37 +1844,46 @@ Exercise the generated release verifier.
           headSha: generatedHead,
           repositoryRoot: fixtureRoot,
         });
+
         const trustedCommands = (yield* fs.readFileString(commandCapture))
           .trim()
           .split("\n")
           .map((line) => line.split("\t"));
+
         expect(trustedCommands.map(([tool, , args]) => [tool, args])).toEqual([
           ["bun", "install --frozen-lockfile --ignore-scripts"],
           ["changeset", "version"],
           ["bun", "install --ignore-scripts"],
         ]);
         const trustedWorkingDirectories = new Set(trustedCommands.map(([, cwd]) => cwd));
+
         expect(trustedWorkingDirectories.size).toBe(1);
         const trustedWorkingDirectory = trustedCommands[0]?.[1];
+
         expect(trustedWorkingDirectory).toMatch(/effect-agent-changesets-release-.+[/]expected$/);
         expect(trustedWorkingDirectory).not.toBe(fixtureRoot);
 
         let failedCleanupPath = "";
+
         const cleanupCause = PlatformError.systemError({
           _tag: "Busy",
           module: "FileSystem",
           method: "remove",
         });
+
         const cleanupFailingFileSystem = FileSystem.FileSystem.of({
           ...fs,
           remove: (target, options) => {
             if (String(target).includes("effect-agent-changesets-release-")) {
               failedCleanupPath = String(target);
+
               return Effect.fail(cleanupCause);
             }
+
             return fs.remove(target, options);
           },
         });
+
         const cleanupFailure = yield* Effect.flip(
           verifyChangesetsRelease({
             baseSha,
@@ -1742,6 +1892,7 @@ Exercise the generated release verifier.
             repositoryRoot: fixtureRoot,
           }).pipe(Effect.provideService(FileSystem.FileSystem, cleanupFailingFileSystem)),
         );
+
         expect(cleanupFailure).toMatchObject({
           _tag: "VerificationCleanupError",
           operation: "temporary directory removal",
@@ -1760,6 +1911,7 @@ Exercise the generated release verifier.
         yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
         yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "alter generated output"]);
         const alteredHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+
         const alteredFailure = yield* Effect.flip(
           classifyChangesetsRelease({
             baseSha,
@@ -1768,6 +1920,7 @@ Exercise the generated release verifier.
             repositoryRoot: fixtureRoot,
           }),
         );
+
         expect(
           Schema.decodeUnknownSync(ReleaseTreeMismatch)(alteredFailure).changedPaths,
         ).toContain("packages/fixture/package.json");
@@ -1777,6 +1930,7 @@ Exercise the generated release verifier.
         yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
         yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "add unexpected file"]);
         const unexpectedHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+
         const unexpectedFailure = yield* Effect.flip(
           verifyChangesetsRelease({
             baseSha,
@@ -1785,6 +1939,7 @@ Exercise the generated release verifier.
             repositoryRoot: fixtureRoot,
           }),
         );
+
         expect(
           Schema.decodeUnknownSync(ReleaseTreeMismatch)(unexpectedFailure).changedPaths,
         ).toContain("unexpected.txt");
@@ -1805,6 +1960,7 @@ Exercise the generated release verifier.
             repositoryRoot: fixtureRoot,
           }),
         );
+
         expect(Schema.decodeUnknownSync(InvalidCommitSha)(invalidShaFailure).label).toBe(
           "--base-sha",
         );
@@ -1814,6 +1970,7 @@ Exercise the generated release verifier.
           "list",
           "--porcelain",
         ]);
+
         expect(worktreesAfterFailures.match(/^worktree /gm)).toHaveLength(1);
       }),
     60_000,
@@ -1824,6 +1981,7 @@ Exercise the generated release verifier.
       const rootDependencies = manifestDependencies(
         yield* readManifest(`${repositoryRoot}/package.json`),
       );
+
       expect(
         rootDependencies.filter((dependency) => forbiddenScaffoldDependencies.has(dependency)),
       ).toEqual([]);
@@ -1835,7 +1993,9 @@ Exercise the generated release verifier.
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
+
         const dependencies = manifestDependencies(manifest);
+
         const cloudflareAllowance = new Set([
           ...(cloudflarePackageNames.includes(packageName)
             ? allowedCloudflareToolchainDependencies
@@ -1871,7 +2031,9 @@ Exercise the generated release verifier.
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
+
         const dependencies = manifestDependencies(manifest);
+
         expect(
           dependencies.filter(
             (dependency) =>
@@ -1886,6 +2048,7 @@ Exercise the generated release verifier.
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
+
         expect(manifest.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
       }
     }),
@@ -1902,13 +2065,17 @@ Exercise the generated release verifier.
         }
         const aliased = specifier.slice("npm:".length);
         const versionSeparator = aliased.indexOf("@", aliased.startsWith("@") ? 1 : 0);
+
         return versionSeparator === -1 ? aliased : aliased.slice(0, versionSeparator);
       };
+
       const workspaceTarget = (name: string, specifier: string): string | undefined => {
         const target = npmAliasTarget(specifier) ?? name;
+
         if (target === "effect-agent") {
           return target;
         }
+
         return target.startsWith("@effect-agent/")
           ? target.slice("@effect-agent/".length)
           : undefined;
@@ -1918,11 +2085,14 @@ Exercise the generated release verifier.
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
+
         const allowed = allowedWorkspaceEdges[packageName];
+
         for (const section of dependencySections) {
           const edges = Object.entries(manifest[section] ?? {})
             .map(([name, specifier]) => workspaceTarget(name, specifier))
             .filter((edge): edge is string => edge !== undefined);
+
           expect(
             edges.filter((edge) => !allowed.includes(edge)),
             `${packageName} ${section} declares a workspace edge outside the documented dependency graph`,
@@ -1941,169 +2111,131 @@ Exercise the generated release verifier.
     }),
   );
 
-  it.effect(
-    "PRR-005 WO-006 WO-009 WO-010 WO-011 WOI-012 confines provider adapters to leaf applications",
-    () =>
-      Effect.gen(function* () {
-        const root = yield* readManifest(`${repositoryRoot}/package.json`);
-        const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
-        const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
-        const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
-        const prReviewAction = yield* readManifest(
-          `${repositoryRoot}/packages/pr-review-action/package.json`,
-        );
-        const prWorkOrders = yield* readManifest(
-          `${repositoryRoot}/examples/pr-work-orders/package.json`,
-        );
-        const prWorkOrderIngress = yield* readManifest(
-          `${repositoryRoot}/examples/pr-work-order-ingress/package.json`,
-        );
-        const demoDependencies = manifestDependencies(demo);
-        const providerDependencies = manifestDependencies(providers);
-        const repoOpsDependencies = manifestDependencies(repoOps);
-        const prReviewDependencies = manifestDependencies(prReviewAction);
-        const prWorkOrdersDependencies = manifestDependencies(prWorkOrders);
-        const prWorkOrderIngressDependencies = manifestDependencies(prWorkOrderIngress);
+  it.effect("PRR-005 confines provider adapters to leaf applications", () =>
+    Effect.gen(function* () {
+      const root = yield* readManifest(`${repositoryRoot}/package.json`);
+      const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
+      const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
+      const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
 
-        expect(demo.name).toBe("@effect-agent/example-demo");
-        expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-        expect(demo.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
-        expect(demo.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
-        expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
-        expect(demo.dependencies?.["@tanstack/react-start"]).toBe("catalog:");
-        expect(demo.dependencies?.["@base-ui/react"]).toBe("catalog:");
-        expect(demo.dependencies?.react).toBe("catalog:");
-        expect(demo.dependencies?.effect).toBe("catalog:");
-        expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
-        expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
-        expect(demoDependencies).not.toContain("wrangler");
-        expect(demoDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
-          false,
-        );
-        expect(providers.name).toBe("@effect-agent/example-providers");
-        expect(providers.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-        expect(providers.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
-        expect(providers.dependencies?.effect).toBe("catalog:");
-        expect(providers.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(providers.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
-        expect(providerDependencies).not.toContain("wrangler");
-        expect(
-          providerDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        // P7: the repo-ops evidence auditor is the third leaf example workspace.
-        expect(repoOps.name).toBe("@effect-agent/example-repo-ops");
-        expect(repoOps.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-        expect(repoOps.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
-        expect(repoOps.dependencies?.effect).toBe("catalog:");
-        expect(repoOps.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(repoOpsDependencies).not.toContain("wrangler");
-        expect(
-          repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        // The GitHub channel owns the concrete provider and platform edges;
-        // the reusable reviewer package stays provider-neutral (PRR-005).
-        expect(prReviewAction.name).toBe("@effect-agent/pr-review-action");
-        expect(prReviewAction.private).toBe(true);
-        expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
-        expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
-        expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
-        expect(prReviewAction.dependencies?.effect).toBe("catalog:");
-        expect(prReviewDependencies).not.toContain("wrangler");
-        expect(
-          prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        // The reusable implementer stays provider-agnostic. The operational
-        // ingress Action binds the two supported Effect AI provider Layers,
-        // while still remaining separate from the read-only reviewer.
-        expect(prWorkOrders.name).toBe("@effect-agent/example-pr-work-orders");
-        expect(prWorkOrders.private).toBe(true);
-        expect(prWorkOrders.dependencies?.["@effect-agent/pr-review"]).toBeUndefined();
-        expect(prWorkOrders.dependencies?.["effect-agent"]).toBe("workspace:*");
-        expect(prWorkOrders.dependencies?.effect).toBe("catalog:");
-        expect(prWorkOrdersDependencies).not.toContain("wrangler");
-        expect(
-          prWorkOrdersDependencies.some((dependency) => dependency.startsWith("@effect/ai-")),
-        ).toBe(false);
-        expect(
-          prWorkOrdersDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        expect(prWorkOrderIngress.name).toBe("@effect-agent/example-pr-work-order-ingress");
-        expect(prWorkOrderIngress.private).toBe(true);
-        expect(prWorkOrderIngress.dependencies?.["@effect-agent/pr-review"]).toBeUndefined();
-        expect(prWorkOrderIngress.dependencies?.["@effect-agent/example-pr-work-orders"]).toBe(
-          "workspace:*",
-        );
-        expect(prWorkOrderIngress.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(prWorkOrderIngress.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
-        expect(prWorkOrderIngress.dependencies?.effect).toBe("catalog:");
-        expect(prWorkOrderIngressDependencies).not.toContain("wrangler");
-        expect(
-          prWorkOrderIngressDependencies.filter((dependency) =>
-            dependency.startsWith("@effect/ai-"),
-          ),
-        ).toEqual(["@effect/ai-anthropic", "@effect/ai-openai"]);
-        expect(
-          prWorkOrderIngressDependencies.some((dependency) =>
-            dependency.startsWith("@cloudflare/"),
-          ),
-        ).toBe(false);
-        const prReviewPublicIndex = yield* readRepositoryFile("packages/pr-review/src/index.ts");
-        expect(prReviewPublicIndex).not.toMatch(/work-?order|remediation|handoff|implementer/i);
+      const prReviewAction = yield* readManifest(
+        `${repositoryRoot}/packages/pr-review-action/package.json`,
+      );
 
-        // The Code Mode Cloudflare demo is the one example that legitimately
-        // deploys to Cloudflare (D-035, ADR-0017): it consumes the Dynamic
-        // Worker executor from @effect-agent/platform-cloudflare and queries a
-        // SQLite Durable Object, so it carries the Durable Object SqlClient and
-        // the types-only Cloudflare package. wrangler is NOT a dependency — the
-        // deploy/dev scripts invoke it through bunx, and the test lane uses
-        // programmatic Miniflare.
-        const codeModeCloudflare = yield* readManifest(
-          `${repositoryRoot}/examples/code-mode-cloudflare/package.json`,
-        );
-        const codeModeCloudflareDependencies = manifestDependencies(codeModeCloudflare);
-        expect(codeModeCloudflare.name).toBe("@effect-agent/example-code-mode-cloudflare");
-        expect(codeModeCloudflare.dependencies?.["@effect-agent/platform-cloudflare"]).toBe(
-          "workspace:*",
-        );
-        expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
-        expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
-        expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
-        expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");
-        expect(codeModeCloudflareDependencies).not.toContain("wrangler");
-        // The only allowed @cloudflare/* dependency is the types-only package.
-        expect(
-          codeModeCloudflareDependencies.filter(
-            (dependency) =>
-              dependency.startsWith("@cloudflare/") && dependency !== "@cloudflare/workers-types",
-          ),
-        ).toEqual([]);
+      const demoDependencies = manifestDependencies(demo);
+      const providerDependencies = manifestDependencies(providers);
+      const repoOpsDependencies = manifestDependencies(repoOps);
+      const prReviewDependencies = manifestDependencies(prReviewAction);
 
-        // The packaged reviewer is transport- and provider-neutral (PRR-005).
-        const prReviewPackage = yield* readManifest(
-          `${repositoryRoot}/packages/pr-review/package.json`,
+      expect(demo.name).toBe("@effect-agent/example-demo");
+      expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
+      expect(demo.dependencies?.["@tanstack/react-start"]).toBe("catalog:");
+      expect(demo.dependencies?.["@base-ui/react"]).toBe("catalog:");
+      expect(demo.dependencies?.react).toBe("catalog:");
+      expect(demo.dependencies?.effect).toBe("catalog:");
+      expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
+      expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
+      expect(demoDependencies).not.toContain("wrangler");
+      expect(demoDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      expect(providers.name).toBe("@effect-agent/example-providers");
+      expect(providers.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(providers.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(providers.dependencies?.effect).toBe("catalog:");
+      expect(providers.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(providers.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
+      expect(providerDependencies).not.toContain("wrangler");
+      expect(providerDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      // P7: the repo-ops evidence auditor is the third leaf example workspace.
+      expect(repoOps.name).toBe("@effect-agent/example-repo-ops");
+      expect(repoOps.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(repoOps.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(repoOps.dependencies?.effect).toBe("catalog:");
+      expect(repoOps.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(repoOpsDependencies).not.toContain("wrangler");
+      expect(repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      // The GitHub channel owns the concrete provider and platform edges;
+      // the reusable reviewer package stays provider-neutral (PRR-005).
+      expect(prReviewAction.name).toBe("@effect-agent/pr-review-action");
+      expect(prReviewAction.private).toBe(true);
+      expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
+      expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
+      expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
+      expect(prReviewAction.dependencies?.effect).toBe("catalog:");
+      expect(prReviewDependencies).not.toContain("wrangler");
+      expect(prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      const prReviewPublicIndex = yield* readRepositoryFile("packages/pr-review/src/index.ts");
+
+      expect(prReviewPublicIndex).not.toMatch(/work-?order|remediation|handoff|implementer/i);
+
+      // The Code Mode Cloudflare demo is the one example that legitimately
+      // deploys to Cloudflare (D-035, ADR-0017): it consumes the Dynamic
+      // Worker executor from @effect-agent/platform-cloudflare and queries a
+      // SQLite Durable Object, so it carries the Durable Object SqlClient and
+      // the types-only Cloudflare package. wrangler is NOT a dependency — the
+      // deploy/dev scripts invoke it through bunx, and the test lane uses
+      // programmatic Miniflare.
+      const codeModeCloudflare = yield* readManifest(
+        `${repositoryRoot}/examples/code-mode-cloudflare/package.json`,
+      );
+
+      const codeModeCloudflareDependencies = manifestDependencies(codeModeCloudflare);
+
+      expect(codeModeCloudflare.name).toBe("@effect-agent/example-code-mode-cloudflare");
+      expect(codeModeCloudflare.dependencies?.["@effect-agent/platform-cloudflare"]).toBe(
+        "workspace:*",
+      );
+      expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
+      expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
+      expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");
+      expect(codeModeCloudflareDependencies).not.toContain("wrangler");
+      // The only allowed @cloudflare/* dependency is the types-only package.
+      expect(
+        codeModeCloudflareDependencies.filter(
+          (dependency) =>
+            dependency.startsWith("@cloudflare/") && dependency !== "@cloudflare/workers-types",
+        ),
+      ).toEqual([]);
+
+      // The packaged reviewer is transport- and provider-neutral (PRR-005).
+      const prReviewPackage = yield* readManifest(
+        `${repositoryRoot}/packages/pr-review/package.json`,
+      );
+
+      for (const adapter of providerAdapterDependencies) {
+        expect(prReviewPackage.dependencies?.[adapter]).toBeUndefined();
+      }
+
+      for (const packageName of packageNames) {
+        const manifest = yield* readManifest(
+          `${repositoryRoot}/packages/${packageName}/package.json`,
         );
+
+        expect(manifestDependencies(manifest)).not.toContain(demo.name);
+        expect(manifestDependencies(manifest)).not.toContain(providers.name);
+        expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
+        expect(manifestDependencies(manifest)).not.toContain(prReviewAction.name);
+        expect(manifestDependencies(manifest)).not.toContain(codeModeCloudflare.name);
+        if (providerConsumingPackages.has(packageName)) continue;
         for (const adapter of providerAdapterDependencies) {
-          expect(prReviewPackage.dependencies?.[adapter]).toBeUndefined();
+          expect(manifestDependencies(manifest)).not.toContain(adapter);
         }
-
-        for (const packageName of packageNames) {
-          const manifest = yield* readManifest(
-            `${repositoryRoot}/packages/${packageName}/package.json`,
-          );
-          expect(manifestDependencies(manifest)).not.toContain(demo.name);
-          expect(manifestDependencies(manifest)).not.toContain(providers.name);
-          expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
-          expect(manifestDependencies(manifest)).not.toContain(prReviewAction.name);
-          expect(manifestDependencies(manifest)).not.toContain(codeModeCloudflare.name);
-          if (providerConsumingPackages.has(packageName)) continue;
-          for (const adapter of providerAdapterDependencies) {
-            expect(manifestDependencies(manifest)).not.toContain(adapter);
-          }
-        }
-      }),
+      }
+    }),
   );
 
   it.effect(
@@ -2111,9 +2243,11 @@ Exercise the generated release verifier.
     () =>
       Effect.gen(function* () {
         const rootManifest = yield* readManifest(`${repositoryRoot}/package.json`);
+
         const vitePlusManifest = yield* readManifest(
           `${repositoryRoot}/node_modules/vite-plus/package.json`,
         );
+
         const effectVersion = rootManifest.catalog?.effect;
 
         expect(effectVersion).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
@@ -2131,6 +2265,7 @@ Exercise the generated release verifier.
           const manifest = yield* readManifest(
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
+
           expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.111");
           expect(manifest.devDependencies?.effect).toBe("catalog:");
           expect(manifest.dependencies?.effect).toBeUndefined();
@@ -2149,6 +2284,7 @@ Exercise the generated release verifier.
           const manifest = yield* readManifest(
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
+
           expect(manifest.devDependencies?.["@effect/vitest"]).toBe("catalog:");
         }
 
@@ -2156,6 +2292,7 @@ Exercise the generated release verifier.
           const manifest = yield* readManifest(
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
+
           // No production package ever SHIPS depending on the testing package.
           expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");
           // Exactly two packages may consume it as a devDependency: platform-cloudflare's

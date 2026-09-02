@@ -92,6 +92,7 @@ const submitAgent = <InputSchema extends Schema.Top & { readonly EncodingService
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.submit(agent, input, options);
     }),
     namespace,
@@ -131,7 +132,9 @@ const modelResponseCount = (records: ReadonlyArray<CanonicalRecordEnvelope>): nu
 const settledPayloadOf = (records: ReadonlyArray<CanonicalRecordEnvelope>) => {
   const payload = records.find((envelope) => envelope.record.payload._tag === "SubmissionSettled")
     ?.record.payload;
+
   if (payload?._tag !== "SubmissionSettled") throw new Error("Expected a SubmissionSettled record");
+
   return payload;
 };
 
@@ -163,6 +166,7 @@ const reservationRows = (thread: string): Promise<ReadonlyArray<ReservationRow>>
     Effect.runPromise(
       Effect.gen(function* () {
         const sql = yield* SqlClientService.SqlClient;
+
         return yield* sql<ReservationRow>`
           SELECT record_json, finalized_at
           FROM effect_agent_settlement_reservations
@@ -206,15 +210,19 @@ const drainLanesUntil = async (
     }
     await sleep(50);
   }
+
   const states = await Promise.all(
     lanes.map(async (thread) => {
       const rows = await laneRows(thread).catch(() => "unreadable");
+
       const tags = await readCanonical(thread)
         .then(logTags)
         .catch(() => "unreadable");
+
       return `${thread}: rows=${JSON.stringify(rows)} tags=${JSON.stringify(tags)}`;
     }),
   );
+
   throw new Error(`Alarm drain did not converge:\n${states.join("\n")}`);
 };
 
@@ -226,10 +234,12 @@ describe("DC Travel Planner — baseline settlement", () => {
   it("runs one durable DC planning Submission to Settlement with canonical input, per-Turn, and settlement records in the Thread's Durable Object", async () => {
     const thread = lane("settlement");
     const receipt = await submitPlanner(thread);
+
     await drainAlarmsUntil(thread, allSettled(thread));
     await assertConvergence(thread);
 
     const records = await readCanonical(thread);
+
     // Repair audit records (DUR-013) are host evidence, not scenario semantics: on DC even a
     // clean run carries `recovery:ApplyInput`, because every pass reconciles before it claims
     // (plan §1.4) and the ready lane's input is applied through the recovery path.
@@ -246,6 +256,7 @@ describe("DC Travel Planner — baseline settlement", () => {
       "SubmissionSettled",
     ]);
     const settled = settledPayloadOf(records);
+
     expect(settled.outcome).toBe("completed");
     expect(settled.receiptId).toBe(receipt.receiptId);
     expect(await Effect.runPromise(travelPlanFromDurableSettlement(records))).toEqual(
@@ -256,10 +267,12 @@ describe("DC Travel Planner — baseline settlement", () => {
   it("DN/DC equivalence: the DC run's cross-platform normalized canonical evidence equals the committed golden that the DN suite asserts", async () => {
     const thread = lane("equivalence");
     const receipt = await submitPlanner(thread);
+
     await drainAlarmsUntil(thread, allSettled(thread));
     await assertConvergence(thread);
 
     const records = await readCanonical(thread);
+
     expect(await normalizedDcEvidence(records, receipt, thread)).toEqual(
       phase6TravelPlannerGoldenEvidence,
     );
@@ -273,6 +286,7 @@ describe("DC Travel Planner — baseline settlement", () => {
 describe("DC Travel Planner — eviction equivalence", () => {
   it("eviction-equivalence: a DO aborted at terminalize:after-reserve converges by alarm alone to the exact reserved settlement, with no further client request", async () => {
     const thread = lane("terminalize-after-reserve");
+
     armRuntimeEviction(thread, "terminalize:after-reserve");
     const receipt = await submitPlanner(thread);
 
@@ -281,6 +295,7 @@ describe("DC Travel Planner — eviction equivalence", () => {
     await drainAlarmsUntil(thread, async () => {
       if (!(await allSettled(thread)())) return false;
       const records = await readCanonical(thread);
+
       return records.some(
         ({ record: { payload } }) =>
           payload._tag === "RepairAnnotated" &&
@@ -292,15 +307,19 @@ describe("DC Travel Planner — eviction equivalence", () => {
 
     const records = await readCanonical(thread);
     const settled = settledPayloadOf(records);
+
     expect(settled.outcome).toBe("completed");
 
     // Recovery appended the EXACT reserved record (durability §12 step 1→2 gap).
     const reservations = await reservationRows(thread);
+
     expect(reservations).toHaveLength(1);
     expect(reservations[0]?.finalized_at).not.toBeNull();
+
     const settledEnvelope = records.find(
       (envelope) => envelope.record.payload._tag === "SubmissionSettled",
     );
+
     if (settledEnvelope === undefined) throw new Error("Expected the settlement envelope");
     expect(JSON.parse(reservations[0]?.record_json ?? "")).toEqual(
       encodeEnvelope(settledEnvelope).record,
@@ -310,6 +329,7 @@ describe("DC Travel Planner — eviction equivalence", () => {
     const repairs = records.flatMap((envelope) =>
       envelope.record.payload._tag === "RepairAnnotated" ? [envelope.record.payload] : [],
     );
+
     expect(repairs.map((repair) => repair.reason)).toContain("recovery:AppendReservedSettlement");
     // … and modulo that audit, the evicted run's normalized evidence equals the SAME golden
     // an uninterrupted DN run produces.
@@ -321,9 +341,11 @@ describe("DC Travel Planner — eviction equivalence", () => {
   it("chaos-abort between every host operation preserves the normalized evidence", async () => {
     const thread = lane("chaos");
     const receipt = await submitPlanner(thread);
+
     for (let round = 0; round < 200; round++) {
       await abortIncarnation(thread);
       const rows = await laneRows(thread);
+
       if (rows.length > 0 && rows.every((row) => row.state === "settled")) break;
       try {
         await runDurableObjectAlarm(stubFor(thread));
@@ -338,6 +360,7 @@ describe("DC Travel Planner — eviction equivalence", () => {
     // Nothing that mattered ever lived in a Durable Object memory field: the chaosed run's
     // cross-platform normalized evidence equals the committed golden of an uninterrupted run.
     const records = await readCanonical(thread);
+
     expect(await normalizedDcEvidence(records, receipt, thread)).toEqual(
       phase6TravelPlannerGoldenEvidence,
     );
@@ -355,6 +378,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
   it("approval-gated booking suspends durably across eviction and resumes from the recorded decision without re-invoking the model", async () => {
     const thread = lane("approval");
     const bookKey = bookFlightIdempotencyKey(phase6BookingToolCallId(thread));
+
     armRuntimeEviction(thread, "approval:after-suspend");
     const receipt = await submitBooking(thread);
 
@@ -366,6 +390,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -382,6 +407,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     await assertConvergence(thread);
 
     const records = await readCanonical(thread);
+
     // Resumed from the canonical declaration and the recorded decision: exactly two model
     // responses ever became canonical (the declaring Turn and the post-batch report Turn).
     expect(modelResponseCount(records)).toBe(2);
@@ -399,6 +425,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
   it("unknown supplier outcome under eviction never fabricates a booking result and wakes only through resolveUnknown", async () => {
     const thread = lane("unknown");
     const bookKey = bookFlightIdempotencyKey(phase6BookingToolCallId(thread));
+
     armRuntimeEviction(thread, "tools:after-prepared-append");
     const receipt = await submitBooking(thread);
 
@@ -409,6 +436,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -437,6 +465,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     expect(await anyInState(thread, "unknown")()).toBe(true);
     expect(await supplierCallCount(bookKey)).toBe(0);
     const blocked = await readCanonical(thread);
+
     expect(logTags(blocked)).toContain("ToolCallUnknown");
     expect(logTags(blocked)).not.toContain("SubmissionSettled");
 
@@ -445,6 +474,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveUnknown(
           decodeThreadId(thread),
           UnknownResolutionCommand.make({
@@ -461,6 +491,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     await assertConvergence(thread);
 
     const records = await readCanonical(thread);
+
     expect(logTags(records)).toContain("ToolCallResolved");
     expect(settledPayloadOf(records).outcome).toBe("completed");
     expect(await supplierCallCount(bookKey)).toBe(1);
@@ -477,11 +508,13 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
 describe("DC Travel Planner — cross-Object delegation", () => {
   it("coordinator→researcher delegation joins across two Durable Objects after parent and child evictions; the completed child never re-executes", async () => {
     const thread = lane("delegation");
+
     resetPhase6ResearcherGate();
     armRuntimeEviction(thread, "subagent:after-reserve");
     const receipt = await submitCoordinator(thread);
     // The deterministic child identity (SUB-016): parent Submission and Tool Call pair.
     const childThread = `subagent:${receipt.submissionId}:${durableResearchCallId}`;
+
     armRuntimeEviction(childThread, "terminalize:after-reserve");
 
     // Establishment first: the PARENT's Object is evicted mid-reservation and its persisted
@@ -495,6 +528,7 @@ describe("DC Travel Planner — cross-Object delegation", () => {
       const records = await readCanonical(thread).catch(
         () => [] as ReadonlyArray<CanonicalRecordEnvelope>,
       );
+
       return logTags(records).includes("SubagentStarted");
     });
     expect(armedEvictionsRemaining(thread)).toBe(0);
@@ -509,6 +543,7 @@ describe("DC Travel Planner — cross-Object delegation", () => {
     // never re-executed: two model Turns and one Settlement in the child's own Object.
     expect(phase6GuideInvocationCount()).toBe(1);
     const childRecords = await readCanonical(childThread);
+
     expect(modelResponseCount(childRecords)).toBe(2);
     expect(
       childRecords.filter((envelope) => envelope.record.payload._tag === "SubmissionSettled"),
@@ -516,10 +551,12 @@ describe("DC Travel Planner — cross-Object delegation", () => {
 
     // The parent joined the projected finding and settled on the fixture shortlist.
     const parentRecords = await readCanonical(thread);
+
     expect(logTags(parentRecords)).toContain("SubagentRequested");
     expect(logTags(parentRecords)).toContain("SubagentStarted");
     expect(logTags(parentRecords)).toContain("SubagentJoined");
     const settled = settledPayloadOf(parentRecords);
+
     expect(settled.outcome).toBe("completed");
     expect(Schema.decodeUnknownSync(DestinationShortlist)(settled.result)).toEqual(
       durableResearchShortlist(phase6ResearchDestination),
@@ -540,6 +577,7 @@ describe("DC Travel Planner — admission limits", () => {
     runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.submit({ definition: TravelPlannerPhase4 }, input, {
           ...options,
           definitions,
@@ -550,6 +588,7 @@ describe("DC Travel Planner — admission limits", () => {
 
   it("admission refuses over-limit input before any ledger row exists", async () => {
     const thread = lane("limit-input");
+
     const oversizedTrip = Schema.decodeUnknownSync(TripRequest)({
       request: `An itinerary brief far beyond the quota: ${"x".repeat(2_048)}`,
       origin: "SFO",
@@ -560,6 +599,7 @@ describe("DC Travel Planner — admission limits", () => {
       budgetCents: 350_000,
       currency: "USD",
     });
+
     const refusal = await submitFlipped(
       oversizedTrip,
       phase4TravelPlannerSubmitOptions(
@@ -567,6 +607,7 @@ describe("DC Travel Planner — admission limits", () => {
         decodeIdempotencyKey(`${thread}-key`),
       ),
     );
+
     expect(refusal._tag).toBe("AdmissionLimitExceeded");
     if (refusal._tag === "AdmissionLimitExceeded") {
       expect(refusal.limit).toBe("input-bytes");
@@ -577,13 +618,16 @@ describe("DC Travel Planner — admission limits", () => {
 
   it("admission refuses over-limit queue depth before any third ledger row exists", async () => {
     const thread = lane("limit-queue");
+
     resetPhase6PlannerGate(thread);
+
     const gatedOptions = (key: string): DurableSubmitOptions => ({
       threadId: decodeThreadId(thread),
       principal: phase4TravelPlannerPrincipal,
       idempotencyKey: decodeIdempotencyKey(key),
       definitions: phase6GatedPlannerDefinitionDigests,
     });
+
     // The gated planner holds the lane durably busy, so both admissions stay nonterminal.
     const first = await submitAgent(
       { definition: TravelPlannerPhase4 },
@@ -591,18 +635,21 @@ describe("DC Travel Planner — admission limits", () => {
       gatedOptions(`${thread}-k1`),
       "LIMITED",
     );
+
     const second = await submitAgent(
       { definition: TravelPlannerPhase4 },
       phase6GatedTrip(thread),
       gatedOptions(`${thread}-k2`),
       "LIMITED",
     );
+
     expect(first.queueSequence).toBe(1);
     expect(second.queueSequence).toBe(2);
 
     const refusal = await submitFlipped(phase6GatedTrip(thread), {
       ...gatedOptions(`${thread}-k3`),
     });
+
     expect(refusal._tag).toBe("AdmissionLimitExceeded");
     if (refusal._tag === "AdmissionLimitExceeded") {
       expect(refusal.limit).toBe("queue-depth");

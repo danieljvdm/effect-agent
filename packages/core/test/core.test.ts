@@ -85,6 +85,7 @@ describe("core schemas", () => {
       outputTokens: { total: 3, text: 2, reasoning: 1 },
       costMicrousd: 5,
     } as const;
+
     const summary = {
       modelCalls: 1,
       inputTokens: group.inputTokens,
@@ -92,6 +93,7 @@ describe("core schemas", () => {
       costMicrousd: group.costMicrousd,
       byModel: [group],
     } as const;
+
     expect(Schema.decodeUnknownExit(RunUsageSummary)(summary)._tag).toBe("Success");
     expect(Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, modelCalls: 0 })._tag).toBe(
       "Failure",
@@ -173,16 +175,19 @@ describe("core schemas", () => {
     const inputOverflow = Effect.runSync(
       Effect.flip(summarizeModelUsage([call(Number.MAX_SAFE_INTEGER, 0), call(1, 0)])),
     );
+
     expect(inputOverflow).toBeInstanceOf(UsageAggregationError);
     expect(inputOverflow.field).toBe("inputTokens.total");
 
     const costOverflow = Effect.runSync(
       Effect.flip(summarizeModelUsage([call(0, Number.MAX_SAFE_INTEGER), call(0, 1)])),
     );
+
     expect(costOverflow).toBeInstanceOf(UsageAggregationError);
     expect(costOverflow.field).toBe("costMicrousd");
 
     const summary = Effect.runSync(summarizeModelUsage([call(2, 3), call(5, 7)]));
+
     expect(summary).toMatchObject({
       modelCalls: 2,
       inputTokens: { total: 7, uncached: 7, cacheRead: 0, cacheWrite: 0 },
@@ -262,6 +267,7 @@ describe("core schemas", () => {
 
   it("round-trips every framework-owned expected failure through the public union", () => {
     const toolCallId = Schema.decodeSync(ToolCallId)("hold-1");
+
     const failures = [
       AgentInputError.make({ message: "invalid trip input" }),
       AgentOutputError.make({ message: "invalid itinerary output" }),
@@ -297,6 +303,7 @@ describe("core schemas", () => {
 
     for (const failure of failures) {
       const encoded = Schema.encodeSync(AgentError)(failure);
+
       expect(Schema.decodeSync(AgentError)(encoded)).toEqual(failure);
     }
   });
@@ -311,13 +318,16 @@ describe("core schemas", () => {
       sequence: 0,
       timestamp: "2026-07-29T12:00:00.000Z",
     } satisfies typeof RunStarted.Encoded;
+
     const event = Schema.decodeSync(RunStarted)(encodedEvent);
 
     expect(Schema.decodeSync(RunEvent)(encodedEvent)).toEqual(event);
+
     const invalidEncodedEvent: unknown = {
       ...encodedEvent,
       eventVersion: 2,
     };
+
     expect(() => Schema.decodeUnknownSync(RunEvent)(invalidEncodedEvent)).toThrow();
   });
 
@@ -337,6 +347,7 @@ describe("core schemas", () => {
     } satisfies typeof RunCompleted.Encoded;
 
     const event = Schema.decodeSync(RunEvent)(encodedEvent);
+
     expect(event).toMatchObject({
       _tag: "RunCompleted",
       runDisposition: "application-complete",
@@ -411,6 +422,7 @@ describe("core schemas", () => {
       parentToolCallId: "delegate-1",
       depth: 1,
     } satisfies typeof SubagentParentLink.Encoded;
+
     const link = Schema.decodeSync(SubagentParentLink)(encodedLink);
 
     expect(Schema.encodeSync(SubagentParentLink)(link)).toEqual(encodedLink);
@@ -444,6 +456,7 @@ describe("core schemas", () => {
       targetAgentId: "research-specialist",
       depth: 1,
     } as const;
+
     const encodedEvents = [
       { _tag: "SubagentRequested", ...base } satisfies typeof SubagentRequested.Encoded,
       { _tag: "SubagentStarted", ...base } satisfies typeof SubagentStarted.Encoded,
@@ -474,6 +487,7 @@ describe("core schemas", () => {
 
     for (const encodedEvent of encodedEvents) {
       const event = Schema.decodeSync(RunEvent)(encodedEvent);
+
       expect(event._tag).toBe(encodedEvent._tag);
       expect(Schema.encodeSync(RunEvent)(event)).toEqual(encodedEvent);
     }
@@ -495,11 +509,13 @@ describe("core schemas", () => {
       targetAgentId: "research-specialist",
       depth: 1,
     } as const;
+
     const progress = {
       _tag: "SubagentProgress",
       ...base,
       summary: "comparing rail connections",
     } satisfies typeof SubagentProgress.Encoded;
+
     const { delegationId: _delegationId, ...withoutDelegationId } = progress;
 
     expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, eventVersion: 2 })).toThrow();
@@ -546,6 +562,7 @@ describe("core schemas", () => {
   it("mints valid, distinct branded identities from the default IdGenerator Layer", () => {
     const program = Effect.gen(function* () {
       const ids = yield* IdGenerator;
+
       return {
         firstThread: yield* ids.nextThreadId,
         secondThread: yield* ids.nextThreadId,
@@ -553,6 +570,7 @@ describe("core schemas", () => {
         turn: yield* ids.nextTurnId,
       };
     }).pipe(Effect.provide(IdGenerator.layer), Random.withSeed("core-id-generator"));
+
     const { firstThread, secondThread, run, turn } = Effect.runSync(program);
 
     expect(Schema.decodeSync(ThreadId)(firstThread)).toBe(firstThread);
@@ -692,6 +710,7 @@ describe("tool result bounds", () => {
         throw new Error("toString trap");
       },
     };
+
     class HostileMessage extends Error {
       override get message(): string {
         throw new Error("message trap");
@@ -699,6 +718,7 @@ describe("tool result bounds", () => {
     }
     for (const cause of [hostileToString, new HostileMessage()]) {
       const sentinel = unserializableToolResult(cause);
+
       expect(sentinel.unserializableToolResult).toBe(true);
       expect(typeof sentinel.reason).toBe("string");
     }
@@ -711,6 +731,7 @@ describe("tool result bounds", () => {
       new Error('\\"'.repeat(400)),
     ]) {
       const sentinel = unserializableToolResult(cause);
+
       expect(utf8Bytes(JSON.stringify(sentinel))).toBeLessThanOrEqual(256);
     }
   });
@@ -722,6 +743,7 @@ describe("context-economics errors and events", () => {
       message: "prompt exceeds the model context window",
       retried: true,
     });
+
     const encoded = Schema.encodeSync(ContextOverflowError)(error);
 
     expect(error._tag).toBe("ContextOverflowError");
@@ -737,6 +759,7 @@ describe("context-economics errors and events", () => {
       sequence: 6,
       timestamp: "2026-08-15T12:00:00.000Z",
     } as const;
+
     const warning = {
       _tag: "BudgetWarning",
       ...base,
@@ -744,6 +767,7 @@ describe("context-economics errors and events", () => {
       consumed: 160_000,
       limitValue: 200_000,
     } satisfies typeof BudgetWarning.Encoded;
+
     const compaction = {
       _tag: "CompactionPerformed",
       ...base,
@@ -755,6 +779,7 @@ describe("context-economics errors and events", () => {
 
     for (const encodedEvent of [warning, compaction] as const) {
       const event = Schema.decodeSync(RunEvent)(encodedEvent);
+
       expect(event._tag).toBe(encodedEvent._tag);
       expect(Schema.encodeSync(RunEvent)(event)).toEqual(encodedEvent);
     }

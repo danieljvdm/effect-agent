@@ -58,6 +58,7 @@ const submitTo = (
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.submit(
         { definition },
         { question: "alarm semantics", ref: thread },
@@ -68,6 +69,7 @@ const submitTo = (
 
 const canonicalFingerprint = async (thread: string): Promise<string> => {
   const records = await readCanonical(thread);
+
   return JSON.stringify(
     records.map((envelope) => ({
       recordId: envelope.record.recordId,
@@ -94,15 +96,18 @@ describe("DC alarm semantics", () => {
   it("issue #93: a stable approval wait quiesces and a forced caught-up alarm performs no SQL work", async () => {
     const thread = lane("issue-93-quiescent-approval");
     const receipt = await submitTo(approvalDefinition, thread);
+
     await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
     await submitTo(plannerDefinition, thread, `${thread}-follower`);
     await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
 
     const suspendedFingerprint = await canonicalFingerprint(thread);
+
     await runInDurableObject(stubFor(thread), async (instance, state) => {
       const sql = vi.spyOn(state.storage.sql, "exec").mockImplementation(() => {
         throw new Error("a caught-up maintenance pass must not touch SQLite");
       });
+
       try {
         await expect(instance.alarm()).resolves.toBeUndefined();
         expect(sql).not.toHaveBeenCalled();
@@ -116,6 +121,7 @@ describe("DC alarm semantics", () => {
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -134,6 +140,7 @@ describe("DC alarm semantics", () => {
 
   it("issue #93: a mutation racing stable-wait cancellation remains dirty and resumes exactly once", async () => {
     const thread = lane("issue-93-cancel-race");
+
     armMaintenancePause(thread, "maintenance:finish:before");
     const receipt = await submitTo(approvalDefinition, thread);
 
@@ -145,6 +152,7 @@ describe("DC alarm semantics", () => {
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -167,6 +175,7 @@ describe("DC alarm semantics", () => {
   it("issue #93: a pass cannot acknowledge a pre-armed generation while its RPC mutation is in flight", async () => {
     const thread = lane("issue-93-in-flight-mutation");
     const receipt = await submitTo(approvalDefinition, thread);
+
     await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
     await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
 
@@ -178,9 +187,11 @@ describe("DC alarm semantics", () => {
       "maintenance:finish:before",
       "maintenance:finish:after",
     );
+
     const resolution = runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -193,11 +204,13 @@ describe("DC alarm semantics", () => {
         );
       }),
     );
+
     await awaitMaintenancePause(thread, "maintenance:mutation:armed");
 
     // Start a forced pass while the RPC is still between pre-arm and body. It snapshots both the
     // new generation and the active-mutation count, then pauses before recovery.
     const forcedPass = runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
+
     await awaitMaintenancePause(thread, "maintenance:begin:after");
 
     // Let the mutation body finish BEFORE the pass observes durable state, but hold the RPC at
@@ -212,6 +225,7 @@ describe("DC alarm semantics", () => {
     releaseMaintenancePause(thread, "maintenance:finish:before");
     await awaitMaintenancePause(thread, "maintenance:finish:after");
     const generation = await maintenanceGeneration(thread);
+
     expect(generation.dirty > generation.processed).toBe(true);
     expect(await scheduledAlarm(thread)).not.toBeNull();
     releaseMaintenancePause(thread, "maintenance:finish:after");
@@ -223,12 +237,14 @@ describe("DC alarm semantics", () => {
 
   it("double-fired alarms are idempotent on a ready lane: one settlement, no duplicate records", async () => {
     const thread = lane("ready-double");
+
     await submitTo(plannerDefinition, thread);
     // At-least-once delivery: fire the SAME obligation twice back to back.
     await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
     await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
     await drainAlarmsUntil(thread, allSettled(thread));
     const settledFingerprint = await canonicalFingerprint(thread);
+
     // Extra deliveries on the settled lane are no-ops (the pass cleared the slot; a forced
     // redelivery would still find nothing to do).
     await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
@@ -239,8 +255,10 @@ describe("DC alarm semantics", () => {
   it("double-fired alarms are idempotent on a durably suspended lane", async () => {
     const thread = lane("suspended-double");
     const receipt = await submitTo(approvalDefinition, thread);
+
     await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
     const suspendedFingerprint = await canonicalFingerprint(thread);
+
     await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
     await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
     // The suspension is durable state, not alarm-driven state: re-delivery changes nothing.
@@ -250,6 +268,7 @@ describe("DC alarm semantics", () => {
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -268,12 +287,15 @@ describe("DC alarm semantics", () => {
 
   it("double-fired alarms are idempotent on a lane blocked by an Unknown Outcome", async () => {
     const thread = lane("unknown-double");
+
     armRuntimeEviction(thread, "tools:after-prepared-append");
     const receipt = await submitTo(bookDefinition, thread);
+
     await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
     await submitTo(plannerDefinition, thread, `${thread}-follower`);
     await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
     const blockedFingerprint = await canonicalFingerprint(thread);
+
     await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
     await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
     // DUR-009: the unresolved ordinary call is never auto-replayed by redelivered alarms.
@@ -283,6 +305,7 @@ describe("DC alarm semantics", () => {
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveUnknown(
           decodeThreadId(thread),
           UnknownResolutionCommand.make({
@@ -308,30 +331,39 @@ describe("DC alarm semantics", () => {
     "authorized abort releases an unknown head after lost external reply (eviction=%s)",
     async (eviction) => {
       const thread = lane(`unknown-abort-${eviction ?? "none"}`);
+
       lostBookReplies.add(thread);
       // Real eviction after recovery has persisted uncertainty. No fake clock races automatic
       // alarms: both the reply loss and eviction are armed before admission.
       armStorageEviction(thread, "ledger:mark-unknown:after");
       const receipt = await submitTo(bookDefinition, thread);
+
       await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
       const follower = await submitTo(plannerDefinition, thread, `${thread}-follower`);
+
       expect(supplierCountsFor(thread)).toEqual({ book: 1 });
+
       const unknownBefore = (await readCanonical(thread)).filter(
         ({ record }) => record.payload._tag === "ToolCallUnknown",
       );
+
       expect(unknownBefore).toHaveLength(1);
       if (eviction !== undefined) armRuntimeEviction(thread, eviction);
+
       const command = AbortCommand.make({
         submissionId: receipt.submissionId,
         author: "authorized-operator",
         reason: "stop this submission; the external outcome is still uncertain",
       });
+
       const accepted = await runClientExit(
         Effect.gen(function* () {
           const client = yield* CloudflareThreadClient;
+
           return yield* client.abort(decodeThreadId(thread), command);
         }),
       );
+
       expect(accepted.ok).toBe(eviction !== "abort:after-intent");
       await drainAlarmsUntil(thread, allSettled(thread));
       await assertConvergence(thread, {
@@ -339,6 +371,7 @@ describe("DC alarm semantics", () => {
       });
       expect(armedEvictionsRemaining(thread)).toBe(0);
       const records = await readCanonical(thread);
+
       expect(records.filter(({ record }) => record.payload._tag === "ToolCallUnknown")).toEqual(
         unknownBefore,
       );
@@ -357,12 +390,15 @@ describe("DC alarm semantics", () => {
           submissionId: receipt.submissionId,
         }),
       ]);
+
       const outcomes = await runClient(
         Effect.gen(function* () {
           const client = yield* CloudflareThreadClient;
+
           return [yield* client.awaitSettlement(receipt), yield* client.awaitSettlement(follower)];
         }),
       );
+
       expect(outcomes.map(({ outcome }) => outcome)).toEqual(["aborted", "completed"]);
     },
     30_000,
@@ -370,6 +406,7 @@ describe("DC alarm semantics", () => {
 
   it("a typed failure inside the pass rejects the delivery and redelivery converges the lane", async () => {
     const thread = lane("throw-retry");
+
     // Armed BEFORE the submit: the FIRST delivery (the pool auto-fires due alarms in the
     // background) fails typed — the alarm handler rejects, which is exactly what makes
     // workerd redeliver under at-least-once semantics. Convergence despite the failed
@@ -384,9 +421,11 @@ describe("DC alarm semantics", () => {
   it("the alarm invariant quiesces an external wait and its resolving mutation restores liveness", async () => {
     const thread = lane("invariant");
     const receipt = await submitTo(approvalDefinition, thread);
+
     // A durably suspended lane is a stable externally-driven wait: elapsed time is not work.
     await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
     let observedCleared = false;
+
     for (let round = 0; round < 100 && !observedCleared; round++) {
       observedCleared = (await scheduledAlarm(thread)) === null;
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -395,6 +434,7 @@ describe("DC alarm semantics", () => {
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareThreadClient;
+
         return yield* client.resolveApproval(
           decodeThreadId(thread),
           ApprovalDecisionCommand.make({
@@ -415,6 +455,7 @@ describe("DC alarm semantics", () => {
 
   it("the alarm invariant survives an eviction mid-pass: the persisted alarm outlives the incarnation", async () => {
     const thread = lane("invariant-evict");
+
     armRuntimeEviction(thread, "claim:after-claim");
     await submitTo(plannerDefinition, thread);
     // Wait for the doomed pass (auto-fired or drain-fired) to pre-arm, claim, and die.
@@ -422,6 +463,7 @@ describe("DC alarm semantics", () => {
     // The alarm that outlives the dead incarnation (its deadline was committed BEFORE the
     // abort) is what converges the lane with no incoming request.
     let observedArmed = false;
+
     for (let round = 0; round < 100 && !observedArmed; round++) {
       observedArmed = (await scheduledAlarm(thread)) !== null;
       if (!observedArmed && (await laneRows(thread)).every((row) => row.state === "settled")) {

@@ -139,6 +139,7 @@ type CheckpointError =
   | SqliteStorageCorruptionError
   | SqliteStorageError
   | SqliteWriteContention;
+
 const storageError =
   (operation: string) =>
   (error: SqlError): SqliteStorageError =>
@@ -194,21 +195,25 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
   const sql = yield* SqlClient.SqlClient;
   const { hit: failpoint } = yield* SqliteStorageFailpoint;
   const { busyTimeout } = yield* SqliteStorageConfig;
+
   yield* sql`PRAGMA foreign_keys = ON`.pipe(Effect.mapError(storageError("enable foreign keys")));
   // PRAGMA statements do not accept bound parameters; the value is a schema-validated
   // non-negative integer, never caller-controlled text.
   yield* sql
     .unsafe(`PRAGMA busy_timeout = ${busyTimeout}`)
     .pipe(Effect.mapError(storageError("configure busy timeout")));
+
   const journalModeRows = yield* sql<Record<string, unknown>>`PRAGMA journal_mode`.pipe(
     Effect.mapError(storageError("read journal mode")),
   );
+
   const journalMode = yield* decodeSingleRow(
     Schema.Array(SqliteJournalModeRow),
     "pragma_journal_mode",
     "singleton",
     journalModeRows,
   );
+
   if (journalMode.journal_mode.toLowerCase() !== "wal") {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: 0,
@@ -220,6 +225,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
   const versionRows = yield* sql<Record<string, unknown>>`PRAGMA user_version`.pipe(
     Effect.mapError(storageError("read storage version")),
   );
+
   const version = yield* decodeSingleRow(
     Schema.Array(SqliteVersionRow),
     "pragma_user_version",
@@ -249,6 +255,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         AND name LIKE 'effect_agent_%'
       ORDER BY name
     `.pipe(Effect.mapError(storageError("inspect unversioned storage")));
+
     const existing = yield* decodeRows(
       Schema.Array(SqliteNameRow),
       "sqlite_master",
@@ -296,12 +303,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       )
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
+
   const required = yield* decodeRows(
     Schema.Array(SqliteNameRow),
     "sqlite_master",
     "required_tables",
     requiredRows,
   );
+
   if (required.length !== 12) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
@@ -345,19 +354,24 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             const connection = yield* sql.reserve.pipe(
               Effect.mapError(classifyWriteFailure(operation)),
             );
+
             yield* connection
               .executeUnprepared("BEGIN IMMEDIATE", [], undefined)
               .pipe(Effect.mapError(classifyWriteFailure(operation)));
+
             const exit = yield* restore(
               Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
             ).pipe(Effect.exit);
+
             if (Exit.isSuccess(exit)) {
               yield* connection
                 .executeUnprepared("COMMIT", [], undefined)
                 .pipe(Effect.mapError(classifyWriteFailure(operation)));
+
               return exit.value;
             }
             yield* Effect.orDie(connection.executeUnprepared("ROLLBACK", [], undefined));
+
             return yield* exit;
           }),
         ).pipe(
@@ -380,19 +394,24 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         Effect.scoped(
           Effect.gen(function* () {
             const connection = yield* sql.reserve.pipe(Effect.mapError(storageError(operation)));
+
             yield* connection
               .executeUnprepared("BEGIN", [], undefined)
               .pipe(Effect.mapError(storageError(operation)));
+
             const exit = yield* restore(
               Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
             ).pipe(Effect.exit);
+
             if (Exit.isSuccess(exit)) {
               yield* connection
                 .executeUnprepared("COMMIT", [], undefined)
                 .pipe(Effect.mapError(storageError(operation)));
+
               return exit.value;
             }
             yield* Effect.orDie(connection.executeUnprepared("ROLLBACK", [], undefined));
+
             return yield* exit;
           }),
         ).pipe(Effect.withSpan("SqliteJournal.withReadTransaction", { attributes: { operation } })),
@@ -428,12 +447,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           FROM effect_agent_threads
           WHERE thread_id = ${threadId}
         `.pipe(Effect.mapError(storageError("read materialized thread")));
+
         const existing = yield* decodeRows(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
           threadId,
           existingRows,
         );
+
         if (existing.length > 1) {
           return yield* SqliteStorageCorruptionError.make({
             table: "effect_agent_threads",
@@ -457,6 +478,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               ${producerEpoch}
             )
           `.pipe(Effect.mapError(storageError("materialize thread")));
+
           return;
         }
         if (producerEpoch < existing[0].producer_epoch) {
@@ -488,6 +510,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       FROM effect_agent_threads
       WHERE thread_id = ${threadId}
     `.pipe(Effect.mapError(storageError("read thread")));
+
     return yield* decodeRows(Schema.Array(ThreadRow), "effect_agent_threads", threadId, rows);
   });
 
@@ -511,9 +534,11 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         message: "Canonical identifiers or encoded JSON exceed the SQLite storage bounds.",
       });
     }
+
     return yield* withWriteTransaction("append transaction")(
       Effect.gen(function* () {
         const recordIds = request.records.map((record) => record.recordId);
+
         if (new Set(recordIds).size !== recordIds.length) {
           return yield* SqliteAppendConflict.make({
             message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
@@ -531,6 +556,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           FROM effect_agent_threads
           WHERE thread_id = ${request.threadId}
         `.pipe(Effect.mapError(storageError("read append tail")));
+
         const thread = yield* decodeSingleRow(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
@@ -559,6 +585,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           WHERE thread_id = ${request.threadId}
             AND batch_id = ${request.batchId}
         `.pipe(Effect.mapError(storageError("read idempotent batch")));
+
         const batches = yield* decodeRows(
           Schema.Array(BatchRow),
           "effect_agent_canonical_batches",
@@ -575,12 +602,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         }
         if (batches.length === 1) {
           const existing = batches[0];
+
           if (existing.batch_digest !== request.batchDigest) {
             return yield* SqliteAppendConflict.make({
               message: `Batch ${request.batchId} already exists with different canonical content.`,
               reason: "batch-digest",
             });
           }
+
           return RawAppendResult.make({
             firstSequence: existing.first_sequence,
             lastSequence: existing.last_sequence,
@@ -621,12 +650,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             AND record_id IN ${sql.in(recordIds)}
           ORDER BY sequence
         `.pipe(Effect.mapError(storageError("check canonical record identities")));
+
         const existingRecords = yield* decodeRows(
           Schema.Array(RecordRow),
           "effect_agent_canonical_records",
           `${request.threadId}/record_ids`,
           existingRecordRows,
         );
+
         if (existingRecords.length > 0) {
           return yield* SqliteAppendConflict.make({
             message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
@@ -645,6 +676,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             }),
           ),
         );
+
         const lastSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
           firstSequence + request.records.length - 1,
         ).pipe(
@@ -736,6 +768,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       ORDER BY sequence
       LIMIT ${request.limit}
     `.pipe(Effect.mapError(storageError("read canonical records")));
+
     return yield* decodeRows(
       Schema.Array(RecordRow),
       "effect_agent_canonical_records",
@@ -757,13 +790,16 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             FROM effect_agent_threads
             WHERE thread_id = ${threadId}
           `.pipe(Effect.mapError(storageError("export thread")));
+
         const thread = yield* decodeSingleRow(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
           threadId,
           threadRows,
         );
+
         yield* failpoint("export:after-thread-read");
+
         const batchRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -777,6 +813,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             WHERE thread_id = ${threadId}
             ORDER BY first_sequence
           `.pipe(Effect.mapError(storageError("export canonical batches")));
+
         const recordRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -788,6 +825,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             WHERE thread_id = ${threadId}
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("export canonical records")));
+
         const checkpointRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -848,12 +886,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           FROM effect_agent_threads
           WHERE thread_id = ${checkpoint.threadId}
         `.pipe(Effect.mapError(storageError("read checkpoint tail")));
+
         const thread = yield* decodeSingleRow(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
           checkpoint.threadId,
           threadRows,
         );
+
         if (checkpoint.throughSequence > thread.tail_sequence) {
           return yield* SqliteCheckpointConflict.make({
             message:
@@ -872,12 +912,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           WHERE thread_id = ${checkpoint.threadId}
             AND through_sequence = ${checkpoint.throughSequence}
         `.pipe(Effect.mapError(storageError("read idempotent checkpoint")));
+
         const existing = yield* decodeRows(
           Schema.Array(CheckpointRow),
           "effect_agent_checkpoints",
           `${checkpoint.threadId}/${checkpoint.throughSequence}`,
           checkpointRows,
         );
+
         if (existing.length > 1) {
           return yield* SqliteStorageCorruptionError.make({
             table: "effect_agent_checkpoints",
@@ -894,6 +936,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               message: "A different checkpoint already exists at this canonical sequence.",
             });
           }
+
           return;
         }
 
@@ -930,6 +973,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       ORDER BY through_sequence DESC
       LIMIT 1
     `.pipe(Effect.mapError(storageError("load checkpoint")));
+
     return yield* decodeRows(
       Schema.Array(CheckpointRow),
       "effect_agent_checkpoints",
@@ -944,12 +988,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
   ) {
     if (sequence === 0) {
       const threads = yield* getThread(threadId);
+
       return threads.length === 0
         ? []
         : [threads[0].tail_sequence === 0 ? threads[0].tail_digest : undefined].filter(
             (value): value is string => value !== undefined,
           );
     }
+
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
         thread_id,
@@ -963,12 +1009,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       WHERE thread_id = ${threadId}
         AND last_sequence = ${sequence}
     `.pipe(Effect.mapError(storageError("read canonical digest at sequence")));
+
     const batches = yield* decodeRows(
       Schema.Array(BatchRow),
       "effect_agent_canonical_batches",
       `${threadId}/${sequence}`,
       rows,
     );
+
     return batches.map((batch) => batch.tail_digest);
   });
 
@@ -985,6 +1033,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             FROM effect_agent_threads
             ORDER BY thread_id
           `.pipe(Effect.mapError(storageError("scan threads")));
+
         const batches = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -997,6 +1046,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             FROM effect_agent_canonical_batches
             ORDER BY thread_id, first_sequence
           `.pipe(Effect.mapError(storageError("scan canonical batches")));
+
         const records = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -1007,6 +1057,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             FROM effect_agent_canonical_records
             ORDER BY thread_id, sequence
           `.pipe(Effect.mapError(storageError("scan canonical records")));
+
         const checkpoints = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -1016,6 +1067,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             FROM effect_agent_checkpoints
             ORDER BY thread_id, through_sequence
           `.pipe(Effect.mapError(storageError("scan checkpoints")));
+
         return {
           threads: yield* decodeRows(
             Schema.Array(ThreadRow),

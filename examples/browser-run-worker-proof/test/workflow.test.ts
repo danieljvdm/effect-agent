@@ -39,12 +39,14 @@ describe("Browser Run Worker proof deployment resource", () => {
   it.effect("deletes the successfully deployed Worker when its Scope exits", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const operations: WorkerDeploymentOperations = {
         nameExists: () => Effect.succeed(false),
         deploy: (name) => Ref.update(events, (current) => [...current, `deploy:${name}`]),
         invoke: () => Effect.succeed(proofResult()),
         delete: (name) => Ref.update(events, (current) => [...current, `delete:${name}`]),
       };
+
       const deletionFailure = yield* Ref.make<Option.Option<WorkerProofError>>(Option.none());
       const name = "effect-agent-browser-proof-0123456789abcdef0123456789abcdef";
 
@@ -63,6 +65,7 @@ describe("Browser Run Worker proof deployment resource", () => {
   it.effect("returns only validated interactive proof metadata and still deletes the Worker", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<string>>([]);
+
       const operations: WorkerDeploymentOperations = {
         nameExists: () => Effect.succeed(false),
         deploy: (name) => Ref.update(events, (current) => [...current, `deploy:${name}`]),
@@ -101,6 +104,7 @@ describe("Browser Run Worker proof deployment resource", () => {
       Effect.gen(function* () {
         const events = yield* Ref.make<ReadonlyArray<string>>([]);
         const invoked = yield* Deferred.make<void>();
+
         const operations: WorkerDeploymentOperations = {
           nameExists: () => Effect.succeed(false),
           deploy: (name) => Ref.update(events, (current) => [...current, `deploy:${name}`]),
@@ -116,6 +120,7 @@ describe("Browser Run Worker proof deployment resource", () => {
           Effect.provide(NodeCrypto.layer),
           Effect.forkChild,
         );
+
         yield* Deferred.await(invoked);
         yield* TestClock.adjust("150 seconds");
         const error = yield* Fiber.join(fiber).pipe(Effect.flip);
@@ -123,6 +128,7 @@ describe("Browser Run Worker proof deployment resource", () => {
         assert.strictEqual(error.reason, "invocation-timeout");
         const observed = yield* Ref.get(events);
         const deployment = observed.find((event) => event.startsWith("deploy:")) ?? "";
+
         assert.deepStrictEqual(observed, [
           deployment,
           deployment.replace("deploy:", "invoke:"),

@@ -1,4 +1,15 @@
-import { Context, Crypto, Duration, Effect, Encoding, JsonSchema, Schema } from "effect";
+import {
+  Context,
+  Crypto,
+  Duration,
+  Effect,
+  Encoding,
+  JsonSchema,
+  type Layer,
+  Option,
+  Schema,
+  type Scope,
+} from "effect";
 import { Tool, type Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
 
@@ -17,7 +28,14 @@ export class McpServerIdentity extends Schema.Class<McpServerIdentity>(
   implementation: McpSchema.Implementation,
 }) {}
 
-/** Requested hard limits for an adapter-owned MCP connection and discovery response. */
+/**
+ * Requested hard limits for an adapter-owned MCP connection and discovery response.
+ *
+ * `expectedToolkitSchemaDigest` pins the tool contract an Agent was authored
+ * against: when a connector derives its Toolkit from live discovery, a server
+ * that adds, removes, or reshapes a tool fails closed instead of silently
+ * changing what the model can call.
+ */
 export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
   "@effect-agent/capabilities/McpConnectionRequest",
 )({
@@ -26,7 +44,21 @@ export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
   maxToolDescriptionBytes: PositiveInt,
   maxDiscoveryBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
   connectTimeoutMillis: PositiveInt,
+  expectedToolkitSchemaDigest: Schema.optionalKey(Sha256Digest),
 }) {}
+
+/**
+ * Tool annotation recording the `outputSchema` an MCP server advertised for a
+ * Tool the framework client derived from discovery, or `None` when the server
+ * advertised none. Such a Tool's Effect success Schema is the client's result
+ * envelope rather than the wire contract, so discovery validation compares
+ * this annotation instead. Tools without the annotation, including dynamic
+ * Tools from other connectors, keep deriving it from their success Schema.
+ */
+export class McpToolOutputSchema extends Context.Service<
+  McpToolOutputSchema,
+  Option.Option<McpSchema.ToolJsonSchema>
+>()("@effect-agent/capabilities/McpToolOutputSchema") {}
 
 /** Typed remote connection failure; no remote execution is claimed exactly-once. */
 export class McpConnectionError extends Schema.TaggedError<McpConnectionError>()(
@@ -70,18 +102,25 @@ export class McpDiscovery extends Schema.Class<McpDiscovery>(
   toolkitSchemaDigest: Sha256Digest,
 }) {}
 
-/** Raw adapter result before the framework validates count and byte limits. */
+/**
+ * Raw adapter result before the framework validates count and byte limits.
+ * A connector that executes tools remotely supplies `handlers`; a connector
+ * serving an application-authored Toolkit leaves them to the application.
+ */
 export interface McpConnectedServer {
   readonly identity: McpServerIdentity;
   readonly capabilities: McpSchema.ServerCapabilities;
   readonly tools: ReadonlyArray<McpSchema.Tool>;
   readonly toolkit: Toolkit.Any;
+  readonly handlers?: Layer.Layer<Tool.Handler<string>> | undefined;
 }
 
 /** Scoped validated MCP connection with native Effect AI dynamic Toolkit values. */
 export interface McpConnection {
   readonly discovery: McpDiscovery;
   readonly toolkit: Toolkit.Any;
+  /** Handler Layer for `toolkit` when the connector executes tools remotely. */
+  readonly handlers?: Layer.Layer<Tool.Handler<string>> | undefined;
 }
 
 /** Adapter port for native Effect AI MCP protocol/schema integration. */
@@ -90,7 +129,7 @@ export class McpConnector extends Context.Service<
   {
     readonly connect: (
       request: McpConnectionRequest,
-    ) => Effect.Effect<McpConnectedServer, McpConnectionError, import("effect").Scope.Scope>;
+    ) => Effect.Effect<McpConnectedServer, McpConnectionError, Scope.Scope>;
   }
 >()("@effect-agent/capabilities/McpConnector") {}
 
@@ -125,6 +164,7 @@ const canonicalJson = (value: Schema.Json): Schema.Json => {
   }
   if (isJsonArray(value)) return value.map(canonicalJson);
   const output: Record<string, Schema.Json> = {};
+
   // Keys sort by UTF-16 code units (RFC 8785 style): locale-aware collation varies
   // across hosts and treats canonically equivalent distinct key sequences as equal.
   for (const [key, item] of Object.entries(value).sort(([left], [right]) =>
@@ -132,16 +172,33 @@ const canonicalJson = (value: Schema.Json): Schema.Json => {
   )) {
     output[key] = canonicalJson(item);
   }
+
   return output;
 };
 
 const utf8 = (value: string): Uint8Array => {
   const hex = Encoding.encodeHex(value);
   const bytes = new Uint8Array(hex.length / 2);
+
   for (let index = 0; index < bytes.length; index += 1) {
     bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   }
+
   return bytes;
+};
+
+/**
+ * The `outputSchema` a Toolkit member claims. A Tool annotated with
+ * `McpToolOutputSchema` reports exactly what discovery advertised, present or
+ * absent; every other Tool derives it from its success Schema.
+ */
+const toolkitOutputSchema = (tool: Tool.Any): JsonSchema.JsonSchema | undefined => {
+  const discovered = Context.getOption(tool.annotations, McpToolOutputSchema);
+
+  if (Option.isSome(discovered)) return Option.getOrUndefined(discovered.value);
+  const derived = flattenTopLevelRef(Tool.getJsonSchemaFromSchema(tool.successSchema));
+
+  return derived.type === "object" ? derived : undefined;
 };
 
 const digestJson = Effect.fn("digestMcpSchema")(function* (serverId: string, value: unknown) {
@@ -154,6 +211,7 @@ const digestJson = Effect.fn("digestMcpSchema")(function* (serverId: string, val
       }),
     ),
   );
+
   const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(
     canonicalJson(json),
   ).pipe(
@@ -165,7 +223,9 @@ const digestJson = Effect.fn("digestMcpSchema")(function* (serverId: string, val
       }),
     ),
   );
+
   const crypto = yield* Crypto.Crypto;
+
   const digest = yield* crypto.digest("SHA-256", utf8(encoded)).pipe(
     Effect.mapError((cause) =>
       McpToolkitMismatch.make({
@@ -175,6 +235,7 @@ const digestJson = Effect.fn("digestMcpSchema")(function* (serverId: string, val
       }),
     ),
   );
+
   return `sha256:${Encoding.encodeHex(digest)}`;
 });
 
@@ -199,6 +260,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
   }
   for (const tool of server.tools) {
     const descriptionBytes = encodedBytes(tool.description ?? "");
+
     if (descriptionBytes > request.maxToolDescriptionBytes) {
       return yield* McpDiscoveryLimitExceeded.make({
         serverId: request.serverId,
@@ -210,6 +272,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
   }
   const discoveredNames = server.tools.map((tool) => tool.name).sort();
   const toolkitNames = Object.keys(server.toolkit.tools).sort();
+
   if (
     discoveredNames.length !== toolkitNames.length ||
     discoveredNames.some((name, index) => name !== toolkitNames[index])
@@ -219,6 +282,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
       message: "Native Effect AI Toolkit names do not match MCP tool discovery",
     });
   }
+
   const discoverySchemas = server.tools
     .map((tool) => ({
       name: tool.name,
@@ -226,15 +290,17 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
       ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
     }))
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+
   const toolkitSchemas = yield* Effect.try({
     try: () =>
       Object.values(server.toolkit.tools)
         .map((tool) => {
-          const outputSchema = flattenTopLevelRef(Tool.getJsonSchemaFromSchema(tool.successSchema));
+          const outputSchema = toolkitOutputSchema(tool);
+
           return {
             name: tool.name,
             inputSchema: flattenTopLevelRef(Tool.getJsonSchema(tool)),
-            ...(outputSchema.type === "object" ? { outputSchema } : {}),
+            ...(outputSchema === undefined ? {} : { outputSchema }),
           };
         })
         .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)),
@@ -245,14 +311,26 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
         message: "Could not derive JSON Schema from the native Effect AI Toolkit",
       }),
   });
+
   const discoveryDigest = yield* digestJson(request.serverId, discoverySchemas);
   const toolkitDigest = yield* digestJson(request.serverId, toolkitSchemas);
+
   if (discoveryDigest !== toolkitDigest) {
     return yield* McpToolkitMismatch.make({
       serverId: request.serverId,
       message: "Native Effect AI Toolkit schemas do not match MCP tool discovery",
     });
   }
+  if (
+    request.expectedToolkitSchemaDigest !== undefined &&
+    request.expectedToolkitSchemaDigest !== toolkitDigest
+  ) {
+    return yield* McpToolkitMismatch.make({
+      serverId: request.serverId,
+      message: `MCP tool discovery digest ${toolkitDigest} does not match the expected ${request.expectedToolkitSchemaDigest}`,
+    });
+  }
+
   const encoded = yield* Schema.encodeEffect(
     Schema.Struct({
       identity: McpServerIdentity,
@@ -272,6 +350,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
       }),
     ),
   );
+
   const discoveryJson = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
     Effect.mapError((error) =>
       McpConnectionError.make({
@@ -281,6 +360,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
       }),
     ),
   );
+
   const discoveryText = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(
     discoveryJson,
   ).pipe(
@@ -292,7 +372,9 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
       }),
     ),
   );
+
   const discoveryBytes = encodedBytes(discoveryText);
+
   if (discoveryBytes > request.maxDiscoveryBytes) {
     return yield* McpDiscoveryLimitExceeded.make({
       serverId: request.serverId,
@@ -301,6 +383,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
       observedValue: discoveryBytes,
     });
   }
+
   return McpDiscovery.make({
     identity: server.identity,
     capabilities: server.capabilities,
@@ -316,6 +399,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
  */
 export const connectMcp = Effect.fn("connectMcp")(function* (request: McpConnectionRequest) {
   const connector = yield* McpConnector;
+
   const server = yield* connector.connect(request).pipe(
     Effect.timeoutOrElse({
       duration: Duration.millis(request.connectTimeoutMillis),
@@ -328,9 +412,12 @@ export const connectMcp = Effect.fn("connectMcp")(function* (request: McpConnect
         ),
     }),
   );
+
   const discovery = yield* validateMcpDiscovery(request, server);
+
   return {
     discovery,
     toolkit: server.toolkit,
+    ...(server.handlers === undefined ? {} : { handlers: server.handlers }),
   } satisfies McpConnection;
 });
