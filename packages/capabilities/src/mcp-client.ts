@@ -706,9 +706,7 @@ const makeMcpTool = (tool: McpSchema.Tool, trustToolAnnotations: boolean): McpTo
   const title = tool.title ?? tool.annotations?.title;
 
   if (title !== undefined) dynamic = dynamic.annotate(Tool.Title, title);
-  if (tool.outputSchema !== undefined) {
-    dynamic = dynamic.annotate(McpToolOutputSchema, tool.outputSchema);
-  }
+  dynamic = dynamic.annotate(McpToolOutputSchema, Option.fromNullishOr(tool.outputSchema));
   if (tool.annotations !== undefined) {
     dynamic = dynamic
       .annotate(Tool.Readonly, tool.annotations.readOnlyHint)

@@ -48,14 +48,16 @@ export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
 }) {}
 
 /**
- * Tool annotation carrying the `outputSchema` an MCP server advertised for a
- * dynamic Tool. A dynamic Tool's Effect success Schema describes the client's
- * result envelope, not the wire contract, so discovery validation compares this
- * annotation instead.
+ * Tool annotation recording the `outputSchema` an MCP server advertised for a
+ * Tool the framework client derived from discovery, or `None` when the server
+ * advertised none. Such a Tool's Effect success Schema is the client's result
+ * envelope rather than the wire contract, so discovery validation compares
+ * this annotation instead. Tools without the annotation, including dynamic
+ * Tools from other connectors, keep deriving it from their success Schema.
  */
 export class McpToolOutputSchema extends Context.Service<
   McpToolOutputSchema,
-  McpSchema.ToolJsonSchema
+  Option.Option<McpSchema.ToolJsonSchema>
 >()("@effect-agent/capabilities/McpToolOutputSchema") {}
 
 /** Typed remote connection failure; no remote execution is claimed exactly-once. */
@@ -182,14 +184,14 @@ const utf8 = (value: string): Uint8Array => {
 };
 
 /**
- * The `outputSchema` a Toolkit member claims. Authored Tools derive it from
- * their success Schema; dynamic Tools carry the discovered schema as an
- * annotation because their success Schema is the client's result envelope.
+ * The `outputSchema` a Toolkit member claims. A Tool annotated with
+ * `McpToolOutputSchema` reports exactly what discovery advertised, present or
+ * absent; every other Tool derives it from its success Schema.
  */
 const toolkitOutputSchema = (tool: Tool.Any): JsonSchema.JsonSchema | undefined => {
-  if (Tool.isDynamic(tool)) {
-    return Option.getOrUndefined(Context.getOption(tool.annotations, McpToolOutputSchema));
-  }
+  const discovered = Context.getOption(tool.annotations, McpToolOutputSchema);
+
+  if (Option.isSome(discovered)) return Option.getOrUndefined(discovered.value);
   const derived = flattenTopLevelRef(Tool.getJsonSchemaFromSchema(tool.successSchema));
 
   return derived.type === "object" ? derived : undefined;

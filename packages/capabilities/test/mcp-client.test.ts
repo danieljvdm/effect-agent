@@ -17,6 +17,7 @@ import {
   Tool,
   Toolkit,
 } from "effect/unstable/ai";
+import * as McpSchema from "effect/unstable/ai/McpSchema";
 import {
   FetchHttpClient,
   HttpClient,
@@ -34,8 +35,10 @@ import {
   McpHttpTransport,
   McpStdioTransport,
   McpToolCallFailed,
+  McpServerIdentity,
   McpToolResult,
   type McpServerTransport,
+  validateMcpDiscovery,
 } from "../src/index.ts";
 
 // ---------------------------------------------------------------------------
@@ -358,6 +361,43 @@ describe("MCP client", () => {
         ),
       ),
     30_000,
+  );
+});
+
+describe("MCP discovery validation for other connectors", () => {
+  it.effect("keeps deriving a dynamic Tool's output schema from its success Schema", () =>
+    Effect.gen(function* () {
+      // A connector implemented outside this client may hand connectMcp a
+      // dynamic Tool with an Effect success Schema; its discovered
+      // outputSchema must still validate against that Schema.
+      const Lookup = Tool.dynamic("lookup", {
+        parameters: Schema.Struct({ id: Schema.String }),
+        success: Schema.Struct({ value: Schema.String }),
+      });
+      const decodeToolJsonSchema = Schema.decodeUnknownEffect(McpSchema.ToolJsonSchema);
+      const discovery = yield* validateMcpDiscovery(request, {
+        identity: McpServerIdentity.make({
+          serverId: request.serverId,
+          implementation: McpSchema.Implementation.make({
+            name: "other-connector",
+            version: "1.0.0",
+          }),
+        }),
+        capabilities: McpSchema.ServerCapabilities.make({}),
+        tools: [
+          McpSchema.Tool.make({
+            name: "lookup",
+            inputSchema: yield* decodeToolJsonSchema(Tool.getJsonSchema(Lookup)),
+            outputSchema: yield* decodeToolJsonSchema(
+              Tool.getJsonSchemaFromSchema(Lookup.successSchema),
+            ),
+          }),
+        ],
+        toolkit: Toolkit.make(Lookup),
+      }).pipe(Effect.provide(NodeCrypto.layer));
+
+      expect(discovery.tools).toHaveLength(1);
+    }),
   );
 });
 
