@@ -88371,6 +88371,13 @@ var GitHubApiFailure = class extends Schema_exports.TaggedError()("GitHubApiFail
   reason: Schema_exports.String
 }) {
 };
+var BinaryBlob = class extends Schema_exports.TaggedError()("BinaryBlob", {
+  sha: Revision3
+}) {
+};
+var isBinaryAssetPath = (path) => /\.(png|jpe?g|gif|webp|avif|heic|heif|ico|icns|bmp|tiff?|psd|woff2?|ttf|otf|eot|mp3|mp4|m4[av]|wav|ogg|flac|aac|aiff|mov|webm|avi|mkv|pdf|zip|gz|bz2|xz|7z|rar|tar|jar|wasm|exe|dll|so|dylib|class|pyc|sqlite3?|db)$/i.test(
+  path
+);
 var StaleReviewHead = class extends Schema_exports.TaggedError()("StaleReviewHead", {
   inspectedHead: Revision3,
   currentHead: Revision3
@@ -88628,10 +88635,7 @@ ${input.evidence}`
       });
     }
     if (bytes2.includes(0)) {
-      return yield* GitHubApiFailure.make({
-        operation: "decode Git blob",
-        reason: `blob ${sha} is not textual`
-      });
+      return yield* BinaryBlob.make({ sha });
     }
     const content = yield* Effect_exports.try({
       try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes2),
@@ -89596,7 +89600,7 @@ var hydrateExactChanges = Effect_exports.fn("hydrateExactChanges")(function* (in
     (left, right) => Number(documentationPath(left.file.path)) - Number(documentationPath(right.file.path)) || (left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0)
   )) {
     const ignored = [file2.path, ...basePath === file2.path ? [] : [basePath]].some(
-      (path) => input.ignore.some((pattern) => matchesIgnore(path, pattern))
+      (path) => isBinaryAssetPath(path) || input.ignore.some((pattern) => matchesIgnore(path, pattern))
     );
     if (ignored) {
       exclude(ignoredPaths, file2, basePath);
@@ -89626,14 +89630,19 @@ var hydrateExactChanges = Effect_exports.fn("hydrateExactChanges")(function* (in
     }
     const contents = yield* Effect_exports.all(
       {
-        before: beforeEntry === void 0 ? Effect_exports.succeed("") : input.base.readTextFile(basePath),
-        after: afterEntry === void 0 ? Effect_exports.succeed("") : input.head.readTextFile(file2.path)
+        before: beforeEntry === void 0 ? Effect_exports.succeed("") : input.base.readTextFile(basePath).pipe(Effect_exports.catchTag("BinaryBlob", () => Effect_exports.succeed(void 0))),
+        after: afterEntry === void 0 ? Effect_exports.succeed("") : input.head.readTextFile(file2.path).pipe(Effect_exports.catchTag("BinaryBlob", () => Effect_exports.succeed(void 0)))
       },
       { concurrency: 2 }
     ).pipe(Effect_exports.result);
     if (Result_exports.isFailure(contents)) {
       hydratedSourceBytes += estimatedSourceBytes;
       exclude(unreviewedPaths, file2, basePath, "source-read-failed");
+      continue;
+    }
+    if (contents.success.before === void 0 || contents.success.after === void 0) {
+      hydratedSourceBytes += estimatedSourceBytes;
+      exclude(ignoredPaths, file2, basePath);
       continue;
     }
     hydratedSourceBytes += sourceSizesKnown ? estimatedSourceBytes : contents.success.before.length + contents.success.after.length;
@@ -89676,7 +89685,7 @@ var hydrateExactChanges = Effect_exports.fn("hydrateExactChanges")(function* (in
 var reviewContextFailure = (message) => ReviewContextError.make({ message });
 var makeReviewRepository = (input) => {
   const snapshot3 = (revision) => revision === "base" ? input.base : input.head;
-  const outsideScope = (path) => input.unavailablePaths.has(path) || input.ignore.some((pattern) => matchesIgnore(path, pattern));
+  const outsideScope = (path) => isBinaryAssetPath(path) || input.unavailablePaths.has(path) || input.ignore.some((pattern) => matchesIgnore(path, pattern));
   const isReadableEntry = (entry) => entry?.type === "blob" && entry.mode !== "120000";
   const readFile3 = Effect_exports.fn("ReviewRepository.readFile")(function* (request3) {
     if (outsideScope(request3.path)) {

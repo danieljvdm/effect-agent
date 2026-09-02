@@ -16,7 +16,12 @@ import {
   reviewEventFor,
   withActionInputs,
 } from "../src/action.ts";
-import { type ChangedFile, GitHubApiFailure, type RepositorySnapshot } from "../src/github.ts";
+import {
+  BinaryBlob,
+  type ChangedFile,
+  GitHubApiFailure,
+  type RepositorySnapshot,
+} from "../src/github.ts";
 import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
@@ -393,6 +398,63 @@ describe("Manual command acknowledgement", () => {
 });
 
 describe("Incremental review scope", () => {
+  it.effect("completes a binary-only PR without fetching blobs or calling a model", () =>
+    Effect.gen(function* () {
+      const published = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+      const client = HttpClient.make((request, url) => {
+        let response: unknown;
+        if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
+          return Ref.update(published, (values) => [
+            ...values,
+            decodePublishedReview(request),
+          ]).pipe(
+            Effect.as(
+              jsonResponse(request, {
+                html_url: "https://github.test/reve-ai/example/pull/12#review",
+              }),
+            ),
+          );
+        }
+        if (url.pathname.endsWith("/pulls/12")) {
+          response = pullRequestWire("Update icons", "base", "head");
+        } else if (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files")) {
+          response = [];
+        } else if (url.pathname.includes("/compare/")) {
+          response = { merge_base_commit: { sha: "base" } };
+        } else if (url.pathname.includes("/git/commits/")) {
+          const sha = url.pathname.endsWith("/base") ? "base" : "head";
+          response = { sha, tree: { sha: `${sha}-tree` } };
+        } else if (url.pathname.includes("/git/trees/")) {
+          const sha = url.pathname.endsWith("/base-tree") ? "base-tree" : "head-tree";
+          response = {
+            sha,
+            truncated: false,
+            tree:
+              sha === "base-tree"
+                ? []
+                : [
+                    {
+                      path: "assets/icon.png",
+                      sha: "image",
+                      mode: "100644",
+                      type: "blob",
+                      size: 20_000_000,
+                    },
+                  ],
+          };
+        } else {
+          return Effect.die(`unexpected request ${request.method} ${url.href}`);
+        }
+        return Effect.succeed(jsonResponse(request, response));
+      });
+      yield* runReviewAction(client);
+      const reviews = yield* Ref.get(published);
+      expect(reviews).toHaveLength(1);
+      expect(reviews[0]?.body).toContain("1 ignored");
+      expect(reviews[0]?.body).toContain(reviewMarker(true, true));
+    }),
+  );
+
   it("publishes blocking findings as a head-bound change request", () => {
     expect(reviewEventFor(1)).toBe("REQUEST_CHANGES");
     expect(reviewEventFor(0)).toBe("COMMENT");
@@ -908,6 +970,100 @@ describe("exact review delta", () => {
       expect(surface.changes[0]?.patch.length).toBeLessThan(1_000);
       expect(surface.changes[0]?.patch).not.toContain("x".repeat(1_000));
     }),
+  );
+
+  it.effect("ignores binary assets before hydration and preserves capacity for text assets", () =>
+    Effect.gen(function* () {
+      const binaries = [
+        ...Array.from({ length: 101 }, (_, index) => `assets/${index}.PNG`),
+        "assets/font.woff2",
+        "assets/video.mp4",
+        "assets/archive.zip",
+        "assets/manual.pdf",
+      ];
+      const text = { "src/main.ts": "export const value = 1;", "assets/icon.svg": "<svg/>" };
+      const base = treeSnapshot("base", {});
+      const head = treeSnapshot(
+        "head",
+        {
+          ...Object.fromEntries(binaries.map((path) => [path, "not text"])),
+          ...text,
+          "assets/unchanged.jpg": "not text",
+        },
+        new Set([...binaries, "assets/unchanged.jpg"]),
+      );
+      const surface = yield* hydrateExactChanges({
+        files: [],
+        changedPaths: [...binaries, ...Object.keys(text)],
+        base,
+        head,
+        ignore: [],
+      });
+      expect(surface.ignoredPaths).toEqual([...binaries].sort());
+      expect(surface.unreviewedPaths).toEqual([]);
+      expect(surface.changes.map(({ path }) => path)).toEqual(Object.keys(text).sort());
+      const repository = makeReviewRepository({
+        base,
+        head,
+        ignore: [],
+        unavailablePaths: surface.unavailablePaths,
+      });
+      expect((yield* repository.findFiles({ revision: "head", query: "assets/" })).paths).toEqual([
+        "assets/icon.svg",
+      ]);
+      expect(
+        yield* repository
+          .readFile({ revision: "head", path: "assets/unchanged.jpg", startLine: 1, lineCount: 1 })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "ReviewContextError" });
+    }),
+  );
+
+  it.effect.each([false, true])("ignores a binary rename in either direction: %s", (reverse) =>
+    Effect.gen(function* () {
+      const previousPath = reverse ? "assets/unknown" : "assets/icon.png";
+      const path = reverse ? "assets/icon.png" : "assets/unknown";
+      const surface = yield* hydrateExactChanges({
+        files: [{ ...file(path, undefined), previousPath, status: "renamed" }],
+        changedPaths: [previousPath, path],
+        base: treeSnapshot("base", { [previousPath]: "binary" }, new Set([previousPath])),
+        head: treeSnapshot("head", { [path]: "binary" }, new Set([path])),
+        ignore: [],
+      });
+      expect(surface.ignoredPaths).toEqual([path]);
+      expect(surface.changes).toEqual([]);
+      expect([...surface.unavailablePaths].sort()).toEqual([previousPath, path].sort());
+    }),
+  );
+
+  it.effect.each([false, true])(
+    "does not let detected binary content hide a source read failure: %s",
+    (failedRead) =>
+      Effect.gen(function* () {
+        const path = "assets/unknown";
+        const surface = yield* hydrateExactChanges({
+          files: [],
+          changedPaths: [path],
+          ignore: [],
+          base: {
+            ...treeSnapshot("base", { [path]: "binary" }),
+            readTextFile: () => Effect.fail(BinaryBlob.make({ sha: "binary" })),
+          },
+          head: {
+            ...treeSnapshot("head", { [path]: "text" }),
+            readTextFile: () =>
+              failedRead
+                ? Effect.fail(
+                    GitHubApiFailure.make({ operation: "get Git blob", reason: "unavailable" }),
+                  )
+                : Effect.succeed("text"),
+          },
+        });
+        expect(surface.ignoredPaths).toEqual(failedRead ? [] : [path]);
+        expect(surface.unreviewedPaths).toEqual(failedRead ? [path] : []);
+        expect(surface.changes).toEqual([]);
+        expect(surface.unavailablePaths.has(path)).toBe(true);
+      }),
   );
 
   it.effect("keeps expected blob read failures as coverage gaps and admits other files", () =>

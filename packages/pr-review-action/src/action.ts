@@ -29,6 +29,7 @@ import {
 import {
   type ChangedFile,
   GitHubApiFailure,
+  isBinaryAssetPath,
   makeExactPatch,
   makeGitHubClient,
   type RepositorySnapshot,
@@ -313,8 +314,9 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       Number(documentationPath(left.file.path)) - Number(documentationPath(right.file.path)) ||
       (left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0),
   )) {
-    const ignored = [file.path, ...(basePath === file.path ? [] : [basePath])].some((path) =>
-      input.ignore.some((pattern) => matchesIgnore(path, pattern)),
+    const ignored = [file.path, ...(basePath === file.path ? [] : [basePath])].some(
+      (path) =>
+        isBinaryAssetPath(path) || input.ignore.some((pattern) => matchesIgnore(path, pattern)),
     );
     if (ignored) {
       exclude(ignoredPaths, file, basePath);
@@ -353,14 +355,31 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     }
     const contents = yield* Effect.all(
       {
-        before: beforeEntry === undefined ? Effect.succeed("") : input.base.readTextFile(basePath),
-        after: afterEntry === undefined ? Effect.succeed("") : input.head.readTextFile(file.path),
+        before:
+          beforeEntry === undefined
+            ? Effect.succeed("")
+            : input.base
+                .readTextFile(basePath)
+                .pipe(Effect.catchTag("BinaryBlob", () => Effect.succeed(undefined))),
+        after:
+          afterEntry === undefined
+            ? Effect.succeed("")
+            : input.head
+                .readTextFile(file.path)
+                .pipe(Effect.catchTag("BinaryBlob", () => Effect.succeed(undefined))),
       },
       { concurrency: 2 },
     ).pipe(Effect.result);
     if (Result.isFailure(contents)) {
       hydratedSourceBytes += estimatedSourceBytes;
       exclude(unreviewedPaths, file, basePath, "source-read-failed");
+      continue;
+    }
+    // Wait for both reads so a binary side cannot hide a real failure on the
+    // other side. Unknown binary formats still consume the bounded read budget.
+    if (contents.success.before === undefined || contents.success.after === undefined) {
+      hydratedSourceBytes += estimatedSourceBytes;
+      exclude(ignoredPaths, file, basePath);
       continue;
     }
     hydratedSourceBytes += sourceSizesKnown
@@ -434,6 +453,7 @@ export const makeReviewRepository = (input: {
 }): ReviewRepository["Service"] => {
   const snapshot = (revision: "base" | "head") => (revision === "base" ? input.base : input.head);
   const outsideScope = (path: string) =>
+    isBinaryAssetPath(path) ||
     input.unavailablePaths.has(path) ||
     input.ignore.some((pattern) => matchesIgnore(path, pattern));
   const isReadableEntry = (entry: ReturnType<RepositorySnapshot["entry"]>) =>
