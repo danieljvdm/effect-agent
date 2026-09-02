@@ -29,21 +29,27 @@ describe("memory namespace addresses", () => {
         '[1,"app/user-conversations",1,{"tenantId":"海🌊","userId":"quote\\"\\\\\\n"}]',
       ],
     ] as const;
+
     for (const [identity, address] of fixtures) {
       const value = definition.make(identity);
+
       expect(value.address).toBe(address);
       const restored = await Effect.runPromise(definition.restore(address));
+
       expect(restored.identity).toEqual(identity);
       expect(MemoryNamespace.equals(value, restored)).toBe(true);
+
       const wire = Schema.encodeSync(MemoryKey.Wire)(
         MemoryKey.make({ namespace: value, id: "same" }),
       );
+
       expect(Schema.decodeSync(MemoryKey.Wire)(wire).namespace.address).toBe(address);
     }
   });
 
   it("normalizes through the codec and sorts nested keys without delimiter or Unicode aliases", async () => {
     const records = MemoryNamespace.define({ name: "records", version: 1, identity: Schema.Json });
+
     expect(records.make({ z: { b: 2, a: 1 }, a: 3 }).address).toBe(
       '[1,"records",1,{"a":3,"z":{"a":1,"b":2}}]',
     );
@@ -53,12 +59,15 @@ describe("memory namespace addresses", () => {
     expect(records.make({ "10": 10, "2": 2 }).address).toBe('[1,"records",1,{"10":10,"2":2}]');
     expect(records.make("é").address).not.toBe(records.make("é").address);
     expect(records.make(-0).address).toBe(records.make(0).address);
+
     const dates = MemoryNamespace.define({
       name: "dates",
       version: 1,
       identity: Schema.DateFromString,
     });
+
     const decoded = await Effect.runPromise(dates.decode("2026-01-01T01:00:00+01:00"));
+
     expect(decoded.address).toBe('[1,"dates",1,"2026-01-01T00:00:00.000Z"]');
     expect((await Effect.runPromise(dates.restore(decoded.address))).identity.toISOString()).toBe(
       "2026-01-01T00:00:00.000Z",
@@ -68,11 +77,13 @@ describe("memory namespace addresses", () => {
   it("rejects wrong definitions, unsupported formats, malformed and out-of-bound identities", async () => {
     const address = definition.make({ tenantId: "a", userId: "b" }).address;
     const other = MemoryNamespace.define({ name: "other", version: 1, identity: Schema.Json });
+
     const newer = MemoryNamespace.define({
       name: definition.name,
       version: 2,
       identity: Schema.Json,
     });
+
     expect(await Effect.runPromise(other.restore(address).pipe(Effect.flip))).toMatchObject({
       reason: "wrong-definition",
     });
@@ -112,6 +123,7 @@ describe("memory namespace addresses", () => {
       ).toThrow(/Expected/);
     }
     const bounded = MemoryNamespace.define({ name: "n", version: 1, identity: Schema.Json });
+
     expect(bounded.make("x".repeat(4084)).address.length).toBe(4096);
     for (const identity of [
       "x".repeat(4085),
@@ -125,6 +137,7 @@ describe("memory namespace addresses", () => {
       });
     }
     let nested: Schema.Json = 0;
+
     for (let depth = 0; depth < 17; depth++) nested = [nested];
     expect(await Effect.runPromise(bounded.decode(nested).pipe(Effect.flip))).toMatchObject({
       reason: "invalid-identity",

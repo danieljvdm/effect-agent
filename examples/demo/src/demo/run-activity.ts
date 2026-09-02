@@ -58,11 +58,13 @@ const activeToolActivity = (tool: ToolActivity): RunActivity => ({
 
 const latestActiveTool = (tools: ReadonlyMap<string, ToolActivity>): ToolActivity | undefined => {
   let latest: ToolActivity | undefined;
+
   for (const tool of tools.values()) {
     if (tool.state === "waiting" || tool.state === "running") {
       latest = tool;
     }
   }
+
   return latest;
 };
 
@@ -89,6 +91,7 @@ export const projectRunActivity = (
     label: "Starting agent…",
     detail: mode === "openai" ? "Live profile" : "Offline fixture profile",
   };
+
   let hasToolResult = false;
   const tools = new Map<string, ToolActivity>();
 
@@ -139,6 +142,7 @@ export const projectRunActivity = (
           providerExecuted: event.providerExecuted,
           state: event.providerExecuted ? "running" : "waiting",
         };
+
         tools.set(event.toolCallId, tool);
         activity = activeToolActivity(tool);
         break;
@@ -146,6 +150,7 @@ export const projectRunActivity = (
       case "ToolCallStarted":
       case "ToolProgress": {
         const declared = tools.get(event.toolCallId);
+
         const tool: ToolActivity = {
           name: event.toolName,
           providerExecuted:
@@ -154,6 +159,7 @@ export const projectRunActivity = (
               : (declared?.providerExecuted ?? false),
           state: "running",
         };
+
         tools.set(event.toolCallId, tool);
         activity = activeToolActivity(tool);
         break;
@@ -164,9 +170,11 @@ export const projectRunActivity = (
           providerExecuted: event.providerExecuted,
           state: "succeeded",
         };
+
         tools.set(event.toolCallId, tool);
         hasToolResult = true;
         const activeTool = latestActiveTool(tools);
+
         activity =
           activeTool === undefined
             ? {
@@ -183,9 +191,11 @@ export const projectRunActivity = (
           providerExecuted: event.providerExecuted,
           state: "failed",
         };
+
         tools.set(event.toolCallId, tool);
         hasToolResult = true;
         const activeTool = latestActiveTool(tools);
+
         activity =
           activeTool === undefined
             ? {
@@ -198,6 +208,7 @@ export const projectRunActivity = (
       }
       case "ApprovalRequested": {
         const declared = tools.get(event.toolCallId);
+
         activity = {
           phase: "waiting",
           label: `Waiting for approval to run ${humanizeToolName(event.toolName)}…`,

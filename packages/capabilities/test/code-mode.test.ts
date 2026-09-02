@@ -53,6 +53,7 @@ describe("CAP-014 CodeMode.make construction", () => {
       description: "Run JavaScript over the warehouse",
       tools: { warehouse: { query: Query } },
     });
+
     expect(Context.get(definition.tool.annotations, Tool.Readonly)).toBe(true);
     expect(Context.get(definition.tool.annotations, ToolExecutionClass)).toBe("readonly");
     expect(definition.tool.failureMode).toBe("return");
@@ -118,6 +119,7 @@ describe("CAP-014 CodeMode.make construction", () => {
       parameters: Schema.Struct({ other: Schema.String }),
       success: Schema.String,
     }).annotate(ToolExecutionClass, "readonly");
+
     expect(() =>
       CodeMode.make("run_javascript", {
         description: "d",
@@ -153,6 +155,7 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
       Effect.gen(function* () {
         const host = yield* CodeExecutionHost;
         const source = request.source.trim();
+
         const finish = (value: Schema.Json, logs: ReadonlyArray<string>) =>
           CodeExecutionResult.make({
             implementation: scriptedExecutorImplementation,
@@ -165,6 +168,7 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
               resultBytes: 0,
             },
           });
+
         // The scripted source stands in for untrusted model output: a parse
         // failure must stay inside the typed executor channel.
         const parseJson = (text: string) =>
@@ -179,14 +183,17 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
                 logs: [],
               }),
           });
+
         if (source.startsWith("CALL ")) {
           const [, target, ...rest] = source.split(" ");
           const [namespace, method] = target.split(".");
+
           const outcome = yield* host.call({
             namespace,
             method,
             argument: yield* parseJson(rest.join(" ")),
           });
+
           return outcome._tag === "CodeHostCallSuccess"
             ? finish({ ok: outcome.value }, ["called host"])
             : finish({ caught: outcome.error }, ["caught envelope"]);
@@ -196,11 +203,13 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
         }
         if (source.startsWith("LOGS ")) {
           const count = Number(source.slice("LOGS ".length));
+
           return finish(
             null,
             Array.from({ length: count }, (_, i) => `line-${i} ${"x".repeat(64)}`),
           );
         }
+
         return yield* CodeProgramFailedError.make({
           implementation: scriptedExecutorImplementation,
           reason: "threw",
@@ -237,6 +246,7 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
       tools: { warehouse: { query: Query } },
       ...(options?.maxEgressBytes === undefined ? {} : { maxEgressBytes: options.maxEgressBytes }),
     });
+
     const agent = Agent.make("code-mode-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -249,9 +259,11 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
         toolConcurrency: 1,
       }),
     });
+
     const toolResults = yield* Ref.make<
       ReadonlyArray<{ readonly result: unknown; readonly isFailure: boolean }>
     >([]);
+
     const model = Model.make(
       "scripted",
       "code-mode",
@@ -259,6 +271,7 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: ({ prompt }) =>
@@ -304,7 +317,9 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
         }),
       ),
     );
+
     const queryCalls = yield* Ref.make(0);
+
     const handlerLayer = definition.handlers.pipe(
       Layer.provide(
         Toolkit.make(Query).toLayer({
@@ -316,11 +331,13 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
       ),
       Layer.provide(scriptedExecutorLayer),
     );
+
     const result = yield* AgentRuntime.run(
       Agent.withModel(agent, model),
       { question: "go" },
       {},
     ).pipe(Effect.provide(handlerLayer), Effect.scoped);
+
     return {
       answer: result.output,
       toolResults: yield* Ref.get(toolResults),
@@ -340,6 +357,7 @@ layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) =
     () =>
       Effect.gen(function* () {
         const outcome = yield* runWithCode('CALL warehouse.query {"sql":"select 1"}');
+
         expect(outcome.answer).toEqual({ answer: "done" });
         expect(outcome.queryCalls).toBe(1);
         expect(outcome.toolResults).toHaveLength(1);
@@ -354,6 +372,7 @@ layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) =
   it.effect("CAP-014 an unknown namespace method rejects as a catchable envelope", () =>
     Effect.gen(function* () {
       const outcome = yield* runWithCode('CALL warehouse.missing {"sql":"x"}');
+
       expect(outcome.queryCalls).toBe(0);
       expect(outcome.toolResults[0].isFailure).toBe(false);
       expect(outcome.toolResults[0].result).toMatchObject({
@@ -367,6 +386,7 @@ layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) =
     () =>
       Effect.gen(function* () {
         const outcome = yield* runWithCode("THROW");
+
         expect(outcome.toolResults).toHaveLength(1);
         expect(outcome.toolResults[0].isFailure).toBe(true);
         expect(outcome.toolResults[0].result).toMatchObject({
@@ -383,6 +403,7 @@ layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) =
       const outcome = yield* runWithCode(`RESULT ${JSON.stringify({ big: "y".repeat(2_000) })}`, {
         maxEgressBytes: 512,
       });
+
       expect(outcome.toolResults[0].isFailure).toBe(true);
       expect(outcome.toolResults[0].result).toMatchObject({
         _tag: "CodeModeFailure",
@@ -396,10 +417,13 @@ layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) =
     () =>
       Effect.gen(function* () {
         const outcome = yield* runWithCode("LOGS 40", { maxEgressBytes: 1_024 });
+
         expect(outcome.toolResults[0].isFailure).toBe(false);
+
         const value = outcome.toolResults[0].result as {
           readonly logs: ReadonlyArray<string>;
         };
+
         expect(value.logs.length).toBeLessThan(40);
         expect(value.logs.at(-1)).toContain("logs truncated");
       }),
@@ -437,10 +461,12 @@ const Second = Tool.make("second_tool", {
   parameters: Schema.Struct({ key: Schema.String }),
   success: Schema.Struct({ ok: Schema.Boolean }),
 }).annotate(ToolExecutionClass, "readonly");
+
 const disjointDefinition = CodeMode.make("disjoint_code_mode", {
   description: "disjoint",
   tools: { warehouse: { query: Query }, other: { second: Second } },
 });
+
 type DisjointRequirements = LayerContext<typeof disjointDefinition.handlers>;
 type DisjointKeepsFirstHandler = Equal<
   Extract<DisjointRequirements, Tool.Handler<"query_warehouse">>,
@@ -458,12 +484,14 @@ describe("Code Mode type proofs", () => {
     const failureProof: HandlerFailureIsEnvelope = true;
     const executorProof: RequiresExecutor = true;
     const successProof: SuccessIsBudgeted = true;
+
     expect(failureProof && executorProof && successProof).toBe(true);
   });
 
   it("keeps every selected handler visible in R across disjoint namespaces", () => {
     const firstProof: DisjointKeepsFirstHandler = true;
     const secondProof: DisjointKeepsSecondHandler = true;
+
     expect(firstProof && secondProof).toBe(true);
   });
 });

@@ -44,10 +44,13 @@ const call = async <A>(runtime: Miniflare, path: string, body?: unknown): Promis
     method: body === undefined ? "GET" : "POST",
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
+
   const payload: unknown = await response.json();
+
   if (!response.ok) {
     throw new Error(`${path} failed: ${JSON.stringify(payload)}`);
   }
+
   return payload as A;
 };
 
@@ -57,6 +60,7 @@ const pollUntil = async (
   deadlineMillis = 60_000,
 ): Promise<void> => {
   const deadline = Date.now() + deadlineMillis;
+
   while (Date.now() < deadline) {
     if (await probe()) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -123,7 +127,9 @@ describe("Miniflare restart lane — Travel Planner armed-failpoint convergence"
       external: ["cloudflare:*", "node:*"],
       logLevel: "silent",
     });
+
     const output = bundled.outputFiles[0];
+
     if (output === undefined) throw new Error("esbuild produced no worker bundle");
     // Miniflare's module locator rejects dynamic `import()` expressions. The only ones in the
     // bundle are DEAD code (`@effect/sql`'s filesystem Migrator loader; the Object uses the
@@ -144,24 +150,29 @@ describe("Miniflare restart lane — Travel Planner armed-failpoint convergence"
     it(`a Miniflare runtime restart over persisted DO storage converges the armed failpoint scenario: ${row.name}`, async () => {
       const thread = `tp-restart-${index}`;
       const persistDirectory = await mkdtemp(join(tmpdir(), "tp-restart-"));
+
       cleanups.push(() => rm(persistDirectory, { recursive: true, force: true }));
       const armedTotal = row.arms.reduce((total, arm) => total + arm.count, 0);
 
       // Runtime 1: arm, submit, and prove the block engaged (the armed location fired at
       // least once AND a retry hit it again — runtime 1 cannot finish this Submission).
       const first = openRuntime(persistDirectory);
+
       for (const arm of row.arms) {
         await call(first, "/arm", { _tag: arm.kind, thread, ...arm });
       }
+
       const { receipt } = await call<{ receipt: unknown }>(first, "/submit", {
         thread,
         key: `${thread}-key`,
       });
+
       await pollUntil(async () => {
         const armed = await call<{ remaining: number }>(
           first,
           `/armed?thread=${encodeURIComponent(thread)}`,
         );
+
         return armed.remaining <= row.blockedAtRemaining;
       }, `runtime 1 to hit ${row.name} repeatedly (started at ${armedTotal})`);
       await first.dispose();
@@ -171,22 +182,28 @@ describe("Miniflare restart lane — Travel Planner armed-failpoint convergence"
       // evidence WITHOUT touching the Object (the /introspect route reads worker module
       // state only), then assert no client entry of any kind preceded it.
       const second = openRuntime(persistDirectory);
+
       cleanups.push(() => second.dispose());
       await second.ready;
       await pollUntil(async () => {
         const seen = await call<Introspection>(second, "/introspect");
+
         return seen.alarmDeliveries >= 1;
       }, "the persisted alarm to re-deliver after reopen");
       const beforeAnyRead = await call<Introspection>(second, "/introspect");
+
       expect(beforeAnyRead.clientEntries).toEqual([]);
 
       // The reads below never run a maintenance pass; they only OBSERVE the outcome the
       // redelivered alarms already converged.
       const settled = await call<{ outcome: string }>(second, "/await", { receipt });
+
       expect(settled.outcome).toBe("completed");
+
       const { tags } = await call<{ tags: ReadonlyArray<string> }>(second, "/records", {
         thread,
       });
+
       expect(tags.filter((tag) => tag === "SubmissionSettled")).toHaveLength(1);
       expect(tags).toContain("ModelResponseRecorded");
     }, 120_000);

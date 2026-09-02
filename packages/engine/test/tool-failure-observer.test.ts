@@ -64,9 +64,11 @@ const identifiers = Layer.succeed(IdGenerator, {
   nextRunId: Effect.succeed(RunId.make("run-observer")),
   nextTurnId: Effect.succeed(TurnId.make("turn-observer")),
 });
+
 const usage = { inputTokens: {}, outputTokens: {} };
 const failure = QueryFailure.make({ message: "Query rejected", privateDetail: "DECLARED_SECRET" });
 const outerId = "provider-call";
+
 const call = (
   name: string,
   id = outerId,
@@ -87,6 +89,7 @@ const model = (calls: ReadonlyArray<Response.StreamPartEncoded>) =>
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: () =>
@@ -139,19 +142,23 @@ const Query = Tool.make("query", {
   success: Schema.Unknown,
   failure: QueryFailure,
 }).annotate(ToolExecutionClass, "readonly");
+
 const Returned = Tool.make("returned", {
   parameters: Schema.Struct({ value: Schema.Int }),
   success: Schema.String,
   failure: QueryFailure,
   failureMode: "return",
 }).annotate(ToolExecutionClass, "idempotent");
+
 const Approval = Tool.make("approval", {
   parameters: Schema.Struct({ value: Schema.Int }),
   success: Schema.String,
   needsApproval: true,
 });
+
 const queries = Toolkit.make(Query);
 const returns = Toolkit.make(Returned);
+
 const hostTools = Toolkit.make(
   Tool.make("host", {
     parameters: Schema.Struct({ value: Schema.Int }),
@@ -175,6 +182,7 @@ const runBroker = <R>(
       hostTools.toLayer(
         Effect.gen(function* () {
           const services = yield* Effect.context<R>();
+
           return {
             host: () =>
               Effect.flatMap(ToolBroker, (broker) =>
@@ -206,12 +214,14 @@ const collect = (observations: Array<ToolFailureObservation>): RunToolFailureObs
       observations.push(observation);
     }),
 });
+
 const identity = {
   agentId: "observer-test",
   threadId: "thread-observer",
   runId: "run-observer",
   turnId: "turn-observer",
 };
+
 const invoke = (pass: ToolBrokerPass) =>
   pass.invoke({ toolName: "query", encodedArguments: { value: 1 } });
 
@@ -229,6 +239,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         for (const earlyClose of [false, true]) {
           const observations: Array<ToolFailureObservation> = [];
           const stream = AgentRuntime.stream(binding(returns, [call("returned")]), "go");
+
           const events = yield* (
             earlyClose
               ? stream.pipe(Stream.takeUntil((event) => event._tag === "ToolCallFailed"))
@@ -240,6 +251,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
               toolFailureObserverLayer(collect(observations)),
             ]),
           );
+
           expect(observations).toEqual([
             {
               ...identity,
@@ -268,14 +280,18 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           ),
           Cause.makeFailReason(failure),
         ]).pipe(Cause.annotate(Context.make(DiagnosticSource, "REASON_SECRET")));
+
         const inner: Toolkit.WithHandler<Record<string, typeof Query>> = {
           tools: queries.tools,
           handle: () => Effect.succeed(Stream.failCause(original)),
         };
+
         const observations: Array<ToolFailureObservation> = [];
+
         const events = yield* runPass(inner, (pass) => invoke(pass).pipe(Effect.as(null))).pipe(
           Effect.provide(toolFailureObserverLayer(collect(observations))),
         );
+
         expect(events.at(-1)?._tag).toBe("RunCompleted");
         expect(observations).toMatchObject([
           {
@@ -291,6 +307,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           },
         ]);
         const observedCause = observations[0]?.cause;
+
         expect(observedCause?.reasons).toHaveLength(2);
         expect(observedCause?.reasons.filter(Cause.isFailReason)[0]?.error).toBe(
           original.reasons.filter(Cause.isFailReason)[0]?.error,
@@ -303,6 +320,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         // Cause the engine actually holds, including the exact Reasons and their annotations.
         const delivered: Array<ToolFailureObservation> = [];
         const observation = observations[0];
+
         if (observation === undefined || observedCause === undefined)
           throw new Error("Expected a live Cause");
         yield* deliverToolFailure(collect(delivered), observation);
@@ -327,8 +345,10 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         const inner = yield* returns.pipe(
           Effect.provide(returns.toLayer({ returned: () => Effect.fail(failure) })),
         );
+
         const observations: Array<ToolFailureObservation> = [];
         let outcome: ProgrammaticCallOutcome | undefined;
+
         yield* runPass(inner, (pass) =>
           pass.invoke({ toolName: "returned", encodedArguments: { value: 1 } }).pipe(
             Effect.tap((value) =>
@@ -370,6 +390,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           isFailure: false,
           preliminary: false,
         };
+
         const cases = [
           { name: "missing", results: [], kind: "protocol", tag: "ModelProtocolError" },
           {
@@ -399,16 +420,20 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             maxResultBytes: 1,
           },
         ];
+
         for (const testCase of cases) {
           const inner: Toolkit.WithHandler<typeof queries.tools> = {
             tools: queries.tools,
             handle: () => Effect.succeed(Stream.fromIterable(testCase.results)),
           };
+
           const observations: Array<ToolFailureObservation> = [];
+
           const events = yield* runPass(inner, (pass) => invoke(pass).pipe(Effect.as(null)), {
             maxResultBytes: testCase.maxResultBytes ?? 1_024,
             redactResult: testCase.redactResult,
           }).pipe(Effect.provide(toolFailureObserverLayer(collect(observations))));
+
           expect(events.at(-1)?._tag, testCase.name).toBe("RunCompleted");
           expect(observations, testCase.name).toHaveLength(1);
           expect(observations[0]).toMatchObject({
@@ -434,16 +459,20 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
       Effect.gen(function* () {
         const rawId = "provider call/🧭";
         const observations: Array<ToolFailureObservation> = [];
+
         const inner = yield* returns.pipe(
           Effect.provide(returns.toLayer({ returned: () => Effect.fail(failure) })),
         );
+
         const events = yield* runBroker(
           (broker) =>
             Effect.gen(function* () {
               const pass = yield* broker
                 .openPass(inner, { maxResultBytes: 1_024 })
                 .pipe(Effect.orDie);
+
               yield* pass.invoke({ toolName: "returned", encodedArguments: { value: 1 } });
+
               return yield* failure;
             }),
           {
@@ -468,6 +497,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             },
           },
         ).pipe(Effect.provide(toolFailureObserverLayer(collect(observations))));
+
         expect(events.at(-1)?._tag).toBe("RunCompleted");
         expect(observations).toMatchObject([
           {
@@ -487,26 +517,32 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
       Effect.gen(function* () {
         const all = Toolkit.make(Query, Approval);
         let starts = 0;
+
         const inner = yield* all.pipe(
           Effect.provide(
             all.toLayer({
               query: () =>
                 Effect.sync(() => {
                   starts += 1;
+
                   return "ok";
                 }),
               approval: () =>
                 Effect.sync(() => {
                   starts += 1;
+
                   return "ok";
                 }),
             }),
           ),
         );
+
         const observations: Array<ToolFailureObservation> = [];
+
         const budgetCause = Cause.fail(
           QueryFailure.make({ message: "🧭".repeat(2_000), privateDetail: "BUDGET_SECRET" }),
         );
+
         yield* runPass(
           inner,
           (pass) =>
@@ -515,6 +551,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
               yield* pass.invoke({ toolName: "approval", encodedArguments: { value: 1 } });
               yield* pass.invoke({ toolName: "query", encodedArguments: { value: "invalid" } });
               yield* invoke(pass);
+
               return null;
             }),
           undefined,
@@ -577,6 +614,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         const release = yield* Deferred.make<void>();
         let observationEntered = yield* Deferred.make<void>();
         let observationRelease = yield* Deferred.make<void>();
+
         const inner = yield* queries.pipe(
           Effect.provide(
             queries.toLayer({
@@ -588,10 +626,12 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             }),
           ),
         );
+
         const observations: Array<ToolFailureObservation> = [];
         let active = 0;
         let peak = 0;
         let finalized = 0;
+
         const observer: RunToolFailureObserver = {
           observe: (observation) =>
             Effect.gen(function* () {
@@ -609,25 +649,31 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
               ),
             ),
         };
+
         const burst = (passes: ReadonlyArray<ToolBrokerPass>, tag: string) =>
           Effect.gen(function* () {
             observationEntered = yield* Deferred.make<void>();
             observationRelease = yield* Deferred.make<void>();
+
             const fibers = yield* Effect.forEach(passes, (pass) =>
               invoke(pass).pipe(Effect.forkChild),
             );
+
             yield* Deferred.await(observationEntered);
             yield* TestClock.adjust("0 millis");
             expect(active).toBe(1);
             const cancelled = fibers.at(-1);
+
             if (cancelled === undefined) throw new Error("Expected a waiting preflight invocation");
             cancelled.interruptUnsafe(7_335);
             const interrupted = yield* Fiber.await(cancelled);
+
             if (Exit.isSuccess(interrupted))
               throw new Error("Expected interrupted preflight observation");
             expect(Cause.hasInterrupts(interrupted.cause)).toBe(true);
             yield* Deferred.succeed(observationRelease, undefined);
             const outcomes = yield* Effect.forEach(fibers.slice(0, -1), Fiber.join);
+
             expect(outcomes).toEqual(
               Array.from({ length: 3 }, () =>
                 expect.objectContaining({
@@ -639,21 +685,27 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             );
             expect(active).toBe(0);
           });
+
         let retained: readonly [ToolBrokerPass, ToolBrokerPass] | undefined;
+
         yield* runBroker((broker) =>
           Effect.gen(function* () {
             const pass = yield* broker
               .openPass(inner, { maxResultBytes: 1_024 })
               .pipe(Effect.orDie);
+
             const otherPass = yield* broker
               .openPass(inner, { maxResultBytes: 1_024 })
               .pipe(Effect.orDie);
+
             retained = [pass, otherPass];
             const handler = yield* invoke(pass).pipe(Effect.forkChild);
+
             yield* Deferred.await(entered);
             yield* burst([pass, pass, pass, pass], "ProgrammaticCallConcurrencyError");
             yield* Deferred.succeed(release, undefined);
             yield* Fiber.join(handler);
+
             return null;
           }),
         ).pipe(Effect.provide(toolFailureObserverLayer(observer)));
@@ -690,25 +742,30 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
       const inner = yield* returns.pipe(
         Effect.provide(returns.toLayer({ returned: () => Effect.fail(failure) })),
       );
+
       for (const reporterDefects of [false, true]) {
         const defects: Array<Error> = [];
         const reports: Array<Cause.Cause<unknown>> = [];
         const observations: Array<ToolFailureObservation> = [];
+
         const observer: RunToolFailureObserver = {
           observe: (observation) => {
             observations.push(observation);
             // A synchronous callback throw is also inside the isolation boundary.
             const defect = new Error("observer defect");
+
             defects.push(defect);
             throw defect;
           },
         };
+
         const reporting = ErrorReporter.layer([
           ErrorReporter.make(({ cause }) => {
             reports.push(cause);
             if (reporterDefects) throw new Error("reporter defect");
           }),
         ]);
+
         const direct = yield* AgentRuntime.stream(binding(returns, [call("returned")]), "go").pipe(
           Stream.runCollect,
           Effect.provide([
@@ -717,7 +774,9 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             reporting,
           ]),
         );
+
         let brokerOutcome: ProgrammaticCallOutcome | undefined;
+
         const programmatic = yield* runPass(inner, (pass) =>
           pass.invoke({ toolName: "returned", encodedArguments: { value: 1 } }).pipe(
             Effect.tap((outcome) =>
@@ -728,6 +787,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             Effect.as(null),
           ),
         ).pipe(Effect.provide([toolFailureObserverLayer(observer), reporting]));
+
         expect(direct.at(-1)?._tag).toBe("RunCompleted");
         expect(programmatic.at(-1)?._tag).toBe("RunCompleted");
         expect(direct.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
@@ -761,6 +821,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         let starts = 0;
         let attempts = 0;
         let finalized = 0;
+
         const observer: RunToolFailureObserver = {
           observe: () =>
             Effect.sync(() => {
@@ -775,6 +836,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
               ),
             ),
         };
+
         const fiber = yield* AgentRuntime.stream(
           binding(returns, [call("returned", "one"), call("returned", "two")]),
           "go",
@@ -802,11 +864,13 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           ]),
           Effect.forkChild,
         );
+
         yield* Deferred.await(entered);
         yield* Deferred.await(terminalObserved);
         expect(starts).toBe(1);
         fiber.interruptUnsafe(7_333);
         const exit = yield* Fiber.await(fiber);
+
         if (Exit.isSuccess(exit)) throw new Error("Expected external interruption");
         expect(Cause.hasInterrupts(exit.cause)).toBe(true);
         expect(
@@ -824,6 +888,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
       const entered = yield* Deferred.make<void>();
       let finalized = false;
       const events: Array<RunEvent> = [];
+
       const fiber = yield* AgentRuntime.stream(binding(returns, [call("returned")]), "go").pipe(
         Stream.tap((event) =>
           Effect.sync(() => {
@@ -847,9 +912,11 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         ]),
         Effect.forkChild,
       );
+
       yield* Deferred.await(entered);
       yield* TestClock.adjust("30 seconds");
       const exit = yield* Fiber.await(fiber);
+
       expect(Exit.isFailure(exit)).toBe(true);
       expect(events.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
       expect(events.at(-1)).toMatchObject({ _tag: "RunFailed", errorTag: "AgentPolicyError" });
@@ -861,18 +928,24 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const spans: Array<Tracer.NativeSpan> = [];
+
       const tracer = Tracer.make({
         span: (options) => {
           const span = new Tracer.NativeSpan(options);
+
           spans.push(span);
+
           return span;
         },
       });
+
       const inner = yield* returns.pipe(
         Effect.provide(returns.toLayer({ returned: () => Effect.fail(failure) })),
       );
+
       let attempts = 0;
       let finalized = 0;
+
       const fiber = yield* runPass(inner, (pass) =>
         pass.invoke({ toolName: "returned", encodedArguments: { value: 1 } }).pipe(Effect.as(null)),
       ).pipe(
@@ -895,12 +968,15 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         ),
         Effect.forkChild,
       );
+
       yield* Deferred.await(entered);
       const span = spans.find((candidate) => candidate.name === "execute_tool returned");
+
       expect(span?.status._tag).toBe("Ended");
       expect(span?.attributes.get("effect_agent.tool.outcome")).toBe("failure");
       fiber.interruptUnsafe(7_334);
       const exit = yield* Fiber.await(fiber);
+
       if (Exit.isSuccess(exit)) throw new Error("Expected interrupted observation");
       expect(Cause.hasInterrupts(exit.cause)).toBe(true);
       expect(span?.status._tag === "Ended" && Exit.isFailure(span.status.exit)).toBe(true);
@@ -914,6 +990,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
       Effect.gen(function* () {
         const observations: Array<ToolFailureObservation> = [];
         const approvalTools = Toolkit.make(Approval);
+
         const scenarios = [
           AgentRuntime.stream(binding(queries, [call("query")]), "go").pipe(
             Stream.provide(queries.toLayer({ query: () => Effect.fail(failure) })),
@@ -975,6 +1052,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             ),
           ),
         ];
+
         for (const stream of scenarios)
           yield* stream.pipe(
             Stream.runDrain,
@@ -988,34 +1066,42 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
   it.effect("does not observe inner defects/interruption or openPass errors", () =>
     Effect.gen(function* () {
       const observations: Array<ToolFailureObservation> = [];
+
       for (const cause of [Cause.die("inner defect"), Cause.interrupt(123)]) {
         const inner: Toolkit.WithHandler<typeof queries.tools> = {
           tools: queries.tools,
           handle: () => Effect.succeed(Stream.failCause(cause)),
         };
+
         const exit = yield* runPass(inner, invoke).pipe(
           Effect.exit,
           Effect.provide(toolFailureObserverLayer(collect(observations))),
         );
+
         expect(Exit.isFailure(exit)).toBe(true);
       }
+
       const inner = yield* queries.pipe(
         Effect.provide(queries.toLayer({ query: () => Effect.succeed(null) })),
       );
+
       yield* runBroker((broker) =>
         broker
           .openPass(inner, { maxResultBytes: 0 })
           .pipe(Effect.catch(() => Effect.succeed(null))),
       ).pipe(Effect.provide(toolFailureObserverLayer(collect(observations))));
       let retained: ToolBrokerService | undefined;
+
       yield* runBroker((broker) =>
         Effect.sync(() => {
           retained = broker;
+
           return null;
         }),
       ).pipe(Effect.provide(toolFailureObserverLayer(collect(observations))));
       if (retained === undefined) throw new Error("Expected a retained broker");
       const closed = yield* retained.openPass(inner, { maxResultBytes: 1_024 }).pipe(Effect.exit);
+
       expect(Exit.isFailure(closed)).toBe(true);
       expect(observations).toEqual([]);
     }),
@@ -1024,6 +1110,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
   it.effect("excludes direct protocol errors, waiting and provider-executed results", () =>
     Effect.gen(function* () {
       const observations: Array<ToolFailureObservation> = [];
+
       const malformedRuntime = Effect.map(
         queries,
         (native): Toolkit.WithHandler<typeof queries.tools> => ({
@@ -1035,11 +1122,13 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           ) => native.handle(name, parameters, id).pipe(Effect.map(Stream.drain)),
         }),
       );
+
       // Same test-only native Toolkit seam as the neighboring post-terminal protocol tests.
       const malformed = Object.assign(malformedRuntime, {
         "~effect/ai/Toolkit": "~effect/ai/Toolkit" as const,
         tools: queries.tools,
       }) as Toolkit.Toolkit<typeof queries.tools>;
+
       const protocol = yield* AgentRuntime.stream(binding(malformed, [call("query")]), "go").pipe(
         Stream.runDrain,
         Effect.exit,
@@ -1048,6 +1137,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           toolFailureObserverLayer(collect(observations)),
         ]),
       );
+
       if (Exit.isSuccess(protocol)) throw new Error("Expected missing-terminal protocol failure");
       expect(protocol.cause.reasons.filter(Cause.isFailReason)[0]?.error).toMatchObject({
         _tag: "ModelProtocolError",
@@ -1058,7 +1148,9 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         success: Schema.String,
         failure: ToolCallWaiting,
       });
+
       const waitingTools = Toolkit.make(Waiting);
+
       const waiting = yield* AgentRuntime.stream(
         binding(waitingTools, [call("waiting")]),
         "go",
@@ -1082,6 +1174,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           toolFailureObserverLayer(collect(observations)),
         ]),
       );
+
       if (Exit.isSuccess(waiting)) throw new Error("Expected child suspension");
       expect(waiting.cause.reasons.filter(Cause.isFailReason)[0]?.error).toMatchObject({
         _tag: "AgentChildPending",
@@ -1094,6 +1187,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         parameters: Schema.Struct({ value: Schema.Int }),
         success: Schema.String,
       })(undefined);
+
       const hosted = yield* AgentRuntime.stream(
         binding(Toolkit.make(Hosted), [
           {
@@ -1114,6 +1208,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         ]),
         "go",
       ).pipe(Stream.runCollect, Effect.provide(toolFailureObserverLayer(collect(observations))));
+
       expect(hosted.at(-1)?._tag).toBe("RunCompleted");
       expect(observations).toEqual([]);
     }),
@@ -1124,13 +1219,17 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
       const observations: Array<ToolFailureObservation> = [];
       const exported: Array<unknown> = [];
       const spans: Array<Tracer.NativeSpan> = [];
+
       const tracer = Tracer.make({
         span: (options) => {
           const span = new Tracer.NativeSpan(options);
+
           spans.push(span);
+
           return span;
         },
       });
+
       const logger = Logger.make<unknown, void>(({ message, cause, fiber }) => {
         exported.push({
           message,
@@ -1138,16 +1237,20 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           annotations: fiber.getRef(References.CurrentLogAnnotations),
         });
       });
+
       const inner = yield* returns.pipe(
         Effect.provide(returns.toLayer({ returned: () => Effect.fail(failure) })),
       );
+
       const original = Cause.fail(
         QueryFailure.make({ message: "query failed", privateDetail: "CAUSE_SECRET" }),
       ).pipe(Cause.annotate(Context.make(DiagnosticSource, "REASON_SECRET")));
+
       const failing: Toolkit.WithHandler<Record<string, typeof Query>> = {
         tools: queries.tools,
         handle: () => Effect.succeed(Stream.failCause(original)),
       };
+
       const program = Effect.gen(function* () {
         exported.push(
           yield* runPass(inner, (pass) =>
@@ -1158,6 +1261,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         );
         exported.push(yield* runPass(failing, (pass) => invoke(pass).pipe(Effect.as(null))));
       });
+
       // Compare the default-none path and the installed path against the same public outcome.
       yield* program.pipe(
         Effect.provideService(Tracer.Tracer, tracer),
@@ -1178,6 +1282,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
         })),
       );
       const text = JSON.stringify(exported);
+
       for (const secret of ["DECLARED_SECRET", "CAUSE_SECRET", "REASON_SECRET"])
         expect(text).not.toContain(secret);
       expect(observations).toHaveLength(2);
@@ -1191,6 +1296,7 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
     Effect.gen(function* () {
       const captured: Array<ToolFailureObservation> = [];
       const replacement: Array<ToolFailureObservation> = [];
+
       yield* AgentRuntime.run(binding(returns, [call("returned")]), "go", {
         input: {
           start: () =>
@@ -1227,21 +1333,25 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
     expectTypeOf<DeclaredFailure["message"]>().toEqualTypeOf<undefined>();
     expectTypeOf<Diagnostic["message"]>().toEqualTypeOf<string>();
     const agent = binding(queries, [call("query")]);
+
     const options: RunOptions<QueryFailure, DiagnosticSource> = {
       budget: { guard: (effect) => effect, consume: () => Effect.asVoid(DiagnosticSource) },
     };
+
     const observer = toolFailureObserverLayer({
       observe: (observation) =>
         observation.kind === "handler-error"
           ? ErrorReporter.report(observation.cause)
           : Effect.void,
     });
+
     const run = AgentRuntime.run(agent, "go", options);
     const observedRun = run.pipe(Effect.provide(observer));
     const stream = AgentRuntime.stream(agent, "go", options);
     const observedStream = stream.pipe(Stream.provide(observer));
     const start = AgentRuntime.start(agent, "go", options);
     const observedStart = start.pipe(Effect.provide(observer));
+
     expectTypeOf<Effect.Error<typeof observedRun>>().toEqualTypeOf<Effect.Error<typeof run>>();
     expectTypeOf<Effect.Services<typeof observedRun>>().toEqualTypeOf<
       Effect.Services<typeof run>

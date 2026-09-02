@@ -68,6 +68,7 @@ export const transportFaultReason = (name: string | undefined): string | undefin
       return `injected transport fault: the Durable Object owning ${name} is unreachable`;
     }
   }
+
   return undefined;
 };
 
@@ -76,6 +77,7 @@ export const transportFaultReason = (name: string | undefined): string | undefin
 // ---------------------------------------------------------------------------
 
 const gatedChildRefs = new Set<string>();
+
 /** Exercise ordinary Tool uncertainty inside the existing attached child fixture. */
 export const uncertainChildRefs = new Set<string>();
 
@@ -166,12 +168,14 @@ const toolCallPart = (
 /** Extract the Thread-unique `ref` the coordinator instructions embed as `[ref:...]`. */
 const refFromPrompt = (promptJson: string): string => {
   const match = /\[ref:([^\]]+)\]/.exec(promptJson);
+
   return match?.[1] ?? "unknown-ref";
 };
 
 /** Extract the `ref` from the researcher's prepared input `research:{ref}`. */
 const childRefFromPrompt = (promptJson: string): string => {
   const match = /research:([A-Za-z0-9-]+)/.exec(promptJson);
+
   return match?.[1] ?? "unknown-ref";
 };
 
@@ -204,6 +208,7 @@ const promptAwareModel = (
  */
 const coordinatorModel = promptAwareModel("cf-s2-coordinator", (promptJson) => {
   const ref = refFromPrompt(promptJson);
+
   return promptJson.includes(delegateCallIdFor(ref))
     ? Stream.fromIterable(finalParts(COORDINATOR_REPORT))
     : Stream.fromIterable([
@@ -215,6 +220,7 @@ const coordinatorModel = promptAwareModel("cf-s2-coordinator", (promptJson) => {
 /** Mixed-batch coordinator: the delegation call plus an ordinary sibling lookup in ONE Turn. */
 const siblingCoordinatorModel = promptAwareModel("cf-s2-sibling-coordinator", (promptJson) => {
   const ref = refFromPrompt(promptJson);
+
   return promptJson.includes(delegateCallIdFor(ref))
     ? Stream.fromIterable(finalParts(COORDINATOR_REPORT))
     : Stream.fromIterable([
@@ -232,7 +238,9 @@ const siblingCoordinatorModel = promptAwareModel("cf-s2-sibling-coordinator", (p
  */
 const researcherModel = promptAwareModel("cf-s2-researcher", (promptJson) => {
   const ref = childRefFromPrompt(promptJson);
+
   recordSupplierCall(CHILD_MODEL_OP, ref, "invoked");
+
   const response = Stream.fromIterable(
     uncertainChildRefs.has(ref)
       ? [
@@ -241,6 +249,7 @@ const researcherModel = promptAwareModel("cf-s2-researcher", (promptJson) => {
         ]
       : finalParts(CHILD_ANSWER),
   );
+
   return gatedChildRefs.has(ref)
     ? Stream.fromEffectDrain(awaitChildRelease(ref)).pipe(Stream.concat(response))
     : response;
@@ -342,15 +351,19 @@ const mapChildFailure = (failure: { readonly _tag: string }) =>
 export const makeSubagentTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = Effect.gen(
   function* () {
     const childBinding = Agent.withModel(researcherDefinition, researcherModel);
+
     const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
       mapChildFailure,
       durable: { targetDigests: SUBAGENT_CHILD_DIGEST_STRINGS },
     }).pipe(Layer.provide([delegationSupport, bookToolLayer]));
+
     const siblingLookupLayer = Toolkit.make(SiblingLookup).toLayer({
       lookup: ({ key }) =>
         Effect.sync(() => {
           const value = `found-${key}`;
+
           recordSupplierCall(SIBLING_LOOKUP_OP, key, value);
+
           return { value };
         }),
     });
@@ -359,14 +372,17 @@ export const makeSubagentTestBindings: Effect.Effect<ReadonlyArray<ResolvedBindi
       Agent.withModel(coordinatorDefinition, coordinatorModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(delegationLayer));
+
     const sibling: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(siblingCoordinatorDefinition, siblingCoordinatorModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(Layer.mergeAll(delegationLayer, siblingLookupLayer)));
+
     const researcher: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       SUBAGENT_CHILD_DIGESTS,
     ).pipe(Effect.provide(bookToolLayer));
+
     return [coordinator, sibling, researcher];
   },
 );

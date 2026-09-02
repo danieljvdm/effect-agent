@@ -117,6 +117,7 @@ const environmentFromAllowlist = Effect.fn("LocalSandbox.environmentFromAllowlis
   request: SandboxRequest,
 ) {
   const environment: Record<string, string> = {};
+
   for (const name of request.environment.allow) {
     const value = yield* Config.option(Config.string(name)).pipe(
       Effect.mapError((error) =>
@@ -127,10 +128,12 @@ const environmentFromAllowlist = Effect.fn("LocalSandbox.environmentFromAllowlis
         ),
       ),
     );
+
     if (Option.isSome(value)) {
       environment[name] = value.value;
     }
   }
+
   return environment;
 });
 
@@ -144,6 +147,7 @@ const outputEvent = (
   Ref.modify(counts, (current) => {
     const streamBytes = current[stream] + bytes.byteLength;
     const next = { ...current, [stream]: streamBytes };
+
     return [next.stdout + next.stderr, next] as const;
   }).pipe(
     Effect.flatMap((observed) =>
@@ -177,6 +181,7 @@ const outputEvent = (
 const flushDecoder = (stream: OutputStream, decoder: TextDecoder): Stream.Stream<SandboxOutput> =>
   Stream.suspend(() => {
     const text = decoder.decode();
+
     return text.length === 0
       ? Stream.empty
       : Stream.succeed(
@@ -201,6 +206,7 @@ const makeExecute =
         const stdoutDecoder = new TextDecoder();
         const stderrDecoder = new TextDecoder();
         const environment = yield* environmentFromAllowlist(request);
+
         const command = ChildProcess.make(request.command, request.args, {
           cwd: request.cwd,
           env: environment,
@@ -208,12 +214,14 @@ const makeExecute =
           stdout: "pipe",
           stderr: "pipe",
         });
+
         const child = yield* spawner
           .spawn(command)
           .pipe(Effect.mapError((error) => spawnError(request, error.message, error)));
 
         const streamOutput = (stream: OutputStream, decoder: TextDecoder) => {
           const source = stream === "stdout" ? child.stdout : child.stderr;
+
           return source.pipe(
             Stream.mapError((error) => exitError(error.message, error)),
             Stream.mapEffect((bytes) =>
@@ -228,13 +236,16 @@ const makeExecute =
             const exitCode = yield* child.exitCode.pipe(
               Effect.mapError((error) => exitError(error.message, error)),
             );
+
             const endedAt = yield* Clock.currentTimeMillis;
             const output = yield* Ref.get(counts);
+
             const resourceUse = SandboxResourceUse.make({
               wallTime: Duration.millis(endedAt - startedAt),
               stdoutBytes: output.stdout,
               stderrBytes: output.stderr,
             });
+
             const exited = SandboxExited.make({
               eventVersion: 1,
               implementation: unisolatedImplementation,
@@ -242,6 +253,7 @@ const makeExecute =
               resourceUse,
               artifacts: [],
             });
+
             return exitCode === 0
               ? Stream.succeed<SandboxEvent>(exited)
               : Stream.concat(
@@ -299,6 +311,7 @@ const makeExecute =
 export const sandboxLayer: Layer.Layer<Sandbox, never, ChildProcessSpawner> = Layer.effect(Sandbox)(
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner;
+
     return Sandbox.of({ execute: makeExecute(spawner) });
   }),
 );

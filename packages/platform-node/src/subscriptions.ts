@@ -44,6 +44,7 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
   PreparedInputAdmission,
   Effect.gen(function* () {
     const host = yield* NodeDurableHost;
+
     return PreparedInputAdmission.of({
       submit: (envelope) =>
         host
@@ -140,6 +141,7 @@ const nodeSubscriptionDriverLayer = (
           }
 
           const deadline = yield* store.nextDeadline.pipe(Effect.exit);
+
           if (Exit.isFailure(deadline)) {
             yield* reportPassFailure(deadline.cause);
             yield* Effect.sleep(Duration.millis(limits.retryMillis));
@@ -147,10 +149,12 @@ const nodeSubscriptionDriverLayer = (
           }
 
           const nowMillis = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+
           const delay =
             deadline.value === null
               ? limits.retryMillis
               : Math.max(1, Math.min(deadline.value - nowMillis, limits.retryMillis));
+
           yield* Effect.sleep(Duration.millis(delay));
         }
       });
@@ -180,13 +184,16 @@ export class NodeSubscriptions {
     | SubscriptionInputBindings
   > {
     const limits = options.limits ?? defaultSubscriptionLimits;
+
     const publicServices = Layer.merge(
       Subscriptions.layer(limits),
       SubscriptionIntake.layer(limits),
     );
+
     const driver = nodeSubscriptionDriverLayer(limits).pipe(
       Layer.provide(SubscriptionDriver.layer(limits)),
     );
+
     return Layer.merge(publicServices, driver).pipe(
       Layer.provide(nodePreparedInputAdmissionLayer),
       Layer.provide(NodeCrypto.layer),

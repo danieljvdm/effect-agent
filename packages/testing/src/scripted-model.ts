@@ -2,9 +2,11 @@ import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { AiError, LanguageModel, Response } from "effect/unstable/ai";
 
 const ScriptedPartMetadata = Schema.Record(Schema.String, Schema.NullOr(Schema.Json));
+
 const ScriptedPartBase = {
   metadata: Schema.optionalKey(ScriptedPartMetadata),
 };
+
 const ScriptedToolCallPart = Schema.Struct({
   ...ScriptedPartBase,
   type: Schema.Literal("tool-call"),
@@ -13,6 +15,7 @@ const ScriptedToolCallPart = Schema.Struct({
   params: Schema.Unknown,
   providerExecuted: Schema.optionalKey(Schema.Boolean),
 });
+
 const ScriptedToolResultPart = Schema.Struct({
   ...ScriptedPartBase,
   type: Schema.Literal("tool-result"),
@@ -44,6 +47,7 @@ export const ScriptedGeneratePart = Schema.Union([
   Schema.toEncoded(Response.ResponseMetadataPart),
   Schema.toEncoded(Response.FinishPart),
 ]).annotate({ identifier: "ScriptedGeneratePart" });
+
 export type ScriptedGeneratePart = typeof ScriptedGeneratePart.Type;
 
 /**
@@ -69,6 +73,7 @@ export const ScriptedStreamPart = Schema.Union([
   Schema.toEncoded(Response.FinishPart),
   Schema.toEncoded(Response.ErrorPart),
 ]).annotate({ identifier: "ScriptedStreamPart" });
+
 export type ScriptedStreamPart = typeof ScriptedStreamPart.Type;
 
 /** Controls whether a scripted stream completes, fails, or waits for interruption. */
@@ -79,12 +84,14 @@ export const ScriptedStreamTermination = Schema.Union([
   }),
   Schema.TaggedStruct("Hang", {}),
 ]);
+
 export type ScriptedStreamTermination = typeof ScriptedStreamTermination.Type;
 
 /** One non-streaming invocation and the encoded response parts it returns. */
 export const ScriptedGenerateTurn = Schema.TaggedStruct("Generate", {
   parts: Schema.Array(ScriptedGeneratePart),
 });
+
 export type ScriptedGenerateTurn = typeof ScriptedGenerateTurn.Type;
 
 /** One streaming invocation with its encoded parts and terminal behavior. */
@@ -92,6 +99,7 @@ export const ScriptedStreamTurn = Schema.TaggedStruct("Stream", {
   parts: Schema.Array(ScriptedStreamPart),
   termination: ScriptedStreamTermination,
 });
+
 export type ScriptedStreamTurn = typeof ScriptedStreamTurn.Type;
 
 /**
@@ -147,8 +155,10 @@ const runAssertion = Effect.fn("ScriptedModel.runAssertion")((
   if (assertion === undefined) {
     return Effect.void;
   }
+
   return Effect.suspend(() => {
     const result = assertion(request);
+
     return Effect.isEffect(result) ? result : Effect.void;
   });
 });
@@ -161,6 +171,7 @@ const takeTurn = Effect.fn("ScriptedModel.takeTurn")(
   ): Effect.Effect<ScriptedTurnInput, AiError.AiError> =>
     Ref.modify(state, (current) => {
       const turn = current.remaining[0];
+
       if (turn === undefined) {
         return [
           undefined,
@@ -170,6 +181,7 @@ const takeTurn = Effect.fn("ScriptedModel.takeTurn")(
           },
         ] as const;
       }
+
       return [
         turn,
         {
@@ -206,6 +218,7 @@ const streamForTurn = (
   let stream: Stream.Stream<Response.StreamPartEncoded, AiError.AiError> = Stream.fromIterable(
     turn.parts,
   );
+
   switch (turn.termination._tag) {
     case "Complete": {
       break;
@@ -227,6 +240,7 @@ const streamForTurn = (
   if (turn.onStreamFinalize !== undefined) {
     stream = stream.pipe(Stream.ensuring(turn.onStreamFinalize));
   }
+
   return stream;
 };
 
@@ -262,16 +276,20 @@ export class ScriptedModel extends Context.Service<
           generateText: (options) =>
             Effect.gen(function* () {
               const turn = yield* takeTurn(state, "generate", options);
+
               yield* runAssertion(turn.assertRequest, options);
               const generateTurn = yield* requireGenerateTurn(turn);
+
               return [...generateTurn.parts];
             }),
           streamText: (options) =>
             Stream.unwrap(
               Effect.gen(function* () {
                 const turn = yield* takeTurn(state, "stream", options);
+
                 yield* runAssertion(turn.assertRequest, options);
                 const streamTurn = yield* requireStreamTurn(turn);
+
                 return streamForTurn(streamTurn);
               }),
             ),

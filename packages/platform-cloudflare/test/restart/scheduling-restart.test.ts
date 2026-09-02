@@ -28,9 +28,11 @@ const buildWorker = Effect.tryPromise({
 }).pipe(
   Effect.flatMap((bundled) => {
     const output = bundled.outputFiles[0];
+
     if (output === undefined) {
       return Effect.fail(RestartHarnessError.make({ operation: "read restart worker bundle" }));
     }
+
     return Effect.succeed(
       `const __disabledDynamicImport = () => Promise.reject(new Error("dynamic import is disabled in the restart fixture"));\n${output.text.replaceAll(
         /\bimport\s*\(/g,
@@ -93,6 +95,7 @@ const Introspection = Schema.Struct({
   completedAlarmDeliveries: Schema.Natural,
   admissionReplyFailures: Schema.Natural,
 });
+
 const Status = Schema.Struct({
   delivered: Schema.Boolean,
   pending: Schema.Boolean,
@@ -104,12 +107,15 @@ const waitForAlarm = (runtime: Miniflare) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const raw = yield* call(runtime, "/introspect");
+
       const observed = yield* Schema.decodeUnknownEffect(Introspection)(raw).pipe(
         Effect.mapError(() => RestartHarnessError.make({ operation: "validate introspection" })),
       );
+
       if (observed.completedAlarmDeliveries > 0) return observed;
       yield* Effect.sleep("50 millis");
     }
+
     return yield* RestartHarnessError.make({ operation: "wait for persisted Schedule alarm" });
   });
 
@@ -117,12 +123,15 @@ const waitForLostReply = (runtime: Miniflare) =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const raw = yield* call(runtime, "/introspect");
+
       const observed = yield* Schema.decodeUnknownEffect(Introspection)(raw).pipe(
         Effect.mapError(() => RestartHarnessError.make({ operation: "validate introspection" })),
       );
+
       if (observed.admissionReplyFailures > 0) return observed;
       yield* Effect.sleep("50 millis");
     }
+
     return yield* RestartHarnessError.make({ operation: "wait for lost admission reply" });
   });
 
@@ -132,16 +141,21 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+
         const persistDirectory = yield* fs.makeTempDirectoryScoped({
           prefix: "effect-agent-cf-schedule-restart-",
         });
+
         const script = yield* buildWorker;
+
         yield* Effect.scoped(
           Effect.gen(function* () {
             const first = yield* openRuntime(persistDirectory, script);
+
             yield* call(first, "/introspect");
             const nowMillis = yield* Clock.currentTimeMillis;
             const deadlineAtMillis = nowMillis + 5_000;
+
             yield* call(first, "/create", { deadlineAtMillis });
           }),
         );
@@ -149,11 +163,14 @@ it.live(
         yield* Effect.scoped(
           Effect.gen(function* () {
             const second = yield* openRuntime(persistDirectory, script);
+
             yield* waitForAlarm(second);
             const rawStatus = yield* call(second, "/status");
+
             const status = yield* Schema.decodeUnknownEffect(Status)(rawStatus).pipe(
               Effect.mapError(() => RestartHarnessError.make({ operation: "validate status" })),
             );
+
             expect(status.delivered).toBe(true);
             expect(status.pending).toBe(false);
             expect(status.submissionIds).toEqual([status.receiptSubmissionId]);
@@ -170,17 +187,21 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+
         const persistDirectory = yield* fs.makeTempDirectoryScoped({
           prefix: "effect-agent-cf-schedule-lost-reply-",
         });
+
         const script = yield* buildWorker;
 
         yield* Effect.scoped(
           Effect.gen(function* () {
             const first = yield* openRuntime(persistDirectory, script);
+
             yield* call(first, "/introspect");
             yield* call(first, "/arm-lost-reply", {});
             const nowMillis = yield* Clock.currentTimeMillis;
+
             yield* call(first, "/create", { deadlineAtMillis: nowMillis + 500 });
             yield* waitForLostReply(first);
           }),
@@ -189,11 +210,14 @@ it.live(
         yield* Effect.scoped(
           Effect.gen(function* () {
             const second = yield* openRuntime(persistDirectory, script);
+
             yield* waitForAlarm(second);
             const rawStatus = yield* call(second, "/status");
+
             const status = yield* Schema.decodeUnknownEffect(Status)(rawStatus).pipe(
               Effect.mapError(() => RestartHarnessError.make({ operation: "validate status" })),
             );
+
             expect(status.delivered).toBe(true);
             expect(status.pending).toBe(false);
             expect(status.submissionIds).toEqual([status.receiptSubmissionId]);

@@ -90,6 +90,7 @@ describe("in-memory semantic index", () => {
       const users = MemoryNamespace.define({ name: "app/users", version: 1, identity });
       const other = MemoryNamespace.define({ name: "app/other", version: 1, identity });
       const newer = MemoryNamespace.define({ name: "app/users", version: 2, identity });
+
       const namespaces = [
         users.make({ tenantId: "a", userId: "one" }),
         users.make({ tenantId: "b", userId: "one" }),
@@ -97,7 +98,9 @@ describe("in-memory semantic index", () => {
         other.make({ tenantId: "a", userId: "one" }),
         newer.make({ tenantId: "a", userId: "one" }),
       ];
+
       const index = yield* SemanticMemoryIndex;
+
       for (const [ordinal, namespace] of namespaces.entries()) {
         yield* index.replace({
           source: MemoryIndexSource.make({ ...source("same"), key: { namespace, id: "same" } }),
@@ -109,15 +112,19 @@ describe("in-memory semantic index", () => {
         const reconstructed = Schema.decodeSync(MemoryNamespace.Any)({
           address: namespace.address,
         });
+
         const found = yield* index.search({ ...query([1, 0]), namespace: reconstructed });
+
         expect(found.candidates.map((candidate) => candidate.passageId)).toEqual([
           `passage-${ordinal}`,
         ]);
       }
+
       const withdrawn = MemoryIndexSource.make({
         ...source("same"),
         key: { namespace: namespaces[0], id: "same" },
       });
+
       yield* index.withdraw(withdrawn);
       expect(
         yield* index
@@ -137,17 +144,20 @@ describe("in-memory semantic index", () => {
     () =>
       Effect.gen(function* () {
         const invalidCapacity = InMemorySemanticIndexCapacity.make({ maxSources: 1, maxChunks: 1 });
+
         Object.defineProperty(invalidCapacity, "maxSources", { value: 0 });
         expect(
           yield* Layer.build(layer(profile, invalidCapacity)).pipe(Effect.scoped, Effect.flip),
         ).toMatchObject({ reason: "invalid-input" });
         const invalidProfile = SemanticMemoryProfile.make({ ...profile });
+
         Object.defineProperty(invalidProfile, "dimensions", { value: 0 });
         expect(
           yield* Layer.build(layer(invalidProfile)).pipe(Effect.scoped, Effect.flip),
         ).toMatchObject({ reason: "invalid-input" });
 
         const maximumDimensions = SemanticMemoryProfile.make({ ...profile, dimensions: 4_096 });
+
         yield* Layer.build(layer(maximumDimensions, { maxSources: 1, maxChunks: 4_096 })).pipe(
           Effect.scoped,
         );
@@ -159,12 +169,14 @@ describe("in-memory semantic index", () => {
         ).toMatchObject({ reason: "invalid-input" });
 
         const index = yield* SemanticMemoryIndex;
+
         yield* index.replace({
           source: source("b"),
           profile,
           chunks: [chunk("b-0", 0, 0, "b", [1, 0])],
         });
         const mutableVector = [1, 0];
+
         yield* index.replace({
           source: source("a"),
           profile,
@@ -172,6 +184,7 @@ describe("in-memory semantic index", () => {
         });
         mutableVector[0] = -1;
         const ranked = yield* index.search(query([1, 0]));
+
         expect(ranked.scannedChunks).toBe(3);
         expect(ranked.candidates.map((candidate) => candidate.passageId)).toEqual([
           "a-0",
@@ -204,14 +217,17 @@ describe("in-memory semantic index", () => {
   it.effect("bounds source identities atomically and releases replaced identity bytes", () => {
     const original = source("a", 1, "1", `memory://${"🌊".repeat(200)}`);
     const originalBytes = Encoding.encodeHex(JSON.stringify(original)).length / 2;
+
     return Effect.gen(function* () {
       const index = yield* SemanticMemoryIndex;
       const chunks = [chunk("current", 0, 0, "current", [1, 0])];
       const larger = source("a", 2, "2", `${original.source.locator}x`);
       const other = source("b");
+
       yield* index.replace({ source: original, profile, chunks });
       yield* index.replace({ source: original, profile, chunks });
       const before = yield* index.search(query([1, 0]));
+
       for (const change of [
         index.replace({ source: larger, profile, chunks }),
         index.withdraw(larger),
@@ -222,6 +238,7 @@ describe("in-memory semantic index", () => {
         expect(yield* index.search(query([1, 0]))).toEqual(before);
       }
       const smaller = source("a", 2);
+
       yield* index.replace({ source: smaller, profile, chunks });
       yield* index.withdraw(other);
       yield* index.withdraw(other);
@@ -245,10 +262,12 @@ describe("in-memory semantic index", () => {
   it.effect("charges tombstones against the exact UTF-8 source identity boundary", () => {
     const tombstone = source("gone", 1, "1", "memory://🌊");
     const bytes = Encoding.encodeHex(JSON.stringify(tombstone)).length / 2;
+
     return Effect.gen(function* () {
       for (const maxSourceBytes of [bytes - 1, bytes]) {
         yield* Effect.gen(function* () {
           const index = yield* SemanticMemoryIndex;
+
           if (maxSourceBytes < bytes) {
             expect(yield* index.withdraw(tombstone).pipe(Effect.flip)).toMatchObject({
               reason: "budget",
@@ -273,9 +292,11 @@ describe("in-memory semantic index", () => {
         const index = yield* SemanticMemoryIndex;
         const current = source("a");
         const original = chunk("old", 0, 0, "old", [1, 0]);
+
         yield* TestClock.setTime(10);
         yield* index.replace({ source: current, profile, chunks: [original] });
         const before = yield* index.search(query([1, 0]));
+
         const malformed = [
           [],
           [chunk("zero", 0, 0, "zero", [0, 0])],
@@ -287,6 +308,7 @@ describe("in-memory semantic index", () => {
           [chunk("large", 0, 0, "x".repeat(17), [1, 0])],
           [chunk("duplicate", 0, 0, "a", [1, 0]), chunk("duplicate", 1, 1, "b", [1, 0])],
         ];
+
         for (const chunks of malformed) {
           expect(
             yield* index.replace({ source: current, profile, chunks }).pipe(Effect.flip),
@@ -343,6 +365,7 @@ describe("in-memory semantic index", () => {
       Effect.gen(function* () {
         const index = yield* SemanticMemoryIndex;
         const chunks = [chunk("current", 0, 0, "current", [1, 0])];
+
         yield* index.replace({ source: source("a", 2), profile, chunks });
         for (const stale of [
           source("a", 1),
@@ -379,18 +402,22 @@ describe("in-memory semantic index", () => {
       const scope = yield* Scope.make();
       const context = yield* Layer.buildWithScope(layer(), scope);
       const index = Context.get(context, SemanticMemoryIndex);
+
       const request = {
         source: source("closed"),
         profile,
         chunks: [chunk("closed", 0, 0, "closed", [1, 0])],
       };
+
       yield* index.replace(request);
       yield* Scope.close(scope, Exit.void);
+
       const calls: ReadonlyArray<Effect.Effect<unknown, MemoryIndexError>> = [
         index.replace(request),
         index.withdraw(request.source),
         index.search(query([1, 0])),
       ];
+
       for (const call of calls) {
         expect(yield* call.pipe(Effect.flip)).toMatchObject({ reason: "unavailable" });
       }

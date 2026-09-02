@@ -34,6 +34,7 @@ export const toDemoRunFailure = (error: unknown): DemoRunFailure => {
     return error;
   }
   const details = decodeErrorDetails(error);
+
   return DemoRunFailure.make({
     errorTag: details._tag ?? "DemoRunError",
     message: (details.message ?? describeUnknown(error))

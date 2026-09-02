@@ -26,6 +26,7 @@ export const cloudflarePreparedInputAdmissionLayer: Layer.Layer<
   PreparedInputAdmission,
   Effect.gen(function* () {
     const client = yield* CloudflareThreadClient;
+
     return PreparedInputAdmission.of({
       submit: (envelope) =>
         client

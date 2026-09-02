@@ -42,6 +42,7 @@ import { NodeWakeSchedulerConfig, nodeWakeSchedulerLayer } from "./wake-schedule
 
 const PositiveMillis = Schema.Int.check(Schema.isGreaterThan(0));
 const NonNegativeMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
 const WorkerConcurrency = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(1),
   Schema.isLessThanOrEqualTo(64),
@@ -207,6 +208,7 @@ const sqliteStorageConfigLayer: Layer.Layer<SqliteStorageConfig, never, NodeDura
   Layer.effect(SqliteStorageConfig)(
     Effect.gen(function* () {
       const config = yield* NodeDurableRuntimeConfig;
+
       return SqliteStorageConfigValue.make({
         observationPollInterval: config.observationPollInterval,
         busyTimeout: config.busyTimeout,
@@ -223,6 +225,7 @@ const durableRuntimeConfigLayer = (
   Layer.effect(DurableRuntimeConfig)(
     Effect.gen(function* () {
       const config = yield* NodeDurableRuntimeConfig;
+
       return DurableRuntimeConfig.make({
         deploymentId: config.deploymentId,
         producerId: config.producerId,
@@ -242,6 +245,7 @@ const wakeSchedulerConfigLayer: Layer.Layer<
 > = Layer.effect(NodeWakeSchedulerConfig)(
   Effect.gen(function* () {
     const config = yield* NodeDurableRuntimeConfig;
+
     return { scanInterval: Duration.millis(config.wakeScanInterval) };
   }),
 );
@@ -252,6 +256,7 @@ const releaseTrackedOwnership = (
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const tracked = yield* Ref.getAndSet(registry, new Map<SubmissionId, OwnershipToken>());
+
     for (const [submissionId, ownershipToken] of tracked) {
       yield* ledger
         .releaseOwnership(ReleaseOwnershipRequest.make({ submissionId, ownershipToken }))
@@ -280,16 +285,20 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
   Layer.effect(SubmissionLedger)(
     Effect.gen(function* () {
       const ledger = yield* SubmissionLedger;
+
       const registry = yield* Ref.make<ReadonlyMap<SubmissionId, OwnershipToken>>(
         new Map<SubmissionId, OwnershipToken>(),
       );
 
       const track = (submissionId: SubmissionId, ownershipToken: OwnershipToken) =>
         Ref.update(registry, (tracked) => new Map(tracked).set(submissionId, ownershipToken));
+
       const untrack = (submissionId: SubmissionId) =>
         Ref.update(registry, (tracked) => {
           const next = new Map(tracked);
+
           next.delete(submissionId);
+
           return next;
         });
 
@@ -403,6 +412,7 @@ export class NodeDurableRuntime {
     return Layer.unwrap(
       Effect.map(configFromOptions(options), (config) => {
         const nodeConfigLayer = Layer.succeed(NodeDurableRuntimeConfig)(config);
+
         const infrastructure = Layer.mergeAll(
           sqliteStorageConfigLayer,
           storageFailpointLayer({
@@ -412,15 +422,19 @@ export class NodeDurableRuntime {
           SqliteClient.layer({ filename: config.filename }),
           NodeCrypto.layer,
         );
+
         const runtimeFailpointLayer =
           options.runtimeFailpoint === undefined
             ? DurableRuntimeFailpoint.layer
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint });
+
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+
         const observerLayer =
           options.toolFailureObserver === undefined
             ? Layer.succeed(CurrentToolFailureObserver)(undefined)
             : toolFailureObserverLayer(options.toolFailureObserver);
+
         const ports = Layer.mergeAll(
           threadStoreLayer,
           scheduleStoreLayer,
@@ -428,6 +442,7 @@ export class NodeDurableRuntime {
             Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
           ),
         );
+
         return DurableAgentRuntime.layerWithServices.pipe(
           Layer.provideMerge(
             Layer.mergeAll(ports, durableRuntimeConfigLayer(options.estimateCostMicrousd)),

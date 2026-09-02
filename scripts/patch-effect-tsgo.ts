@@ -42,12 +42,14 @@ const requireExactVersion = Effect.fn("requireExactPackageVersion")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+
   const manifestPath = path.join(
     repositoryRoot,
     "node_modules",
     ...packageName.split("/"),
     "package.json",
   );
+
   const contents = yield* fs.readFileString(manifestPath).pipe(
     Effect.mapError(() =>
       EffectTsgoDependencyError.make({
@@ -57,6 +59,7 @@ const requireExactVersion = Effect.fn("requireExactPackageVersion")(function* (
       }),
     ),
   );
+
   const manifest = yield* Schema.decodeEffect(PackageVersionSchema)(contents).pipe(
     Effect.mapError(() =>
       EffectTsgoDependencyError.make({
@@ -85,11 +88,13 @@ const program = Effect.gen(function* () {
   yield* requireExactVersion(repositoryRoot, "typescript", EXPECTED_TYPESCRIPT_VERSION);
 
   const executable = path.join(repositoryRoot, "node_modules", ".bin", "effect-tsgo");
+
   const child = yield* ChildProcess.make(executable, ["patch", "--typescript"], {
     cwd: repositoryRoot,
     stderr: "pipe",
     stdout: "pipe",
   });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,

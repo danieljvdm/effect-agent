@@ -27,11 +27,13 @@ const readBoundedFile = Effect.fn("PrReviewEval.readBoundedFile")(function* (
   operation: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
+
   const info = yield* fs
     .stat(path)
     .pipe(
       Effect.mapError((cause) => dataError(operation, `Could not inspect ${path}`, path, cause)),
     );
+
   if (info.type !== "File") {
     return yield* dataError(operation, "Input path is not a regular file", path);
   }
@@ -42,6 +44,7 @@ const readBoundedFile = Effect.fn("PrReviewEval.readBoundedFile")(function* (
       path,
     );
   }
+
   return yield* fs
     .readFileString(path)
     .pipe(Effect.mapError((cause) => dataError(operation, `Could not read ${path}`, path, cause)));
@@ -52,6 +55,7 @@ export const loadObservationFile = Effect.fn("PrReviewEval.loadObservationFile")
 ): Effect.fn.Return<ReadonlyArray<EvalObservation>, EvalDataError, FileSystem.FileSystem> {
   const contents = yield* readBoundedFile(path, MAX_OBSERVATION_BYTES, "read observations");
   const observations = yield* decodeObservationLines(contents);
+
   if (observations.length === 0) {
     return yield* dataError(
       "read observations",
@@ -59,6 +63,7 @@ export const loadObservationFile = Effect.fn("PrReviewEval.loadObservationFile")
       path,
     );
   }
+
   return observations;
 });
 
@@ -66,11 +71,13 @@ export const loadObservationFiles = Effect.fn("PrReviewEval.loadObservationFiles
   paths: ReadonlyArray<string>,
 ) {
   const batches = yield* Effect.forEach(paths, loadObservationFile);
+
   return batches.flat();
 });
 
 export const loadJudgmentSet = Effect.fn("PrReviewEval.loadJudgmentSet")(function* (path: string) {
   const contents = yield* readBoundedFile(path, MAX_JUDGMENT_BYTES, "read judgments");
+
   return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvalJudgmentSet))(contents).pipe(
     Effect.mapError((cause) =>
       dataError("decode judgments", `Judgment set at ${path} is invalid`, path, cause),
@@ -89,7 +96,9 @@ export const writeQualityReport = Effect.fn("PrReviewEval.writeQualityReport")(f
       dataError("encode quality report", "Quality report failed to encode", path, cause),
     ),
   );
+
   const fs = yield* FileSystem.FileSystem;
+
   yield* fs
     .writeFileString(path, `${contents}\n`, { flag: "wx" })
     .pipe(

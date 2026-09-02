@@ -46,15 +46,20 @@ const validateCronFrequency = (
   const minuteOfDay = values(cron.hours, 24).flatMap((hour) =>
     values(cron.minutes, 60).map((minute) => hour * 60 + minute),
   );
+
   minuteOfDay.sort((left, right) => left - right);
   let minimumGap = 24 * 60;
+
   for (let index = 0; index < minuteOfDay.length; index += 1) {
     const current = minuteOfDay[index];
     const next = minuteOfDay[(index + 1) % minuteOfDay.length];
+
     if (current === undefined || next === undefined) continue;
     const gap = next > current ? next - current : 24 * 60 - current + next;
+
     minimumGap = Math.min(minimumGap, gap);
   }
+
   return minimumGap * 60_000 >= minimumMillis
     ? Result.succeed(undefined)
     : invalid(`Cron may fire more often than the configured ${minimumMillis}ms minimum`);
@@ -66,8 +71,10 @@ export const parseScheduleCron = (
   minimumMillis: number,
 ): Result.Result<Cron.Cron, ScheduleValidationError> => {
   const parsed = Cron.parse(expression, timeZone);
+
   if (Result.isFailure(parsed)) return invalid(parsed.failure.message);
   const frequency = validateCronFrequency(parsed.success, minimumMillis);
+
   return Result.isFailure(frequency)
     ? Result.fail(frequency.failure)
     : Result.succeed(parsed.success);
@@ -83,16 +90,19 @@ export const normalizeScheduleTiming = (
       return Result.succeed(request);
     case "After": {
       const at = checkedInstant(nowMillis + request.delayMillis, "Relative deadline");
+
       return Result.map(at, (atMillis) => ({ _tag: "At" as const, atMillis }));
     }
     case "Interval": {
       if (request.everyMillis < minimumMillis) {
         return invalid(`Interval must be at least ${minimumMillis}ms`);
       }
+
       const anchor = checkedInstant(
         request.anchorMillis ?? nowMillis + request.everyMillis,
         "Interval anchor",
       );
+
       return Result.map(anchor, (anchorMillis) => ({
         _tag: "Interval" as const,
         everyMillis: request.everyMillis,
@@ -102,7 +112,9 @@ export const normalizeScheduleTiming = (
     case "Cron": {
       const timeZone = request.timeZone ?? "UTC";
       const cron = parseScheduleCron(request.expression, timeZone, minimumMillis);
+
       if (Result.isFailure(cron)) return Result.fail(cron.failure);
+
       return Result.succeed({ _tag: "Cron", expression: request.expression, timeZone });
     }
   }
@@ -110,6 +122,7 @@ export const normalizeScheduleTiming = (
 
 const parsedStoredCron = (timing: Extract<ScheduleTiming, { _tag: "Cron" }>) => {
   const parsed = Cron.parse(timing.expression, timing.timeZone);
+
   return Result.isFailure(parsed)
     ? invalid(`Stored cron is invalid: ${parsed.failure.message}`)
     : Result.succeed(parsed.success);
@@ -127,20 +140,26 @@ export const scheduleNextAfter = (
       if (afterMillis < timing.anchorMillis) return Result.succeed(timing.anchorMillis);
       const steps = Math.floor((afterMillis - timing.anchorMillis) / timing.everyMillis) + 1;
       const next = timing.anchorMillis + steps * timing.everyMillis;
+
       return checkedInstant(next, "Next interval occurrence");
     }
     case "Cron": {
       const cron = parsedStoredCron(timing);
+
       if (Result.isFailure(cron)) return Result.fail(cron.failure);
+
       return Result.try({
         try: () => {
           let next = Cron.next(cron.success, afterMillis).getTime();
+
           // Inside a fall fold Effect may select the first, already elapsed local instant.
           while (next <= afterMillis) {
             const following = Cron.next(cron.success, next).getTime();
+
             if (following <= next) throw new Error("Cron did not advance");
             next = following;
           }
+
           return next;
         },
         catch: () => ScheduleValidationError.make({ message: "Cron has no supported next firing" }),
@@ -178,18 +197,23 @@ export const scheduleDueOccurrence = (
   }
 
   let intendedAtMillis: number;
+
   if (timing._tag === "Interval") {
     const steps = Math.floor((nowMillis - timing.anchorMillis) / timing.everyMillis);
+
     intendedAtMillis = Math.max(cursorMillis, timing.anchorMillis + steps * timing.everyMillis);
   } else {
     const cron = parsedStoredCron(timing);
+
     if (Result.isFailure(cron)) return Result.fail(cron.failure);
+
     const due = Result.try({
       try: () => {
         let intended = cursorMillis;
         // Reverse traversal is safe only without offset transitions. Named-zone reverse
         // traversal has different gap/fold semantics from the forward occurrence sequence.
         const zone = Option.getOrUndefined(cron.success.tz);
+
         if (zone !== undefined && (DateTime.isTimeZoneOffset(zone) || zone.id === "UTC")) {
           intended = Math.max(cursorMillis, Cron.prev(cron.success, nowMillis + 1_000).getTime());
         } else {
@@ -204,33 +228,43 @@ export const scheduleDueOccurrence = (
             hours: [0],
             tz: DateTime.zoneMakeNamedUnsafe("UTC"),
           });
+
           const localDay = DateTime.makeUnsafe(
             DateTime.toDate(DateTime.makeZonedUnsafe(nowMillis, { timeZone: zone })),
           ).pipe(DateTime.startOf("day"), DateTime.subtract({ days: 2 }));
+
           const seedDay = Cron.prev(calendar, DateTime.toEpochMillis(localDay) + 1_000);
+
           const seed =
             DateTime.makeZonedUnsafe(seedDay, {
               timeZone: zone,
               adjustForTimeZone: true,
             }).pipe(DateTime.toEpochMillis) - 1_000;
+
           if (seed > cursorMillis) {
             const first = Cron.next(cron.success, seed).getTime();
+
             if (first <= nowMillis) intended = Math.max(intended, first);
           }
         }
         let next = Cron.next(cron.success, intended).getTime();
+
         while (next <= nowMillis) {
           if (next <= intended) throw new Error("Cron did not advance");
           intended = next;
           next = Cron.next(cron.success, intended).getTime();
         }
+
         return { intended, next };
       },
       catch: () => ScheduleValidationError.make({ message: "Cron has no supported due firing" }),
     });
+
     if (Result.isFailure(due)) return Result.fail(due.failure);
     const next = checkedInstant(due.success.next, "Next cron occurrence");
+
     if (Result.isFailure(next)) return Result.fail(next.failure);
+
     return Result.succeed({
       intendedAtMillis: due.success.intended,
       nextAtMillis: next.success,
@@ -245,7 +279,9 @@ export const scheduleDueOccurrence = (
   }
 
   const next = scheduleNextAfter(timing, nowMillis);
+
   if (Result.isFailure(next)) return Result.fail(next.failure);
+
   return Result.succeed({
     intendedAtMillis,
     nextAtMillis: next.success,
@@ -262,5 +298,6 @@ export const scheduleResumeCursor = (
   nowMillis: number,
 ): Result.Result<number | null, ScheduleValidationError> => {
   if (timing._tag === "At") return Result.succeed(existingCursor);
+
   return scheduleNextAfter(timing, nowMillis);
 };

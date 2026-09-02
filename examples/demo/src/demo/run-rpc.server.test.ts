@@ -20,8 +20,10 @@ describe("Phase 2 demo RPC server", () => {
   it.effect("runs deterministic chat without resolving an OpenAI credential", () =>
     Effect.gen(function* () {
       const handlers = DemoRunRpcHandlers.pipe(Layer.provide(DemoInteractiveRuntimeLive));
+
       const events = yield* Effect.gen(function* () {
         const client = yield* RpcTest.makeClient(DemoRunRpcs);
+
         return yield* client
           .StreamChatRun({
             mode: "deterministic",

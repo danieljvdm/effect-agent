@@ -56,12 +56,14 @@ const SearchAvailability = Tool.make("search_availability", {
   failure: AvailabilityFailure,
   dependencies: [AvailabilityCatalog],
 });
+
 const TravelTools = Toolkit.make(SearchAvailability);
 
 const PostMessage = Tool.make("post_message", {
   parameters: Schema.Struct({ message: Schema.String }),
   success: Schema.Struct({ messageId: Schema.String }),
 });
+
 const DeliveryTools = Toolkit.make(PostMessage);
 
 const model = Model.make(
@@ -71,6 +73,7 @@ const model = Model.make(
     LanguageModel.LanguageModel,
     Effect.gen(function* () {
       yield* ModelConfig;
+
       return yield* LanguageModel.make({
         generateText: () => Effect.succeed([]),
         streamText: () => Stream.empty,
@@ -85,11 +88,13 @@ const definition = Agent.make("type-proof", {
   instructions: ({ destination }) =>
     Effect.gen(function* () {
       const context = yield* InstructionContext;
+
       if (context.locale.length === 0) {
         return yield* InstructionFailure.make({
           message: "locale is required",
         });
       }
+
       return `Search ${destination} using ${context.locale}.`;
     }),
   toolkit: TravelTools,
@@ -100,6 +105,7 @@ const definition = Agent.make("type-proof", {
     toolConcurrency: 1,
   }),
 });
+
 const agent = Agent.withModel(definition, model);
 
 const inputPromptDefinition = Agent.make("input-prompt-type-proof", {
@@ -111,9 +117,11 @@ const inputPromptDefinition = Agent.make("input-prompt-type-proof", {
       ? []
       : Effect.gen(function* () {
           const context = yield* InputPromptContext;
+
           if (context.prefix === "") {
             return yield* InputPromptFailure.make({ message: "prefix is required" });
           }
+
           return `${context.prefix}${destination}`;
         }),
   toolkit: Toolkit.empty,
@@ -126,6 +134,7 @@ const inputPromptDefinition = Agent.make("input-prompt-type-proof", {
 });
 
 const RunDisposition = Schema.Literal("application-complete");
+
 const dispositionDefinition = Agent.make("disposition-type-proof", {
   input: Schema.Struct({ destination: Schema.String }),
   output: Schema.Struct({

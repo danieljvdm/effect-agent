@@ -15,30 +15,40 @@ export const SubscriptionName = Schema.NonEmptyString.check(
   Schema.isMaxLength(256),
   Schema.isPattern(/^[^\p{Surrogate}]*$/u),
 );
+
 const Positive = Schema.Int.check(Schema.isGreaterThan(0));
+
 /** Stable storage identity. Deployment and payload values must never change its routing. */
 export const SourcePartition = Schema.Struct({
   tenantId: SubscriptionName,
   address: SubscriptionName,
 });
+
 export type SourcePartition = typeof SourcePartition.Type;
+
 export const EventSourceVersion = Schema.Struct({
   name: SubscriptionName,
   version: SubscriptionName,
 });
+
 export type EventSourceVersion = typeof EventSourceVersion.Type;
+
 export const SubscriptionKey = Schema.Struct({
   partition: SourcePartition,
   ownerId: SubscriptionName,
   subscriptionId: SubscriptionName,
 });
+
 export type SubscriptionKey = typeof SubscriptionKey.Type;
+
 export const SubscriptionScope = Schema.Struct({
   partition: SourcePartition,
   ownerId: SubscriptionName,
   principal: Principal,
 });
+
 export type SubscriptionScope = typeof SubscriptionScope.Type;
+
 export const SubscriptionConfiguration = Schema.Struct({
   source: EventSourceVersion,
   matchingKey: SubscriptionName,
@@ -51,7 +61,9 @@ export const SubscriptionConfiguration = Schema.Struct({
   agentId: AgentId,
   definitions: DefinitionDigests,
 });
+
 export type SubscriptionConfiguration = typeof SubscriptionConfiguration.Type;
+
 export const SourceRecovery = Schema.Struct({
   attempts: Schema.Natural,
   /** Null retains a conclusive source failure without continuing provider polling. */
@@ -60,6 +72,7 @@ export const SourceRecovery = Schema.Struct({
 }).check(
   Schema.makeFilter((value) => value.nextAttemptAtMillis !== null || value.lastFailure !== null),
 );
+
 export const SubscriptionRecord = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   key: SubscriptionKey,
@@ -79,7 +92,9 @@ export const SubscriptionRecord = Schema.Struct({
         (value.configuration.mode === "once" && value.state === "active")),
   ),
 );
+
 export type SubscriptionRecord = typeof SubscriptionRecord.Type;
+
 export const AcceptedEvent = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   partition: SourcePartition,
@@ -95,12 +110,15 @@ export const AcceptedEvent = Schema.Struct({
   routingFailure: Schema.NullOr(SubscriptionName),
   nextAttemptAtMillis: ScheduleInstant,
 }).check(Schema.makeFilter((value) => value.cursor <= value.cutoff));
+
 export type AcceptedEvent = typeof AcceptedEvent.Type;
+
 export const EventAcknowledgement = Schema.Struct({
   partition: SourcePartition,
   eventId: SubscriptionName,
   acceptedAtMillis: ScheduleInstant,
 });
+
 export type EventAcknowledgement = typeof EventAcknowledgement.Type;
 
 /** Common admission data; neither a schedule cursor nor a subscription lifecycle lives here. */
@@ -115,16 +133,21 @@ export const PreparedInput = Schema.Struct({
   admissionKey: IdempotencyKey,
   authorization: ScheduleAuthorizationDecision,
 });
+
 export type PreparedInput = typeof PreparedInput.Type;
+
 export const SubscriptionDeliveryKey = Schema.Struct({
   subscription: SubscriptionKey,
   eventId: SubscriptionName,
 });
+
 export type SubscriptionDeliveryKey = typeof SubscriptionDeliveryKey.Type;
+
 export const SubscriptionRefusal = Schema.Struct({
   phase: Schema.Literals(["preparation", "admission"]),
   code: SubscriptionName,
 });
+
 export const SubscriptionDelivery = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   key: SubscriptionDeliveryKey,
@@ -145,6 +168,7 @@ export const SubscriptionDelivery = Schema.Struct({
   Schema.makeFilter((value) => {
     const hasEnvelope = value.envelope !== null && value.envelopeDigest !== null;
     const noEnvelope = value.envelope === null && value.envelopeDigest === null;
+
     switch (value.state) {
       case "selected":
         return noEnvelope && value.receipt === null && value.refusal === null;
@@ -161,7 +185,9 @@ export const SubscriptionDelivery = Schema.Struct({
     }
   }),
 );
+
 export type SubscriptionDelivery = typeof SubscriptionDelivery.Type;
+
 /** Management projections intentionally exclude parameters, context, payload, and input. */
 export const SubscriptionSnapshot = Schema.Struct({
   key: SubscriptionKey,
@@ -172,7 +198,9 @@ export const SubscriptionSnapshot = Schema.Struct({
   expiresAtMillis: ScheduleInstant,
   recovery: Schema.NullOr(SourceRecovery),
 });
+
 export type SubscriptionSnapshot = typeof SubscriptionSnapshot.Type;
+
 export const SubscriptionDeliverySnapshot = Schema.Struct({
   key: SubscriptionDeliveryKey,
   state: SubscriptionDelivery.fields.state,
@@ -198,6 +226,7 @@ export class SubscriptionError extends Schema.TaggedError<SubscriptionError>()(
     code: SubscriptionName,
   },
 ) {}
+
 /** Host source adapters classify expected failures; raw provider diagnostics are never stored. */
 export class SubscriptionSourceError extends Schema.TaggedError<SubscriptionSourceError>()(
   "SubscriptionSourceError",
@@ -206,11 +235,14 @@ export class SubscriptionSourceError extends Schema.TaggedError<SubscriptionSour
     retryable: Schema.Boolean,
   },
 ) {}
+
 export class SubscriptionFailpointError extends Schema.TaggedError<SubscriptionFailpointError>()(
   "SubscriptionFailpointError",
   { point: Schema.String },
 ) {}
+
 export type SubscriptionStoreFailure = SubscriptionError | SubscriptionFailpointError;
+
 export const SubscriptionFailpoint = Context.Reference<{
   readonly hit: (point: string) => Effect.Effect<void, SubscriptionFailpointError>;
 }>("@effect-agent/thread/SubscriptionFailpoint", {
@@ -231,7 +263,9 @@ export const SubscriptionLimits = Schema.Struct({
   retryMillis: Positive.check(Schema.isLessThanOrEqualTo(86_400_000)),
   operationTimeoutMillis: Positive.check(Schema.isLessThanOrEqualTo(300_000)),
 });
+
 export type SubscriptionLimits = typeof SubscriptionLimits.Type;
+
 export const defaultSubscriptionLimits: SubscriptionLimits = {
   maxRegistrations: 10_000,
   maxRegistrationsPerOwner: 1_000,
@@ -266,6 +300,7 @@ export const DeliveryChange = Schema.Union([
     nowMillis: ScheduleInstant,
   }),
 ]);
+
 export type DeliveryChange = typeof DeliveryChange.Type;
 
 /** Progress of bounded recovery sweeps, independent of individual work success. */
@@ -274,6 +309,7 @@ export const SubscriptionScanCursors = Schema.Struct({
   deliveries: Schema.String,
   recovery: Schema.Natural,
 });
+
 export type SubscriptionScanCursors = typeof SubscriptionScanCursors.Type;
 
 /**
@@ -407,5 +443,6 @@ export class SubscriptionAuthorizer extends Context.Service<
 
 export const subscriptionKeyString = (key: SubscriptionKey): string =>
   JSON.stringify([key.partition.tenantId, key.partition.address, key.ownerId, key.subscriptionId]);
+
 export const subscriptionDeliveryKeyString = (key: SubscriptionDeliveryKey): string =>
   JSON.stringify([key.subscription.ownerId, key.subscription.subscriptionId, key.eventId]);

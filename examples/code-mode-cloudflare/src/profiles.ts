@@ -63,6 +63,7 @@ const makeScriptedModel = (program: string, answer: string) =>
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: () =>

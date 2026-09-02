@@ -85,9 +85,11 @@ const fixtureArticles: ReadonlyArray<{
 /** Resolve deterministic offline search results for the fixture profile. */
 export const searchFixtureKnowledge = (query: FixtureKnowledgeQuery): FixtureKnowledgeResult => {
   const normalized = query.query.toLowerCase();
+
   const matches = fixtureArticles
     .filter((article) => article.keywords.some((keyword) => normalized.includes(keyword)))
     .map((article) => article.match);
+
   return Schema.decodeSync(FixtureKnowledgeResult)({
     fixture: true,
     query: query.query,
@@ -173,11 +175,13 @@ const calculate = Effect.fn("Calculator.calculate")((
 });
 
 export const CalculatorToolkit = Toolkit.make(Calculate);
+
 export const CalculatorToolkitLayer = CalculatorToolkit.toLayer({
   calculate,
 });
 
 export const FixtureChatToolkit = Toolkit.make(SearchFixtureKnowledge, Calculate);
+
 export const FixtureChatToolkitLayer = FixtureChatToolkit.toLayer({
   search_fixture_knowledge: (query) =>
     Effect.flatMap(FixtureKnowledge, (knowledge) => knowledge.search(query)),
@@ -222,12 +226,14 @@ const fixtureUsage = {
 export const makeFixtureChatAgent = (message: string) => {
   const input = Schema.decodeSync(ChatInput)({ message });
   const fixture = searchFixtureKnowledge({ query: input.message });
+
   const answer = Schema.decodeSync(ChatOutput)({
     answer: [
       fixture.matches.map((match) => `${match.title}: ${match.snippet}`).join("\n"),
       "This answer came from deterministic fixture data, not live research.",
     ].join("\n\n"),
   });
+
   const turns = [
     {
       _tag: "Stream" as const,
@@ -265,6 +271,7 @@ export const makeFixtureChatAgent = (message: string) => {
       termination: { _tag: "Complete" as const },
     },
   ];
+
   return Agent.withModel(
     FixtureChatDefinition,
     Model.make("scripted", "general-chat-fixture", ScriptedModel.layer(turns)),
@@ -278,6 +285,7 @@ export const DemoIdGeneratorLayer = Layer.effect(
     const thread = yield* Ref.make(0);
     const run = yield* Ref.make(0);
     const turn = yield* Ref.make(0);
+
     return IdGenerator.of({
       nextThreadId: Ref.updateAndGet(thread, (value) => value + 1).pipe(
         Effect.map((value) => Schema.decodeSync(ThreadId)(`demo-thread-${value}`)),

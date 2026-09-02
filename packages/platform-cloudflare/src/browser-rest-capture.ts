@@ -51,6 +51,7 @@ const RestSuccessEnvelope = Schema.Struct({
   errors: Schema.optionalKey(Schema.Array(Schema.Unknown)),
   meta: Schema.optionalKey(Schema.Unknown),
 });
+
 const RestErrorEnvelope = Schema.Struct({
   success: Schema.Literal(false),
   errors: Schema.Array(
@@ -62,6 +63,7 @@ const RestErrorEnvelope = Schema.Struct({
   result: Schema.optionalKey(Schema.Json),
   meta: Schema.optionalKey(Schema.Unknown),
 });
+
 const RestEnvelope = Schema.Union([RestSuccessEnvelope, RestErrorEnvelope]);
 const decodeEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(RestEnvelope));
 
@@ -86,6 +88,7 @@ const privateResponseCause = (
   if (bodyText.length === 0) return undefined;
   const token = Redacted.value(apiToken);
   const diagnostic = boundedDiagnostic(bodyText);
+
   return new Error(token.length === 0 ? diagnostic : diagnostic.replaceAll(token, "[REDACTED]"));
 };
 
@@ -94,8 +97,10 @@ const requestBody = (request: PageCaptureRequest): Record<string, unknown> => {
     request.target._tag === "PageUrlTarget"
       ? { url: request.target.url }
       : { html: request.target.html };
+
   if (request.navigation !== undefined) {
     const goto: Record<string, unknown> = {};
+
     if (request.navigation.waitUntil !== undefined) goto.waitUntil = request.navigation.waitUntil;
     if (request.navigation.timeoutMillis !== undefined)
       goto.timeout = request.navigation.timeoutMillis;
@@ -116,6 +121,7 @@ const requestBody = (request: PageCaptureRequest): Record<string, unknown> => {
   if (request.resourcePolicy?.allowRequestPatterns !== undefined) {
     body.allowRequestPattern = [...request.resourcePolicy.allowRequestPatterns];
   }
+
   return body;
 };
 
@@ -138,6 +144,7 @@ const actionName = (
 
 const actionBody = (request: PageCaptureRequest): Record<string, unknown> => {
   const body = requestBody(request);
+
   switch (request.action._tag) {
     case "CapturePageContent":
     case "CapturePageMarkdown":
@@ -167,8 +174,10 @@ const retryAfterMillis = (
   headers: Readonly<Record<string, string | undefined>>,
 ): number | undefined => {
   const seconds = Number(headers["retry-after"]);
+
   if (!Number.isSafeInteger(seconds) || seconds < 0) return undefined;
   const millis = seconds * 1_000;
+
   return Number.isSafeInteger(millis) ? millis : undefined;
 };
 
@@ -176,14 +185,17 @@ const browserMillis = (
   headers: Readonly<Record<string, string | undefined>>,
 ): number | undefined => {
   const millis = Number(headers["x-browser-ms-used"]);
+
   return Number.isSafeInteger(millis) && millis >= 0 ? millis : undefined;
 };
 
 /** Response framing is provider metadata, never content controlled by the rendered page. */
 const isJsonResponse = (headers: Readonly<Record<string, string | undefined>>): boolean => {
   const contentType = headers["content-type"];
+
   if (contentType === undefined) return false;
   const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+
   return mediaType === "application/json" || mediaType?.endsWith("+json") === true;
 };
 
@@ -192,6 +204,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCapture.readResponse")(functio
   request: PageCaptureRequest,
 ): Effect.fn.Return<string, PageCaptureError> {
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
+
   const chunks = yield* Stream.runFoldEffect<
     Uint8Array,
     HttpClientError.HttpClientError,
@@ -204,6 +217,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCapture.readResponse")(functio
     () => ({ observed: 0, text: "" }),
     (state, chunk) => {
       const observed = state.observed + chunk.byteLength;
+
       if (observed > request.limits.maxOutputBytes) {
         return Effect.fail(
           PageCaptureOutputLimitError.make({
@@ -213,6 +227,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCapture.readResponse")(functio
           }),
         );
       }
+
       return Effect.try({
         try: () => ({ observed, text: state.text + decoder.decode(chunk, { stream: true }) }),
         catch: (cause) => protocolError("Decoding the Browser Run response failed", cause),
@@ -225,6 +240,7 @@ const readBoundedResponse = Effect.fn("BrowserRestCapture.readResponse")(functio
         : protocolError("Reading the Browser Run response failed", error),
     ),
   );
+
   return yield* Effect.try({
     try: () => chunks.text + decoder.decode(),
     catch: (cause) => protocolError("Decoding the Browser Run response failed", cause),
@@ -237,6 +253,7 @@ const parseOutput = (
   apiToken: Redacted.Redacted<string>,
 ): PageCaptureOutput | PageCaptureNavigationError | PageCaptureProtocolError => {
   const envelope = decodeEnvelope(bodyText);
+
   if (Option.isNone(envelope)) {
     return protocolError(
       "The Browser Run response did not carry a valid response envelope",
@@ -255,6 +272,7 @@ const parseOutput = (
       if (typeof envelope.value.result !== "string") {
         return protocolError("The Browser Run response envelope carried a non-text result");
       }
+
       return action._tag === "CapturePageContent"
         ? PageContentCaptured.make({ html: envelope.value.result })
         : PageMarkdownCaptured.make({ markdown: envelope.value.result });
@@ -263,6 +281,7 @@ const parseOutput = (
         _tag: "PageLinksCaptured",
         links: envelope.value.result,
       });
+
       return Option.isSome(decoded)
         ? decoded.value
         : protocolError("Browser Run links did not return a bounded array of valid URLs");
@@ -272,6 +291,7 @@ const parseOutput = (
         _tag: "PageScrapeCaptured",
         groups: envelope.value.result,
       });
+
       return Option.isSome(decoded)
         ? decoded.value
         : protocolError("Browser Run scrape did not return bounded grouped element records");
@@ -292,6 +312,7 @@ const makeCapture = (
     request: PageCaptureRequest,
   ): Effect.fn.Return<PageCaptureResult, PageCaptureError> {
     const usesWorkersAi = request.action._tag === "CapturePageStructured";
+
     if (usesWorkersAi) {
       if (workersAi === undefined) {
         return yield* PageCaptureUnsupportedError.make({
@@ -318,6 +339,7 @@ const makeCapture = (
     }
     const action = actionName(request.action);
     const path = `${API_ORIGIN}/client/v4/accounts/${encodeURIComponent(options.accountId)}/browser-rendering/${action}`;
+
     const requestWithBody = yield* HttpClientRequest.post(path).pipe(
       request.engine === "kitesurf"
         ? HttpClientRequest.setUrlParam("browser", "kitesurf")
@@ -327,14 +349,18 @@ const makeCapture = (
       HttpClientRequest.bodyJson(actionBody(request)),
       Effect.mapError((cause) => protocolError("Encoding the Browser Run request failed", cause)),
     );
+
     const response = yield* client
       .execute(requestWithBody)
       .pipe(
         Effect.mapError((cause) => protocolError("Calling the Browser Run REST API failed", cause)),
       );
+
     const bodyText = yield* readBoundedResponse(response, request);
+
     if (response.status === 429) {
       const reason = isQuotaMessage(bodyText) ? "quota" : "rate";
+
       return yield* PageCaptureRateLimitedError.make({
         implementation: browserRestCaptureImplementation,
         reason,
@@ -361,6 +387,7 @@ const makeCapture = (
               `Browser Run answered HTTP ${String(response.status)}`,
               privateResponseCause(bodyText, options.apiToken),
             );
+
       return yield* error;
     }
     if (!isJsonResponse(response.headers)) {
@@ -370,12 +397,14 @@ const makeCapture = (
       );
     }
     const output = parseOutput(request.action, bodyText, options.apiToken);
+
     if (
       output._tag === "PageCaptureNavigationError" ||
       output._tag === "PageCaptureProtocolError"
     ) {
       return yield* output;
     }
+
     return PageCaptureResult.make({
       implementation: browserRestCaptureImplementation,
       output,
@@ -415,6 +444,7 @@ export const browserRestWorkersAiCaptureLayer = (
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
       const workersAi = yield* BrowserQuickActionWorkersAi;
+
       return PageCapture.of({ capture: makeCapture(client, options, workersAi) });
     }),
   );

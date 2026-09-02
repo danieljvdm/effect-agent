@@ -52,6 +52,7 @@ export const DelegationAdmissionEvidence = Schema.Literals([
   "admitted",
   "indeterminate",
 ]);
+
 export type DelegationAdmissionEvidence = typeof DelegationAdmissionEvidence.Type;
 
 /**
@@ -430,6 +431,7 @@ export const RecoveryDecision = Schema.Union([
   AwaitParentEstablishment,
   NoAction,
 ]);
+
 export type RecoveryDecision = typeof RecoveryDecision.Type;
 
 /**
@@ -464,9 +466,12 @@ const delegationViewsOf = (
   evidence: RecoveryEvidence,
 ): Array<DelegationCallView> => {
   const views = new Map<ToolCallId, DelegationCallView>();
+
   const ensure = (toolCallId: ToolCallId): DelegationCallView => {
     const existing = views.get(toolCallId);
+
     if (existing !== undefined) return existing;
+
     const created: DelegationCallView = {
       toolCallId,
       turn: undefined,
@@ -479,12 +484,15 @@ const delegationViewsOf = (
       reservation: undefined,
       attachment: undefined,
     };
+
     views.set(toolCallId, created);
+
     return created;
   };
 
   for (const call of evidence.openDelegationCalls) {
     const view = ensure(call.toolCallId);
+
     view.turn = call.turn;
     view.open = true;
     view.requested = call.requested;
@@ -495,6 +503,7 @@ const delegationViewsOf = (
   }
   for (const reservation of snapshot.childReservations) {
     let view = views.get(reservation.parentToolCallId);
+
     if (view === undefined) {
       view = ensure(reservation.parentToolCallId);
     }
@@ -505,11 +514,13 @@ const delegationViewsOf = (
   }
   for (const attachment of snapshot.childAttachments) {
     const view = ensure(attachment.toolCallId);
+
     view.attachment = attachment;
     if (view.childSubmissionId === undefined) {
       view.childSubmissionId = attachment.childSubmissionId;
     }
   }
+
   return [...views.values()];
 };
 
@@ -518,6 +529,7 @@ const waitingChildOf = (view: DelegationCallView, childSubmissionId: SubmissionI
 
 const nonEmpty = <A>(values: ReadonlyArray<A>): readonly [A, ...Array<A>] | undefined => {
   const [first, ...rest] = values;
+
   return first === undefined ? undefined : [first, ...rest];
 };
 
@@ -581,6 +593,7 @@ const classifyDelegationRepairs = (
     if (view.started && view.childSubmissionId !== undefined) {
       // Rows: started + child nonterminal → waiting; child terminal + join missing → wake.
       const child = waitingChildOf(view, view.childSubmissionId);
+
       if (view.attachment !== undefined && isTerminalAttachment(view.attachment)) {
         terminalUnjoined.push(child);
       } else {
@@ -608,6 +621,7 @@ const classifyDelegationRepairs = (
       continue;
     }
     const reservation = reservedReservation(view);
+
     if (reservation !== undefined) {
       // Row: reservation exists, request absent, no resumable batch → release exactly once.
       orphanReservations.push(reservation);
@@ -615,6 +629,7 @@ const classifyDelegationRepairs = (
   }
 
   const applyJoin = applyJoins[0];
+
   if (applyJoin?.reservation !== undefined) {
     return ApplyJoinAccounting.make({
       submissionId,
@@ -623,14 +638,17 @@ const classifyDelegationRepairs = (
     });
   }
   const completeAdmission = completeAdmissions[0];
+
   if (completeAdmission !== undefined) {
     return CompleteChildAdmission.make({ submissionId, toolCallId: completeAdmission.toolCallId });
   }
   const repairStartLink = repairStartLinks[0];
+
   if (repairStartLink !== undefined) {
     return RepairSubagentStartLink.make({ submissionId, toolCallId: repairStartLink.toolCallId });
   }
   const awaitAdmission = awaitAdmissions[0];
+
   if (awaitAdmission !== undefined) {
     return AwaitChildAdmissionResolution.make({
       submissionId,
@@ -638,21 +656,26 @@ const classifyDelegationRepairs = (
     });
   }
   const resumeBatch = resumeBatches[0];
+
   if (resumeBatch?.turn !== undefined) {
     return ResumePendingToolBatch.make({ submissionId, turn: resumeBatch.turn });
   }
   const waitingChildren = nonEmpty([...waiting, ...terminalUnjoined]);
+
   if (waiting.length > 0 && waitingChildren !== undefined) {
     return EnsureWaitingForChild.make({ submissionId, children: waitingChildren });
   }
   const settledChildren = nonEmpty(terminalUnjoined);
+
   if (settledChildren !== undefined) {
     return ResumeWaitingParent.make({ submissionId, children: settledChildren });
   }
   const orphans = nonEmpty(orphanReservations.map((reservation) => reservation.reservationId));
+
   if (orphans !== undefined) {
     return ReleaseOrphanChildReservation.make({ submissionId, reservationIds: orphans });
   }
+
   return undefined;
 };
 
@@ -698,6 +721,7 @@ const classifyDelegationAbort = (
         continue;
       }
       const child = waitingChildOf(view, view.childSubmissionId);
+
       if (view.attachment !== undefined && isTerminalAttachment(view.attachment)) {
         terminalUnjoined.push(child);
       } else {
@@ -714,6 +738,7 @@ const classifyDelegationAbort = (
         // Provably childless request under abort: never admit a child merely to abort it;
         // release the unused reservation exactly once.
         const reservation = reservedReservation(view);
+
         if (reservation !== undefined) orphanReservations.push(reservation);
       } else {
         // Indeterminate or unqueried: a child may exist — never release, settle, or re-admit
@@ -723,6 +748,7 @@ const classifyDelegationAbort = (
       continue;
     }
     const reservation = reservedReservation(view);
+
     if (reservation !== undefined) orphanReservations.push(reservation);
     // An open delegation call with no reservation carries no child obligation: establishment
     // never started, so the ordinary aborted settlement (with its unknown-audit for open
@@ -730,6 +756,7 @@ const classifyDelegationAbort = (
   }
 
   const awaitAdmission = awaitAdmissions[0];
+
   if (awaitAdmission !== undefined) {
     return AwaitChildAdmissionResolution.make({
       submissionId,
@@ -737,18 +764,22 @@ const classifyDelegationAbort = (
     });
   }
   const repairStartLink = repairStartLinks[0];
+
   if (repairStartLink !== undefined) {
     return RepairSubagentStartLink.make({ submissionId, toolCallId: repairStartLink.toolCallId });
   }
   const abortChildren = nonEmpty(nonterminal);
+
   if (abortChildren !== undefined) {
     return PropagateChildAbort.make({ submissionId, children: abortChildren });
   }
   const settledChildren = nonEmpty(terminalUnjoined);
+
   if (settledChildren !== undefined) {
     return ResumeWaitingParent.make({ submissionId, children: settledChildren });
   }
   const applyJoin = applyJoins[0];
+
   if (applyJoin?.reservation !== undefined) {
     return ApplyJoinAccounting.make({
       submissionId,
@@ -757,9 +788,11 @@ const classifyDelegationAbort = (
     });
   }
   const orphans = nonEmpty(orphanReservations.map((reservation) => reservation.reservationId));
+
   if (orphans !== undefined) {
     return ReleaseOrphanChildReservation.make({ submissionId, reservationIds: orphans });
   }
+
   return undefined;
 };
 
@@ -829,6 +862,7 @@ export const classifyRecovery = (
 ): RecoveryDecision => {
   const submissionId = snapshot.submission.submissionId;
   const state = snapshot.submission.state;
+
   if (state === "settled") {
     return NoAction.make({ submissionId });
   }
@@ -847,6 +881,7 @@ export const classifyRecovery = (
         outcome: snapshot.reservation.outcome,
       });
     }
+
     return AppendReservedSettlement.make({
       submissionId,
       settlementId: snapshot.reservation.settlementId,
@@ -865,6 +900,7 @@ export const classifyRecovery = (
         outcome: evidence.hostSettlementOutcome,
       });
     }
+
     return AwaitHostSettlement.make({
       submissionId,
       ...(snapshot.hostSubmissionId === undefined
@@ -873,17 +909,21 @@ export const classifyRecovery = (
     });
   }
   const delegationViews = delegationViewsOf(snapshot, evidence);
+
   if (snapshot.abortIntent !== undefined) {
     return (
       classifyDelegationAbort(submissionId, delegationViews) ?? SettleAborted.make({ submissionId })
     );
   }
+
   const delegationCallIds = new Set<string>(
     evidence.openDelegationCalls.map((call) => call.toolCallId),
   );
+
   const ordinaryOpenCalls = evidence.openToolCalls.filter(
     (call) => !delegationCallIds.has(call.toolCallId),
   );
+
   if (state !== "unknown" && ordinaryOpenCalls.length > 0) {
     return MarkUnknown.make({
       submissionId,
@@ -895,27 +935,34 @@ export const classifyRecovery = (
     const resolved = new Set(
       snapshot.unknownResolutions.map((resolution) => resolution.toolCallId),
     );
+
     const covered = ordinaryOpenCalls.every((call) => resolved.has(call.toolCallId));
+
     return covered
       ? ApplyUnknownResolutions.make({ submissionId })
       : AwaitUnknownResolution.make({ submissionId });
   }
   const decided = new Set(snapshot.approvalDecisions.map((decision) => decision.toolCallId));
+
   const undecidedApprovals = evidence.approvalsPending.filter(
     (pending) => !decided.has(pending.toolCallId),
   );
+
   if (state === "suspended") {
     const reason = snapshot.suspension?.reason;
+
     if (reason !== undefined && reason._tag === "WaitingForChild") {
       const terminalChildIds = new Set(
         snapshot.childAttachments
           .filter(isTerminalAttachment)
           .map((attachment) => attachment.childSubmissionId),
       );
+
       return reason.children.every((child) => terminalChildIds.has(child.childSubmissionId))
         ? ResumeWaitingParent.make({ submissionId, children: reason.children })
         : AwaitChildSettlement.make({ submissionId });
     }
+
     return undecidedApprovals.length === 0
       ? ResumeSuspended.make({ submissionId })
       : AwaitApprovalDecision.make({ submissionId });
@@ -924,6 +971,7 @@ export const classifyRecovery = (
     return AwaitApprovalDecision.make({ submissionId });
   }
   const delegationDecision = classifyDelegationRepairs(submissionId, delegationViews);
+
   if (delegationDecision !== undefined) {
     return delegationDecision;
   }
@@ -938,6 +986,7 @@ export const classifyRecovery = (
     // lineage record is canonical — the parent's establishment appends lineage BEFORE
     // markReady, so the parent completes the child idempotently.
     const linkage = snapshot.submission.parentLinkage ?? snapshot.parentLinkage;
+
     if (linkage !== undefined && !evidence.subagentLineageRecorded) {
       return AwaitParentEstablishment.make({
         submissionId,
@@ -945,6 +994,7 @@ export const classifyRecovery = (
         parentToolCallId: linkage.parentToolCallId,
       });
     }
+
     return evidence.threadMaterialized
       ? RepairReadiness.make({ submissionId })
       : CompleteMaterialization.make({ submissionId });
@@ -955,5 +1005,6 @@ export const classifyRecovery = (
   if (snapshot.inputApplied === undefined) {
     return RepairInputMarker.make({ submissionId });
   }
+
   return ResumeFromTurnBoundary.make({ submissionId });
 };

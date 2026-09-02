@@ -8,13 +8,16 @@ import { SubscriptionSourceError } from "./subscription.ts";
 import { SubscriptionIntake } from "./subscriptions.ts";
 
 const PositiveId = Schema.Int.check(Schema.isGreaterThan(0));
+
 const GitHubName = Schema.NonEmptyString.check(
   Schema.isMaxLength(100),
   Schema.isPattern(/^[A-Za-z0-9_.-]+$/),
 );
+
 const GitCommitSha = Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/));
 const GitHubConclusion = Schema.NonEmptyString.check(Schema.isMaxLength(64));
 const GitHubStatus = Schema.NonEmptyString.check(Schema.isMaxLength(32));
+
 const strict = <S extends Schema.Top>(schema: S) =>
   schema.pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
 
@@ -26,6 +29,7 @@ export const GitHubRepository = strict(
     name: GitHubName,
   }),
 );
+
 export type GitHubRepository = typeof GitHubRepository.Type;
 
 /** Exact workflow attempt requested by an Agent through a host-permitted source. */
@@ -36,6 +40,7 @@ export const GitHubWorkflowRunWatch = strict(
     expectedHeadSha: GitCommitSha,
   }),
 );
+
 export type GitHubWorkflowRunWatch = typeof GitHubWorkflowRunWatch.Type;
 
 /**
@@ -51,6 +56,7 @@ export const GitHubWorkflowRunCompletion = strict(
     conclusion: GitHubConclusion,
   }),
 );
+
 export type GitHubWorkflowRunCompletion = typeof GitHubWorkflowRunCompletion.Type;
 
 // Provider wire payloads intentionally project the fields we own. GitHub adds many fields and
@@ -69,6 +75,7 @@ export const GitHubWorkflowRunWebhook = Schema.Struct({
   repository: Schema.Struct({ id: PositiveId }),
   workflow_run: GitHubWorkflowRunWire,
 });
+
 export type GitHubWorkflowRunWebhook = typeof GitHubWorkflowRunWebhook.Type;
 
 export const GitHubWorkflowRunAttempt = GitHubWorkflowRunWire;
@@ -136,16 +143,20 @@ export const githubWorkflowRunsHttpLayer = (
     GitHubWorkflowRuns,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
+
       const permittedRepository = yield* Schema.decodeUnknownEffect(GitHubRepository)(
         options.repository,
       ).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
+
       const apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "");
+
       const getAttempt = Effect.fn("GitHubWorkflowRuns.getAttempt")(function* (
         request: GitHubWorkflowRunAttemptRequest,
       ) {
         const repository = yield* Schema.decodeUnknownEffect(GitHubRepository)(
           request.repository,
         ).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
+
         if (
           repository.id !== permittedRepository.id ||
           repository.owner !== permittedRepository.owner ||
@@ -153,12 +164,15 @@ export const githubWorkflowRunsHttpLayer = (
         ) {
           return yield* httpFailure("unauthorized", false);
         }
+
         const watch = yield* Schema.decodeUnknownEffect(GitHubWorkflowRunWatch)({
           runId: request.runId,
           attempt: request.attempt,
           expectedHeadSha: "0".repeat(40),
         }).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
+
         const url = `${apiUrl}/repos/${repository.owner}/${repository.name}/actions/runs/${String(watch.runId)}/attempts/${String(watch.attempt)}`;
+
         const response = yield* client
           .execute(
             HttpClientRequest.get(url).pipe(
@@ -171,6 +185,7 @@ export const githubWorkflowRunsHttpLayer = (
             ),
           )
           .pipe(Effect.mapError(() => httpFailure("unavailable", true)));
+
         if (
           response.status === 429 ||
           (response.status === 403 &&
@@ -186,6 +201,7 @@ export const githubWorkflowRunsHttpLayer = (
         if (response.status < 200 || response.status >= 300) {
           return yield* httpFailure("unavailable", response.status >= 500);
         }
+
         return yield* response.json.pipe(
           Effect.provideService(HttpIncomingMessage.MaxBodySize, FileSystem.Size(1024 * 1024)),
           Effect.mapError(() => httpFailure("invalid-response", false)),
@@ -193,6 +209,7 @@ export const githubWorkflowRunsHttpLayer = (
           Effect.mapError(() => httpFailure("invalid-response", false)),
         );
       });
+
       return GitHubWorkflowRuns.of({ getAttempt });
     }),
   );
@@ -223,6 +240,7 @@ const completionFromWire = Effect.fn("GitHubWorkflowRun.completionFromWire")(fun
   if (wire.conclusion === null) {
     return yield* sourceError("github-completed-without-conclusion", false);
   }
+
   return GitHubWorkflowRunCompletion.make({
     repositoryId: repository.id,
     runId: wire.id,
@@ -246,7 +264,9 @@ export const makeGitHubWorkflowRunSource = Effect.fn("makeGitHubWorkflowRunSourc
   const repository = yield* Schema.decodeUnknownEffect(GitHubRepository)(options.repository).pipe(
     Effect.mapError(() => sourceError("github-repository-configuration", false)),
   );
+
   const runs = yield* GitHubWorkflowRuns;
+
   return yield* makeEventSource({
     source: GitHubWorkflowRunSourceVersion,
     continuity:
@@ -329,6 +349,7 @@ export const webCryptoGitHubWebhookSignatureVerifierLayer = <Key>(
         if (!/^sha256=[0-9a-f]{64}$/.test(signature)) {
           return yield* GitHubWebhookVerificationError.make({ reason: "invalid-signature" });
         }
+
         const signatureBytes = yield* Effect.fromResult(
           Encoding.decodeHex(signature.slice("sha256=".length)),
         ).pipe(
@@ -336,9 +357,12 @@ export const webCryptoGitHubWebhookSignatureVerifierLayer = <Key>(
             GitHubWebhookVerificationError.make({ reason: "invalid-signature" }),
           ),
         );
+
         const keyBytes = new TextEncoder().encode(Redacted.value(secret));
         const keyBuffer = new ArrayBuffer(keyBytes.byteLength);
+
         new Uint8Array(keyBuffer).set(keyBytes);
+
         const key = yield* Effect.tryPromise({
           try: () =>
             subtle.importKey("raw", keyBuffer, { name: "HMAC", hash: "SHA-256" }, false, [
@@ -346,18 +370,24 @@ export const webCryptoGitHubWebhookSignatureVerifierLayer = <Key>(
             ]),
           catch: () => GitHubWebhookVerificationError.make({ reason: "crypto-unavailable" }),
         });
+
         const signatureBuffer = new ArrayBuffer(signatureBytes.byteLength);
+
         new Uint8Array(signatureBuffer).set(signatureBytes);
         const bodyBuffer = new ArrayBuffer(body.byteLength);
+
         new Uint8Array(bodyBuffer).set(body);
+
         const valid = yield* Effect.tryPromise({
           try: () => subtle.verify("HMAC", key, signatureBuffer, bodyBuffer),
           catch: () => GitHubWebhookVerificationError.make({ reason: "crypto-unavailable" }),
         });
+
         if (!valid) {
           return yield* GitHubWebhookVerificationError.make({ reason: "invalid-signature" });
         }
       });
+
       return GitHubWebhookSignatureVerifier.of({ verify });
     }),
   );
@@ -390,22 +420,27 @@ export const acceptVerifiedGitHubWorkflowRunWebhook = Effect.fn(
     return yield* GitHubWebhookVerificationError.make({ reason: "invalid-event" });
   }
   const verifier = yield* GitHubWebhookSignatureVerifier;
+
   yield* verifier.verify(request.body, request.signatureHeader);
+
   const text = yield* Effect.try({
     try: () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(request.body),
     catch: () => GitHubWebhookVerificationError.make({ reason: "invalid-payload" }),
   });
+
   const webhook = yield* Schema.decodeUnknownEffect(
     Schema.fromJsonString(GitHubWorkflowRunWebhook),
   )(text).pipe(
     Effect.mapError(() => GitHubWebhookVerificationError.make({ reason: "invalid-payload" })),
   );
+
   if (webhook.repository.id !== webhook.workflow_run.repository.id) {
     return yield* GitHubWebhookVerificationError.make({ reason: "invalid-payload" });
   }
   if (webhook.workflow_run.status !== "completed" || webhook.workflow_run.conclusion === null) {
     return yield* GitHubWebhookVerificationError.make({ reason: "invalid-payload" });
   }
+
   const completion = GitHubWorkflowRunCompletion.make({
     repositoryId: webhook.repository.id,
     runId: webhook.workflow_run.id,
@@ -413,6 +448,8 @@ export const acceptVerifiedGitHubWorkflowRunWebhook = Effect.fn(
     headSha: webhook.workflow_run.head_sha,
     conclusion: webhook.workflow_run.conclusion,
   });
+
   const intake = yield* SubscriptionIntake;
+
   return yield* intake.accept(request.principal, GitHubWorkflowRunSourceVersion, completion);
 });

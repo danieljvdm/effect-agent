@@ -41,7 +41,9 @@ const policy = Layer.effect(
   Effect.gen(function* () {
     const { namespace } = yield* MemoryOwnerIdentity;
     const project = yield* Projects.restore(namespace.address);
+
     yield* Schema.decodeUnknownEffect(BenchmarkCase)(project.identity);
+
     return {
       authorize: (request) =>
         request.principal === "benchmark" && request.access.scope === "benchmark"
@@ -74,6 +76,7 @@ export class ProjectMemory extends MemoryObject.make(policy) {
 
 const memoryClient = Effect.fn("benchmark.client")(function* (name: BenchmarkCase) {
   const env = yield* WorkerEnvironment;
+
   return yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
     access: MemoryAccess.make({ namespace: Projects.make(name), scope: memoryScope }),
     principal: Principal.make("benchmark"),
@@ -91,7 +94,9 @@ export class BenchmarkThread extends ThreadObject.make(ThreadObject.layer([]), {
       Effect.gen(function* () {
         name = yield* Schema.decodeUnknownEffect(BenchmarkCase)(name);
         const client = yield* memoryClient(name);
+
         for (let i = 0; i < sourceCount(name); i++) yield* client.change(command(name, i));
+
         return true;
       }),
     );
@@ -107,17 +112,23 @@ export class BenchmarkThread extends ThreadObject.make(ThreadObject.layer([]), {
         let renderedBytes = 0;
         let validationRpcMillis = 0;
         const start = yield* Clock.currentTimeMillis;
+
         const result = yield* Effect.gen(function* () {
           const current = yield* client.revalidate(lookup, limits);
+
           validationRpcMillis = (yield* Clock.currentTimeMillis) - start;
           validatedBytes = memoryWireBytes(JSON.stringify(current));
+
           const recalled = yield* Memory.recall(
             [{ id: "project", essential: true, read: Effect.succeed(current) }],
             limits,
           );
+
           renderedBytes = recalled.bytes;
         }).pipe(Effect.result);
+
         const elapsed = (yield* Clock.currentTimeMillis) - start;
+
         return yield* Schema.encodeEffect(Sample)({
           case: name,
           sourceCount: sourceCount(name),
@@ -157,6 +168,7 @@ export default {
         const name = yield* Schema.decodeUnknownEffect(BenchmarkCase)(url.searchParams.get("case"));
         const caller = url.searchParams.get("caller") === "b" ? "b" : "a";
         const thread = env.THREADS.getByName(`benchmark-${name}-${caller}`);
+
         if (url.pathname === "/seed")
           return Response.json(yield* Effect.promise(() => thread.seed(name)));
         if (url.pathname === "/sample")
@@ -170,6 +182,7 @@ export default {
             ingressColo: request.cf?.colo ?? "unknown",
             placementHint: "automatic",
           });
+
         return new Response("Not found", { status: 404 });
       }).pipe(
         Effect.scoped,

@@ -52,6 +52,7 @@ const makeLiveBrowserBinding = Effect.gen(function* () {
     options: object,
   ): Effect.fn.Return<Response, BrowserQuickActionRpcError> {
     const rpcError = (cause: unknown) => BrowserQuickActionRpcError.make({ action, cause });
+
     yield* Ref.update(calls, (previous) => [...previous, { action, options: { ...options } }]);
 
     const request = yield* HttpClientRequest.post(
@@ -61,14 +62,17 @@ const makeLiveBrowserBinding = Effect.gen(function* () {
       HttpClientRequest.bodyJson(options),
       Effect.mapError(rpcError),
     );
+
     const response = yield* client.execute(request).pipe(Effect.mapError(rpcError));
     const rawBody = yield* response.text.pipe(Effect.mapError(rpcError));
     const contentType = response.headers["content-type"]?.toLowerCase() ?? "";
+
     const wrapTextResult =
       response.status >= 200 &&
       response.status < 300 &&
       (action === "content" || action === "markdown") &&
       !contentType.includes("application/json");
+
     const body = wrapTextResult ? JSON.stringify({ success: true, result: rawBody }) : rawBody;
 
     return new Response(body, {
@@ -79,6 +83,7 @@ const makeLiveBrowserBinding = Effect.gen(function* () {
       },
     });
   });
+
   const binding: BrowserQuickActionClient = {
     screenshot: (options) => runQuickAction("screenshot", options),
     content: (options) => runQuickAction("content", options),
@@ -160,6 +165,7 @@ describe.skipIf(!liveEnabled)("Browser Run live smoke (opt-in)", () => {
       Effect.runPromise(
         Effect.gen(function* () {
           const browser = yield* makeLiveBrowserBinding;
+
           const browserHandlers = readWebpage.handlers.pipe(
             Layer.provide(
               browserQuickActionCaptureLayer().pipe(
@@ -167,6 +173,7 @@ describe.skipIf(!liveEnabled)("Browser Run live smoke (opt-in)", () => {
               ),
             ),
           );
+
           const events = yield* AgentRuntime.stream(BrowserResearcher, {
             url: PRICING_URL,
             firstPlan: FIRST_PLAN,

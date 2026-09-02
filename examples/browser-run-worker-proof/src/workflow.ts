@@ -30,10 +30,12 @@ const AccountId = Schema.NonEmptyString.check(
   Schema.isMaxLength(64),
   Schema.isPattern(/^[a-f0-9]{32}$/),
 );
+
 const WorkersSubdomain = Schema.NonEmptyString.check(
   Schema.isMaxLength(63),
   Schema.isPattern(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/),
 );
+
 const WorkerName = Schema.NonEmptyString.check(
   Schema.isMaxLength(63),
   Schema.isPattern(/^effect-agent-browser-proof-[a-f0-9]{32}$/),
@@ -118,12 +120,14 @@ const runProcess = Effect.fn("BrowserRunWorkerProof.runProcess")(function* (inpu
           stderr: "pipe",
         }),
       );
+
       const [outputBytes, exitCode] = yield* Effect.all([
         Stream.runFoldEffect(
           handle.all,
           () => 0,
           (observed, chunk) => {
             const next = observed + chunk.length;
+
             return next <= MAX_PROCESS_OUTPUT_BYTES
               ? Effect.succeed(next)
               : workerProofError(
@@ -135,6 +139,7 @@ const runProcess = Effect.fn("BrowserRunWorkerProof.runProcess")(function* (inpu
         ),
         handle.exitCode,
       ]);
+
       void outputBytes;
       if (Number(exitCode) !== 0) {
         return yield* workerProofError(
@@ -156,6 +161,7 @@ const runProcess = Effect.fn("BrowserRunWorkerProof.runProcess")(function* (inpu
           ),
     ),
   );
+
   return yield* process.pipe(
     Effect.timeoutOrElse({
       duration: PROCESS_TIMEOUT,
@@ -183,6 +189,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
     const exampleRoot = path.join(repositoryRoot, "examples", "browser-run-worker-proof");
     const wranglerExecutable = path.join(exampleRoot, "node_modules", ".bin", "wrangler");
     const wranglerConfig = path.join(exampleRoot, "wrangler.jsonc");
+
     const subprocessEnv = {
       CLOUDFLARE_ACCOUNT_ID: config.accountId,
       CLOUDFLARE_API_TOKEN: Redacted.value(config.apiToken),
@@ -192,10 +199,13 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
       WRANGLER_SEND_METRICS: "false",
       WRANGLER_WRITE_LOGS: "false",
     };
+
     const scriptUrl = (name: string) =>
       `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/workers/scripts/${name}`;
+
     const invocationUrl = (name: string) =>
       `https://${name}.${config.workersSubdomain}.workers.dev/`;
+
     const execute = <E>(
       request: HttpClientRequest.HttpClientRequest,
       mapError: (cause: unknown) => E,
@@ -213,8 +223,10 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
           { cause },
         ),
       );
+
       if (response.status === 404) return false;
       if (response.status >= 200 && response.status < 300) return true;
+
       return yield* workerProofError(
         "name-check",
         "check temporary Worker name",
@@ -262,6 +274,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
         Effect.withTracerEnabled(false),
         Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
       );
+
       if (secretResponse.status < 200 || secretResponse.status >= 300) {
         return yield* workerProofError(
           "deployment",
@@ -271,6 +284,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
         );
       }
       yield* Effect.sleep(DEPLOYMENT_PROPAGATION_DELAY);
+
       const response = yield* client
         .execute(HttpClientRequest.get(invocationUrl(name)))
         .pipe(
@@ -283,11 +297,13 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
             ),
           ),
         );
+
       if (response.status < 200 || response.status >= 300) {
         const failure = yield* response.json.pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofFailure)),
           Effect.option,
         );
+
         return yield* workerProofError(
           "invocation",
           "invoke temporary Worker",
@@ -297,6 +313,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
           { status: response.status },
         );
       }
+
       const value = yield* response.json.pipe(
         Effect.mapError((cause) =>
           workerProofError(
@@ -307,6 +324,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
           ),
         ),
       );
+
       return yield* Schema.decodeUnknownEffect(BrowserRunWorkerProofResult)(value).pipe(
         Effect.mapError((cause) =>
           workerProofError(
@@ -348,6 +366,7 @@ export const temporaryWorker = Effect.fn("BrowserRunWorkerProof.temporaryWorker"
         );
       }
       yield* operations.deploy(name);
+
       return name;
     }),
     (deployedName) =>
@@ -360,6 +379,7 @@ export const temporaryWorker = Effect.fn("BrowserRunWorkerProof.temporaryWorker"
 
 const makeWorkerName = Effect.fn("BrowserRunWorkerProof.makeWorkerName")(function* () {
   const crypto = yield* Crypto.Crypto;
+
   const uuid = yield* crypto.randomUUIDv4.pipe(
     Effect.mapError((cause) =>
       workerProofError(
@@ -370,6 +390,7 @@ const makeWorkerName = Effect.fn("BrowserRunWorkerProof.makeWorkerName")(functio
       ),
     ),
   );
+
   return yield* Schema.decodeUnknownEffect(WorkerName)(
     `effect-agent-browser-proof-${uuid.replaceAll("-", "")}`,
   ).pipe(
@@ -389,9 +410,11 @@ export const runWorkerProofWith = Effect.fn("BrowserRunWorkerProof.runWorkerProo
 ) {
   const name = yield* makeWorkerName();
   const deletionFailure = yield* Ref.make<Option.Option<WorkerProofError>>(Option.none());
+
   const proofExit = yield* Effect.scoped(
     Effect.gen(function* () {
       const deployedName = yield* temporaryWorker(operations, name, deletionFailure);
+
       const result = yield* operations.invoke(deployedName).pipe(
         Effect.timeoutOrElse({
           duration: INVOCATION_TIMEOUT,
@@ -403,20 +426,26 @@ export const runWorkerProofWith = Effect.fn("BrowserRunWorkerProof.runWorkerProo
             ),
         }),
       );
+
       return { name: deployedName, result } as const;
     }),
   ).pipe(Effect.exit);
+
   const cleanup = yield* Ref.get(deletionFailure);
+
   if (Option.isSome(cleanup)) {
     if (Exit.isFailure(proofExit)) {
       return yield* Effect.failCause(Cause.combine(proofExit.cause, Cause.fail(cleanup.value)));
     }
+
     return yield* cleanup.value;
   }
+
   return yield* proofExit;
 });
 
 export const liveWorkerProof = Effect.gen(function* () {
   const operations = yield* makeLiveOperations();
+
   return yield* runWorkerProofWith(operations);
 }).pipe(Effect.provide(FetchHttpClient.layer));

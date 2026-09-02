@@ -18,6 +18,7 @@ export const BrowserRunProofStage = Schema.Literals([
   "close",
   "closed-handle",
 ]);
+
 export class BrowserRunWorkerProofFailure extends Schema.Class<BrowserRunWorkerProofFailure>(
   "BrowserRunWorkerProofFailure",
 )({

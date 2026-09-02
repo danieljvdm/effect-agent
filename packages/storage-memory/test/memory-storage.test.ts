@@ -150,12 +150,14 @@ describe("MemoryThreadStore", () => {
     it.effect("rejects unsupported record versions before mutating canonical state", () =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
+
         const invalid = {
           threadId,
           expectedTailSequence: 0,
@@ -182,15 +184,19 @@ describe("MemoryThreadStore", () => {
             ],
           },
         };
+
         const appendBoundary: unknown = store.append;
+
         if (typeof appendBoundary !== "function") {
           return yield* Effect.die(new Error("Expected an append function"));
         }
         const unvalidatedResult: unknown = appendBoundary(invalid);
+
         if (!Effect.isEffect(unvalidatedResult)) {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
+
         if (!isThreadStoreError(failure)) {
           return yield* Effect.die(new Error("Expected a ThreadStoreError"));
         }
@@ -201,6 +207,7 @@ describe("MemoryThreadStore", () => {
         expect(failure.cause).toBeDefined();
 
         const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
+
         expect(exported.records).toEqual([]);
       }),
     );
@@ -210,12 +217,14 @@ describe("MemoryThreadStore", () => {
     it.effect("rejects oversized persisted JSON before mutating canonical state", () =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
+
         const invalid = {
           threadId,
           expectedTailSequence: 0,
@@ -242,15 +251,19 @@ describe("MemoryThreadStore", () => {
             ],
           },
         };
+
         const appendBoundary: unknown = store.append;
+
         if (typeof appendBoundary !== "function") {
           return yield* Effect.die(new Error("Expected an append function"));
         }
         const unvalidatedResult: unknown = appendBoundary(invalid);
+
         if (!Effect.isEffect(unvalidatedResult)) {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
+
         if (!isThreadStoreError(failure)) {
           return yield* Effect.die(new Error("Expected a ThreadStoreError"));
         }
@@ -261,6 +274,7 @@ describe("MemoryThreadStore", () => {
         expect(failure.cause).toBeDefined();
 
         const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
+
         expect(exported.records).toEqual([]);
         expect(exported.tailDigest).toBe(EMPTY_TAIL_DIGEST);
       }),
@@ -271,12 +285,14 @@ describe("MemoryThreadStore", () => {
     it.effect("classifies an unsupported checkpoint version before mutation", () =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
+
         const invalid = {
           checkpoint: {
             schemaVersion: 2,
@@ -291,16 +307,20 @@ describe("MemoryThreadStore", () => {
             createdAt: "1970-01-01T00:00:00.001Z",
           },
         };
+
         const saveBoundary: unknown = store.checkpoints!.save;
+
         if (typeof saveBoundary !== "function") {
           return yield* Effect.die(new Error("Expected a saveCheckpoint function"));
         }
         const unvalidatedResult: unknown = saveBoundary(invalid);
+
         if (!Effect.isEffect(unvalidatedResult)) {
           return yield* Effect.die(new Error("Expected saveCheckpoint to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
         const checkpointFailure = yield* Schema.decodeUnknownEffect(CheckpointRejected)(failure);
+
         expect(checkpointFailure).toMatchObject({
           _tag: "CheckpointRejected",
           threadId,
@@ -317,30 +337,37 @@ describe("MemoryThreadStore", () => {
     it.effect("resumes observation from an opaque cursor and emits later appends", () =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
+
         const first = yield* append(
           store,
           batch("observe-1", [inputRecord("observe-record-1", "first")]),
         );
+
         const second = yield* append(
           store,
           batch("observe-2", [inputRecord("observe-record-2", "second")]),
           first,
         );
+
         const existing = yield* store
           .read(ThreadRead.make({ threadId, limit: 1_024 }))
           .pipe(Stream.runCollect);
+
         const firstExisting = existing.at(0);
         const secondExisting = existing.at(1);
+
         if (firstExisting === undefined || secondExisting === undefined) {
           return yield* Effect.die(new Error("Expected two existing observation records"));
         }
         const malformedOffset = id(ObservationOffset, "foreign-adapter:1");
+
         const malformed = yield* store
           .observe(
             ThreadObservation.make({
@@ -349,6 +376,7 @@ describe("MemoryThreadStore", () => {
             }),
           )
           .pipe(Stream.take(1), Stream.runCollect, Effect.flip);
+
         expect(malformed).toMatchObject({
           _tag: "ThreadStoreError",
           operation: "observe",
@@ -363,6 +391,7 @@ describe("MemoryThreadStore", () => {
             }),
           )
           .pipe(Stream.take(1), Stream.runCollect);
+
         expect(resumed.map((record) => record.record.recordId)).toEqual([
           secondExisting.record.recordId,
         ]);
@@ -375,6 +404,7 @@ describe("MemoryThreadStore", () => {
             }),
           )
           .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
+
         yield* Effect.yieldNow;
         yield* append(
           store,
@@ -382,6 +412,7 @@ describe("MemoryThreadStore", () => {
           second,
         );
         const live = yield* Fiber.join(liveFiber);
+
         expect(live[0]?.record.recordId).toBe(
           id(
             Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/thread/RecordId")),
@@ -396,6 +427,7 @@ describe("MemoryThreadStore", () => {
     it.effect("coalesces wakeups without dropping records for a slow observer", () =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId,
@@ -404,18 +436,21 @@ describe("MemoryThreadStore", () => {
         );
         const releaseObserver = yield* Deferred.make<void>();
         const recordCount = 32;
+
         const observerFiber = yield* store.observe(ThreadObservation.make({ threadId })).pipe(
           Stream.tap(() => Deferred.await(releaseObserver)),
           Stream.take(recordCount),
           Stream.runCollect,
           Effect.forkChild,
         );
+
         yield* Effect.yieldNow;
 
         let tail: Pick<AppendResult, "lastSequence" | "tailDigest"> = {
           lastSequence: ZERO_CANONICAL_SEQUENCE,
           tailDigest: EMPTY_TAIL_DIGEST,
         };
+
         for (let index = 0; index < recordCount; index++) {
           tail = yield* append(
             store,
@@ -426,6 +461,7 @@ describe("MemoryThreadStore", () => {
 
         yield* Deferred.succeed(releaseObserver, undefined);
         const observed = yield* Fiber.join(observerFiber);
+
         expect(observed.map((record) => record.record.recordId)).toEqual(
           Array.from({ length: recordCount }, (_, index) => `slow-record-${index}`),
         );
@@ -438,19 +474,23 @@ describe("MemoryThreadStore", () => {
       const layerScope = yield* Scope.make();
       const context = yield* Layer.buildWithScope(testLayer, layerScope);
       const store = Context.get(context, ThreadStore);
+
       yield* store.materialize(
         ThreadMaterialization.make({
           threadId,
           producerEpoch: FIRST_PRODUCER_EPOCH,
         }),
       );
+
       const observerFiber = yield* store
         .observe(ThreadObservation.make({ threadId }))
         .pipe(Stream.runDrain, Effect.forkChild);
+
       yield* Effect.yieldNow;
 
       yield* Scope.close(layerScope, Exit.void);
       const observerExit = yield* Fiber.await(observerFiber);
+
       expect(Exit.isFailure(observerExit)).toBe(true);
       if (Exit.isFailure(observerExit)) {
         expect(Cause.hasInterrupts(observerExit.cause)).toBe(true);
@@ -462,21 +502,26 @@ describe("MemoryThreadStore", () => {
     it.effect("makes valid checkpoint replay equivalent to full export replay", () =>
       Effect.gen(function* () {
         const store = yield* ThreadStore;
+
         yield* store.materialize(
           ThreadMaterialization.make({
             threadId,
             producerEpoch: FIRST_PRODUCER_EPOCH,
           }),
         );
+
         const first = yield* append(
           store,
           batch("checkpoint-1", [inputRecord("checkpoint-record-1", "Kyoto")]),
         );
+
         const firstRecords = yield* store
           .read(ThreadRead.make({ threadId, limit: 1_024 }))
           .pipe(Stream.runCollect);
+
         const atCheckpoint = replayThread(threadId, firstRecords, first.tailDigest);
         const checkpointState = yield* Schema.encodeEffect(ThreadProjection)(atCheckpoint);
+
         const rejectedCheckpoint = yield* store
           .checkpoints!.save(
             SaveCheckpointRequest.make({
@@ -495,6 +540,7 @@ describe("MemoryThreadStore", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(rejectedCheckpoint).toMatchObject({
           _tag: "CheckpointRejected",
           threadId,
@@ -525,22 +571,28 @@ describe("MemoryThreadStore", () => {
           "checkpoint-record-2",
           RunCompleted.make({ runId, output: { itinerary: "Kyoto" } }),
         );
+
         const second = yield* append(store, batch("checkpoint-2", [completed]), first);
         const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
         const loaded = yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }));
+
         expect(Option.isSome(loaded)).toBe(true);
         if (Option.isNone(loaded)) return;
+
         const decodedCheckpoint = yield* Schema.decodeUnknownEffect(ThreadProjection)(
           loaded.value.state,
         );
+
         const tail = exported.records.filter(
           (record) => record.sequence > loaded.value.throughSequence,
         );
+
         const checkpointReplay = replayThreadFromCheckpoint(
           decodedCheckpoint,
           tail,
           second.tailDigest,
         );
+
         const fullReplay = replayThread(threadId, exported.records, exported.tailDigest);
 
         expect(checkpointReplay).toEqual(fullReplay);

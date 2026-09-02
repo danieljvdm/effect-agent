@@ -13,4 +13,5 @@ export const RunPolicyUsage = Schema.Struct({
   consecutiveToolFailures: Schema.Natural,
   finalizationUsed: Schema.Boolean,
 });
+
 export type RunPolicyUsage = typeof RunPolicyUsage.Type;

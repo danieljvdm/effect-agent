@@ -125,6 +125,7 @@ export const CrashScenario = Schema.Literals([
   "subagent-abort",
   "subagent-recover",
 ]);
+
 export type CrashScenario = typeof CrashScenario.Type;
 
 /** Exit code armed at a kill failpoint (`process.exit`, mirroring SIGKILL's 128+9). */
@@ -144,6 +145,7 @@ export const STALE_ANSWER = '{"answer":"stale"}';
 export const FRESH_ANSWER = '{"answer":"fresh"}';
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
+
 export const CRASH_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 export const CRASH_PRINCIPAL = Schema.decodeSync(Principal)("principal-crash");
 
@@ -229,6 +231,7 @@ const SupplierRecordSchema = Schema.Struct({
   key: Schema.String,
   value: Schema.String,
 });
+
 const decodeSupplierRecord = Schema.decodeUnknownOption(SupplierRecordSchema);
 
 const supplierLogPath = (dir: string): string => `${dir}/supplier-log.jsonl`;
@@ -240,6 +243,7 @@ export const recordSupplierCall = (dir: string, op: string, key: string, value: 
 
 export const readSupplierRecords = (dir: string): ReadonlyArray<SupplierRecord> => {
   if (!fs.existsSync(supplierLogPath(dir))) return [];
+
   return fs
     .readFileSync(supplierLogPath(dir), "utf8")
     .split("\n")
@@ -247,6 +251,7 @@ export const readSupplierRecords = (dir: string): ReadonlyArray<SupplierRecord> 
     .flatMap((line) => {
       try {
         const parsed: unknown = JSON.parse(line);
+
         return Option.match(decodeSupplierRecord(parsed), {
           onNone: () => [],
           onSome: (record) => [record],
@@ -260,10 +265,13 @@ export const readSupplierRecords = (dir: string): ReadonlyArray<SupplierRecord> 
 /** Exact per-operation invocation counts, keyed `{op}:{key}` — the honesty-claim currency. */
 export const supplierCounts = (dir: string): Record<string, number> => {
   const counts: Record<string, number> = {};
+
   for (const record of readSupplierRecords(dir)) {
     const key = `${record.op}:${record.key}`;
+
     counts[key] = (counts[key] ?? 0) + 1;
   }
+
   return counts;
 };
 
@@ -278,6 +286,7 @@ export const supplierValues = (dir: string): ReadonlySet<string> =>
 export const makeScriptedStreamModel = Effect.fn("CrashFixtures.makeScriptedStreamModel")(
   function* (script: (call: number) => Stream.Stream<Response.StreamPartEncoded>) {
     const calls = yield* Ref.make(0);
+
     return Model.make(
       "scripted",
       "crash-harness",
@@ -320,6 +329,7 @@ const Search = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
   success: Schema.Struct({ available: Schema.Boolean }),
 }).annotate(ToolExecutionClass, "readonly");
+
 export const searchTools = Toolkit.make(Search);
 
 export const searchDefinition = Agent.make("crash-search", {
@@ -351,7 +361,9 @@ const BookUncertain = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 });
+
 export const bookTools = Toolkit.make(BookUncertain);
+
 export const bookDefinition = Agent.make("crash-book", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -365,7 +377,9 @@ const BookIdempotent = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 }).annotate(ToolExecutionClass, "idempotent");
+
 export const bookIdempotentTools = Toolkit.make(BookIdempotent);
+
 export const bookIdempotentDefinition = Agent.make("crash-book-idempotent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -380,7 +394,9 @@ const BookApproval = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
   needsApproval: true,
 });
+
 export const approvalTools = Toolkit.make(BookApproval);
+
 export const approvalDefinition = Agent.make("crash-book-approval", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -396,7 +412,9 @@ const Itinerary = Tool.make("itinerary", {
   failure: DurableStepError,
   dependencies: [DurableStep],
 });
+
 export const itineraryTools = Toolkit.make(Itinerary);
+
 export const itineraryDefinition = Agent.make("crash-itinerary", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -413,7 +431,9 @@ export const makeBookToolLayer = (dir: string, tools: BookToolkit) =>
     book: ({ ref }) =>
       Effect.sync(() => {
         const confirmation = `confirmed-${ref}`;
+
         recordSupplierCall(dir, "book", ref, confirmation);
+
         return { confirmation };
       }),
   });
@@ -439,24 +459,31 @@ export const makeItineraryToolLayer = (dir: string) =>
       Effect.gen(function* () {
         yield* Effect.sync(() => recordSupplierCall(dir, "itinerary-enter", ref, `enter-${ref}`));
         const step = yield* DurableStep;
+
         const flight = yield* step.do(
           "reserve-flight",
           Schema.String,
           Effect.sync(() => {
             const value = `flight-${ref}`;
+
             recordSupplierCall(dir, "reserve-flight", ref, value);
+
             return value;
           }),
         );
+
         const lodging = yield* step.do(
           "reserve-lodging",
           Schema.String,
           Effect.sync(() => {
             const value = `lodging-${ref}`;
+
             recordSupplierCall(dir, "reserve-lodging", ref, value);
+
             return value;
           }),
         );
+
         return { state: `${flight}+${lodging}` };
       }),
   });
@@ -476,12 +503,15 @@ export const supplierReconcilerLayer = (dir: string): Layer.Layer<ToolReconciler
       Effect.sync(() => {
         if (evidence.toolName === "book") {
           const params = decodeBookParameters(evidence.parameters);
+
           if (Option.isNone(params)) {
             return ReconciliationUncertain.make({ reason: "Unreadable book parameters" });
           }
+
           const booking = readSupplierRecords(dir).find(
             (record) => record.op === "book" && record.key === params.value.ref,
           );
+
           return booking !== undefined
             ? ReconciliationCompleted.make({
                 result: { confirmation: booking.value },
@@ -490,6 +520,7 @@ export const supplierReconcilerLayer = (dir: string): Layer.Layer<ToolReconciler
             : ReconciliationNeverStarted.make();
         }
         if (evidence.toolName === "itinerary") return ReconciliationSafeToRetry.make();
+
         return ReconciliationUncertain.make({
           reason: `No supplier proof exists for ${evidence.toolName}`,
         });
@@ -516,6 +547,7 @@ export const CHILD_DIGEST_STRINGS = {
   model: "c".repeat(64),
   tools: "d".repeat(64),
 } as const;
+
 export const CHILD_DIGESTS = DefinitionDigests.make({
   agent: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.agent),
   model: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.model),
@@ -608,6 +640,7 @@ export const makeCrashCoordinator = (delegation: ReturnType<typeof makeCrashDele
  */
 export const coordinatorSubmitSlice = (() => {
   const definition = makeCrashCoordinator(makeCrashDelegation());
+
   return { definition: { id: definition.id, input: definition.input } } as const;
 })();
 
@@ -690,10 +723,12 @@ const crashIdentifiers = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
     const counter = yield* Ref.make(0);
+
     const next = <A>(decode: (value: string) => A, prefix: string) =>
       Ref.getAndUpdate(counter, (value) => value + 1).pipe(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
+
     return {
       nextThreadId: next(decodeThreadId, "crash-fixture-thread"),
       nextRunId: next(decodeRunId, "crash-fixture-run"),
@@ -728,18 +763,22 @@ export const makeCrashSubagentBindings = Effect.fn("CrashFixtures.makeCrashSubag
     const parentBinding = Agent.withModel(coordinatorDefinition, parentModel);
     const childModel = makeCrashChildModel(options.supplierDir, options.childBlock);
     const childBinding = Agent.withModel(researcherDefinition, childModel);
+
     const delegationLayer = SubagentRuntime.layer(delegation, childBinding, {
       mapChildFailure: mapCrashChildFailure,
       durable: { targetDigests: CHILD_DIGEST_STRINGS },
     }).pipe(Layer.provide(delegationSupport));
+
     const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       parentBinding,
       CRASH_DIGESTS,
     ).pipe(Effect.provide(delegationLayer));
+
     const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       CHILD_DIGESTS,
     );
+
     return [parentResolved, childResolved] as const;
   },
 );
@@ -764,6 +803,7 @@ export const ChildMessage = Schema.Union([
     value: Schema.String,
   }),
 ]);
+
 export type ChildMessage = typeof ChildMessage.Type;
 
 export const encodeChildMessage = Schema.encodeSync(ChildMessage);

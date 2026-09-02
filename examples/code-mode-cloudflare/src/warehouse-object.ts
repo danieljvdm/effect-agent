@@ -48,8 +48,10 @@ const seedRows: ReadonlyArray<{
 const stripLiteralsAndComments = (sql: string): string => {
   let output = "";
   let index = 0;
+
   while (index < sql.length) {
     const char = sql[index];
+
     if (char === "'") {
       index += 1;
       while (index < sql.length) {
@@ -73,6 +75,7 @@ const stripLiteralsAndComments = (sql: string): string => {
     output += char;
     index += 1;
   }
+
   return output;
 };
 
@@ -88,12 +91,14 @@ const stripLiteralsAndComments = (sql: string): string => {
 // A production deployment should still back the warehouse with a read-only
 // database identity or curated read-only views rather than a text scan.
 const readOnlyPrefix = /^\s*(select|with)\b/i;
+
 const disallowedTokens =
   /\b(insert|update|delete|replace|drop|create|alter|truncate|reindex|analyze|pragma|attach|detach|vacuum|load_extension|savepoint|release|begin|commit|rollback)\b/i;
 
 const scanReadOnly = (sql: string): string | undefined => {
   const stripped = stripLiteralsAndComments(sql);
   const semicolon = stripped.indexOf(";");
+
   if (semicolon !== -1 && stripped.slice(semicolon + 1).trim().length > 0) {
     return "exactly one statement is allowed per call";
   }
@@ -101,6 +106,7 @@ const scanReadOnly = (sql: string): string | undefined => {
     return "only read-only SELECT statements are allowed";
   }
   const disallowed = disallowedTokens.exec(stripped);
+
   return disallowed === null
     ? undefined
     : `${disallowed[1].toUpperCase()} is not allowed in a read-only query`;
@@ -125,10 +131,12 @@ const runQuery = (
 ): Effect.Effect<WarehouseQueryOutcome> =>
   Effect.sync(() => {
     const denied = scanReadOnly(sql);
+
     if (denied !== undefined) {
       return { ok: false, columns: [], rows: [], rowCount: 0, truncated: false, reason: denied };
     }
     let cursor;
+
     try {
       cursor = storage.sql.exec(sql, ...parameters);
     } catch (cause) {
@@ -144,12 +152,14 @@ const runQuery = (
     const rows: Array<Record<string, unknown>> = [];
     let truncated = false;
     let usedBytes = 0;
+
     for (const raw of cursor) {
       if (rows.length >= MAX_ROWS) {
         truncated = true;
         break;
       }
       const decoded = decodeRow(raw as Record<string, unknown>);
+
       if (Option.isNone(decoded)) {
         return {
           ok: false,
@@ -161,6 +171,7 @@ const runQuery = (
         };
       }
       const bytes = utf8ByteLength(JSON.stringify(decoded.value));
+
       if (usedBytes + bytes > MAX_RESULT_BYTES) {
         truncated = true;
         break;
@@ -168,6 +179,7 @@ const runQuery = (
       usedBytes += bytes;
       rows.push(decoded.value);
     }
+
     return {
       ok: true,
       columns: rows.length === 0 ? [] : Object.keys(rows[0]),
@@ -185,15 +197,18 @@ export class WarehouseObject extends DurableObject {
     await Effect.runPromise(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
+
         yield* sql`CREATE TABLE IF NOT EXISTS invoice_summary (
           customer TEXT NOT NULL,
           region TEXT NOT NULL,
           revenue INTEGER NOT NULL,
           created_at TEXT NOT NULL
         )`;
+
         const existing = yield* sql`SELECT COUNT(*) AS n FROM invoice_summary`.pipe(
           Effect.map((rows) => Number((rows[0] as { n?: unknown }).n ?? 0)),
         );
+
         if (existing === 0) {
           for (const row of seedRows) {
             yield* sql`INSERT INTO invoice_summary ${sql.insert({
@@ -222,6 +237,7 @@ export class WarehouseObject extends DurableObject {
     parameters: ReadonlyArray<string | number | boolean | null>,
   ): Promise<WarehouseQueryOutcome> {
     await this.#ensureSeeded();
+
     return Effect.runPromise(runQuery(this.ctx.storage, sql, parameters));
   }
 }
@@ -252,6 +268,7 @@ export const warehouseLayer = (
       // typed denied outcome rather than dying the pass.
       Effect.tryPromise((): Promise<WarehouseQueryOutcome> => {
         const stub = namespace.get(namespace.idFromName(tenant));
+
         return stub.query(sql, [...parameters]) as Promise<WarehouseQueryOutcome>;
       }).pipe(
         Effect.catch((error) =>

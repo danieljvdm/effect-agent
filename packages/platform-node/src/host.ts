@@ -64,6 +64,7 @@ const makeHost = (bindings: ReadonlyArray<ResolvedBinding>) =>
     const startupRecovery = yield* runtime.runRecovery;
 
     const admission = yield* Ref.make(true);
+
     // Shutdown step 1 (DEPLOY-005): admission closes before the ownership drain in the runtime
     // Layer below releases claims and before the stores close in reverse acquisition order.
     yield* Effect.addFinalizer(() => Ref.set(admission, false));
@@ -257,6 +258,7 @@ export class NodeDurableHost extends Context.Service<
     Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
   > {
     const { bindings = [], ...runtimeOptions } = options;
+
     return NodeDurableHost.layer(bindings).pipe(
       Layer.provideMerge(NodeDurableRuntime.layer(runtimeOptions)),
     );

@@ -32,10 +32,12 @@ export const subscriptionConformancePartition: SourcePartition = {
   tenantId: "subscription-conformance",
   address: "source-address",
 };
+
 const principal = Schema.decodeSync(Principal)("subscription-conformance-principal");
 const agentId = Schema.decodeSync(AgentId)("subscription-conformance-agent");
 const threadId = Schema.decodeSync(ThreadId)("subscription-conformance-thread");
 const digest = (character: string) => Schema.decodeSync(Digest)(character.repeat(64));
+
 const definitions = DefinitionDigests.make({
   agent: digest("a"),
   model: digest("b"),
@@ -91,6 +93,7 @@ const delivery = (
   suffix = "0",
 ): SubscriptionDelivery => {
   const deliveryId = digest(suffix === "0" ? "1" : "2");
+
   return {
     schemaVersion: 1,
     key: { subscription: subscription.key, eventId: accepted.eventId },
@@ -158,27 +161,33 @@ const cutoffAndIntake = conformanceCase(
       const before = yield* store.register(record("before"), defaultSubscriptionLimits);
       const accepted = yield* store.accept(event("cutoff"), defaultSubscriptionLimits);
       const after = yield* store.register(record("after"), defaultSubscriptionLimits);
+
       yield* ensure(
         before.ordinal < accepted.cutoff && after.ordinal > accepted.cutoff,
         "sequence did not order registration and intake",
       );
       const candidates = yield* store.candidates(accepted, 10);
+
       yield* ensure(
         candidates.length === 1 && candidates[0].key.subscriptionId === "before",
         "cutoff admitted a later registration",
       );
+
       const replayed = yield* store.accept(
         { ...event("cutoff"), acceptedAtMillis: 99 },
         defaultSubscriptionLimits,
       );
+
       yield* ensure(
         replayed.cutoff === accepted.cutoff &&
           replayed.acceptedAtMillis === accepted.acceptedAtMillis,
         "duplicate intake did not return retained progress",
       );
+
       const conflict = yield* Effect.result(
         store.accept(event("cutoff", digest("9")), defaultSubscriptionLimits),
       );
+
       yield* ensure(
         Result.isFailure(conflict) &&
           conflict.failure._tag === "SubscriptionError" &&
@@ -196,6 +205,7 @@ const onceAndCapacity = conformanceCase(
       const once = yield* store.register(record("once"), defaultSubscriptionLimits);
       const first = yield* store.accept(event("first"), defaultSubscriptionLimits);
       const second = yield* store.accept(event("second"), defaultSubscriptionLimits);
+
       yield* store.select(
         first,
         [delivery(once, first)],
@@ -229,12 +239,15 @@ const onceAndCapacity = conformanceCase(
         record("left", "continuous", "capacity"),
         defaultSubscriptionLimits,
       );
+
       const right = yield* store.register(
         record("right", "continuous", "capacity"),
         defaultSubscriptionLimits,
       );
+
       const bounded = yield* store.accept(event("bounded"), defaultSubscriptionLimits);
       const limits = { ...defaultSubscriptionLimits, maxDeliveries: 2, maxDeliveriesPerOwner: 1 };
+
       const failure = yield* Effect.result(
         store.select(
           bounded,
@@ -245,6 +258,7 @@ const onceAndCapacity = conformanceCase(
           limits,
         ),
       );
+
       yield* ensure(
         Result.isFailure(failure) &&
           failure.failure._tag === "SubscriptionError" &&
@@ -264,11 +278,14 @@ const preparationLifecycle = conformanceCase(
     Effect.gen(function* () {
       const store = yield* SubscriptionStore;
       const cancelled = yield* store.register(record("cancelled"), defaultSubscriptionLimits);
+
       const cancelledEvent = yield* store.accept(
         event("cancelled-event"),
         defaultSubscriptionLimits,
       );
+
       const cancelledDelivery = delivery(cancelled, cancelledEvent);
+
       yield* store.select(
         cancelledEvent,
         [cancelledDelivery],
@@ -278,6 +295,7 @@ const preparationLifecycle = conformanceCase(
         defaultSubscriptionLimits,
       );
       yield* store.cancel(cancelled.key);
+
       const refused = yield* store.changeDelivery(
         cancelledDelivery.key,
         cancelledDelivery.deliveryId,
@@ -288,6 +306,7 @@ const preparationLifecycle = conformanceCase(
           nowMillis: 30,
         },
       );
+
       yield* ensure(
         refused.state === "refused" && refused.refusal?.code === "cancelled",
         "cancelled selection prepared",
@@ -296,6 +315,7 @@ const preparationLifecycle = conformanceCase(
       const durable = yield* store.register(record("durable"), defaultSubscriptionLimits);
       const durableEvent = yield* store.accept(event("durable-event"), defaultSubscriptionLimits);
       const selected = delivery(durable, durableEvent);
+
       yield* store.select(
         durableEvent,
         [selected],
@@ -304,18 +324,21 @@ const preparationLifecycle = conformanceCase(
         20,
         defaultSubscriptionLimits,
       );
+
       const prepared = yield* store.changeDelivery(selected.key, selected.deliveryId, {
         _tag: "Prepare",
         envelope: preparedInput(selected),
         envelopeDigest: digest("5"),
         nowMillis: 30,
       });
+
       const retry = {
         attempts: 2,
         nextAttemptAtMillis: 60,
         lastAttemptAtMillis: 35,
         lastFailure: "transport" as const,
       };
+
       yield* store.changeDelivery(selected.key, selected.deliveryId, {
         _tag: "Retry",
         retry,
@@ -331,21 +354,25 @@ const preparationLifecycle = conformanceCase(
           retry: staleRetry,
           nowMillis: 36,
         });
+
         yield* ensure(
           retained.retry.attempts === 2 && retained.retry.nextAttemptAtMillis === 60,
           "stale retry overwrote newer retry state",
         );
       }
       yield* store.cancel(durable.key);
+
       const completed = yield* store.changeDelivery(selected.key, selected.deliveryId, {
         _tag: "Complete",
         receipt,
         nowMillis: 40,
       });
+
       yield* ensure(
         prepared.state === "prepared" && completed.state === "delivered",
         "prepared work did not survive cancellation",
       );
+
       const stale = yield* Effect.result(
         store.changeDelivery(selected.key, digest("8"), {
           _tag: "Complete",
@@ -353,6 +380,7 @@ const preparationLifecycle = conformanceCase(
           nowMillis: 41,
         }),
       );
+
       yield* ensure(
         Result.isFailure(stale) &&
           stale.failure._tag === "SubscriptionError" &&
@@ -370,6 +398,7 @@ const catchUpAndCursors = conformanceCase(
       const accepted = yield* store.accept(event("observed"), defaultSubscriptionLimits);
       const watch = yield* store.register(record("watch"), defaultSubscriptionLimits);
       const selected = delivery(watch, accepted);
+
       yield* store.catchUp(accepted, selected, 20, defaultSubscriptionLimits);
       yield* store.catchUp(
         accepted,
@@ -383,6 +412,7 @@ const catchUpAndCursors = conformanceCase(
       );
       yield* store.advanceScanCursors({ events: "e", deliveries: "d", recovery: 7 });
       const cursors = yield* store.readScanCursors;
+
       yield* ensure(
         cursors.events === "e" && cursors.deliveries === "d" && cursors.recovery === 7,
         "scan cursors were not durable",
@@ -401,6 +431,7 @@ const replayUnderTighterLimits = conformanceCase(
       const store = yield* SubscriptionStore;
       const created = yield* store.register(record("retained"), defaultSubscriptionLimits);
       const accepted = yield* store.accept(event("retained"), defaultSubscriptionLimits);
+
       const limits = {
         ...defaultSubscriptionLimits,
         maxRegistrations: 1,
@@ -409,12 +440,15 @@ const replayUnderTighterLimits = conformanceCase(
         maxContextBytes: 1,
         maxLifetimeMillis: 1,
       };
+
       const replayed = yield* store.register(record("retained"), limits);
       const repeated = yield* store.accept(event("retained"), limits);
+
       yield* ensure(replayed.ordinal === created.ordinal, "registration replay lost identity");
       yield* ensure(repeated.cutoff === accepted.cutoff, "intake replay lost cutoff");
       const newRegistration = yield* Effect.result(store.register(record("new"), limits));
       const newEvent = yield* Effect.result(store.accept(event("new"), limits));
+
       yield* ensure(Result.isFailure(newRegistration), "new registration ignored tightened limits");
       yield* ensure(Result.isFailure(newEvent), "new intake ignored tightened limits");
     }),

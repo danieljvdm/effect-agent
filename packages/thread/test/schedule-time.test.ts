@@ -19,6 +19,7 @@ describe("Schedule timing", () => {
     const defaultAnchor = success(
       normalizeScheduleTiming({ _tag: "Interval", everyMillis: 60_000 }, 10_000, 60_000),
     );
+
     expect(defaultAnchor).toEqual({
       _tag: "Interval",
       everyMillis: 60_000,
@@ -33,6 +34,7 @@ describe("Schedule timing", () => {
         60_000,
       ),
     );
+
     expect(success(scheduleInitialCursor(pastAnchor, 130_000))).toBe(190_000);
   });
 
@@ -102,9 +104,12 @@ describe("Schedule timing", () => {
       expression: "30 3 * * *",
       timeZone: "America/New_York",
     };
+
     const first = success(scheduleNextAfter(timing, Date.parse("2026-03-07T00:00:00Z")));
+
     expect(first).toBe(Date.parse("2026-03-07T08:30:00Z"));
     const second = success(scheduleNextAfter(timing, Date.parse("2026-03-07T08:30:00Z")));
+
     expect(second).toBe(Date.parse("2026-03-08T07:30:00Z"));
     expect(Result.isFailure(normalizeScheduleTiming(timing, 0, 86_400_000))).toBe(true);
     expect(Result.isSuccess(normalizeScheduleTiming(timing, 0, 60_000))).toBe(true);
@@ -121,12 +126,14 @@ describe("Schedule timing", () => {
       expression: "30 2 * * *",
       timeZone: "America/New_York",
     };
+
     expect(success(scheduleNextAfter(timing, Date.parse("2026-03-07T07:31:00.000Z")))).toBe(
       Date.parse("2026-03-08T07:30:00.000Z"),
     );
     for (const cursor of ["2026-03-07T07:30:00Z", "2026-03-08T07:30:00Z"]) {
       for (const now of ["2026-03-08T07:30:00Z", "2026-03-08T08:00:00Z"]) {
         const due = success(scheduleDueOccurrence(timing, Date.parse(cursor), Date.parse(now)));
+
         expect(due?.intendedAtMillis).toBe(Date.parse("2026-03-08T07:30:00Z"));
         expect(due?.nextAtMillis).toBe(Date.parse("2026-03-09T06:30:00Z"));
       }
@@ -137,7 +144,9 @@ describe("Schedule timing", () => {
       expression: "30 1 * * *",
       timeZone: "America/New_York",
     };
+
     const first = success(scheduleNextAfter(repeated, Date.parse("2026-11-01T05:29:00.000Z")));
+
     expect(first).toBe(Date.parse("2026-11-01T05:30:00.000Z"));
     if (first === null) throw new Error("expected a fall DST occurrence");
     expect(success(scheduleNextAfter(repeated, first))).toBe(
@@ -146,6 +155,7 @@ describe("Schedule timing", () => {
     expect(success(scheduleNextAfter(repeated, Date.parse("2026-11-01T06:15:00Z")))).toBe(
       Date.parse("2026-11-02T06:30:00Z"),
     );
+
     const folded = success(
       scheduleDueOccurrence(
         repeated,
@@ -153,6 +163,7 @@ describe("Schedule timing", () => {
         Date.parse("2026-11-01T06:15:00Z"),
       ),
     );
+
     expect(folded?.intendedAtMillis).toBe(Date.parse("2026-11-01T05:30:00Z"));
     expect(folded?.nextAtMillis).toBe(Date.parse("2026-11-02T06:30:00Z"));
     expect(
@@ -212,6 +223,7 @@ describe("Schedule timing", () => {
           Date.parse(now),
         ),
       );
+
       expect(due?.intendedAtMillis).toBe(Date.parse(intended));
       expect(due?.nextAtMillis).toBe(Date.parse(next));
     }

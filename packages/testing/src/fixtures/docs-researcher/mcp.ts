@@ -48,17 +48,20 @@ const JsonSchemaDefinitions = Schema.Record(
   Schema.String,
   Schema.Record(Schema.String, Schema.Unknown),
 );
+
 const decodeJsonSchemaDefinitions = Schema.decodeUnknownSync(JsonSchemaDefinitions);
 const decodeToolJsonSchema = Schema.decodeUnknownSync(McpSchema.ToolJsonSchema);
 
 const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): McpSchema.ToolJsonSchema => {
   const ref = schema["$ref"];
+
   if (typeof ref !== "string") {
     return decodeToolJsonSchema(schema);
   }
 
   const defs = decodeJsonSchemaDefinitions(schema["$defs"]);
   const resolved = JsonSchema.resolve$ref(ref, defs);
+
   return decodeToolJsonSchema(resolved ?? schema);
 };
 
@@ -132,9 +135,11 @@ export const assertDiscoveryMatchesAuthoredToolkit = Effect.fn(
   const authored = Object.values(DocContentToolkit.tools)
     .map((tool) => ({ name: tool.name, inputSchema: Tool.getJsonSchema(tool) }))
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+
   const discovered = Object.values(connection.toolkit.tools)
     .map((tool) => ({ name: tool.name, inputSchema: Tool.getJsonSchema(tool) }))
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+
   const matches =
     authored.length === discovered.length &&
     authored.every(
@@ -142,6 +147,7 @@ export const assertDiscoveryMatchesAuthoredToolkit = Effect.fn(
         tool.name === discovered[index]?.name &&
         isJsonEqual(tool.inputSchema, discovered[index]?.inputSchema),
     );
+
   if (!matches) {
     return yield* McpToolkitMismatch.make({
       serverId: connection.discovery.identity.serverId,

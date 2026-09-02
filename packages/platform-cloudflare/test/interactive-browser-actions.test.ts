@@ -16,6 +16,7 @@ import {
 } from "../src/interactive-browser.ts";
 
 const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
+
 vi.mock("@cloudflare/puppeteer", () => ({ default: sdk }));
 
 // Node's virtual timers cover the SDK boundary's quiet/deadline windows without
@@ -30,18 +31,23 @@ interface Request {
   resourceType: () => string;
   response: () => { status: () => number } | null;
 }
+
 const request = (type = "fetch", status = 200): Request => ({
   resourceType: () => type,
   response: () => ({ status: () => status }),
 });
+
 const emptyState = { matchCount: 1, kind: "button", formValid: false };
+
 const gate = <A>() => {
   let resolve: (value: A) => void = () => {
     throw new Error("Uninitialized gate");
   };
+
   const promise = new Promise<A>((complete) => {
     resolve = complete;
   });
+
   return { promise, resolve };
 };
 
@@ -60,11 +66,13 @@ const fixture = (
   const logs: Array<ReturnType<typeof Logger.formatStructured.log>> = [];
   const listeners = new Map<string, Set<(request: Request) => void>>();
   const started = gate<void>();
+
   const action = async () => {
     events.push("dispatch");
     started.resolve();
     await options.action?.();
   };
+
   const page = {
     evaluate: options.state ?? (async () => emptyState),
     $$: async () =>
@@ -84,6 +92,7 @@ const fixture = (
     setRequestInterception: async () => {},
     on: (event: string, listener: (request: Request) => void) => {
       const existing = listeners.get(event) ?? new Set();
+
       existing.add(listener);
       listeners.set(event, existing);
     },
@@ -91,6 +100,7 @@ const fixture = (
       listeners.get(event)?.delete(listener);
     },
   };
+
   sdk.launch.mockResolvedValue({
     createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
     sessionId: () => "actions-test",
@@ -99,9 +109,11 @@ const fixture = (
     off: () => {},
     close: async () => {},
   });
+
   const unused = async (): Promise<Response> => {
     throw new Error("No live Browser Run calls");
   };
+
   const layer = browserRunInteractiveLayer().pipe(
     Layer.provide(
       BrowserRunInteractiveBinding.layer({ browser: { fetch: unused, quickAction: unused } }).pipe(
@@ -109,6 +121,7 @@ const fixture = (
       ),
     ),
   );
+
   return {
     layer: Layer.merge(
       layer,
@@ -125,6 +138,7 @@ const fixture = (
     emit: (event: string, value: Request) => {
       // The separately installed policy request listener is not a network observer.
       const callbacks = [...(listeners.get(event) ?? [])];
+
       for (const callback of event === "request" ? callbacks.slice(1) : callbacks) callback(value);
     },
     observerCount: () =>
@@ -146,6 +160,7 @@ const open = Effect.gen(function* () {
     }),
   );
 });
+
 const click = BrowserClickRequest.make({ selector: "#private-selector" });
 const advance = (millis: number) => Effect.promise(() => vi.advanceTimersByTimeAsync(millis));
 
@@ -159,11 +174,14 @@ describe("Browser Run observed mutations", () => {
         },
       });
       const f = fixture({ state: async (evaluate, selector) => evaluate(selector) });
+
       return Effect.gen(function* () {
         const handle = yield* open;
+
         const error = yield* handle
           .click(BrowserClickRequest.make({ selector: "[" }))
           .pipe(Effect.flip);
+
         expect(isBrowserRunUndispatchedActionError(error)).toBe(true);
         expect(error).not.toHaveProperty("cause");
         expect(f.events).not.toContain("dispatch");
@@ -175,17 +193,22 @@ describe("Browser Run observed mutations", () => {
   it.effect("fences dispatch when a preflight query completes after interruption", () => {
     const query = gate<unknown>();
     const entered = gate<void>();
+
     const f = fixture({
       state: () => {
         entered.resolve();
+
         return query.promise;
       },
     });
+
     return Effect.gen(function* () {
       const handle = yield* open;
       const fiber = yield* handle.click(click).pipe(Effect.forkChild);
+
       yield* Effect.promise(() => entered.promise);
       const interrupt = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild);
+
       yield* advance(500);
       yield* Fiber.join(interrupt);
       query.resolve(emptyState);
@@ -205,14 +228,17 @@ describe("Browser Run observed mutations", () => {
     (count) => {
       let matches = count;
       const f = fixture({ state: async () => ({ matchCount: matches }) });
+
       return Effect.gen(function* () {
         const handle = yield* open;
         const error = yield* handle.click(click).pipe(Effect.flip);
+
         expect(isBrowserRunUndispatchedActionError(error)).toBe(true);
         expect(f.events).not.toContain("dispatch");
         expect(f.logs[0]?.annotations["browser.selector_match_count"]).toBe(count);
         matches = 1;
         const fiber = yield* handle.click(click).pipe(Effect.forkChild);
+
         yield* Effect.promise(() => f.started);
         yield* advance(200);
         yield* Fiber.join(fiber);
@@ -224,8 +250,10 @@ describe("Browser Run observed mutations", () => {
 
   it.effect("rechecks uniqueness on the acquired handles and disposes an ambiguous batch", () => {
     const f = fixture({ matches: 2 });
+
     return Effect.gen(function* () {
       const handle = yield* open;
+
       expect(
         isBrowserRunUndispatchedActionError(
           yield* handle
@@ -242,20 +270,25 @@ describe("Browser Run observed mutations", () => {
     "observes delayed fetch/XHR and ignores unrelated requests without leaking request data",
     () => {
       const f = fixture();
+
       return Effect.gen(function* () {
         const handle = yield* open;
         const fiber = yield* handle.click(click).pipe(Effect.forkChild);
+
         yield* Effect.promise(() => f.started);
         yield* advance(100);
         f.emit("request", request("image"));
+
         const requests = [
           request("fetch", 204),
           request("xhr", 302),
           request("fetch", 404),
           request("xhr", 503),
         ];
+
         for (const req of requests) f.emit("request", req);
         const failed = request();
+
         f.emit("request", failed);
         f.emit("requestfailed", failed);
         yield* advance(300);
@@ -290,12 +323,15 @@ describe("Browser Run observed mutations", () => {
     "caps pending network settlement at two seconds and post-navigation state at 250ms",
     () => {
       let reads = 0;
+
       const f = fixture({
         state: async () => (++reads === 1 ? emptyState : new Promise(() => {})),
       });
+
       return Effect.gen(function* () {
         const handle = yield* open;
         const fiber = yield* handle.click(click).pipe(Effect.forkChild);
+
         yield* Effect.promise(() => f.started);
         f.emit("request", request());
         yield* advance(2_250);
@@ -313,15 +349,19 @@ describe("Browser Run observed mutations", () => {
 
   it.effect("does not turn a destroyed post-action document into an action failure", () => {
     let reads = 0;
+
     const f = fixture({
       state: async () => {
         if (++reads > 1) throw new Error("private provider exception");
+
         return emptyState;
       },
     });
+
     return Effect.gen(function* () {
       const handle = yield* open;
       const fiber = yield* handle.click(click).pipe(Effect.forkChild);
+
       yield* Effect.promise(() => f.started);
       yield* advance(200);
       yield* Fiber.join(fiber);
@@ -340,9 +380,11 @@ describe("Browser Run observed mutations", () => {
         },
         dispose: () => new Promise(() => {}),
       });
+
       return Effect.gen(function* () {
         const handle = yield* open;
         const fiber = yield* handle.click(click).pipe(Effect.flip, Effect.forkChild);
+
         yield* Effect.promise(() => f.started);
         yield* advance(250);
         expect(isBrowserRunUndispatchedActionError(yield* Fiber.join(fiber))).toBe(false);
@@ -360,11 +402,14 @@ describe("Browser Run observed mutations", () => {
     () => {
       const action = gate<void>();
       const f = fixture({ action: () => action.promise });
+
       return Effect.gen(function* () {
         const handle = yield* open;
         const fiber = yield* handle.click(click).pipe(Effect.forkChild);
+
         yield* Effect.promise(() => f.started);
         const interrupt = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild);
+
         yield* advance(500);
         yield* Fiber.join(interrupt);
         expect(f.observerCount()).toBe(0);

@@ -76,6 +76,7 @@ const TestNamespace = MemoryNamespace.define({
 
 const danThreadId = Schema.decodeSync(ThreadId)(DAN_THREAD);
 const timThreadId = Schema.decodeSync(ThreadId)(TIM_THREAD);
+
 const recallLimits = MemoryRecallLimits.make({
   maxSources: 2,
   maxItems: 8,
@@ -83,13 +84,16 @@ const recallLimits = MemoryRecallLimits.make({
   maxTokens: 64_000,
   timeoutMillis: 5_000,
 });
+
 const FIVE_MINUTES_MILLIS = 300_000;
+
 const policy = AgentPolicy.make({
   maxTurns: 1,
   maxToolCalls: 1,
   maxDuration: "30 seconds",
   toolConcurrency: 1,
 });
+
 const usage = { inputTokens: {}, outputTokens: {} };
 
 const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => [
@@ -171,9 +175,11 @@ const spawnWorker = Effect.fn("MemoryActivityTest.spawnWorker")(function* (
   mode: MemoryActivityWorkerMode,
 ) {
   const path = yield* Path.Path;
+
   const entry = yield* path.fromFileUrl(
     new URL("./memory-activity-worker-entry.ts", import.meta.url),
   );
+
   return yield* ChildProcess.make("node", ["--experimental-transform-types", entry], {
     cwd: path.dirname(entry),
     env: {
@@ -209,13 +215,17 @@ const runWorker = (filename: string, mode: MemoryActivityWorkerMode) =>
   Effect.scoped(
     Effect.gen(function* () {
       const child = yield* spawnWorker(filename, mode);
+
       const stderr = yield* Effect.forkScoped(
         child.stderr.pipe(Stream.decodeText(), Stream.mkString),
       );
+
       const output = yield* decodeFirstLine(child, MemoryActivityWorkerResult);
       const exitCode = yield* child.exitCode;
       const errorText = yield* Fiber.join(stderr);
+
       if (Number(exitCode) !== 0) return yield* Effect.die(`Worker failed: ${errorText}`);
+
       return output;
     }),
   );
@@ -241,6 +251,7 @@ const runTim = Effect.fn("MemoryActivityTest.runTim")(function* (
   const prompts = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
   const recalled = yield* Ref.make<ReadonlyArray<string>>([]);
   const agent = Agent.withModel(timDefinition, model(`tim-${question}`, "acknowledged", prompts));
+
   yield* AgentRuntime.run(
     agent,
     { question, askedAt },
@@ -278,6 +289,7 @@ const runTim = Effect.fn("MemoryActivityTest.runTim")(function* (
       RunContextPreparationPassthrough,
     ]),
   );
+
   return { prompts: yield* Ref.get(prompts), recalled: yield* Ref.get(recalled) };
 });
 
@@ -285,7 +297,9 @@ const originalWriteFrom = Effect.fn("MemoryActivityTest.originalWriteFrom")(func
   pending: PreparedActivity,
 ) {
   const output = yield* Schema.decodeUnknownEffect(ActivityMemoryOutput)(pending.output);
+
   if (output._tag !== "Remember") return yield* Effect.die("Expected remembered activity");
+
   return yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
     _tag: "Put",
     key: output.key,
@@ -310,9 +324,11 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+
         const directory = yield* fs.makeTempDirectoryScoped({
           prefix: "effect-agent-memory-activity-restart-",
         });
+
         const filename = `${directory}/memory.sqlite`;
 
         yield* AgentRuntime.run(sourceAgent, danStatement, { threadId: danThreadId }).pipe(
@@ -323,6 +339,7 @@ it.live(
           ]),
         );
         const source = yield* exportThread(filename, danThreadId);
+
         expect(source.records.map(({ record }) => record.payload._tag)).toEqual([
           "UserInputRecorded",
           "ModelCompleted",
@@ -331,26 +348,32 @@ it.live(
         expect(JSON.stringify(source.records[1])).toContain(ORIGINAL_TEXT);
 
         const first = yield* spawnWorker(filename, "crash-after-apply");
+
         const stderr = yield* Effect.forkScoped(
           first.stderr.pipe(Stream.decodeText(), Stream.mkString),
         );
+
         expect(yield* decodeFirstLine(first, MemoryActivityMarker)).toEqual({
           _tag: "MemoryActivityMarker",
           point: "memory:change:after",
         });
         yield* first.kill({ killSignal: "SIGKILL" });
         const killed = yield* first.exitCode.pipe(Effect.result);
+
         yield* Fiber.join(stderr);
         expect(Result.isFailure(killed)).toBe(true);
 
         const crashedProgress = yield* inspectActivity(filename);
+
         expect(crashedProgress?.throughSequence).toBe(0);
         expect(crashedProgress?.pending?.sequence).toBe(1);
         const pending = crashedProgress?.pending;
+
         if (pending === null || pending === undefined) {
           return yield* Effect.die("Expected pinned activity after process death");
         }
         const firstDocument = yield* readMemory(filename);
+
         expect(firstDocument).toMatchObject({
           _tag: "ActiveMemoryDocument",
           generation: 1,
@@ -361,6 +384,7 @@ it.live(
         // SIGKILL skips claim release, so the restarted process must wait out the real lease.
         yield* Effect.sleep(Duration.millis(2_500));
         const recovered = yield* runWorker(filename, "recover-divergent");
+
         expect(recovered.pass).toMatchObject({
           capturedTail: 3,
           throughSequence: 3,
@@ -370,9 +394,11 @@ it.live(
         expect(recovered.appliedWorkIds[0]).toBe(pending.workId);
         expect(recovered.extractedUserRecords).toBe(0);
         const progress = yield* inspectActivity(filename);
+
         expect(progress).toMatchObject({ throughSequence: 3, pending: null });
 
         const original = yield* readMemory(filename);
+
         expect(original?._tag).toBe("ActiveMemoryDocument");
         if (original === null || original._tag !== "ActiveMemoryDocument") {
           return yield* Effect.die("Expected active recovered memory");
@@ -402,14 +428,17 @@ it.live(
 
         const staleCandidates = candidateFrom(original);
         const askedAt = danStatement.activityAt + FIVE_MINUTES_MILLIS;
+
         const initialRecall = yield* runTim(
           filename,
           "What did Dan say about Chad?",
           askedAt,
           staleCandidates,
         );
+
         const initialPrompt = JSON.stringify(initialRecall.prompts[0]);
         const recalledText = initialRecall.recalled[0] ?? "";
+
         expect(recalledText).toContain(ORIGINAL_TEXT);
         expect(recalledText).toContain('"speaker":"Dan"');
         expect(recalledText).toContain('"observers":["Chad"]');
@@ -427,10 +456,12 @@ it.live(
           namespace: TestNamespace.make("another-team"),
           scope: MEMORY_SCOPE,
         }).pipe(Effect.provide(readerLayer(filename)));
+
         const wrongScope = yield* revalidateMemoryLookup(staleCandidates, {
           namespace: MEMORY_NAMESPACE,
           scope: MemoryScope.make("unshared-channel"),
         }).pipe(Effect.provide(readerLayer(filename)));
+
         expect(wrongNamespace).toEqual({ _tag: "NoMatch" });
         expect(wrongScope).toEqual({ _tag: "NoMatch" });
 
@@ -450,17 +481,20 @@ it.live(
             scopes: [MEMORY_SCOPE],
           }),
         ).pipe(Effect.provide(memoryLayer(filename)));
+
         expect(corrected).toMatchObject({
           _tag: "ActiveMemoryDocument",
           generation: 2,
           predecessor: original.source,
         });
+
         const correctedRecall = yield* runTim(
           filename,
           "Was the Project Atlas statement corrected?",
           askedAt + 1_000,
           staleCandidates,
         );
+
         expect(correctedRecall.recalled[0]).toContain(CORRECTED_TEXT);
         expect(correctedRecall.recalled[0]).not.toContain(ORIGINAL_TEXT);
 
@@ -473,11 +507,13 @@ it.live(
             reason: "Dan withdrew the source statement",
           }),
         ).pipe(Effect.provide(memoryLayer(filename)));
+
         expect(withdrawn).toMatchObject({ _tag: "WithdrawnMemoryDocument", generation: 3 });
 
         const replayed = yield* Effect.flatMap(MemoryWriter, (writer) =>
           Effect.flatMap(originalWriteFrom(pending), writer.change),
         ).pipe(Effect.provide(memoryLayer(filename)));
+
         expect(replayed).toMatchObject({
           _tag: "ActiveMemoryDocument",
           generation: 1,
@@ -494,13 +530,16 @@ it.live(
           askedAt + 2_000,
           staleCandidates,
         );
+
         expect(withdrawnRecall.recalled[0]).toBe("");
         expect(JSON.stringify(withdrawnRecall.prompts[0])).not.toContain(CORRECTED_TEXT);
 
         const timHistory = yield* Effect.flatMap(ThreadHistory, (history) =>
           history.load(timThreadId),
         ).pipe(Effect.provide(historyLayer(filename)));
+
         const canonicalTim = JSON.stringify(timHistory);
+
         expect(canonicalTim).not.toContain(ORIGINAL_TEXT);
         expect(canonicalTim).not.toContain(CORRECTED_TEXT);
         expect(canonicalTim).not.toContain(pending.recordDigest);

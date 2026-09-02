@@ -329,10 +329,12 @@ const withChildReservation = (
 
 const findHead = (state: LedgerState, threadId: ThreadId): StoredSubmission | undefined => {
   let head: StoredSubmission | undefined;
+
   for (const stored of state.submissions.values()) {
     if (stored.row.threadId !== threadId || stored.row.state === "settled") continue;
     if (head === undefined || stored.row.queueSequence < head.row.queueSequence) head = stored;
   }
+
   return head;
 };
 
@@ -379,6 +381,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       childReservations: new Map(),
       mintCounter: 0,
     });
+
     const leaseMillis = Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION);
 
     const capabilities = Effect.succeed(LedgerCapabilities.make({ durability: "non-durable" }));
@@ -388,6 +391,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
         Effect.gen(function* () {
           const request = yield* validate(AdmissionRequest, "admit", unvalidated);
           const nowMillis = yield* Clock.currentTimeMillis;
+
           const decision = yield* Ref.modify(
             state,
             (
@@ -398,8 +402,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ] => {
               const key = admissionKey(request.threadId, request.principal, request.idempotencyKey);
               const existingId = current.admissionIndex.get(key);
+
               if (existingId !== undefined) {
                 const existing = current.submissions.get(existingId);
+
                 if (existing === undefined) {
                   return [
                     failure(
@@ -427,6 +433,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                     current,
                   ];
                 }
+
                 return [
                   success(
                     AdmissionResult.make({
@@ -448,11 +455,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               const lane = current.lanes.get(request.threadId) ?? {
                 nextQueueSequence: 1,
                 producerEpoch: 0,
               };
+
               const mintCounter = current.mintCounter + 1;
+
               const row: SubmissionRow = {
                 submissionId: decodeSubmissionId(`submission-memory-${mintCounter}`),
                 threadId: request.threadId,
@@ -471,6 +481,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 readyAtMillis: undefined,
                 parentLinkage: request.parentLinkage,
               };
+
               const submissions = new Map(current.submissions).set(row.submissionId, {
                 row,
                 ownership: undefined,
@@ -483,11 +494,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 approvalDecisions: new Map<ToolCallId, ApprovalDecisionIntent>(),
                 unknownResolutions: new Map<ToolCallId, StoredUnknownResolution>(),
               });
+
               const admissionIndex = new Map(current.admissionIndex).set(key, row.submissionId);
+
               const lanes = new Map(current.lanes).set(request.threadId, {
                 nextQueueSequence: lane.nextQueueSequence + 1,
                 producerEpoch: lane.producerEpoch,
               });
+
               return [
                 success(
                   AdmissionResult.make({
@@ -502,7 +516,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             },
           );
+
           if (decision._tag === "failure") return yield* decision.error;
+
           return decision.value;
         }),
     );
@@ -513,10 +529,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       Effect.gen(function* () {
         const request = yield* validate(MarkReadyRequest, "markReady", unvalidated);
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [Decision<void, LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(ledgerError("markReady", `Unknown Submission ${request.submissionId}`)),
@@ -524,6 +542,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
             if (stored.row.state !== "admitted") return [success(undefined), current];
+
             return [
               success(undefined),
               withSubmission(current, {
@@ -533,6 +552,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
       }),
     );
@@ -543,14 +563,17 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       Effect.gen(function* () {
         const request = yield* validate(SubmissionLookup, "lookup", unvalidated);
         const current = yield* Ref.get(state);
+
         const submissionId =
           request._tag === "SubmissionLookupById"
             ? request.submissionId
             : current.admissionIndex.get(
                 admissionKey(request.threadId, request.principal, request.idempotencyKey),
               );
+
         const stored =
           submissionId === undefined ? undefined : current.submissions.get(submissionId);
+
         return stored === undefined ? Option.none() : Option.some(toSnapshot(stored.row));
       }),
     );
@@ -560,20 +583,25 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(SubmissionLookupByKey, "resolveAdmission", unvalidated);
+
         // Test-only fault seam: lets suites exercise the Indeterminate classification that a
         // single strongly consistent store never produces on its own (SUB-031, P6 honesty).
         if (options.resolveAdmissionFault !== undefined) {
           const fault = yield* options.resolveAdmissionFault;
+
           if (Option.isSome(fault)) {
             return AdmissionIndeterminate.make({ reason: fault.value });
           }
         }
         const current = yield* Ref.get(state);
+
         const submissionId = current.admissionIndex.get(
           admissionKey(request.threadId, request.principal, request.idempotencyKey),
         );
+
         const stored =
           submissionId === undefined ? undefined : current.submissions.get(submissionId);
+
         return stored === undefined
           ? AdmissionNotAdmitted.make()
           : AdmissionAdmitted.make({ submission: toSnapshot(stored.row) });
@@ -585,10 +613,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
         Effect.gen(function* () {
           const request = yield* validate(ClaimRequest, "claim", unvalidated);
           const nowMillis = yield* Clock.currentTimeMillis;
+
           const decision = yield* Ref.modify(
             state,
             (current): readonly [Decision<Option.Option<Claim>, LedgerError>, LedgerState] => {
               const head = findHead(current, request.threadId);
+
               if (head === undefined) return [success(Option.none()), current];
               if (
                 BLOCKED_HEAD_STATES.has(head.row.state) ||
@@ -603,6 +633,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 return [success(Option.none()), current];
               }
               const lane = current.lanes.get(request.threadId);
+
               if (lane === undefined) {
                 return [
                   failure(ledgerError("claim", "Claimable head without a Thread lane")),
@@ -611,6 +642,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               }
               const producerEpoch = decodeProducerEpoch(lane.producerEpoch + 1);
               const mintCounter = current.mintCounter + 1;
+
               const ownership: StoredOwnership = {
                 attemptId: decodeAttemptId(`attempt-memory-${mintCounter}`),
                 ownershipToken: decodeOwnershipToken(`ownership-memory-${mintCounter}`),
@@ -618,13 +650,17 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ownerProducerId: request.producerId,
                 leaseExpiresAtMillis: nowMillis + leaseMillis,
               };
+
               const row: SubmissionRow =
                 head.row.state === "ready" ? { ...head.row, state: "running" } : head.row;
+
               const next = withSubmission(current, { ...head, row, ownership });
+
               const lanes = new Map(next.lanes).set(request.threadId, {
                 nextQueueSequence: lane.nextQueueSequence,
                 producerEpoch: lane.producerEpoch + 1,
               });
+
               return [
                 success(
                   Option.some(
@@ -642,7 +678,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             },
           );
+
           if (decision._tag === "failure") return yield* decision.error;
+
           return decision.value;
         }),
     );
@@ -653,12 +691,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       Effect.gen(function* () {
         const request = yield* validate(RenewOwnershipRequest, "renewOwnership", unvalidated);
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (
             current,
           ): readonly [Decision<OwnershipRenewal, OwnershipLost | LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(
@@ -670,10 +710,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (stored.ownership === undefined || !ownsLane(stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
             }
+
             const ownership: StoredOwnership = {
               ...stored.ownership,
               leaseExpiresAtMillis: nowMillis + leaseMillis,
             };
+
             return [
               success(
                 OwnershipRenewal.make({
@@ -685,7 +727,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -695,10 +739,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(ReleaseOwnershipRequest, "releaseOwnership", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [Decision<void, OwnershipLost | LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(
@@ -710,12 +756,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (!ownsLane(stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
             }
+
             return [
               success(undefined),
               withSubmission(current, { ...stored, ownership: undefined }),
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
       }),
     );
@@ -725,10 +773,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(MarkInputAppliedRequest, "markInputApplied", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [Decision<void, OwnershipLost | LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(
@@ -740,20 +790,24 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (!ownsLane(stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
             }
+
             const marker = InputAppliedMarker.make({
               recordId: request.recordId,
               sequence: request.sequence,
             });
+
             const row: SubmissionRow =
               STATE_RANK[stored.row.state] < STATE_RANK["input-applied"]
                 ? { ...stored.row, state: "input-applied" }
                 : stored.row;
+
             return [
               success(undefined),
               withSubmission(current, { ...stored, row, inputApplied: marker }),
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
       }),
     );
@@ -763,6 +817,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(SettlementReservation, "reserveSettlement", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (
@@ -772,6 +827,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             LedgerState,
           ] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(
@@ -780,11 +836,13 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
+
             // A `joined` Submission settles WITH its host (plan §2.5) and its lane is never
             // worker-claimable, so no ownership token can exist for it: the recorded host
             // linkage authorizes the reservation and the presented token is not consulted.
             const joinedSettlement =
               stored.row.state === "joined" && stored.joinedHostSubmissionId !== undefined;
+
             // P7 §7(c): an aborted, never-claimed, still-queued Submission likewise has no
             // live ownership to fence against — its durable abort intent authorizes exactly
             // its ABORTED settlement (`terminalizing` is the same pass's crash replay). Every
@@ -794,6 +852,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               stored.abortIntent !== undefined &&
               stored.ownership === undefined &&
               (stored.row.state === "ready" || stored.row.state === "terminalizing");
+
             if (
               !joinedSettlement &&
               !queuedAbortSettlement &&
@@ -802,6 +861,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               return [failure(ownershipLost(current, stored)), current];
             }
             const existing = stored.reservation;
+
             if (existing !== undefined) {
               if (
                 existing.settlementId !== request.settlementId ||
@@ -818,6 +878,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [
                 success(
                   ReservedSettlement.make({
@@ -832,6 +893,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
+
             const reservation: StoredReservation = {
               settlementId: request.settlementId,
               outcome: request.outcome,
@@ -839,10 +901,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               recordDigest: request.recordDigest,
               finalizedAtMillis: undefined,
             };
+
             const row: SubmissionRow =
               STATE_RANK[stored.row.state] < STATE_RANK.terminalizing
                 ? { ...stored.row, state: "terminalizing" }
                 : stored.row;
+
             return [
               success(
                 ReservedSettlement.make({
@@ -858,7 +922,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -869,12 +935,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       Effect.gen(function* () {
         const request = yield* validate(SettlementFinalization, "finalizeSettlement", unvalidated);
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (
             current,
           ): readonly [Decision<Settlement, SettlementConflict | LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(
@@ -884,6 +952,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
             const reservation = stored.reservation;
+
             if (reservation === undefined) {
               return [
                 failure(
@@ -896,6 +965,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
             const settlementFailure = settlementFailureFromRecord(reservation.record);
+
             if ((reservation.outcome === "failed") !== (settlementFailure !== undefined)) {
               return [
                 failure(
@@ -933,12 +1003,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
+
             const next = withSubmission(current, {
               ...stored,
               row: { ...stored.row, state: "settled", settledOutcome: reservation.outcome },
               ownership: undefined,
               reservation: { ...reservation, finalizedAtMillis: nowMillis },
             });
+
             return [
               success(
                 Settlement.make({
@@ -954,7 +1026,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -965,6 +1039,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       Effect.gen(function* () {
         const request = yield* validate(AbortCommand, "requestAbort", unvalidated);
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (
@@ -974,6 +1049,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             LedgerState,
           ] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(ledgerError("requestAbort", `Unknown Submission ${request.submissionId}`)),
@@ -995,6 +1071,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [
                 failure(
                   JoinedToHost.make({
@@ -1017,6 +1094,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [
                 failure(
                   SettlementConflict.make({
@@ -1028,16 +1106,20 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
             if (stored.abortIntent !== undefined) return [success(stored.abortIntent), current];
+
             const intent = AbortIntent.make({
               submissionId: request.submissionId,
               author: request.author,
               reason: request.reason,
               requestedAt: utc(nowMillis),
             });
+
             return [success(intent), withSubmission(current, { ...stored, abortIntent: intent })];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -1047,6 +1129,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(ClaimJoiningRequest, "claimJoining", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (
@@ -1056,6 +1139,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             LedgerState,
           ] => {
             const host = current.submissions.get(request.hostSubmissionId);
+
             if (host === undefined) {
               return [
                 failure(
@@ -1078,6 +1162,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (!ownsLane(host, request.ownershipToken)) {
               return [failure(ownershipLost(current, host)), current];
             }
+
             const later = [...current.submissions.values()]
               .filter(
                 (stored) =>
@@ -1085,8 +1170,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   stored.row.queueSequence > host.row.queueSequence,
               )
               .sort((left, right) => left.row.queueSequence - right.row.queueSequence);
+
             const claims: Array<JoiningClaim> = [];
             const submissions = new Map(current.submissions);
+
             for (const stored of later) {
               if (claims.length >= request.maxCount) break;
               // Rows already claimed by THIS host extend its contiguous prefix and are skipped;
@@ -1119,10 +1206,13 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 }),
               );
             }
+
             return [success(claims), { ...current, submissions }];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -1132,10 +1222,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(MarkJoinedRequest, "markJoined", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [Decision<void, OwnershipLost | LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(ledgerError("markJoined", `Unknown Submission ${request.submissionId}`)),
@@ -1154,6 +1246,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
             const host = current.submissions.get(stored.joinedHostSubmissionId);
+
             if (host === undefined) {
               return [
                 failure(
@@ -1177,6 +1270,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ) {
                 return [success(undefined), current];
               }
+
               return [
                 failure(
                   ledgerError(
@@ -1198,10 +1292,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
+
             const marker = InputAppliedMarker.make({
               recordId: request.recordId,
               sequence: request.sequence,
             });
+
             return [
               success(undefined),
               withSubmission(current, {
@@ -1212,6 +1308,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
       }),
     );
@@ -1221,10 +1318,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(RevertJoiningRequest, "revertJoining", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [Decision<void, LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(ledgerError("revertJoining", `Unknown Submission ${request.submissionId}`)),
@@ -1234,6 +1333,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             // Idempotent and recovery-only: only a still-`joining` Submission reverts; an
             // already-joined (or already-reverted) Submission is a no-op (DUR-016).
             if (stored.row.state !== "joining") return [success(undefined), current];
+
             return [
               success(undefined),
               withSubmission(current, {
@@ -1244,6 +1344,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
       }),
     );
@@ -1254,6 +1355,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       Effect.gen(function* () {
         const request = yield* validate(SuspendRequest, "suspend", unvalidated);
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (
@@ -1263,6 +1365,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             LedgerState,
           ] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(ledgerError("suspend", `Unknown Submission ${request.submissionId}`)),
@@ -1281,6 +1384,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [
                 failure(
                   SettlementConflict.make({
@@ -1307,6 +1411,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (!ownsLane(stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
             }
+
             // A covering event that raced ahead of the suspend transaction (an approval decision,
             // or a child settlement observed directly from the child's row in this single store)
             // resumes the caller immediately WITHOUT releasing the lane (plan §2.6, spec §12).
@@ -1319,9 +1424,11 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                     (child) =>
                       current.submissions.get(child.childSubmissionId)?.row.state === "settled",
                   );
+
             if (alreadyCovered) {
               return [success("resume-immediately" as const), current];
             }
+
             return [
               success("suspended" as const),
               withSubmission(current, {
@@ -1333,7 +1440,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -1347,7 +1456,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           "recordApprovalDecision",
           unvalidated,
         );
+
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (
@@ -1357,6 +1468,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             LedgerState,
           ] => {
             const stored = current.submissions.get(command.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(
@@ -1380,6 +1492,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [
                 failure(
                   SettlementConflict.make({
@@ -1391,6 +1504,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
             const existing = stored.approvalDecisions.get(command.toolCallId);
+
             if (existing !== undefined) {
               if (existing.decision !== command.decision) {
                 return [
@@ -1404,8 +1518,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [success(existing), current];
             }
+
             const intent = ApprovalDecisionIntent.make({
               submissionId: command.submissionId,
               toolCallId: command.toolCallId,
@@ -1414,10 +1530,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               reason: command.reason,
               decidedAt: utc(nowMillis),
             });
+
             const approvalDecisions = new Map(stored.approvalDecisions).set(
               command.toolCallId,
               intent,
             );
+
             // Once every pending call of an ApprovalPending suspension is decided, the lane
             // wakes: suspended → input-applied (plan §2.6). A WaitingForChild suspension wakes
             // only through recordChildSettled.
@@ -1428,6 +1546,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               stored.suspension.reason.toolCallIds.every((toolCallId) =>
                 approvalDecisions.has(toolCallId),
               );
+
             return [
               success(intent),
               withSubmission(current, {
@@ -1439,7 +1558,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -1449,10 +1570,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(MarkUnknownRequest, "markUnknown", unvalidated);
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [Decision<void, SettlementConflict | LedgerError>, LedgerState] => {
             const stored = current.submissions.get(request.submissionId);
+
             if (stored === undefined) {
               return [
                 failure(ledgerError("markUnknown", `Unknown Submission ${request.submissionId}`)),
@@ -1471,6 +1594,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [
                 failure(
                   SettlementConflict.make({
@@ -1498,10 +1622,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             // set while the first recorded reason is kept.
             const existing = stored.unknownMark;
             const known = new Set(existing?.toolCallIds ?? []);
+
             const merged = [
               ...(existing?.toolCallIds ?? []),
               ...request.toolCallIds.filter((toolCallId) => !known.has(toolCallId)),
             ];
+
             return [
               success(undefined),
               withSubmission(current, {
@@ -1513,6 +1639,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
       }),
     );
@@ -1525,7 +1652,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             "recordUnknownResolution",
             unvalidated,
           );
+
           const nowMillis = yield* Clock.currentTimeMillis;
+
           const decision = yield* Ref.modify(
             state,
             (
@@ -1538,6 +1667,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               LedgerState,
             ] => {
               const stored = current.submissions.get(command.submissionId);
+
               if (stored === undefined) {
                 return [
                   failure(
@@ -1561,6 +1691,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                     current,
                   ];
                 }
+
                 return [
                   failure(
                     SettlementConflict.make({
@@ -1572,6 +1703,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ];
               }
               const existing = stored.unknownResolutions.get(command.toolCallId);
+
               if (
                 existing !== undefined &&
                 !equivalentUnknownResolution(existing.intent.resolution, command.resolution)
@@ -1586,6 +1718,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               const intent =
                 existing?.intent ??
                 UnknownResolutionIntent.make({
@@ -1596,12 +1729,14 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   resolution: command.resolution,
                   resolvedAt: utc(nowMillis),
                 });
+
               const unknownResolutions =
                 existing !== undefined
                   ? stored.unknownResolutions
                   : new Map(stored.unknownResolutions).set(command.toolCallId, {
                       intent,
                     });
+
               // The lane reopens only when EVERY marked open call has a durable resolution
               // intent: unknown → input-applied (DUR-017). Replays re-run the coverage check so
               // a recovering caller can wake the lane idempotently.
@@ -1611,6 +1746,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 stored.unknownMark.toolCallIds.every((toolCallId) =>
                   unknownResolutions.has(toolCallId),
                 );
+
               return [
                 success(intent),
                 withSubmission(current, {
@@ -1622,7 +1758,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             },
           );
+
           if (decision._tag === "failure") return yield* decision.error;
+
           return decision.value;
         }),
       );
@@ -1636,10 +1774,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           "recordChildSettled",
           unvalidated,
         );
+
         const decision = yield* Ref.modify(
           state,
           (current): readonly [Decision<ChildSettledOutcome, LedgerError>, LedgerState] => {
             const parent = current.submissions.get(request.parentSubmissionId);
+
             if (parent === undefined) {
               return [
                 failure(
@@ -1656,10 +1796,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             // narrow durable prefix that makes that ordering admissible; earlier states remain
             // a caller error.
             const child = current.submissions.get(request.childSubmissionId);
+
             const announced =
               child !== undefined &&
               (child.row.state === "settled" ||
                 (child.row.state === "terminalizing" && child.reservation !== undefined));
+
             if (!announced) {
               return [
                 failure(
@@ -1679,19 +1821,24 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               return [success("not-waiting" as const), current];
             }
             const children = parent.suspension.reason.children;
+
             if (!children.some((entry) => entry.childSubmissionId === request.childSubmissionId)) {
               return [success("not-waiting" as const), current];
             }
+
             // Every listed child must be either finalized or canonically announced from the
             // exact terminalizing reservation. Replays re-run this coverage check idempotently.
             const allSettled = children.every((entry) => {
               const listed = current.submissions.get(entry.childSubmissionId);
+
               return (
                 listed?.row.state === "settled" ||
                 (listed?.row.state === "terminalizing" && listed.reservation !== undefined)
               );
             });
+
             if (!allSettled) return [success("still-waiting" as const), current];
+
             return [
               success("woken" as const),
               withSubmission(current, {
@@ -1702,7 +1849,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -1716,7 +1865,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           "reserveChildBudget",
           unvalidated,
         );
+
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (
@@ -1726,6 +1877,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             LedgerState,
           ] => {
             const existing = current.childReservations.get(request.reservationId);
+
             if (existing !== undefined) {
               // Identical replays short-circuit before the fence, mirroring reserveSettlement:
               // a replay creates nothing, so a recovering caller resumes rather than duplicates.
@@ -1734,6 +1886,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 existing.parentToolCallId === request.parentToolCallId &&
                 existing.allocationDigest === request.allocationDigest &&
                 equivalentPersistedJson(existing.allocation, request.allocation);
+
               if (!identical) {
                 return [
                   failure(
@@ -1747,6 +1900,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               return [
                 success(
                   ReservedChildBudget.make({
@@ -1775,6 +1929,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               }
             }
             const parent = current.submissions.get(request.parentSubmissionId);
+
             if (parent === undefined) {
               return [
                 failure(
@@ -1791,6 +1946,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (!ownsLane(parent, request.ownershipToken)) {
               return [failure(ownershipLost(current, parent)), current];
             }
+
             const reservation: StoredChildReservation = {
               reservationId: request.reservationId,
               parentSubmissionId: request.parentSubmissionId,
@@ -1804,6 +1960,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               releaseBeganAtMillis: undefined,
               releasedAtMillis: undefined,
             };
+
             return [
               success(
                 ReservedChildBudget.make({
@@ -1815,7 +1972,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -1828,6 +1987,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             "attachChildToReservation",
             unvalidated,
           );
+
           const decision = yield* Ref.modify(
             state,
             (
@@ -1840,6 +2000,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               LedgerState,
             ] => {
               const reservation = current.childReservations.get(request.reservationId);
+
               if (reservation === undefined) {
                 return [
                   failure(
@@ -1856,6 +2017,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 if (reservation.childSubmissionId === request.childSubmissionId) {
                   return [success(toReservationSnapshot(reservation)), current];
                 }
+
                 return [
                   failure(
                     ChildReservationConflict.make({
@@ -1868,6 +2030,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ];
               }
               const parent = current.submissions.get(reservation.parentSubmissionId);
+
               if (parent === undefined) {
                 return [
                   failure(
@@ -1907,17 +2070,21 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               const attached: StoredChildReservation = {
                 ...reservation,
                 childSubmissionId: request.childSubmissionId,
               };
+
               return [
                 success(toReservationSnapshot(attached)),
                 withChildReservation(current, attached),
               ];
             },
           );
+
           if (decision._tag === "failure") return yield* decision.error;
+
           return decision.value;
         }),
       );
@@ -1930,7 +2097,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             "beginChildBudgetRelease",
             unvalidated,
           );
+
           const nowMillis = yield* Clock.currentTimeMillis;
+
           const decision = yield* Ref.modify(
             state,
             (
@@ -1940,6 +2109,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               LedgerState,
             ] => {
               const reservation = current.childReservations.get(request.reservationId);
+
               if (reservation === undefined) {
                 return [
                   failure(
@@ -1960,6 +2130,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ) {
                   return [success(toReservationSnapshot(reservation)), current];
                 }
+
                 return [
                   failure(
                     ChildReservationConflict.make({
@@ -1972,19 +2143,23 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
               const frozen: StoredChildReservation = {
                 ...reservation,
                 status: "releasePending",
                 accounting: request.accounting,
                 releaseBeganAtMillis: nowMillis,
               };
+
               return [
                 success(toReservationSnapshot(frozen)),
                 withChildReservation(current, frozen),
               ];
             },
           );
+
           if (decision._tag === "failure") return yield* decision.error;
+
           return decision.value;
         }),
       );
@@ -1998,7 +2173,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           "releaseChildBudget",
           unvalidated,
         );
+
         const nowMillis = yield* Clock.currentTimeMillis;
+
         const decision = yield* Ref.modify(
           state,
           (
@@ -2008,6 +2185,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             LedgerState,
           ] => {
             const reservation = current.childReservations.get(request.reservationId);
+
             if (reservation === undefined) {
               return [
                 failure(
@@ -2037,18 +2215,22 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
+
             const released: StoredChildReservation = {
               ...reservation,
               status: "released",
               releasedAtMillis: nowMillis,
             };
+
             return [
               success(toReservationSnapshot(released)),
               withChildReservation(current, released),
             ];
           },
         );
+
         if (decision._tag === "failure") return yield* decision.error;
+
         return decision.value;
       }),
     );
@@ -2066,6 +2248,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   : left.row.queueSequence - right.row.queueSequence,
             )
             .map((stored) => toSnapshot(stored.row));
+
           return Stream.fromIterable(snapshots);
         }),
       ),
@@ -2080,14 +2263,17 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           "loadRecoverySnapshot",
           unvalidated,
         );
+
         const current = yield* Ref.get(state);
         const stored = current.submissions.get(request.submissionId);
+
         if (stored === undefined) {
           return yield* ledgerError(
             "loadRecoverySnapshot",
             `Unknown Submission ${request.submissionId}`,
           );
         }
+
         const joins = [...current.submissions.values()]
           .filter((candidate) => candidate.joinedHostSubmissionId === request.submissionId)
           .sort((left, right) => left.row.queueSequence - right.row.queueSequence)
@@ -2098,11 +2284,13 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               hostSubmissionId: request.submissionId,
             }),
           );
+
         const byToolCallId = <A extends { readonly toolCallId: ToolCallId }>(
           left: A,
           right: A,
         ): number =>
           left.toolCallId < right.toolCallId ? -1 : left.toolCallId > right.toolCallId ? 1 : 0;
+
         // Parent-side subagent view: this Submission's child budget reservations in parent Tool
         // Call order, plus each attached child's current lane state (a disposable derived view;
         // the canonical records stay the recovery truth, DUR-015).
@@ -2115,10 +2303,13 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ? 1
                 : 0,
           );
+
         const childAttachments: Array<ChildAttachmentSnapshot> = [];
+
         for (const reservation of childReservations) {
           if (reservation.childSubmissionId === undefined) continue;
           const child = current.submissions.get(reservation.childSubmissionId);
+
           if (child === undefined) continue;
           childAttachments.push(
             ChildAttachmentSnapshot.make({
@@ -2131,6 +2322,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             }),
           );
         }
+
         return RecoverySnapshot.make({
           submission: toSnapshot(stored.row),
           joins,

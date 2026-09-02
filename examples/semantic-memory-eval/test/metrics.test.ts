@@ -34,6 +34,7 @@ const row = (overrides: {
 describe("semantic memory evaluation metrics", () => {
   it("uses nearest-rank percentiles and retains failed slow samples", () => {
     const summary = summarizeLatencies([4, 1, 100, 3, 2], 50);
+
     expect(summary).toEqual({
       n: 5,
       samplesMillis: [4, 1, 100, 3, 2],
@@ -53,6 +54,7 @@ describe("semantic memory evaluation metrics", () => {
       documents: [],
       queries: [{ id: "q", text: "query", category: "negative", forbiddenIds: [] }],
     };
+
     expect(Schema.is(EvaluationCorpus)(malformed)).toBe(false);
   });
 
@@ -71,9 +73,11 @@ describe("semantic memory evaluation metrics", () => {
         usefulOrigins: 0,
       }),
     ]);
+
     const semantic = summaries.find(
       (summary) => summary.method === "semantic" && summary.cohort === "natural-language-queries",
     );
+
     expect(semantic).toMatchObject({
       queryCount: 2,
       usefulOriginHits: 1,

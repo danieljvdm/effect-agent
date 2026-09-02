@@ -85,6 +85,7 @@ describe("run activity projection", () => {
       toolCallId: "calculate-1",
       toolName: "calculate",
     });
+
     expect(projectRunActivity([declared, started], "deterministic")).toMatchObject({
       phase: "tool",
       label: "Calculating…",
@@ -100,6 +101,7 @@ describe("run activity projection", () => {
       result: { value: 2603 },
       providerExecuted: false,
     });
+
     expect(projectRunActivity([declared, started, succeeded], "deterministic")).toMatchObject({
       phase: "composing",
       label: "Checking the calculation…",
@@ -157,6 +159,7 @@ describe("run activity projection", () => {
       parameters: { operation: "add", left: 1, right: 2 },
       providerExecuted: false,
     });
+
     const second = event({
       ...base,
       _tag: "ToolCallDeclared",
@@ -167,6 +170,7 @@ describe("run activity projection", () => {
       parameters: { query: "Effect" },
       providerExecuted: false,
     });
+
     const firstSucceeded = event({
       ...base,
       _tag: "ToolCallSucceeded",

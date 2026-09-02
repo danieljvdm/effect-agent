@@ -68,6 +68,7 @@ const defectId = Schema.decodeSync(EvalDefectId)("undefined-dereference");
 
 const makeSuite = Effect.fn("PrReviewEvalTest.makeSuite")(function* () {
   const inputDigest = yield* digestReviewRequest(request);
+
   return EvalSuite.make({
     version: 1,
     cases: [
@@ -125,6 +126,7 @@ describe("PR-review model eval", () => {
   it.effect("replays the real reviewer and round-trips its JSONL observation", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
+
       const scripted = yield* Layer.build(
         ScriptedModel.layer([
           {
@@ -149,8 +151,10 @@ describe("PR-review model eval", () => {
           },
         ]),
       );
+
       const model = Model.make("scripted", "eval", Layer.succeedContext(scripted));
       const reviewer = makeReviewer({ model });
+
       const variant: EvalVariant<ReviewRepository> = {
         configuration: configuration("scripted"),
         review: (input) =>
@@ -163,11 +167,13 @@ describe("PR-review model eval", () => {
             ),
           ),
       };
+
       const observations = yield* runEvalSuite(suite, [variant], {
         trials: 1,
         concurrency: 1,
         caseIds: [],
       }).pipe(Stream.runCollect);
+
       expect(observations).toHaveLength(1);
       expect(observations[0]?.runnerVersion).toBe("0.1.1");
       expect(observations[0]?.result._tag).toBe("Succeeded");
@@ -178,13 +184,17 @@ describe("PR-review model eval", () => {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-eval-" });
       const output = `${directory}/observations.jsonl`;
+
       expect(yield* writeObservations(output, Stream.fromIterable(observations))).toBe(1);
       const decoded = yield* decodeObservationLines(yield* fs.readFileString(output));
+
       expect(decoded).toEqual(observations);
+
       const historical = (yield* fs.readFileString(output)).replace(
         '"runnerVersion":"0.1.1"',
         '"runnerVersion":"0.0.9"',
       );
+
       expect((yield* decodeObservationLines(historical))[0]?.runnerVersion).toBe("0.0.9");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -194,6 +204,7 @@ describe("PR-review model eval", () => {
     () =>
       Effect.gen(function* () {
         const suite = yield* makeSuite();
+
         const scripted = yield* Layer.build(
           ScriptedModel.layer([
             {
@@ -230,10 +241,12 @@ describe("PR-review model eval", () => {
             },
           ]),
         );
+
         const reviewer = makeReviewer({
           model: Model.make("scripted", "eval", Layer.succeedContext(scripted)),
           estimateCostMicrousd: () => Effect.succeed({ costMicrousd: 12 }),
         });
+
         const variant: EvalVariant<ReviewRepository> = {
           configuration: configuration("partial"),
           review: (input) =>
@@ -246,16 +259,19 @@ describe("PR-review model eval", () => {
               ),
             ),
         };
+
         const observations = yield* runEvalSuite(suite, [variant], {
           trials: 1,
           concurrency: 1,
           caseIds: [],
         }).pipe(Stream.runCollect);
+
         expect(observations[0]?.result).toMatchObject({
           _tag: "Succeeded",
           outcome: { incomplete: true, report: { findings: [{ path: "src/read.ts", line: 1 }] } },
         });
         const report = yield* makeQualityReport(suite, observations, 1);
+
         expect(report.variants[0]?.resources).toMatchObject({
           attemptedTrials: 1,
           succeededTrials: 0,
@@ -279,6 +295,7 @@ describe("PR-review model eval", () => {
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         guidance: "  Keep the public error channel typed.  ",
       });
+
       type Review = ReturnType<typeof variant.review>;
       expectTypeOf<Effect.Error<Review>>().toEqualTypeOf<EvalReviewerFailure>();
       expectTypeOf<Effect.Services<Review>>().toEqualTypeOf<
@@ -296,10 +313,13 @@ describe("PR-review model eval", () => {
   it.effect("records actionable AI error categories without provider payloads or credentials", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
+
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("provider-failure"),
       });
+
       const privateText = "private-source-and-provider-payload";
+
       const client = HttpClient.make((request) =>
         Effect.succeed(
           HttpClientResponse.fromWeb(
@@ -311,6 +331,7 @@ describe("PR-review model eval", () => {
           ),
         ),
       );
+
       const observations = yield* runEvalSuite(suite, [variant], {
         trials: 1,
         concurrency: 1,
@@ -323,6 +344,7 @@ describe("PR-review model eval", () => {
           ),
         ),
       );
+
       expect(observations[0]?.result).toEqual({
         _tag: "Failed",
         errorTag: "AiError/InvalidRequestError",
@@ -342,9 +364,11 @@ describe("PR-review model eval", () => {
         const variant = yield* makeCurrentOpenAiVariant({ id: "capped-wire" });
         const sent: Array<Schema.Json> = [];
         let counts = 0;
+
         const client = HttpClient.make((httpRequest) => {
           if (httpRequest.url.endsWith("/responses/input_tokens")) {
             counts += 1;
+
             return Effect.succeed(
               HttpClientResponse.fromWeb(
                 httpRequest,
@@ -361,6 +385,7 @@ describe("PR-review model eval", () => {
               new TextDecoder().decode(httpRequest.body.body),
             ),
           );
+
           const item = {
             type: "function_call",
             id: "fc_read",
@@ -374,6 +399,7 @@ describe("PR-review model eval", () => {
             }),
             status: "completed",
           };
+
           const events = [
             { type: "response.output_item.added", output_index: 0, item },
             {
@@ -402,6 +428,7 @@ describe("PR-review model eval", () => {
               },
             },
           ];
+
           return Effect.succeed(
             HttpClientResponse.fromWeb(
               httpRequest,
@@ -417,6 +444,7 @@ describe("PR-review model eval", () => {
             ),
           );
         });
+
         const observations = yield* runEvalSuite(suite, [variant], {
           trials: 2,
           concurrency: 2,
@@ -429,6 +457,7 @@ describe("PR-review model eval", () => {
             ),
           ),
         );
+
         expect(counts).toBe(4);
         expect(sent).toHaveLength(2);
         for (const payload of sent) {
@@ -465,6 +494,7 @@ describe("PR-review model eval", () => {
             },
           });
         }
+
         const unadjudicated = EvalSuite.make({
           ...suite,
           cases: suite.cases.map((evalCase) =>
@@ -475,7 +505,9 @@ describe("PR-review model eval", () => {
             }),
           ),
         });
+
         const report = yield* makeQualityReport(unadjudicated, observations, 2);
+
         expect(report.variants[0]?.cleanControls).toEqual({ passed: 0, total: 0 });
         expect(report.variants[0]?.blockerCases.total).toBe(0);
         expect(report.variants[0]?.cases[0]?.blockerStatus).toBe("not-applicable");
@@ -486,18 +518,22 @@ describe("PR-review model eval", () => {
     Effect.gen(function* () {
       const originalSuite = yield* makeSuite();
       const original = originalSuite.cases[0];
+
       expect(original).toBeDefined();
       if (original === undefined) return;
 
       const selectedId = Schema.decodeSync(EvalCaseId)("selected-case");
+
       const suite = EvalSuite.make({
         version: 1,
         cases: [original, EvalCase.make({ ...original, id: selectedId })],
       });
+
       const variant: EvalVariant<never> = {
         configuration: configuration("timed"),
         review: () => TestClock.adjust(5).pipe(Effect.as(successfulOutcome)),
       };
+
       const observations = yield* runEvalSuite(suite, [variant], {
         trials: 1,
         concurrency: 1,
@@ -522,6 +558,7 @@ describe("PR-review model eval", () => {
         const fs = yield* FileSystem.FileSystem;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-interrupted-" });
         const output = `${directory}/observations.jsonl`;
+
         const variant: EvalVariant<Scope.Scope> = {
           configuration: configuration("interruptible"),
           review: () =>
@@ -529,11 +566,13 @@ describe("PR-review model eval", () => {
               if ((yield* Ref.updateAndGet(calls, (count) => count + 1)) === 1) {
                 return successfulOutcome;
               }
+
               return yield* Effect.acquireRelease(Deferred.succeed(acquired, undefined), () =>
                 Deferred.succeed(released, undefined),
               ).pipe(Effect.andThen(Effect.never));
             }),
         };
+
         const fiber = yield* writeObservations(
           output,
           runEvalSuite(suite, [variant], { trials: 3, concurrency: 1, caseIds: [] }),
@@ -549,6 +588,7 @@ describe("PR-review model eval", () => {
         yield* Deferred.await(acquired);
         const persisted = yield* fs.readFileString(output);
         const decoded = yield* decodeObservationLines(persisted);
+
         expect(decoded.map((observation) => observation.trial)).toEqual([1]);
         expect(decoded[0]?.result._tag).toBe("Succeeded");
         yield* Fiber.interrupt(fiber);
@@ -557,6 +597,7 @@ describe("PR-review model eval", () => {
         expect(yield* fs.readFileString(output)).toBe(persisted);
         expect(yield* Ref.get(calls)).toBe(2);
         const handle = yield* Ref.get(opened);
+
         expect(Option.isSome(handle)).toBe(true);
         if (Option.isSome(handle)) {
           expect((yield* Effect.result(handle.value.stat))._tag).toBe("Failure");
@@ -570,8 +611,10 @@ describe("PR-review model eval", () => {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-existing-" });
       const output = `${directory}/observations.jsonl`;
+
       yield* fs.writeFileString(output, "existing evidence\n");
       const calls = yield* Ref.make(0);
+
       const variant: EvalVariant<never> = {
         configuration: configuration("existing"),
         review: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(successfulOutcome)),
@@ -603,20 +646,24 @@ describe("PR-review model eval", () => {
       const calls = yield* Ref.make(0);
       const writes = yield* Ref.make(0);
       const opened = yield* Ref.make<Option.Option<FileSystem.File>>(Option.none());
+
       const variant: EvalVariant<Scope.Scope> = {
         configuration: configuration("write-failure"),
         review: () =>
           Effect.gen(function* () {
             const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+
             if (call === 1) {
               return yield* Effect.acquireRelease(Deferred.succeed(blocked, undefined), () =>
                 Deferred.succeed(released, undefined),
               ).pipe(Effect.andThen(Effect.never));
             }
             yield* Deferred.await(call === 2 ? blocked : saved);
+
             return successfulOutcome;
           }),
       };
+
       const outputFailure = PlatformError.systemError({
         _tag: "Unknown",
         module: "FileSystem",
@@ -632,7 +679,9 @@ describe("PR-review model eval", () => {
           ...fs,
           open: Effect.fn(function* (path, options) {
             const file = yield* fs.open(path, options);
+
             yield* Ref.set(opened, Option.some(file));
+
             return {
               ...file,
               writeAll: (bytes: Uint8Array) =>
@@ -654,8 +703,10 @@ describe("PR-review model eval", () => {
       });
       expect(yield* Deferred.isDone(released)).toBe(true);
       const decoded = yield* decodeObservationLines(yield* fs.readFileString(output));
+
       expect(decoded.map((observation) => observation.trial)).toEqual([2]);
       const handle = yield* Ref.get(opened);
+
       expect(Option.isSome(handle)).toBe(true);
       if (Option.isSome(handle)) {
         expect((yield* Effect.result(handle.value.stat))._tag).toBe("Failure");
@@ -669,18 +720,22 @@ describe("PR-review model eval", () => {
       const active = yield* Ref.make(0);
       const maximum = yield* Ref.make(0);
       const gate = yield* Deferred.make<void>();
+
       const successful: EvalVariant<never> = {
         configuration: configuration("successful"),
         review: () =>
           Effect.gen(function* () {
             const count = yield* Ref.updateAndGet(active, (value) => value + 1);
+
             yield* Ref.update(maximum, (value) => Math.max(value, count));
             if (count === 2) yield* Deferred.succeed(gate, undefined);
             yield* Deferred.await(gate);
             yield* Ref.update(active, (value) => value - 1);
+
             return successfulOutcome;
           }),
       };
+
       const failing: EvalVariant<never> = {
         configuration: configuration("failing"),
         review: () =>
@@ -690,11 +745,13 @@ describe("PR-review model eval", () => {
             estimatedCostMicrousd: 13,
           }),
       };
+
       const observations = yield* runEvalSuite(suite, [successful, failing], {
         trials: 4,
         concurrency: 2,
         caseIds: [],
       }).pipe(Stream.runCollect);
+
       expect(yield* Ref.get(maximum)).toBe(2);
       expect(observations).toHaveLength(8);
       expect(
@@ -717,24 +774,32 @@ describe("PR-review model eval", () => {
     Effect.gen(function* () {
       const suite = yield* makeSuite();
       const original = suite.cases[0];
+
       expect(original).toBeDefined();
       if (original === undefined) return;
 
       const wrongDigest = Schema.decodeSync(EvalInputDigest)("0".repeat(64));
+
       const corrupt = EvalSuite.make({
         version: 1,
         cases: [EvalCase.make({ ...original, inputDigest: wrongDigest })],
       });
+
       const result = yield* Effect.result(validateEvalSuite(corrupt));
+
       expect(result._tag).toBe("Failure");
 
       const encoded = Schema.encodeSync(EvalSuite)(suite);
+
       expect(Schema.decodeSync(EvalSuite)(encoded)).toEqual(suite);
+
       const changedDigest = yield* digestReviewRequest(
         ReviewRequest.make({ ...request, headRevision: "changed-head" }),
       );
+
       expect(changedDigest).not.toBe(original.inputDigest);
       const duplicateCases = { ...encoded, cases: [encoded.cases[0], encoded.cases[0]] };
+
       const duplicateDefects = {
         ...encoded,
         cases: [
@@ -747,10 +812,12 @@ describe("PR-review model eval", () => {
           },
         ],
       };
+
       const cleanWithDefect = {
         ...encoded,
         cases: [{ ...encoded.cases[0], kind: "clean-control" }],
       };
+
       const unknownEvidencePath = {
         ...encoded,
         cases: [
@@ -770,6 +837,7 @@ describe("PR-review model eval", () => {
           },
         ],
       };
+
       const malformedRevision = {
         ...encoded,
         cases: [
@@ -779,6 +847,7 @@ describe("PR-review model eval", () => {
           },
         ],
       };
+
       for (const invalid of [
         duplicateCases,
         duplicateDefects,

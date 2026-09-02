@@ -45,6 +45,7 @@ export type ProducerId = typeof ProducerId.Type;
 export const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pipe(
   Schema.brand("@effect-agent/thread/Digest"),
 );
+
 export type Digest = typeof Digest.Type;
 
 /** Adapter-owned resume cursor. Callers must not parse or synthesize it. */
@@ -55,12 +56,14 @@ export type ObservationOffset = typeof ObservationOffset.Type;
 export const CanonicalSequence = Schema.Natural.pipe(
   Schema.brand("@effect-agent/thread/CanonicalSequence"),
 );
+
 export type CanonicalSequence = typeof CanonicalSequence.Type;
 
 /** Monotonic fencing epoch for a Thread producer. */
 export const ProducerEpoch = Schema.Natural.pipe(
   Schema.brand("@effect-agent/thread/ProducerEpoch"),
 );
+
 export type ProducerEpoch = typeof ProducerEpoch.Type;
 
 const BoundedText = Schema.String.check(Schema.isMaxLength(64 * 1024));
@@ -86,6 +89,7 @@ export const SettlementFailureDiagnostic = Schema.Struct({
     parseOptions: { onExcessProperty: "error" },
   }),
 );
+
 export type SettlementFailureDiagnostic = typeof SettlementFailureDiagnostic.Type;
 
 /** Positive canonical (Run-relative, Attempt-independent) Turn number. */
@@ -108,6 +112,7 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
   const pending: Array<{ readonly value: unknown; readonly depth: number }> = [
     { value: input, depth: 0 },
   ];
+
   const visited = new WeakSet<object>();
   let nodes = 0;
   let textUnits = 0;
@@ -115,12 +120,14 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
   try {
     while (pending.length > 0) {
       const current = pending.pop();
+
       if (current === undefined) return false;
       if (current.depth > MAX_PERSISTED_JSON_DEPTH || ++nodes > MAX_PERSISTED_JSON_NODES) {
         return false;
       }
 
       const value = current.value;
+
       if (value === null || typeof value === "boolean") continue;
       if (typeof value === "number") {
         if (!Number.isFinite(value)) return false;
@@ -137,6 +144,7 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
       const entries = Array.isArray(value)
         ? value.map((entry, index) => [index, entry] as const)
         : Object.entries(value);
+
       if (entries.length > MAX_PERSISTED_JSON_COLLECTION_LENGTH) return false;
       for (const [key, entry] of entries) {
         textUnits += typeof key === "string" ? key.length : 0;
@@ -147,6 +155,7 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
 
     if (!isJson(input)) return false;
     const encoded = JSON.stringify(input);
+
     return (
       encoded !== undefined && Encoding.encodeHex(encoded).length / 2 <= MAX_PERSISTED_JSON_BYTES
     );
@@ -160,6 +169,7 @@ export const PersistedJson = Schema.declare(isPersistedJson, {
   identifier: "@effect-agent/thread/PersistedJson",
   description: "JSON bounded by canonical persistence depth, collection, node, and byte limits",
 });
+
 export type PersistedJson = typeof PersistedJson.Type;
 
 /** Schema-owned replay inputs whose individual definitions are incorporated into digests. */
@@ -348,6 +358,7 @@ export const ToolCallResolution = Schema.Literals([
   "never-started",
   "safe-retry",
 ]);
+
 export type ToolCallResolution = typeof ToolCallResolution.Type;
 
 /**
@@ -557,6 +568,7 @@ const RawSubmissionSettled = Schema.Struct({
 const isPolicyFailureProjection = Schema.is(
   Schema.Struct({ errorTag: Schema.Literal("AgentPolicyError") }),
 );
+
 const isSettlementFailureDiagnostic = Schema.is(SettlementFailureDiagnostic);
 
 const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): boolean =>
@@ -753,6 +765,7 @@ export const CanonicalRecordPayload = Schema.Union([
   SubagentLineageRecorded,
   RepairAnnotated,
 ]);
+
 export type CanonicalRecordPayload = typeof CanonicalRecordPayload.Type;
 
 /**

@@ -31,6 +31,7 @@ export const PolicyLimit = Schema.Literals([
   "cost",
   "repeated-failures",
 ]);
+
 export type PolicyLimit = typeof PolicyLimit.Type;
 
 /** A run exhausted one of its finite policy limits. */
@@ -147,4 +148,5 @@ export const AgentError = Schema.Union([
   ContextOverflowError,
   ContextBudgetError,
 ]);
+
 export type AgentError = typeof AgentError.Type;

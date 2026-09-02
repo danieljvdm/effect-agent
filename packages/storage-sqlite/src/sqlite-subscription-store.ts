@@ -33,12 +33,15 @@ import type { SqliteStorageInitializationError } from "./sqlite-thread-store.ts"
 const StoredJson = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
 const CountRow = Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) });
 const SequenceRow = Schema.Struct({ sequence: Schema.Natural });
+
 const ScanRow = Schema.Struct({
   event_scan_cursor: Schema.String,
   delivery_scan_cursor: Schema.String,
   recovery_scan_cursor: Schema.Natural,
 });
+
 const JsonRow = Schema.Struct({ record_json: StoredJson });
+
 const RegistrationRow = Schema.Struct({
   owner_id: Schema.String,
   subscription_id: Schema.String,
@@ -51,6 +54,7 @@ const RegistrationRow = Schema.Struct({
   recovery_at_millis: Schema.NullOr(Schema.Number),
   record_json: StoredJson,
 });
+
 const EventRow = Schema.Struct({
   event_id: Schema.String,
   source_name: Schema.String,
@@ -63,6 +67,7 @@ const EventRow = Schema.Struct({
   next_attempt_at_millis: Schema.Number,
   record_json: StoredJson,
 });
+
 const DeliveryRow = Schema.Struct({
   owner_id: Schema.String,
   subscription_id: Schema.String,
@@ -75,6 +80,7 @@ const DeliveryRow = Schema.Struct({
 
 const error = (reason: SubscriptionError["reason"], code: string) =>
   SubscriptionError.make({ reason, code });
+
 const unavailable = (operation: string) => error("storage", operation);
 const corrupt = (operation: string) => error("corrupt", operation);
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
@@ -111,6 +117,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
   const partition = yield* validate(SourcePartition, owned, "partition");
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* SubscriptionFailpoint;
+
   yield* initializeSqliteJournal();
   yield* sql`
     INSERT INTO effect_agent_subscription_sequences (
@@ -122,22 +129,28 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     sql
       .withTransaction(effect)
       .pipe(Effect.catchTag("SqlError", () => Effect.fail(unavailable("transaction"))));
+
   const query = <A extends object>(
     effect: Effect.Effect<ReadonlyArray<A>, SqlError>,
     code: string,
   ) => effect.pipe(Effect.mapError(() => unavailable(code)));
+
   const requirePartition = (candidate: SourcePartition, code: string) =>
     sameSourcePartition(candidate, partition)
       ? Effect.void
       : Effect.fail(error("validation", code));
+
   const requireKey = Effect.fn("SqliteSubscriptionStore.requireKey")(function* (
     input: SubscriptionKey,
     code: string,
   ) {
     const key = yield* validate(SubscriptionKey, input, code);
+
     yield* requirePartition(key.partition, code);
+
     return key;
   });
+
   const readRegistration = Effect.fn("SqliteSubscriptionStore.readRegistration")(function* (
     key: SubscriptionKey,
     code: string,
@@ -151,11 +164,15 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       code,
     );
+
     const decodedRows = yield* decodeRows(RegistrationRow, rows, code);
+
     if (decodedRows.length > 1) return yield* corrupt(code);
     const row = decodedRows[0];
+
     if (row === undefined) return null;
     const record = yield* decode(SubscriptionRecord, row.record_json, code);
+
     if (
       !sameSourcePartition(record.key.partition, partition) ||
       record.key.ownerId !== row.owner_id ||
@@ -169,8 +186,10 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       (record.recovery?.nextAttemptAtMillis ?? null) !== row.recovery_at_millis
     )
       return yield* corrupt(`${code}-projection`);
+
     return record;
   });
+
   const readEvent = Effect.fn("SqliteSubscriptionStore.readEvent")(function* (
     eventId: string,
     code: string,
@@ -183,11 +202,15 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       code,
     );
+
     const decodedRows = yield* decodeRows(EventRow, rows, code);
+
     if (decodedRows.length > 1) return yield* corrupt(code);
     const row = decodedRows[0];
+
     if (row === undefined) return null;
     const event = yield* decode(AcceptedEvent, row.record_json, code);
+
     if (
       !sameSourcePartition(event.partition, partition) ||
       event.eventId !== row.event_id ||
@@ -201,8 +224,10 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       event.nextAttemptAtMillis !== row.next_attempt_at_millis
     )
       return yield* corrupt(`${code}-projection`);
+
     return event;
   });
+
   const readDelivery = Effect.fn("SqliteSubscriptionStore.readDelivery")(function* (
     key: SubscriptionDeliveryKey,
     code: string,
@@ -217,11 +242,15 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       code,
     );
+
     const decodedRows = yield* decodeRows(DeliveryRow, rows, code);
+
     if (decodedRows.length > 1) return yield* corrupt(code);
     const row = decodedRows[0];
+
     if (row === undefined) return null;
     const delivery = yield* decode(SubscriptionDelivery, row.record_json, code);
+
     if (
       !sameSourcePartition(delivery.key.subscription.partition, partition) ||
       delivery.key.subscription.ownerId !== row.owner_id ||
@@ -232,17 +261,22 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       delivery.retry.nextAttemptAtMillis !== row.next_attempt_at_millis
     )
       return yield* corrupt(`${code}-projection`);
+
     return delivery;
   });
+
   const count = Effect.fn("SqliteSubscriptionStore.count")(function* (
     statement: Effect.Effect<ReadonlyArray<Record<string, unknown>>, SqlError>,
     code: string,
   ) {
     const rows = yield* query(statement, code);
     const decoded = yield* decodeRows(CountRow, rows, code);
+
     if (decoded.length !== 1) return yield* corrupt(code);
+
     return decoded[0].count;
   });
+
   const nextSequence = Effect.fn("SqliteSubscriptionStore.nextSequence")(function* () {
     const rows = yield* query(
       sql<Record<string, unknown>>`
@@ -252,14 +286,19 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       "advance subscription sequence",
     );
+
     const decoded = yield* decodeRows(SequenceRow, rows, "advance subscription sequence");
+
     if (decoded.length !== 1) return yield* corrupt("subscription sequence");
+
     return decoded[0].sequence;
   });
+
   const writeRegistration = Effect.fn("SqliteSubscriptionStore.writeRegistration")(function* (
     record: SubscriptionRecord,
   ) {
     const json = yield* encode(SubscriptionRecord, record, "encode subscription");
+
     yield* query(
       sql<Record<string, unknown>>`
       UPDATE effect_agent_subscriptions SET state=${record.state}, expires_at_millis=${record.configuration.expiresAtMillis},
@@ -270,10 +309,12 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       "write subscription",
     );
   });
+
   const writeEvent = Effect.fn("SqliteSubscriptionStore.writeEvent")(function* (
     event: AcceptedEvent,
   ) {
     const json = yield* encode(AcceptedEvent, event, "encode event");
+
     yield* query(
       sql<Record<string, unknown>>`
       UPDATE effect_agent_subscription_events SET cursor=${event.cursor}, routing_complete=${event.routingComplete ? 1 : 0},
@@ -283,10 +324,12 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       "write event",
     );
   });
+
   const writeDelivery = Effect.fn("SqliteSubscriptionStore.writeDelivery")(function* (
     delivery: SubscriptionDelivery,
   ) {
     const json = yield* encode(SubscriptionDelivery, delivery, "encode delivery");
+
     yield* query(
       sql<Record<string, unknown>>`
       UPDATE effect_agent_subscription_deliveries SET state=${delivery.state},
@@ -304,13 +347,17 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
   )(function* (input, inputLimits) {
     const record = yield* validate(SubscriptionRecord, input, "register-record");
     const limits = yield* validate(SubscriptionLimits, inputLimits, "register-limits");
+
     yield* requirePartition(record.key.partition, "register-partition");
+
     const result = yield* transact(
       Effect.gen(function* () {
         const existing = yield* readRegistration(record.key, "register-existing");
+
         if (existing !== null) {
           if (existing.creationFingerprint !== record.creationFingerprint)
             return yield* error("conflict", "registration-identity");
+
           return { value: existing, changed: false } as const;
         }
         if (bytes(record.configuration.context) > limits.maxContextBytes)
@@ -342,6 +389,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
           return yield* error("capacity", "owner-registrations");
         const assigned = { ...record, ordinal: yield* nextSequence() };
         const json = yield* encode(SubscriptionRecord, assigned, "encode registration");
+
         yield* failpoint.hit("subscription:register:before");
         yield* query(
           sql<Record<string, unknown>>`
@@ -353,10 +401,13 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       `,
           "insert registration",
         );
+
         return { value: assigned, changed: true } as const;
       }),
     );
+
     if (result.changed) yield* failpoint.hit("subscription:register:after");
+
     return result.value;
   });
 
@@ -375,6 +426,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
         "list subscriptions",
       );
+
       const decoded = yield* decodeRows(
         Schema.Struct({
           owner_id: Schema.String,
@@ -384,6 +436,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
         rows,
         "list subscriptions",
       );
+
       return yield* Effect.forEach(
         decoded,
         Effect.fn("SqliteSubscriptionStore.listRecord")(function* (row) {
@@ -391,8 +444,10 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
             { partition, ownerId: row.owner_id, subscriptionId: row.subscription_id },
             "list subscription",
           );
+
           if (record === null || record.ordinal !== row.ordinal)
             return yield* corrupt("list subscription projection");
+
           return record;
         }),
       );
@@ -403,18 +458,24 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     "SqliteSubscriptionStore.cancel",
   )(function* (input) {
     const key = yield* requireKey(input, "cancel-key");
+
     const result = yield* transact(
       Effect.gen(function* () {
         const current = yield* readRegistration(key, "cancel subscription");
+
         if (current === null) return yield* error("not-found", "subscription");
         if (current.state === "cancelled") return { value: current, changed: false } as const;
         const updated = { ...current, state: "cancelled" as const, recovery: null };
+
         yield* failpoint.hit("subscription:cancel:before");
         yield* writeRegistration(updated);
+
         return { value: updated, changed: true } as const;
       }),
     );
+
     if (result.changed) yield* failpoint.hit("subscription:cancel:after");
+
     return result.value;
   });
 
@@ -423,13 +484,17 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
   )(function* (input, inputLimits) {
     const event = yield* validate(AcceptedEvent, input, "accept-event");
     const limits = yield* validate(SubscriptionLimits, inputLimits, "accept-limits");
+
     yield* requirePartition(event.partition, "accept-partition");
+
     const result = yield* transact(
       Effect.gen(function* () {
         const existing = yield* readEvent(event.eventId, "accept event");
+
         if (existing !== null) {
           if (!sameAcceptedEventIdentity(existing, event))
             return yield* error("conflict", "event-identity");
+
           return { value: existing, changed: false } as const;
         }
         if (bytes(event.payload) > limits.maxPayloadBytes)
@@ -443,6 +508,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
           )) >= limits.maxEvents
         )
           return yield* error("capacity", "events");
+
         const accepted: AcceptedEvent = {
           ...event,
           cutoff: yield* nextSequence(),
@@ -450,7 +516,9 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
           routingComplete: false,
           routingFailure: null,
         };
+
         const json = yield* encode(AcceptedEvent, accepted, "encode accepted event");
+
         yield* failpoint.hit("subscription:accept:before");
         yield* query(
           sql<Record<string, unknown>>`
@@ -461,10 +529,13 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       `,
           "insert event",
         );
+
         return { value: accepted, changed: true } as const;
       }),
     );
+
     if (result.changed) yield* failpoint.hit("subscription:accept:after");
+
     return result.value;
   });
 
@@ -482,6 +553,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       "pending events",
     );
+
     return yield* decodeRows(
       Schema.Struct({ event_id: Schema.String }),
       rows,
@@ -493,10 +565,13 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     "SqliteSubscriptionStore.candidates",
   )(function* (input, limit) {
     const supplied = yield* validate(AcceptedEvent, input, "candidates-event");
+
     yield* requirePartition(supplied.partition, "candidates-partition");
     const stored = yield* readEvent(supplied.eventId, "candidates event");
+
     if (stored === null) return yield* error("not-found", "event");
     if (!sameAcceptedEventIdentity(stored, supplied)) return yield* error("conflict", "event");
+
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, ordinal FROM effect_agent_subscriptions WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
@@ -505,6 +580,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       "subscription candidates",
     );
+
     const decoded = yield* decodeRows(
       Schema.Struct({
         owner_id: Schema.String,
@@ -514,6 +590,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       rows,
       "subscription candidates",
     );
+
     return yield* Effect.forEach(
       decoded,
       Effect.fn("SqliteSubscriptionStore.candidateRecord")(function* (row) {
@@ -521,8 +598,10 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
           { partition, ownerId: row.owner_id, subscriptionId: row.subscription_id },
           "subscription candidate",
         );
+
         if (record === null || record.ordinal !== row.ordinal)
           return yield* corrupt("subscription candidate projection");
+
         return record;
       }),
     );
@@ -532,6 +611,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     delivery: SubscriptionDelivery,
   ) {
     const json = yield* encode(SubscriptionDelivery, delivery, "encode selected delivery");
+
     yield* query(
       sql<Record<string, unknown>>`
       INSERT INTO effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, event_id,
@@ -547,18 +627,23 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     "SqliteSubscriptionStore.select",
   )(function* (inputEvent, inputDeliveries, cursor, complete, nowMillis, inputLimits) {
     const supplied = yield* validate(AcceptedEvent, inputEvent, "select-event");
+
     const deliveries = yield* validate(
       Schema.Array(SubscriptionDelivery),
       inputDeliveries,
       "select-deliveries",
     );
+
     const limits = yield* validate(SubscriptionLimits, inputLimits, "select-limits");
+
     yield* requirePartition(supplied.partition, "select-partition");
     for (const candidate of deliveries)
       yield* requirePartition(candidate.key.subscription.partition, "select-delivery-partition");
+
     const changed = yield* transact(
       Effect.gen(function* () {
         const accepted = yield* readEvent(supplied.eventId, "select event");
+
         if (accepted === null) return yield* error("not-found", "event");
         if (!sameAcceptedEventIdentity(accepted, supplied) || accepted.cursor !== supplied.cursor)
           return yield* error("conflict", "event-cursor");
@@ -568,8 +653,10 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
         yield* failpoint.hit("subscription:select:before");
         const effectiveNowMillis = Math.max(nowMillis, yield* Clock.currentTimeMillis);
         const additions: Array<{ delivery: SubscriptionDelivery; record: SubscriptionRecord }> = [];
+
         for (const delivery of deliveries) {
           const record = yield* readRegistration(delivery.key.subscription, "select registration");
+
           if (record === null) return yield* error("not-found", "subscription");
           if (
             !subscriptionDeliveryCanSelect(delivery, record, accepted) ||
@@ -581,6 +668,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
           )
             return yield* error("conflict", "selection");
           const existing = yield* readDelivery(delivery.key, "select existing delivery");
+
           if (existing !== null) {
             if (!sameDeliveryIdentity(existing, delivery))
               return yield* error("conflict", "delivery-identity");
@@ -589,12 +677,14 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
           if (!subscriptionCanSelect(record, accepted, effectiveNowMillis, false)) continue;
           additions.push({ delivery, record });
         }
+
         const total = yield* count(
           sql<
             Record<string, unknown>
           >`SELECT COUNT(*) AS count FROM effect_agent_subscription_deliveries WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
           "count deliveries",
         );
+
         if (total + additions.length > limits.maxDeliveries)
           return yield* error("capacity", "deliveries");
         for (const ownerId of new Set(additions.map(({ record }) => record.key.ownerId))) {
@@ -604,6 +694,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
             >`SELECT COUNT(*) AS count FROM effect_agent_subscription_deliveries WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND owner_id=${ownerId}`,
             "count owner deliveries",
           );
+
           if (
             existing + additions.filter(({ record }) => record.key.ownerId === ownerId).length >
             limits.maxDeliveriesPerOwner
@@ -616,9 +707,11 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
             yield* writeRegistration({ ...addition.record, state: "consumed", recovery: null });
         }
         yield* writeEvent({ ...accepted, cursor, routingComplete: complete, routingFailure: null });
+
         return true;
       }),
     );
+
     if (changed) yield* failpoint.hit("subscription:select:after");
   });
 
@@ -628,12 +721,15 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     const supplied = yield* validate(AcceptedEvent, inputEvent, "catch-up-event");
     const delivery = yield* validate(SubscriptionDelivery, inputDelivery, "catch-up-delivery");
     const limits = yield* validate(SubscriptionLimits, inputLimits, "catch-up-limits");
+
     yield* requirePartition(supplied.partition, "catch-up-partition");
     yield* requirePartition(delivery.key.subscription.partition, "catch-up-delivery-partition");
+
     const changed = yield* transact(
       Effect.gen(function* () {
         const accepted = yield* readEvent(supplied.eventId, "catch-up event");
         const record = yield* readRegistration(delivery.key.subscription, "catch-up subscription");
+
         if (accepted === null || record === null)
           return yield* error("not-found", accepted === null ? "event" : "subscription");
         if (
@@ -646,13 +742,16 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
         )
           return yield* error("conflict", "catch-up-identity");
         const existing = yield* readDelivery(delivery.key, "catch-up existing delivery");
+
         if (existing !== null) {
           if (!sameDeliveryIdentity(existing, delivery))
             return yield* error("conflict", "delivery-identity");
+
           return false;
         }
         yield* failpoint.hit("subscription:catch-up:before");
         const effectiveNowMillis = Math.max(nowMillis, yield* Clock.currentTimeMillis);
+
         if (!subscriptionCanSelect(record, accepted, effectiveNowMillis, true))
           return yield* error("conflict", "catch-up-eligibility");
         if (
@@ -675,9 +774,11 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
           return yield* error("capacity", "owner-deliveries");
         yield* insertDelivery(delivery);
         yield* writeRegistration({ ...record, state: "consumed", recovery: null });
+
         return true;
       }),
     );
+
     if (changed) yield* failpoint.hit("subscription:catch-up:after");
   });
 
@@ -688,9 +789,11 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
       code === undefined
         ? "routing-failed"
         : yield* validate(SubscriptionName, code, "routing-failure");
+
     yield* transact(
       Effect.gen(function* () {
         const accepted = yield* readEvent(eventId, "defer event");
+
         if (accepted === null) return yield* error("not-found", "event");
         yield* failpoint.hit("subscription:defer-event:before");
         yield* writeEvent({ ...accepted, nextAttemptAtMillis, routingFailure });
@@ -703,7 +806,9 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     "SqliteSubscriptionStore.delivery",
   )(function* (input) {
     const key = yield* validate(SubscriptionDeliveryKey, input, "delivery-key");
+
     yield* requirePartition(key.subscription.partition, "delivery-partition");
+
     return yield* readDelivery(key, "get delivery");
   });
 
@@ -718,11 +823,13 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       "pending deliveries",
     );
+
     const rowSchema = Schema.Struct({
       owner_id: Schema.String,
       subscription_id: Schema.String,
       event_id: Schema.String,
     });
+
     return yield* decodeRows(rowSchema, rows, "pending delivery keys").pipe(
       Effect.map((items) =>
         items.map((item) => ({
@@ -737,6 +844,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     "SqliteSubscriptionStore.listDeliveries",
   )(function* (input, after, limit) {
     const key = yield* requireKey(input, "list-deliveries-key");
+
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT record_json FROM effect_agent_subscription_deliveries WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
@@ -744,7 +852,9 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       "list deliveries",
     );
+
     const decoded = yield* decodeRows(JsonRow, rows, "list deliveries");
+
     return yield* Effect.forEach(decoded, (row) =>
       decode(SubscriptionDelivery, row.record_json, "list delivery"),
     );
@@ -756,32 +866,41 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     const key = yield* validate(SubscriptionDeliveryKey, inputKey, "change-delivery-key");
     const deliveryId = yield* validate(Digest, inputDeliveryId, "change-delivery-id");
     const change = yield* validate(DeliveryChange, inputChange, "change-delivery-change");
+
     yield* requirePartition(key.subscription.partition, "change-delivery-partition");
+
     const result = yield* transact(
       Effect.gen(function* () {
         const existing = yield* readDelivery(key, "change delivery");
         const record = yield* readRegistration(key.subscription, "change delivery subscription");
+
         if (existing === null || record === null)
           return yield* error("not-found", existing === null ? "delivery" : "subscription");
         yield* failpoint.hit(`subscription:delivery-${change._tag.toLowerCase()}:before`);
+
         const effectiveChange =
           change._tag === "Prepare"
             ? { ...change, nowMillis: Math.max(change.nowMillis, yield* Clock.currentTimeMillis) }
             : change;
+
         const transition = applySubscriptionDeliveryChange(
           existing,
           record,
           deliveryId,
           effectiveChange,
         );
+
         if (Result.isFailure(transition)) return yield* transition.failure;
         if (transition.success === existing) return { value: existing, changed: false } as const;
         yield* writeDelivery(transition.success);
+
         return { value: transition.success, changed: true } as const;
       }),
     );
+
     if (result.changed)
       yield* failpoint.hit(`subscription:delivery-${change._tag.toLowerCase()}:after`);
+
     return result.value;
   });
 
@@ -797,11 +916,13 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       "recovering subscriptions",
     );
+
     const rowSchema = Schema.Struct({
       owner_id: Schema.String,
       subscription_id: Schema.String,
       ordinal: Schema.Natural,
     });
+
     return yield* decodeRows(rowSchema, rows, "recovering subscription keys").pipe(
       Effect.map((items) =>
         items.map((item) => ({
@@ -816,9 +937,11 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     "SqliteSubscriptionStore.deferRecovery",
   )(function* (input, recovery) {
     const key = yield* requireKey(input, "defer-recovery-key");
+
     yield* transact(
       Effect.gen(function* () {
         const record = yield* readRegistration(key, "defer recovery");
+
         if (record === null) return yield* error("not-found", "subscription");
         yield* failpoint.hit("subscription:defer-recovery:before");
         yield* writeRegistration({
@@ -839,8 +962,11 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     `,
       "read subscription scan cursors",
     );
+
     const decoded = yield* decodeRows(ScanRow, rows, "read subscription scan cursors");
+
     if (decoded.length !== 1) return yield* corrupt("subscription scan cursors");
+
     return {
       events: decoded[0].event_scan_cursor,
       deliveries: decoded[0].delivery_scan_cursor,
@@ -852,6 +978,7 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
     "SqliteSubscriptionStore.advanceScanCursors",
   )(function* (input) {
     const cursors = yield* validate(SubscriptionScanCursors, input, "scan-cursors");
+
     yield* transact(
       Effect.gen(function* () {
         yield* failpoint.hit("subscription:advance-scan-cursors:before");
@@ -897,7 +1024,9 @@ const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function
 
   const nextDeadline = Effect.gen(function* () {
     const cursors = yield* readScanCursors;
+
     if (cursors.events !== "" || cursors.deliveries !== "" || cursors.recovery !== 0) return 0;
+
     return yield* indexedDeadline;
   });
 

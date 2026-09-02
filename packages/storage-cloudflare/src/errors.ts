@@ -155,6 +155,7 @@ export const DoStorageFailpointLocation = Schema.Literals([
   "ledger:child-settled:before",
   "ledger:child-settled:after",
 ]);
+
 export type DoStorageFailpointLocation = typeof DoStorageFailpointLocation.Type;
 
 /** Deterministic test-only fault or pause injected at a Durable Object storage boundary. */

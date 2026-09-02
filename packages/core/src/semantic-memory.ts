@@ -5,9 +5,11 @@ import { MemoryNamespace } from "./memory-namespace.ts";
 import { MemoryPassage } from "./memory.ts";
 
 const Identity = Schema.NonEmptyString.check(Schema.isMaxLength(256));
+
 const Positive = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
 );
+
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const Vector = Schema.Array(Schema.Finite).check(Schema.isMinLength(1), Schema.isMaxLength(4_096));
 
@@ -50,6 +52,7 @@ export type MemoryIndexSource<Namespace extends MemoryNamespace.Any = MemoryName
   MemoryIndexSourceWire,
   "key"
 > & { readonly key: MemoryKey<Namespace> };
+
 export const MemoryIndexSource = {
   Wire: MemoryIndexSourceWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -71,6 +74,7 @@ class MemoryIndexReplacementWire extends Schema.Class<MemoryIndexReplacementWire
 
 export type MemoryIndexReplacement<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> =
   Omit<MemoryIndexReplacementWire, "source"> & { readonly source: MemoryIndexSource<Namespace> };
+
 export const MemoryIndexReplacement = {
   Wire: MemoryIndexReplacementWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -96,6 +100,7 @@ class MemoryIndexCandidateWire extends Schema.Class<MemoryIndexCandidateWire>(
 
 export type MemoryIndexCandidate<Namespace extends MemoryNamespace.Any = MemoryNamespace.Any> =
   Omit<MemoryIndexCandidateWire, "key"> & { readonly key: MemoryKey<Namespace> };
+
 export const MemoryIndexCandidate = {
   Wire: MemoryIndexCandidateWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -120,6 +125,7 @@ export type MemoryIndexQuery<Namespace extends MemoryNamespace.Any = MemoryNames
   MemoryIndexQueryWire,
   "namespace"
 > & { readonly namespace: Namespace };
+
 export const MemoryIndexQuery = {
   Wire: MemoryIndexQueryWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -141,6 +147,7 @@ export type MemoryIndexSearch<Namespace extends MemoryNamespace.Any = MemoryName
   MemoryIndexSearchWire,
   "candidates"
 > & { readonly candidates: ReadonlyArray<MemoryIndexCandidate<Namespace>> };
+
 export const MemoryIndexSearch = {
   Wire: MemoryIndexSearchWire,
   make: <Namespace extends MemoryNamespace.Any>(
@@ -213,12 +220,15 @@ export class SemanticMemoryIndex extends Context.Service<
         Namespace extends MemoryNamespace.Any,
       >(query: MemoryIndexQuery<Namespace>) {
         const result = yield* adapter.search(query);
+
         const checked = yield* Schema.decodeUnknownEffect(MemoryIndexSearch.Wire)(result).pipe(
           Effect.mapError(() =>
             MemoryIndexError.make({ operation: "restore index search", reason: "corrupt" }),
           ),
         );
+
         const candidates: Array<MemoryIndexCandidate<Namespace>> = [];
+
         for (const candidate of checked.candidates) {
           if (!MemoryNamespace.equals(candidate.key.namespace, query.namespace))
             return yield* MemoryIndexError.make({
@@ -232,6 +242,7 @@ export class SemanticMemoryIndex extends Context.Service<
             }),
           );
         }
+
         return MemoryIndexSearch.make({ ...checked, candidates });
       }),
     };

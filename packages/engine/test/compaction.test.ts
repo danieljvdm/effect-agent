@@ -113,6 +113,7 @@ const overflowFailure = (description: string): AiError.AiError =>
 /** Scripted multi-call model; an entry may fail the whole request typed. */
 const scriptedModel = (script: ReadonlyArray<ScriptEntry>, name = "compaction") => {
   const requests: Array<CapturedRequest> = [];
+
   const model = Model.make(
     "scripted",
     name,
@@ -122,19 +123,23 @@ const scriptedModel = (script: ReadonlyArray<ScriptEntry>, name = "compaction") 
         generateText: () => Effect.succeed([]),
         streamText: (request) => {
           const index = Math.min(requests.length, script.length - 1);
+
           requests.push({
             prompt: request.prompt,
             toolCount: request.tools.length,
             toolChoice: request.toolChoice,
           });
           const entry = script[index];
+
           if (entry === undefined) return Stream.empty;
           if ("fail" in entry) return Stream.fail(overflowFailure(entry.fail));
+
           return Stream.fromIterable(entry);
         },
       }),
     ),
   );
+
   return { model, requests };
 };
 
@@ -142,6 +147,7 @@ const messageText = (message: Prompt.Prompt["content"][number]): string => {
   if (typeof message.content === "string") {
     return message.content;
   }
+
   return message.content
     .map((part) => ("text" in part && typeof part.text === "string" ? part.text : ""))
     .join("");
@@ -165,10 +171,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -176,6 +184,7 @@ const SearchTool = Tool.make("search", {
   parameters: Schema.Struct({}),
   success: Schema.String,
 });
+
 const searchToolkit = Toolkit.make(SearchTool);
 
 const answerOutput = Schema.Struct({ answer: Schema.String });
@@ -204,6 +213,7 @@ const basePolicy = {
 const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup) =>
   Effect.gen(function* () {
     const { policy, script, results, commitCompaction } = setup;
+
     const definition = Agent.make("compaction-agent", {
       input: Schema.Struct({ question: Schema.String }),
       output,
@@ -211,15 +221,19 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
       toolkit: searchToolkit,
       policy,
     });
+
     const { model, requests } = scriptedModel(script);
     const callCount = yield* Ref.make(0);
+
     const toolLayer = searchToolkit.toLayer({
       search: () =>
         Ref.getAndUpdate(callCount, (count) => count + 1).pipe(
           Effect.map((count) => results[count] ?? "found"),
         ),
     });
+
     const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
     const durability: RunDurabilityHook | undefined =
       commitCompaction === undefined
         ? undefined
@@ -233,6 +247,7 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
             commitCompaction,
             noteTurnUsage: setup.noteTurnUsage ?? (() => Effect.void),
           };
+
     const exit = yield* AgentRuntime.stream(
       Agent.withModel(definition, model),
       { question: "compact?" },
@@ -251,6 +266,7 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
       Effect.provide(toolLayer),
       Effect.exit,
     );
+
     return { exit, requests, events: yield* Ref.get(events) };
   });
 
@@ -288,16 +304,19 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           [finalParts("Application summary", usageOf(50, 20))],
           "summary-only",
         );
+
         const commits: Array<RunCompactionCommit> = [];
         const usage: Array<RunUsageDelta> = [];
         const estimates: Array<number> = [];
         const references = yield* Ref.make(0);
+
         const baseCompactor = Layer.effect(
           ContextCompactor,
           Effect.map(summaryModel.model.captureRequirements, (model) =>
             ContextCompactor.of({
               estimate: (messages) => {
                 estimates.push(messages.length);
+
                 return estimatePromptTokens(messages);
               },
               compact: (request) =>
@@ -318,10 +337,12 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             }),
           ),
         );
+
         const summaryDecorator = Layer.effect(
           ContextCompactor,
           Effect.gen(function* () {
             const underlying = yield* ContextCompactor;
+
             return ContextCompactor.of({
               estimate: underlying.estimate,
               compact: (request) =>
@@ -339,16 +360,21 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             });
           }),
         );
+
         const compactor = summaryDecorator.pipe(Layer.provide(baseCompactor));
+
         const decoratorRequiresBase: ContextCompactor extends Layer.Services<
           typeof summaryDecorator
         >
           ? true
           : false = true;
+
         const compositionClosesBase: ContextCompactor extends Layer.Services<typeof compactor>
           ? false
           : true = true;
+
         expect([decoratorRequiresBase, compositionClosesBase]).toEqual([true, true]);
+
         const result = yield* driveRun({
           ...replacementSetup,
           policy: AgentPolicy.make({
@@ -382,6 +408,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             ).pipe(Layer.provide(compactor)),
           ),
         );
+
         expect(Exit.isSuccess(result.exit)).toBe(true);
         expect(result.requests).toHaveLength(3);
         expect(summaryModel.requests).toHaveLength(1);
@@ -400,6 +427,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         );
         expect(result.requests[2]?.toolChoice).toBe("none");
         const outgoing = result.requests[2]?.prompt ?? Prompt.empty;
+
         expect(promptText(outgoing)).toContain("Application summary");
         expect(promptText(outgoing)).toContain("Research the question with the search tool");
         expect(promptText(outgoing)).toContain("compact?");
@@ -430,17 +458,23 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           "test/SummaryConfig",
         ) {}
         class SummaryFailure extends Schema.TaggedError<SummaryFailure>()("SummaryFailure", {}) {}
+
         const source = Prompt.fromMessages([
           Prompt.assistantMessage({ content: [Prompt.textPart({ text: "older history" })] }),
           Prompt.userMessage({ content: [Prompt.textPart({ text: "latest input" })] }),
         ]);
+
         const compactor = yield* ContextCompactor;
+
         const summarize = () =>
           Effect.gen(function* () {
             const config = yield* SummaryConfig;
+
             if (config.text === "") return yield* SummaryFailure.make({});
+
             return config.text;
           });
+
         const program = compactor
           .compact({
             source,
@@ -452,10 +486,13 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             summarize,
           })
           .pipe(Stream.runCollect);
+
         const errorProof: SummaryFailure extends Effect.Error<typeof program> ? true : false = true;
+
         const requirementProof: SummaryConfig extends Effect.Services<typeof program>
           ? true
           : false = true;
+
         const model = Model.make(
           "test",
           "configured",
@@ -463,6 +500,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             LanguageModel.LanguageModel,
             Effect.gen(function* () {
               const config = yield* SummaryConfig;
+
               return yield* LanguageModel.make({
                 generateText: () => Effect.succeed([]),
                 streamText: () => Stream.fromIterable(finalParts(config.text)),
@@ -470,10 +508,13 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             }),
           ),
         );
+
         const configured = ContextCompactor.layerWithModel(model);
+
         const modelRequirements: SummaryConfig extends Layer.Services<typeof configured>
           ? true
           : false = true;
+
         expect([errorProof, requirementProof, modelRequirements]).toEqual([true, true, true]);
         expect(
           yield* program.pipe(Effect.provideService(SummaryConfig, { text: "harness summary" })),
@@ -502,6 +543,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           }),
         ]) {
           const commits: Array<RunCompactionCommit> = [];
+
           const result = yield* driveRun({
             ...replacementSetup,
             commitCompaction: (commit) =>
@@ -509,6 +551,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                 commits.push(commit);
               }),
           }).pipe(Effect.provide(Layer.succeed(ContextCompactor, compactor)));
+
           expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
           expect(result.requests.length).toBeLessThanOrEqual(2);
           expect(commits).toEqual([]);
@@ -521,6 +564,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
     () =>
       Effect.gen(function* () {
         const expected = CompactionError.make({ message: "summary refused" });
+
         const typed = yield* driveRun(replacementSetup).pipe(
           Effect.provide(
             Layer.succeed(ContextCompactor, {
@@ -529,7 +573,9 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             }),
           ),
         );
+
         expect(failureFrom(typed.exit)).toBe(expected);
+
         const defect = yield* driveRun(replacementSetup).pipe(
           Effect.provide(
             Layer.succeed(ContextCompactor, {
@@ -538,11 +584,14 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             }),
           ),
         );
+
         expect(Exit.isFailure(defect.exit) && Cause.hasDies(defect.exit.cause)).toBe(true);
         const failedModel = scriptedModel([{ fail: "summary provider unavailable" }]);
+
         const failed = yield* driveRun(replacementSetup).pipe(
           Effect.provide(ContextCompactor.layerWithModel(failedModel.model)),
         );
+
         expect(failureFrom(failed.exit)).toBeInstanceOf(AiError.AiError);
         expect(typed.requests).toHaveLength(2);
         expect(defect.requests).toHaveLength(2);
@@ -559,6 +608,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             const entered = yield* Deferred.make<void>();
             const closed: Array<string> = [];
             const commits: Array<RunCompactionCommit> = [];
+
             const model = Model.make(
               "test",
               "blocked-summary",
@@ -579,6 +629,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                 ),
               ),
             );
+
             const custom = Layer.effect(
               ContextCompactor,
               Effect.acquireRelease(
@@ -603,6 +654,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                   }),
               ),
             );
+
             const fiber = yield* driveRun({
               ...replacementSetup,
               commitCompaction: (commit) =>
@@ -615,12 +667,14 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
               ),
               Effect.forkChild,
             );
+
             yield* Deferred.await(entered);
             if (termination === "interrupt") {
               yield* Fiber.interrupt(fiber);
             } else {
               yield* TestClock.adjust("1 minute");
               const result = yield* Fiber.join(fiber);
+
               expect(failureFrom(result.exit)).toMatchObject({
                 _tag: "AgentPolicyError",
                 limit: "duration",
@@ -645,10 +699,12 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         "too many tokens in the request",
         "maximum context window reached",
       ];
+
       for (const text of positives) {
         expect(isContextOverflowMessage(text)).toBe(true);
       }
       const negatives = ["rate limit exceeded", "invalid api key", "content filtered", ""];
+
       for (const text of negatives) {
         expect(isContextOverflowMessage(text)).toBe(false);
       }
@@ -664,6 +720,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
       // Per-message clip applies to plain text, not only tool results.
       const oversized = renderForSummary([userMessage(`start${"x".repeat(10_000)}end`)], undefined);
+
       expect(oversized.length).toBeLessThan(3_000);
 
       // Total budget: many clipped messages exceed it; middle-out retention
@@ -671,7 +728,9 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
       const many = Array.from({ length: 80 }, (_, index) =>
         userMessage(`marker-${index} ${"y".repeat(1_900)}`),
       );
+
       const rendered = renderForSummary(many, "previous summary text");
+
       expect(rendered.length + COMPACTION_INSTRUCTION.length).toBeLessThanOrEqual(
         SUMMARY_INPUT_BUDGET,
       );
@@ -691,7 +750,9 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         role: "user",
         content: [{ type: "text", text: "hello 🌍" }],
       } as unknown as Prompt.Message;
+
       const one = estimateMessageTokens(message);
+
       expect(one).toBeGreaterThan(0);
       expect(estimateMessageTokens(message)).toBe(one);
       expect(estimatePromptTokens([message, message])).toBe(one * 2);
@@ -709,6 +770,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           contextTokenLimit: 2_000,
           compaction: CompactionPolicy.make({ keepRecentTokens: 1_200 }),
         });
+
         const { exit, requests, events } = yield* driveRun({
           policy,
           script: [
@@ -722,13 +784,16 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         expect(Exit.isSuccess(exit)).toBe(true);
         expect(requests).toHaveLength(3);
         const third = requests[2];
+
         if (third === undefined) throw new Error("expected a third model request");
         const results = toolResultValues(third.prompt);
+
         expect(results).toHaveLength(2);
         expect(results[0]).toBe(CLEARED_TOOL_RESULT);
         expect(results[1]).toBe("b".repeat(4_000));
 
         const performed = compactionEvents(events);
+
         expect(performed).toHaveLength(1);
         expect(performed[0]?.kind).toBe("clear-tool-results");
         expect(performed[0]?.tokensAfterEstimate).toBeLessThan(
@@ -747,6 +812,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           completionReserveTokens: 500,
           compaction: CompactionPolicy.make({ keepRecentTokens: 200, mode: "prune" }),
         });
+
         const { exit, requests, events } = yield* driveRun({
           policy,
           script: [
@@ -760,6 +826,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         expect(Exit.isSuccess(exit)).toBe(true);
         expect(requests).toHaveLength(3);
         const finalRequest = requests[2];
+
         if (finalRequest === undefined) throw new Error("expected a final request");
         expect(toolResultValues(finalRequest.prompt)).toEqual([CLEARED_TOOL_RESULT, "recent"]);
         expect(compactionEvents(events).map((event) => event.kind)).toContain("clear-tool-results");
@@ -775,6 +842,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         contextTokenLimit: 2_000,
         compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
       });
+
       const { exit, requests, events } = yield* driveRun({
         policy,
         script: [
@@ -840,6 +908,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         Effect.gen(function* () {
           const commits: Array<RunCompactionCommit> = [];
           const usage: Array<RunTurnUsage> = [];
+
           const { exit, requests, events } = yield* driveRun({
             policy: replacementSetup.policy,
             script: [
@@ -860,6 +929,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                 usage.push(call);
               }),
           });
+
           expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
           expect(requests).toHaveLength(5);
           expect(compactionEvents(events).map((event) => event.kind)).toEqual(["summarize"]);
@@ -870,6 +940,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             expect(usage[4]?.usage.outputTokens.total).toBe(20);
           }
           const lastRequest = requests[4];
+
           if (lastRequest === undefined) throw new Error("expected rejected summarizer request");
           expect(promptText(lastRequest.prompt)).toContain(
             "[Previous summary]\nGoal: preserved summary",
@@ -881,11 +952,13 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
   it.effect("RUN-026: summarizes when configured, rebuilding instructions + summary + tail", () =>
     Effect.gen(function* () {
       const commits = yield* Ref.make<ReadonlyArray<RunCompactionCommit>>([]);
+
       const policy = AgentPolicy.make({
         ...basePolicy,
         contextTokenLimit: 1_500,
         compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
       });
+
       const { exit, requests, events } = yield* driveRun({
         policy,
         script: [
@@ -903,8 +976,10 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
       // Request 3 is the summarizer call: instruction + rendered transcript.
       const summarizer = requests[2];
+
       if (summarizer === undefined) throw new Error("expected a summarizer request");
       const summarizerText = promptText(summarizer.prompt);
+
       expect(summarizerText).toContain(COMPACTION_INSTRUCTION);
       expect(summarizerText).toContain("[tool result search:");
       expect(summarizer.toolCount).toBe(0);
@@ -912,18 +987,23 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
       // Request 4 is the compacted turn: instructions survive, the summary
       // replaces the covered span, the recent tail stays verbatim.
       const compacted = requests[3];
+
       if (compacted === undefined) throw new Error("expected a compacted request");
       const compactedText = promptText(compacted.prompt);
+
       expect(compactedText).toContain("Research the question with the search tool");
       expect(compactedText).toContain(`${COMPACTION_SUMMARY_PREFIX}Goal: find data`);
       const results = toolResultValues(compacted.prompt);
+
       expect(results).toEqual(["b".repeat(4_000)]);
 
       const performed = compactionEvents(events);
+
       expect(performed).toHaveLength(1);
       expect(performed[0]?.kind).toBe("summarize");
 
       const observedCommits = yield* Ref.get(commits);
+
       expect(observedCommits).toHaveLength(1);
       expect(observedCommits[0]?.kind).toBe("summarize");
       expect(observedCommits[0]?.turn).toBe(3);
@@ -942,6 +1022,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           contextTokenLimit: 1_500,
           compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
         });
+
         const { exit, requests } = yield* driveRun({
           policy,
           script: [
@@ -960,8 +1041,10 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         expect(requests).toHaveLength(6);
 
         const second = requests[4];
+
         if (second === undefined) throw new Error("expected a second summarizer request");
         const secondText = promptText(second.prompt);
+
         // The second summarize carries the previous summary and the newly
         // covered span — never the span the first summarize already folded.
         expect(secondText).toContain("[Previous summary]");
@@ -978,6 +1061,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         contextTokenLimit: 500,
         compaction: CompactionPolicy.make({ keepRecentTokens: 1_000, mode: "prune" }),
       });
+
       const { exit, requests, events } = yield* driveRun({
         policy,
         script: [
@@ -989,6 +1073,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
       expect(Exit.isFailure(exit)).toBe(true);
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(ContextBudgetError);
       expect(requests).toHaveLength(1);
       expect(compactionEvents(events)).toHaveLength(0);
@@ -1005,11 +1090,13 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         const paddedOutput = Schema.Struct({ answer: Schema.String }).annotate({
           description: "p".repeat(12_000),
         });
+
         const policy = AgentPolicy.make({
           ...basePolicy,
           contextTokenLimit: 5_000,
           compaction: CompactionPolicy.make({ keepRecentTokens: 200, mode: "prune" }),
         });
+
         const bigResult = "r".repeat(6_000);
         const recentResult = "s".repeat(8_000);
 
@@ -1022,6 +1109,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           ],
           results: [bigResult, recentResult],
         });
+
         expect(Exit.isFailure(reserved.exit)).toBe(true);
         expect(failureFrom(reserved.exit)).toBeInstanceOf(ContextBudgetError);
         // The contract plus the protected newest result cannot reach the
@@ -1042,9 +1130,11 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             results: [bigResult, recentResult],
           },
         );
+
         expect(Exit.isSuccess(control.exit)).toBe(true);
         expect(compactionEvents(control.events)).toHaveLength(0);
         const controlFinal = control.requests.at(-1);
+
         if (controlFinal === undefined) throw new Error("expected a final control request");
         expect(toolResultValues(controlFinal.prompt)).toContain(bigResult);
       }),
@@ -1053,6 +1143,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
   it.effect("RUN-026: never compacts without a contextTokenLimit", () =>
     Effect.gen(function* () {
       const policy = AgentPolicy.make({ ...basePolicy });
+
       const { exit, requests, events } = yield* driveRun({
         policy,
         script: [
@@ -1066,6 +1157,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(requests).toHaveLength(3);
       const third = requests[2];
+
       if (third === undefined) throw new Error("expected a third model request");
       expect(toolResultValues(third.prompt)).toEqual(["a".repeat(4_000), "b".repeat(4_000)]);
       expect(compactionEvents(events)).toHaveLength(0);
@@ -1085,6 +1177,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         Effect.gen(function* () {
           const commits: Array<RunCompactionCommit> = [];
           const passes: Array<boolean> = [];
+
           const result = yield* driveRun({
             policy: AgentPolicy.make({ ...basePolicy, contextTokenLimit: 800, runStatus: "off" }),
             script: [
@@ -1120,7 +1213,9 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                     passes.push(request.forceSummarize);
                     const kind = request.forceSummarize ? scenario.retry : scenario.first;
                     const through = request.forceSummarize ? 6 : 4;
+
                     if (kind === "clear-tool-results") return Stream.succeed({ kind, through });
+
                     return Stream.fromEffect(
                       request.summarize(
                         Prompt.fromMessages([
@@ -1139,6 +1234,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
           const canRetry =
             scenario.first === "clear-tool-results" && scenario.retry === "summarize";
+
           expect(commits.map(({ turn, kind }) => [turn, kind])).toEqual(
             canRetry
               ? [
@@ -1180,6 +1276,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         contextTokenLimit: 100_000,
         compaction: CompactionPolicy.make({ keepRecentTokens: 300 }),
       });
+
       const { exit, requests, events } = yield* driveRun({
         policy,
         script: [
@@ -1195,9 +1292,11 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(requests).toHaveLength(5);
       const performed = compactionEvents(events);
+
       expect(performed).toHaveLength(1);
       expect(performed[0]?.kind).toBe("summarize");
       const retried = requests[4];
+
       if (retried === undefined) throw new Error("expected a retried model request");
       expect(promptText(retried.prompt)).toContain(COMPACTION_SUMMARY_PREFIX);
       expect(toolResultValues(retried.prompt)).toEqual(["b".repeat(4_000)]);
@@ -1211,6 +1310,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         contextTokenLimit: 100_000,
         compaction: CompactionPolicy.make({ keepRecentTokens: 300 }),
       });
+
       const { exit, requests } = yield* driveRun({
         policy,
         script: [
@@ -1225,6 +1325,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
       expect(requests).toHaveLength(5);
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(ContextOverflowError);
       if (failure instanceof ContextOverflowError) {
         expect(failure.retried).toBe(true);
@@ -1239,6 +1340,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         contextTokenLimit: 20_000,
         compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
       });
+
       const { exit, requests } = yield* driveRun({
         policy,
         script: [
@@ -1262,6 +1364,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
     () =>
       Effect.gen(function* () {
         const policy = AgentPolicy.make({ ...basePolicy });
+
         const { exit, requests } = yield* driveRun({
           policy,
           script: [{ fail: "This request exceeds the maximum context length" }],
@@ -1270,6 +1373,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
         expect(requests).toHaveLength(1);
         const failure = failureFrom(exit);
+
         expect(failure).toBeInstanceOf(ContextOverflowError);
         if (failure instanceof ContextOverflowError) {
           expect(failure.retried).toBe(false);
@@ -1283,6 +1387,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         ...basePolicy,
         contextTokenLimit: 100_000,
       });
+
       const { exit, requests } = yield* driveRun({
         policy,
         script: [{ fail: "rate limited, slow down" }],
@@ -1291,6 +1396,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
       expect(requests).toHaveLength(1);
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(AiError.AiError);
     }),
   );

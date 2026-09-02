@@ -240,6 +240,7 @@ const formatUtc = (value: DateTime.Utc): string => DateTime.formatIso(value);
 export const renderRecoveryExplanation = (explanation: RecoveryExplanation): string => {
   const submission = explanation.submission;
   const evidence = explanation.evidence;
+
   const lines: Array<string> = [
     `Submission ${submission.submissionId} (thread ${submission.threadId})`,
     `  state: ${submission.state}  queue: ${submission.queueSequence}  age: ${submission.ageSeconds}s`,
@@ -247,6 +248,7 @@ export const renderRecoveryExplanation = (explanation: RecoveryExplanation): str
       submission.readyAt === undefined ? "" : `  ready: ${formatUtc(submission.readyAt)}`
     }`,
   ];
+
   if (submission.parentLinkage !== undefined) {
     lines.push(
       `  attached child of ${submission.parentLinkage.parentSubmissionId} (tool call ${submission.parentLinkage.parentToolCallId})`,
@@ -320,6 +322,7 @@ export const renderRecoveryExplanation = (explanation: RecoveryExplanation): str
     `  decision: ${explanation.decision._tag} → disposition ${explanation.disposition}`,
     `  meaning: ${explanation.decisionMeaning}`,
   );
+
   return lines.join("\n");
 };
 
@@ -351,6 +354,7 @@ export const IntegrityCheckName = Schema.Literals([
   /** Convergence mode only: every known Submission is settled. */
   "all-settled",
 ]);
+
 export type IntegrityCheckName = typeof IntegrityCheckName.Type;
 
 export const IntegrityCheckStatus = Schema.Literals(["passed", "failed", "skipped"]);
@@ -397,6 +401,7 @@ export const ObligationBlockedOn = Schema.Literals([
   "ready-aged",
   "running-aged",
 ]);
+
 export type ObligationBlockedOn = typeof ObligationBlockedOn.Type;
 
 export const ObligationSeverity = Schema.Literals(["ok", "aging", "overdue"]);
@@ -475,6 +480,7 @@ export const RetryRefusalReason = Schema.Literals([
   /** The lane is durably waiting for approval decisions; use `resolveApproval`. */
   "await-approval-decision",
 ]);
+
 export type RetryRefusalReason = typeof RetryRefusalReason.Type;
 
 /**

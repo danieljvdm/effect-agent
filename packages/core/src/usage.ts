@@ -4,6 +4,7 @@ const UsageIdentity = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 
 const hasAdditiveTotal = (total: number, components: ReadonlyArray<number>): boolean => {
   const sum = components.reduce((accumulator, component) => accumulator + component, 0);
+
   return Number.isSafeInteger(sum) && total === sum;
 };
 
@@ -83,6 +84,7 @@ const RunUsageSummaryFields = Schema.Struct({
           group.pricingVersion ?? null,
         ]),
       );
+
       return (
         new Set(identities).size === identities.length &&
         hasAdditiveTotal(
@@ -169,6 +171,7 @@ const checkedAdd = (
   right: number,
 ): Effect.Effect<number, UsageAggregationError> => {
   const total = left + right;
+
   return Number.isSafeInteger(left) &&
     left >= 0 &&
     Number.isSafeInteger(right) &&
@@ -238,7 +241,9 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
       call.serviceTier ?? null,
       call.pricingVersion ?? null,
     ]);
+
     let group = groups.get(key);
+
     if (group === undefined) {
       group = {
         provider: call.provider,

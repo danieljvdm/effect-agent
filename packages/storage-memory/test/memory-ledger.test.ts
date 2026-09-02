@@ -59,9 +59,11 @@ const unknownSubmission = Schema.decodeSync(SubmissionId)("submission-memory-unk
 const unknownToken = Schema.decodeSync(OwnershipToken)("ownership-memory-unknown");
 const unknownCall = Schema.decodeSync(ToolCallId)("call-memory-unknown");
 const unknownReservation = Schema.decodeSync(ChildReservationId)("child-reservation-unknown");
+
 const semanticReservation = Schema.decodeSync(ChildReservationId)(
   "child-reservation:semantic-json",
 );
+
 const isLedgerError = Schema.is(LedgerError);
 const sequenceOne = Schema.decodeSync(CanonicalSequence)(1);
 const waitingParentLane = Schema.decodeSync(ThreadId)("thread-memory-waiting");
@@ -71,6 +73,7 @@ const waitingParentKey = Schema.decodeSync(IdempotencyKey)("waiting-parent");
 const waitingChildKey = Schema.decodeSync(IdempotencyKey)("waiting-child");
 const waitingParentDigest = Schema.decodeSync(Digest)("d1".padEnd(64, "0"));
 const waitingChildDigest = Schema.decodeSync(Digest)("d2".padEnd(64, "0"));
+
 const agentDigests = DefinitionDigests.make({
   agent: definitionDigest,
   model: definitionDigest,
@@ -101,15 +104,19 @@ describe("MemorySubmissionLedger", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const admitted = yield* ledger.admit(admissionRequest("semantic-json-key", "af"));
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
         const claim = yield* ledger.claim(ClaimRequest.make({ threadId, producerId: producerA }));
+
         if (Option.isNone(claim)) return yield* Effect.die("missing semantic JSON claim");
 
         const allocation = { turns: 4, toolCalls: 8 };
         const reorderedAllocation = { toolCalls: 8, turns: 4 };
         const allocationDigest = yield* digestJson(allocation);
+
         expect(yield* digestJson(reorderedAllocation)).toBe(allocationDigest);
         const reservationId = semanticReservation;
+
         const reservationFields = {
           reservationId,
           parentSubmissionId: admitted.submissionId,
@@ -117,24 +124,29 @@ describe("MemorySubmissionLedger", () => {
           ownershipToken: claim.value.ownershipToken,
           allocationDigest,
         };
+
         yield* ledger.reserveChildBudget(
           ChildBudgetReservationRequest.make({ ...reservationFields, allocation }),
         );
+
         const replayed = yield* ledger.reserveChildBudget(
           ChildBudgetReservationRequest.make({
             ...reservationFields,
             allocation: reorderedAllocation,
           }),
         );
+
         expect(replayed.replayed).toBe(true);
 
         const accounting = {
           consumed: { turns: 1, toolCalls: 2 },
           released: { turns: 3, toolCalls: 6 },
         };
+
         yield* ledger.beginChildBudgetRelease(
           BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
         );
+
         const replayedFreeze = yield* ledger.beginChildBudgetRelease(
           BeginChildBudgetReleaseRequest.make({
             reservationId,
@@ -144,6 +156,7 @@ describe("MemorySubmissionLedger", () => {
             },
           }),
         );
+
         expect(replayedFreeze.status).toBe("releasePending");
 
         yield* ledger.markUnknown(
@@ -153,6 +166,7 @@ describe("MemorySubmissionLedger", () => {
             reason: "semantic JSON replay",
           }),
         );
+
         const firstResolution = yield* ledger.recordUnknownResolution(
           UnknownResolutionCommand.make({
             submissionId: admitted.submissionId,
@@ -165,6 +179,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           }),
         );
+
         const replayedResolution = yield* ledger.recordUnknownResolution(
           UnknownResolutionCommand.make({
             submissionId: admitted.submissionId,
@@ -177,6 +192,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           }),
         );
+
         expect(replayedResolution.resolvedAt).toEqual(firstResolution.resolvedAt);
       }),
     );
@@ -187,6 +203,7 @@ describe("MemorySubmissionLedger", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const capabilities = yield* ledger.capabilities;
+
         expect(capabilities.durability).toBe("non-durable");
       }),
     );
@@ -198,11 +215,13 @@ describe("MemorySubmissionLedger", () => {
         const ledger = yield* SubmissionLedger;
         const request = admissionRequest("replay-state-key", "ab");
         const first = yield* ledger.admit(request);
+
         expect(first.replayed).toBe(false);
         expect(first.state).toBe("admitted");
 
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: first.submissionId }));
         const replayed = yield* ledger.admit(request);
+
         expect(replayed.replayed).toBe(true);
         expect(replayed.submissionId).toBe(first.submissionId);
         expect(replayed.receiptId).toBe(first.receiptId);
@@ -216,15 +235,18 @@ describe("MemorySubmissionLedger", () => {
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const admitted = yield* ledger.admit(admissionRequest("same-producer-key", "ac"));
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
 
         const first = yield* ledger.claim(ClaimRequest.make({ threadId, producerId: producerA }));
+
         expect(Option.isSome(first)).toBe(true);
         if (Option.isNone(first)) return;
 
         const reclaimed = yield* ledger.claim(
           ClaimRequest.make({ threadId, producerId: producerA }),
         );
+
         expect(Option.isSome(reclaimed)).toBe(true);
         if (Option.isNone(reclaimed)) return;
         expect(reclaimed.value.submissionId).toBe(admitted.submissionId);
@@ -239,6 +261,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(staleRenew).toBeInstanceOf(OwnershipLost);
         expect(staleRenew).toMatchObject({
           _tag: "OwnershipLost",
@@ -252,6 +275,7 @@ describe("MemorySubmissionLedger", () => {
             ownershipToken: reclaimed.value.ownershipToken,
           }),
         );
+
         expect(liveRenew.ownershipToken).toBe(reclaimed.value.ownershipToken);
       }),
     );
@@ -261,6 +285,7 @@ describe("MemorySubmissionLedger", () => {
     it.effect("rejects malformed admissions at the schema boundary without mutating state", () =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const invalid = {
           threadId: "thread-memory-ledger-invalid",
           principal: "principal-memory-ledger",
@@ -275,15 +300,19 @@ describe("MemorySubmissionLedger", () => {
           inputPayload: { work: "invalid" },
           inputDigest: "not-a-digest",
         };
+
         const admitBoundary: unknown = ledger.admit;
+
         if (typeof admitBoundary !== "function") {
           return yield* Effect.die(new Error("Expected an admit function"));
         }
         const unvalidatedResult: unknown = admitBoundary(invalid);
+
         if (!Effect.isEffect(unvalidatedResult)) {
           return yield* Effect.die(new Error("Expected admit to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
+
         if (!isLedgerError(failure)) {
           return yield* Effect.die(new Error("Expected a LedgerError"));
         }
@@ -291,6 +320,7 @@ describe("MemorySubmissionLedger", () => {
         expect(failure.cause).toBeDefined();
 
         const scanned = yield* ledger.scanNonterminal.pipe(Stream.runCollect);
+
         expect(scanned).toEqual([]);
       }),
     );
@@ -304,6 +334,7 @@ describe("MemorySubmissionLedger", () => {
         const readyFailure = yield* ledger
           .markReady(MarkReadyRequest.make({ submissionId: unknownSubmission }))
           .pipe(Effect.flip);
+
         expect(readyFailure).toMatchObject({ _tag: "LedgerError", operation: "markReady" });
 
         const renewFailure = yield* ledger
@@ -314,6 +345,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(renewFailure).toMatchObject({ _tag: "LedgerError", operation: "renewOwnership" });
 
         const finalizeFailure = yield* ledger
@@ -324,6 +356,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(finalizeFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "finalizeSettlement",
@@ -332,6 +365,7 @@ describe("MemorySubmissionLedger", () => {
         const snapshotFailure = yield* ledger
           .loadRecoverySnapshot(RecoverySnapshotRequest.make({ submissionId: unknownSubmission }))
           .pipe(Effect.flip);
+
         expect(snapshotFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "loadRecoverySnapshot",
@@ -347,6 +381,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(claimJoiningFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "claimJoining",
@@ -362,11 +397,13 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(markJoinedFailure).toMatchObject({ _tag: "LedgerError", operation: "markJoined" });
 
         const revertFailure = yield* ledger
           .revertJoining(RevertJoiningRequest.make({ submissionId: unknownSubmission }))
           .pipe(Effect.flip);
+
         expect(revertFailure).toMatchObject({ _tag: "LedgerError", operation: "revertJoining" });
 
         const suspendFailure = yield* ledger
@@ -378,6 +415,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(suspendFailure).toMatchObject({ _tag: "LedgerError", operation: "suspend" });
 
         const decisionFailure = yield* ledger
@@ -391,6 +429,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(decisionFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "recordApprovalDecision",
@@ -405,6 +444,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(markUnknownFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "markUnknown",
@@ -421,6 +461,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(resolutionFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "recordUnknownResolution",
@@ -438,6 +479,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(reserveFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "reserveChildBudget",
@@ -452,6 +494,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(attachFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "attachChildToReservation",
@@ -465,6 +508,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(beginFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "beginChildBudgetRelease",
@@ -473,6 +517,7 @@ describe("MemorySubmissionLedger", () => {
         const releaseFailure = yield* ledger
           .releaseChildBudget(ReleaseChildBudgetRequest.make({ reservationId: unknownReservation }))
           .pipe(Effect.flip);
+
         expect(releaseFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "releaseChildBudget",
@@ -486,6 +531,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(settledFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "recordChildSettled",
@@ -511,6 +557,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           )
           .pipe(Effect.flip);
+
         expect(premature).toMatchObject({
           _tag: "LedgerError",
           operation: "recordChildSettled",
@@ -522,12 +569,15 @@ describe("MemorySubmissionLedger", () => {
   it.effect("answers Indeterminate from the fault seam and never treats it as absence", () =>
     Effect.gen(function* () {
       const fault = yield* Ref.make<Option.Option<string>>(Option.none());
+
       const faultLayer = Layer.mergeAll(
         memorySubmissionLedgerLayer({ resolveAdmissionFault: Ref.get(fault) }),
         NodeCrypto.layer,
       );
+
       yield* Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
+
         const key = SubmissionLookupByKey.make({
           threadId,
           principal,
@@ -535,6 +585,7 @@ describe("MemorySubmissionLedger", () => {
         });
 
         const beforeAdmission = yield* ledger.resolveAdmission(key);
+
         expect(beforeAdmission._tag).toBe("NotAdmitted");
 
         const admitted = yield* ledger.admit(admissionRequest("indeterminate-key", "c1"));
@@ -543,6 +594,7 @@ describe("MemorySubmissionLedger", () => {
         // a typed "cannot prove either", never NotAdmitted (SUB-031).
         yield* Ref.set(fault, Option.some("the authoritative child owner is unreachable"));
         const during = yield* ledger.resolveAdmission(key);
+
         expect(during._tag).toBe("Indeterminate");
         if (during._tag === "Indeterminate") {
           expect(during.reason).toBe("the authoritative child owner is unreachable");
@@ -552,6 +604,7 @@ describe("MemorySubmissionLedger", () => {
         // so no second child was ever permitted.
         yield* Ref.set(fault, Option.none());
         const after = yield* ledger.resolveAdmission(key);
+
         expect(after._tag).toBe("Admitted");
         if (after._tag === "Admitted") {
           expect(after.submission.submissionId).toBe(admitted.submissionId);
@@ -578,7 +631,9 @@ describe("MemorySubmissionLedger", () => {
             inputDigest: waitingParentDigest,
           }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: parent.submissionId }));
+
         const child = yield* ledger.admit(
           AdmissionRequest.make({
             threadId: waitingChildLane,
@@ -595,13 +650,16 @@ describe("MemorySubmissionLedger", () => {
             },
           }),
         );
+
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
 
         const parentClaim = yield* ledger.claim(
           ClaimRequest.make({ threadId: waitingParentLane, producerId: producerA }),
         );
+
         expect(Option.isSome(parentClaim)).toBe(true);
         if (Option.isNone(parentClaim)) return;
+
         const suspended = yield* ledger.suspend(
           SuspendRequest.make({
             submissionId: parent.submissionId,
@@ -616,6 +674,7 @@ describe("MemorySubmissionLedger", () => {
             }),
           }),
         );
+
         expect(suspended).toBe("suspended");
 
         // Independent fencing (SUB-020): the child lane claims under its OWN epoch while the
@@ -623,10 +682,13 @@ describe("MemorySubmissionLedger", () => {
         const childClaim = yield* ledger.claim(
           ClaimRequest.make({ threadId: waitingChildLane, producerId: producerA }),
         );
+
         expect(Option.isSome(childClaim)).toBe(true);
+
         const blockedParent = yield* ledger.claim(
           ClaimRequest.make({ threadId: waitingParentLane, producerId: producerA }),
         );
+
         expect(Option.isNone(blockedParent)).toBe(true);
       }),
     );

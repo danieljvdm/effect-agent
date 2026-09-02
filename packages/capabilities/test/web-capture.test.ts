@@ -38,6 +38,7 @@ describe("WebCapture construction", () => {
       urls: ["docs.example.com", "*.Effect.website"],
       actions: ["markdown", "links"],
     });
+
     expect(Context.get(definition.tool.annotations, Tool.Readonly)).toBe(false);
     expect(Context.get(definition.tool.annotations, ToolExecutionClass)).toBe("uncertain");
     expect(definition.tool.failureMode).toBe("return");
@@ -56,6 +57,7 @@ describe("WebCapture construction", () => {
   it("snapshots and freezes security-sensitive host and action policies", () => {
     const urls = ["docs.example.com"];
     const actions: Array<"markdown" | "content" | "links"> = ["markdown"];
+
     const definition = WebCapture.make("read_webpage", {
       description: "Read documentation pages.",
       urls,
@@ -121,6 +123,7 @@ describe("WebCapture construction", () => {
         plans: Schema.Array(Schema.Struct({ name: Schema.String, monthlyUsd: Schema.Number })),
       }),
     });
+
     expect(definition.responseFormat).toMatchObject({ type: "object" });
     expect(JSON.stringify(definition.responseFormat)).toContain("monthlyUsd");
     expect(definition.tool.failureMode).toBe("return");
@@ -199,12 +202,14 @@ const ServicePricingSchema = Schema.Struct({
  */
 const makeScriptedPort = Effect.gen(function* () {
   const requests = yield* Ref.make<ReadonlyArray<PageCaptureRequest>>([]);
+
   const port = Layer.succeed(PageCapture)(
     PageCapture.of({
       capture: (request) =>
         Ref.update(requests, (all) => [...all, request]).pipe(
           Effect.flatMap((): Effect.Effect<PageCaptureResult, PageCaptureError> => {
             const url = request.target._tag === "PageUrlTarget" ? request.target.url : "";
+
             if (url.includes("/rate-limited")) {
               return Effect.fail(
                 PageCaptureRateLimitedError.make({
@@ -235,6 +240,7 @@ const makeScriptedPort = Effect.gen(function* () {
                 }),
               );
             }
+
             const finish = (output: PageCaptureResult["output"]) =>
               Effect.succeed(
                 PageCaptureResult.make({
@@ -243,6 +249,7 @@ const makeScriptedPort = Effect.gen(function* () {
                   resourceUse: { browserMillis: 42 },
                 }),
               );
+
             if (url.includes("/mismatch")) {
               return finish(PageLinksCaptured.make({ links: ["https://docs.example.com/a"] }));
             }
@@ -297,6 +304,7 @@ const makeScriptedPort = Effect.gen(function* () {
         ),
     }),
   );
+
   return { requests, port };
 });
 
@@ -326,6 +334,7 @@ const scriptedModel = (
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: ({ prompt }) =>
@@ -394,6 +403,7 @@ const runCapture = (
       urls: ["docs.example.com", "*.effect.website"],
       ...(options?.actions === undefined ? {} : { actions: options.actions }),
     });
+
     const agent = Agent.make("web-capture-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -401,13 +411,16 @@ const runCapture = (
       toolkit: Toolkit.make(definition.tool),
       policy,
     });
+
     const toolResults = yield* Ref.make<ReadonlyArray<ToolResultPart>>([]);
     const scripted = yield* makeScriptedPort;
+
     yield* AgentRuntime.run(
       Agent.withModel(agent, scriptedModel("read_webpage", params, toolResults)),
       { question: "go" },
       {},
     ).pipe(Effect.provide(definition.handlers.pipe(Layer.provide(scripted.port))), Effect.scoped);
+
     return {
       toolResults: yield* Ref.get(toolResults),
       requests: yield* Ref.get(scripted.requests),
@@ -424,6 +437,7 @@ const runExtract = (
       schema: PricingSchema,
       prompt: "Extract every plan",
     });
+
     const agent = Agent.make("web-extract-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -431,13 +445,16 @@ const runExtract = (
       toolkit: Toolkit.make(definition.tool),
       policy,
     });
+
     const toolResults = yield* Ref.make<ReadonlyArray<ToolResultPart>>([]);
     const scripted = yield* makeScriptedPort;
+
     yield* AgentRuntime.run(
       Agent.withModel(agent, scriptedModel("extract_pricing", params, toolResults)),
       { question: "go" },
       {},
     ).pipe(Effect.provide(definition.handlers.pipe(Layer.provide(scripted.port))), Effect.scoped);
+
     return {
       toolResults: yield* Ref.get(toolResults),
       requests: yield* Ref.get(scripted.requests),
@@ -453,6 +470,7 @@ const runScrape = (
       urls: ["docs.example.com"],
       maxResponseBytes: 64 * 1024,
     });
+
     const agent = Agent.make("web-scrape-host", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -460,13 +478,16 @@ const runScrape = (
       toolkit: Toolkit.make(definition.tool),
       policy,
     });
+
     const toolResults = yield* Ref.make<ReadonlyArray<ToolResultPart>>([]);
     const scripted = yield* makeScriptedPort;
+
     yield* AgentRuntime.run(
       Agent.withModel(agent, scriptedModel("scrape_webpage", params, toolResults)),
       { question: "go" },
       {},
     ).pipe(Effect.provide(definition.handlers.pipe(Layer.provide(scripted.port))), Effect.scoped);
+
     return {
       toolResults: yield* Ref.get(toolResults),
       requests: yield* Ref.get(scripted.requests),
@@ -486,17 +507,21 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "https://docs.example.com/pricing",
         action: "markdown",
       });
+
       expect(outcome.requests).toHaveLength(1);
       expect(outcome.requests[0].engine).toBe("chromium");
       expect(outcome.requests[0].limits.maxOutputBytes).toBe(128 * 1024);
       expect(outcome.requests[0].action._tag).toBe("CapturePageMarkdown");
       const requestPatterns = outcome.requests[0].resourcePolicy?.allowRequestPatterns;
+
       expect(requestPatterns).toEqual([
         "^https://docs\\.example\\.com(?::[0-9]+)?(?:[/?#]|$)",
         "^https://(?:[a-z0-9-]+\\.)*effect\\.website(?::[0-9]+)?(?:[/?#]|$)",
       ]);
+
       const allowsRequest = (url: string): boolean =>
         requestPatterns?.some((pattern) => new RegExp(pattern).test(url)) ?? false;
+
       for (const allowed of [
         "https://docs.example.com/pricing",
         "https://docs.example.com:8443/redirect-target",
@@ -530,6 +555,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "https://evil.example.net/x",
         action: "markdown",
       });
+
       expect(outcome.requests).toHaveLength(0);
       expect(outcome.toolResults[0].isFailure).toBe(true);
       expect(outcome.toolResults[0].result).toMatchObject({
@@ -543,6 +569,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
     Effect.gen(function* () {
       for (const url of ["https://effect.website/", "https://docs.effect.website/pricing"]) {
         const allowed = yield* runCapture({ url, action: "markdown" });
+
         expect(allowed.requests).toHaveLength(1);
         expect(allowed.toolResults[0].isFailure).toBe(false);
       }
@@ -551,6 +578,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "https://effect.website.attacker.test/pricing",
         action: "markdown",
       });
+
       expect(denied.requests).toHaveLength(0);
       expect(denied.toolResults[0].result).toMatchObject({ errorTag: "WebCaptureUrlDenied" });
     }),
@@ -562,6 +590,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "http://docs.example.com/pricing",
         action: "markdown",
       });
+
       expect(insecure.requests).toHaveLength(0);
       expect(insecure.toolResults[0].result).toMatchObject({ errorTag: "WebCaptureUrlDenied" });
 
@@ -569,6 +598,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         { url: "https://docs.example.com/pricing", action: "links" },
         { actions: ["markdown"] },
       );
+
       expect(disabled.requests).toHaveLength(0);
       expect(disabled.toolResults[0].result).toMatchObject({
         errorTag: "WebCaptureActionDenied",
@@ -582,6 +612,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "https://docs.example.com/rate-limited",
         action: "markdown",
       });
+
       expect(outcome.toolResults[0].isFailure).toBe(true);
       expect(outcome.toolResults[0].result).toMatchObject({
         _tag: "WebCaptureFailure",
@@ -632,6 +663,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "https://docs.example.com/mismatch",
         action: "markdown",
       });
+
       expect(outcome.toolResults[0].isFailure).toBe(true);
       expect(outcome.toolResults[0].result).toMatchObject({
         errorTag: "WebCaptureProtocolMismatch",
@@ -642,8 +674,10 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
   it.effect("sends the derived response format and decodes the extraction through the Schema", () =>
     Effect.gen(function* () {
       const outcome = yield* runExtract({ url: "https://docs.example.com/pricing" });
+
       expect(outcome.requests).toHaveLength(1);
       const action = outcome.requests[0].action;
+
       expect(action._tag).toBe("CapturePageStructured");
       if (action._tag === "CapturePageStructured") {
         expect(JSON.stringify(action.responseFormat)).toContain("monthlyUsd");
@@ -662,6 +696,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "https://docs.example.com/pricing",
         selectors: [".plan", "#faq"],
       });
+
       expect(outcome.requests).toHaveLength(1);
       expect(outcome.requests[0]).toMatchObject({
         engine: "chromium",
@@ -688,6 +723,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         url: "https://attacker.example/pricing",
         selectors: [".plan"],
       });
+
       expect(denied.requests).toHaveLength(0);
       expect(denied.toolResults[0].result).toMatchObject({ errorTag: "WebCaptureUrlDenied" });
     }),
@@ -696,6 +732,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
   it.effect("an extraction outside the Schema fails typed, never a fabricated success", () =>
     Effect.gen(function* () {
       const outcome = yield* runExtract({ url: "https://docs.example.com/malformed" });
+
       expect(outcome.toolResults[0].isFailure).toBe(true);
       expect(outcome.toolResults[0].result).toMatchObject({
         _tag: "WebCaptureFailure",
@@ -713,6 +750,7 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         urls: ["docs.example.com"],
         schema: ServicePricingSchema,
       });
+
       const agent = Agent.make("web-service-extract-host", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -720,8 +758,10 @@ layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
         toolkit: Toolkit.make(definition.tool),
         policy,
       });
+
       const toolResults = yield* Ref.make<ReadonlyArray<ToolResultPart>>([]);
       const scripted = yield* makeScriptedPort;
+
       const decoderLayer = Layer.succeed(ExtractionDecoderService, {
         normalize: (value) => value.toUpperCase(),
       });
@@ -782,6 +822,7 @@ const typedExtract = WebCapture.makeExtract("typed_extract", {
   urls: ["docs.example.com"],
   schema: PricingSchema,
 });
+
 type ExtractLayerRequirements = LayerContext<typeof typedExtract.handlers>;
 type ExtractRequiresPageCapture = Equal<ExtractLayerRequirements, PageCapture>;
 type ExtractSuccessIsDecoded = Equal<
@@ -794,6 +835,7 @@ const typedServiceExtract = WebCapture.makeExtract("typed_service_extract", {
   urls: ["docs.example.com"],
   schema: ServicePricingSchema,
 });
+
 type ServiceExtractLayerRequirements = LayerContext<typeof typedServiceExtract.handlers>;
 type ServiceExtractKeepsDecoderRequirement = Equal<
   ServiceExtractLayerRequirements,
@@ -808,6 +850,7 @@ const typedScrape = WebCapture.makeScrape("typed_scrape", {
   description: "typed",
   urls: ["docs.example.com"],
 });
+
 type ScrapeLayerRequirements = LayerContext<typeof typedScrape.handlers>;
 type ScrapeRequiresPageCapture = Equal<ScrapeLayerRequirements, PageCapture>;
 type ScrapeSuccessIsBounded = Equal<Tool.Success<typeof typedScrape.tool>, WebCaptureScrapeSuccess>;
@@ -823,6 +866,7 @@ describe("WebCapture type proofs", () => {
     const decoderInvocationProof: ServiceExtractToolKeepsDecoderRequirement = true;
     const scrapeRequirementProof: ScrapeRequiresPageCapture = true;
     const scrapeSuccessProof: ScrapeSuccessIsBounded = true;
+
     expect(
       requirementProof &&
         failureProof &&

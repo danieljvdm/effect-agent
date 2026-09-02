@@ -69,32 +69,41 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
   const validated = yield* Schema.decodeUnknownEffect(MemoryRpcLimits)(rpcLimits).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
+
   const bound = yield* Schema.decodeUnknownEffect(MemoryAccess.Wire)(access).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
+
   principal = yield* Schema.decodeUnknownEffect(Principal)(principal).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
   const { namespace } = yield* MemoryObjectNamespace;
+
   const call = Effect.fn("CloudflareMemoryClient.call")(function* (request: MemoryOwnerRequest) {
     const decoded = yield* Schema.decodeUnknownEffect(MemoryOwnerRequest)(request).pipe(
       Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
     );
+
     const encoded = yield* encodeMemoryWire(MemoryOwnerRequest, decoded, validated.maxRequestBytes);
+
     const raw = yield* Effect.tryPromise({
       try: () =>
         namespace.get(namespace.idFromName(memoryObjectName(bound.namespace))).memory(encoded),
       catch: () => MemoryRpcError.make({ reason: "unavailable" }),
     });
+
     const response = yield* decodeMemoryWire(MemoryOwnerResponse, raw, validated.maxResponseBytes);
+
     if (response._tag === "Failed") return yield* response.failure;
     if (
       !MemoryNamespace.equals(response.access.namespace, bound.namespace) ||
       response.access.scope !== bound.scope
     )
       return yield* MemoryRpcError.make({ reason: "protocol" });
+
     return response;
   });
+
   const withinDeadline = <A, E, R>(effect: Effect.Effect<A, E, R>, timeoutMillis: number) =>
     effect.pipe(
       Effect.timeoutOrElse({
@@ -102,6 +111,7 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
         orElse: () => Effect.fail(MemoryRpcError.make({ reason: "timeout" })),
       }),
     );
+
   const revalidate = Effect.fn("CloudflareMemoryClient.revalidate")(function* (
     lookup: MemoryLookup,
     limits: MemoryRecallLimits,
@@ -110,6 +120,7 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
       Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
     );
     const timeoutMillis = Math.min(validated.timeoutMillis, limits.timeoutMillis);
+
     return yield* Effect.gen(function* () {
       const response = yield* call({
         _tag: "Revalidate",
@@ -120,15 +131,19 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
         limits,
         deadlineMillis: (yield* Clock.currentTimeMillis) + timeoutMillis,
       });
+
       if (response._tag !== "Lookup") return yield* MemoryRpcError.make({ reason: "protocol" });
+
       return response.lookup;
     }).pipe((effect) => withinDeadline(effect, timeoutMillis));
   });
+
   const change = Effect.fn("CloudflareMemoryClient.change")(function* (
     write: MemoryWrite<Namespace>,
   ) {
     if (!MemoryNamespace.equals(write.key.namespace, bound.namespace))
       return yield* MemoryRpcError.make({ reason: "denied" });
+
     return yield* Effect.gen(function* () {
       const response = yield* call({
         _tag: "Change",
@@ -138,11 +153,14 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
         write,
         deadlineMillis: (yield* Clock.currentTimeMillis) + validated.timeoutMillis,
       });
+
       if (response._tag !== "Changed" || response.document.key.id !== write.key.id)
         return yield* MemoryRpcError.make({ reason: "protocol" });
+
       return yield* MemoryDocument.restore(access.namespace, response.document);
     }).pipe((effect) => withinDeadline(effect, validated.timeoutMillis));
   });
+
   const revalidateSemantic = Effect.fn("CloudflareMemoryClient.revalidateSemantic")(function* (
     found: MemoryIndexSearch<Namespace>,
     profile: SemanticMemoryProfile,
@@ -159,10 +177,13 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
         limits,
         deadlineMillis: (yield* Clock.currentTimeMillis) + validated.timeoutMillis,
       });
+
       if (response._tag !== "Semantic") return yield* MemoryRpcError.make({ reason: "protocol" });
+
       return response.result;
     }).pipe((effect) => withinDeadline(effect, validated.timeoutMillis));
   });
+
   /**
    * Revalidate in one owner RPC, then render whole passages within the caller's budget.
    * The bound source is essential: unavailable/stale results and matches that cannot fit
@@ -181,6 +202,7 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
       estimateTokens,
     );
   });
+
   return { recall, revalidate, revalidateSemantic, change };
 });
 
@@ -218,6 +240,7 @@ export const cloudflareMemoryWriterLayer = (
     MemoryWriter,
     Effect.gen(function* () {
       const client = yield* CloudflareMemoryClient.make(access, principal, limits);
+
       return MemoryWriter.fromAdapter({
         change: (write) =>
           client.change(write).pipe(
@@ -243,11 +266,13 @@ export const cloudflareMemoryWriterLayer = (
   );
 
 type OwnerServices = MemoryReader | MemoryWriter | MemoryOwnerAuthorizer | MemoryOwnerIdentity;
+
 export interface MemoryObjectInstance extends InstanceType<
   EffectCfDurableObject.DurableObjectClass<Record<never, never>, OwnerServices>
 > {
   memory(encoded: string): Promise<string>;
 }
+
 export interface MemoryObjectClass {
   new (ctx: globalThis.DurableObjectState, env: Cloudflare.Env): MemoryObjectInstance;
 }
@@ -277,12 +302,15 @@ const makeMemoryObject = <E>(
     MemoryOwnerIdentity,
     Effect.gen(function* () {
       const state = yield* DurableObjectState.DurableObjectState;
+
       const address = yield* Schema.decodeUnknownEffect(MemoryNamespaceAddress)(
         state.raw.id.name,
       ).pipe(Effect.mapError(() => MemoryRpcError.make({ reason: "denied" })));
+
       return { namespace: MemoryNamespace.Any.make({ address }) };
     }),
   );
+
   const store = Layer.unwrap(
     Effect.map(DurableObjectState.DurableObjectState, (state) =>
       doMemoryStoreLayerWithFailpoints(
@@ -291,7 +319,9 @@ const makeMemoryObject = <E>(
       ),
     ),
   ).pipe(Layer.provide(options.failpoints ?? MemoryMutationFailpoint.layer));
+
   const application = Layer.merge(store, host).pipe(Layer.provideMerge(identity));
+
   const runtime: Layer.Layer<
     OwnerServices,
     E | MemoryOwnerFailure,
@@ -300,12 +330,15 @@ const makeMemoryObject = <E>(
     Effect.gen(function* () {
       const state = yield* DurableObjectState.DurableObjectState;
       const scope = yield* Effect.scope;
+
       yield* Schema.decodeUnknownEffect(MemoryRpcLimits)(
         options.rpcLimits ?? defaultMemoryRpcLimits,
       ).pipe(Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })));
+
       return yield* state.blockConcurrencyWhile(Layer.buildWithScope(application, scope));
     }),
   );
+
   return EffectCfDurableObject.make(runtime, {
     rpc: { memory: (encoded: string) => handleMemoryOwnerRequest(encoded, options.rpcLimits) },
   });

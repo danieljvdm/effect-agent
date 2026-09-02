@@ -60,6 +60,7 @@ export const makeRunCommandQueue = Effect.fn("makeRunCommandQueue")(function* (
 ) {
   const queue = yield* Queue.bounded<RunCommand>(config.capacity);
   const shutdown = Queue.shutdown(queue).pipe(Effect.asVoid);
+
   yield* Effect.addFinalizer(() => shutdown);
 
   const offer = (command: RunCommand): Effect.Effect<void, RunCommandQueueClosed> =>

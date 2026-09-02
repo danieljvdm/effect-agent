@@ -91,6 +91,7 @@ const formatLogValue = (value: unknown): string => {
     if (typeof value === "string") {
       return value;
     }
+
     return JSON.stringify(value) ?? String(value);
   } catch {
     try {
@@ -104,17 +105,21 @@ const formatLogValue = (value: unknown): string => {
 const makeConsole = (capture: LogCapture, limits: CodeExecutionLimits) => {
   const write = (...values: ReadonlyArray<unknown>): void => {
     const joined = values.map(formatLogValue).join(" ");
+
     const line =
       joined.length > MAX_LOG_LINE_CHARACTERS
         ? `${joined.slice(0, MAX_LOG_LINE_CHARACTERS - 1)}…`
         : joined;
+
     const bytes = utf8ByteLength(line);
+
     if (capture.lines.length >= MAX_LOG_LINES || capture.bytes + bytes > limits.maxLogBytes) {
       throw new LogLimitSignal(capture.bytes + bytes);
     }
     capture.lines.push(line);
     capture.bytes += bytes;
   };
+
   return { debug: write, error: write, info: write, log: write, warn: write };
 };
 
@@ -131,18 +136,21 @@ const buildNamespaceObject = (
   offer: (pending: PendingHostCall) => void,
 ): Record<string, unknown> => {
   const methods: Record<string, unknown> = {};
+
   for (const method of namespace.methods) {
     methods[method] = (argument: unknown) =>
       new Promise((resolve, reject) => {
         offer({ namespace: namespace.name, method, argument, resolve, reject });
       });
   }
+
   return methods;
 };
 
 const boundedText = (value: unknown): string => {
   try {
     const text = value instanceof Error ? `${value.name}: ${value.message}` : formatLogValue(value);
+
     return text.slice(0, MAX_THROWN_CHARACTERS);
   } catch {
     return "[unserializable thrown value]";
@@ -160,9 +168,11 @@ const safeDecodeJson = (value: unknown): Option.Option<Schema.Json> => {
 
 const boundedThrown = (value: unknown): Schema.Json => {
   const decoded = safeDecodeJson(value);
+
   if (Option.isSome(decoded)) {
     try {
       const encoded = JSON.stringify(decoded.value);
+
       if (encoded !== undefined && encoded.length <= MAX_THROWN_CHARACTERS) {
         return decoded.value;
       }
@@ -170,12 +180,14 @@ const boundedThrown = (value: unknown): Schema.Json => {
       // fall through to the bounded string form
     }
   }
+
   return boundedText(value);
 };
 
 const encodedJsonByteLength = (value: Schema.Json): number | undefined => {
   try {
     const encoded = JSON.stringify(value);
+
     return encoded === undefined ? undefined : utf8ByteLength(encoded);
   } catch {
     return undefined;
@@ -213,6 +225,7 @@ const validateRequest = (
     }
     const reservedNames = new Set<string>([...shadowedGlobals, "console"]);
     const seen = new Set<string>();
+
     for (const namespace of request.namespaces) {
       if (reservedNames.has(namespace.name) || seen.has(namespace.name)) {
         return yield* CodeExecutorUnsupportedError.make({
@@ -224,6 +237,7 @@ const validateRequest = (
       seen.add(namespace.name);
     }
     const sourceBytes = utf8ByteLength(request.source);
+
     if (sourceBytes > request.limits.maxSourceBytes) {
       return yield* CodeSourceError.make({
         implementation: inProcessCodeExecutorImplementation,
@@ -246,6 +260,7 @@ const serveHostCalls = (
   Effect.gen(function* () {
     while (true) {
       const pending = yield* Queue.take(queue);
+
       counter.calls += 1;
       if (counter.calls > limits.maxHostCalls) {
         return yield* CodeHostCallLimitError.make({
@@ -255,11 +270,13 @@ const serveHostCalls = (
         });
       }
       const argument = safeDecodeJson(pending.argument);
+
       if (Option.isNone(argument)) {
         pending.reject(new TypeError("host call arguments must be JSON values"));
         continue;
       }
       const argumentBytes = encodedJsonByteLength(argument.value);
+
       if (argumentBytes === undefined || argumentBytes > limits.maxHostCallArgumentBytes) {
         return yield* CodeOutputLimitError.make({
           implementation: inProcessCodeExecutorImplementation,
@@ -269,6 +286,7 @@ const serveHostCalls = (
           logs: [...capture.lines],
         });
       }
+
       const rawOutcome = yield* host.call(
         CodeHostCall.make({
           namespace: pending.namespace,
@@ -276,7 +294,9 @@ const serveHostCalls = (
           argument: argument.value,
         }),
       );
+
       const outcome = decodeHostOutcome(rawOutcome);
+
       if (Option.isNone(outcome)) {
         return yield* CodeExecutionProtocolError.make({
           implementation: inProcessCodeExecutorImplementation,
@@ -288,6 +308,7 @@ const serveHostCalls = (
         continue;
       }
       const resultBytes = encodedJsonByteLength(outcome.value.value);
+
       if (resultBytes === undefined || resultBytes > limits.maxHostCallResultBytes) {
         return yield* CodeOutputLimitError.make({
           implementation: inProcessCodeExecutorImplementation,
@@ -307,6 +328,7 @@ const classifyProgramFailure = (
   capture: LogCapture,
 ): CodeOutputLimitError | CodeSourceError | CodeProgramFailedError => {
   const inner = thrown instanceof EvaluationThrew ? thrown.inner : thrown;
+
   if (inner instanceof LogLimitSignal) {
     return CodeOutputLimitError.make({
       implementation: inProcessCodeExecutorImplementation,
@@ -327,6 +349,7 @@ const classifyProgramFailure = (
   // split is by value shape: exception-like values read as `threw`, plain
   // rejection values (an uncaught host failure envelope) read as `rejected`.
   const reason = thrown instanceof EvaluationThrew || inner instanceof Error ? "threw" : "rejected";
+
   return CodeProgramFailedError.make({
     implementation: inProcessCodeExecutorImplementation,
     reason,
@@ -370,11 +393,13 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
     // rejected synchronously, so the queue stays bounded against hostile
     // programs.
     let issuedHostCalls = 0;
+
     const namespaceObjects = request.namespaces.map((namespace) =>
       buildNamespaceObject(namespace, (pending) => {
         issuedHostCalls += 1;
         if (issuedHostCalls > request.limits.maxHostCalls + 1) {
           pending.reject(new Error(`host-call limit of ${request.limits.maxHostCalls} exceeded`));
+
           return;
         }
         Queue.offerUnsafe(queue, pending);
@@ -388,6 +413,7 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
     const program = Effect.tryPromise({
       try: async () => {
         let candidate: unknown;
+
         try {
           candidate = factory(
             ...shadowedGlobals.map(() => undefined),
@@ -401,17 +427,20 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
           throw new EvaluationThrew(new NotAFunction(typeof candidate));
         }
         let outcome: unknown;
+
         try {
           outcome = candidate();
         } catch (cause) {
           throw new EvaluationThrew(cause);
         }
+
         return await Promise.resolve(outcome);
       },
       catch: (thrown) => classifyProgramFailure(thrown, request.limits, capture),
     });
 
     const startedAt = yield* Clock.currentTimeMillis;
+
     // The wall-clock deadline interrupts only at asynchronous suspension
     // points: a synchronous runaway shares the host thread and cannot be
     // stopped in-process — exactly why the platform CPU enforcement cases
@@ -431,6 +460,7 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
       }),
       Effect.ensuring(Fiber.interrupt(server)),
     );
+
     const finishedAt = yield* Clock.currentTimeMillis;
 
     // An unawaited burst can outrun the server: the program may return before
@@ -456,7 +486,9 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
         }),
       ),
     );
+
     const resultBytes = encodedJsonByteLength(value);
+
     if (resultBytes === undefined || resultBytes > request.limits.maxResultBytes) {
       return yield* CodeOutputLimitError.make({
         implementation: inProcessCodeExecutorImplementation,

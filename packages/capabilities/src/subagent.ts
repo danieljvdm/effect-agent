@@ -52,6 +52,7 @@ import {
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 const Natural = Schema.Natural;
+
 const FinitePositiveDuration = Schema.Duration.pipe(
   Schema.refine(
     (duration): duration is Duration.Duration =>
@@ -76,6 +77,7 @@ const SubagentPolicyFields = Schema.Struct({
   maxCostMicrousd: Schema.optionalKey(Natural),
   maxResultBytes: Schema.optionalKey(PositiveInt),
 });
+
 type SubagentPolicyFields = typeof SubagentPolicyFields.Type;
 
 /** Inputs normalized and validated by `SubagentPolicy.make`. */
@@ -167,6 +169,7 @@ export const SubagentExecutionFailureClassification = Schema.Literals([
   "establishment-denied",
   "declaration-unavailable",
 ]);
+
 export type SubagentExecutionFailureClassification =
   typeof SubagentExecutionFailureClassification.Type;
 
@@ -212,6 +215,7 @@ const DelegationToolName = Schema.String.pipe(
     { expected: `a delegation Tool name of the form "${delegationToolPrefix}<target>"` },
   ),
 );
+
 const decodeDelegationToolName = Schema.decodeSync(DelegationToolName);
 const decodeDelegationId = Schema.decodeSync(DelegationId);
 
@@ -240,6 +244,7 @@ export interface SubagentResultContext {
 /** Default delegation result, preserving partial-output information. */
 export const SubagentResult = <Output extends Schema.Top>(output: Output) =>
   Schema.Struct({ output, budgetExhausted: Schema.Boolean });
+
 export type SubagentResult<Output extends Schema.Top> = ReturnType<typeof SubagentResult<Output>>;
 
 /**
@@ -571,16 +576,19 @@ const defineExplicit = <
     }
   }
   const delegationId = decodeDelegationId(name);
+
   const grant =
     options.grant ??
     SubagentGrant.make({
       allowedToolNames: Object.keys(options.target.toolkit.tools),
       maxDepth: 1,
     });
+
   // `Mode` defaults to `"error"` exactly when `failureMode` is absent, so the
   // resolved literal always inhabits `Mode`; the assertion bridges only that
   // inference gap and crosses no schema boundary.
   const failureMode = (options.failureMode ?? "error") as Mode;
+
   const containedFailure = Schema.Union([
     options.failure,
     SubagentPrestartDenied,
@@ -588,6 +596,7 @@ const defineExplicit = <
     SubagentProjectionFailure,
     SubagentExecutionFailure,
   ]);
+
   const returnModeTool = Tool.make(name, {
     description: options.description,
     parameters: options.parameters,
@@ -599,6 +608,7 @@ const defineExplicit = <
     failure: Schema.Union([ToolCallWaiting, SubagentDurabilityError]),
     needsApproval: options.needsApproval,
   });
+
   const errorModeTool = Tool.make(name, {
     description: options.description,
     parameters: options.parameters,
@@ -614,6 +624,7 @@ const defineExplicit = <
     ]),
     needsApproval: options.needsApproval,
   });
+
   // Each branch is exactly `SubagentTool<..., Mode>` at its concrete `Mode`;
   // TypeScript cannot relate a runtime branch to the conditional generic, so
   // this assertion bridges only that limitation and crosses no schema
@@ -630,6 +641,7 @@ const defineExplicit = <
     Failure,
     Mode
   >;
+
   return Object.freeze({
     ...options,
     name,
@@ -821,18 +833,22 @@ function define<
     Success["DecodingServices"] | Output["DecodingServices"],
     Success["EncodingServices"] | Output["EncodingServices"]
   > = options.success ?? SubagentResult(options.target.output);
+
   const parameters = options.parameters ?? options.target.input;
+
   const failure: Schema.Codec<
     Failure["Type"],
     Failure["Encoded"],
     Failure["DecodingServices"],
     Failure["EncodingServices"]
   > = options.failure ?? Schema.Never;
+
   const inputValue = Schema.decodeUnknownEffect(Schema.toType(options.target.input));
   const resultValue = Schema.decodeUnknownEffect(Schema.toType(success));
   const needsApproval = options.needsApproval;
   const prepareInput = options.prepareInput;
   const projectResult = options.projectResult;
+
   const projectionFailure = (stage: "input" | "result") =>
     SubagentProjectionFailure.make({
       delegationId: decodeDelegationId(name),
@@ -842,6 +858,7 @@ function define<
           ? "Delegation parameters did not satisfy the child input Schema"
           : "Child output did not satisfy the delegation success Schema",
     });
+
   const resolved = {
     ...options,
     needsApproval:
@@ -868,6 +885,7 @@ function define<
           )
         : projectResult(output, context, input),
   };
+
   return options.failureMode === "return"
     ? defineExplicit<
         Name,
@@ -1132,6 +1150,7 @@ export interface SubagentRuntimeOptions<
 }
 
 const maxEventTextLength = 4 * 1024;
+
 const boundedEventText = (text: string): string =>
   text.length <= maxEventTextLength ? text : `${text.slice(0, maxEventTextLength - 1)}…`;
 
@@ -1152,6 +1171,7 @@ const errorTagOf = (error: unknown): string =>
 
 const boundedErrorTag = (tag: string): string => {
   const nonEmpty = tag.length === 0 ? "UnknownError" : tag;
+
   return nonEmpty.length <= maxErrorTagLength ? nonEmpty : nonEmpty.slice(0, maxErrorTagLength);
 };
 
@@ -1196,10 +1216,13 @@ const encodeAllocationAmounts = Schema.encodeEffect(SubagentReservationAmounts);
 
 const utf8ByteLength = (value: string): number => {
   let total = 0;
+
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
+
     total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
   }
+
   return total;
 };
 
@@ -1240,10 +1263,12 @@ const settleReservation = (
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const started = yield* Ref.get(startedAt);
+
     if (started === undefined) {
       yield* reservations.observe(reservationId, neverStartedUsage);
     } else {
       const now = yield* Clock.currentTimeMillis;
+
       yield* reservations.observe(
         reservationId,
         SubagentObservedUsage.make({ durationMillis: Math.max(0, Math.floor(now - started)) }),
@@ -1418,14 +1443,17 @@ const layer = <
     "definition" in modelOrBinding
       ? modelOrBinding
       : { definition: delegation.target, model: modelOrBinding };
+
   if (childBinding.definition !== delegation.target) {
     throw new Error("SubagentRuntime.layer requires the delegation's exact target Definition");
   }
+
   const resolvePolicy = (parent: AgentPolicy) => {
     const inherited = AgentPolicy.resolve(
       delegation.target.policyOverrides ?? delegation.target.policy,
       parent,
     );
+
     const policy =
       delegation.policy ??
       SubagentPolicy.make({
@@ -1442,6 +1470,7 @@ const layer = <
           : { maxCostMicrousd: parent.costBudgetMicrousd }),
         maxResultBytes: parent.toolResultBounds.maxBytes,
       });
+
     const tokenCeiling =
       policy.maxInputTokens === undefined || policy.maxOutputTokens === undefined
         ? inherited.tokenBudget
@@ -1449,6 +1478,7 @@ const layer = <
             inherited.tokenBudget ?? Infinity,
             policy.maxInputTokens + policy.maxOutputTokens,
           );
+
     const childPolicy = AgentPolicy.make({
       ...inherited,
       maxTurns: Math.min(inherited.maxTurns, policy.maxTurns),
@@ -1469,6 +1499,7 @@ const layer = <
             ),
           }),
     });
+
     const caps =
       options.parentCaps ??
       (delegation.policy === undefined
@@ -1486,8 +1517,10 @@ const layer = <
               : { maxCostMicrousd: parent.costBudgetMicrousd }),
           })
         : delegationCapsFromPolicy(policy));
+
     return { policy, childPolicy, allocation: delegationAllocationFromPolicy(policy), caps };
   };
+
   // `Toolkit.ToolsByName` cannot reduce its mapped-as key while `Name` is
   // generic (it degrades to a string index signature); at every concrete
   // `Name` the two records are identical, so this assertion bridges only that
@@ -1495,6 +1528,7 @@ const layer = <
   const toolkit = Toolkit.make(delegation.tool as Tool.Any) as unknown as Toolkit.Toolkit<
     SubagentTools<Name, Parameters, Success, Failure, Mode>
   >;
+
   // Containment (SUB-033): under `failureMode: "return"` every expected
   // delegation failure becomes the handler's SUCCESS value (the Tool success
   // Schema is the union of the declared success and the contained family);
@@ -1506,14 +1540,17 @@ const layer = <
   const decodeChildOutput = Schema.decodeUnknownEffect(delegation.target.output);
   const encodeDeclaredFailure = Schema.encodeEffect(delegation.failure);
   const childToolNames = Object.keys(delegation.target.toolkit.tools);
+
   const childToolCallAllowance = (
     parameters: Parameters["Type"],
     policy: SubagentPolicy,
     childPolicy: AgentPolicy,
   ): number => {
     const option = delegation.toolCallAllowance;
+
     if (option === undefined) return childPolicy.maxToolCalls;
     const extracted = option.fromParameters?.(parameters);
+
     // A non-finite parameter falls back to the author default, then the reservation.
     const requested =
       extracted !== undefined && Number.isFinite(extracted)
@@ -1521,12 +1558,14 @@ const layer = <
         : Number.isFinite(option.default)
           ? option.default
           : policy.maxToolCalls;
+
     return Math.min(
       Math.max(1, Math.floor(requested)),
       policy.maxToolCalls,
       childPolicy.maxToolCalls,
     );
   };
+
   // Construction-fixed durable declaration (S2): the exact digest strings the
   // establishment request carries on every Attempt, including batch resume.
   const durableDeclaration: SubagentDurableOptions | undefined =
@@ -1606,6 +1645,7 @@ const layer = <
       const { policy, childPolicy, allocation, caps } = resolvePolicy(spawner.policy);
       const sink = yield* RunEventSink;
       const reservations = yield* SubagentReservations;
+
       // The interpreter supplies the parent Tool Call identity for every
       // executed Tool Call; its absence is an engine defect, not an expected
       // failure of the delegation.
@@ -1642,6 +1682,7 @@ const layer = <
         toolCallId,
         parent: spawner.parent,
       });
+
       const encodedInput = yield* encodeChildInput(prepared).pipe(
         Effect.mapError(() =>
           SubagentProjectionFailure.make({
@@ -1653,6 +1694,7 @@ const layer = <
       );
 
       const parentRunId = spawner.parent.runId;
+
       yield* reservations
         .registerParent(parentRunId, caps)
         .pipe(
@@ -1668,6 +1710,7 @@ const layer = <
 
       const reservationId = makeBudgetReservationId(parentRunId, toolCallId);
       const startedAt = yield* Ref.make<number | undefined>(undefined);
+
       // Reservation settlement is finalizer-driven from this point on: every
       // exit path — success, declared failure, interruption, defect — settles
       // accounting exactly once when the handler scope closes.
@@ -1699,6 +1742,7 @@ const layer = <
 
       const seededChild = options.child;
       const seededBudget = seededChild?.budget;
+
       const budget: RunBudgetHook<never, HookRequirements> = {
         guard:
           seededBudget === undefined ? (effect) => effect : (effect) => seededBudget.guard(effect),
@@ -1712,7 +1756,9 @@ const layer = <
               ),
             ),
       };
+
       const toolCallAllowance = childToolCallAllowance(parameters, policy, childPolicy);
+
       const childOptions: SpawnRunOptions<never, HookRequirements> = {
         ...seededChild,
         budget,
@@ -1720,6 +1766,7 @@ const layer = <
       };
 
       yield* Ref.set(startedAt, yield* Clock.currentTimeMillis);
+
       const child = yield* spawner.spawn<
         TargetInput,
         TargetOutput,
@@ -1749,6 +1796,7 @@ const layer = <
         targetAgentId: delegation.target.id,
         depth: child.parentLink.depth,
       };
+
       // The sink cannot be closed while this Tool batch is live; a closed
       // sink here is an engine defect.
       const emit = (event: SubagentEventPayload): Effect.Effect<void> =>
@@ -1801,6 +1849,7 @@ const layer = <
               ),
           }),
         );
+
         yield* emit({
           _tag: "SubagentCompleted",
           ...payload,
@@ -1811,6 +1860,7 @@ const layer = <
           // the parent without leaking any child transcript.
           ...(result.exhausted !== undefined ? { exhausted: result.exhausted } : {}),
         });
+
         const projected = yield* delegation.projectResult(
           result.output,
           {
@@ -1818,6 +1868,7 @@ const layer = <
           },
           parameters,
         );
+
         const encodedResult = yield* encodeSuccess(projected).pipe(
           Effect.mapError(() =>
             SubagentProjectionFailure.make({
@@ -1827,7 +1878,9 @@ const layer = <
             }),
           ),
         );
+
         const resultBytes = utf8ByteLength(JSON.stringify(encodedResult) ?? "");
+
         yield* reservations
           .observe(reservationId, SubagentObservedUsage.make({ resultBytes }))
           .pipe(Effect.orDie);
@@ -1838,6 +1891,7 @@ const layer = <
             errorTag: "SubagentBudgetExhausted",
             message: `Projected child result of ${resultBytes} bytes exceeds the ${policy.maxResultBytes}-byte delegation budget`,
           });
+
           return yield* SubagentBudgetExhausted.make({
             parentRunId,
             dimension: "result-bytes",
@@ -1846,6 +1900,7 @@ const layer = <
           });
         }
         yield* emit({ _tag: "SubagentJoined", ...payload });
+
         return projected;
       });
 
@@ -1884,6 +1939,7 @@ const layer = <
       const spawner = yield* AgentSpawner;
       const { policy, childPolicy, allocation, caps } = resolvePolicy(spawner.policy);
       const encodedAllocation = yield* encodeAllocationAmounts(allocation).pipe(Effect.orDie);
+
       const conservativeAccounting = yield* encodeDurableAccounting(
         SubagentDurableAccounting.make({
           allocation,
@@ -1892,10 +1948,13 @@ const layer = <
           basis: "reserved-conservative",
         }),
       ).pipe(Effect.orDie);
+
       const sink = yield* RunEventSink;
+
       const toolCallId = yield* Schema.decodeUnknownEffect(ToolCallId)(
         handlerContext.toolCallId,
       ).pipe(Effect.orDie);
+
       const emit = (event: SubagentEventPayload): Effect.Effect<void> =>
         sink.emit(event).pipe(Effect.orDie);
 
@@ -1915,6 +1974,7 @@ const layer = <
       // per-action reauthorization): a narrowed or revoked grant denies the
       // next action typed before any establishment replay.
       const depth = spawner.depth + 1;
+
       if (depth > delegation.grant.maxDepth) {
         return yield* prestartDenied(
           "nested-delegation",
@@ -1941,6 +2001,7 @@ const layer = <
         toolCallId,
         parent: spawner.parent,
       });
+
       const encodedInput = yield* encodeChildInput(prepared).pipe(
         Effect.mapError(() =>
           SubagentProjectionFailure.make({
@@ -1985,8 +2046,10 @@ const layer = <
             targetAgentId: delegation.target.id,
             depth,
           };
+
           yield* emit({ _tag: "SubagentRequested", ...payload });
           yield* emit({ _tag: "SubagentStarted", ...payload });
+
           // The handler ends here and never returns: the engine keeps the
           // call open (no Tool failure, no batch failure policy), siblings
           // finish, and the Run suspends waitingForChild — never polling,
@@ -2002,6 +2065,7 @@ const layer = <
             targetAgentId: delegation.target.id,
             depth,
           };
+
           // Every terminal projection of a settled child — success or typed
           // failure — goes through ONE atomic join (SUB-019): the coordinator
           // appends `SubagentJoined` + the parent `ToolCallSettled` in one
@@ -2040,6 +2104,7 @@ const layer = <
 
           if (status.outcome !== "completed") {
             const projection = childFailureProjectionOf(status.encodedResult);
+
             const failure = executionFailure(
               status.outcome === "aborted"
                 ? "child-aborted"
@@ -2050,7 +2115,9 @@ const layer = <
               projection.message,
               status,
             );
+
             const encodedFailure = yield* encodeExecutionFailure(failure).pipe(Effect.orDie);
+
             return yield* settleFailure(failure, encodedFailure);
           }
 
@@ -2067,12 +2134,14 @@ const layer = <
                 stage: "result",
                 message: "Settled child output did not satisfy the target Agent output Schema",
               });
+
               return encodeProjectionFailure(failure).pipe(
                 Effect.orDie,
                 Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)),
               );
             }),
           );
+
           const projected = yield* delegation
             .projectResult(
               decoded,
@@ -2089,6 +2158,7 @@ const layer = <
                 ),
               ),
             );
+
           const encodedResult = yield* encodeSuccess(projected).pipe(
             Effect.catch(() => {
               const failure = SubagentProjectionFailure.make({
@@ -2096,13 +2166,16 @@ const layer = <
                 stage: "result",
                 message: "Projected child result did not satisfy the delegation success Schema",
               });
+
               return encodeProjectionFailure(failure).pipe(
                 Effect.orDie,
                 Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)),
               );
             }),
           );
+
           const resultBytes = utf8ByteLength(JSON.stringify(encodedResult) ?? "");
+
           if (policy.maxResultBytes !== undefined && resultBytes > policy.maxResultBytes) {
             const failure = SubagentBudgetExhausted.make({
               parentRunId: spawner.parent.runId,
@@ -2110,7 +2183,9 @@ const layer = <
               limitValue: policy.maxResultBytes,
               observedValue: resultBytes,
             });
+
             const encodedFailure = yield* encodeBudgetFailure(failure).pipe(Effect.orDie);
+
             return yield* settleFailure(failure, encodedFailure);
           }
           yield* Effect.mapError(wrapEngineSignal)(
@@ -2122,6 +2197,7 @@ const layer = <
             }),
           );
           yield* emit({ _tag: "SubagentJoined", ...payload });
+
           return projected;
         }
       }
@@ -2167,6 +2243,7 @@ const layer = <
         const spawner = yield* AgentSpawner;
         const sink = yield* RunEventSink;
         const durability = yield* SubagentDurability;
+
         // Service-mode dispatch (S2 plan §2): the engine states ephemeral
         // mode explicitly when no durable coordinator supplied the hook, so
         // absence keeps the S1 in-process spawn semantics honestly.
@@ -2178,10 +2255,12 @@ const layer = <
             Effect.provideService(SubagentDurability, durability),
             Effect.provide(captured),
           );
+
           return yield* contained
             ? durable.pipe(Effect.catch(containSignals))
             : durable.pipe(Effect.mapError(unwrapSignals));
         }
+
         const ephemeral = invoke(parameters, handlerContext).pipe(
           Effect.scoped,
           Effect.provideService(AgentSpawner, spawner),
@@ -2189,6 +2268,7 @@ const layer = <
           Effect.provideService(SubagentDurability, durability),
           Effect.provide(captured),
         );
+
         return yield* contained
           ? ephemeral.pipe(Effect.catch(containSignals))
           : ephemeral.pipe(Effect.mapError(unwrapSignals));

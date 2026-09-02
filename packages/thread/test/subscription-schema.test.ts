@@ -16,6 +16,7 @@ const partition = { tenantId: "fixture-tenant", address: "repository:42" };
 const source = { name: "workflow-completed", version: "1" };
 const key = { partition, ownerId: "reviewer", subscriptionId: "watch-101" };
 const digest = "a".repeat(64);
+
 const registration = {
   schemaVersion: 1,
   key,
@@ -38,6 +39,7 @@ const registration = {
   state: "active",
   recovery: { attempts: 1, nextAttemptAtMillis: 100, lastFailure: "github-rate-limited" },
 };
+
 const accepted = {
   schemaVersion: 1,
   partition,
@@ -53,6 +55,7 @@ const accepted = {
   routingFailure: null,
   nextAttemptAtMillis: 50,
 };
+
 const envelope = {
   schemaVersion: 1,
   threadId: `subscription:${digest}`,
@@ -64,6 +67,7 @@ const envelope = {
   admissionKey: `subscription:${digest}`,
   authorization: { policyId: "repository-policy", decisionId: "allowed" },
 };
+
 const selected = {
   schemaVersion: 1,
   key: { subscription: key, eventId: accepted.eventId },
@@ -81,7 +85,9 @@ const selected = {
   receipt: null,
   refusal: null,
 };
+
 const prepared = { ...selected, state: "prepared", envelope, envelopeDigest: digest };
+
 const receipt = {
   receiptId: "receipt",
   submissionId: "submission",
@@ -91,6 +97,7 @@ const receipt = {
 
 const fixture = <A, I>(schema: Schema.Codec<A, I>, encoded: unknown): void => {
   const value = Schema.decodeUnknownSync(schema)(encoded);
+
   expect(Schema.encodeSync(schema)(value)).toEqual(encoded);
 };
 

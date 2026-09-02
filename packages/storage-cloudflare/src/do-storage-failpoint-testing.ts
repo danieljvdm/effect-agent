@@ -17,6 +17,7 @@ export class DoStorageFailpointTestControl extends Context.Service<
   static readonly layer = Layer.effectContext(
     Effect.gen(function* () {
       const handler = yield* Ref.make<DoStorageFailpointHandler>(noFailpoint);
+
       return Context.make(
         DoStorageFailpoint,
         DoStorageFailpoint.of({

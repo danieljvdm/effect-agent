@@ -97,6 +97,7 @@ export class BrowserQuickActionBrowserBinding extends Context.Service<
     options: BrowserQuickActionCaptureOptions,
   ): Layer.Layer<BrowserQuickActionBrowserBinding> {
     const browser = options.browser;
+
     const invoke = Effect.fn("BrowserQuickActionBrowserBinding.invoke")(function* (
       action: "screenshot" | "content" | "markdown" | "links" | "scrape" | "json",
       evaluate: () => Promise<Response>,
@@ -106,6 +107,7 @@ export class BrowserQuickActionBrowserBinding extends Context.Service<
         catch: (cause) => BrowserQuickActionRpcError.make({ action, cause }),
       });
     });
+
     return Layer.succeed(BrowserQuickActionBrowserBinding)({
       screenshot: (request) =>
         invoke("screenshot", () => browser.quickAction("screenshot", request)),
@@ -175,8 +177,10 @@ const decodeEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(QuickAct
 const quickActionCommonOptions = (request: PageCaptureRequest): BrowserRunCommonOptions => {
   const options: BrowserRunBaseOptions = {};
   const navigation = request.navigation;
+
   if (navigation !== undefined) {
     const goto: NonNullable<BrowserRunBaseOptions["gotoOptions"]> = {};
+
     if (navigation.waitUntil !== undefined) goto.waitUntil = navigation.waitUntil;
     if (navigation.timeoutMillis !== undefined) goto.timeout = navigation.timeoutMillis;
     if (Object.keys(goto).length > 0) options.gotoOptions = goto;
@@ -200,6 +204,7 @@ const quickActionCommonOptions = (request: PageCaptureRequest): BrowserRunCommon
       options.allowRequestPattern = [...request.resourcePolicy.allowRequestPatterns];
     }
   }
+
   return request.target._tag === "PageUrlTarget"
     ? { ...options, url: request.target.url }
     : { ...options, html: request.target.html };
@@ -211,6 +216,7 @@ const executeQuickAction = (
   request: PageCaptureRequest,
 ): Effect.Effect<Response, BrowserQuickActionRpcError> => {
   const options = quickActionCommonOptions(request);
+
   switch (request.action._tag) {
     case "CapturePageContent": {
       return browser.content(options);
@@ -284,6 +290,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
   request: PageCaptureRequest,
 ) {
   const body = response.body;
+
   if (body === null) return "";
 
   const reader = yield* Effect.acquireRelease(
@@ -293,6 +300,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
     }),
     releaseResponseReader,
   );
+
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
   let observedBytes = 0;
   let bodyText = "";
@@ -302,6 +310,7 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
       try: () => reader.read(),
       catch: (cause) => protocolError("Reading the Quick Action response failed", cause),
     });
+
     if (chunk.done) break;
 
     observedBytes += chunk.value.byteLength;
@@ -334,25 +343,32 @@ const readBoundedResponse = Effect.fn("BrowserQuickActionCapture.readResponse")(
  */
 const retryAfterMillis = (response: Response): number | undefined => {
   const header = response.headers.get("Retry-After");
+
   if (header === null) return undefined;
   const seconds = Number(header);
+
   if (!Number.isSafeInteger(seconds) || seconds < 0) return undefined;
   const millis = seconds * 1_000;
+
   return Number.isSafeInteger(millis) ? millis : undefined;
 };
 
 const browserMillis = (response: Response): number | undefined => {
   const header = response.headers.get("X-Browser-Ms-Used");
+
   if (header === null) return undefined;
   const millis = Number(header);
+
   return Number.isSafeInteger(millis) && millis >= 0 ? millis : undefined;
 };
 
 /** Only trusted response metadata chooses transport framing; page text never does. */
 const isJsonResponse = (response: Response): boolean => {
   const contentType = response.headers.get("Content-Type");
+
   if (contentType === null) return false;
   const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+
   return mediaType === "application/json" || mediaType?.endsWith("+json") === true;
 };
 
@@ -368,6 +384,7 @@ const parseOutput = (
     );
   }
   const envelope = decodeEnvelope(bodyText);
+
   if (Option.isNone(envelope)) {
     return protocolError(
       "The JSON Quick Action response did not carry a valid response envelope",
@@ -386,6 +403,7 @@ const parseOutput = (
       if (typeof envelope.value.result !== "string") {
         return protocolError("The Quick Action envelope carried a non-text result");
       }
+
       return action._tag === "CapturePageContent"
         ? PageContentCaptured.make({ html: envelope.value.result })
         : PageMarkdownCaptured.make({ markdown: envelope.value.result });
@@ -395,9 +413,11 @@ const parseOutput = (
         _tag: "PageLinksCaptured",
         links: envelope.value.result,
       });
+
       if (Option.isNone(decoded)) {
         return protocolError("The links Quick Action did not return a bounded array of valid URLs");
       }
+
       return decoded.value;
     }
     case "CapturePageScrape": {
@@ -405,11 +425,13 @@ const parseOutput = (
         _tag: "PageScrapeCaptured",
         groups: envelope.value.result,
       });
+
       if (Option.isNone(decoded)) {
         return protocolError(
           "The scrape Quick Action did not return bounded grouped element records",
         );
       }
+
       return decoded.value;
     }
     case "CapturePageStructured": {
@@ -437,6 +459,7 @@ const makeCapture = (
     }
 
     const usesWorkersAi = request.action._tag === "CapturePageStructured";
+
     if (usesWorkersAi) {
       if (workersAi === undefined) {
         return yield* PageCaptureUnsupportedError.make({
@@ -467,11 +490,14 @@ const makeCapture = (
         protocolError("The browser binding rejected the Quick Action", error.cause),
       ),
     );
+
     const bodyText = yield* readBoundedResponse(response, request);
+
     if (response.status === 429) {
       const retryAfter = retryAfterMillis(response);
       const reason = isQuotaMessage(bodyText) ? "quota" : "rate";
       const cause = privateResponseCause(bodyText);
+
       return yield* PageCaptureRateLimitedError.make({
         implementation: browserQuickActionImplementation,
         reason,
@@ -486,12 +512,15 @@ const makeCapture = (
     if (!response.ok) {
       const message = `The Quick Action answered HTTP ${response.status}`;
       const cause = privateResponseCause(bodyText);
+
       if (response.status >= 500) {
         return yield* protocolError(message, cause);
       }
+
       return yield* navigationError(message, cause);
     }
     const output = parseOutput(request.action, bodyText, response);
+
     if (
       output._tag === "PageCaptureNavigationError" ||
       output._tag === "PageCaptureProtocolError"
@@ -499,6 +528,7 @@ const makeCapture = (
       return yield* output;
     }
     const millis = browserMillis(response);
+
     return PageCaptureResult.make({
       implementation: browserQuickActionImplementation,
       output,
@@ -543,6 +573,7 @@ export const browserQuickActionWorkersAiCaptureLayer = (): Layer.Layer<
     Effect.gen(function* () {
       const browser = yield* BrowserQuickActionBrowserBinding;
       const workersAi = yield* BrowserQuickActionWorkersAi;
+
       return PageCapture.of({ capture: makeCapture(browser, workersAi) });
     }),
   );
@@ -580,6 +611,7 @@ export const CloudflareBrowser = {
 
 const screenshotOptions = (request: PageScreenshotRequest): BrowserRunScreenshotOptions => {
   const options: BrowserRunBaseOptions = {};
+
   if (
     request.navigation?.waitUntil !== undefined ||
     request.navigation?.timeoutMillis !== undefined
@@ -610,6 +642,7 @@ const screenshotOptions = (request: PageScreenshotRequest): BrowserRunScreenshot
   if (request.resourcePolicy?.allowRequestPatterns !== undefined) {
     options.allowRequestPattern = [...request.resourcePolicy.allowRequestPatterns];
   }
+
   return {
     ...options,
     ...(request.target._tag === "PageUrlTarget"
@@ -643,8 +676,10 @@ const pngResponse = (response: Response): boolean =>
 
 const declaredLength = (response: Response): number | undefined => {
   const raw = response.headers.get("Content-Length");
+
   if (raw === null || !/^(0|[1-9][0-9]*)$/.test(raw)) return undefined;
   const length = Number(raw);
+
   return Number.isSafeInteger(length) ? length : undefined;
 };
 
@@ -653,22 +688,27 @@ const readScreenshot = Effect.fn("BrowserQuickActionScreenshot.read")(function* 
   request: PageScreenshotRequest,
 ) {
   const body = response.body;
+
   if (body === null) {
     return yield* protocolError("The screenshot response had no body");
   }
   if (!pngResponse(response)) {
     yield* cancelBody(body);
+
     return yield* protocolError("The screenshot response was not image/png");
   }
   const length = declaredLength(response);
+
   if (length !== undefined && length > request.limits.maxOutputBytes) {
     yield* cancelBody(body);
+
     return yield* PageScreenshotOutputLimitError.make({
       implementation: browserQuickActionImplementation,
       limit: request.limits.maxOutputBytes,
       observed: length,
     });
   }
+
   const reader = yield* Effect.acquireRelease(
     Effect.try({
       try: () => body.getReader(),
@@ -676,13 +716,16 @@ const readScreenshot = Effect.fn("BrowserQuickActionScreenshot.read")(function* 
     }),
     releaseScreenshotReader,
   );
+
   const chunks: Array<Uint8Array> = [];
   let observed = 0;
+
   while (true) {
     const next = yield* Effect.tryPromise({
       try: () => reader.read(),
       catch: (cause) => protocolError("Reading the screenshot response failed", cause),
     });
+
     if (next.done) break;
     observed += next.value.byteLength;
     if (observed > request.limits.maxOutputBytes) {
@@ -696,10 +739,12 @@ const readScreenshot = Effect.fn("BrowserQuickActionScreenshot.read")(function* 
   }
   const bytes = new Uint8Array(observed);
   let offset = 0;
+
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+
   return bytes;
 }, Effect.scoped);
 
@@ -714,6 +759,7 @@ const makeScreenshot = (browser: BrowserQuickActionClient): PageScreenshotCaptur
         message: "The browser binding's screenshot action exposes no engine selector",
       });
     }
+
     const response = yield* browser
       .screenshot(screenshotOptions(request))
       .pipe(
@@ -721,9 +767,12 @@ const makeScreenshot = (browser: BrowserQuickActionClient): PageScreenshotCaptur
           protocolError("The browser binding rejected the screenshot", error.cause),
         ),
       );
+
     if (response.status === 429) {
       const body = response.body;
+
       if (body !== null) yield* cancelBody(body);
+
       return yield* PageCaptureRateLimitedError.make({
         implementation: browserQuickActionImplementation,
         reason: "rate",
@@ -735,11 +784,14 @@ const makeScreenshot = (browser: BrowserQuickActionClient): PageScreenshotCaptur
     }
     if (!response.ok) {
       const body = response.body;
+
       if (body !== null) yield* cancelBody(body);
       const message = `The screenshot Quick Action answered HTTP ${response.status}`;
+
       return yield* response.status >= 500 ? protocolError(message) : navigationError(message);
     }
     const bytes = yield* readScreenshot(response, request);
+
     return PageScreenshotResult.make({
       implementation: browserQuickActionImplementation,
       mediaType: "image/png",

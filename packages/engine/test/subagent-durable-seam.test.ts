@@ -81,10 +81,12 @@ const makeIdentifiers = () =>
   Layer.effect(IdGenerator)(
     Effect.gen(function* () {
       const counter = yield* Ref.make(0);
+
       const next = <A>(decode: (value: string) => A, prefix: string) =>
         Ref.updateAndGet(counter, (value) => value + 1).pipe(
           Effect.map((value) => decode(`${prefix}-${value}`)),
         );
+
       return {
         nextThreadId: next(decodeThreadId, "thread"),
         nextRunId: next(decodeRunId, "run"),
@@ -111,6 +113,7 @@ const scriptedModel = (firstTurn: ReadonlyArray<Response.StreamPartEncoded>, fin
       LanguageModel.LanguageModel,
       Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
           streamText: () =>
@@ -134,10 +137,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -172,10 +177,12 @@ const durableDelegateHandler =
         yield* Ref.update(log.executions, (count) => count + 1);
       }
       const durability = yield* SubagentDurability;
+
       if (durability.mode === "ephemeral") {
         return yield* Effect.die(new Error("Expected the durable-mode SubagentDurability service"));
       }
       const toolCallId = yield* decodeToolCallId(context.toolCallId).pipe(Effect.orDie);
+
       const request: RunSubagentEstablishRequest = {
         toolCallId,
         delegationId,
@@ -186,10 +193,12 @@ const durableDelegateHandler =
         encodedGrant: { allowedToolNames: [], maxDepth: 1 },
         encodedAllocation: { turns: 2, toolCalls: 1 },
       };
+
       if (log?.establishes !== undefined) {
         yield* Ref.update(log.establishes, (all) => [...all, request]);
       }
       const status = yield* durability.establish(request);
+
       switch (status._tag) {
         case "waiting": {
           return yield* durability.waiting(toolCallId, status);
@@ -203,15 +212,18 @@ const durableDelegateHandler =
               message: `child settled ${status.outcome}`,
             });
           }
+
           const decoded = yield* Schema.decodeUnknownEffect(ChildResult)(status.encodedResult).pipe(
             Effect.orDie,
           );
+
           yield* durability.join({
             toolCallId,
             encodedResult: { answer: decoded.answer },
             isFailure: false,
             encodedAccounting: { consumed: { turns: 1 }, released: { turns: 1 } },
           });
+
           return { answer: decoded.answer };
         }
       }
@@ -229,6 +241,7 @@ const Lookup = Tool.make("lookup", {
 });
 
 const batchTools = Toolkit.make(DelegateChild, Lookup);
+
 const batchDefinition = Agent.make("durable-delegating-parent", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -280,6 +293,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const child = childIdentityFor("wait");
       const subagent = scriptedHook(() => ({ _tag: "waiting", ...child }));
+
       const model = scriptedModel(
         [
           delegateCallPart("delegate-1"),
@@ -288,6 +302,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         ],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = batchTools.toLayer({
         delegate_child: durableDelegateHandler(),
         lookup: ({ key }) => Effect.succeed(`handled-${key}`),
@@ -305,6 +320,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(AgentChildPending);
       if (!(failure instanceof AgentChildPending)) {
         throw new Error("Expected AgentChildPending");
@@ -320,12 +336,15 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
 
       const observed = yield* Ref.get(events);
       const tags = observed.map((event) => event._tag);
+
       // The sibling settled normally; the waiting call has no terminal event
       // (neither failure nor success) — it stays open for the resumed batch.
       expect(tags.filter((tag) => tag === "ToolCallFailed")).toEqual([]);
       const succeeded = observed.filter((event) => event._tag === "ToolCallSucceeded");
+
       expect(succeeded.map((event) => event.toolCallId)).toEqual(["lookup-1"]);
       const started = observed.filter((event) => event._tag === "ToolCallStarted");
+
       expect(started.map((event) => event.toolCallId).sort()).toEqual(["delegate-1", "lookup-1"]);
       expect(tags.at(-1)).toBe("RunSuspended");
     }),
@@ -338,6 +357,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       const siblingCompleted = yield* Ref.make(false);
       const child = childIdentityFor("slow-sibling");
       const subagent = scriptedHook(() => ({ _tag: "waiting", ...child }));
+
       const model = scriptedModel(
         [
           delegateCallPart("delegate-1"),
@@ -346,6 +366,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         ],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = batchTools.toLayer({
         // The delegation raises the waiting signal immediately …
         delegate_child: durableDelegateHandler(),
@@ -356,6 +377,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
             yield* Effect.yieldNow;
             yield* Effect.yieldNow;
             yield* Ref.set(siblingCompleted, true);
+
             return `handled-${key}`;
           }).pipe(Effect.onInterrupt(() => Ref.set(siblingInterrupted, true))),
       });
@@ -375,10 +397,13 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       expect(yield* Ref.get(siblingCompleted)).toBe(true);
       expect(yield* Ref.get(siblingInterrupted)).toBe(false);
       const observed = yield* Ref.get(events);
+
       const succeededIndex = observed.findIndex(
         (event) => event._tag === "ToolCallSucceeded" && event.toolCallId === "lookup-1",
       );
+
       const suspendedIndex = observed.findIndex((event) => event._tag === "RunSuspended");
+
       expect(succeededIndex).toBeGreaterThanOrEqual(0);
       expect(suspendedIndex).toBeGreaterThan(succeededIndex);
     }),
@@ -391,12 +416,15 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       const firstMayWait = yield* Deferred.make<void>();
       const childA = childIdentityFor("a");
       const childB = childIdentityFor("b");
+
       const subagent = scriptedHook((request) =>
         request.toolCallId === "delegate-1"
           ? { _tag: "waiting", ...childA }
           : { _tag: "waiting", ...childB },
       );
+
       const DelegateOnly = Toolkit.make(DelegateChild);
+
       const definition = Agent.make("two-waiting-delegations", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -409,6 +437,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
           toolConcurrency: 2,
         }),
       });
+
       const model = scriptedModel(
         [
           delegateCallPart("delegate-1"),
@@ -417,6 +446,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         ],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = DelegateOnly.toLayer({
         delegate_child: (parameters, context) =>
           context.toolCallId === "delegate-1"
@@ -437,6 +467,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(AgentChildPending);
       if (!(failure instanceof AgentChildPending)) {
         throw new Error("Expected AgentChildPending");
@@ -457,12 +488,15 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       const waitingRaised = yield* Deferred.make<void>();
       const child = childIdentityFor("failing-sibling");
       const subagent = scriptedHook(() => ({ _tag: "waiting", ...child }));
+
       const FailingLookup = Tool.make("lookup", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
         failure: DelegationFailed,
       });
+
       const tools = Toolkit.make(DelegateChild, FailingLookup);
+
       const definition = Agent.make("waiting-plus-failing-sibling", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -475,6 +509,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
           toolConcurrency: 2,
         }),
       });
+
       const model = scriptedModel(
         [
           delegateCallPart("delegate-1"),
@@ -483,6 +518,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         ],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = tools.toLayer({
         delegate_child: (parameters, context) =>
           durableDelegateHandler()(parameters, context).pipe(
@@ -504,6 +540,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       // wins: real failures keep the existing batch failure policy and the
       // durable ledger state (not this stream) carries the attached child.
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(DelegationFailed);
       expect((failure as DelegationFailed).message).toBe("sibling failed");
     }),
@@ -514,6 +551,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
       const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
       const child = childIdentityFor("settled");
+
       const subagent = scriptedHook(
         () => ({
           _tag: "settled",
@@ -523,10 +561,12 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         }),
         joins,
       );
+
       const model = scriptedModel(
         [delegateCallPart("delegate-1"), { type: "finish", reason: "tool-calls", usage }],
         '{"answer":"joined"}',
       );
+
       const toolLayer = batchTools.toLayer({
         delegate_child: durableDelegateHandler({ establishes }),
         lookup: ({ key }) => Effect.succeed(`handled-${key}`),
@@ -540,6 +580,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
 
       expect(result.output).toEqual({ answer: "joined" });
       const recordedEstablishes = yield* Ref.get(establishes);
+
       expect(recordedEstablishes).toHaveLength(1);
       expect(recordedEstablishes[0]).toMatchObject({
         toolCallId: "delegate-1",
@@ -550,6 +591,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         encodedChildInput: { question: "child?" },
       });
       const recordedJoins = yield* Ref.get(joins);
+
       expect(recordedJoins).toEqual([
         {
           toolCallId: "delegate-1",
@@ -568,6 +610,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       const lookupExecutions = yield* Ref.make(0);
       let nextRequestPrompt: Prompt.Prompt | undefined;
       const child = childIdentityFor("resume");
+
       // On the resumed Attempt the child has settled: establishment replays
       // idempotently and reports the verified settlement.
       const subagent = scriptedHook(
@@ -579,6 +622,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         }),
         joins,
       );
+
       const model = Model.make(
         "scripted",
         "resume-joining",
@@ -588,16 +632,19 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: (request) => {
               nextRequestPrompt = request.prompt;
+
               return Stream.fromIterable(finalParts('{"answer":"resumed"}'));
             },
           }),
         ),
       );
+
       const toolLayer = batchTools.toLayer({
         delegate_child: durableDelegateHandler({ executions: delegateExecutions }),
         lookup: ({ key }) =>
           Ref.update(lookupExecutions, (count) => count + 1).pipe(Effect.as(`re-handled-${key}`)),
       });
+
       const resume: RunTurnResume = {
         turn: 1,
         turnId: decodeTurnId("turn-resume-join"),
@@ -641,10 +688,12 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       if (nextRequestPrompt === undefined) {
         throw new Error("Expected the follow-up model request to be captured");
       }
+
       const toolResults = nextRequestPrompt.content
         .filter((message) => message.role === "tool")
         .flatMap((message) => message.content)
         .filter((part) => part.type === "tool-result");
+
       expect(toolResults.map((part) => [part.id, part.result])).toEqual([
         ["delegate-1", { answer: "child-answer" }],
         ["lookup-1", "recorded-a"],
@@ -655,15 +704,18 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
   it.effect("a denied establishment is an ordinary typed Tool failure", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const subagent = scriptedHook(() => ({
         _tag: "denied",
         errorTag: "ChildVerificationFailed",
         message: "parent link verification failed closed",
       }));
+
       const model = scriptedModel(
         [delegateCallPart("delegate-1"), { type: "finish", reason: "tool-calls", usage }],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = batchTools.toLayer({
         delegate_child: durableDelegateHandler(),
         lookup: ({ key }) => Effect.succeed(`handled-${key}`),
@@ -681,10 +733,12 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(DelegationFailed);
       expect((failure as DelegationFailed).message).toContain("verification failed closed");
       const observed = yield* Ref.get(events);
       const failed = observed.filter((event) => event._tag === "ToolCallFailed");
+
       expect(failed.map((event) => event.toolCallId)).toEqual(["delegate-1"]);
       // A denied establishment never suspends: RunFailed, not RunSuspended.
       expect(observed.at(-1)?._tag).toBe("RunFailed");
@@ -695,18 +749,23 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const reported: Array<string> = [];
+
       const reporter = ErrorReporter.make(({ error }) => {
         reported.push(error.message);
       });
+
       const hookFailure = HookFailure.make({ message: "ledger unavailable" });
+
       const subagent: RunSubagentHook<HookFailure> = {
         establish: () => Effect.fail(hookFailure),
         join: () => Effect.void,
       };
+
       const model = scriptedModel(
         [delegateCallPart("delegate-1"), { type: "finish", reason: "tool-calls", usage }],
         '{"answer":"unreachable"}',
       );
+
       const toolLayer = batchTools.toLayer({
         delegate_child: durableDelegateHandler(),
         lookup: ({ key }) => Effect.succeed(`handled-${key}`),
@@ -726,6 +785,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(failure).toBeInstanceOf(SubagentDurabilityError);
       if (!(failure instanceof SubagentDurabilityError)) {
         throw new Error("Expected SubagentDurabilityError");
@@ -753,6 +813,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const SpawningDelegate = Tool.make("delegate_child", {
         parameters: Schema.Struct({ question: Schema.String }),
         success: Schema.Struct({ answer: Schema.String }),
@@ -760,7 +821,9 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         .addDependency(AgentSpawner)
         .addDependency(IdGenerator)
         .addDependency(SubagentDurability);
+
       const tools = Toolkit.make(SpawningDelegate);
+
       const definition = Agent.make("ephemeral-default-parent", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -773,6 +836,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const spawnChild = (
         parameters: { readonly question: string },
         toolCallId: string | undefined,
@@ -780,35 +844,43 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         Effect.gen(function* () {
           const spawner = yield* AgentSpawner;
           const parentToolCallId = yield* decodeToolCallId(toolCallId).pipe(Effect.orDie);
+
           const childBinding = Agent.withModel(
             childDefinition,
             scriptedModel(finalParts('{"answer":"child-answer"}'), '{"answer":"child-answer"}'),
           );
+
           const child = yield* spawner.spawn(
             childBinding,
             { question: parameters.question },
             { delegationId, parentToolCallId },
           );
+
           const result = yield* child.await.pipe(Effect.orDie);
+
           return { answer: result.output.answer };
         }).pipe(Effect.scoped);
 
       const observedMode = yield* Ref.make<string | undefined>(undefined);
+
       // Baseline: the exact S1 handler shape — spawn and await, never
       // consulting the durability seam.
       const baselineLayer = tools.toLayer({
         delegate_child: (parameters, context) => spawnChild(parameters, context.toolCallId),
       });
+
       // Candidate: identical behavior after dispatching on the engine's
       // explicit ephemeral-mode default.
       const dispatchingLayer = tools.toLayer({
         delegate_child: (parameters, context) =>
           Effect.gen(function* () {
             const durability = yield* SubagentDurability;
+
             yield* Ref.set(observedMode, durability.mode);
             if (durability.mode !== "ephemeral") {
               return yield* Effect.die(new Error("Expected the ephemeral default"));
             }
+
             return yield* spawnChild(parameters, context.toolCallId);
           }),
       });
@@ -844,6 +916,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       delegate_child: () => Effect.succeed({ answer: "typed" }),
       lookup: ({ key }) => Effect.succeed(`handled-${key}`),
     });
+
     const agent = Agent.withModel(
       batchDefinition,
       scriptedModel(
@@ -851,6 +924,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         '{"answer":"typed"}',
       ),
     );
+
     const program = AgentRuntime.run(agent, { question: "types" });
 
     type Services = Effect.Services<typeof program>;
@@ -868,6 +942,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       spawnerExcluded: true,
       idGeneratorKept: true,
     });
+
     return AgentRuntime.run(agent, { question: "types" }).pipe(
       Effect.provide(toolLayer),
       Effect.scoped,
@@ -880,10 +955,12 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       establish: () =>
         Effect.gen(function* () {
           yield* TypedHookService;
+
           return yield* HookFailure.make({ message: "establish failed" });
         }),
       join: () => Effect.andThen(TypedHookService, Effect.void),
     };
+
     const agent = Agent.withModel(batchDefinition, scriptedModel([], '{"answer":"typed"}'));
     const program = AgentRuntime.run(agent, { question: "typed" }, { subagent });
 
@@ -900,6 +977,7 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       requirementsProof: true,
       childPendingProof: true,
     });
+
     return Effect.void;
   });
 });

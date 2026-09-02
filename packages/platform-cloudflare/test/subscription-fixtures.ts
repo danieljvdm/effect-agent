@@ -18,9 +18,11 @@ export const subscriptionPartition = SourcePartition.make({
   tenantId: "cf-subscription-tenant",
   address: "application:events",
 });
+
 export const subscriptionPrincipal = Schema.decodeSync(Principal)("cf-subscription-principal");
 export const subscriptionAgentId = Schema.decodeSync(AgentId)("cf-planner");
 export { TEST_DIGESTS as subscriptionDefinitions } from "./fixtures.ts";
+
 export const SubscriptionTestSourceVersion = {
   name: "test-application-event",
   version: "1",
@@ -30,6 +32,7 @@ const armed = new Map<string, Array<string>>();
 
 export const armSubscriptionEviction = (partitionName: string, point: string): void => {
   const queue = armed.get(partitionName) ?? [];
+
   queue.push(point);
   armed.set(partitionName, queue);
 };
@@ -43,11 +46,14 @@ export const subscriptionFailpointLayer = Layer.effect(
     hit: (point: string) =>
       Effect.suspend(() => {
         const name = state.raw.id.name;
+
         if (name === undefined) return Effect.void;
         const queue = armed.get(name);
+
         if (queue === undefined || queue[0] !== point) return Effect.void;
         queue.shift();
         if (queue.length === 0) armed.delete(name);
+
         return Effect.sync((): never => {
           state.raw.abort(`armed subscription eviction at ${point}`);
           throw new Error(`Durable Object abort returned at ${point}`);

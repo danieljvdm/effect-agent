@@ -36,6 +36,7 @@ export const SoakEnv = {
 } as const;
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
+
 export const SOAK_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 
 export const SOAK_CHILD_DIGEST_STRINGS = {
@@ -43,6 +44,7 @@ export const SOAK_CHILD_DIGEST_STRINGS = {
   model: "c".repeat(64),
   tools: "d".repeat(64),
 } as const;
+
 export const SOAK_CHILD_DIGESTS = DefinitionDigests.make({
   agent: Schema.decodeSync(Digest)(SOAK_CHILD_DIGEST_STRINGS.agent),
   model: Schema.decodeSync(Digest)(SOAK_CHILD_DIGEST_STRINGS.model),
@@ -167,6 +169,7 @@ export const soakCoordinatorDefinition = Agent.make("soak-coordinator", {
 export const soakPlannerSubmitSlice = {
   definition: { id: soakPlannerDefinition.id, input: soakPlannerDefinition.input },
 } as const;
+
 export const soakCoordinatorSubmitSlice = {
   definition: { id: soakCoordinatorDefinition.id, input: soakCoordinatorDefinition.input },
 } as const;
@@ -176,10 +179,12 @@ const soakIdentifiers = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
     const counter = yield* Ref.make(0);
+
     const next = <A>(decode: (value: string) => A, prefix: string) =>
       Ref.getAndUpdate(counter, (value) => value + 1).pipe(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
+
     return {
       nextThreadId: next(decodeThreadId, "soak-fixture-thread"),
       nextRunId: next(decodeRunId, "soak-fixture-run"),
@@ -207,6 +212,7 @@ export const makeSoakBindings = Effect.fn("SoakFixtures.makeSoakBindings")(funct
       ? finalParts('{"report":"done"}')
       : delegateParts,
   );
+
   const coordinatorBinding = Agent.withModel(soakCoordinatorDefinition, coordinatorModel);
 
   const childModel = promptScriptedModel("soak-child", () => finalParts('{"answer":"child"}'));
@@ -221,13 +227,16 @@ export const makeSoakBindings = Effect.fn("SoakFixtures.makeSoakBindings")(funct
     plannerBinding,
     SOAK_DIGESTS,
   );
+
   const coordinatorResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
     coordinatorBinding,
     SOAK_DIGESTS,
   ).pipe(Effect.provide(delegationLayer));
+
   const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
     childBinding,
     SOAK_CHILD_DIGESTS,
   );
+
   return [plannerResolved, coordinatorResolved, childResolved];
 });

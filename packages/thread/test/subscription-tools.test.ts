@@ -20,6 +20,7 @@ const digest = Schema.decodeSync(Digest)("c".repeat(64));
 const principal = Schema.decodeSync(Principal)("tool-principal");
 const agentId = Schema.decodeSync(AgentId)("tool-agent");
 const threadId = Schema.decodeSync(ThreadId)("tool-thread");
+
 const scope = Schema.decodeSync(
   Schema.Struct({
     partition: Schema.Struct({ tenantId: Schema.String, address: Schema.String }),
@@ -34,6 +35,7 @@ const scope = Schema.decodeSync(
 
 const durableReplay = () => {
   const recorded = new Map<string, unknown>();
+
   const service: DurableStep["Service"] = {
     do: (name, output, execute) =>
       Effect.gen(function* () {
@@ -50,6 +52,7 @@ const durableReplay = () => {
           );
         }
         const value = yield* execute;
+
         const encoded = yield* Schema.encodeEffect(output)(value).pipe(
           Effect.mapError((cause) =>
             DurableStepError.make({
@@ -60,10 +63,13 @@ const durableReplay = () => {
             }),
           ),
         );
+
         recorded.set(name, encoded);
+
         return value;
       }),
   };
+
   return service;
 };
 
@@ -74,10 +80,12 @@ describe("restricted subscription Tools", () => {
         readonly scope: SubscriptionScope;
         readonly options: SubscribeOptions;
       }> = [];
+
       const subscriptions = Subscriptions.of({
         subscribe: (requestedScope, options) => {
           return Effect.sync(() => {
             calls.push({ scope: requestedScope, options });
+
             return SubscriptionSnapshot.make({
               key: {
                 partition: requestedScope.partition,
@@ -97,6 +105,7 @@ describe("restricted subscription Tools", () => {
         cancelSubscription: () => Effect.die("unused"),
         listDeliveries: () => Effect.die("unused"),
       });
+
       const handlers = subscriptionToolsLayer({
         scope,
         currentThreadId: threadId,
@@ -119,8 +128,10 @@ describe("restricted subscription Tools", () => {
       }).pipe(
         Layer.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(Subscriptions, subscriptions))),
       );
+
       const toolkit = yield* SubscriptionTools.pipe(Effect.provide(handlers));
       const step = durableReplay();
+
       const parameters = {
         source: { name: "github-workflow-run-completed" as const, version: "1" as const },
         parameters: { runId: 202, attempt: 3, expectedHeadSha: "a".repeat(40) },
@@ -128,13 +139,16 @@ describe("restricted subscription Tools", () => {
         expiresAtMillis: 9_999,
         context: { reason: "release" },
       };
+
       const invoke = Effect.gen(function* () {
         const stream = yield* toolkit.handle("subscribe_to_event", parameters, "provider-call");
+
         return yield* Stream.runCollect(stream);
       }).pipe(Effect.provideService(DurableStep, step));
 
       const first = yield* invoke;
       const replay = yield* invoke;
+
       expect(replay).toEqual(first);
       expect(calls).toHaveLength(1);
       expect(calls[0]).toMatchObject({

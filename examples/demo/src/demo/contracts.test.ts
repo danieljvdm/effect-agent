@@ -96,7 +96,9 @@ describe("Phase 2 demo transport contracts", () => {
       executionClass: "ephemeral",
       schedulerConcurrency: 3,
     });
+
     const encoded = Schema.encodeSync(DemoOperationalEvent)(opened);
+
     const failure = DemoRunFailure.make({
       errorTag: "BudgetExceeded",
       message: "The run-level cost fuse opened.",

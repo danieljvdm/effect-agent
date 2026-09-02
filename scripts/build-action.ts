@@ -29,14 +29,18 @@ const runCommand = Effect.fn("runCommand")(function* (
 ) {
   const formatted = [command, ...args].join(" ");
   const child = yield* ChildProcess.make(command, args, { stderr: "pipe", stdout: "pipe" });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+
   const trimmed = output.trim();
+
   if (exitCode !== 0) {
     return yield* CommandError.make({ command: formatted, exitCode, output: trimmed });
   }
+
   return trimmed;
 });
 
@@ -58,12 +62,15 @@ export const command = CliCommand.make("build-action", {}, () =>
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const scratch = path.join(yield* fs.makeTempDirectoryScoped(), "index.mjs");
+
     yield* bundleTo(entry, scratch);
     yield* runCommand("node", ["--check", scratch]);
     const fresh = yield* fs.readFileString(scratch);
+
     yield* fs.makeDirectory(path.dirname(bundle), { recursive: true });
     yield* fs.writeFileString(bundle, fresh);
     const stat = yield* fs.stat(bundle);
+
     yield* Console.log(`Bundled ${entry} -> ${bundle} (${stat.size} bytes).`);
   }),
 ).pipe(CliCommand.withDescription("Build the PR-review GitHub Action for distribution."));

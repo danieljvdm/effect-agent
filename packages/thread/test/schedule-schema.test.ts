@@ -42,12 +42,14 @@ const occurrenceId = Schema.decodeSync(Digest)("e".repeat(64));
 const owner = { tenantId: "schedule-schema-tenant", ownerId: "schedule-schema-owner" };
 const key = { owner, scheduleId };
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
+
 const receipt = Receipt.make({
   receiptId: Schema.decodeSync(ReceiptId)("schedule-schema-receipt"),
   submissionId: Schema.decodeSync(SubmissionId)("schedule-schema-submission"),
   threadId,
   queueSequence: Schema.decodeSync(QueueSequence)(1),
 });
+
 const envelope = ScheduledEnvelope.make({
   schemaVersion: 1,
   ...key,
@@ -64,6 +66,7 @@ const envelope = ScheduledEnvelope.make({
   admissionKey: Schema.decodeSync(IdempotencyKey)("schedule-schema-admission"),
   authorization: { policyId: "policy", decisionId: "decision" },
 });
+
 const record = ScheduleRecord.make({
   schemaVersion: 1,
   ...key,
@@ -139,6 +142,7 @@ const snapshot = ScheduleSnapshot.make({
 
 const roundTrip = <A, I>(schema: Schema.Codec<A, I, never, never>, value: A): void => {
   const encoded = Schema.encodeSync(schema)(value);
+
   expect(Schema.decodeSync(schema)(encoded)).toEqual(value);
 };
 
@@ -225,6 +229,7 @@ describe("Schedule persisted schemas", () => {
         nowMillis: 120,
       },
     ];
+
     for (const change of changes) roundTrip(ScheduleChange, change);
 
     roundTrip(ScheduleValidationError, ScheduleValidationError.make({ message: "invalid" }));
@@ -261,6 +266,7 @@ describe("Schedule persisted schemas", () => {
 
   it("rejects malformed Unicode names before they cross a UTF-8 storage boundary", () => {
     const isKey = Schema.is(ScheduleKey);
+
     for (const name of ["\ud800", "\udc00", "tenant\ud800name", "\udc00\ud800"]) {
       expect(isKey({ ...key, scheduleId: name })).toBe(false);
       expect(isKey({ ...key, owner: { ...owner, tenantId: name } })).toBe(false);

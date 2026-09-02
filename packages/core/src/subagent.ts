@@ -39,6 +39,7 @@ export const SubagentBudgetReservation = Schema.Struct({
   caps: SubagentDelegationCaps,
   allocation: SubagentReservationAmounts,
 });
+
 export type SubagentBudgetReservation = typeof SubagentBudgetReservation.Type;
 
 /** Root-relative delegation depth; the direct child of a top-level run has depth 1. */

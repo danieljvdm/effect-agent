@@ -99,6 +99,7 @@ describe("general chat fixture profile", () => {
         Effect.provide(FixtureChatRuntimeLayer),
         Effect.scoped,
       );
+
       const declared = events.find((event) => event._tag === "ToolCallDeclared");
       const succeeded = events.find((event) => event._tag === "ToolCallSucceeded");
       const completed = events.find((event) => event._tag === "RunCompleted");

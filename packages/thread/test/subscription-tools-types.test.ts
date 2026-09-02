@@ -53,7 +53,9 @@ class PrepareInput extends Context.Service<PrepareInput, { readonly prefix: stri
 const sourceEffect = makeGitHubWorkflowRunSource({
   repository: GitHubRepository.make({ id: 1, owner: "effect", name: "agent" }),
 });
+
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
+
 const bindingEffect = makeSubscriptionInputBinding({
   source: GitHubWorkflowRunSourceVersion,
   agentId: Schema.decodeSync(AgentId)("agent"),
@@ -65,6 +67,7 @@ const bindingEffect = makeSubscriptionInputBinding({
   prepare: (_completion, _watch, context) =>
     Effect.gen(function* () {
       const service = yield* PrepareInput;
+
       return { message: `${service.prefix}${context.message}` };
     }),
 });
@@ -87,6 +90,7 @@ describe("Subscription Tool and GitHub source public types", () => {
       BindingFailureProof,
       BindingRequirementsProof,
     ] = [true, true, true, true, true, true, true];
+
     expect(proofs).toEqual([true, true, true, true, true, true, true]);
   });
 });
