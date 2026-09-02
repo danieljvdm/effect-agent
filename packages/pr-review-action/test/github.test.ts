@@ -372,7 +372,10 @@ it.effect("PRR-009 publishes twenty-four blocking findings at the review field b
     });
 
     expect(result).toBe(reviewUrl);
-    expect(reviewBody).not.toContain("Prompt for all");
+    expect(reviewBody).toContain("<details>\n<summary>Copy all findings (24)</summary>");
+    for (const finding of findings) {
+      expect(reviewBody.split(finding.title)).toHaveLength(2);
+    }
     expect(yield* Ref.get(published)).toEqual([
       "GET /repos/reve-ai/example/pulls/12",
       "POST /repos/reve-ai/example/pulls/12/reviews",
