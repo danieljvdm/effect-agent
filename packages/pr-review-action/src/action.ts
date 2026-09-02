@@ -22,6 +22,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  Option,
   Result,
   Schema,
 } from "effect";
@@ -252,6 +253,8 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   readonly base: RepositorySnapshot;
   readonly head: RepositorySnapshot;
   readonly ignore: ReadonlyArray<string>;
+  /** Omit to disable automatic exclusions. The host must use a trusted revision, not a PR head. */
+  readonly isGenerated?: (path: string) => Effect.Effect<boolean, GitHubApiFailure>;
 }) {
   const metadata = new Map(input.files.map((file) => [file.path, file] as const));
   const activeRenames = new Map<string, ChangedFile>();
@@ -338,6 +341,16 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       (afterEntry !== undefined && (afterEntry.type !== "blob" || afterEntry.mode === "120000"))
     ) {
       exclude(unreviewedPaths, file, basePath, "unsupported-entry");
+      continue;
+    }
+    if (
+      basePath === file.path &&
+      beforeEntry !== undefined &&
+      (afterEntry === undefined || beforeEntry.mode === afterEntry.mode) &&
+      input.isGenerated !== undefined &&
+      (yield* input.isGenerated(file.path))
+    ) {
+      exclude(ignoredPaths, file, basePath);
       continue;
     }
     const sourceSizesKnown =
@@ -565,12 +578,14 @@ export const reviewActionProgram = Effect.gen(function* () {
   const apiUrl = yield* Config.nonEmptyString("GITHUB_API_URL").pipe(
     Config.withDefault("https://api.github.com"),
   );
+  const graphqlUrl = yield* Config.nonEmptyString("GITHUB_GRAPHQL_URL").pipe(Config.option);
 
   const github = yield* makeGitHubClient({
     repository,
     pullRequest: pullRequestNumber,
     token,
     apiUrl,
+    graphqlUrl: Option.getOrUndefined(graphqlUrl),
   });
   if (commentId > 0) yield* github.acknowledgeComment(commentId);
   const pull = yield* github.getPullRequest;
@@ -644,12 +659,21 @@ export const reviewActionProgram = Effect.gen(function* () {
       }
     }
     const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
+    // A completed incremental baseline is still PR-controlled. Only the merge
+    // base with the target branch may authorize automatic generated exclusions.
+    const generatedAt = yield* Effect.cached(
+      reviewBase === currentMergeBase
+        ? Effect.succeed(comparison.base)
+        : github.readTreeSnapshot(currentMergeBase),
+    );
     const surface = yield* hydrateExactChanges({
       files: fullFiles,
       changedPaths: comparison.changedPaths,
       base: comparison.base,
       head: comparison.head,
       ignore,
+      isGenerated: (path) =>
+        generatedAt.pipe(Effect.flatMap((snapshot) => github.isGenerated(snapshot, path))),
     });
     const reviewRepository = makeReviewRepository({
       base: comparison.base,

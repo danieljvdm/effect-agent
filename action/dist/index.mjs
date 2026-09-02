@@ -50761,6 +50761,30 @@ var GitBlobWire = exports_Schema.Struct({
 var CompareWire = exports_Schema.Struct({
   merge_base_commit: exports_Schema.Struct({ sha: Revision3 })
 });
+var GeneratedFileQuery = exports_Schema.Struct({
+  query: exports_Schema.String,
+  variables: exports_Schema.Struct({
+    owner: exports_Schema.NonEmptyString,
+    name: exports_Schema.NonEmptyString,
+    revision: Revision3,
+    path: GitTreeEntryFields.path
+  })
+});
+var GeneratedFileWire = exports_Schema.Struct({
+  data: exports_Schema.Struct({
+    repository: exports_Schema.Struct({
+      object: exports_Schema.Struct({
+        oid: Revision3,
+        file: exports_Schema.Struct({
+          path: GitTreeEntryFields.path,
+          oid: Revision3,
+          isGenerated: exports_Schema.Boolean
+        })
+      })
+    })
+  }),
+  errors: exports_Schema.optionalKey(exports_Schema.Tuple([]))
+});
 var PublishedReviewWire = exports_Schema.Struct({ html_url: ShortString });
 var CreateReactionWire = exports_Schema.Struct({ content: exports_Schema.Literal("eyes") });
 var ReactionWire = exports_Schema.Struct({
@@ -50809,6 +50833,7 @@ var changedFileFromWire = (wire) => ({
 var makeGitHubClient = exports_Effect.fn("makeGitHubClient")(function* (options3) {
   const client = yield* exports_HttpClient.HttpClient;
   const apiUrl = (options3.apiUrl ?? "https://api.github.com").replace(/\/$/, "");
+  const graphqlUrl = options3.graphqlUrl ?? `${apiUrl.replace(/\/v3$/, "")}/graphql`;
   const pullUrl = `${apiUrl}/repos/${options3.repository}/pulls/${String(options3.pullRequest)}`;
   const failure = (operation, cause) => GitHubApiFailure.make({ operation, reason: String(cause).slice(0, 4096) });
   const request3 = (value4) => value4.pipe(exports_HttpClientRequest.setHeaders({
@@ -51053,6 +51078,35 @@ ${input.evidence}`
     });
     return { changedPaths, base: baseSnapshot, head: headSnapshot };
   });
+  const isGenerated = exports_Effect.fn("GitHubClient.isGenerated")(function* (snapshot3, path) {
+    const entry = snapshot3.entry(path);
+    if (entry?.type !== "blob" || entry.mode === "120000")
+      return false;
+    const [owner = "", name = ""] = options3.repository.split("/");
+    const body = yield* exports_Schema.encodeEffect(GeneratedFileQuery)({
+      query: `query GeneratedFile($owner: String!, $name: String!, $revision: GitObjectID!, $path: String!) {
+        repository(owner: $owner, name: $name) {
+          object(oid: $revision) {
+            ... on Commit { oid file(path: $path) { path oid isGenerated } }
+          }
+        }
+      }`,
+      variables: { owner, name, revision: snapshot3.revision, path }
+    }).pipe(exports_Effect.mapError((cause) => failure("encode generated file query", cause)));
+    const query = yield* exports_HttpClientRequest.post(graphqlUrl).pipe(exports_HttpClientRequest.bodyJson(body), exports_Effect.mapError((cause) => failure("encode generated file query", cause)));
+    const result4 = yield* execute2("classify generated file", query).pipe(exports_Effect.flatMap(decode4(GeneratedFileWire, "classify generated file")), exports_Effect.timeout("10 seconds"), exports_Effect.catchTag("TimeoutError", () => exports_Effect.fail(GitHubApiFailure.make({
+      operation: "classify generated file",
+      reason: "Generated-file classification timed out"
+    }))));
+    const commit = result4.data.repository.object;
+    if (commit.oid !== snapshot3.revision || commit.file.path !== path || commit.file.oid !== entry.sha) {
+      return yield* GitHubApiFailure.make({
+        operation: "classify generated file",
+        reason: "Generated-file classification does not match the frozen repository entry"
+      });
+    }
+    return commit.file.isGenerated;
+  });
   const acknowledgeComment = exports_Effect.fn("GitHubClient.acknowledgeComment")(function* (commentId) {
     const body = yield* exports_Schema.encodeEffect(CreateReactionWire)({ content: "eyes" }).pipe(exports_Effect.mapError((cause) => failure("encode issue comment reaction", cause)));
     const reactionRequest = yield* exports_HttpClientRequest.post(`${apiUrl}/repos/${options3.repository}/issues/comments/${String(commentId)}/reactions`).pipe(exports_HttpClientRequest.bodyJson(body), exports_Effect.mapError((cause) => failure("encode issue comment reaction", cause)));
@@ -51098,6 +51152,8 @@ ${input.evidence}`
     dismissReview,
     getMergeBase,
     compareTrees,
+    readTreeSnapshot,
+    isGenerated,
     acknowledgeComment,
     publishReview,
     publishAttemptMarker
@@ -51874,6 +51930,10 @@ var hydrateExactChanges = exports_Effect.fn("hydrateExactChanges")(function* (in
       exclude(unreviewedPaths, file2, basePath, "unsupported-entry");
       continue;
     }
+    if (basePath === file2.path && beforeEntry !== undefined && (afterEntry === undefined || beforeEntry.mode === afterEntry.mode) && input.isGenerated !== undefined && (yield* input.isGenerated(file2.path))) {
+      exclude(ignoredPaths, file2, basePath);
+      continue;
+    }
     const sourceSizesKnown = (beforeEntry === undefined || beforeEntry.size !== undefined) && (afterEntry === undefined || afterEntry.size !== undefined);
     const estimatedSourceBytes = (beforeEntry?.size ?? 0) + (afterEntry?.size ?? 0);
     if (hydratedSourceBytes >= MAX_HYDRATED_SOURCE_BYTES || sourceSizesKnown && hydratedSourceBytes + estimatedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
@@ -51997,11 +52057,13 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const guidanceFile = yield* exports_Config.string("PR_REVIEW_GUIDANCE_FILE").pipe(exports_Config.withDefault(""));
   const ignore6 = (yield* exports_Config.string("PR_REVIEW_IGNORE").pipe(exports_Config.withDefault(""))).split(",").map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0);
   const apiUrl = yield* exports_Config.nonEmptyString("GITHUB_API_URL").pipe(exports_Config.withDefault("https://api.github.com"));
+  const graphqlUrl = yield* exports_Config.nonEmptyString("GITHUB_GRAPHQL_URL").pipe(exports_Config.option);
   const github = yield* makeGitHubClient({
     repository,
     pullRequest: pullRequestNumber,
     token,
-    apiUrl
+    apiUrl,
+    graphqlUrl: exports_Option.getOrUndefined(graphqlUrl)
   });
   if (commentId > 0)
     yield* github.acknowledgeComment(commentId);
@@ -52069,12 +52131,14 @@ var reviewActionProgram = exports_Effect.gen(function* () {
       }
     }
     const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
+    const generatedAt = yield* exports_Effect.cached(reviewBase === currentMergeBase ? exports_Effect.succeed(comparison.base) : github.readTreeSnapshot(currentMergeBase));
     const surface2 = yield* hydrateExactChanges({
       files: fullFiles,
       changedPaths: comparison.changedPaths,
       base: comparison.base,
       head: comparison.head,
-      ignore: ignore6
+      ignore: ignore6,
+      isGenerated: (path) => generatedAt.pipe(exports_Effect.flatMap((snapshot3) => github.isGenerated(snapshot3, path)))
     });
     const reviewRepository = makeReviewRepository({
       base: comparison.base,

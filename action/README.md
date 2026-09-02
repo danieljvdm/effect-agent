@@ -76,6 +76,30 @@ supplied patches completes. The comment shows up to 30 exclusions; the Action lo
 them. Paths excluded only by input capacity remain available to bounded source tools, while ignore
 rules and unsupported or unreadable entries continue to block access.
 
+### Generated files
+
+Before reading modified or deleted regular files, the Action checks GitHub's
+[`TreeEntry.isGenerated`](https://docs.github.com/en/graphql/reference/git#treeentry) metadata
+at the pull request's merge base with its target branch. This includes GitHub's generated-file
+classification and repository `linguist-generated` attributes. Generated files count as ignored,
+not incomplete coverage, and their contents are not read or supplied to the model. Deleting an
+artifact and its attributes or workflow ignore rule in the same PR does not lose the base
+classification. Explicit `ignore` patterns still take precedence.
+
+The trusted merge base owns this policy even during incremental reviews. Neither the PR head nor
+a previously reviewed PR commit can authorize a new automatic exclusion. New paths, renames,
+permission changes, and unsupported entries retain normal admission rules. This is not a blanket
+`dist/` exclusion; new generated paths still need an explicit host ignore rule until their
+classification exists on the target branch.
+
+Classification uses GitHub GraphQL with the same repository-read token, without checking out or
+executing PR code. Responses must match the trusted commit, path, and blob identity. Missing,
+malformed, partial-error, or failed responses stop preparation and record an incomplete attempt;
+they never silently authorize an exclusion. Each metadata request has a ten-second timeout and
+no automatic retries. At most 100 candidate files are classified per attempt, sharing the existing
+file-admission bound. The Action uses `GITHUB_GRAPHQL_URL` when set, otherwise the GraphQL endpoint
+corresponding to `GITHUB_API_URL`, including GitHub Enterprise Server's `/api/graphql` endpoint.
+
 ## Spending and prompt caching
 
 Every review attempt has a fixed **$0.999999 admission ceiling**. The Action keeps the configured

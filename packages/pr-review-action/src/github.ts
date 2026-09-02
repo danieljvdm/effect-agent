@@ -111,6 +111,31 @@ const CompareWire = Schema.Struct({
   merge_base_commit: Schema.Struct({ sha: Revision }),
 });
 
+const GeneratedFileQuery = Schema.Struct({
+  query: Schema.String,
+  variables: Schema.Struct({
+    owner: Schema.NonEmptyString,
+    name: Schema.NonEmptyString,
+    revision: Revision,
+    path: GitTreeEntryFields.path,
+  }),
+});
+const GeneratedFileWire = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      object: Schema.Struct({
+        oid: Revision,
+        file: Schema.Struct({
+          path: GitTreeEntryFields.path,
+          oid: Revision,
+          isGenerated: Schema.Boolean,
+        }),
+      }),
+    }),
+  }),
+  errors: Schema.optionalKey(Schema.Tuple([])),
+});
+
 const PublishedReviewWire = Schema.Struct({ html_url: ShortString });
 const CreateReactionWire = Schema.Struct({ content: Schema.Literal("eyes") });
 const ReactionWire = Schema.Struct({
@@ -222,9 +247,11 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
   readonly pullRequest: number;
   readonly token: Redacted.Redacted<string>;
   readonly apiUrl?: string | undefined;
+  readonly graphqlUrl?: string | undefined;
 }) {
   const client = yield* HttpClient.HttpClient;
   const apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "");
+  const graphqlUrl = options.graphqlUrl ?? `${apiUrl.replace(/\/v3$/, "")}/graphql`;
   const pullUrl = `${apiUrl}/repos/${options.repository}/pulls/${String(options.pullRequest)}`;
   const failure = (operation: string, cause: unknown) =>
     GitHubApiFailure.make({ operation, reason: String(cause).slice(0, 4_096) });
@@ -605,6 +632,54 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     return { changedPaths, base: baseSnapshot, head: headSnapshot } satisfies TreeComparisonView;
   });
 
+  /** Classify only an existing regular file in a caller-selected trusted snapshot. */
+  const isGenerated = Effect.fn("GitHubClient.isGenerated")(function* (
+    snapshot: RepositorySnapshot,
+    path: string,
+  ) {
+    const entry = snapshot.entry(path);
+    if (entry?.type !== "blob" || entry.mode === "120000") return false;
+    const [owner = "", name = ""] = options.repository.split("/");
+    const body = yield* Schema.encodeEffect(GeneratedFileQuery)({
+      query: `query GeneratedFile($owner: String!, $name: String!, $revision: GitObjectID!, $path: String!) {
+        repository(owner: $owner, name: $name) {
+          object(oid: $revision) {
+            ... on Commit { oid file(path: $path) { path oid isGenerated } }
+          }
+        }
+      }`,
+      variables: { owner, name, revision: snapshot.revision, path },
+    }).pipe(Effect.mapError((cause) => failure("encode generated file query", cause)));
+    const query = yield* HttpClientRequest.post(graphqlUrl).pipe(
+      HttpClientRequest.bodyJson(body),
+      Effect.mapError((cause) => failure("encode generated file query", cause)),
+    );
+    const result = yield* execute("classify generated file", query).pipe(
+      Effect.flatMap(decode(GeneratedFileWire, "classify generated file")),
+      Effect.timeout("10 seconds"),
+      Effect.catchTag("TimeoutError", () =>
+        Effect.fail(
+          GitHubApiFailure.make({
+            operation: "classify generated file",
+            reason: "Generated-file classification timed out",
+          }),
+        ),
+      ),
+    );
+    const commit = result.data.repository.object;
+    if (
+      commit.oid !== snapshot.revision ||
+      commit.file.path !== path ||
+      commit.file.oid !== entry.sha
+    ) {
+      return yield* GitHubApiFailure.make({
+        operation: "classify generated file",
+        reason: "Generated-file classification does not match the frozen repository entry",
+      });
+    }
+    return commit.file.isGenerated;
+  });
+
   const acknowledgeComment = Effect.fn("GitHubClient.acknowledgeComment")(function* (
     commentId: number,
   ) {
@@ -690,6 +765,8 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     dismissReview,
     getMergeBase,
     compareTrees,
+    readTreeSnapshot,
+    isGenerated,
     acknowledgeComment,
     publishReview,
     publishAttemptMarker,

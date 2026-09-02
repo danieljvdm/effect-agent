@@ -1,9 +1,10 @@
 import { ReviewFinding, ReviewFollowUp, ReviewReport } from "@effect-agent/pr-review";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Encoding, Exit, Fiber, Redacted, Ref, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-import { makeGitHubClient } from "../src/github.ts";
+import { makeGitHubClient, type RepositorySnapshot } from "../src/github.ts";
 import { defaultReviewPresentation } from "../src/presentation.ts";
 import { reviewMarker, type ReviewHistoryItem } from "../src/selection.ts";
 
@@ -472,6 +473,171 @@ it.effect("retains GitHub's exact previous filename for declared renames", () =>
 );
 
 describe("GitHub tree comparison", () => {
+  const generatedPath = "retired-action/dist/index.mjs";
+  const generatedBlob = "a".repeat(40);
+  const trustedSnapshot: RepositorySnapshot = {
+    revision: baseRevision,
+    paths: [generatedPath],
+    entry: (path) => (path === generatedPath ? entry(path, generatedBlob) : undefined),
+    readTextFile: () => Effect.die("classification must not read the bundle"),
+  };
+  const generatedResponse = (isGenerated: boolean) => ({
+    data: {
+      repository: {
+        object: {
+          oid: baseRevision,
+          file: { path: generatedPath, oid: generatedBlob, isGenerated },
+        },
+      },
+    },
+  });
+
+  it.effect.each([true, false])(
+    "reads revision-bound generated metadata without source: %s",
+    (generated) =>
+      Effect.gen(function* () {
+        const client = HttpClient.make((request, url) => {
+          expect(url.href).toBe("https://github.test/api/graphql");
+          expect(request.method).toBe("POST");
+          if (request.body._tag !== "Uint8Array") throw new Error("Expected GraphQL JSON");
+          const query = Schema.decodeUnknownSync(
+            Schema.fromJsonString(
+              Schema.Struct({
+                variables: Schema.Struct({
+                  owner: Schema.String,
+                  name: Schema.String,
+                  revision: Schema.String,
+                  path: Schema.String,
+                }),
+              }),
+            ),
+          )(new TextDecoder().decode(request.body.body));
+          expect(query.variables).toEqual({
+            owner: "reve-ai",
+            name: "example",
+            revision: baseRevision,
+            path: generatedPath,
+          });
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new globalThis.Response(JSON.stringify(generatedResponse(generated))),
+            ),
+          );
+        });
+        const github = yield* makeGitHubClient({
+          repository,
+          pullRequest: 12,
+          token: Redacted.make("token"),
+          apiUrl: "https://github.test/api/v3",
+        }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+        expect(yield* github.isGenerated(trustedSnapshot, generatedPath)).toBe(generated);
+        expect(yield* github.isGenerated(trustedSnapshot, "head-only.ts")).toBe(false);
+      }),
+  );
+
+  it.effect.each([
+    {
+      name: "GraphQL partial failure",
+      body: { ...generatedResponse(true), errors: [{ message: "unavailable" }] },
+    },
+    {
+      name: "missing classification",
+      body: { data: { repository: { object: { oid: baseRevision, file: null } } } },
+    },
+    {
+      name: "wrong commit",
+      body: {
+        data: {
+          repository: {
+            object: { ...generatedResponse(true).data.repository.object, oid: headRevision },
+          },
+        },
+      },
+    },
+    {
+      name: "wrong file",
+      body: {
+        data: {
+          repository: {
+            object: {
+              oid: baseRevision,
+              file: { path: "other.ts", oid: generatedBlob, isGenerated: true },
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "wrong blob",
+      body: {
+        data: {
+          repository: {
+            object: {
+              oid: baseRevision,
+              file: { path: generatedPath, oid: headRevision, isGenerated: true },
+            },
+          },
+        },
+      },
+    },
+  ])("never authorizes exclusion on $name", ({ body }) =>
+    Effect.gen(function* () {
+      const client = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(request, new globalThis.Response(JSON.stringify(body))),
+        ),
+      );
+      const github = yield* makeGitHubClient({
+        repository,
+        pullRequest: 12,
+        token: Redacted.make("token"),
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+      expect(
+        yield* github.isGenerated(trustedSnapshot, generatedPath).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "GitHubApiFailure", operation: "classify generated file" });
+    }),
+  );
+
+  it.effect.each(["timeout", "interruption"] as const)(
+    "finalizes generated metadata requests on %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        let finalized = false;
+        const client = HttpClient.make(() =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(
+              Effect.sync(() => {
+                finalized = true;
+              }),
+            ),
+          ),
+        );
+        const github = yield* makeGitHubClient({
+          repository,
+          pullRequest: 12,
+          token: Redacted.make("token"),
+        }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+        const fiber = yield* github
+          .isGenerated(trustedSnapshot, generatedPath)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        if (mode === "timeout") {
+          yield* TestClock.adjust("10 seconds");
+          expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
+            _tag: "GitHubApiFailure",
+            reason: "Generated-file classification timed out",
+          });
+        } else {
+          yield* Fiber.interrupt(fiber);
+          expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true);
+        }
+        expect(finalized).toBe(true);
+      }),
+  );
+
   it.effect("PRR-008 compares exact contents after rewritten history", () =>
     Effect.gen(function* () {
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
