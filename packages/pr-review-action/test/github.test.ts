@@ -680,6 +680,7 @@ describe("GitHub tree comparison", () => {
       Effect.gen(function* () {
         const path = "assets/unknown";
         const blob = "a".repeat(40);
+
         const client = HttpClient.make((request, url) => {
           const body = url.pathname.includes("/git/commits/")
             ? {
@@ -689,6 +690,7 @@ describe("GitHub tree comparison", () => {
             : url.pathname.includes("/git/trees/")
               ? { sha: headTree, truncated: false, tree: [entry(path, blob)] }
               : { sha: blob, size, encoding: "base64", content: Encoding.encodeBase64(bytes) };
+
           return Effect.succeed(
             HttpClientResponse.fromWeb(
               request,
@@ -699,13 +701,16 @@ describe("GitHub tree comparison", () => {
             ),
           );
         });
+
         const github = yield* makeGitHubClient({
           repository,
           pullRequest: 12,
           token: Redacted.make("github-token"),
           apiUrl: "https://api.github.test",
         }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
         const comparison = yield* github.compareTrees(baseRevision, headRevision);
+
         expect((yield* comparison.head.readTextFile(path).pipe(Effect.flip))._tag).toBe(tag);
       }),
   );
