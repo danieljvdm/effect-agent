@@ -180,12 +180,6 @@ delegation, and depth that established it.
 A Subagent Invocation whose terminal outcome must be joined into its parent Tool Call before that
 Tool Call settles. Detachment is a separate future capability.
 
-**Work Order**
-A head-bound, path-scoped instruction on a pull request, admitted only by explicit human
-dispatch. An implementer proposes a patch; the host validates and publishes. The separate
-[work-order Action](work-order-action/README.md) owns GitHub dispatch, persistent admission,
-isolated publication, and thread presentation.
-
 **MCP Server**
 An external Model Context Protocol server reached through an application-configured transport.
 Its discovered tools become dynamic Effect AI Tools that forward `tools/call`; they remain ordinary

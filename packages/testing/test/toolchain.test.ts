@@ -101,8 +101,6 @@ const exampleNames = [
   "cloudflare-memory",
   "code-mode-cloudflare",
   "demo",
-  "pr-work-order-ingress",
-  "pr-work-orders",
   "pr-review-eval",
   "providers",
   "repo-ops",
@@ -1941,169 +1939,124 @@ Exercise the generated release verifier.
     }),
   );
 
-  it.effect(
-    "PRR-005 WO-006 WO-009 WO-010 WO-011 WOI-012 confines provider adapters to leaf applications",
-    () =>
-      Effect.gen(function* () {
-        const root = yield* readManifest(`${repositoryRoot}/package.json`);
-        const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
-        const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
-        const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
-        const prReviewAction = yield* readManifest(
-          `${repositoryRoot}/packages/pr-review-action/package.json`,
-        );
-        const prWorkOrders = yield* readManifest(
-          `${repositoryRoot}/examples/pr-work-orders/package.json`,
-        );
-        const prWorkOrderIngress = yield* readManifest(
-          `${repositoryRoot}/examples/pr-work-order-ingress/package.json`,
-        );
-        const demoDependencies = manifestDependencies(demo);
-        const providerDependencies = manifestDependencies(providers);
-        const repoOpsDependencies = manifestDependencies(repoOps);
-        const prReviewDependencies = manifestDependencies(prReviewAction);
-        const prWorkOrdersDependencies = manifestDependencies(prWorkOrders);
-        const prWorkOrderIngressDependencies = manifestDependencies(prWorkOrderIngress);
+  it.effect("PRR-005 confines provider adapters to leaf applications", () =>
+    Effect.gen(function* () {
+      const root = yield* readManifest(`${repositoryRoot}/package.json`);
+      const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
+      const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
+      const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
+      const prReviewAction = yield* readManifest(
+        `${repositoryRoot}/packages/pr-review-action/package.json`,
+      );
+      const demoDependencies = manifestDependencies(demo);
+      const providerDependencies = manifestDependencies(providers);
+      const repoOpsDependencies = manifestDependencies(repoOps);
+      const prReviewDependencies = manifestDependencies(prReviewAction);
 
-        expect(demo.name).toBe("@effect-agent/example-demo");
-        expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-        expect(demo.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
-        expect(demo.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
-        expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
-        expect(demo.dependencies?.["@tanstack/react-start"]).toBe("catalog:");
-        expect(demo.dependencies?.["@base-ui/react"]).toBe("catalog:");
-        expect(demo.dependencies?.react).toBe("catalog:");
-        expect(demo.dependencies?.effect).toBe("catalog:");
-        expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
-        expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
-        expect(demoDependencies).not.toContain("wrangler");
-        expect(demoDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
-          false,
-        );
-        expect(providers.name).toBe("@effect-agent/example-providers");
-        expect(providers.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-        expect(providers.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
-        expect(providers.dependencies?.effect).toBe("catalog:");
-        expect(providers.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(providers.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
-        expect(providerDependencies).not.toContain("wrangler");
-        expect(
-          providerDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        // P7: the repo-ops evidence auditor is the third leaf example workspace.
-        expect(repoOps.name).toBe("@effect-agent/example-repo-ops");
-        expect(repoOps.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-        expect(repoOps.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
-        expect(repoOps.dependencies?.effect).toBe("catalog:");
-        expect(repoOps.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(repoOpsDependencies).not.toContain("wrangler");
-        expect(
-          repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        // The GitHub channel owns the concrete provider and platform edges;
-        // the reusable reviewer package stays provider-neutral (PRR-005).
-        expect(prReviewAction.name).toBe("@effect-agent/pr-review-action");
-        expect(prReviewAction.private).toBe(true);
-        expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
-        expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
-        expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
-        expect(prReviewAction.dependencies?.effect).toBe("catalog:");
-        expect(prReviewDependencies).not.toContain("wrangler");
-        expect(
-          prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        // The reusable implementer stays provider-agnostic. The operational
-        // ingress Action binds the two supported Effect AI provider Layers,
-        // while still remaining separate from the read-only reviewer.
-        expect(prWorkOrders.name).toBe("@effect-agent/example-pr-work-orders");
-        expect(prWorkOrders.private).toBe(true);
-        expect(prWorkOrders.dependencies?.["@effect-agent/pr-review"]).toBeUndefined();
-        expect(prWorkOrders.dependencies?.["effect-agent"]).toBe("workspace:*");
-        expect(prWorkOrders.dependencies?.effect).toBe("catalog:");
-        expect(prWorkOrdersDependencies).not.toContain("wrangler");
-        expect(
-          prWorkOrdersDependencies.some((dependency) => dependency.startsWith("@effect/ai-")),
-        ).toBe(false);
-        expect(
-          prWorkOrdersDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
-        ).toBe(false);
-        expect(prWorkOrderIngress.name).toBe("@effect-agent/example-pr-work-order-ingress");
-        expect(prWorkOrderIngress.private).toBe(true);
-        expect(prWorkOrderIngress.dependencies?.["@effect-agent/pr-review"]).toBeUndefined();
-        expect(prWorkOrderIngress.dependencies?.["@effect-agent/example-pr-work-orders"]).toBe(
-          "workspace:*",
-        );
-        expect(prWorkOrderIngress.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(prWorkOrderIngress.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
-        expect(prWorkOrderIngress.dependencies?.effect).toBe("catalog:");
-        expect(prWorkOrderIngressDependencies).not.toContain("wrangler");
-        expect(
-          prWorkOrderIngressDependencies.filter((dependency) =>
-            dependency.startsWith("@effect/ai-"),
-          ),
-        ).toEqual(["@effect/ai-anthropic", "@effect/ai-openai"]);
-        expect(
-          prWorkOrderIngressDependencies.some((dependency) =>
-            dependency.startsWith("@cloudflare/"),
-          ),
-        ).toBe(false);
-        const prReviewPublicIndex = yield* readRepositoryFile("packages/pr-review/src/index.ts");
-        expect(prReviewPublicIndex).not.toMatch(/work-?order|remediation|handoff|implementer/i);
+      expect(demo.name).toBe("@effect-agent/example-demo");
+      expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
+      expect(demo.dependencies?.["@tanstack/react-start"]).toBe("catalog:");
+      expect(demo.dependencies?.["@base-ui/react"]).toBe("catalog:");
+      expect(demo.dependencies?.react).toBe("catalog:");
+      expect(demo.dependencies?.effect).toBe("catalog:");
+      expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
+      expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
+      expect(demoDependencies).not.toContain("wrangler");
+      expect(demoDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      expect(providers.name).toBe("@effect-agent/example-providers");
+      expect(providers.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(providers.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(providers.dependencies?.effect).toBe("catalog:");
+      expect(providers.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(providers.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
+      expect(providerDependencies).not.toContain("wrangler");
+      expect(providerDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      // P7: the repo-ops evidence auditor is the third leaf example workspace.
+      expect(repoOps.name).toBe("@effect-agent/example-repo-ops");
+      expect(repoOps.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(repoOps.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(repoOps.dependencies?.effect).toBe("catalog:");
+      expect(repoOps.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(repoOpsDependencies).not.toContain("wrangler");
+      expect(repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      // The GitHub channel owns the concrete provider and platform edges;
+      // the reusable reviewer package stays provider-neutral (PRR-005).
+      expect(prReviewAction.name).toBe("@effect-agent/pr-review-action");
+      expect(prReviewAction.private).toBe(true);
+      expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
+      expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
+      expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
+      expect(prReviewAction.dependencies?.effect).toBe("catalog:");
+      expect(prReviewDependencies).not.toContain("wrangler");
+      expect(prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      const prReviewPublicIndex = yield* readRepositoryFile("packages/pr-review/src/index.ts");
+      expect(prReviewPublicIndex).not.toMatch(/work-?order|remediation|handoff|implementer/i);
 
-        // The Code Mode Cloudflare demo is the one example that legitimately
-        // deploys to Cloudflare (D-035, ADR-0017): it consumes the Dynamic
-        // Worker executor from @effect-agent/platform-cloudflare and queries a
-        // SQLite Durable Object, so it carries the Durable Object SqlClient and
-        // the types-only Cloudflare package. wrangler is NOT a dependency — the
-        // deploy/dev scripts invoke it through bunx, and the test lane uses
-        // programmatic Miniflare.
-        const codeModeCloudflare = yield* readManifest(
-          `${repositoryRoot}/examples/code-mode-cloudflare/package.json`,
-        );
-        const codeModeCloudflareDependencies = manifestDependencies(codeModeCloudflare);
-        expect(codeModeCloudflare.name).toBe("@effect-agent/example-code-mode-cloudflare");
-        expect(codeModeCloudflare.dependencies?.["@effect-agent/platform-cloudflare"]).toBe(
-          "workspace:*",
-        );
-        expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
-        expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
-        expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
-        expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
-        expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");
-        expect(codeModeCloudflareDependencies).not.toContain("wrangler");
-        // The only allowed @cloudflare/* dependency is the types-only package.
-        expect(
-          codeModeCloudflareDependencies.filter(
-            (dependency) =>
-              dependency.startsWith("@cloudflare/") && dependency !== "@cloudflare/workers-types",
-          ),
-        ).toEqual([]);
+      // The Code Mode Cloudflare demo is the one example that legitimately
+      // deploys to Cloudflare (D-035, ADR-0017): it consumes the Dynamic
+      // Worker executor from @effect-agent/platform-cloudflare and queries a
+      // SQLite Durable Object, so it carries the Durable Object SqlClient and
+      // the types-only Cloudflare package. wrangler is NOT a dependency — the
+      // deploy/dev scripts invoke it through bunx, and the test lane uses
+      // programmatic Miniflare.
+      const codeModeCloudflare = yield* readManifest(
+        `${repositoryRoot}/examples/code-mode-cloudflare/package.json`,
+      );
+      const codeModeCloudflareDependencies = manifestDependencies(codeModeCloudflare);
+      expect(codeModeCloudflare.name).toBe("@effect-agent/example-code-mode-cloudflare");
+      expect(codeModeCloudflare.dependencies?.["@effect-agent/platform-cloudflare"]).toBe(
+        "workspace:*",
+      );
+      expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
+      expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
+      expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");
+      expect(codeModeCloudflareDependencies).not.toContain("wrangler");
+      // The only allowed @cloudflare/* dependency is the types-only package.
+      expect(
+        codeModeCloudflareDependencies.filter(
+          (dependency) =>
+            dependency.startsWith("@cloudflare/") && dependency !== "@cloudflare/workers-types",
+        ),
+      ).toEqual([]);
 
-        // The packaged reviewer is transport- and provider-neutral (PRR-005).
-        const prReviewPackage = yield* readManifest(
-          `${repositoryRoot}/packages/pr-review/package.json`,
+      // The packaged reviewer is transport- and provider-neutral (PRR-005).
+      const prReviewPackage = yield* readManifest(
+        `${repositoryRoot}/packages/pr-review/package.json`,
+      );
+      for (const adapter of providerAdapterDependencies) {
+        expect(prReviewPackage.dependencies?.[adapter]).toBeUndefined();
+      }
+
+      for (const packageName of packageNames) {
+        const manifest = yield* readManifest(
+          `${repositoryRoot}/packages/${packageName}/package.json`,
         );
+        expect(manifestDependencies(manifest)).not.toContain(demo.name);
+        expect(manifestDependencies(manifest)).not.toContain(providers.name);
+        expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
+        expect(manifestDependencies(manifest)).not.toContain(prReviewAction.name);
+        expect(manifestDependencies(manifest)).not.toContain(codeModeCloudflare.name);
+        if (providerConsumingPackages.has(packageName)) continue;
         for (const adapter of providerAdapterDependencies) {
-          expect(prReviewPackage.dependencies?.[adapter]).toBeUndefined();
+          expect(manifestDependencies(manifest)).not.toContain(adapter);
         }
-
-        for (const packageName of packageNames) {
-          const manifest = yield* readManifest(
-            `${repositoryRoot}/packages/${packageName}/package.json`,
-          );
-          expect(manifestDependencies(manifest)).not.toContain(demo.name);
-          expect(manifestDependencies(manifest)).not.toContain(providers.name);
-          expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
-          expect(manifestDependencies(manifest)).not.toContain(prReviewAction.name);
-          expect(manifestDependencies(manifest)).not.toContain(codeModeCloudflare.name);
-          if (providerConsumingPackages.has(packageName)) continue;
-          for (const adapter of providerAdapterDependencies) {
-            expect(manifestDependencies(manifest)).not.toContain(adapter);
-          }
-        }
-      }),
+      }
+    }),
   );
 
   it.effect(

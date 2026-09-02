@@ -48,12 +48,6 @@
       "path": "./packages/pr-review-action"
     },
     {
-      "path": "./examples/pr-work-orders"
-    },
-    {
-      "path": "./examples/pr-work-order-ingress"
-    },
-    {
       "path": "./examples/providers"
     },
     {

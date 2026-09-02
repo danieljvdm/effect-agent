@@ -47,14 +47,11 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `examples/demo`                     | Local browser app                                     |
 | `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
 | `examples/providers`                | Provider bindings and persistent-history example      |
-| `examples/pr-work-orders`           | Trusted local work-order implementation               |
-| `examples/pr-work-order-ingress`    | GitHub dispatch and isolated publication              |
 | `examples/repo-ops`                 | Repository evidence auditor                           |
 | `examples/browser-run-worker-proof` | Opt-in hosted Browser Run verification; owns Wrangler |
 | `examples/pr-review-eval`           | Opt-in live review evaluation                         |
 | `examples/code-mode-cloudflare`     | Generated JavaScript over a SQLite DO warehouse       |
 | `action/`                           | Distributed PR-review Action and bundle               |
-| `work-order-action/`                | Distributed work-order Action and bundle              |
 
 Framework code stays in `packages/*`. Examples are leaf workspaces.
 Provider integrations come from upstream Effect AI Layers.

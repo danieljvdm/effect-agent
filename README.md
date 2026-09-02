@@ -81,8 +81,7 @@ isolation. [MCP servers](docs/guide/tools.md#mcp) connect over Streamable HTTP o
 credentials and commands the application supplies. Read the
 [host isolation requirements](docs/guide/operations.md#authorization-and-isolation) before deploying.
 
-For GitHub integrations, see the [read-only PR reviewer](packages/pr-review/README.md) and the
-separate [work-order Action](work-order-action/README.md).
+For GitHub integrations, see the [read-only PR reviewer](packages/pr-review/README.md).
 
 ## Development
 
