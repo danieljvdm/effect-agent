@@ -21,11 +21,11 @@ import { TestClock } from "effect/testing";
 import {
   makeProtectedNativeTransport,
   ProtectedNativeSession,
-} from "../src/protected-browser-native.ts";
+} from "../src/protected-browser/native.ts";
 import {
   BrowserRunProtectedTransport,
   browserRunProtectedLayer,
-} from "../src/protected-browser-policy.ts";
+} from "../src/protected-browser/policy.ts";
 
 class ProbeError extends Schema.TaggedError<ProbeError>()("ProtectedNativeProbeError", {}) {}
 const native = <A>(run: () => Promise<A>) =>

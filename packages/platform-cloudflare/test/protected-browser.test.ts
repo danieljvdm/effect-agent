@@ -21,18 +21,18 @@ import { type Crypto, Deferred, Effect, Fiber, Layer, Redacted, Schema, type Sco
 import { TestClock } from "effect/testing";
 
 import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
+import { browserRunProtectedBindingLayer } from "../src/protected-browser.ts";
 import type {
   makeProtectedNativeTransport,
   ProtectedNativeSession,
-} from "../src/protected-browser-native.ts";
+} from "../src/protected-browser/native.ts";
 import {
   BrowserRunProtectedTransport,
   browserRunProtectedLayer,
   ProtectedTransportError,
   ProtectedBrowserDispatch,
   type ProtectedBrowserTransport,
-} from "../src/protected-browser-policy.ts";
-import { browserRunProtectedBindingLayer } from "../src/protected-browser.ts";
+} from "../src/protected-browser/policy.ts";
 
 const policy = InteractiveBrowserPolicy.make({
   network: { _tag: "ExactHosts", allowedHosts: ["shop.test", "pay.test"] },
