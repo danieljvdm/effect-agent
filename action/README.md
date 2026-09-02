@@ -20,6 +20,11 @@ RIGHT-side anchors and publishes against the inspected head. A stopped run prese
 recorded before research ended. Preparation failures publish a failure marker. Blocking findings
 request changes and fail the Action after publication; other outcomes remain comments.
 
+Reviews with findings include a **Copy all findings** dropdown. Expand it and use the code
+block's copy button to copy every finding from that review, including paths, inline line numbers
+when available, and the inspected commit. The block reminds coding agents to verify findings
+before making changes. It opens by default when any finding has no inline comment.
+
 A complete pass with no new blockers can dismiss this bot's earlier change requests, but only
 when the reviewer explicitly verifies every blocker in each selected review against current source.
 The dismissal records the inspected commit and the fixing evidence. A clean delta, changed line,

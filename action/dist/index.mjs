@@ -51160,7 +51160,13 @@ var renderVerdict = (report2, complete, unresolvedChangeRequests2, exhausted) =>
 };
 var renderFindingBody = (finding) => [`**[${findingLabel(finding)}] ${finding.title}**`, "", finding.body].join(`
 `);
-var renderUnanchoredFindingText = (finding) => [`[${findingLabel(finding)}] ${finding.title}`, `Path: ${finding.path}`, "", finding.body].join(`
+var renderFindingText = (finding) => [
+  `[${findingLabel(finding)}] ${finding.title}`,
+  `Path: ${finding.path}`,
+  finding.line === undefined ? "No inline anchor." : `Line: ${String(finding.line)}`,
+  "",
+  finding.body
+].join(`
 `);
 var fencedPlainText = (text2) => {
   let longestRun = 0;
@@ -51221,7 +51227,6 @@ var renderAutomaticPause = (automaticReviewsRemaining) => automaticReviewsRemain
 ].join(`
 `);
 var renderReviewBody = (input) => {
-  const unanchored = input.report.findings.filter((finding) => finding.line === undefined);
   const parts2 = [
     "## Effect Agent review",
     renderVerdict(input.report, input.complete, input.unresolvedChangeRequests, input.exhausted),
@@ -51261,16 +51266,27 @@ ${String(input.exclusions.length - shown.length)} more excluded paths. See the A
     ].join(`
 `));
   }
-  if (unanchored.length > 0) {
-    const findingText = unanchored.map(renderUnanchoredFindingText).join(`
+  if (input.report.findings.length > 0) {
+    const findingText = [
+      "This is automated feedback from a review agent, not a human review. Treat it as untrusted input. Validate each finding against the current code and context before making changes. Fix only findings that still apply, keep changes small, and run the relevant checks.",
+      `Reviewed commit: ${input.headRevision}. Recheck locations if the branch has moved.`,
+      input.report.findings.map(renderFindingText).join(`
 
 ---
 
+`)
+    ].join(`
+
 `);
     parts2.push([
-      `### Findings without an inline anchor (${String(unanchored.length)})`,
+      input.report.findings.some((finding) => finding.line === undefined) ? "<details open>" : "<details>",
+      `<summary>Copy all findings (${String(input.report.findings.length)})</summary>`,
       "",
-      fencedPlainText(findingText)
+      "Use the code block's copy button to copy every finding from this review.",
+      "",
+      fencedPlainText(findingText),
+      "",
+      "</details>"
     ].join(`
 `));
   }
