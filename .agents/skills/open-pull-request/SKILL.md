@@ -1,74 +1,53 @@
 ---
 name: open-pull-request
-description: Prepare, open, or revise pull requests with conventional titles and descriptions proportional to the change. Use when drafting a PR title or body, preparing a branch for review, or opening a PR.
+description: Prepare, open, update, or land pull requests. Write brief summaries and capture or publish screenshots and videos for review.
 ---
 
-# Open a pull request
+# Pull requests
 
-Help the reviewer understand what changes and why. Default to a short
-description; add detail where it helps them assess the change.
+Give the reviewer a high-level account of what changed and why. Usually a
+short paragraph or a few bullets is enough. Add a risk, limitation, or manual
+deploy step only when it affects their decision. Skip code tours, investigation
+history, routine CI recaps, and prescribed sections or accordions.
 
-## Prepare the branch
+Write for public-library contributors. Keep company/customer names, account
+identifiers, and private workspace links out of PR text and linked evidence
+unless the user explicitly requests them.
 
-Read repository contribution instructions and any required PR template. Inspect
-the intended base, full commit range, diff, and working tree so the description
-covers the branch as it exists. Resolve accidental changes before opening.
+For UI or visible features, capture the final running implementation during
+verification and reuse it for the PR. A screenshot is the default; use a short
+video when the sequence matters, such as an agent exchange or animation. Both
+are rarely needed. Nonvisual changes need no media.
 
-Use Conventional Commits for commits you create and the PR title:
-`type(scope): imperative summary`. Follow repository conventions and omit the
-scope when it adds nothing. Keep commits focused. Rewrite only your own unshared
-commits; get approval before rewriting user-authored or published history.
+Use existing capture tools; load `playwright-cli` when available for browser
+capture. Keep recordings focused, usually under 30 seconds, without changing
+product timing.
+Use safe fixture data and review the image or whole clip once for correctness
+and private content. Treat published assets as public; unreviewed media stays
+local. If inspection is unavailable, use a safe alternative or report the
+blocker. Do not build viewers, extract frame galleries, or reconstruct GitHub.
 
-Complete required validation on the final branch state before opening the PR,
-including any changes made by commit hooks. Ground claims in the diff, CI, or
-verified artifacts.
+Publish reviewed media through an existing repository task or supported
+attachment tool. Use the returned Markdown in the PR. Keep originals until
+publication succeeds; if no upload path is available or it fails, report the
+exact local path. Never extract browser cookies, expose credentials in arguments,
+create asset branches, or invent an upload service.
 
-## Write the description
+For an already verified change, aim to publish within two minutes:
 
-Choose the shape from the change. Follow a required repository template;
-otherwise there are no mandatory headings or sections.
+1. Check the base, branch diff, and working tree for accidental changes. Reuse
+   review, validation, and evidence already completed for unchanged inputs;
+   `AGENTS.md` owns required checks.
+2. Use Conventional Commits for commits and the title. Commit and push the
+   intended changes, preserving unrelated work and published history.
+3. Open or update the PR with the short body and existing evidence. With `gh`,
+   use `--body-file` for multiline text.
+4. Read back base/head, title, and body once with `gh pr view`, then return the
+   URL. No GitHub browser inspection or wait for CI is required to open it.
 
-- Small fixes and maintenance usually need one short paragraph. State the
-  observable problem and how the change fixes it. A bug's cause can fit in the
-  same sentence; expand only when the reasoning is subtle.
-- For architecture or API changes, lead with the practical difference and show
-  a compact before/after code example. Use actual base and head code, trimming
-  to the relevant call site, contract, or implementation. Explain the ownership
-  or flow change that the snippets cannot show. Include migration steps when
-  callers must act.
-- For subtle correctness changes, add the causal explanation, tradeoff, or
-  limitation a reviewer needs to judge the fix. Use headings only when they
-  make that explanation easier to scan.
+Follow `AGENTS.md` for merge approval and required checks; opening a PR does
+not authorize merging it.
 
-A small fix can be this short:
-
-> Clearing the search box left the previous filter active because the update
-> skipped empty strings. Always apply the new value so clearing shows all rows.
-
-Code examples should show the change with enough context to understand it.
-Mark omissions or schematic examples clearly. One representative example is
-usually enough; link to a guide for full setup or additional variants. For
-changes that code cannot explain well, use the smallest useful before/after
-output or diagram instead.
-
-Link to implementation points when they save the reviewer a search. Keep the
-body focused on behavior, rationale, and necessary migration. Leave the file
-inventory to the diff and routine validation results to CI.
-
-## Include evidence when it helps
-
-Add a screenshot for a visible UI change, or concise output, a request/response,
-or a focused regression result when it makes the behavior easier to assess.
-Use only artifacts actually produced and verified, and check them for secrets
-or personal data. If needed proof is unavailable, state the limitation briefly.
-
-Evidence can sit beside the explanation. Omit it when it adds nothing beyond
-the diff and CI. Mention validation commands only for unusual checks, checks CI
-cannot run, or results that explain the behavior.
-
-## Open and verify
-
-Open against the intended base with the prepared conventional title and body.
-Read back the rendered PR and check its branches, description, links, attached
-artifacts, and check status. Return the URL once it is reviewable, reporting any
-pending or failed checks accurately.
+When an existing draft PR is the subject, interpret "open it" or "ready it"
+as making it ready for review unless the user asks to view it. State the intended
+transition before acting; use `gh pr ready` rather than opening a browser.
