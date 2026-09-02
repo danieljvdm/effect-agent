@@ -32,6 +32,7 @@ import {
   type RunTurnResume,
   type RunUsageDelta,
 } from "../src/index.ts";
+import { RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -174,7 +175,11 @@ const postMessageToolkit = Toolkit.make(PostMessageTool);
 
 const answerOutput = Schema.Struct({ answer: Schema.String });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("context economics — bounding, tracking, status, exhaustion", (it) => {
   // ---------------------------------------------------------------- RUN-022

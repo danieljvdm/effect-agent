@@ -46,6 +46,7 @@ import {
   type ToolBrokerService,
   type ToolFailureObservation,
 } from "../src/index.ts";
+import { RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 import { deliverToolFailure } from "../src/tool-derivative-internal.ts";
 
@@ -214,7 +215,11 @@ const identity = {
 const invoke = (pass: ToolBrokerPass) =>
   pass.invoke({ toolName: "query", encodedArguments: { value: 1 } });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
   it.effect(

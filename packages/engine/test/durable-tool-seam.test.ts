@@ -6,6 +6,7 @@ import {
   ThreadId,
   DelegationTool,
   IdGenerator,
+  MemoryRecallError,
   ModelProtocolError,
   RunId,
   TurnId,
@@ -34,7 +35,8 @@ import { Prompt, LanguageModel, Model, type Response, Tool, Toolkit } from "effe
 import {
   AgentRuntime,
   RunContextPreparation,
-  RunContextPreparationError,
+  type RunContextPreparationError,
+  RunContextPreparationPassthrough,
   RunToolAuthorization,
   DurableStep,
   DurableStepError,
@@ -167,7 +169,11 @@ const policy = (overrides?: Partial<Parameters<typeof AgentPolicy.make>[0]>) =>
     ...overrides,
   });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
@@ -197,16 +203,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         model,
       );
       const program = Effect.gen(function* () {
-        const preparation = yield* RunContextPreparation;
         const authorization = yield* RunToolAuthorization;
         return yield* AgentRuntime.run(agent, "book", {
-          context: preparation.hook,
           toolAuthorization: authorization,
         });
       });
       const preparationRequired: RunContextPreparation extends Effect.Services<typeof program>
         ? true
-        : false = true;
+        : false = false;
       const authorizationRequired: RunToolAuthorization extends Effect.Services<typeof program>
         ? true
         : false = true;
@@ -224,16 +228,14 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             expect(Cause.findErrorOption(result.cause)).toMatchObject({
               _tag: "Some",
               value: {
-                _tag:
-                  outcome === "denied"
-                    ? "AgentToolAuthorizationDenied"
-                    : "RunContextPreparationError",
+                _tag: outcome === "denied" ? "AgentToolAuthorizationDenied" : "MemoryRecallError",
               },
             });
           }
           expect(seen).toEqual(outcome === "denied" ? ["prepare", "authorize"] : ["prepare"]);
         }
-        expect(preparationRequired && authorizationRequired && preparationError).toBe(true);
+        expect(preparationRequired).toBe(false);
+        expect(authorizationRequired && preparationError).toBe(true);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -243,8 +245,9 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
                   Effect.gen(function* () {
                     seen.push("prepare");
                     if (outcome === "preparation-failed") {
-                      return yield* RunContextPreparationError.make({
-                        preparerId: "host",
+                      return yield* MemoryRecallError.make({
+                        reason: "unavailable",
+                        sourceId: "host",
                         message: "unavailable",
                       });
                     }

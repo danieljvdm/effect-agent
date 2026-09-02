@@ -13,6 +13,7 @@ import {
 } from "@effect-agent/core";
 import {
   ThreadHistory,
+  RunContextPreparationPassthrough,
   type RunEventSink,
   type SubagentDurability,
   type SubagentDurabilityError,
@@ -109,6 +110,7 @@ const TestServices = Layer.mergeAll(
   identifiers,
   SubagentReservationsMemoryLive,
   ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
 );
 
 const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => [

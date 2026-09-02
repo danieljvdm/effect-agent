@@ -619,7 +619,7 @@ export type DurableWorkerRequirements<
 > =
   | Exclude<
       AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>,
-      IdGenerator | ThreadHistory
+      IdGenerator | ThreadHistory | RunContextPreparation
     >
   | AgentCompletionProjectionRequirements<AgentValue>;
 
@@ -919,7 +919,9 @@ const make = Effect.gen(function* () {
   const reconciler = yield* ToolReconciler;
   const approvalResolver = yield* DurableApprovalResolver;
   // Capture independent host choices at acquisition so worker callers cannot replace them.
-  const runContextPreparation = yield* RunContextPreparation;
+  const runContextPreparation = yield* Effect.serviceOption(RunContextPreparation).pipe(
+    Effect.map(Option.getOrElse(() => RunContextPreparation.of({}))),
+  );
   const runToolAuthorization = yield* RunToolAuthorization;
   const compactor =
     runContextPreparation.compactor ??
@@ -5013,6 +5015,9 @@ const make = Effect.gen(function* () {
               },
             }),
         ...(preparedContext === undefined ? {} : { context: preparedContext }),
+        ...(runContextPreparation.transientContext === undefined
+          ? {}
+          : { transientContext: runContextPreparation.transientContext }),
         ...(config.estimateCostMicrousd === undefined
           ? {}
           : { estimateCostMicrousd: config.estimateCostMicrousd }),
@@ -5325,6 +5330,7 @@ const make = Effect.gen(function* () {
           Stream.provide(ThreadHistory.layerTransient),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),
+          Stream.provideService(RunContextPreparation, { ...runContextPreparation, compactor }),
         ),
         (event) =>
           halt(
@@ -7848,7 +7854,7 @@ export class DurableAgentRuntime extends Context.Service<
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
   }
 >()("@effect-agent/thread/DurableAgentRuntime") {
-  /** Generic assembly whose independent context and Tool authority requirements remain in `R`. */
+  /** Captures optional context preparation; Tool authorization remains required in `R`. */
   static readonly layerWithServices: Layer.Layer<
     DurableAgentRuntime,
     never,
@@ -7858,7 +7864,6 @@ export class DurableAgentRuntime extends Context.Service<
     | DurableRuntimeFailpoint
     | DurableRuntimeConfig
     | ToolReconciler
-    | RunContextPreparation
     | RunToolAuthorization
     | Crypto.Crypto
   > = Layer.effect(DurableAgentRuntime)(make);

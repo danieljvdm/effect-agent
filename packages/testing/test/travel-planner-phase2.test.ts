@@ -14,7 +14,11 @@ import {
   ThreadId,
   RunId,
 } from "@effect-agent/core";
-import { ThreadHistory, AgentRuntime } from "@effect-agent/engine";
+import {
+  ThreadHistory,
+  AgentRuntime,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   ActivityCatalogLayer,
@@ -84,6 +88,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           },
         ];
         const layer = Layer.mergeAll(
+          RunContextPreparationPassthrough,
           ThreadHistory.layerTransient,
           controlled.layer,
           FlightCatalogLayer,
@@ -267,6 +272,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         }),
       );
       const runtimeLayer = Layer.mergeAll(
+        RunContextPreparationPassthrough,
         ThreadHistory.layerTransient,
         TravelPlannerPhase2ToolkitLayer,
         FlightCatalogLayer,

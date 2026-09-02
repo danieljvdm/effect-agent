@@ -6,6 +6,7 @@ import {
   type AgentPolicyError,
   type ContextBudgetError,
   type ContextOverflowError,
+  type MemoryRecallError,
   IdGenerator,
   type RunEvent,
   type ModelProtocolError,
@@ -17,6 +18,7 @@ import {
   type AgentChildPending,
   AgentRuntime,
   ThreadHistory,
+  RunContextPreparationPassthrough,
   type ThreadHistoryError,
   type CompactionError,
   type AgentRuntimeFailure,
@@ -113,6 +115,7 @@ type ExpectedFailure =
   | ContextBudgetError
   | ContextOverflowError
   | CompactionError
+  | MemoryRecallError
   | ThreadHistoryError
   | ModelProtocolError
   | AgentApprovalDenied
@@ -157,7 +160,13 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     };
     const plain = Agent.withModel(Agent.make("scope-free", config), model);
     const selfContained = AgentRuntime.run(plain, "question").pipe(
-      Effect.provide(Layer.merge(IdGenerator.layer, ThreadHistory.layerTransient)),
+      Effect.provide(
+        Layer.mergeAll(
+          IdGenerator.layer,
+          ThreadHistory.layerTransient,
+          RunContextPreparationPassthrough,
+        ),
+      ),
     );
     const instructionAgent = Agent.withModel(
       Agent.make("scoped-instructions", {

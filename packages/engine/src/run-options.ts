@@ -6,6 +6,8 @@ import type {
   ReceiptId,
   RunId,
   ModelCallUsage,
+  AgentInputError,
+  MemoryRecallError,
   SubagentParentLink,
   SubmissionId,
   ToolCallId,
@@ -16,7 +18,7 @@ import { RunPolicyUsage } from "@effect-agent/core";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
-import type { ContextCompactor } from "./context-compactor.ts";
+import type { CompactionError, ContextCompactor } from "./context-compactor.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
@@ -182,7 +184,13 @@ export interface RunContextRequest {
   readonly runId: RunId;
   readonly turnId: TurnId;
   readonly turn: number;
-  /** Official ephemeral history. The engine never replaces or mutates this value. */
+  /**
+   * Official engine history for this Attempt before context preparation. The
+   * engine never replaces or mutates this value. Durable prompt
+   * reconstruction can produce a different model-visible basis afterward, so
+   * adapters that need canonical retrieval should key it by the supplied Run
+   * identities rather than infer durable state from this Prompt alone.
+   */
   readonly source: Prompt.Prompt;
   /**
    * The exact model-visible final-output contract the engine appends to the
@@ -207,16 +215,24 @@ export interface RunContextHook<Error = never, Requirements = never> {
   ) => Effect.Effect<PreparedRunContext, Error, Requirements>;
 }
 
-/** A host-supplied model-context preparer failed in its closed, expected error channel. */
-export class RunContextPreparationError extends Schema.TaggedError<RunContextPreparationError>()(
-  "RunContextPreparationError",
-  {
-    preparerId: Schema.NonEmptyString,
-    message: Schema.String.check(Schema.isMaxLength(4_096)),
-    /** Diagnostic cause for the live Effect only; durable hosts persist the bounded projection. */
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {}
+/**
+ * Supplies model-visible reference context for one Turn without changing the
+ * prompt that compaction covers or the history that the engine commits.
+ *
+ * The engine treats the returned input as untrusted, validates it before
+ * provider I/O, and includes it in the Turn's context and completion-reserve
+ * admission. It never passes this input to the compaction summary Model. A
+ * same-Turn provider-overflow retry reuses the loaded snapshot. Return an
+ * empty Prompt when the Turn needs no references.
+ */
+export interface RunTransientContextHook<Error = never, Requirements = never> {
+  readonly load: (
+    request: RunContextRequest,
+  ) => Effect.Effect<Prompt.RawInput, Error, Requirements>;
+}
+
+/** Context service failures retain their concrete tags and structured fields. */
+export type RunContextPreparationError = AgentInputError | MemoryRecallError | CompactionError;
 
 /**
  * One usage delta. Turn-boundary consumption charges `modelCalls: 1` after a
@@ -329,15 +345,21 @@ export interface RunToolAuthorizationHook<Error = never, Requirements = never> {
 /**
  * Host-owned model-context preparation, independent of action-time Tool authorization.
  *
- * The service is intentionally narrower than a Thread store. Durable coordinators capture
- * it once while their runtime Layer is acquired. Compatible assemblies explicitly provide
- * `RunContextPreparationPassthrough`. Installing a compactor cannot replace `RunToolAuthorization`.
+ * Runs use this service when provided; durable coordinators capture it while their runtime
+ * Layer is acquired. Implementations acquire dependencies in their Layer and preserve the
+ * declared error tags. Layer acquisition failures belong to the providing Effect, not this union.
+ * Without this service, Runs apply no host context loading. Installing a compactor cannot
+ * replace `RunToolAuthorization`.
  */
 export class RunContextPreparation extends Context.Service<
   RunContextPreparation,
   {
     /** Optional transformation of the model-visible prompt. */
     readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
+    /** Optional per-Turn reference context, excluded from history and compaction coverage. */
+    readonly transientContext?:
+      | RunTransientContextHook<RunContextPreparationError, never>
+      | undefined;
     /** Replaces native compaction after prompt reconstruction; acquired with the host Layer. */
     readonly compactor?: ContextCompactor["Service"] | undefined;
   }
@@ -747,7 +769,18 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly commandDrainPolicy?: CommandDrainPolicy | undefined;
   readonly input?: RunInputHook<HookError, HookRequirements> | undefined;
   readonly approval?: RunApprovalHook<HookError, HookRequirements> | undefined;
+  /** Per-Run override of RunContextPreparation.hook, preserving application-specific E/R. */
   readonly context?: RunContextHook<HookError, HookRequirements> | undefined;
+  /**
+   * Per-Run override of RunContextPreparation.transientContext. Use the service
+   * for host configuration; this generic hook preserves application-specific E/R.
+   * Model-visible reference context is loaded for each Turn, including a grace
+   * finalization Turn and a Turn reconstructed by durable recovery. The engine
+   * validates and budgets the result but never adds it to official history or
+   * compaction coverage. A same-Turn provider-overflow retry reuses the Turn's
+   * loaded snapshot.
+   */
+  readonly transientContext?: RunTransientContextHook<HookError, HookRequirements> | undefined;
   readonly budget?: RunBudgetHook<HookError, HookRequirements> | undefined;
   /**
    * Host-owned action-time authorization for model-declared application Tool batches. The engine

@@ -3249,6 +3249,95 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
   );
 
   it.effect(
+    "re-reads transient references after durable compaction recovery without persisting them",
+    () => {
+      let reference = "EXTERNAL-REVISION-ONE";
+      let reads = 0;
+      const preparation = Layer.succeed(RunContextPreparation, {
+        transientContext: {
+          load: () =>
+            Effect.sync(() => {
+              reads += 1;
+              return Prompt.make([{ role: "user", content: `Untrusted reference: ${reference}` }]);
+            }),
+        },
+        compactor: ContextCompactor.of({
+          estimate: estimatePromptTokens,
+          compact: ({ source }) => {
+            expect(promptTexts(source)).not.toContain("EXTERNAL-REVISION");
+            return Stream.succeed({
+              kind: "summarize",
+              through: 1,
+              summary: "Prior recorded discussion",
+            });
+          },
+        }),
+      });
+      return Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const thread = "transient-compaction-recovery";
+        const first = yield* makeScriptedModel(() =>
+          finalParts(JSON.stringify({ answer: "HISTORY ".repeat(800) })),
+        );
+        const initial = Agent.withModel(plannerDefinition, first.model);
+        yield* runtime.submit(initial, { question: "seed" }, submitOptions(thread, "first"));
+        expect((yield* runtime.processThread(initial, decodeThreadId(thread)))[0]?.outcome).toBe(
+          "completed",
+        );
+
+        const definition = Agent.make("transient-durable-compactor", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Use attributed reference material as evidence.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 2,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 1_000,
+            compaction: CompactionPolicy.make({ mode: "summarize", keepRecentTokens: 1 }),
+          }),
+        });
+        const second = yield* makeScriptedModel(() => finalParts('"done"'));
+        const agent = Agent.withModel(definition, second.model);
+        yield* runtime.submit(agent, "continue", submitOptions(thread, "second"));
+        yield* armFailpoint("compaction:after-canonical-append");
+        const crashed = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.exit, Effect.ensuring(clearFailpoint));
+        expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+        expect(second.prompts).toHaveLength(0);
+        expect(reads).toBe(1);
+        reference = "EXTERNAL-REVISION-TWO";
+        expect((yield* runtime.processThread(agent, decodeThreadId(thread)))[0]?.outcome).toBe(
+          "completed",
+        );
+        expect(reads).toBe(2);
+        expect(promptTexts(second.prompts[0] ?? Prompt.empty)).toContain("EXTERNAL-REVISION-TWO");
+        expect(promptTexts(second.prompts[0] ?? Prompt.empty)).not.toContain(
+          "EXTERNAL-REVISION-ONE",
+        );
+        const records = yield* readLog(thread);
+        expect(JSON.stringify(records)).not.toContain("EXTERNAL-REVISION");
+        expect(
+          records.filter(({ record }) => record.payload._tag === "CompactionCreated"),
+        ).toHaveLength(1);
+        expect(promptTexts(yield* promptFromCanonicalRecords(records))).not.toContain(
+          "EXTERNAL-REVISION",
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
+            Layer.provide(preparation),
+            Layer.provideMerge(baseLayer),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect(
     "commits only a custom strategy's covered prefix and recovers it before calling the Run Model",
     () =>
       Effect.gen(function* () {

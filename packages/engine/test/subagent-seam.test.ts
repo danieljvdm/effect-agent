@@ -13,7 +13,7 @@ import {
 } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import {
   AgentRuntime,
@@ -23,6 +23,7 @@ import {
   type RunEventSinkService,
   type SubagentEventBasePayload,
 } from "../src/index.ts";
+import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 const usage = {
@@ -187,7 +188,11 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
 
 const isSubagentEvent = (event: RunEvent) => event._tag.startsWith("Subagent");
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("SUB S1 engine execution seam", (it) => {
   it.effect("honors preallocated Thread and Run identity in every emitted event", () => {
@@ -343,6 +348,7 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
       Effect.gen(function* () {
         const rootDepth = yield* Ref.make(-1);
         const childDepth = yield* Ref.make(-1);
+        const contextThreads: Array<ThreadId> = [];
         const captured = yield* Ref.make<
           | {
               readonly threadId: string;
@@ -442,6 +448,15 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
 
         const result = yield* AgentRuntime.run(parent, { question: "root?" }).pipe(
           Effect.provide(parentToolLayer),
+          Effect.provideService(RunContextPreparation, {
+            transientContext: {
+              load: ({ threadId }) =>
+                Effect.sync(() => {
+                  contextThreads.push(threadId);
+                  return Prompt.empty;
+                }),
+            },
+          }),
         );
 
         expect(result.output).toEqual({ answer: "parent-answer" });
@@ -456,6 +471,12 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
         // The child owns fresh, distinct identity supplied by the spawner.
         expect(snapshot.threadId).not.toBe(result.threadId);
         expect(snapshot.runId).not.toBe(result.runId);
+        expect(contextThreads).toEqual([
+          result.threadId,
+          snapshot.threadId,
+          snapshot.threadId,
+          result.threadId,
+        ]);
         expect(snapshot.parentLink).toMatchObject({
           delegationId,
           parentAgentId: spawningDefinition.id,

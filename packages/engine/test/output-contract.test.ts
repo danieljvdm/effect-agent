@@ -13,6 +13,7 @@ import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effe
 
 import { AgentRuntime } from "../src/index.ts";
 import { insertOutputContract, outputSchemaContract } from "../src/output-contract-internal.ts";
+import { RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 /**
@@ -147,7 +148,11 @@ const policy = AgentPolicy.make({
   toolConcurrency: 1,
 });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("RUN-028 model-visible output contract", (it) => {
   it.effect(

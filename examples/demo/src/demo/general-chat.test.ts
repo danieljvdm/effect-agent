@@ -7,6 +7,7 @@ import type {
   AgentToolAuthorizationDenied,
   ContextBudgetError,
   ContextOverflowError,
+  MemoryRecallError,
   IdGenerator,
   ModelProtocolError,
 } from "@effect-agent/core";
@@ -58,6 +59,7 @@ type ExpectedFailure =
   | ContextBudgetError
   | ContextOverflowError
   | CompactionError
+  | MemoryRecallError
   | ThreadHistoryError
   | ModelProtocolError
   | AgentApprovalDenied

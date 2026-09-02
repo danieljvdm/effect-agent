@@ -1,5 +1,10 @@
 import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ToolExecutionClass, AgentRuntime, ThreadHistory } from "@effect-agent/engine";
+import {
+  ToolExecutionClass,
+  AgentRuntime,
+  ThreadHistory,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import {
   CodeExecutionHost,
   CodeExecutionResult,
@@ -323,7 +328,11 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
     } satisfies ScenarioOutcome;
   });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) => {
   it.effect(

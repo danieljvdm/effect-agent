@@ -28,6 +28,7 @@ import {
   type ToolBrokerPassOptions,
   type RunOptions,
 } from "../src/index.ts";
+import { RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 class QueryFailure extends Schema.TaggedError<QueryFailure>()("QueryFailure", {
@@ -171,7 +172,11 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
     return result;
   });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
   it.effect("serializes cumulative reservations across concurrent outer handlers", () =>

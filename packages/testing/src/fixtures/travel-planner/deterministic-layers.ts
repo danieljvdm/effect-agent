@@ -1,5 +1,5 @@
 import { ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ThreadHistory } from "@effect-agent/engine";
+import { ThreadHistory, RunContextPreparationPassthrough } from "@effect-agent/engine";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 
 import {
@@ -423,6 +423,7 @@ export const DeterministicIdGeneratorLayer = Layer.effect(
   }),
 );
 export const TravelPlannerRuntimeLayer = Layer.mergeAll(
+  RunContextPreparationPassthrough,
   ThreadHistory.layerTransient,
   TravelPlannerToolkitLayer,
   FlightCatalogLayer,

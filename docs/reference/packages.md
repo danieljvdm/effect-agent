@@ -14,28 +14,30 @@ Before 1.0, APIs and stored data may change without a migration path.
 
 ## Find a capability {#capability-inventory}
 
-| Need                                   | Guide                                                    | Your application supplies                          |
-| -------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
-| Run or stream an agent                 | [Execution](../guide/run-agents)                         | Model, tool handlers, history policy               |
-| Retain completed threads               | [History](../guide/threads#retain-completed-runs)        | Store and thread IDs                               |
-| Recover work after a crash             | [Durability](../concepts/durability)                     | Registered agents, workers, storage, authorization |
-| Prune or summarize context             | [Context management](../guide/context-management)        | Context limits and compaction policy               |
-| Require approval or limit spending     | [Run hooks](../guide/run-agents#operational-hooks)       | Approval policy, budget hooks, cost estimates      |
-| Delegate to another agent              | [Subagents](../guide/subagents)                          | Targets, bindings, permissions, budgets            |
-| Schedule new input                     | [Scheduling](../guide/operations#scheduled-input)        | Owner policy, registered inputs, driver            |
-| React to external events               | [Subscriptions](../guide/operations#event-subscriptions) | Authenticated source, preparation, authorization   |
-| Run generated JavaScript               | [Code Mode](../guide/code-mode)                          | Read-only tools and an isolated executor           |
-| Run trusted local commands             | [Sandbox execution](../guide/sandbox)                    | Executable, environment, output and time limits    |
-| Capture, crawl, or interact with pages | [Browser tools](../guide/browser)                        | Browser binding or credentials, target policy      |
+| Need                                   | Guide                                                           | Your application supplies                          |
+| -------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
+| Run or stream an agent                 | [Execution](../guide/run-agents)                                | Model, tool handlers, history policy               |
+| Retain completed threads               | [History](../guide/threads#retain-completed-runs)               | Store and thread IDs                               |
+| Recover work after a crash             | [Durability](../concepts/durability)                            | Registered agents, workers, storage, authorization |
+| Prune or summarize context             | [Context management](../guide/context-management)               | Context limits and compaction policy               |
+| Recall application-owned sources       | [Context management](../guide/context-management#recall-memory) | Readable passages, provenance, query policy        |
+| Require approval or limit spending     | [Run hooks](../guide/run-agents#operational-hooks)              | Approval policy, budget hooks, cost estimates      |
+| Delegate to another agent              | [Subagents](../guide/subagents)                                 | Targets, bindings, permissions, budgets            |
+| Schedule new input                     | [Scheduling](../guide/operations#scheduled-input)               | Owner policy, registered inputs, driver            |
+| React to external events               | [Subscriptions](../guide/operations#event-subscriptions)        | Authenticated source, preparation, authorization   |
+| Run generated JavaScript               | [Code Mode](../guide/code-mode)                                 | Read-only tools and an isolated executor           |
+| Run trusted local commands             | [Sandbox execution](../guide/sandbox)                           | Executable, environment, output and time limits    |
+| Capture, crawl, or interact with pages | [Browser tools](../guide/browser)                               | Browser binding or credentials, target policy      |
 
 ### Limits and unsupported features {#compaction-and-unsupported-capabilities}
 
 MCP validates connections and tool discovery through `McpConnector` and `connectMcp`.
 Your application implements the transport and remote handlers; no stdio or HTTP client is bundled.
 
-Nested delegation, handoff, detached subagents, runtime Skills, a persistent agent memory service,
-arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
-Applications own domain state. Thread history and compaction summaries do not replace it.
+Nested delegation, handoff, detached subagents, runtime Skills, a framework-owned persistent agent
+memory service, arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
+Applications own domain state. `recallMemory` reads bounded passages from sources they select; it
+does not store them. Thread history and compaction summaries do not replace application state.
 
 Automatic compaction uses `ContextCompactor`. The separate
 [artifact utilities](../guide/context-management#explicit-compaction-artifacts) validate and apply
@@ -64,13 +66,17 @@ Exports `AgentRuntime`, `DetachedRun`, `RunOptions`, and `ThreadHistory`.
 
 Every entry point needs a history policy. Use `ThreadHistory.layerTransient` to retain
 nothing or `PersistentHistory.layer` from `@effect-agent/thread` to retain successful runs.
+Provide `RunContextPreparation` only when you need host context loading. Context service failures
+retain their concrete tagged errors.
 Use [`toolFailureObserverLayer`](../guide/run-agents#observe-recovered-tool-failures) to observe
 recovered tool failures locally. Observations are not stored or exported automatically.
 
 ### `@effect-agent/capabilities`
 
-Adds thread queues, approval, audit, budgets, context utilities, scheduling overrides,
-MCP, redaction, and subagents to the engine. [`CodeMode.make`](../guide/code-mode) exposes generated
+Adds thread queues, approval, audit, budgets, context utilities, bounded `recallMemory`, scheduling
+overrides, MCP, redaction, and subagents to the engine. `recallMemory` reads ranked
+`MemoryPassage` values from host-selected sources and returns a transient `RecalledMemory` view;
+it supplies no store or retrieval adapter. [`CodeMode.make`](../guide/code-mode) exposes generated
 JavaScript execution over an explicit read-only Tool allowlist. `WebCapture.make`,
 `WebCapture.makeScrape`, and `WebCapture.makeExtract` expose a supplied `PageCapture` service as tools.
 Capture calls have uncertain external outcomes;

@@ -1,5 +1,11 @@
 import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ThreadHistory, AgentRuntime, ToolExecutionClass } from "@effect-agent/engine";
+import type { RunContextPreparation } from "@effect-agent/engine";
+import {
+  ThreadHistory,
+  AgentRuntime,
+  ToolExecutionClass,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import {
   PageCapture,
   PageCaptureInferencePolicyError,
@@ -381,7 +387,7 @@ interface ScenarioOutcome {
 const runCapture = (
   params: Record<string, unknown>,
   options?: { readonly actions?: ReadonlyArray<"markdown" | "content" | "links"> },
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory> =>
+): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory | RunContextPreparation> =>
   Effect.gen(function* () {
     const definition = WebCapture.make("read_webpage", {
       description: "Read documentation pages.",
@@ -410,7 +416,7 @@ const runCapture = (
 
 const runExtract = (
   params: Record<string, unknown>,
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory> =>
+): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory | RunContextPreparation> =>
   Effect.gen(function* () {
     const definition = WebCapture.makeExtract("extract_pricing", {
       description: "Extract pricing plans.",
@@ -440,7 +446,7 @@ const runExtract = (
 
 const runScrape = (
   params: Record<string, unknown>,
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory> =>
+): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory | RunContextPreparation> =>
   Effect.gen(function* () {
     const definition = WebCapture.makeScrape("scrape_webpage", {
       description: "Scrape rendered elements.",
@@ -467,7 +473,11 @@ const runScrape = (
     };
   });
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("WebCapture handlers through a scripted port", (it) => {
   it.effect("projects an allowed markdown capture onto the port and returns the page", () =>

@@ -60,6 +60,7 @@ import {
   type RunUsageDelta,
 } from "../src/index.ts";
 import { boundedJsonSnapshot } from "../src/provider-result-staging-internal.ts";
+import { RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 import { emitThenAfter, isolateToolDerivative } from "../src/tool-derivative-internal.ts";
 import {
@@ -268,7 +269,11 @@ type ExportedLogObservation = ReturnType<typeof exportedLogObservation>;
 const renderedLogMessage = (message: unknown): string =>
   Array.isArray(message) ? message.join(" ") : String(message);
 
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("runs Definitions with composed native Layers and decodes encoded input", () =>

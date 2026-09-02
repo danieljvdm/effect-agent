@@ -26,6 +26,7 @@ See [durability](../concepts/durability) for recovery rules and unconfirmed tool
 
 For work that can end with its process, use [`AgentRuntime.run`](../guide/run-agents)
 with provider and tool Layers plus `ThreadHistory.layerTransient`.
+Provide a `RunContextPreparation` Layer only when you need host context loading.
 
 To retain completed history without recovering unfinished work, provide
 [`PersistentHistory.layer`](../guide/threads#retain-completed-runs) with a storage adapter.

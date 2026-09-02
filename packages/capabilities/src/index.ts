@@ -6,6 +6,7 @@ export * from "./thread.ts";
 export * from "./context.ts";
 export * from "./engine-adapters.ts";
 export * from "./mcp.ts";
+export * from "./memory.ts";
 export * from "./redaction.ts";
 export * from "./scheduling.ts";
 export * from "./subagent.ts";

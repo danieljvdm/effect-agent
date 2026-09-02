@@ -1,8 +1,16 @@
 import { Agent, AgentPolicy, type ThreadId, type IdGenerator } from "@effect-agent/core";
 import { type ThreadHistory, AgentRuntime, type AgentRuntimeFailure } from "@effect-agent/engine";
 import { describe, expect, it } from "@effect/vitest";
-import type { Crypto } from "effect";
-import { type Stream, Context, Effect, Schema, SchemaGetter, type Scope, type Layer } from "effect";
+import {
+  type Crypto,
+  type Stream,
+  Context,
+  Effect,
+  Schema,
+  SchemaGetter,
+  type Scope,
+  type Layer,
+} from "effect";
 import { Toolkit, type LanguageModel, type Model, Tool } from "effect/unstable/ai";
 
 import { compileRegistrations } from "../src/agent-registration.ts";

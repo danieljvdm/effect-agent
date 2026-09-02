@@ -2,6 +2,7 @@ import { CodeMode } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
   ThreadHistory,
+  RunContextPreparationPassthrough,
   AgentRuntime,
   ToolExecutionClass,
   toolFailureObserverLayer,
@@ -165,7 +166,11 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
 // The suite opts out of the injected test services because the in-process
 // executor's wall-clock deadline runs on the live Clock (see the substitute
 // suite for the rationale).
-const testLayer = Layer.merge(identifiers, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  identifiers,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => {
   it.effect(

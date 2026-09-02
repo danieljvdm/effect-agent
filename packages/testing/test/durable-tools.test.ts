@@ -1794,7 +1794,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         typeof DurableAgentRuntime.layerWithServices
       >
         ? true
-        : false = true;
+        : false = false;
       const defaultLayerClosesContext: RunContextPreparation extends LayerIn<
         typeof DurableAgentRuntime.layer
       >
@@ -1815,7 +1815,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(resolveHasSettlement).toBe(true);
       expect(resolveHasFailpoint).toBe(true);
       expect(layerNeedsReconciler).toBe(true);
-      expect(customLayerNeedsContext).toBe(true);
+      expect(customLayerNeedsContext).toBe(false);
       expect(defaultLayerClosesContext).toBe(true);
       expect(customLayerNeedsAuthorization).toBe(true);
       expect(defaultLayerClosesAuthorization).toBe(true);

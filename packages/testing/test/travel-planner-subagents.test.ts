@@ -14,7 +14,12 @@ import {
   RunId,
   ToolCallId,
 } from "@effect-agent/core";
-import { AgentRuntime, AgentSpawner, ThreadHistory } from "@effect-agent/engine";
+import {
+  AgentRuntime,
+  AgentSpawner,
+  ThreadHistory,
+  RunContextPreparationPassthrough,
+} from "@effect-agent/engine";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
 import {
   AirportCode,
@@ -61,6 +66,7 @@ const makeCoordinator = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   );
 
 const TestSupportLayer = Layer.mergeAll(
+  RunContextPreparationPassthrough,
   ThreadHistory.layerTransient,
   SubagentReservationsMemoryLive,
   CatalogLifecycle.layerNoDeps,

@@ -56,8 +56,10 @@ import {
   type RunUsageDelta,
   type RunCompactionCommit,
   type RunDurabilityHook,
+  type RunTransientContextHook,
   type RunTurnUsage,
 } from "../src/index.ts";
+import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/run-options.ts";
 import { ThreadHistory } from "../src/thread-history.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -188,6 +190,7 @@ interface RunSetup {
   readonly commitCompaction?: (commit: RunCompactionCommit) => Effect.Effect<void>;
   readonly noteTurnUsage?: (usage: RunTurnUsage) => Effect.Effect<void>;
   readonly consume?: (delta: RunUsageDelta) => Effect.Effect<void>;
+  readonly transientContext?: RunTransientContextHook | undefined;
 }
 
 const basePolicy = {
@@ -235,6 +238,9 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
       { question: "compact?" },
       {
         ...(durability === undefined ? {} : { durability }),
+        ...(setup.transientContext === undefined
+          ? {}
+          : { transientContext: setup.transientContext }),
         ...(setup.consume === undefined
           ? {}
           : { budget: { guard: (effect) => effect, consume: setup.consume } }),
@@ -253,7 +259,11 @@ const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
 const compactionTestLayer = Layer.merge(identifiers, ContextCompactor.layer);
 
-const testLayer = Layer.merge(compactionTestLayer, ThreadHistory.layerTransient);
+const testLayer = Layer.mergeAll(
+  compactionTestLayer,
+  ThreadHistory.layerTransient,
+  RunContextPreparationPassthrough,
+);
 
 layer(testLayer)("engine compaction and overflow recovery", (it) => {
   const replacementSetup: RunSetup = {
@@ -281,6 +291,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         const commits: Array<RunCompactionCommit> = [];
         const usage: Array<RunUsageDelta> = [];
         const estimates: Array<number> = [];
+        const references = yield* Ref.make(0);
         const baseCompactor = Layer.effect(
           ContextCompactor,
           Effect.map(summaryModel.model.captureRequirements, (model) =>
@@ -340,6 +351,21 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         expect([decoratorRequiresBase, compositionClosesBase]).toEqual([true, true]);
         const result = yield* driveRun({
           ...replacementSetup,
+          policy: AgentPolicy.make({
+            ...basePolicy,
+            maxTurns: 2,
+            contextTokenLimit: 2_000,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
+            onExhaustion: "final-answer",
+          }),
+          transientContext: {
+            load: () =>
+              Ref.getAndUpdate(references, (count) => count + 1).pipe(
+                Effect.map((count) =>
+                  Prompt.make(`transient reference for model Turn ${count + 1}`),
+                ),
+              ),
+          },
           commitCompaction: (commit) =>
             Effect.sync(() => {
               commits.push(commit);
@@ -348,13 +374,31 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             Effect.sync(() => {
               usage.push(delta);
             }),
-        }).pipe(Effect.provide(compactor));
+        }).pipe(
+          Effect.provide(
+            Layer.effect(
+              RunContextPreparation,
+              Effect.map(ContextCompactor, (compactor) => ({ compactor })),
+            ).pipe(Layer.provide(compactor)),
+          ),
+        );
         expect(Exit.isSuccess(result.exit)).toBe(true);
         expect(result.requests).toHaveLength(3);
         expect(summaryModel.requests).toHaveLength(1);
         expect(promptText(summaryModel.requests[0]?.prompt ?? Prompt.empty)).toBe(
           "Keep the application decisions.\nTranscript from the injected strategy.",
         );
+        expect(promptText(summaryModel.requests[0]?.prompt ?? Prompt.empty)).not.toContain(
+          "transient reference",
+        );
+        expect(result.requests.map(({ prompt }) => promptText(prompt))).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("transient reference for model Turn 1"),
+            expect.stringContaining("transient reference for model Turn 2"),
+            expect.stringContaining("transient reference for model Turn 3"),
+          ]),
+        );
+        expect(result.requests[2]?.toolChoice).toBe("none");
         const outgoing = result.requests[2]?.prompt ?? Prompt.empty;
         expect(promptText(outgoing)).toContain("Application summary");
         expect(promptText(outgoing)).toContain("Research the question with the search tool");
@@ -364,6 +408,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         expect(toolResultValues(commits[0]?.source ?? Prompt.empty)).toEqual(
           replacementSetup.results,
         );
+        expect(promptText(commits[0]?.source ?? Prompt.empty)).not.toContain("transient reference");
         expect(commits[0]?.through).toBe(4);
         expect(usage.map((delta) => delta.modelUsage?.model)).toEqual([
           "compaction",
