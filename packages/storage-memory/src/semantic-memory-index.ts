@@ -49,10 +49,10 @@ interface IndexData {
 }
 
 const sameProfile = Schema.toEquivalence(SemanticMemoryProfile);
-const sameSource = Schema.toEquivalence(MemoryIndexSource);
+const sameSource = Schema.toEquivalence(MemoryIndexSource.Wire);
 const error = (operation: string, reason: MemoryIndexError["reason"]): MemoryIndexError =>
   MemoryIndexError.make({ operation, reason });
-const keyString = (key: MemoryKey): string => JSON.stringify([key.namespace, key.id]);
+const keyString = (key: MemoryKey): string => JSON.stringify([key.namespace.address, key.id]);
 const sourceIdentityBytes = (source: MemoryIndexSource): number =>
   Encoding.encodeHex(JSON.stringify(source)).length / 2;
 
@@ -70,7 +70,12 @@ const decodeBoundary = Effect.fn("InMemorySemanticIndex.decodeBoundary")(functio
 const freezeSource = (source: MemoryIndexSource): MemoryIndexSource =>
   Object.freeze(
     MemoryIndexSource.make({
-      key: Object.freeze(MemoryKey.make({ ...source.key })),
+      key: Object.freeze(
+        MemoryKey.make({
+          ...source.key,
+          namespace: Object.freeze({ address: source.key.namespace.address }),
+        }),
+      ),
       source: Object.freeze({ ...source.source }),
       sourceGeneration: source.sourceGeneration,
     }),
@@ -172,7 +177,7 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
   )(function* (rawRequest) {
     const operation = "replace semantic memory source";
     yield* ensureOpen(operation);
-    const request = yield* decodeBoundary(MemoryIndexReplacement, rawRequest, operation);
+    const request = yield* decodeBoundary(MemoryIndexReplacement.Wire, rawRequest, operation);
     const source = freezeSource(request.source);
     const sourceBytes = sourceIdentityBytes(source);
     const chunks = Object.freeze(request.chunks.map(freezeChunk));
@@ -215,7 +220,9 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
   )(function* (rawSource) {
     const operation = "withdraw semantic memory source";
     yield* ensureOpen(operation);
-    const source = freezeSource(yield* decodeBoundary(MemoryIndexSource, rawSource, operation));
+    const source = freezeSource(
+      yield* decodeBoundary(MemoryIndexSource.Wire, rawSource, operation),
+    );
     const sourceBytes = sourceIdentityBytes(source);
     if (source.source.id !== source.key.id) return yield* error(operation, "invalid-input");
     const failure = yield* Ref.modify(
@@ -245,12 +252,10 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     if (failure !== undefined) return yield* failure;
   });
 
-  const search: SemanticMemoryIndex["Service"]["search"] = Effect.fn(
-    "InMemorySemanticIndex.search",
-  )(function* (rawQuery) {
+  const search = Effect.fn("InMemorySemanticIndex.search")(function* (rawQuery: MemoryIndexQuery) {
     const operation = "search semantic memory index";
     yield* ensureOpen(operation);
-    const query = yield* decodeBoundary(MemoryIndexQuery, rawQuery, operation);
+    const query = yield* decodeBoundary(MemoryIndexQuery.Wire, rawQuery, operation);
     const vector = Object.freeze([...query.vector]);
     if (!validVector(vector, profile)) return yield* error(operation, "invalid-input");
     const current = yield* Ref.get(data);
@@ -261,12 +266,20 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     for (const entry of current.entries.values()) {
       inspectedSources += 1;
       if (inspectedSources % 128 === 0) yield* Effect.yieldNow;
-      if (entry.source.key.namespace !== query.namespace || entry._tag !== "Indexed") continue;
+      if (
+        entry.source.key.namespace.address !== query.namespace.address ||
+        entry._tag !== "Indexed"
+      )
+        continue;
       scannedChunks += entry.chunks.length;
       if (scannedChunks > query.maxScannedChunks) return yield* error(operation, "budget");
     }
     for (const entry of current.entries.values()) {
-      if (entry.source.key.namespace !== query.namespace || entry._tag !== "Indexed") continue;
+      if (
+        entry.source.key.namespace.address !== query.namespace.address ||
+        entry._tag !== "Indexed"
+      )
+        continue;
       yield* Effect.yieldNow;
       for (const chunk of entry.chunks) {
         const score = cosine(vector, chunk.vector);
@@ -296,7 +309,7 @@ const makeIndex = Effect.fn("InMemorySemanticIndex.make")(function* (
     return MemoryIndexSearch.make({ candidates: candidates.slice(0, query.limit), scannedChunks });
   });
 
-  return SemanticMemoryIndex.of({ profile, replace, withdraw, search });
+  return SemanticMemoryIndex.fromAdapter({ profile, replace, withdraw, search });
 });
 
 /** Scoped disposable semantic index. No persistent build or recovery state is retained. */

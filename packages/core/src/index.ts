@@ -4,6 +4,7 @@ export * from "./events.ts";
 export * from "./identifiers.ts";
 export * from "./memory.ts";
 export * from "./memory-lifecycle.ts";
+export * from "./memory-namespace.ts";
 export * from "./semantic-memory.ts";
 export * from "./policy.ts";
 export * from "./run-policy-usage.ts";

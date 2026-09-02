@@ -1,4 +1,5 @@
 import {
+  MemoryNamespace,
   ActiveMemoryDocument,
   type MemoryDocument,
   MemoryIndexCandidate,
@@ -14,7 +15,17 @@ import {
 } from "@effect-agent/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, type Crypto, Deferred, Effect, Encoding, Exit, Fiber, Layer } from "effect";
+import {
+  Schema as NamespaceSchema,
+  Cause,
+  type Crypto,
+  Deferred,
+  Effect,
+  Encoding,
+  Exit,
+  Fiber,
+  Layer,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
 
@@ -28,7 +39,13 @@ import {
   recallMemory,
 } from "../src/index.ts";
 
-const key = MemoryKey.make({ namespace: "team", id: "proposal" });
+const TestNamespace = MemoryNamespace.define({
+  name: "test/memory",
+  version: 1,
+  identity: NamespaceSchema.String,
+});
+
+const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
 const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
 const profile = SemanticMemoryProfile.make({
   version: 1,
@@ -141,7 +158,7 @@ const probe = () => {
     beforePublish: Effect.void,
     searchFailure: null,
   };
-  const index = SemanticMemoryIndex.of({
+  const index = SemanticMemoryIndex.fromAdapter({
     profile,
     replace: ({ chunks }) =>
       Effect.gen(function* () {
@@ -164,13 +181,16 @@ const probe = () => {
       ),
   });
   const layer = Layer.mergeAll(
-    Layer.succeed(MemoryReader, {
-      get: () =>
-        Effect.sync(() => {
-          state.reads += 1;
-          return state.current;
-        }),
-    }),
+    Layer.succeed(
+      MemoryReader,
+      MemoryReader.fromAdapter({
+        get: () =>
+          Effect.sync(() => {
+            state.reads += 1;
+            return state.current;
+          }),
+      }),
+    ),
     Layer.succeed(SemanticMemoryIndex, index),
     Layer.effect(
       EmbeddingModel.EmbeddingModel,
@@ -281,7 +301,7 @@ describe("optional semantic workflows", () => {
           _tag: "Found",
           passages: [
             {
-              authority: access.namespace,
+              authority: access.namespace.address,
               content: {
                 text: "Dan 🌊",
                 attributions: document.content.attributions,
@@ -290,7 +310,7 @@ describe("optional semantic workflows", () => {
               },
             },
             {
-              authority: access.namespace,
+              authority: access.namespace.address,
               content: { text: "Dan 🌊", attributions: document.content.attributions },
             },
           ],
@@ -302,7 +322,7 @@ describe("optional semantic workflows", () => {
         expect(recalled.passages).toHaveLength(1);
         expect(recalled.text).toContain('"speaker":"Dan"');
         expect(recalled.text).toContain('"observers":["Chad"]');
-        expect(recalled.text).not.toContain(access.namespace);
+        expect(recalled.text).not.toContain(access.namespace.address);
         expect(recalled.text).toContain('"authority":"memory-authority:1"');
         const limited = yield* recallMemory(
           [{ id: "semantic", essential: false, read: Effect.succeed(queried.lookup) }],
@@ -328,7 +348,10 @@ describe("optional semantic workflows", () => {
           staleExcluded: 1,
         });
         test.state.candidates = [
-          MemoryIndexCandidate.make({ ...candidate(), key: { ...key, namespace: "other" } }),
+          MemoryIndexCandidate.make({
+            ...candidate(),
+            key: { ...key, namespace: TestNamespace.make("other") },
+          }),
         ];
         expect(
           yield* querySemanticMemory("queue", access, queryLimits).pipe(Effect.flip),
@@ -357,10 +380,13 @@ describe("optional semantic workflows", () => {
       maxSourceBytes: byteLength(JSON.stringify(test.state.current)),
       timeoutMillis: 10_000,
     }).pipe(
-      Effect.provideService(SemanticMemoryIndex, {
-        ...test.index,
-        profile: SemanticMemoryProfile.make({ ...profile, maxChunkBytes: 8_192 }),
-      }),
+      Effect.provideService(
+        SemanticMemoryIndex,
+        SemanticMemoryIndex.fromAdapter({
+          ...test.index,
+          profile: SemanticMemoryProfile.make({ ...profile, maxChunkBytes: 8_192 }),
+        }),
+      ),
     );
     return Effect.gen(function* () {
       const result = yield* query;
@@ -399,7 +425,7 @@ describe("optional semantic workflows", () => {
         (total, item) => total + new TextEncoder().encode(JSON.stringify(item)).byteLength,
         0,
       );
-      const read = MemoryReader.of({
+      const read = MemoryReader.fromAdapter({
         get: (requested) =>
           Effect.sync(() => {
             reads.push(requested.id);

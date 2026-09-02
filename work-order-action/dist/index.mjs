@@ -32512,15 +32512,131 @@ class MemoryRecallError extends exports_Schema.TaggedError()("MemoryRecallError"
   message: exports_Schema.String.check(exports_Schema.isMaxLength(4096))
 }) {
 }
+// packages/core/src/memory-namespace.ts
+var Name = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var Version = exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
+var invariant = (value4) => value4;
+var canonicalJson2 = (value4) => {
+  if (Array.isArray(value4))
+    return `[${value4.map(canonicalJson2).join(",")}]`;
+  if (value4 !== null && typeof value4 === "object") {
+    return `{${Object.entries(value4).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson2(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value4);
+};
+var boundedIdentity = (value4, depth = 0) => {
+  if (depth > 16)
+    return false;
+  if (value4 !== null && typeof value4 === "object") {
+    const entries3 = Object.values(value4);
+    return entries3.length <= 128 && entries3.every((entry) => boundedIdentity(entry, depth + 1));
+  }
+  return true;
+};
+var Envelope = exports_Schema.Tuple([
+  exports_Schema.Literal(1),
+  Name,
+  Version,
+  exports_Schema.Json.check(exports_Schema.makeFilter((value4) => boundedIdentity(value4), {
+    expected: "JSON identity at most 16 levels deep and 128 entries per container"
+  }))
+]);
+var EnvelopeJson = exports_Schema.fromJsonString(Envelope);
+
+class MemoryNamespaceError extends exports_Schema.TaggedError()("MemoryNamespaceError", {
+  reason: exports_Schema.Literals([
+    "invalid-identity",
+    "invalid-address",
+    "wrong-definition",
+    "unsupported-format"
+  ])
+}) {
+}
+var BoundedAddress = exports_Schema.String.check(exports_Schema.isMaxLength(4096), exports_Schema.makeFilter((address) => exports_Encoding.encodeHex(address).length / 2 <= 4096, {
+  expected: "at most 4096 UTF-8 bytes"
+}));
+var MemoryNamespaceAddress = BoundedAddress.check(exports_Schema.makeFilter((address) => {
+  const decoded = exports_Schema.decodeUnknownOption(EnvelopeJson)(address);
+  return decoded._tag === "Some" && canonicalJson2(decoded.value) === address;
+}, { expected: "canonical memory namespace format 1" })).pipe(exports_Schema.brand("@effect-agent/core/MemoryNamespaceAddress"));
+var MemoryNamespace;
+((MemoryNamespace) => {
+  MemoryNamespace.Any = exports_Schema.Struct({
+    address: MemoryNamespaceAddress
+  });
+  MemoryNamespace.equals = (left, right) => left.address === right.address;
+  MemoryNamespace.define = (options3) => {
+    exports_Schema.decodeUnknownSync(exports_Schema.Struct({ name: Name, version: Version }))({
+      name: options3.name,
+      version: options3.version
+    });
+    const identityCodec = options3.identity;
+    const name = options3.name;
+    const version = options3.version;
+    const create = exports_Effect.fn("MemoryNamespace.create")(function* (input) {
+      const encoded = yield* exports_Schema.encodeEffect(identityCodec)(input);
+      const normalized = yield* exports_Schema.decodeUnknownEffect(identityCodec)(encoded);
+      const stable = yield* exports_Schema.encodeEffect(identityCodec)(normalized);
+      const repeated = yield* exports_Schema.decodeUnknownEffect(identityCodec)(stable).pipe(exports_Effect.flatMap(exports_Schema.encodeEffect(identityCodec)));
+      const envelope = yield* exports_Schema.decodeUnknownEffect(Envelope)([1, name, version, stable]);
+      if (canonicalJson2(stable) !== canonicalJson2(repeated))
+        return yield* MemoryNamespaceError.make({ reason: "invalid-identity" });
+      const address = yield* exports_Schema.decodeUnknownEffect(MemoryNamespaceAddress)(canonicalJson2(envelope));
+      const value4 = Object.assign(MemoryNamespace.Any.make({ address }), {
+        name,
+        version,
+        identity: normalized,
+        _type: invariant
+      });
+      Object.defineProperties(value4, {
+        name: { enumerable: false },
+        version: { enumerable: false },
+        identity: { enumerable: false },
+        _type: { enumerable: false }
+      });
+      return Object.freeze(value4);
+    }, exports_Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-identity" })));
+    const decode2 = exports_Effect.fn("MemoryNamespace.decode")(function* (input) {
+      const identity3 = yield* exports_Schema.decodeUnknownEffect(identityCodec)(input).pipe(exports_Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-identity" })));
+      return yield* create(identity3);
+    });
+    const restore = exports_Effect.fn("MemoryNamespace.restore")(function* (input) {
+      const bounded3 = yield* exports_Schema.decodeUnknownEffect(BoundedAddress)(input).pipe(exports_Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })));
+      const header = yield* exports_Schema.decodeUnknownEffect(exports_Schema.fromJsonString(exports_Schema.Array(exports_Schema.Json)))(bounded3).pipe(exports_Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })));
+      if (header[0] !== 1)
+        return yield* MemoryNamespaceError.make({ reason: "unsupported-format" });
+      const address = yield* exports_Schema.decodeUnknownEffect(MemoryNamespaceAddress)(input).pipe(exports_Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })));
+      const envelope = yield* exports_Schema.decodeUnknownEffect(EnvelopeJson)(address).pipe(exports_Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })));
+      if (envelope[1] !== name || envelope[2] !== version)
+        return yield* MemoryNamespaceError.make({ reason: "wrong-definition" });
+      const value4 = yield* decode2(envelope[3]);
+      if (value4.address !== address)
+        return yield* MemoryNamespaceError.make({ reason: "invalid-address" });
+      return value4;
+    });
+    return {
+      name,
+      version,
+      make: (identity3) => exports_Effect.runSync(create(identity3)),
+      decode: decode2,
+      restore
+    };
+  };
+})(MemoryNamespace ||= {});
+
 // packages/core/src/memory-lifecycle.ts
 var Identity2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024));
 var Timestamp2 = exports_Schema.Finite.check(exports_Schema.isGreaterThanOrEqualTo(0));
 
-class MemoryKey extends exports_Schema.Class("@effect-agent/core/MemoryKey")({
-  namespace: Identity2,
+class MemoryKeyWire extends exports_Schema.Class("@effect-agent/core/MemoryKey")({
+  namespace: MemoryNamespace.Any,
   id: MemorySourceReference.fields.id
 }) {
 }
+var MemoryKey = {
+  Wire: MemoryKeyWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryKeyWire)(fields), { namespace: fields.namespace })
+};
 var KnownSource = exports_Schema.Struct({
   ...MemorySourceReference.fields,
   revision: Identity2
@@ -32530,31 +32646,57 @@ var AccessScopes = exports_Schema.Array(Identity2).check(exports_Schema.isMaxLen
 }));
 var DocumentFields = {
   version: exports_Schema.Literal(1),
-  key: MemoryKey,
+  key: MemoryKey.Wire,
   source: KnownSource,
   generation: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
   predecessor: exports_Schema.NullOr(MemorySourceReference),
   modifiedAt: Timestamp2
 };
 
-class ActiveMemoryDocument extends exports_Schema.TaggedClass()("ActiveMemoryDocument", {
+class ActiveMemoryDocumentWire extends exports_Schema.TaggedClass()("ActiveMemoryDocument", {
   ...DocumentFields,
   content: MemoryContent,
   scopes: AccessScopes
 }) {
 }
 
-class WithdrawnMemoryDocument extends exports_Schema.TaggedClass()("WithdrawnMemoryDocument", {
+class WithdrawnMemoryDocumentWire extends exports_Schema.TaggedClass()("WithdrawnMemoryDocument", {
   ...DocumentFields,
   reason: exports_Schema.String.check(exports_Schema.isMaxLength(4096))
 }) {
 }
-var MemoryDocument = exports_Schema.Union([ActiveMemoryDocument, WithdrawnMemoryDocument]);
+var ActiveMemoryDocument = {
+  Wire: ActiveMemoryDocumentWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(ActiveMemoryDocumentWire)({
+    _tag: "ActiveMemoryDocument",
+    ...fields
+  }), { key: MemoryKey.make(fields.key) })
+};
+var WithdrawnMemoryDocument = {
+  Wire: WithdrawnMemoryDocumentWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(WithdrawnMemoryDocumentWire)({
+    _tag: "WithdrawnMemoryDocument",
+    ...fields
+  }), { key: MemoryKey.make(fields.key) })
+};
+var MemoryDocument = {
+  Wire: exports_Schema.Union([ActiveMemoryDocument.Wire, WithdrawnMemoryDocument.Wire]),
+  restore: exports_Effect.fn("MemoryDocument.restore")(function* (namespace, input) {
+    const document = yield* exports_Schema.decodeUnknownEffect(MemoryDocument.Wire)(input).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "restore memory document", reason: "corrupt" })));
+    if (!MemoryNamespace.equals(namespace, document.key.namespace))
+      return yield* MemoryStorageError.make({
+        operation: "restore memory namespace",
+        reason: "corrupt"
+      });
+    const key = MemoryKey.make({ ...document.key, namespace });
+    return document._tag === "ActiveMemoryDocument" ? ActiveMemoryDocument.make({ ...document, key }) : WithdrawnMemoryDocument.make({ ...document, key });
+  })
+};
 var WriteFields = {
-  key: MemoryKey,
+  key: MemoryKey.Wire,
   operationId: Identity2
 };
-var MemoryWrite = exports_Schema.Union([
+var MemoryWriteWire = exports_Schema.Union([
   exports_Schema.TaggedStruct("Put", {
     ...WriteFields,
     expectedRevision: exports_Schema.NullOr(Identity2),
@@ -32565,25 +32707,24 @@ var MemoryWrite = exports_Schema.Union([
   exports_Schema.TaggedStruct("Withdraw", {
     ...WriteFields,
     expectedRevision: Identity2,
-    reason: WithdrawnMemoryDocument.fields.reason
+    reason: WithdrawnMemoryDocument.Wire.fields.reason
   })
 ]);
-
 class MemoryConflict extends exports_Schema.TaggedError()("MemoryConflict", {
-  key: MemoryKey,
+  key: MemoryKey.Wire,
   expectedRevision: exports_Schema.NullOr(Identity2),
   actualRevision: exports_Schema.NullOr(Identity2)
 }) {
 }
 
 class MemoryWithdrawn extends exports_Schema.TaggedError()("MemoryWithdrawn", {
-  key: MemoryKey,
+  key: MemoryKey.Wire,
   revision: Identity2
 }) {
 }
 
 class MemoryOperationConflict extends exports_Schema.TaggedError()("MemoryOperationConflict", {
-  key: MemoryKey,
+  key: MemoryKey.Wire,
   operationId: Identity2
 }) {
 }
@@ -32612,12 +32753,28 @@ class MemoryMutationFailpoint extends exports_Context.Service()("@effect-agent/c
 }
 
 class MemoryReader extends exports_Context.Service()("@effect-agent/core/MemoryReader") {
+  static fromAdapter(adapter) {
+    return {
+      get: exports_Effect.fn("MemoryReader.get")(function* (key) {
+        const document = yield* adapter.get(key);
+        return document === null ? null : yield* MemoryDocument.restore(key.namespace, document);
+      })
+    };
+  }
 }
 
 class MemoryWriter extends exports_Context.Service()("@effect-agent/core/MemoryWriter") {
+  static fromAdapter(adapter) {
+    return {
+      change: exports_Effect.fn("MemoryWriter.change")(function* (write2) {
+        const document = yield* adapter.change(write2);
+        return yield* MemoryDocument.restore(write2.key.namespace, document);
+      })
+    };
+  }
 }
 var applyMemoryWrite = exports_Effect.fn("applyMemoryWrite")(function* (current, write2, modifiedAt) {
-  if (current !== null && (current.key.namespace !== write2.key.namespace || current.key.id !== write2.key.id || current.source.id !== write2.key.id)) {
+  if (current !== null && (!MemoryNamespace.equals(current.key.namespace, write2.key.namespace) || current.key.id !== write2.key.id || current.source.id !== write2.key.id)) {
     return yield* MemoryStorageError.make({
       operation: "memory transition identity",
       reason: "corrupt"
@@ -32653,7 +32810,8 @@ var applyMemoryWrite = exports_Effect.fn("applyMemoryWrite")(function* (current,
     content: write2.content,
     scopes: write2.scopes
   } : { _tag: "WithdrawnMemoryDocument", ...fields, reason: write2.reason };
-  return yield* exports_Schema.decodeUnknownEffect(MemoryDocument)(next).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "memory transition", reason: "invalid-input" })));
+  const document = yield* exports_Schema.decodeUnknownEffect(MemoryDocument.Wire)(next).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "memory transition", reason: "invalid-input" })));
+  return yield* MemoryDocument.restore(write2.key.namespace, document);
 });
 // packages/core/src/semantic-memory.ts
 var Identity3 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
@@ -32683,22 +32841,27 @@ class SemanticMemoryChunk extends exports_Schema.Class("@effect-agent/core/Seman
 }) {
 }
 var SourceFields = {
-  key: MemoryKey,
-  source: ActiveMemoryDocument.fields.source,
+  key: MemoryKey.Wire,
+  source: ActiveMemoryDocument.Wire.fields.source,
   sourceGeneration: Positive
 };
 
-class MemoryIndexSource extends exports_Schema.Class("@effect-agent/core/MemoryIndexSource")(SourceFields) {
+class MemoryIndexSourceWire extends exports_Schema.Class("@effect-agent/core/MemoryIndexSource")(SourceFields) {
 }
+var MemoryIndexSource = {
+  Wire: MemoryIndexSourceWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryIndexSourceWire)(fields), {
+    key: MemoryKey.make(fields.key)
+  })
+};
 
-class MemoryIndexReplacement extends exports_Schema.Class("@effect-agent/core/MemoryIndexReplacement")({
-  source: MemoryIndexSource,
+class MemoryIndexReplacementWire extends exports_Schema.Class("@effect-agent/core/MemoryIndexReplacement")({
+  source: MemoryIndexSource.Wire,
   profile: SemanticMemoryProfile,
   chunks: exports_Schema.Array(SemanticMemoryChunk).check(exports_Schema.isMinLength(1), exports_Schema.isMaxLength(256))
 }) {
 }
-
-class MemoryIndexCandidate extends exports_Schema.Class("@effect-agent/core/MemoryIndexCandidate")({
+class MemoryIndexCandidateWire extends exports_Schema.Class("@effect-agent/core/MemoryIndexCandidate")({
   ...SourceFields,
   passageId: SemanticMemoryChunk.fields.passageId,
   ordinal: SemanticMemoryChunk.fields.ordinal,
@@ -32709,21 +32872,39 @@ class MemoryIndexCandidate extends exports_Schema.Class("@effect-agent/core/Memo
   indexedAt: Timestamp3
 }) {
 }
+var MemoryIndexCandidate = {
+  Wire: MemoryIndexCandidateWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryIndexCandidateWire)(fields), {
+    key: MemoryKey.make(fields.key)
+  })
+};
 
-class MemoryIndexQuery extends exports_Schema.Class("@effect-agent/core/MemoryIndexQuery")({
-  namespace: MemoryKey.fields.namespace,
+class MemoryIndexQueryWire extends exports_Schema.Class("@effect-agent/core/MemoryIndexQuery")({
+  namespace: MemoryKey.Wire.fields.namespace,
   vector: Vector,
   limit: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 128 })),
   minScore: exports_Schema.Finite.check(exports_Schema.isBetween({ minimum: -1, maximum: 1 })),
   maxScannedChunks: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 65536 }))
 }) {
 }
+var MemoryIndexQuery = {
+  Wire: MemoryIndexQueryWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryIndexQueryWire)(fields), {
+    namespace: fields.namespace
+  })
+};
 
-class MemoryIndexSearch extends exports_Schema.Class("@effect-agent/core/MemoryIndexSearch")({
-  candidates: exports_Schema.Array(MemoryIndexCandidate).check(exports_Schema.isMaxLength(128)),
+class MemoryIndexSearchWire extends exports_Schema.Class("@effect-agent/core/MemoryIndexSearch")({
+  candidates: exports_Schema.Array(MemoryIndexCandidate.Wire).check(exports_Schema.isMaxLength(128)),
   scannedChunks: exports_Schema.Natural
 }) {
 }
+var MemoryIndexSearch = {
+  Wire: MemoryIndexSearchWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryIndexSearchWire)(fields), {
+    candidates: fields.candidates
+  })
+};
 
 class MemoryIndexError extends exports_Schema.TaggedError()("MemoryIndexError", {
   operation: Identity3,
@@ -32739,6 +32920,28 @@ class MemoryIndexError extends exports_Schema.TaggedError()("MemoryIndexError", 
 }
 
 class SemanticMemoryIndex extends exports_Context.Service()("@effect-agent/core/SemanticMemoryIndex") {
+  static fromAdapter(adapter) {
+    return {
+      ...adapter,
+      search: exports_Effect.fn("SemanticMemoryIndex.search")(function* (query) {
+        const result4 = yield* adapter.search(query);
+        const checked = yield* exports_Schema.decodeUnknownEffect(MemoryIndexSearch.Wire)(result4).pipe(exports_Effect.mapError(() => MemoryIndexError.make({ operation: "restore index search", reason: "corrupt" })));
+        const candidates = [];
+        for (const candidate of checked.candidates) {
+          if (!MemoryNamespace.equals(candidate.key.namespace, query.namespace))
+            return yield* MemoryIndexError.make({
+              operation: "restore index namespace",
+              reason: "corrupt"
+            });
+          candidates.push(MemoryIndexCandidate.make({
+            ...candidate,
+            key: MemoryKey.make({ ...candidate.key, namespace: query.namespace })
+          }));
+        }
+        return MemoryIndexSearch.make({ ...checked, candidates });
+      })
+    };
+  }
 }
 // packages/core/src/tool-result.ts
 var ENVELOPE_FLOOR_BYTES = 256;
@@ -43820,15 +44023,15 @@ var flattenTopLevelRef = (schema3) => {
     return schema3;
   return exports_JsonSchema.resolve$ref(ref, defs) ?? schema3;
 };
-var canonicalJson2 = (value4) => {
+var canonicalJson3 = (value4) => {
   if (value4 === null || typeof value4 === "string" || typeof value4 === "boolean" || typeof value4 === "number") {
     return value4;
   }
   if (isJsonArray2(value4))
-    return value4.map(canonicalJson2);
+    return value4.map(canonicalJson3);
   const output = {};
   for (const [key, item] of Object.entries(value4).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
-    output[key] = canonicalJson2(item);
+    output[key] = canonicalJson3(item);
   }
   return output;
 };
@@ -43846,7 +44049,7 @@ var digestJson = exports_Effect.fn("digestMcpSchema")(function* (serverId, value
     serverId,
     message: `MCP Tool schema is not canonical JSON: ${error2.message}`
   })));
-  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(exports_Schema.Json))(canonicalJson2(json2)).pipe(exports_Effect.mapError((error2) => McpToolkitMismatch.make({
+  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(exports_Schema.Json))(canonicalJson3(json2)).pipe(exports_Effect.mapError((error2) => McpToolkitMismatch.make({
     cause: error2,
     serverId,
     message: `Could not encode canonical MCP Tool schema JSON: ${error2.message}`
@@ -43994,8 +44197,8 @@ class RecalledMemory extends exports_Schema.Class("@effect-agent/capabilities/Re
 }) {
 }
 var bytes = (text2) => exports_Encoding.encodeHex(text2).length / 2;
-var canonicalJson3 = (value4) => JSON.stringify(value4, (_key, item) => exports_Predicate.isObject(item) && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) : item);
-var identity3 = (passage, authority) => canonicalJson3([
+var canonicalJson4 = (value4) => JSON.stringify(value4, (_key, item) => exports_Predicate.isObject(item) && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) : item);
+var identity3 = (passage, authority) => canonicalJson4([
   authority,
   passage.source.id,
   passage.source.revision,
@@ -44075,7 +44278,7 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
       let deduplicated = 0;
       let omitted = 0;
       for (const passage of result4.passages) {
-        const encoded = canonicalJson3(passage);
+        const encoded = canonicalJson4(passage);
         const remainingInputBytes = maxInputBytes - inputBytes;
         const encodedBytes3 = encoded.length <= remainingInputBytes ? bytes(encoded) : undefined;
         if (encodedBytes3 === undefined || encodedBytes3 > remainingInputBytes) {
@@ -44086,8 +44289,8 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
           });
         }
         inputBytes += encodedBytes3;
-        const authority = canonicalJson3(passage.authority === undefined ? ["reader", source.id] : ["qualified", passage.authority]);
-        const qualifiedSource = canonicalJson3([authority, passage.source.id]);
+        const authority = canonicalJson4(passage.authority === undefined ? ["reader", source.id] : ["qualified", passage.authority]);
+        const qualifiedSource = canonicalJson4([authority, passage.source.id]);
         const key = identity3(passage, authority);
         const previous = claims.get(key);
         if (previous !== undefined && previous !== encoded) {
@@ -44155,14 +44358,20 @@ var RevalidationLimits = exports_Schema.Struct({
   maxInputBytes: MemoryRecallLimits.fields.maxInputBytes
 });
 
-class MemoryAccess extends exports_Schema.Class("@effect-agent/capabilities/MemoryAccess")({
-  namespace: MemoryKey.fields.namespace,
+class MemoryAccessWire extends exports_Schema.Class("@effect-agent/capabilities/MemoryAccess")({
+  namespace: MemoryKey.Wire.fields.namespace,
   scope: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024))
 }) {
 }
+var MemoryAccess = {
+  Wire: MemoryAccessWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryAccessWire)(fields), {
+    namespace: fields.namespace
+  })
+};
 var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(function* (lookup2, access3, limits = {}) {
   const decodedLimits = yield* exports_Schema.decodeUnknownEffect(RevalidationLimits)(limits).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid revalidation limits" })));
-  const decodedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess)(access3).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" })));
+  const decodedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess.Wire)(access3).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" })));
   const decoded = yield* exports_Schema.decodeUnknownEffect(MemoryLookup)(lookup2).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Malformed memory candidates" })));
   if (decoded._tag !== "Found")
     return decoded;
@@ -44180,8 +44389,8 @@ var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(functio
   let inputBytes = 0;
   for (const [sourceId, group2] of groups) {
     const key = MemoryKey.make({ namespace: decodedAccess.namespace, id: sourceId });
-    const document = yield* reader.get(key).pipe(exports_Effect.flatMap((value4) => exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument))(value4).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" })))));
-    if (document !== null && (document.key.namespace !== key.namespace || document.key.id !== key.id || document.source.id !== key.id)) {
+    const document = yield* reader.get(key).pipe(exports_Effect.flatMap((value4) => exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument.Wire))(value4).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" })))));
+    if (document !== null && (document.key.namespace.address !== key.namespace.address || document.key.id !== key.id || document.source.id !== key.id)) {
       return yield* MemoryStorageError.make({
         operation: "validate source identity",
         reason: "corrupt"
@@ -44193,7 +44402,7 @@ var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(functio
       const sameExcerpt = document.source.revision === candidate.source.revision && document.content.text.includes(candidate.content.text);
       const passage = MemoryPassage.make({
         version: 1,
-        authority: decodedAccess.namespace,
+        authority: decodedAccess.namespace.address,
         source: document.source,
         passageId: sameExcerpt ? candidate.passageId : "document",
         content: {
@@ -44254,8 +44463,8 @@ class SemanticQueryLimits extends exports_Schema.Class("@effect-agent/capabiliti
 }) {
 }
 
-class SemanticIndexResult extends exports_Schema.Class("@effect-agent/capabilities/SemanticIndexResult")({
-  key: MemoryKey,
+class SemanticIndexResultWire extends exports_Schema.Class("@effect-agent/capabilities/SemanticIndexResult")({
+  key: MemoryKey.Wire,
   status: exports_Schema.Literals(["Missing", "Withdrawn", "Indexed"]),
   embeddedChunks: exports_Schema.Natural,
   embeddedBytes: exports_Schema.Natural,
@@ -44264,6 +44473,12 @@ class SemanticIndexResult extends exports_Schema.Class("@effect-agent/capabiliti
   finishedAt: Timestamp4
 }) {
 }
+var SemanticIndexResult = {
+  Wire: SemanticIndexResultWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(SemanticIndexResultWire)(fields), {
+    key: MemoryKey.make(fields.key)
+  })
+};
 
 class SemanticQueryResult extends exports_Schema.Class("@effect-agent/capabilities/SemanticQueryResult")({
   lookup: MemoryLookup,
@@ -44287,11 +44502,11 @@ var asSource = (document) => MemoryIndexSource.make({
   source: document.source,
   sourceGeneration: document.generation
 });
-var sameSource = (left, right) => left.key.namespace === right.key.namespace && left.key.id === right.key.id && left.generation === right.generation && left.source.revision === right.source.revision && left.source.locator === right.source.locator && left._tag === right._tag;
+var sameSource = (left, right) => left.key.namespace.address === right.key.namespace.address && left.key.id === right.key.id && left.generation === right.generation && left.source.revision === right.source.revision && left.source.locator === right.source.locator && left._tag === right._tag;
 var readDocument = exports_Effect.fn("semanticMemory.readDocument")(function* (key) {
   const reader = yield* MemoryReader;
-  const document = yield* reader.get(key).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument))), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryStorageError.make({ operation: "validate semantic source", reason: "corrupt" }))));
-  if (document !== null && (document.key.namespace !== key.namespace || document.key.id !== key.id || document.source.id !== key.id)) {
+  const document = yield* reader.get(key).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument.Wire))), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryStorageError.make({ operation: "validate semantic source", reason: "corrupt" }))));
+  if (document !== null && (document.key.namespace.address !== key.namespace.address || document.key.id !== key.id || document.source.id !== key.id)) {
     return yield* MemoryStorageError.make({
       operation: "validate semantic source identity",
       reason: "corrupt"
@@ -44353,7 +44568,8 @@ var chunkText = exports_Effect.fn("semanticMemory.chunkText")(function* (text2, 
   return chunks2;
 });
 var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, limits) {
-  const checkedKey = yield* exports_Schema.decodeUnknownEffect(MemoryKey)(key).pipe(exports_Effect.mapError(() => invalid2("index key")));
+  yield* exports_Schema.decodeUnknownEffect(MemoryKey.Wire)(key).pipe(exports_Effect.mapError(() => invalid2("index key")));
+  const checkedKey = MemoryKey.make(key);
   const checkedLimits = yield* exports_Schema.decodeUnknownEffect(SemanticIndexLimits)(limits).pipe(exports_Effect.mapError(() => invalid2("index limits")));
   return yield* exports_Effect.gen(function* () {
     const startedAt = yield* exports_Clock.currentTimeMillis;
@@ -44418,7 +44634,7 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
 });
 var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (query, access3, limits) {
   const checkedQuery = yield* exports_Schema.decodeUnknownEffect(exports_Schema.NonEmptyString)(query).pipe(exports_Effect.mapError(() => invalid2("query text")));
-  const checkedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess)(access3).pipe(exports_Effect.mapError(() => invalid2("query access")));
+  const checkedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess.Wire)(access3).pipe(exports_Effect.mapError(() => invalid2("query access")));
   const checkedLimits = yield* exports_Schema.decodeUnknownEffect(SemanticQueryLimits)(limits).pipe(exports_Effect.mapError(() => invalid2("query limits")));
   const queryBytes = byteLength(checkedQuery);
   if (queryBytes > checkedLimits.maxQueryBytes)
@@ -44440,7 +44656,7 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
       limit: checkedLimits.maxCandidates,
       minScore: checkedLimits.minScore,
       maxScannedChunks: checkedLimits.maxScannedChunks
-    })).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(MemoryIndexSearch)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryIndexError.make({ operation: "validate candidates", reason: "corrupt" }))));
+    })).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(MemoryIndexSearch.Wire)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryIndexError.make({ operation: "validate candidates", reason: "corrupt" }))));
     if (found.candidates.length > checkedLimits.maxCandidates || found.scannedChunks > checkedLimits.maxScannedChunks || found.scannedChunks < found.candidates.length) {
       return yield* MemoryIndexError.make({
         operation: "validate candidate bounds",
@@ -44452,7 +44668,7 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
     let staleExcluded = 0;
     let unauthorizedExcluded = 0;
     for (const [rank, candidate] of found.candidates.entries()) {
-      if (candidate.key.namespace !== checkedAccess.namespace || candidate.source.id !== candidate.key.id || candidate.score < checkedLimits.minScore) {
+      if (candidate.key.namespace.address !== checkedAccess.namespace.address || candidate.source.id !== candidate.key.id || candidate.score < checkedLimits.minScore) {
         return yield* MemoryIndexError.make({
           operation: "validate candidate identity",
           reason: "corrupt"
@@ -44501,7 +44717,7 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
           rank,
           passage: MemoryPassage.make({
             version: 1,
-            authority: checkedAccess.namespace,
+            authority: checkedAccess.namespace.address,
             source: document.source,
             passageId: candidate.passageId,
             content: { ...document.content, text: candidate.text }

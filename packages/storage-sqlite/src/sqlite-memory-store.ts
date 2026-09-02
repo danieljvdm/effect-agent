@@ -2,6 +2,7 @@ import {
   applyMemoryWrite,
   MemoryDocument,
   MemoryKey,
+  MemoryNamespaceAddress,
   MemoryMutationFailpoint,
   type MemoryMutationFailure,
   MemoryOperationConflict,
@@ -14,7 +15,7 @@ import { Clock, Context, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
-const STORAGE_VERSION = 1 as const;
+const STORAGE_VERSION = 2 as const;
 const METADATA_COMPONENT = "memory";
 const DOCUMENT_TABLE = "effect_agent_memory_documents_v1";
 const RECEIPT_TABLE = "effect_agent_memory_receipts_v1";
@@ -25,8 +26,8 @@ const EncodedMemoryChange = Schema.Struct({
   documentJson: StoredJson,
   resultJson: StoredJson,
 });
-const equivalentContent = Schema.toEquivalence(MemoryWrite.members[0].fields.content);
-const equivalentScopes = Schema.toEquivalence(MemoryWrite.members[0].fields.scopes);
+const equivalentContent = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.content);
+const equivalentScopes = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.scopes);
 
 class MemoryMetadataRow extends Schema.Class<MemoryMetadataRow>(
   "@effect-agent/storage-sqlite/MemoryMetadataRow",
@@ -43,8 +44,8 @@ class MemoryTableRow extends Schema.Class<MemoryTableRow>(
 class MemoryDocumentRow extends Schema.Class<MemoryDocumentRow>(
   "@effect-agent/storage-sqlite/MemoryDocumentRow",
 )({
-  namespace: MemoryKey.fields.namespace,
-  source_id: MemoryKey.fields.id,
+  namespace: MemoryNamespaceAddress,
+  source_id: MemoryKey.Wire.fields.id,
   format_version: Schema.Int,
   generation: Schema.Int,
   revision: Schema.NonEmptyString,
@@ -54,9 +55,9 @@ class MemoryDocumentRow extends Schema.Class<MemoryDocumentRow>(
 class MemoryReceiptRow extends Schema.Class<MemoryReceiptRow>(
   "@effect-agent/storage-sqlite/MemoryReceiptRow",
 )({
-  namespace: MemoryKey.fields.namespace,
-  operation_id: MemoryWrite.members[0].fields.operationId,
-  source_id: MemoryKey.fields.id,
+  namespace: MemoryNamespaceAddress,
+  operation_id: MemoryWrite.Wire.members[0].fields.operationId,
+  source_id: MemoryKey.Wire.fields.id,
   format_version: Schema.Int,
   command_json: StoredJson,
   result_json: StoredJson,
@@ -72,14 +73,14 @@ class StoredMemoryCommand extends Schema.Class<StoredMemoryCommand>(
   "@effect-agent/storage-sqlite/StoredMemoryCommand",
 )({
   version: Schema.Literal(STORAGE_VERSION),
-  value: MemoryWrite,
+  value: MemoryWrite.Wire,
 }) {}
 
 class StoredMemoryResult extends Schema.Class<StoredMemoryResult>(
   "@effect-agent/storage-sqlite/StoredMemoryResult",
 )({
   version: Schema.Literal(STORAGE_VERSION),
-  value: MemoryDocument,
+  value: MemoryDocument.Wire,
 }) {}
 
 const StoredVersionHeader = Schema.Struct({ version: Schema.Int });
@@ -160,7 +161,7 @@ const validateDocument = Effect.fn("SqliteMemoryStore.validateDocument")(functio
   operation: string,
 ): Effect.fn.Return<MemoryDocument, MemoryStorageError> {
   if (
-    document.key.namespace !== key.namespace ||
+    document.key.namespace.address !== key.namespace.address ||
     document.key.id !== key.id ||
     document.source.id !== key.id ||
     document.source.revision !== String(document.generation) ||
@@ -302,7 +303,7 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
       sql<Record<string, unknown>>`
         SELECT namespace, source_id, format_version, generation, revision, document_json
         FROM effect_agent_memory_documents_v1
-        WHERE namespace = ${key.namespace} AND source_id = ${key.id}
+        WHERE namespace = ${key.namespace.address} AND source_id = ${key.id}
       `,
       operation,
     );
@@ -313,10 +314,11 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
     if (row.format_version !== STORAGE_VERSION) {
       return yield* storageError(operation, "incompatible");
     }
-    const document = yield* decodeVersionedJson(MemoryDocument, row.document_json, operation);
+    const stored = yield* decodeVersionedJson(StoredMemoryResult, row.document_json, operation);
+    const document = stored.value;
     yield* validateDocument(document, key, operation);
     if (
-      row.namespace !== key.namespace ||
+      row.namespace !== key.namespace.address ||
       row.source_id !== key.id ||
       row.generation !== document.generation ||
       row.revision !== document.source.revision
@@ -326,8 +328,8 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
     return document;
   });
 
-  const get: MemoryReader["Service"]["get"] = Effect.fn("SqliteMemoryStore.get")(function* (key) {
-    const decodedKey = yield* decodeInput(MemoryKey, key, "get memory document");
+  const get = Effect.fn("SqliteMemoryStore.get")(function* (key: MemoryKey) {
+    const decodedKey = yield* decodeInput(MemoryKey.Wire, key, "get memory document");
     return yield* readDocument(decodedKey, "get memory document");
   });
 
@@ -348,7 +350,7 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
       sql<Record<string, unknown>>`
         SELECT namespace, operation_id, source_id, format_version, command_json, result_json
         FROM effect_agent_memory_receipts_v1
-        WHERE namespace = ${write.key.namespace} AND operation_id = ${write.operationId}
+        WHERE namespace = ${write.key.namespace.address} AND operation_id = ${write.operationId}
       `,
       operation,
     );
@@ -370,10 +372,10 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
       `${operation} result`,
     );
     if (
-      row.namespace !== command.value.key.namespace ||
+      row.namespace !== command.value.key.namespace.address ||
       row.operation_id !== command.value.operationId ||
       row.source_id !== command.value.key.id ||
-      result.value.key.namespace !== command.value.key.namespace ||
+      result.value.key.namespace.address !== command.value.key.namespace.address ||
       result.value.key.id !== command.value.key.id
     ) {
       return yield* storageError(operation, "corrupt");
@@ -383,94 +385,92 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
     return { commandJson: row.command_json, result: result.value };
   });
 
-  const change: MemoryWriter["Service"]["change"] = Effect.fn("SqliteMemoryStore.change")(
-    function* (write) {
-      const operation = "change memory document";
-      const decodedWrite = yield* decodeInput(MemoryWrite, write, operation);
-      const commandJson = yield* encodeJson(
-        StoredMemoryCommand,
-        StoredMemoryCommand.make({ version: STORAGE_VERSION, value: decodedWrite }),
-        "encode memory command",
-      );
-      yield* failpoint.hit("memory:change:before");
-      // The pinned Node SQLite client starts writable transactions with BEGIN IMMEDIATE.
-      // Acquiring the write lock before the receipt and document reads makes this CAS safe
-      // across independent SqlClient connections and avoids deferred-transaction upgrades.
-      const transactionResult = yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const receipt = yield* readReceipt(decodedWrite, operation);
-            if (receipt !== null) {
-              if (receipt.commandJson !== commandJson) {
-                return yield* MemoryOperationConflict.make({
-                  key: decodedWrite.key,
-                  operationId: decodedWrite.operationId,
-                });
-              }
-              return { document: receipt.result, changed: false } as const;
+  const change = Effect.fn("SqliteMemoryStore.change")(function* (write: MemoryWrite) {
+    const operation = "change memory document";
+    const decodedWrite = yield* decodeInput(MemoryWrite.Wire, write, operation);
+    const commandJson = yield* encodeJson(
+      StoredMemoryCommand,
+      StoredMemoryCommand.make({ version: STORAGE_VERSION, value: decodedWrite }),
+      "encode memory command",
+    );
+    yield* failpoint.hit("memory:change:before");
+    // The pinned Node SQLite client starts writable transactions with BEGIN IMMEDIATE.
+    // Acquiring the write lock before the receipt and document reads makes this CAS safe
+    // across independent SqlClient connections and avoids deferred-transaction upgrades.
+    const transactionResult = yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const receipt = yield* readReceipt(decodedWrite, operation);
+          if (receipt !== null) {
+            if (receipt.commandJson !== commandJson) {
+              return yield* MemoryOperationConflict.make({
+                key: decodedWrite.key,
+                operationId: decodedWrite.operationId,
+              });
             }
+            return { document: receipt.result, changed: false } as const;
+          }
 
-            const current = yield* readDocument(decodedWrite.key, operation);
-            const modifiedAt = yield* Clock.currentTimeMillis;
-            const next = yield* applyMemoryWrite(current, decodedWrite, modifiedAt);
-            const documentJson = yield* encodeJson(MemoryDocument, next, "encode memory document");
-            const resultJson = yield* encodeJson(
-              StoredMemoryResult,
-              StoredMemoryResult.make({ version: STORAGE_VERSION, value: next }),
-              "encode memory result",
-            );
-            yield* validateEncodedChange({ commandJson, documentJson, resultJson }, operation);
+          const current = yield* readDocument(decodedWrite.key, operation);
+          const modifiedAt = yield* Clock.currentTimeMillis;
+          const next = yield* applyMemoryWrite(current, decodedWrite, modifiedAt);
+          const resultJson = yield* encodeJson(
+            StoredMemoryResult,
+            StoredMemoryResult.make({ version: STORAGE_VERSION, value: next }),
+            "encode memory result",
+          );
+          const documentJson = resultJson;
+          yield* validateEncodedChange({ commandJson, documentJson, resultJson }, operation);
 
-            if (current === null) {
-              yield* sql`
+          if (current === null) {
+            yield* sql`
                 INSERT INTO effect_agent_memory_documents_v1 (
                   namespace, source_id, format_version, generation, revision, document_json
                 ) VALUES (
-                  ${next.key.namespace}, ${next.key.id}, ${STORAGE_VERSION},
+                  ${next.key.namespace.address}, ${next.key.id}, ${STORAGE_VERSION},
                   ${next.generation}, ${next.source.revision}, ${documentJson}
                 )
               `;
-            } else {
-              yield* sql`
+          } else {
+            yield* sql`
                 UPDATE effect_agent_memory_documents_v1
                 SET format_version = ${STORAGE_VERSION},
                     generation = ${next.generation},
                     revision = ${next.source.revision},
                     document_json = ${documentJson}
-                WHERE namespace = ${next.key.namespace}
+                WHERE namespace = ${next.key.namespace.address}
                   AND source_id = ${next.key.id}
                   AND generation = ${current.generation}
                   AND revision = ${current.source.revision}
               `;
-            }
-            const changedRows = yield* sql<Record<string, unknown>>`
+          }
+          const changedRows = yield* sql<Record<string, unknown>>`
               SELECT changes() AS changed
             `;
-            const changed = yield* decodeRows(MemoryChangeCountRow, changedRows, operation);
-            if (changed.length !== 1 || changed[0].changed !== 1) {
-              return yield* storageError(operation, "corrupt");
-            }
-            yield* failpoint.hit("memory:change:after-state");
-            yield* sql`
+          const changed = yield* decodeRows(MemoryChangeCountRow, changedRows, operation);
+          if (changed.length !== 1 || changed[0].changed !== 1) {
+            return yield* storageError(operation, "corrupt");
+          }
+          yield* failpoint.hit("memory:change:after-state");
+          yield* sql`
               INSERT INTO effect_agent_memory_receipts_v1 (
                 namespace, operation_id, source_id, format_version, command_json, result_json
               ) VALUES (
-                ${decodedWrite.key.namespace}, ${decodedWrite.operationId}, ${decodedWrite.key.id},
+                ${decodedWrite.key.namespace.address}, ${decodedWrite.operationId}, ${decodedWrite.key.id},
                 ${STORAGE_VERSION}, ${commandJson}, ${resultJson}
               )
             `;
-            yield* failpoint.hit("memory:change:after-receipt");
-            return { document: next, changed: true } as const;
-          }),
-        )
-        .pipe(Effect.catchTag("SqlError", () => Effect.fail(storageError(operation))));
-      if (transactionResult.changed) yield* failpoint.hit("memory:change:after");
-      return transactionResult.document;
-    },
-  );
+          yield* failpoint.hit("memory:change:after-receipt");
+          return { document: next, changed: true } as const;
+        }),
+      )
+      .pipe(Effect.catchTag("SqlError", () => Effect.fail(storageError(operation))));
+    if (transactionResult.changed) yield* failpoint.hit("memory:change:after");
+    return transactionResult.document;
+  });
 
-  return Context.make(MemoryReader, MemoryReader.of({ get })).pipe(
-    Context.add(MemoryWriter, MemoryWriter.of({ change })),
+  return Context.make(MemoryReader, MemoryReader.fromAdapter({ get })).pipe(
+    Context.add(MemoryWriter, MemoryWriter.fromAdapter({ change })),
   );
 });
 
@@ -527,6 +527,6 @@ export const memoryReaderLayer: Layer.Layer<
       operation,
     );
     const { get } = yield* makeMemoryReader();
-    return MemoryReader.of({ get });
+    return MemoryReader.fromAdapter({ get });
   }),
 );

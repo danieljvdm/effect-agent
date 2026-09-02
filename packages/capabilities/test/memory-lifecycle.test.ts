@@ -1,4 +1,5 @@
 import {
+  MemoryNamespace,
   ActiveMemoryDocument,
   MemoryAttribution,
   MemoryContent,
@@ -11,13 +12,31 @@ import {
   WithdrawnMemoryDocument,
 } from "@effect-agent/core";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref } from "effect";
+import {
+  Schema as NamespaceSchema,
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Ref,
+} from "effect";
 import { TestClock } from "effect/testing";
 
 import { MemoryAccess, recallMemory, revalidateMemoryLookup } from "../src/index.ts";
 
-const key = MemoryKey.make({ namespace: "team-a", id: "queue-discussion" });
-const access = MemoryAccess.make({ namespace: "team-a", scope: "participating-channels" });
+const TestNamespace = MemoryNamespace.define({
+  name: "test/memory",
+  version: 1,
+  identity: NamespaceSchema.String,
+});
+
+const key = MemoryKey.make({ namespace: TestNamespace.make("team-a"), id: "queue-discussion" });
+const access = MemoryAccess.make({
+  namespace: TestNamespace.make("team-a"),
+  scope: "participating-channels",
+});
 const document = ActiveMemoryDocument.make({
   version: 1,
   key,
@@ -73,7 +92,10 @@ const recall = (lookup = candidates) =>
 describe("authoritative memory validation", () => {
   it.effect("preserves independently authorized namespaces through recall composition", () =>
     Effect.gen(function* () {
-      const accesses = [access, MemoryAccess.make({ ...access, namespace: "team-b" })];
+      const accesses = [
+        access,
+        MemoryAccess.make({ ...access, namespace: TestNamespace.make("team-b") }),
+      ];
       const lookup: MemoryLookup = {
         _tag: "Found",
         passages: [
@@ -102,15 +124,18 @@ describe("authoritative memory validation", () => {
             id: `reader-${index}`,
             essential: true,
             read: revalidateMemoryLookup(lookup, bound).pipe(
-              Effect.provideService(MemoryReader, {
-                get: () => Effect.succeed(current[index] ?? null),
-              }),
+              Effect.provideService(
+                MemoryReader,
+                MemoryReader.fromAdapter({
+                  get: () => Effect.succeed(current[index] ?? null),
+                }),
+              ),
             ),
           })),
           limits,
         );
         expect(result.passages.map((passage) => passage.authority)).toEqual(
-          accesses.map((bound) => bound.namespace),
+          accesses.map((bound) => bound.namespace.address),
         );
         expect(result.passages.map((passage) => passage.content.text)).toEqual([
           document.content.text,
@@ -139,7 +164,7 @@ describe("authoritative memory validation", () => {
       const excerpts = selected.map((current, index) =>
         MemoryPassage.make({
           ...candidate,
-          authority: access.namespace,
+          authority: access.namespace.address,
           source: current.source,
           passageId: `excerpt-${index}`,
           content: { ...current.content, text: "🌊" },
@@ -149,7 +174,7 @@ describe("authoritative memory validation", () => {
         new TextEncoder().encode(JSON.stringify(passage)).byteLength;
       const maxInputBytes = excerpts.reduce((total, passage) => total + bytes(passage), 0);
       const reads: Array<string> = [];
-      const reader = MemoryReader.of({
+      const reader = MemoryReader.fromAdapter({
         get: (requested) =>
           Effect.sync(() => {
             reads.push(requested.id);
@@ -211,7 +236,10 @@ describe("authoritative memory validation", () => {
           },
         });
         const result = yield* recall().pipe(
-          Effect.provideService(MemoryReader, { get: () => Effect.succeed(corrected) }),
+          Effect.provideService(
+            MemoryReader,
+            MemoryReader.fromAdapter({ get: () => Effect.succeed(corrected) }),
+          ),
         );
         expect(result.passages).toHaveLength(1);
         expect(result.passages[0]).toMatchObject({
@@ -249,17 +277,23 @@ describe("authoritative memory validation", () => {
           null,
         ]) {
           const result = yield* recall().pipe(
-            Effect.provideService(MemoryReader, { get: () => Effect.succeed(current) }),
+            Effect.provideService(
+              MemoryReader,
+              MemoryReader.fromAdapter({ get: () => Effect.succeed(current) }),
+            ),
           );
           expect(result.passages).toEqual([]);
           expect(result.outcomes[0]?.status).toBe("NoMatch");
         }
         const leaked = ActiveMemoryDocument.make({
           ...document,
-          key: { ...key, namespace: "other-tenant" },
+          key: { ...key, namespace: TestNamespace.make("other-tenant") },
         });
         const error = yield* recall().pipe(
-          Effect.provideService(MemoryReader, { get: () => Effect.succeed(leaked) }),
+          Effect.provideService(
+            MemoryReader,
+            MemoryReader.fromAdapter({ get: () => Effect.succeed(leaked) }),
+          ),
           Effect.flip,
         );
         expect(error).toMatchObject({ _tag: "MemoryStorageError", reason: "corrupt" });
@@ -271,7 +305,7 @@ describe("authoritative memory validation", () => {
     () =>
       Effect.gen(function* () {
         const reads = yield* Ref.make(0);
-        const reader = MemoryReader.of({
+        const reader = MemoryReader.fromAdapter({
           get: () =>
             Ref.getAndUpdate(reads, (n) => n + 1).pipe(
               Effect.map((n) => (n === 0 ? document : null)),
@@ -302,12 +336,18 @@ describe("authoritative memory validation", () => {
       const failure = MemoryStorageError.make({ operation: "read", reason: "unavailable" });
       expect(
         yield* recall().pipe(
-          Effect.provideService(MemoryReader, { get: () => Effect.fail(failure) }),
+          Effect.provideService(
+            MemoryReader,
+            MemoryReader.fromAdapter({ get: () => Effect.fail(failure) }),
+          ),
           Effect.flip,
         ),
       ).toEqual(failure);
       const defect = yield* recall().pipe(
-        Effect.provideService(MemoryReader, { get: () => Effect.die("reader defect") }),
+        Effect.provideService(
+          MemoryReader,
+          MemoryReader.fromAdapter({ get: () => Effect.die("reader defect") }),
+        ),
         Effect.exit,
       );
       expect(Exit.isFailure(defect)).toBe(true);
@@ -324,7 +364,7 @@ describe("authoritative memory validation", () => {
           MemoryReader,
           Effect.acquireRelease(
             Effect.succeed(
-              MemoryReader.of({
+              MemoryReader.fromAdapter({
                 get: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
               }),
             ),

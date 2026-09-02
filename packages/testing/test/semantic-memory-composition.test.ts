@@ -5,6 +5,7 @@ import {
   recallMemory,
 } from "@effect-agent/capabilities";
 import {
+  MemoryNamespace,
   MemoryKey,
   MemoryWriter,
   SemanticMemoryIndex,
@@ -15,11 +16,17 @@ import { memoryStoreLayer } from "@effect-agent/storage-sqlite";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
+import { Schema as NamespaceSchema, Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
 
-const key = MemoryKey.make({ namespace: "team", id: "proposal" });
+const TestNamespace = MemoryNamespace.define({
+  name: "test/memory",
+  version: 1,
+  identity: NamespaceSchema.String,
+});
+
+const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
 const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
 const profile = SemanticMemoryProfile.make({
   version: 1,
@@ -100,7 +107,7 @@ it.effect(
         },
       );
       expect(recalled.passages).toMatchObject([
-        { authority: access.namespace, source: { id: key.id, revision: "1" }, content },
+        { authority: access.namespace.address, source: { id: key.id, revision: "1" }, content },
       ]);
 
       const corrected = { ...content, text: "Dan proposes a scheduler instead." };
@@ -235,14 +242,17 @@ it.effect("fences delayed replacement after a newer index or terminal withdrawal
         const reached = yield* Deferred.make<void>();
         const resume = yield* Deferred.make<void>();
         const delayed = yield* indexMemorySource(key, indexLimits).pipe(
-          Effect.provideService(SemanticMemoryIndex, {
-            ...index,
-            replace: (request) =>
-              Deferred.succeed(reached, undefined).pipe(
-                Effect.andThen(Deferred.await(resume)),
-                Effect.andThen(index.replace(request)),
-              ),
-          }),
+          Effect.provideService(
+            SemanticMemoryIndex,
+            SemanticMemoryIndex.fromAdapter({
+              ...index,
+              replace: (request) =>
+                Deferred.succeed(reached, undefined).pipe(
+                  Effect.andThen(Deferred.await(resume)),
+                  Effect.andThen(index.replace(request)),
+                ),
+            }),
+          ),
           Effect.forkChild,
         );
         yield* Deferred.await(reached);

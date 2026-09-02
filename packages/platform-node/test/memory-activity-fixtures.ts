@@ -1,8 +1,12 @@
-import { MemoryContent, MemoryKey } from "@effect-agent/core";
+import { MemoryContent, MemoryKey, MemoryNamespace } from "@effect-agent/core";
 import { ActivityPassResult, ActivityProcessorKey, Digest } from "@effect-agent/thread";
 import { Schema } from "effect";
 
-export const MEMORY_NAMESPACE = "team-memory";
+export const MEMORY_NAMESPACE = MemoryNamespace.define({
+  name: "test/committed-memory",
+  version: 1,
+  identity: Schema.Struct({ tenantId: Schema.String, userId: Schema.String }),
+}).make({ tenantId: "team-memory", userId: "dan" });
 export const MEMORY_SCOPE = "participating-channels";
 export const MEMORY_SOURCE_ID = "dan-chad-project-atlas";
 export const DAN_THREAD = "memory-source-dan-thread";
@@ -49,7 +53,7 @@ export const danStatement = DanStatement.make({
 export const ActivityMemoryOutput = Schema.Union([
   Schema.TaggedStruct("Skip", {}),
   Schema.TaggedStruct("Remember", {
-    key: MemoryKey,
+    key: MemoryKey.Wire,
     locator: Schema.NonEmptyString,
     content: MemoryContent,
     scopes: Schema.Array(Schema.NonEmptyString),

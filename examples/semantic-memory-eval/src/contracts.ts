@@ -1,9 +1,14 @@
+import { MemoryNamespace } from "@effect-agent/core";
 import { Schema } from "effect";
 
 export const MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
 export const MODEL_REVISION = "aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f";
 export const CORPUS_SHA256 = "47bf97a564f088bc32b0abd823f2ebbd8146f2f9b65766db9bb3779ac77a7e8e";
-export const MEMORY_NAMESPACE = "semantic-memory-evaluation";
+export const MEMORY_NAMESPACE = MemoryNamespace.define({
+  name: "example/semantic-memory-evaluation",
+  version: 1,
+  identity: Schema.Null,
+}).make(null);
 export const MEMORY_SCOPE = "evaluation-reader";
 
 export const CorpusDocument = Schema.Struct({

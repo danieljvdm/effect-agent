@@ -250,7 +250,7 @@ const applyActivity = Effect.fn("SemanticMemoryEvaluation.applyActivity")(functi
   const document = output.document;
   const writer = yield* MemoryWriter;
   yield* writer.change(
-    yield* Schema.decodeUnknownEffect(MemoryWrite)({
+    yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
       _tag: "Put",
       key: key(document.id),
       operationId: work.workId,
@@ -637,7 +637,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
     for (const document of corpus.documents) {
       if (document.previousText !== undefined) {
         yield* writer.change(
-          yield* Schema.decodeUnknownEffect(MemoryWrite)({
+          yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
             _tag: "Put",
             key: key(document.id),
             operationId: `fixture-correction-${document.id}`,
@@ -664,7 +664,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
         );
       } else if (document.state === "withdrawn") {
         yield* writer.change(
-          yield* Schema.decodeUnknownEffect(MemoryWrite)({
+          yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
             _tag: "Withdraw",
             key: key(document.id),
             operationId: `fixture-withdrawal-${document.id}`,

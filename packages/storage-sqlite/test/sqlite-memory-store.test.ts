@@ -1,4 +1,5 @@
 import {
+  MemoryNamespace,
   MemoryConflict,
   MemoryKey,
   MemoryMutationFailpoint,
@@ -13,8 +14,19 @@ import {
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
+import {
+  Schema as NamespaceSchema,
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Result,
+  Schema,
+} from "effect";
 import type { PlatformError } from "effect";
-import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
@@ -24,16 +36,22 @@ import {
   memoryStoreLayerWithFailpoints,
 } from "../src/index.ts";
 
-const key = MemoryKey.make({ namespace: "tenant-a", id: "source-1" });
+const TestNamespace = MemoryNamespace.define({
+  name: "test/memory",
+  version: 1,
+  identity: NamespaceSchema.String,
+});
 
-const putFor = (
-  memoryKey: MemoryKey,
+const key = MemoryKey.make({ namespace: TestNamespace.make("tenant-a"), id: "source-1" });
+
+const putFor = <Namespace extends MemoryNamespace.Any>(
+  memoryKey: MemoryKey<Namespace>,
   operationId: string,
   expectedRevision: string | null,
   text: string,
   scopes: ReadonlyArray<string> = ["team"],
 ) =>
-  Schema.decodeSync(MemoryWrite)({
+  MemoryWrite.make({
     _tag: "Put",
     key: memoryKey,
     operationId,
@@ -66,7 +84,7 @@ const put = (
 ) => putFor(key, operationId, expectedRevision, text, scopes);
 
 const withdraw = (operationId: string, expectedRevision: string) =>
-  Schema.decodeSync(MemoryWrite)({
+  Schema.decodeSync(MemoryWrite.Wire)({
     _tag: "Withdraw",
     key,
     operationId,
@@ -81,7 +99,7 @@ const boundaryObservers = Array.from({ length: 128 }, (_, index) => {
 });
 
 const boundaryPut = (operationId: string, attributionCount: number) =>
-  Schema.decodeSync(MemoryWrite)({
+  Schema.decodeSync(MemoryWrite.Wire)({
     _tag: "Put",
     key,
     operationId,
@@ -145,6 +163,99 @@ const runRaw = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientSer
   effect.pipe(Effect.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 describe("SQLite memory store", () => {
+  it.effect(
+    "isolates structured namespace documents, receipts, and tombstones across restart",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const identity = Schema.Struct({ tenantId: Schema.String, userId: Schema.String });
+          const users = MemoryNamespace.define({ name: "app/users", version: 1, identity });
+          const other = MemoryNamespace.define({ name: "app/other", version: 1, identity });
+          const newer = MemoryNamespace.define({ name: "app/users", version: 2, identity });
+          const namespaces = [
+            users.make({ tenantId: "a", userId: "one" }),
+            users.make({ tenantId: "a", userId: "two" }),
+            users.make({ tenantId: "b", userId: "one" }),
+            other.make({ tenantId: "a", userId: "one" }),
+            newer.make({ tenantId: "a", userId: "one" }),
+          ];
+          for (const [index, namespace] of namespaces.entries()) {
+            const command = putFor(
+              MemoryKey.make({ namespace, id: "shared-source" }),
+              "shared-operation",
+              null,
+              `source-${index}`,
+            );
+            const write = Effect.flatMap(MemoryWriter, (writer) => writer.change(command));
+            if (index === 0) {
+              expect(
+                yield* write.pipe(
+                  Effect.provide(
+                    failpointLayer(filename, (point) =>
+                      point === "memory:change:after"
+                        ? Effect.fail(MemoryMutationFailure.make({ point }))
+                        : Effect.void,
+                    ),
+                  ),
+                  Effect.flip,
+                ),
+              ).toMatchObject({ point: "memory:change:after" });
+            } else yield* write.pipe(Effect.provide(storeLayer(filename)));
+          }
+          const reconstructed = MemoryNamespace.define({
+            name: "app/users",
+            version: 1,
+            identity: Schema.Struct({ userId: Schema.String, tenantId: Schema.String }),
+          });
+          const first = reconstructed.make({ userId: "one", tenantId: "a" });
+          expect(first).not.toBe(namespaces[0]);
+          expect(first.address).toBe(namespaces[0].address);
+          yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+            const reader = yield* MemoryReader;
+            for (const [index, namespace] of [first, ...namespaces.slice(1)].entries()) {
+              const memoryKey = MemoryKey.make({ namespace, id: "shared-source" });
+              const receipt = yield* writer.change(
+                putFor(memoryKey, "shared-operation", null, `source-${index}`),
+              );
+              expect(receipt.generation).toBe(1);
+              expect(yield* reader.get(memoryKey)).toEqual(receipt);
+              if (receipt._tag === "ActiveMemoryDocument")
+                expect(receipt.content.text).toBe(`source-${index}`);
+              expect(
+                yield* writer
+                  .change(putFor(memoryKey, "shared-operation", null, "changed payload"))
+                  .pipe(Effect.flip),
+              ).toMatchObject({ _tag: "MemoryOperationConflict" });
+            }
+            const firstKey = MemoryKey.make({ namespace: first, id: "shared-source" });
+            yield* writer.change(
+              MemoryWrite.make({
+                _tag: "Withdraw",
+                key: firstKey,
+                operationId: "withdraw",
+                expectedRevision: "1",
+                reason: "removed",
+              }),
+            );
+            expect(
+              yield* writer
+                .change(putFor(firstKey, "later", "2", "resurrection"))
+                .pipe(Effect.flip),
+            ).toMatchObject({ _tag: "MemoryWithdrawn" });
+            for (const namespace of namespaces.slice(1))
+              expect(
+                (yield* reader.get(MemoryKey.make({ namespace, id: "shared-source" })))?._tag,
+              ).toBe("ActiveMemoryDocument");
+          }).pipe(Effect.provide(storeLayer(filename)));
+          const tombstone = yield* Effect.flatMap(MemoryReader, (reader) =>
+            reader.get(MemoryKey.make({ namespace: first, id: "shared-source" })),
+          ).pipe(Effect.provide(readerLayer(filename)));
+          expect(tombstone?._tag).toBe("WithdrawnMemoryDocument");
+        }),
+      ),
+  );
+
   it.effect("rejects uninitialized and incompatible reader schemas without creating tables", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
@@ -166,7 +277,7 @@ describe("SQLite memory store", () => {
           filename,
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
-            yield* sql`UPDATE effect_agent_memory_metadata SET version = 2`;
+            yield* sql`UPDATE effect_agent_memory_metadata SET version = 999`;
           }),
         );
         expect(yield* readCurrent(filename).pipe(Effect.flip)).toEqual(
@@ -313,7 +424,7 @@ describe("SQLite memory store", () => {
   it.effect("isolates identical source and operation IDs by namespace", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const otherKey = MemoryKey.make({ namespace: "tenant-b", id: key.id });
+        const otherKey = MemoryKey.make({ namespace: TestNamespace.make("tenant-b"), id: key.id });
         const firstCommand = putFor(key, "shared-operation", null, "tenant a");
         const secondCommand = putFor(otherKey, "shared-operation", null, "tenant b");
         yield* Effect.gen(function* () {
@@ -594,8 +705,8 @@ describe("SQLite memory store", () => {
             const sql = yield* SqlClientService.SqlClient;
             yield* sql`
               UPDATE effect_agent_memory_documents_v1
-              SET document_json = '{"version":2}'
-              WHERE namespace = ${key.namespace} AND source_id = ${key.id}
+              SET document_json = '{"version":999}'
+              WHERE namespace = ${key.namespace.address} AND source_id = ${key.id}
             `;
           }),
         );
@@ -616,8 +727,8 @@ describe("SQLite memory store", () => {
             const sql = yield* SqlClientService.SqlClient;
             yield* sql`
               UPDATE effect_agent_memory_receipts_v1
-              SET result_json = '{"version":1,"value":null}'
-              WHERE namespace = ${key.namespace} AND operation_id = ${command.operationId}
+              SET result_json = '{"version":2,"value":null}'
+              WHERE namespace = ${key.namespace.address} AND operation_id = ${command.operationId}
             `;
           }),
         );
@@ -659,7 +770,7 @@ describe("SQLite memory store", () => {
             return yield* sql<{ operation_id: string; result_json: string }>`
               SELECT operation_id, result_json
               FROM effect_agent_memory_receipts_v1
-              WHERE namespace = ${key.namespace}
+              WHERE namespace = ${key.namespace.address}
                 AND operation_id IN (${created.operationId}, ${corrected.operationId}, ${withdrawn.operationId})
             `;
           }),
@@ -684,7 +795,7 @@ describe("SQLite memory store", () => {
               yield* sql`
                 UPDATE effect_agent_memory_receipts_v1
                 SET result_json = replace(${createdResult}, ${original}, ${replacement})
-                WHERE namespace = ${key.namespace} AND operation_id = ${created.operationId}
+                WHERE namespace = ${key.namespace.address} AND operation_id = ${created.operationId}
               `;
             }),
           );
@@ -700,7 +811,7 @@ describe("SQLite memory store", () => {
             yield* sql`
               UPDATE effect_agent_memory_receipts_v1
               SET result_json = ${createdResult}
-              WHERE namespace = ${key.namespace} AND operation_id = ${corrected.operationId}
+              WHERE namespace = ${key.namespace.address} AND operation_id = ${corrected.operationId}
             `;
           }),
         );
@@ -715,7 +826,7 @@ describe("SQLite memory store", () => {
             yield* sql`
               UPDATE effect_agent_memory_receipts_v1
               SET result_json = ${createdResult}
-              WHERE namespace = ${key.namespace} AND operation_id = ${withdrawn.operationId}
+              WHERE namespace = ${key.namespace.address} AND operation_id = ${withdrawn.operationId}
             `;
           }),
         );
@@ -734,7 +845,7 @@ describe("SQLite memory store", () => {
                 ${'"reason":"source withdrawn"'},
                 ${'"reason":"forged withdrawal"'}
               )
-              WHERE namespace = ${key.namespace} AND operation_id = ${withdrawn.operationId}
+              WHERE namespace = ${key.namespace.address} AND operation_id = ${withdrawn.operationId}
             `;
           }),
         );
