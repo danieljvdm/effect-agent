@@ -1,5 +1,40 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.40
+
+### Minor Changes
+
+- [#269](https://github.com/danieljvdm/effect-agent/pull/269) [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Provide optional context loading through `RunContextPreparation` for ephemeral and durable runs, and catch its concrete tagged errors directly.
+
+  BEHAVIOR CHANGE: replace `RunContextPreparationError.make` with a declared `AgentInputError`, `MemoryRecallError`, or `CompactionError`.
+
+- [#270](https://github.com/danieljvdm/effect-agent/pull/270) [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add optional conditional memory updates, idempotent write receipts, and terminal withdrawal with SQLite persistence. Revalidate cached passages against the current source revision and host-selected access scope before recall.
+
+- [#273](https://github.com/danieljvdm/effect-agent/pull/273) [`c36fe73`](https://github.com/danieljvdm/effect-agent/commit/c36fe73d2d226f9271c6dd60071159b0d82862ae) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add optional native Effect embedding retrieval with bounded deterministic chunks and authoritative source validation. Provide a disposable exact cosine index with fenced replacement and withdrawal.
+
+- [#269](https://github.com/danieljvdm/effect-agent/pull/269) [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Compose bounded, attributed Markdown or external corpus passages as optional transient model context. Keep recalled text outside Thread history and compaction coverage, and reload it when durable execution resumes.
+
+### Patch Changes
+
+- [#270](https://github.com/danieljvdm/effect-agent/pull/270) [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve the authorized namespace as private recall authority when revalidating passages, overriding candidate-supplied authority.
+
+- [#269](https://github.com/danieljvdm/effect-agent/pull/269) [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Qualify recalled source identities by private authority and render only result-local authority labels. BEHAVIOR CHANGE: direct readers must set the same `MemoryPassage.authority` to deduplicate across reader declarations.
+
+- [#270](https://github.com/danieljvdm/effect-agent/pull/270) [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Bound authoritative recall replacements before retaining them. Pass the optional `maxInputBytes` limit to `revalidateMemoryLookup` to share the recall input budget.
+
+- [#269](https://github.com/danieljvdm/effect-agent/pull/269) [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Deduplicate equivalent recalled JSON metadata regardless of object member order. Load transient references after initial canonical compaction, then compact further when needed to fit the complete prompt.
+
+- [#273](https://github.com/danieljvdm/effect-agent/pull/273) [`c36fe73`](https://github.com/danieljvdm/effect-agent/commit/c36fe73d2d226f9271c6dd60071159b0d82862ae) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Carry the authorized namespace as private authority through semantic retrieval and recall composition.
+
+- [#278](https://github.com/danieljvdm/effect-agent/pull/278) [`0fbcbbf`](https://github.com/danieljvdm/effect-agent/commit/0fbcbbf3c8c2ca7595543e545baddb0c6f965436) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Define memory namespaces with branded Schema identities and retain their types through reads, writes, and semantic indexing. Use one canonical address for document, receipt, and index isolation.
+
+  BEHAVIOR CHANGE: Replace raw namespace strings with `MemoryNamespace.define(...).make(...)`, use `.Wire` Schemas at heterogeneous transport boundaries, and reset incompatible development memory and prepared processor data.
+
+- Updated dependencies [[`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb), [`c36fe73`](https://github.com/danieljvdm/effect-agent/commit/c36fe73d2d226f9271c6dd60071159b0d82862ae), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`0fbcbbf`](https://github.com/danieljvdm/effect-agent/commit/0fbcbbf3c8c2ca7595543e545baddb0c6f965436)]:
+  - @effect-agent/core@0.1.0-beta.40
+  - @effect-agent/engine@0.1.0-beta.40
+  - @effect-agent/sandbox@0.1.0-beta.40
+
 ## 0.1.0-beta.39
 
 ### Minor Changes

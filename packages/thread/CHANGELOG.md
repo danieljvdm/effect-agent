@@ -1,5 +1,25 @@
 # @effect-agent/session
 
+## 0.1.0-beta.40
+
+### Minor Changes
+
+- [#272](https://github.com/danieljvdm/effect-agent/pull/272) [`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Process application-selected committed Thread activity in bounded, resumable passes with durable extraction output and fenced progress. Use the optional SQLite adapter to resume memory ingestion safely after interrupted application or lost acknowledgments.
+
+- [#269](https://github.com/danieljvdm/effect-agent/pull/269) [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Provide optional context loading through `RunContextPreparation` for ephemeral and durable runs, and catch its concrete tagged errors directly.
+
+  BEHAVIOR CHANGE: replace `RunContextPreparationError.make` with a declared `AgentInputError`, `MemoryRecallError`, or `CompactionError`.
+
+- [#269](https://github.com/danieljvdm/effect-agent/pull/269) [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Compose bounded, attributed Markdown or external corpus passages as optional transient model context. Keep recalled text outside Thread history and compaction coverage, and reload it when durable execution resumes.
+
+### Patch Changes
+
+- [#272](https://github.com/danieljvdm/effect-agent/pull/272) [`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reject oversized activity progress before persisting it and reject pending work beyond the captured Thread tail. Keep prior progress intact on rejected writes and release the pass's claim on inconsistent tails.
+
+- Updated dependencies [[`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb), [`c36fe73`](https://github.com/danieljvdm/effect-agent/commit/c36fe73d2d226f9271c6dd60071159b0d82862ae), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`0fbcbbf`](https://github.com/danieljvdm/effect-agent/commit/0fbcbbf3c8c2ca7595543e545baddb0c6f965436)]:
+  - @effect-agent/core@0.1.0-beta.40
+  - @effect-agent/engine@0.1.0-beta.40
+
 ## 0.1.0-beta.39
 
 ### Minor Changes

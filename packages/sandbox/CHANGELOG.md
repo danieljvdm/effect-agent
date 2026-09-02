@@ -1,5 +1,7 @@
 # @effect-agent/sandbox
 
+## 0.1.0-beta.40
+
 ## 0.1.0-beta.39
 
 ### Minor Changes

@@ -1,5 +1,17 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.40
+
+### Patch Changes
+
+- [#280](https://github.com/danieljvdm/effect-agent/pull/280) [`614a81d`](https://github.com/danieljvdm/effect-agent/commit/614a81db4f9d121ac209cc56fc6d420f43f4ab1b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Assemble Cloudflare Code Mode, REST capture tools, interactive browsers, and thread clients with platform-owned Layer constructors. Register Node agents through `NodeDurableHost.layerRegistered(registrations, options)` while preserving application service requirements and host-scoped cleanup.
+
+- Updated dependencies [[`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`b885b9f`](https://github.com/danieljvdm/effect-agent/commit/b885b9fa92a7ea72612a513c66adff13f35bd527), [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb), [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb), [`c36fe73`](https://github.com/danieljvdm/effect-agent/commit/c36fe73d2d226f9271c6dd60071159b0d82862ae), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`0fbcbbf`](https://github.com/danieljvdm/effect-agent/commit/0fbcbbf3c8c2ca7595543e545baddb0c6f965436)]:
+  - @effect-agent/storage-sqlite@0.1.0-beta.40
+  - @effect-agent/thread@0.1.0-beta.40
+  - @effect-agent/core@0.1.0-beta.40
+  - @effect-agent/engine@0.1.0-beta.40
+
 ## 0.1.0-beta.39
 
 ### Minor Changes

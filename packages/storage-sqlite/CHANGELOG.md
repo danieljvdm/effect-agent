@@ -1,5 +1,29 @@
 # @effect-agent/storage-sqlite
 
+## 0.1.0-beta.40
+
+### Minor Changes
+
+- [#272](https://github.com/danieljvdm/effect-agent/pull/272) [`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Process application-selected committed Thread activity in bounded, resumable passes with durable extraction output and fenced progress. Use the optional SQLite adapter to resume memory ingestion safely after interrupted application or lost acknowledgments.
+
+- [#270](https://github.com/danieljvdm/effect-agent/pull/270) [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add optional conditional memory updates, idempotent write receipts, and terminal withdrawal with SQLite persistence. Revalidate cached passages against the current source revision and host-selected access scope before recall.
+
+### Patch Changes
+
+- [#272](https://github.com/danieljvdm/effect-agent/pull/272) [`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reject oversized activity progress before persisting it and reject pending work beyond the captured Thread tail. Keep prior progress intact on rejected writes and release the pass's claim on inconsistent tails.
+
+- [#267](https://github.com/danieljvdm/effect-agent/pull/267) [`b885b9f`](https://github.com/danieljvdm/effect-agent/commit/b885b9fa92a7ea72612a513c66adff13f35bd527) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Initialize SQLite storage directly with the complete Thread schema.
+
+- [#270](https://github.com/danieljvdm/effect-agent/pull/270) [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reject memory receipts whose saved result does not match the original write command.
+
+- [#278](https://github.com/danieljvdm/effect-agent/pull/278) [`0fbcbbf`](https://github.com/danieljvdm/effect-agent/commit/0fbcbbf3c8c2ca7595543e545baddb0c6f965436) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Define memory namespaces with branded Schema identities and retain their types through reads, writes, and semantic indexing. Use one canonical address for document, receipt, and index isolation.
+
+  BEHAVIOR CHANGE: Replace raw namespace strings with `MemoryNamespace.define(...).make(...)`, use `.Wire` Schemas at heterogeneous transport boundaries, and reset incompatible development memory and prepared processor data.
+
+- Updated dependencies [[`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb), [`c36fe73`](https://github.com/danieljvdm/effect-agent/commit/c36fe73d2d226f9271c6dd60071159b0d82862ae), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`0fbcbbf`](https://github.com/danieljvdm/effect-agent/commit/0fbcbbf3c8c2ca7595543e545baddb0c6f965436)]:
+  - @effect-agent/thread@0.1.0-beta.40
+  - @effect-agent/core@0.1.0-beta.40
+
 ## 0.1.0-beta.39
 
 ### Minor Changes
