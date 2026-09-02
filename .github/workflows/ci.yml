@@ -180,6 +180,7 @@ jobs:
         with:
           name: pr-review-action
           path: action/dist/index.mjs
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
 
