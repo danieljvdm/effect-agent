@@ -95,13 +95,16 @@ const PROFILE = SemanticMemoryProfile.make({
   maxChunkBytes: 1024,
   distance: "cosine",
 });
+
 const INDEX_CAPACITY = InMemorySemanticIndexCapacity.make({ maxSources: 20, maxChunks: 160 });
 const ACCESS = MemoryAccess.make({ namespace: MEMORY_NAMESPACE, scope: MEMORY_SCOPE });
+
 const INDEX_LIMITS = SemanticIndexLimits.make({
   maxSourceBytes: 4096,
   maxChunks: 8,
   timeoutMillis: 60_000,
 });
+
 const QUERY_LIMITS = SemanticQueryLimits.make({
   maxQueryBytes: 4096,
   maxCandidates: 3,
@@ -109,6 +112,7 @@ const QUERY_LIMITS = SemanticQueryLimits.make({
   minScore: 0.35,
   timeoutMillis: 60_000,
 });
+
 const RECALL_LIMITS = MemoryRecallLimits.make({
   maxSources: 3,
   maxItems: 3,
@@ -116,13 +120,16 @@ const RECALL_LIMITS = MemoryRecallLimits.make({
   maxTokens: 4096,
   timeoutMillis: 10_000,
 });
+
 const ACTIVITY_LIMITS = ActivityPassLimits.make({
   maxRecords: 1,
   pageSize: 1,
   timeoutMillis: 5_000,
   leaseMillis: 6_500,
 });
+
 const THREAD_ID = Schema.decodeSync(ThreadId)("semantic-memory-evaluation-source");
+
 const PROCESSOR_KEY = ActivityProcessorKey.make({
   processorId: "semantic-memory-evaluation-extractor",
   processorVersion: "frozen-corpus-v1",
@@ -131,10 +138,13 @@ const PROCESSOR_KEY = ActivityProcessorKey.make({
 
 const ActivityOutput = Schema.Struct({ document: CorpusDocument, recordId: Schema.NonEmptyString });
 const byteLength = (text: string): number => Encoding.encodeHex(text).length / 2;
+
 const elapsedMillis = (started: bigint, finished: bigint): number =>
   Number(finished - started) / 1_000_000;
+
 const locator = (id: string): string => `memory://evaluation/${id}`;
 const key = (id: string) => MemoryKey.make({ namespace: MEMORY_NAMESPACE, id });
+
 const evalError = (operation: string, cause: unknown) =>
   EvaluationError.make({
     operation,
@@ -146,9 +156,12 @@ export const summarizeLatencies = (
   targetMillis: number | null,
 ): LatencySummaryType => {
   const sorted = [...samples].sort((left, right) => left - right);
+
   const percentile = (fraction: number) =>
     sorted.length === 0 ? null : (sorted[Math.ceil(sorted.length * fraction) - 1] ?? null);
+
   const maximum = sorted.at(-1) ?? null;
+
   return {
     n: sorted.length,
     samplesMillis: [...samples],
@@ -172,12 +185,15 @@ const lookupFromIds = Effect.fn("SemanticMemoryEvaluation.lookupFromIds")(functi
 ) {
   const reader = yield* MemoryReader;
   const passages = [] as Array<ReturnType<typeof passage>>;
+
   for (const id of ids) {
     const document = yield* reader.get(key(id));
+
     if (document?._tag === "ActiveMemoryDocument" && document.scopes.includes(MEMORY_SCOPE)) {
       passages.push(passage(document));
     }
   }
+
   return passages.length === 0
     ? ({ _tag: "NoMatch" } as const)
     : ({ _tag: "Found", passages } as const);
@@ -191,6 +207,7 @@ const tokenize = (text: string): ReadonlySet<string> =>
 
 const lexicalIds = (query: string, documents: ReadonlyArray<CorpusDocument>): Array<string> => {
   const terms = tokenize(query);
+
   return documents
     .filter((document) => document.state === "active")
     .map((document) => ({
@@ -209,17 +226,23 @@ const appendDocument = Effect.fn("SemanticMemoryEvaluation.appendDocument")(func
 ) {
   const store = yield* ThreadStore;
   const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId: THREAD_ID }));
+
   const recordId = yield* Schema.decodeUnknownEffect(RecordId)(
     `eval-record-${ordinal}-${document.id}`,
   );
+
   const deploymentId = yield* Schema.decodeUnknownEffect(DeploymentId)(
     "semantic-memory-evaluation",
   );
+
   const producerEpoch = yield* Schema.decodeUnknownEffect(ProducerEpoch)(1);
+
   const batchId = yield* Schema.decodeUnknownEffect(BatchId)(
     `eval-batch-${ordinal}-${document.id}`,
   );
+
   const producerId = yield* Schema.decodeUnknownEffect(ProducerId)("semantic-memory-evaluation");
+
   const record = RecordEnvelope.make({
     recordId,
     family: "thread",
@@ -228,6 +251,7 @@ const appendDocument = Effect.fn("SemanticMemoryEvaluation.appendDocument")(func
     deploymentId,
     payload: UserInputRecorded.make({ kind: "user", input: document }),
   });
+
   return yield* store.append(
     FencedAppendRequest.make({
       threadId: THREAD_ID,
@@ -249,6 +273,7 @@ const applyActivity = Effect.fn("SemanticMemoryEvaluation.applyActivity")(functi
   const output = yield* Schema.decodeUnknownEffect(ActivityOutput)(work.output);
   const document = output.document;
   const writer = yield* MemoryWriter;
+
   yield* writer.change(
     yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
       _tag: "Put",
@@ -289,6 +314,7 @@ const processOne = (extractionCalls: { value: number }) =>
     limits: ACTIVITY_LIMITS,
     extract: (record: CanonicalRecordEnvelope) => {
       extractionCalls.value += 1;
+
       return record.record.payload._tag === "UserInputRecorded"
         ? Schema.decodeUnknownEffect(CorpusDocument)(record.record.payload.input).pipe(
             Effect.flatMap((document) =>
@@ -308,7 +334,9 @@ const currentDocuments = Effect.fn("SemanticMemoryEvaluation.currentDocuments")(
 ) {
   const reader = yield* MemoryReader;
   const result = new Map<string, MemoryDocument | null>();
+
   for (const document of documents) result.set(document.id, yield* reader.get(key(document.id)));
+
   return result;
 });
 
@@ -321,13 +349,16 @@ const measureQuery = Effect.fn("SemanticMemoryEvaluation.measureQuery")(function
   let lookup: MemoryLookup;
   let staleExcluded = 0;
   let nativeInputTokens: number | null = null;
+
   if (method === "direct-locator") {
     const exact = corpusDocuments.find((document) => locator(document.id) === query.text);
+
     lookup = yield* lookupFromIds(exact === undefined ? [] : [exact.id]);
   } else if (method === "lexical-overlap") {
     lookup = yield* lookupFromIds(lexicalIds(query.text, corpusDocuments));
   } else {
     const semantic = yield* querySemanticMemory(query.text, ACCESS, QUERY_LIMITS);
+
     lookup = semantic.lookup;
     staleExcluded = semantic.staleExcluded;
     nativeInputTokens = semantic.inputTokens;
@@ -336,38 +367,49 @@ const measureQuery = Effect.fn("SemanticMemoryEvaluation.measureQuery")(function
   const finished = yield* Clock.monotonicTimeNanos;
   const selectedIds = [...new Set(recalled.passages.map((item) => item.source.id))];
   const usefulMisses = query.usefulIds.filter((id) => !selectedIds.includes(id));
+
   const forbiddenActiveContextMatches = query.forbiddenIds.filter(
     (id) =>
       selectedIds.includes(id) &&
       corpusDocuments.find((document) => document.id === id)?.state === "active",
   );
+
   const withdrawnStaleMatches = selectedIds.filter(
     (id) => corpusDocuments.find((document) => document.id === id)?.state === "withdrawn",
   );
+
   const activeIrrelevantMatches = selectedIds.filter(
     (id) =>
       !query.usefulIds.includes(id) &&
       !query.forbiddenIds.includes(id) &&
       corpusDocuments.find((document) => document.id === id)?.state === "active",
   );
+
   const usefulOrigins = new Set(
     query.usefulIds.flatMap((id) => {
       const found = corpusDocuments.find((document) => document.id === id);
+
       return found === undefined ? [] : [found.originId];
     }),
   );
+
   const usefulOriginHits = new Set(
     selectedIds.flatMap((id) => {
       if (!query.usefulIds.includes(id)) return [];
       const found = corpusDocuments.find((document) => document.id === id);
+
       return found === undefined ? [] : [found.originId];
     }),
   ).size;
+
   const current = yield* currentDocuments(corpusDocuments);
+
   const attributionCorrect = recalled.passages.every((item) => {
     const fixture = corpusDocuments.find((document) => document.id === item.source.id);
+
     const expectedActivityAt =
       fixture === undefined ? null : 1_700_000_000_000 - fixture.activityDaysAgo * 86_400_000;
+
     return (
       fixture !== undefined &&
       item.content.attributions.length === 1 &&
@@ -382,9 +424,11 @@ const measureQuery = Effect.fn("SemanticMemoryEvaluation.measureQuery")(function
       )
     );
   });
+
   const currentRevisionCorrect = recalled.passages.every(
     (item) => current.get(item.source.id)?.source.revision === item.source.revision,
   );
+
   return {
     queryId: query.id,
     category: query.category,
@@ -416,6 +460,7 @@ export const summarizeMethods = (measurements: ReadonlyArray<QueryMeasurement>) 
       const usefulOriginHits = rows.reduce((total, row) => total + row.usefulOriginHits, 0);
       const usefulOrigins = rows.reduce((total, row) => total + row.usefulOrigins, 0);
       const negative = rows.filter((row) => row.usefulOrigins === 0);
+
       return {
         method,
         cohort,
@@ -462,6 +507,7 @@ const providerCohort = Effect.fn("SemanticMemoryEvaluation.providerCohort")(func
   timeoutMillis: number | null,
 ) {
   let nativeCallStarted = false;
+
   const wrapper = yield* EmbeddingModel.make({
     embedMany: ({ inputs }) =>
       Effect.gen(function* () {
@@ -469,13 +515,16 @@ const providerCohort = Effect.fn("SemanticMemoryEvaluation.providerCohort")(func
         if (provider.fail === true) return yield* injectedAiError("injected failure");
         nativeCallStarted = true;
         const response = yield* base.embedMany(inputs);
+
         return {
           results: response.embeddings.map(({ vector }) => [...vector]),
           usage: { inputTokens: response.usage.inputTokens },
         };
       }),
   });
+
   const started = yield* Clock.monotonicTimeNanos;
+
   const probe = querySemanticMemory(
     "When does Aurora reach production?",
     ACCESS,
@@ -484,6 +533,7 @@ const providerCohort = Effect.fn("SemanticMemoryEvaluation.providerCohort")(func
     Effect.flatMap((result) => recall(`provider-cohort:${name}`, result.lookup)),
     Effect.provideService(EmbeddingModel.EmbeddingModel, wrapper),
   );
+
   const observed = yield* timeoutMillis === null
     ? probe.pipe(Effect.match({ onFailure: String, onSuccess: () => "success" }))
     : probe.pipe(
@@ -494,7 +544,9 @@ const providerCohort = Effect.fn("SemanticMemoryEvaluation.providerCohort")(func
             Option.isNone(value) ? "cooperative-timeout-before-native-call" : "success",
         }),
       );
+
   const elapsed = elapsedMillis(started, yield* Clock.monotonicTimeNanos);
+
   return {
     report: {
       name,
@@ -516,6 +568,7 @@ const coldSample = Effect.fn("SemanticMemoryEvaluation.coldSample")(function* (
 ) {
   const native = yield* makeNativeEmbeddingLayer({ cachePath: options.cachePath, offline: true });
   const started = yield* Clock.monotonicTimeNanos;
+
   const elapsed = yield* Effect.scoped(
     Effect.gen(function* () {
       const result = yield* querySemanticMemory(
@@ -523,11 +576,15 @@ const coldSample = Effect.fn("SemanticMemoryEvaluation.coldSample")(function* (
         ACCESS,
         QUERY_LIMITS,
       );
+
       yield* recall("cold-semantic", result.lookup);
+
       return elapsedMillis(started, yield* Clock.monotonicTimeNanos);
     }).pipe(Effect.provide(native.layer)),
   );
+
   const snapshot = yield* native.snapshot;
+
   return { elapsed, calls: snapshot.calls, textBytes: snapshot.textBytes };
 });
 
@@ -538,10 +595,13 @@ const loadCorpus = Effect.fn("SemanticMemoryEvaluation.loadCorpus")(function* ()
   const fixture = path.resolve(path.dirname(modulePath), "../fixtures/semantic-memory-corpus.json");
   const raw = yield* fs.readFileString(fixture);
   const crypto = yield* Crypto.Crypto;
+
   const digest = yield* crypto
     .digest("SHA-256", new TextEncoder().encode(raw))
     .pipe(Effect.map(Encoding.encodeHex));
+
   if (digest !== CORPUS_SHA256) return yield* evalError("verify corpus", `SHA-256 ${digest}`);
+
   return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvaluationCorpus))(raw).pipe(
     Effect.mapError((cause) => evalError("decode corpus", cause)),
   );
@@ -556,29 +616,35 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "effect-agent-semantic-eval-" });
   const database = `${directory}/evaluation.sqlite`;
   const sql = SqliteClient.layer({ filename: database, busyTimeout: 5_000 });
+
   const storage = Layer.mergeAll(
     sqliteThreadStoreLayer({ filename: database, busyTimeout: 5_000 }),
     activityProcessorStoreLayer.pipe(Layer.provide(sql)),
     memoryStoreLayer.pipe(Layer.provide(sql)),
     NodeCrypto.layer,
   );
+
   const native = yield* makeNativeEmbeddingLayer({
     cachePath: options.cachePath,
     offline: options.offline,
   });
+
   const semanticIndex = inMemorySemanticIndexLayer(PROFILE, INDEX_CAPACITY);
   const baseServices = Layer.merge(storage, semanticIndex);
   const extractionCalls = { value: 0 };
+
   const directRecallSamples: Array<{
     sourceId: string;
     outcome: "recalled" | "miss";
     elapsedMillis: number;
   }> = [];
+
   const semanticRecallSamples: Array<{
     sourceId: string;
     outcome: "recalled" | "miss";
     elapsedMillis: number;
   }> = [];
+
   let sourceEmbeddingCalls = 0;
   let initialEmbeddedBytes = 0;
   let semanticLagQueryCalls = 0;
@@ -587,6 +653,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
 
   const main = Effect.gen(function* () {
     const threads = yield* ThreadStore;
+
     yield* threads.materialize(
       ThreadMaterialization.make({
         threadId: THREAD_ID,
@@ -597,14 +664,17 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
     yield* Effect.flatMap(EmbeddingModel.EmbeddingModel, (model) => model.embedMany(["warmup"]));
     for (let ordinal = 0; ordinal < corpus.documents.length; ordinal++) {
       const document = corpus.documents[ordinal];
+
       if (document === undefined) continue;
       yield* appendDocument(document, ordinal);
       const committedAt = yield* Clock.monotonicTimeNanos;
       const extractionStarted = yield* Clock.monotonicTimeNanos;
+
       yield* processOne(extractionCalls);
       extractionMillis += elapsedMillis(extractionStarted, yield* Clock.monotonicTimeNanos);
       const directLookup = yield* lookupFromIds([document.id]);
       const direct = yield* recall(`commit-direct:${document.id}`, directLookup);
+
       directRecallSamples.push({
         sourceId: document.id,
         outcome: direct.passages.some((item) => item.source.id === document.id)
@@ -614,16 +684,20 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
       });
       const indexStarted = yield* Clock.monotonicTimeNanos;
       const indexed = yield* indexMemorySource(key(document.id), INDEX_LIMITS);
+
       indexingMillis += elapsedMillis(indexStarted, yield* Clock.monotonicTimeNanos);
       if (indexed.embeddedChunks > 0) sourceEmbeddingCalls += 1;
       initialEmbeddedBytes += indexed.embeddedBytes;
+
       const semantic = yield* querySemanticMemory(
         document.previousText ?? document.text,
         ACCESS,
         QUERY_LIMITS,
       );
+
       semanticLagQueryCalls += 1;
       const recalled = yield* recall(`commit-semantic:${document.id}`, semantic.lookup);
+
       semanticRecallSamples.push({
         sourceId: document.id,
         outcome: recalled.passages.some((item) => item.source.id === document.id)
@@ -634,6 +708,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
     }
 
     const writer = yield* MemoryWriter;
+
     for (const document of corpus.documents) {
       if (document.previousText !== undefined) {
         yield* writer.change(
@@ -677,36 +752,45 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
 
     let staleExcluded = 0;
     let staleSelected = 0;
+
     const changed = corpus.documents.filter(
       (document) => document.previousText !== undefined || document.state === "withdrawn",
     );
+
     for (const document of changed) {
       const probe = yield* querySemanticMemory(
         document.previousText ?? document.text,
         ACCESS,
         QUERY_LIMITS,
       );
+
       staleExcluded += probe.staleExcluded;
       const recalled = yield* recall(`stale-probe:${document.id}`, probe.lookup);
+
       staleSelected += recalled.passages.filter((item) => item.source.id === document.id).length;
     }
 
     const refreshStarted = yield* Clock.monotonicTimeNanos;
     let refreshEmbeddedBytes = 0;
+
     for (const document of corpus.documents) {
       const indexed = yield* indexMemorySource(key(document.id), INDEX_LIMITS);
+
       if (indexed.embeddedChunks > 0) sourceEmbeddingCalls += 1;
       refreshEmbeddedBytes += indexed.embeddedBytes;
     }
     const refreshMillis = elapsedMillis(refreshStarted, yield* Clock.monotonicTimeNanos);
+
     indexingMillis += refreshMillis;
 
     const measurements: Array<QueryMeasurement> = [];
+
     for (const query of corpus.queries) {
       measurements.push(yield* measureQuery(query, "direct-locator", corpus.documents));
       measurements.push(yield* measureQuery(query, "lexical-overlap", corpus.documents));
       measurements.push(yield* measureQuery(query, "semantic", corpus.documents));
     }
+
     return {
       staleExcluded,
       staleSelected,
@@ -721,20 +805,26 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
     const coldSamples: Array<number> = [];
     let coldCalls = 0;
     let coldTextBytes = 0;
+
     for (let index = 0; index < 3; index++) {
       const sample = yield* coldSample(options);
+
       coldSamples.push(sample.elapsed);
       coldCalls += sample.calls;
       coldTextBytes += sample.textBytes;
     }
+
     const cohortNative = yield* makeNativeEmbeddingLayer({
       cachePath: options.cachePath,
       offline: true,
     });
+
     const providerCohorts = yield* Effect.scoped(
       Effect.gen(function* () {
         const base = yield* EmbeddingModel.EmbeddingModel;
+
         yield* base.embedMany(["warm provider cohort"]);
+
         return [
           (yield* providerCohort("injected-slow-200ms", base, { delayMillis: 200 }, null)).report,
           (yield* providerCohort("typed-failure", base, { fail: true }, null)).report,
@@ -743,7 +833,9 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
         ];
       }).pipe(Effect.provide(cohortNative.layer)),
     );
+
     const cohortTelemetry = yield* cohortNative.snapshot;
+
     return {
       result,
       mainTelemetry,
@@ -755,6 +847,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
       cohortTextBytes: cohortTelemetry.textBytes,
     };
   }).pipe(Effect.provide(baseServices));
+
   const {
     result,
     mainTelemetry,
@@ -765,8 +858,10 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
     cohortCalls,
     cohortTextBytes,
   } = phases;
+
   const semanticRows = result.measurements.filter((row) => row.method === "semantic");
   const generatedAt = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
+
   return yield* Schema.decodeUnknownEffect(Schema.toType(EvaluationReport))({
     version: 1,
     metadata: {

@@ -141,6 +141,7 @@ describe("Browser Run native field filling", () => {
   it.effect("focuses ordinary fields and emits bubbling input then change with the new value", () =>
     Effect.gen(function* () {
       const field = new Field();
+
       const events: Array<{
         type: string;
         bubbles: boolean;
@@ -183,6 +184,7 @@ describe("Browser Run native field filling", () => {
   ])("rejects nonfillable elements with a typed fill failure (%#)", (element) =>
     Effect.gen(function* () {
       const handle = yield* open;
+
       const error = yield* handle
         .fill(BrowserFillRequest.make({ selector: "#field", value: "agent-first" }))
         .pipe(Effect.flip);

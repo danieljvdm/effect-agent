@@ -48,6 +48,7 @@ const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
 const usage = { inputTokens: {}, outputTokens: {} };
+
 const finalParts: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "answer" },
   { type: "text-delta", id: "answer", delta: '{"answer":"soak"}' },
@@ -114,9 +115,11 @@ const submitOptions = (wave: number, lane: number, member: number): DurableSubmi
 const heapAfterGc = (): number => {
   v8.setFlagsFromString("--expose-gc");
   const gc = vm.runInNewContext("gc") as () => void;
+
   gc();
   gc();
   v8.setFlagsFromString("--no-expose-gc");
+
   return process.memoryUsage().heapUsed;
 };
 
@@ -126,6 +129,7 @@ const runWave = (wave: number) =>
     const runtime = yield* DurableAgentRuntime;
     const ledger = yield* SubmissionLedger;
     const agent = Agent.withModel(soakDefinition, soakModel);
+
     for (let lane = 0; lane < LANES; lane++) {
       // The whole queue is admitted before the drain, so the host Run claims the contiguous
       // ready prefix and JOINS the queued members at its Turn seams (DUR-016).
@@ -136,18 +140,23 @@ const runWave = (wave: number) =>
           submitOptions(wave, lane, member),
         );
       }
+
       const settlements = yield* runtime.processThread(
         agent,
         decodeThreadId(`soak-memory-w${wave}-lane-${lane}`),
       );
+
       expect(settlements.length).toBeGreaterThan(0);
     }
     // Convergence: nothing nonterminal, nothing invisibly stuck (DUR-017 surface agrees).
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+
     expect(Array.from(nonterminal)).toHaveLength(0);
+
     const obligations = yield* runtime.scanObligations(
       ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }),
     );
+
     expect(obligations.entries).toHaveLength(0);
   }).pipe(Effect.provide(freshLayer()));
 
@@ -158,12 +167,14 @@ describe("DUR-016 P7 pure-memory soak (coordinator map cleanup)", () => {
       Effect.gen(function* () {
         const baseline = yield* Effect.sync(heapAfterGc);
         const waveHeaps: Array<number> = [];
+
         for (let wave = 0; wave < WAVES; wave++) {
           yield* runWave(wave);
           waveHeaps.push(yield* Effect.sync(heapAfterGc));
         }
         const first = waveHeaps[0] ?? Number.NaN;
         const last = waveHeaps.at(-1) ?? Number.NaN;
+
         // Window-to-window stability: closing each wave's Layer scope releases everything the
         // wave retained (canonical records included — they live in the wave's memory adapters).
         // A coordinator leak surviving the scope would grow monotonically across windows.

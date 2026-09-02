@@ -32,6 +32,7 @@ const submitAndSettle = async (
   const receipt = await runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.submit(
         { definition: contextCompactorDefinition },
         { question, ref: thread },
@@ -40,21 +41,28 @@ const submitAndSettle = async (
     }),
     namespace,
   );
+
   await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
+
   const settlement = await runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareThreadClient;
+
       return yield* client.awaitSettlement(receipt);
     }),
     namespace,
   );
+
   const records = await readCanonical(thread, namespace);
+
   const terminal = records.find(
     (envelope) => envelope.record.recordId === submissionSettlementRecordId(receipt.submissionId),
   )?.record.payload;
+
   if (terminal?._tag !== "SubmissionSettled") {
     throw new Error(`Missing canonical settlement for ${receipt.submissionId}`);
   }
+
   return { receipt, settlement, records, terminal };
 };
 
@@ -69,15 +77,19 @@ const abortIncarnation = (thread: string): Promise<void> =>
 describe("Cloudflare replaceable compaction", () => {
   it("retains independent Tool authorization alongside a compactor after eviction", async () => {
     const thread = lane("authorization");
+
     for (const incarnation of [1, 2]) {
       await submitAndSettle(thread, "seed", `${thread}-seed-${incarnation}`, "CONTEXT_COMPACTOR");
+
       const compacted = await submitAndSettle(
         thread,
         "compact",
         `${thread}-compact-${incarnation}`,
         "CONTEXT_COMPACTOR",
       );
+
       expect(compacted.terminal.result).toEqual({ answer: "compacted" });
+
       const receipt = await runClient(
         CloudflareThreadClient.use((client) =>
           client.submit(
@@ -88,13 +100,16 @@ describe("Cloudflare replaceable compaction", () => {
         ),
         "CONTEXT_COMPACTOR",
       );
+
       await drainAlarmsUntil(thread, allSettled(thread, "CONTEXT_COMPACTOR"), {
         namespace: "CONTEXT_COMPACTOR",
       });
+
       const settlement = await runClient(
         CloudflareThreadClient.use((client) => client.awaitSettlement(receipt)),
         "CONTEXT_COMPACTOR",
       );
+
       expect(settlement).toMatchObject({
         outcome: "failed",
         failure: {
@@ -108,6 +123,7 @@ describe("Cloudflare replaceable compaction", () => {
       });
       expect(contextCompactorProbe(thread).acquisitions).toBe(incarnation);
       const records = await readCanonical(thread, "CONTEXT_COMPACTOR");
+
       expect(records.some(({ record }) => record.payload._tag === "ToolCallSettled")).toBe(false);
       if (incarnation === 1) await abortIncarnation(thread);
     }
@@ -115,6 +131,7 @@ describe("Cloudflare replaceable compaction", () => {
 
   it("keeps the existing no-compactor construction behavior", async () => {
     const thread = lane("default");
+
     const result = await submitAndSettle(
       thread,
       "without a host compactor",
@@ -129,6 +146,7 @@ describe("Cloudflare replaceable compaction", () => {
   it("invokes the provided compactor without replacing canonical history", async () => {
     const thread = lane("provided");
     const original = "preserve this exact canonical input";
+
     await submitAndSettle(thread, original, `${thread}-seed`, "CONTEXT_COMPACTOR");
     const result = await submitAndSettle(thread, original, `${thread}-key`, "CONTEXT_COMPACTOR");
 
@@ -139,6 +157,7 @@ describe("Cloudflare replaceable compaction", () => {
       invocations: 1,
     });
     const canonical = JSON.stringify(result.records);
+
     expect(canonical).toContain(original);
     expect(result.records.some((entry) => entry.record.payload._tag === "CompactionCreated")).toBe(
       true,
@@ -147,7 +166,9 @@ describe("Cloudflare replaceable compaction", () => {
 
   it("settles a typed compactor failure without persisting its cause", async () => {
     const thread = lane("typed-failure");
+
     await submitAndSettle(thread, "seed", `${thread}-seed`, "CONTEXT_COMPACTOR");
+
     const result = await submitAndSettle(
       thread,
       "[host-compactor-failure] preserve the refused input",
@@ -162,29 +183,35 @@ describe("Cloudflare replaceable compaction", () => {
     });
     expect(result.terminal.result).not.toHaveProperty("cause");
     const canonical = JSON.stringify(result.records);
+
     expect(canonical).toContain("preserve the refused input");
     expect(canonical).not.toContain("the host compactor refused this context");
   });
 
   it("DEPLOY-013 acquires once per incarnation and reconstructs from canonical history after eviction", async () => {
     const thread = lane("reconstruction");
+
     await submitAndSettle(thread, "first", `${thread}-first`, "CONTEXT_COMPACTOR");
     await submitAndSettle(thread, "second", `${thread}-second`, "CONTEXT_COMPACTOR");
 
     const beforeEviction = contextCompactorProbe(thread);
+
     expect(beforeEviction.acquisitions).toBe(1);
     expect(beforeEviction.invocations).toBe(1);
 
     await abortIncarnation(thread);
+
     const reconstructed = await submitAndSettle(
       thread,
       "third after eviction",
       `${thread}-third`,
       "CONTEXT_COMPACTOR",
     );
+
     expect(reconstructed.terminal.result).toEqual({ answer: "compacted" });
 
     const afterEviction = contextCompactorProbe(thread);
+
     expect(afterEviction.acquisitions).toBe(2);
     expect(afterEviction.invocations).toBe(2);
     expect(JSON.stringify(reconstructed.records)).toContain("third after eviction");

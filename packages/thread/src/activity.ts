@@ -95,6 +95,7 @@ export const ActivityMutationPoint = Schema.Literals([
   "activity:release:after-state",
   "activity:release:after",
 ]);
+
 export type ActivityMutationPoint = typeof ActivityMutationPoint.Type;
 
 export class ActivityMutationFailure extends Schema.TaggedError<ActivityMutationFailure>()(

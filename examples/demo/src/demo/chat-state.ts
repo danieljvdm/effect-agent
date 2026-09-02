@@ -96,9 +96,11 @@ const updateAssistant = (
   update: (message: ChatMessage) => ChatMessage,
 ): ReadonlyArray<ChatMessage> => {
   const index = messages.findIndex((message) => message.id === id);
+
   if (index === -1) {
     return [...messages, update({ id, role: "assistant", content: "" })];
   }
+
   return messages.map((message, messageIndex) =>
     messageIndex === index ? update(message) : message,
   );
@@ -112,6 +114,7 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
   const previous = context(chatStateAtom);
   const runNumber = previous.runNumber + 1;
   const assistantId = `assistant-${runNumber}`;
+
   context.set(chatStateAtom, {
     ...previous,
     status: "running",
@@ -133,6 +136,7 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
 
   const projectEvent = Effect.fn("Demo.projectChatEvent")(function* (event: RunEvent) {
     const current = context(chatStateAtom);
+
     const messages =
       event._tag === "ReasoningDelta"
         ? updateAssistant(current.messages, assistantId, (assistant) => ({
@@ -144,6 +148,7 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
             ...assistant,
             events: [...(assistant.events ?? []), event],
           }));
+
     context.set(chatStateAtom, {
       ...current,
       messages,
@@ -154,6 +159,7 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
       const candidate: unknown = event.output;
       const output = yield* Schema.decodeUnknownEffect(ChatOutput)(candidate);
       const completed = context(chatStateAtom);
+
       context.set(chatStateAtom, {
         ...completed,
         status: "succeeded",
@@ -184,6 +190,7 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
   return Stream.unwrap(
     Effect.gen(function* () {
       const client = yield* DemoRunRpcClient;
+
       return client.StreamChatRun({ history, message, mode });
     }),
   ).pipe(
@@ -192,6 +199,7 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
     Effect.tap(() =>
       Effect.sync(() => {
         const current = context(chatStateAtom);
+
         if (current.status === "running") {
           context.set(chatStateAtom, {
             ...current,
@@ -237,6 +245,7 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
   const previous = context(chatStateAtom);
   const runNumber = previous.runNumber + 1;
   const assistantId = `assistant-${runNumber}`;
+
   context.set(chatStateAtom, {
     ...previous,
     status: "running",
@@ -279,6 +288,7 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
         break;
       case "RunCompleted": {
         const candidate: unknown = event.output;
+
         capabilityOutput = yield* Schema.decodeUnknownEffect(TravelPlan)(candidate);
         content = formatTravelPlanForChat(capabilityOutput);
         status = "succeeded";
@@ -319,6 +329,7 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
   return Stream.unwrap(
     Effect.gen(function* () {
       const client = yield* DemoRunRpcClient;
+
       return previous.mode === "openai"
         ? client.StreamLiveTravelChatRun({
             message,
@@ -333,6 +344,7 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
     Effect.tap(() =>
       Effect.sync(() => {
         const current = context(chatStateAtom);
+
         if (current.activeExperience === "capability") {
           context.set(chatStateAtom, {
             ...current,
@@ -347,6 +359,7 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
       Effect.sync(() => {
         const current = context(chatStateAtom);
         const messageText = capabilityFailureMessage(current.events, failureMessage(cause));
+
         context.set(chatStateAtom, {
           ...current,
           status: "failed",
@@ -362,6 +375,7 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
     Effect.onInterrupt(() =>
       Effect.sync(() => {
         const current = context(chatStateAtom);
+
         context.set(chatStateAtom, {
           ...current,
           status: "interrupted",
@@ -382,6 +396,7 @@ export const queueChatUpdateAtom = DemoRunRpcRuntime.fn<QueueChatUpdate>()((
   context,
 ) => {
   const current = context(chatStateAtom);
+
   if (current.handle === null || current.activeExperience !== "capability") {
     return Effect.sync(() => {
       context.set(chatStateAtom, {
@@ -392,17 +407,21 @@ export const queueChatUpdateAtom = DemoRunRpcRuntime.fn<QueueChatUpdate>()((
   }
 
   const handle = current.handle;
+
   const kind = current.events.some(
     (event) => event._tag === "DemoCommandStateChanged" && event.kind === "steering",
   )
     ? ("follow-up" as const)
     : ("steering" as const);
+
   context.set(chatStateAtom, { ...current, controlError: null });
 
   return Effect.gen(function* () {
     const client = yield* DemoRunRpcClient;
+
     yield* client.QueueRunCommand({ handle, kind, content });
     const latest = context(chatStateAtom);
+
     context.set(chatStateAtom, {
       ...latest,
       messages: [
@@ -420,6 +439,7 @@ export const queueChatUpdateAtom = DemoRunRpcRuntime.fn<QueueChatUpdate>()((
     Effect.catch((cause) =>
       Effect.sync(() => {
         const latest = context(chatStateAtom);
+
         context.set(chatStateAtom, {
           ...latest,
           controlError: failureMessage(cause),
@@ -440,6 +460,7 @@ export const resolveChatApprovalAtom = DemoRunRpcRuntime.fn<ResolveChatApproval>
   context,
 ) => {
   const current = context(chatStateAtom);
+
   if (current.handle === null || current.activeExperience !== "capability") {
     return Effect.sync(() => {
       context.set(chatStateAtom, {
@@ -450,9 +471,12 @@ export const resolveChatApprovalAtom = DemoRunRpcRuntime.fn<ResolveChatApproval>
   }
 
   const handle = current.handle;
+
   context.set(chatStateAtom, { ...current, controlError: null });
+
   return Effect.gen(function* () {
     const client = yield* DemoRunRpcClient;
+
     yield* client.ResolveRunApproval({
       handle,
       requestId: request.requestId,
@@ -463,6 +487,7 @@ export const resolveChatApprovalAtom = DemoRunRpcRuntime.fn<ResolveChatApproval>
     Effect.catch((cause) =>
       Effect.sync(() => {
         const latest = context(chatStateAtom);
+
         context.set(chatStateAtom, {
           ...latest,
           controlError: failureMessage(cause),

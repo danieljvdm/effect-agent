@@ -85,6 +85,7 @@ type Requirements = Assert<
 describe("committed activity public composition", () => {
   it("preserves application failures and requirements while owning callback scopes", () => {
     const proof: readonly [Errors, Requirements] = [true, true];
+
     expect(proof).toEqual([true, true]);
   });
 });

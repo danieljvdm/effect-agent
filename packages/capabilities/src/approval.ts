@@ -6,6 +6,7 @@ import { RedactedPreview, Redactor, type RedactionError } from "./redaction.ts";
 const MAX_APPROVAL_TARGETS = 32;
 const MAX_APPROVAL_TARGET_BYTES = 64 * 1024;
 const MAX_APPROVAL_AUDIT_EVENTS = 2_048;
+
 const ApprovalTargets = Schema.Array(Schema.String.check(Schema.isMaxLength(2 * 1024)))
   .check(Schema.isMaxLength(MAX_APPROVAL_TARGETS))
   .pipe(
@@ -101,6 +102,7 @@ export class ApprovalDecisionRecorded extends Schema.TaggedClass<ApprovalDecisio
 
 export const ApprovalAuditEvent = Schema.Union([ApprovalRequestRecorded, ApprovalDecisionRecorded]);
 export type ApprovalAuditEvent = typeof ApprovalAuditEvent.Type;
+
 export const ApprovalAuditEvents = Schema.Array(ApprovalAuditEvent).check(
   Schema.isMaxLength(MAX_APPROVAL_AUDIT_EVENTS),
 );
@@ -145,13 +147,16 @@ export const ApprovalAuditMemoryLive = Layer.effect(
       readonly pending: ReadonlySet<string>;
     }
     const state = yield* Ref.make<AuditState>({ events: [], pending: new Set() });
+
     return ApprovalAudit.of({
       recordRequest: (request) =>
         Effect.gen(function* () {
           const recordedAt = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+
           const error = yield* Ref.modify(state, (current) => {
             // Each accepted request atomically reserves room for its decision.
             const reservedSize = current.events.length + current.pending.size + 2;
+
             if (reservedSize > MAX_APPROVAL_AUDIT_EVENTS) {
               return [
                 ApprovalAuditLimitExceeded.make({
@@ -161,11 +166,13 @@ export const ApprovalAuditMemoryLive = Layer.effect(
                 current,
               ] as const;
             }
+
             const event = ApprovalRequestRecorded.make({
               sequence: current.events.length,
               recordedAt,
               request,
             });
+
             return [
               undefined,
               {
@@ -174,11 +181,13 @@ export const ApprovalAuditMemoryLive = Layer.effect(
               },
             ] as const;
           });
+
           if (error !== undefined) return yield* error;
         }),
       recordDecision: (decision) =>
         Effect.gen(function* () {
           const recordedAt = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+
           const error = yield* Ref.modify(state, (current) => {
             if (!current.pending.has(decision.requestId)) {
               return [
@@ -190,12 +199,15 @@ export const ApprovalAuditMemoryLive = Layer.effect(
               ] as const;
             }
             const pending = new Set(current.pending);
+
             pending.delete(decision.requestId);
+
             const event = ApprovalDecisionRecorded.make({
               sequence: current.events.length,
               recordedAt,
               decision,
             });
+
             return [
               undefined,
               {
@@ -204,6 +216,7 @@ export const ApprovalAuditMemoryLive = Layer.effect(
               },
             ] as const;
           });
+
           if (error !== undefined) return yield* error;
         }),
       events: Ref.get(state).pipe(Effect.map((current) => current.events)),
@@ -218,6 +231,7 @@ export const makeApprovalRequest = Effect.fn("makeApprovalRequest")(function* (
 ): Effect.fn.Return<ApprovalRequest, RedactionError, Redactor> {
   const redactor = yield* Redactor;
   const redactedInputPreview = yield* redactor.redact(decodedToolInput);
+
   return ApprovalRequest.make({
     requestId: draft.requestId,
     runId: draft.runId,
@@ -250,16 +264,19 @@ const timeoutDenial = (request: ApprovalRequest, decidedAt: DateTime.Utc): Appro
  */
 export const requestApproval = Effect.fn("requestApproval")(function* (request: ApprovalRequest) {
   const audit = yield* ApprovalAudit;
+
   yield* audit.recordRequest(request);
   const nowMillis = yield* Clock.currentTimeMillis;
   const now = DateTime.toUtc(DateTime.makeUnsafe(nowMillis));
   const remainingMillis = DateTime.toEpochMillis(request.expiresAt) - nowMillis;
 
   let decision: ApprovalDecision;
+
   if (remainingMillis <= 0) {
     decision = timeoutDenial(request, now);
   } else {
     const resolver = yield* ApprovalResolver;
+
     decision = yield* resolver.request(request).pipe(
       Effect.timeoutOrElse({
         duration: Duration.millis(remainingMillis),
@@ -299,6 +316,7 @@ export const requestApproval = Effect.fn("requestApproval")(function* (request: 
       expectedRequestId: request.requestId,
       observedRequestId: decision.requestId,
     });
+
     const denied = ApprovalDenied.make({
       requestId: request.requestId,
       decidedAt: DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
@@ -306,10 +324,13 @@ export const requestApproval = Effect.fn("requestApproval")(function* (request: 
       reason: "Approval resolver returned a decision for another request",
       timedOut: false,
     });
+
     yield* audit.recordDecision(denied);
+
     return yield* mismatch;
   }
   yield* audit.recordDecision(decision);
+
   return decision;
 });
 

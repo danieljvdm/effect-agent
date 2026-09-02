@@ -58,6 +58,7 @@ const pageOne = [
   { customer: "acme", revenue: 4_200 },
   { customer: "tiny", revenue: 120 },
 ];
+
 const pageTwo = [
   { customer: "globex", revenue: 2_500 },
   { customer: "small", revenue: 90 },
@@ -69,6 +70,7 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
       description: "Execute JavaScript that may query the warehouse",
       tools: { warehouse: { query: QueryWarehouse } },
     });
+
     const agent = Agent.make("code-mode-e2e", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -81,9 +83,11 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
         toolConcurrency: 1,
       }),
     });
+
     const observedToolResults = yield* Ref.make<
       ReadonlyArray<{ readonly result: unknown; readonly isFailure: boolean }>
     >([]);
+
     const model = Model.make(
       "scripted",
       "code-mode-e2e",
@@ -91,6 +95,7 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
         LanguageModel.LanguageModel,
         Effect.gen(function* () {
           const turn = yield* Ref.make(0);
+
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
             streamText: ({ prompt }) =>
@@ -136,7 +141,9 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
         }),
       ),
     );
+
     const handlerCalls = yield* Ref.make<ReadonlyArray<string>>([]);
+
     const handlerLayer = codeMode.handlers.pipe(
       Layer.provide(
         Toolkit.make(QueryWarehouse).toLayer({
@@ -151,11 +158,13 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
       ),
       Layer.provide(inProcessCodeExecutorLayer),
     );
+
     const result = yield* AgentRuntime.run(
       Agent.withModel(agent, model),
       { question: "top customers" },
       {},
     ).pipe(Effect.provide(handlerLayer), Effect.scoped);
+
     return {
       answer: result.output,
       toolResults: yield* Ref.get(observedToolResults),
@@ -180,25 +189,30 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
         message: Schema.String,
         privateDetail: Schema.String,
       }) {}
+
       const original = LookupFailure.make({
         message: "Lookup unavailable",
         privateDetail: "CODE_MODE_CAUSE_SECRET",
       });
+
       const Lookup = Tool.make("lookup", {
         parameters: Schema.Struct({ value: Schema.Int }),
         success: Schema.String,
         failure: LookupFailure,
       }).annotate(ToolExecutionClass, "readonly");
+
       const Declared = Tool.make("declared", {
         parameters: Schema.Struct({ value: Schema.Int }),
         success: Schema.String,
         failure: LookupFailure,
         failureMode: "return",
       }).annotate(ToolExecutionClass, "readonly");
+
       const codeMode = CodeMode.make("search_workspace", {
         description: "Search the workspace",
         tools: { workspace: { declared: Declared, lookup: Lookup } },
       });
+
       const definition = Agent.make("code-mode-observer-regression", {
         input: Schema.String,
         output: Schema.String,
@@ -211,8 +225,10 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
           toolConcurrency: 1,
         }),
       });
+
       const observations: Array<ToolFailureObservation> = [];
       const logs: Array<unknown> = [];
+
       const logger = Logger.make<unknown, void>(({ message, cause, fiber }) => {
         logs.push({
           message,
@@ -220,6 +236,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
           annotations: fiber.getRef(References.CurrentLogAnnotations),
         });
       });
+
       const runtimeLayer = DurableAgentRuntime.layer.pipe(
         Layer.provideMerge(
           Layer.mergeAll(
@@ -242,6 +259,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
         ),
         Layer.provide(NodeCrypto.layer),
       );
+
       const handlers = codeMode.handlers.pipe(
         Layer.provide([
           Toolkit.make(Declared, Lookup).toLayer({
@@ -257,8 +275,10 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
           inProcessCodeExecutorLayer,
         ]),
       );
+
       return Effect.gen(function* () {
         const turn = yield* Ref.make(0);
+
         const model = Model.make(
           "scripted",
           "observer-regression",
@@ -300,18 +320,22 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
             }),
           ),
         );
+
         const agent = Agent.withModel(definition, model);
         const runtime = yield* DurableAgentRuntime;
         const threadId = ThreadId.make("code-mode-observer");
         const digest = Digest.make("a".repeat(64));
+
         const receipt = yield* runtime.submit(agent, "search", {
           threadId,
           principal: Principal.make("test"),
           idempotencyKey: IdempotencyKey.make("search"),
           definitions: DefinitionDigests.make({ agent: digest, model: digest, tools: digest }),
         });
+
         yield* runtime.processThread(agent, threadId).pipe(Effect.provide(handlers));
         const settlement = yield* runtime.awaitSettlement(receipt);
+
         expect(settlement.outcome).toBe("completed");
         expect(observations).toHaveLength(3);
         expect(observations[0]).toMatchObject({
@@ -341,12 +365,15 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
         expect(observations[2]).not.toHaveProperty("cause");
         expect(observations[2]).not.toHaveProperty("message");
         const store = yield* ThreadStore;
+
         const records = yield* store
           .read(ThreadRead.make({ threadId, limit: 1_024 }))
           .pipe(Stream.runCollect);
+
         const tools = records.filter(
           (envelope) => envelope.record.payload._tag === "ToolCallSettled",
         );
+
         expect(tools).toHaveLength(1);
         expect(tools[0]?.record.payload).toMatchObject({
           toolCallId: "search-1",
@@ -375,6 +402,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
             return { top: rows.map((row) => row.customer), count: rows.length };
           }`,
         });
+
         expect(outcome.answer).toEqual({ answer: "done" });
         expect(outcome.handlerCalls).toEqual([
           "SELECT * FROM invoices WHERE page = 1",
@@ -408,6 +436,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
             }
           }`,
         });
+
         expect(outcome.handlerCalls).toEqual(["SELECT * FROM invoices WHERE page = 1"]);
         expect(outcome.toolResults[0].isFailure).toBe(false);
         expect(outcome.toolResults[0].result).toMatchObject({
@@ -429,6 +458,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
           description: "Execute JavaScript over the read-only warehouse",
           tools: { warehouse: { query: warehouseQueryTool } },
         });
+
         const agent = Agent.make("code-mode-c3", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -441,7 +471,9 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
             toolConcurrency: 1,
           }),
         });
+
         const observed = yield* Ref.make<ReadonlyArray<unknown>>([]);
+
         const model = Model.make(
           "scripted",
           "code-mode-c3",
@@ -449,6 +481,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
             LanguageModel.LanguageModel,
             Effect.gen(function* () {
               const turn = yield* Ref.make(0);
+
               const code = `async () => {
                 const broad = await warehouse.query({
                   sql: "SELECT customer, revenue FROM invoice_summary ORDER BY revenue DESC",
@@ -463,6 +496,7 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
                 console.log("kept", big.length, "of", broad.rows.length);
                 return { top: big.map((row) => row.customer), writeDenied };
               }`;
+
               return yield* LanguageModel.make({
                 generateText: () => Effect.succeed([]),
                 streamText: ({ prompt }) =>
@@ -505,18 +539,22 @@ layer(testLayer, { excludeTestServices: true })("Code Mode end to end", (it) => 
             }),
           ),
         );
+
         const handlerLayer = codeMode.handlers.pipe(
           Layer.provide(warehouseHandlersLayer),
           Layer.provide(warehouseDbLayer({ tenant: "acme", seed: warehouseDemoSeed })),
           Layer.provide(inProcessCodeExecutorLayer),
         );
+
         const result = yield* AgentRuntime.run(
           Agent.withModel(agent, model),
           { question: "top customers" },
           {},
         ).pipe(Effect.provide(handlerLayer), Effect.scoped);
+
         expect(result.output).toEqual({ answer: "done" });
         const [toolResult] = yield* Ref.get(observed);
+
         expect(toolResult).toMatchObject({
           result: {
             top: ["Stellar Freight", "Nimbus Analytics", "Harbor Lights Ltd"],

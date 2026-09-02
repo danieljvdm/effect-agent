@@ -55,6 +55,7 @@ export const subscriptionDeliveryCanSelect = (
     subscription.configuration.destination._tag === "ExistingThread"
       ? subscription.configuration.destination.threadId
       : `subscription:${delivery.deliveryId}`;
+
   return (
     delivery.key.eventId === event.eventId &&
     delivery.key.subscription.partition.tenantId === subscription.key.partition.tenantId &&
@@ -126,6 +127,7 @@ export const applySubscriptionDeliveryChange = (
         !sameDefinitions(change.envelope.definitions, subscription.configuration.definitions)
       )
         return Result.fail(conflict("prepared-identity"));
+
       return Result.succeed({
         ...existing,
         state: "prepared",
@@ -140,6 +142,7 @@ export const applySubscriptionDeliveryChange = (
         return existing.receipt !== null && sameReceipt(existing.receipt, change.receipt)
           ? Result.succeed(existing)
           : Result.fail(conflict("receipt"));
+
       return existing.state === "prepared"
         ? Result.succeed({ ...existing, state: "delivered", receipt: change.receipt })
         : Result.fail(conflict("delivery-state"));
@@ -154,6 +157,7 @@ export const applySubscriptionDeliveryChange = (
         (change.refusal.phase === "admission" && existing.state !== "prepared")
       )
         return Result.fail(conflict("refusal-phase"));
+
       return existing.state === "delivered"
         ? Result.fail(conflict("delivery-state"))
         : Result.succeed({ ...existing, state: "refused", refusal: change.refusal });
@@ -165,6 +169,7 @@ export const applySubscriptionDeliveryChange = (
         change.retry.nextAttemptAtMillis < existing.retry.nextAttemptAtMillis
       )
         return Result.succeed(existing);
+
       return Result.succeed({ ...existing, retry: change.retry });
   }
 };

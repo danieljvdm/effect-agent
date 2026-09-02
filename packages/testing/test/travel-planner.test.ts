@@ -54,16 +54,19 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
 describe("TEST-014 P1 Travel Planner reference application (E)", () => {
   it.effect("runs the offline two-Turn bounded Tool batch through run and stream", () => {
     let sawToolResultOnSecondTurn = false;
+
     const assertedTurns: ReadonlyArray<ScriptedTurnInput> = [
       {
         ...phase1HappyPathTurns[0],
@@ -88,8 +91,10 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         ...phase1HappyPathTurns[1],
         assertRequest: (request) => {
           const roles = request.prompt.content.map((message) => message.role);
+
           sawToolResultOnSecondTurn = roles.includes("tool");
           const prompt = JSON.stringify(request.prompt.content);
+
           expect(prompt).toContain("quote-sfo-lhr-001");
           expect(prompt.indexOf("EA 218")).toBeLessThan(prompt.indexOf("Bloomsbury House"));
           expect(prompt.indexOf("Bloomsbury House")).toBeLessThan(prompt.indexOf("British Museum"));
@@ -100,19 +105,25 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
     return Effect.gen(function* () {
       const streamEvidence = yield* Effect.gen(function* () {
         const lifecycle = yield* CatalogLifecycle;
+
         const events = yield* provideTravelLayers(
           AgentRuntime.stream(makeScriptedAgent(assertedTurns), phase1Trip).pipe(Stream.runCollect),
         ).pipe(Effect.scoped);
+
         const counts = yield* lifecycle.counts;
+
         return { counts, events: Array.from(events) };
       }).pipe(Effect.provide(CatalogLifecycle.layerNoDeps));
 
       const runEvidence = yield* Effect.gen(function* () {
         const lifecycle = yield* CatalogLifecycle;
+
         const result = yield* provideTravelLayers(
           AgentRuntime.run(makeScriptedAgent(phase1HappyPathTurns), phase1Trip),
         );
+
         const counts = yield* lifecycle.counts;
+
         return { counts, result };
       }).pipe(Effect.provide(CatalogLifecycle.layerNoDeps));
 
@@ -125,6 +136,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
 
       const candidatePlan: unknown = completed.output;
       const decodedPlan = yield* Schema.decodeUnknownEffect(TravelPlan)(candidatePlan);
+
       expect(sawToolResultOnSecondTurn).toBe(true);
       expect(decodedPlan).toEqual(expectedTravelPlan);
       expect(runEvidence.result).toMatchObject({
@@ -149,6 +161,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         const lifecycle = yield* CatalogLifecycle;
         const started = yield* Deferred.make<void>();
         const modelFinalized = yield* Deferred.make<void>();
+
         const turns: ReadonlyArray<ScriptedTurnInput> = [
           {
             _tag: "Stream",
@@ -179,16 +192,20 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
 
   it.effect("accepts an empty activity result as a successful Tool outcome", () => {
     const encodedPlan = Schema.encodeSync(TravelPlan)(expectedTravelPlan);
+
     const emptyPlan = Schema.decodeSync(TravelPlan)({
       itineraries: encodedPlan.itineraries.map((itinerary) => ({
         ...itinerary,
         activities: [],
       })),
     });
+
     const baseFinalTurn = phase1HappyPathTurns[1];
+
     if (baseFinalTurn._tag !== "Stream") {
       throw new Error("Expected the Phase 1 final fixture Turn to stream");
     }
+
     const finalTurn: ScriptedTurnInput = {
       ...baseFinalTurn,
       parts: baseFinalTurn.parts.map((part): (typeof baseFinalTurn.parts)[number] =>
@@ -203,12 +220,14 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         expect(JSON.stringify(request.prompt.content)).toContain('"activities":[]');
       },
     };
+
     const emptyActivityLayer = Layer.succeed(
       ActivityCatalog,
       ActivityCatalog.of({
         search: () => Effect.succeed(Schema.decodeSync(ActivitySearchResult)({ activities: [] })),
       }),
     );
+
     const layer = Layer.mergeAll(
       RunContextPreparationPassthrough,
       ThreadHistory.layerTransient,
@@ -232,16 +251,19 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
   it.effect("keeps a typed flight failure in E after terminal Tool events", () =>
     Effect.gen(function* () {
       const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
       const unavailable = FlightUnavailable.make({
         query: "SFO-LHR",
         message: "The deterministic supplier is unavailable.",
       });
+
       const failingFlightLayer = Layer.succeed(
         FlightCatalog,
         FlightCatalog.of({
           search: () => Effect.fail(unavailable),
         }),
       );
+
       const layer = Layer.mergeAll(
         RunContextPreparationPassthrough,
         ThreadHistory.layerTransient,
@@ -263,6 +285,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         Effect.scoped,
         Effect.exit,
       );
+
       const failure = failureFrom(exit);
       const events = yield* Ref.get(observed);
 
@@ -287,6 +310,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
     Effect.gen(function* () {
       const controlled = yield* ReverseCompletionToolkitLayer;
       let nextPrompt = "";
+
       const turns: ReadonlyArray<ScriptedTurnInput> = [
         phase1HappyPathTurns[0],
         {
@@ -296,6 +320,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
           },
         },
       ];
+
       const layer = Layer.mergeAll(
         RunContextPreparationPassthrough,
         ThreadHistory.layerTransient,
@@ -306,6 +331,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         TravelGuidanceLayer,
         DeterministicIdGeneratorLayer,
       ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
+
       const fiber = yield* AgentRuntime.run(makeScriptedAgent(turns), phase1Trip).pipe(
         Effect.provide(layer),
         Effect.forkChild,

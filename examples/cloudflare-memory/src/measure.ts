@@ -12,22 +12,26 @@ import { BenchmarkCase, cases, Sample } from "./contracts.ts";
 class BenchmarkFailure extends Schema.TaggedError<BenchmarkFailure>()("BenchmarkFailure", {
   reason: Schema.Literals(["transport", "timeout"]),
 }) {}
+
 const Observation = Schema.Struct({
   httpMillis: Schema.Finite,
   sample: Schema.NullOr(Sample),
   transportFailure: Schema.NullOr(BenchmarkFailure),
 });
+
 const Placement = Schema.Struct({
   callerEgressColo: Schema.String,
   ownerEgressColo: Schema.String,
   ingressColo: Schema.String,
   placementHint: Schema.String,
 });
+
 const Distribution = Schema.Struct({
   p50: Schema.NullOr(Schema.Number),
   p95: Schema.NullOr(Schema.Number),
   p99: Schema.NullOr(Schema.Number),
 });
+
 const Summary = Schema.Struct({
   http: Distribution,
   validationRpc: Distribution,
@@ -35,6 +39,7 @@ const Summary = Schema.Struct({
   errors: Schema.Natural,
   timeouts: Schema.Natural,
 });
+
 const Cohort = Schema.Struct({
   case: BenchmarkCase,
   state: Schema.Literals(["first-after-inactivity", "warm"]),
@@ -42,6 +47,7 @@ const Cohort = Schema.Struct({
   observations: Schema.Array(Observation),
   summary: Summary,
 });
+
 const Report = Schema.Struct({
   version: Schema.Literal(1),
   url: Schema.String,
@@ -58,12 +64,16 @@ const Report = Schema.Struct({
 
 const distribution = (values: ReadonlyArray<number>) => {
   const sorted = [...values].sort((a, b) => a - b);
+
   const at = (fraction: number) =>
     sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)] ?? null;
+
   return { p50: at(0.5), p95: at(0.95), p99: at(0.99) };
 };
+
 const summarize = (observations: ReadonlyArray<typeof Observation.Type>) => {
   const valid = observations.flatMap((o) => (o.sample?.status === "ok" ? [o.sample] : []));
+
   return {
     http: distribution(observations.map((o) => o.httpMillis)),
     validationRpc: distribution(valid.map((s) => s.validationRpcMillis)),
@@ -106,6 +116,7 @@ export const command = Command.make(
   Effect.fn("benchmark.measure")(function* (options) {
     const token = yield* Config.redacted("BENCH_TOKEN");
     const http = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
+
     const request = Effect.fn("benchmark.request")(function* <A, I>(
       path: string,
       name: BenchmarkCase,
@@ -117,10 +128,13 @@ export const command = Command.make(
           `${options.url.replace(/\/$/, "")}/${path}?case=${name}&caller=${caller}`,
         ).pipe(HttpClientRequest.bearerToken(token)),
       );
+
       return yield* HttpClientResponse.schemaBodyJson(schema)(response);
     });
+
     const observe = Effect.fn("benchmark.observe")(function* (name: BenchmarkCase, caller: string) {
       const start = yield* Clock.currentTimeMillis;
+
       const result = yield* request("sample", name, caller, Sample).pipe(
         Effect.mapError(() => BenchmarkFailure.make({ reason: "transport" })),
         Effect.timeoutOrElse({
@@ -129,14 +143,17 @@ export const command = Command.make(
         }),
         Effect.result,
       );
+
       return {
         httpMillis: (yield* Clock.currentTimeMillis) - start,
         sample: result._tag === "Success" ? result.success : null,
         transportFailure: result._tag === "Failure" ? result.failure : null,
       };
     });
+
     const startedAt = yield* Clock.currentTimeMillis;
     const cohorts: Array<typeof Cohort.Type> = [];
+
     for (const name of cases) {
       yield* request("seed", name, "a", Schema.Boolean);
       yield* request("sample", name, "b", Sample);
@@ -147,6 +164,7 @@ export const command = Command.make(
     yield* Effect.sleep(options.inactivity * 1000);
     for (const name of cases) {
       const observations = [yield* observe(name, "a")];
+
       cohorts.push({
         case: name,
         state: "first-after-inactivity",
@@ -162,6 +180,7 @@ export const command = Command.make(
           (i) => observe(name, i % 2 === 0 ? "a" : "b"),
           { concurrency },
         );
+
         cohorts.push({
           case: name,
           state: "warm",
@@ -174,6 +193,7 @@ export const command = Command.make(
         );
       }
     const placements: Array<(typeof Report.Type)["placements"][number]> = [];
+
     for (const name of cases)
       for (const caller of ["a", "b"])
         placements.push({
@@ -181,6 +201,7 @@ export const command = Command.make(
           caller,
           placement: yield* request("placement", name, caller, Placement),
         });
+
     const report = {
       version: 1 as const,
       url: options.url,
@@ -200,8 +221,10 @@ export const command = Command.make(
         "Latency distributions for validation and full recall include successful samples; all transport durations, failures, and timeouts remain in the report.",
       ],
     };
+
     const json = yield* Schema.encodeEffect(Schema.fromJsonString(Report))(report);
     const fs = yield* FileSystem.FileSystem;
+
     yield* fs.writeFileString(options.output, `${json}\n`);
     yield* Console.log(json);
   }),

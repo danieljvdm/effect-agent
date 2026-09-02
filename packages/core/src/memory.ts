@@ -85,6 +85,7 @@ export const MemoryLookup = Schema.Union([
     message: Schema.String.check(Schema.isMaxLength(4_096)),
   }),
 ]);
+
 export type MemoryLookup = typeof MemoryLookup.Type;
 
 /** Output bounds cover the complete rendered reference text, including citations and provenance. */

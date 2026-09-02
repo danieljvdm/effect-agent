@@ -101,6 +101,7 @@ const inProcessHttpClient = Layer.unwrap(
     yield* Effect.addFinalizer(() =>
       Effect.tryPromise({ try: () => dispose(), catch: () => undefined }).pipe(Effect.ignore),
     );
+
     const fetch: typeof globalThis.fetch = Object.assign(
       (input: string | URL | Request, init?: RequestInit) =>
         handler(input instanceof Request ? input : new Request(input, init)),
@@ -158,6 +159,7 @@ describe("MCP client", () => {
         expect(Context.get(echo.annotations, ToolExecutionClass)).toBe("uncertain");
 
         const handlers = connection.handlers!;
+
         const echoed = yield* callHandler(connection, "echo", { message: "hello" }).pipe(
           Effect.provide(handlers),
         );
@@ -196,10 +198,12 @@ describe("MCP client", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const first = yield* connectMcp(request);
+
         const pinned = McpConnectionRequest.make({
           ...request,
           expectedToolkitSchemaDigest: first.discovery.toolkitSchemaDigest,
         });
+
         const drifted = McpConnectionRequest.make({
           ...request,
           expectedToolkitSchemaDigest: `sha256:${"0".repeat(64)}`,
@@ -222,6 +226,7 @@ describe("MCP client", () => {
         const connection = yield* connectMcp(request);
         const observed = yield* Ref.make<ReadonlyArray<Response.ToolResultPartEncoded>>([]);
         const usage = { inputTokens: {}, outputTokens: {} };
+
         const model = Model.make(
           "scripted",
           "mcp",
@@ -271,6 +276,7 @@ describe("MCP client", () => {
             }),
           ),
         );
+
         const agent = Agent.make("mcp-host", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -283,6 +289,7 @@ describe("MCP client", () => {
             toolConcurrency: 1,
           }),
         });
+
         const result = yield* AgentRuntime.run(
           Agent.withModel(agent, model),
           { question: "go" },
@@ -318,6 +325,7 @@ describe("MCP client", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const connector = yield* McpConnector;
+
         const exit = yield* connector
           .connect(McpConnectionRequest.make({ ...request, serverId: "unknown" }))
           .pipe(Effect.exit);
@@ -337,6 +345,7 @@ describe("MCP client", () => {
           expect(connection.discovery.identity.implementation.name).toBe(
             "effect-agent-stdio-fixture",
           );
+
           const echoed = yield* callHandler(connection, "echo", { message: "stdio" }).pipe(
             Effect.provide(connection.handlers!),
           );
@@ -374,7 +383,9 @@ describe("MCP discovery validation for other connectors", () => {
         parameters: Schema.Struct({ id: Schema.String }),
         success: Schema.Struct({ value: Schema.String }),
       });
+
       const decodeToolJsonSchema = Schema.decodeUnknownEffect(McpSchema.ToolJsonSchema);
+
       const discovery = yield* validateMcpDiscovery(request, {
         identity: McpServerIdentity.make({
           serverId: request.serverId,
@@ -408,6 +419,7 @@ describe("MCP client requirements", () => {
     const httpLayer: Layer.Layer<McpConnector, never, HttpClient.HttpClient> = McpClient.layer([
       httpTransport(false),
     ]);
+
     const stdioLayer: Layer.Layer<McpConnector, never, ChildProcessSpawner.ChildProcessSpawner> =
       McpClient.layer([McpStdioTransport.make({ serverId: "fixture", command: process.execPath })]);
 
@@ -440,6 +452,7 @@ const JsonRpcRequest = Schema.fromJsonString(
     params: Schema.optionalKey(Schema.Unknown),
   }),
 );
+
 const decodeJsonRpcRequest = Schema.decodeUnknownEffect(JsonRpcRequest);
 
 interface ObservedRequest {
@@ -476,9 +489,11 @@ const sseResult = (
 
 const scriptedSseServer = Effect.gen(function* () {
   const observed = yield* Ref.make<ReadonlyArray<ObservedRequest>>([]);
+
   const client = HttpClient.make((request) =>
     Effect.gen(function* () {
       const web = yield* HttpClientRequest.toWeb(request);
+
       const record = (method: string | undefined, hasId: boolean) =>
         Ref.update(observed, (all) => [
           ...all,
@@ -589,6 +604,7 @@ describe("MCP client over server-sent events", () => {
     () =>
       Effect.gen(function* () {
         const server = yield* scriptedSseServer;
+
         const connector = McpClient.layer([httpTransport(false)]).pipe(
           Layer.provide(Layer.succeed(HttpClient.HttpClient, server.client)),
         );

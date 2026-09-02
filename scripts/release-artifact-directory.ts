@@ -36,16 +36,19 @@ export const prepareReleaseArtifactDirectory = <A, E, R>(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const parent = path.dirname(destination);
+
     const acquire = Effect.gen(function* () {
       yield* fs
         .makeDirectory(parent, { recursive: true })
         .pipe(Effect.mapError(artifactDirectoryError(destination, "create-parent")));
+
       const directory = yield* fs
         .makeTempDirectory({
           directory: parent,
           prefix: ".effect-agent-release-staging-",
         })
         .pipe(Effect.mapError(artifactDirectoryError(destination, "create-staging")));
+
       return directory;
     });
 
@@ -53,10 +56,12 @@ export const prepareReleaseArtifactDirectory = <A, E, R>(
       Effect.gen(function* () {
         const directory = yield* acquire;
         const prepareExit = yield* restore(prepare(directory)).pipe(Effect.exit);
+
         if (Exit.isFailure(prepareExit)) {
           const cleanupExit = yield* fs
             .remove(directory, { force: true, recursive: true })
             .pipe(Effect.mapError(artifactDirectoryError(destination, "cleanup")), Effect.exit);
+
           return yield* Effect.failCause(
             Exit.isFailure(cleanupExit)
               ? Cause.combine(prepareExit.cause, cleanupExit.cause)
@@ -67,16 +72,19 @@ export const prepareReleaseArtifactDirectory = <A, E, R>(
         const commitExit = yield* fs
           .rename(directory, destination)
           .pipe(Effect.mapError(artifactDirectoryError(destination, "commit")), Effect.exit);
+
         if (Exit.isFailure(commitExit)) {
           const cleanupExit = yield* fs
             .remove(directory, { force: true, recursive: true })
             .pipe(Effect.mapError(artifactDirectoryError(destination, "cleanup")), Effect.exit);
+
           return yield* Effect.failCause(
             Exit.isFailure(cleanupExit)
               ? Cause.combine(commitExit.cause, cleanupExit.cause)
               : commitExit.cause,
           );
         }
+
         return prepareExit.value;
       }),
     );

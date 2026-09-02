@@ -4,11 +4,13 @@ import { Schema } from "effect";
 export const MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
 export const MODEL_REVISION = "aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f";
 export const CORPUS_SHA256 = "47bf97a564f088bc32b0abd823f2ebbd8146f2f9b65766db9bb3779ac77a7e8e";
+
 export const MEMORY_NAMESPACE = MemoryNamespace.define({
   name: "example/semantic-memory-evaluation",
   version: 1,
   identity: Schema.Null,
 }).make(null);
+
 export const MEMORY_SCOPE = MemoryScope.make("evaluation-reader");
 
 export const CorpusDocument = Schema.Struct({
@@ -22,6 +24,7 @@ export const CorpusDocument = Schema.Struct({
   state: Schema.Literals(["active", "withdrawn"]),
   previousText: Schema.optionalKey(Schema.NonEmptyString),
 });
+
 export type CorpusDocument = typeof CorpusDocument.Type;
 
 export const CorpusQuery = Schema.Struct({
@@ -31,6 +34,7 @@ export const CorpusQuery = Schema.Struct({
   usefulIds: Schema.Array(Schema.NonEmptyString),
   forbiddenIds: Schema.Array(Schema.NonEmptyString),
 });
+
 export type CorpusQuery = typeof CorpusQuery.Type;
 
 export const EvaluationCorpus = Schema.Struct({
@@ -39,6 +43,7 @@ export const EvaluationCorpus = Schema.Struct({
   documents: Schema.Array(CorpusDocument),
   queries: Schema.Array(CorpusQuery),
 });
+
 export type EvaluationCorpus = typeof EvaluationCorpus.Type;
 
 export const LatencySummary = Schema.Struct({
@@ -50,6 +55,7 @@ export const LatencySummary = Schema.Struct({
   targetMillis: Schema.NullOr(Schema.Finite),
   withinTarget: Schema.NullOr(Schema.Boolean),
 });
+
 export type LatencySummary = typeof LatencySummary.Type;
 
 export const QueryMeasurement = Schema.Struct({
@@ -73,6 +79,7 @@ export const QueryMeasurement = Schema.Struct({
   nativeInputTokens: Schema.NullOr(Schema.Natural),
   elapsedMillis: Schema.Finite,
 });
+
 export type QueryMeasurement = typeof QueryMeasurement.Type;
 
 export const MethodSummary = Schema.Struct({
@@ -190,6 +197,7 @@ export const EvaluationReport = Schema.Struct({
   providerCohorts: Schema.Array(ProviderCohort),
   limitations: Schema.Array(Schema.NonEmptyString),
 });
+
 export type EvaluationReport = typeof EvaluationReport.Type;
 
 export class EvaluationError extends Schema.TaggedError<EvaluationError>()("EvaluationError", {

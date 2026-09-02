@@ -73,15 +73,18 @@ const adapters: ReadonlyArray<Adapter> = [
     name: "Worker binding",
     layer: (responses, denied) => {
       let index = 0;
+
       const invoke =
         (action: "screenshot" | "content" | "markdown" | "links" | "scrape" | "json") => () => {
           const response = responses[index++];
+
           return response === undefined
             ? Effect.fail(
                 BrowserQuickActionRpcError.make({ action, cause: new Error("missing response") }),
               )
             : Effect.succeed(response);
         };
+
       const binding: BrowserQuickActionClient = {
         screenshot: invoke("screenshot"),
         content: invoke("content"),
@@ -90,6 +93,7 @@ const adapters: ReadonlyArray<Adapter> = [
         scrape: invoke("scrape"),
         json: invoke("json"),
       };
+
       const authorities = Layer.merge(
         Layer.succeed(BrowserQuickActionBrowserBinding)(binding),
         BrowserQuickActionWorkersAi.layer({
@@ -104,6 +108,7 @@ const adapters: ReadonlyArray<Adapter> = [
               : Effect.void,
         }),
       );
+
       return {
         layer: browserQuickActionWorkersAiCaptureLayer().pipe(Layer.provide(authorities)),
         calls: () => index,
@@ -114,12 +119,15 @@ const adapters: ReadonlyArray<Adapter> = [
     name: "REST",
     layer: (responses, denied) => {
       let index = 0;
+
       const client = HttpClient.make((request) => {
         const response = responses[index++];
+
         return response === undefined
           ? Effect.die("missing response")
           : Effect.succeed(HttpClientResponse.fromWeb(request, response));
       });
+
       const authorities = Layer.merge(
         Layer.succeed(HttpClient.HttpClient)(client),
         BrowserQuickActionWorkersAi.layer({
@@ -134,6 +142,7 @@ const adapters: ReadonlyArray<Adapter> = [
               : Effect.void,
         }),
       );
+
       return {
         layer: browserRestWorkersAiCaptureLayer({
           accountId: "account",
@@ -155,6 +164,7 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
     Effect.gen(function* () {
       const harness = adapter.layer([json({ success: true, result: "# Page" })]);
       const result = yield* capture(harness.layer, markdownRequest());
+
       expect(result.output).toMatchObject({ _tag: "PageMarkdownCaptured", markdown: "# Page" });
       expect(harness.calls()).toBe(1);
     }),
@@ -171,7 +181,9 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
           ],
         }),
       ]);
+
       const result = yield* capture(harness.layer, scrapeRequest());
+
       expect(result.output).toMatchObject({
         _tag: "PageScrapeCaptured",
         groups: [
@@ -186,10 +198,12 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
   it.effect("rejects malformed and over-count selector scrape responses", () =>
     Effect.gen(function* () {
       const malformed = [{ selector: ".plan", results: [{ ...scrapeElement, width: "wide" }] }];
+
       const aggregateOverflow = [
         { selector: ".plan", results: Array.from({ length: 2_048 }, () => scrapeElement) },
         { selector: "#faq", results: Array.from({ length: 2_049 }, () => scrapeElement) },
       ];
+
       const attributeOverflow = [
         {
           selector: ".plan",
@@ -204,11 +218,13 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
           ],
         },
       ];
+
       for (const result of [malformed, aggregateOverflow, attributeOverflow]) {
         const error = yield* capture(
           adapter.layer([json({ success: true, result })]).layer,
           scrapeRequest(),
         ).pipe(Effect.flip);
+
         expect(error._tag).toBe("PageCaptureProtocolError");
       }
     }),
@@ -227,6 +243,7 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
         ]).layer,
         scrapeRequest(1_024),
       ).pipe(Effect.flip);
+
       expect(error._tag).toBe("PageCaptureOutputLimitError");
     }),
   );
@@ -251,6 +268,7 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
         const exit = yield* capture(adapter.layer([response]).layer, markdownRequest()).pipe(
           Effect.exit,
         );
+
         expect(String(exit)).toContain(tag);
       }
     }),
@@ -267,17 +285,20 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
         ]).layer,
         markdownRequest(),
       ).pipe(Effect.flip);
+
       expect(rate).toMatchObject({
         _tag: "PageCaptureRateLimitedError",
         reason: "rate",
         retryAfterMillis: 7_000,
       });
+
       const quota = yield* capture(
         adapter.layer([
           json({ success: false, errors: [{ message: "daily quota" }] }, { status: 429 }),
         ]).layer,
         markdownRequest(),
       ).pipe(Effect.flip);
+
       expect(quota).toMatchObject({ _tag: "PageCaptureRateLimitedError", reason: "quota" });
     }),
   );
@@ -286,6 +307,7 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
     Effect.gen(function* () {
       let reads = 0;
       let cancelled = false;
+
       const stream = new ReadableStream<Uint8Array>(
         {
           pull(controller) {
@@ -298,11 +320,13 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
         },
         { highWaterMark: 0 },
       );
+
       const exit = yield* capture(
         adapter.layer([new Response(stream, { headers: { "content-type": "application/json" } })])
           .layer,
         markdownRequest(1_024),
       ).pipe(Effect.exit);
+
       expect(String(exit)).toContain("PageCaptureOutputLimitError");
       expect(reads).toBe(3);
       expect(cancelled).toBe(true);
@@ -313,6 +337,7 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
     Effect.gen(function* () {
       const harness = adapter.layer([json({ success: true, result: {} })], true);
       const exit = yield* capture(harness.layer, structuredRequest).pipe(Effect.exit);
+
       expect(String(exit)).toContain("PageCaptureInferencePolicyError");
       expect(harness.calls()).toBe(0);
     }),
@@ -322,10 +347,12 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       let cancelled = false;
+
       const stream = new ReadableStream<Uint8Array>(
         {
           pull() {
             Effect.runSync(Deferred.succeed(started, undefined));
+
             return new Promise<void>(() => {});
           },
           cancel() {
@@ -334,12 +361,15 @@ describe.each(adapters)("PageCapture adapter contract: $name", (adapter) => {
         },
         { highWaterMark: 0 },
       );
+
       const program = capture(
         adapter.layer([new Response(stream, { headers: { "content-type": "application/json" } })])
           .layer,
         markdownRequest(),
       );
+
       const fiber = yield* Effect.forkChild(program);
+
       yield* Deferred.await(started);
       yield* Fiber.interrupt(fiber);
       expect(cancelled).toBe(true);

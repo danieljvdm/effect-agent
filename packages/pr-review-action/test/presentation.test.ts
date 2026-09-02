@@ -40,6 +40,7 @@ describe("review presentation", () => {
       title: "Authorization is not enforced",
       body: "The new route accepts requests without checking the caller.",
     });
+
     const body = renderReviewBody({
       report: ReviewReport.make({
         summary: "The change has two actionable defects.",
@@ -233,6 +234,7 @@ The new route accepts requests without checking the caller.
     expect(render(true, 2)).not.toContain("✅ None");
     for (const exhausted of ["tokens", "turns", "tool-calls", "cost"] as const) {
       const body = render(false, 0, exhausted);
+
       expect(body).toContain(`Review stopped at the ${exhausted} budget`);
       expect(body).not.toContain("No actionable findings");
       expect(body).not.toContain("✅ None");
@@ -250,6 +252,7 @@ The new route accepts requests without checking the caller.
         body: "`".repeat(2_000),
       }),
     );
+
     const body = renderReviewBody({
       report: ReviewReport.make({ summary: "x".repeat(6_000), findings }),
       automaticReviewsRemaining: 1,
@@ -280,6 +283,7 @@ The new route accepts requests without checking the caller.
 
   it("contains closing HTML and long backtick runs in the copyable plaintext fence", () => {
     const backticks = "`".repeat(1_900);
+
     const body = renderReviewBody({
       report: ReviewReport.make({
         summary: "One finding could contain markup.",
@@ -308,6 +312,7 @@ The new route accepts requests without checking the caller.
       outputTokens: 50,
       headRevision,
     });
+
     const findingsSection = body.slice(body.indexOf("<details open>"), body.indexOf("<sub>"));
     const openingFence = findingsSection.split("\n").find((line) => line.startsWith("```"));
 

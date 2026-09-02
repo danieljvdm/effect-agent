@@ -35,9 +35,11 @@ const storedTextBytes = (value: string): number => new TextEncoder().encode(valu
 
 const chunked = <A>(values: ReadonlyArray<A>, size: number): Array<ReadonlyArray<A>> => {
   const chunks: Array<ReadonlyArray<A>> = [];
+
   for (let index = 0; index < values.length; index += size) {
     chunks.push(values.slice(index, index + size));
   }
+
   return chunks;
 };
 
@@ -244,6 +246,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     WHERE type = 'table'
       AND name = 'effect_agent_meta'
   `.pipe(Effect.mapError(storageError("read storage version table")));
+
   const metaTables = yield* decodeRows(
     Schema.Array(DoNameRow),
     "sqlite_master",
@@ -259,6 +262,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         AND name LIKE 'effect_agent_%'
       ORDER BY name
     `.pipe(Effect.mapError(storageError("inspect unversioned storage")));
+
     const existing = yield* decodeRows(
       Schema.Array(DoNameRow),
       "sqlite_master",
@@ -293,6 +297,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       FROM effect_agent_meta
       WHERE key = 'storage_version'
     `.pipe(Effect.mapError(storageError("read storage version")));
+
     const version = yield* decodeSingleRow(
       Schema.Array(DoMetaRow),
       "effect_agent_meta",
@@ -305,6 +310,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     // rather than being decoded incorrectly (DEPLOY-008).
     if (version.value !== String(CurrentDoStorageVersion)) {
       const actualVersion = Number.parseInt(version.value, 10);
+
       return yield* DoStorageCompatibilityError.make({
         actualVersion: Number.isSafeInteger(actualVersion) ? actualVersion : -1,
         supportedVersion: CurrentDoStorageVersion,
@@ -323,12 +329,14 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       AND name IN ${sql.in([...REQUIRED_TABLES])}
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
+
   const required = yield* decodeRows(
     Schema.Array(DoNameRow),
     "sqlite_master",
     "required_tables",
     requiredRows,
   );
+
   if (required.length !== REQUIRED_TABLES.length) {
     return yield* DoStorageCompatibilityError.make({
       actualVersion: CurrentDoStorageVersion,
@@ -352,6 +360,7 @@ const makeJournal = (
     value: string,
   ): Effect.Effect<void, DoValueBoundExceeded> => {
     const actualBytes = storedTextBytes(value);
+
     return actualBytes > maxStoredValueBytes
       ? Effect.fail(
           DoValueBoundExceeded.make({
@@ -411,12 +420,14 @@ const makeJournal = (
           FROM effect_agent_threads
           WHERE thread_id = ${threadId}
         `.pipe(Effect.mapError(storageError("read materialized thread")));
+
         const existing = yield* decodeRows(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
           threadId,
           existingRows,
         );
+
         if (existing.length > 1) {
           return yield* DoStorageCorruptionError.make({
             table: "effect_agent_threads",
@@ -440,6 +451,7 @@ const makeJournal = (
               ${producerEpoch}
             )
           `.pipe(Effect.mapError(storageError("materialize thread")));
+
           return;
         }
         if (producerEpoch < existing[0].producer_epoch) {
@@ -471,6 +483,7 @@ const makeJournal = (
       FROM effect_agent_threads
       WHERE thread_id = ${threadId}
     `.pipe(Effect.mapError(storageError("read thread")));
+
     return yield* decodeRows(Schema.Array(ThreadRow), "effect_agent_threads", threadId, rows);
   });
 
@@ -496,9 +509,11 @@ const makeJournal = (
       (record) => checkValueBound("append canonical record", record.recordJson),
       { discard: true },
     );
+
     return yield* withWriteTransaction("append transaction")(
       Effect.gen(function* () {
         const recordIds = request.records.map((record) => record.recordId);
+
         if (new Set(recordIds).size !== recordIds.length) {
           return yield* DoAppendConflict.make({
             message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
@@ -516,6 +531,7 @@ const makeJournal = (
           FROM effect_agent_threads
           WHERE thread_id = ${request.threadId}
         `.pipe(Effect.mapError(storageError("read append tail")));
+
         const thread = yield* decodeSingleRow(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
@@ -544,6 +560,7 @@ const makeJournal = (
           WHERE thread_id = ${request.threadId}
             AND batch_id = ${request.batchId}
         `.pipe(Effect.mapError(storageError("read idempotent batch")));
+
         const batches = yield* decodeRows(
           Schema.Array(BatchRow),
           "effect_agent_canonical_batches",
@@ -560,12 +577,14 @@ const makeJournal = (
         }
         if (batches.length === 1) {
           const existing = batches[0];
+
           if (existing.batch_digest !== request.batchDigest) {
             return yield* DoAppendConflict.make({
               message: `Batch ${request.batchId} already exists with different canonical content.`,
               reason: "batch-digest",
             });
           }
+
           return RawAppendResult.make({
             firstSequence: existing.first_sequence,
             lastSequence: existing.last_sequence,
@@ -597,6 +616,7 @@ const makeJournal = (
         // Chunked to respect the Durable Object platform's 100-bound-parameter statement
         // limit: a batch may carry up to 256 records.
         const existingRecords: Array<RecordRow> = [];
+
         for (const chunk of chunked(recordIds, MAX_BOUND_PARAMETERS - 10)) {
           const existingRecordRows = yield* sql<Record<string, unknown>>`
             SELECT
@@ -610,6 +630,7 @@ const makeJournal = (
               AND record_id IN ${sql.in([...chunk])}
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("check canonical record identities")));
+
           existingRecords.push(
             ...(yield* decodeRows(
               Schema.Array(RecordRow),
@@ -637,6 +658,7 @@ const makeJournal = (
             }),
           ),
         );
+
         const lastSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
           firstSequence + request.records.length - 1,
         ).pipe(
@@ -728,6 +750,7 @@ const makeJournal = (
       ORDER BY sequence
       LIMIT ${request.limit}
     `.pipe(Effect.mapError(storageError("read canonical records")));
+
     return yield* decodeRows(
       Schema.Array(RecordRow),
       "effect_agent_canonical_records",
@@ -750,13 +773,16 @@ const makeJournal = (
             FROM effect_agent_threads
             WHERE thread_id = ${threadId}
           `.pipe(Effect.mapError(storageError("export thread")));
+
           const thread = yield* decodeSingleRow(
             Schema.Array(ThreadRow),
             "effect_agent_threads",
             threadId,
             threadRows,
           );
+
           yield* failpoint("export:after-thread-read");
+
           const batchRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -770,6 +796,7 @@ const makeJournal = (
             WHERE thread_id = ${threadId}
             ORDER BY first_sequence
           `.pipe(Effect.mapError(storageError("export canonical batches")));
+
           const recordRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -781,6 +808,7 @@ const makeJournal = (
             WHERE thread_id = ${threadId}
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("export canonical records")));
+
           const checkpointRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -844,12 +872,14 @@ const makeJournal = (
           FROM effect_agent_threads
           WHERE thread_id = ${checkpoint.threadId}
         `.pipe(Effect.mapError(storageError("read checkpoint tail")));
+
         const thread = yield* decodeSingleRow(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
           checkpoint.threadId,
           threadRows,
         );
+
         if (checkpoint.throughSequence > thread.tail_sequence) {
           return yield* DoCheckpointConflict.make({
             message:
@@ -868,12 +898,14 @@ const makeJournal = (
           WHERE thread_id = ${checkpoint.threadId}
             AND through_sequence = ${checkpoint.throughSequence}
         `.pipe(Effect.mapError(storageError("read idempotent checkpoint")));
+
         const existing = yield* decodeRows(
           Schema.Array(CheckpointRow),
           "effect_agent_checkpoints",
           `${checkpoint.threadId}/${checkpoint.throughSequence}`,
           checkpointRows,
         );
+
         if (existing.length > 1) {
           return yield* DoStorageCorruptionError.make({
             table: "effect_agent_checkpoints",
@@ -890,6 +922,7 @@ const makeJournal = (
               message: "A different checkpoint already exists at this canonical sequence.",
             });
           }
+
           return;
         }
 
@@ -926,6 +959,7 @@ const makeJournal = (
       ORDER BY through_sequence DESC
       LIMIT 1
     `.pipe(Effect.mapError(storageError("load checkpoint")));
+
     return yield* decodeRows(
       Schema.Array(CheckpointRow),
       "effect_agent_checkpoints",
@@ -940,12 +974,14 @@ const makeJournal = (
   ) {
     if (sequence === 0) {
       const threads = yield* getThread(threadId);
+
       return threads.length === 0
         ? []
         : [threads[0].tail_sequence === 0 ? threads[0].tail_digest : undefined].filter(
             (value): value is string => value !== undefined,
           );
     }
+
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
         thread_id,
@@ -959,12 +995,14 @@ const makeJournal = (
       WHERE thread_id = ${threadId}
         AND last_sequence = ${sequence}
     `.pipe(Effect.mapError(storageError("read canonical digest at sequence")));
+
     const batches = yield* decodeRows(
       Schema.Array(BatchRow),
       "effect_agent_canonical_batches",
       `${threadId}/${sequence}`,
       rows,
     );
+
     return batches.map((batch) => batch.tail_digest);
   });
 
@@ -982,6 +1020,7 @@ const makeJournal = (
             FROM effect_agent_threads
             ORDER BY thread_id
           `.pipe(Effect.mapError(storageError("scan threads")));
+
           const batches = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -994,6 +1033,7 @@ const makeJournal = (
             FROM effect_agent_canonical_batches
             ORDER BY thread_id, first_sequence
           `.pipe(Effect.mapError(storageError("scan canonical batches")));
+
           const records = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -1004,6 +1044,7 @@ const makeJournal = (
             FROM effect_agent_canonical_records
             ORDER BY thread_id, sequence
           `.pipe(Effect.mapError(storageError("scan canonical records")));
+
           const checkpoints = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -1013,6 +1054,7 @@ const makeJournal = (
             FROM effect_agent_checkpoints
             ORDER BY thread_id, through_sequence
           `.pipe(Effect.mapError(storageError("scan checkpoints")));
+
           return {
             threads: yield* decodeRows(
               Schema.Array(ThreadRow),

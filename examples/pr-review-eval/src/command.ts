@@ -18,6 +18,7 @@ import { runEvalSuite, selectEvalCases } from "./runner.ts";
 const casesFile = Flag.file("cases").pipe(
   Flag.withDescription("Path to one schema-encoded eval suite JSON file."),
 );
+
 const selectedCases = Flag.string("case").pipe(
   Flag.withDescription("Select one case ID. Repeat this flag to select several cases."),
   Flag.atMost(50),
@@ -52,6 +53,7 @@ const validateCommand = Command.make(
     const suite = yield* loadEvalSuite(shared.casesFile);
     const selected = yield* decodeSelectedCases(options.selectedCases);
     const cases = yield* selectEvalCases(suite, selected);
+
     yield* Console.log(`Validated ${cases.length} eval case(s).`);
   }),
 ).pipe(
@@ -61,20 +63,24 @@ const validateCommand = Command.make(
 const output = Flag.file("output").pipe(
   Flag.withDescription("New JSONL file to receive one observation per trial."),
 );
+
 const trials = Flag.integer("trials").pipe(
   Flag.withDefault(2),
   Flag.withSchema(EvalTrialCount),
   Flag.withDescription("Independent trials per case and variant, between 1 and 20."),
 );
+
 const concurrency = Flag.integer("concurrency").pipe(
   Flag.withDefault(1),
   Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 }))),
   Flag.withDescription("Maximum concurrent reviewer invocations, between 1 and 4."),
 );
+
 const guidance = Flag.file("guidance").pipe(
   Flag.withDescription("Optional repository guidance file, capped at 20,000 characters."),
   Flag.optional,
 );
+
 const variantId = Flag.string("variant").pipe(
   Flag.withDefault("current"),
   Flag.withSchema(EvalVariantId),
@@ -86,6 +92,7 @@ const runCommand = Command.make(
   { concurrency, guidance, output, selectedCases, trials, variantId },
   Effect.fn("PrReviewEval.runCommand")(function* (options) {
     const liveGate = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault(""));
+
     if (liveGate !== "1") {
       return yield* EvalConfigurationError.make({
         message: "Set EFFECT_AGENT_LIVE=1 to authorize live model evaluation",
@@ -94,8 +101,10 @@ const runCommand = Command.make(
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
     const caseIds = yield* decodeSelectedCases(options.selectedCases);
+
     yield* selectEvalCases(suite, caseIds);
     const fs = yield* FileSystem.FileSystem;
+
     const guidanceText = yield* Option.match(options.guidance, {
       onNone: () => Effect.succeed(undefined),
       onSome: (path) =>
@@ -110,18 +119,22 @@ const runCommand = Command.make(
               }),
             ),
           );
+
           if (text.length > 20_000) {
             return yield* EvalConfigurationError.make({
               message: "Repository guidance exceeds the 20,000 character limit",
             });
           }
+
           return text;
         }),
     });
+
     const variant = yield* makeCurrentOpenAiVariant({
       id: options.variantId,
       ...(guidanceText === undefined ? {} : { guidance: guidanceText }),
     });
+
     const count = yield* writeObservations(
       options.output,
       runEvalSuite(suite, [variant], {
@@ -130,6 +143,7 @@ const runCommand = Command.make(
         caseIds,
       }),
     ).pipe(Effect.provide(openAiClientLayer));
+
     yield* Console.log(`Wrote ${count} eval observation(s) to ${options.output}.`);
   }),
 ).pipe(
@@ -147,13 +161,16 @@ const observationFiles = Flag.file("observations").pipe(
   Flag.withDescription("JSONL observations; repeat once per baseline or candidate."),
   Flag.between(1, 8),
 );
+
 const judgmentsFile = Flag.file("judgments").pipe(
   Flag.withDescription("Optional schema-encoded judgment set with named adjudicators."),
   Flag.optional,
 );
+
 const reportOutput = Flag.file("output").pipe(
   Flag.withDescription("New JSON file to receive the deterministic quality report."),
 );
+
 const reportTrials = Flag.integer("trials").pipe(
   Flag.withSchema(EvalTrialCount),
   Flag.withDescription("Expected trials per case and variant; must match the original run."),
@@ -166,21 +183,26 @@ const reportCommand = Command.make(
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
     const caseIds = yield* decodeSelectedCases(options.selectedCases);
+
     const selectedSuite = EvalSuite.make({
       ...suite,
       cases: yield* selectEvalCases(suite, caseIds),
     });
+
     const observations = yield* loadObservationFiles(options.observationFiles);
+
     const judgments = yield* Option.match(options.judgmentsFile, {
       onNone: () => Effect.succeed(undefined),
       onSome: loadJudgmentSet,
     });
+
     const report = yield* makeQualityReport(
       selectedSuite,
       observations,
       options.reportTrials,
       judgments,
     );
+
     yield* writeQualityReport(options.reportOutput, report);
     yield* Console.log(renderQualityReport(report));
     if (judgments === undefined) {

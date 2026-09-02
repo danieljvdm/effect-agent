@@ -49,6 +49,7 @@ export const scheduleDailyReport = Effect.fn("Example.scheduleDailyReport")(func
   options: Omit<ScheduleCreateOptions, "timing">,
 ) {
   const scheduling = yield* Scheduling;
+
   return yield* scheduling.create(agent, input, {
     ...options,
     timing: { _tag: "Cron", expression: "0 8 * * *", timeZone: "UTC" },

@@ -59,6 +59,7 @@ const partition = SourcePartition.make({
   tenantId: "node-subscription-tenant",
   address: "github:repository:42",
 });
+
 const principal = Schema.decodeSync(Principal)("node-subscription-principal");
 const threadId = Schema.decodeSync(ThreadId)("node-subscription-thread");
 const digest = Schema.decodeSync(Digest)("b".repeat(64));
@@ -150,7 +151,9 @@ const storeLayer = (filename: string, probe?: DeadlineDefectProbe) => {
   const sqliteStore = subscriptionStoreLayer(partition).pipe(
     Layer.provide(sqliteInfrastructure(filename)),
   );
+
   if (probe === undefined) return sqliteStore;
+
   return Layer.effect(
     SubscriptionStore,
     Effect.map(SubscriptionStore, (store) =>
@@ -190,6 +193,7 @@ const subscriptionLayer = (
     authorizerLayer,
     sourceLayer(calls, completed),
   );
+
   return NodeSubscriptions.layer({ limits }).pipe(Layer.provideMerge(dependencies));
 };
 
@@ -199,9 +203,11 @@ const withTemporaryDatabase = <A, E>(
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
       const directory = yield* fs.makeTempDirectoryScoped({
         prefix: "effect-agent-node-subscription-",
       });
+
       return yield* use(`${directory}/runtime.sqlite`);
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
@@ -231,15 +237,19 @@ const waitForDelivery = (
         ownerId: scope.ownerId,
         subscriptionId: "workflow-completion",
       });
+
       const item = page.items[0];
+
       if (item !== undefined && predicate(item)) return item;
       yield* TestClock.adjust(10);
       yield* Effect.yieldNow;
     }
+
     return yield* Effect.die("Timed out waiting for subscription delivery");
   });
 
 const usage = { inputTokens: {}, outputTokens: {} };
+
 const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => [
   { type: "text-start", id: "answer" },
   { type: "text-delta", id: "answer", delta: text },
@@ -272,6 +282,7 @@ const makeInitialAgent = Effect.sync(() => {
       }),
     ),
   );
+
   return Agent.withModel(initialAgentDefinition, model);
 });
 
@@ -286,10 +297,13 @@ it.effect(
           const pending = yield* Ref.make(true);
           const attempts = yield* Ref.make(0);
           const driverScope = yield* Scope.make();
+
           yield* Effect.addFinalizer(() => Scope.close(driverScope, Exit.void));
+
           const context = yield* Layer.build(
             subscriptionLayer(filename, calls, completed, undefined, { pending, attempts }),
           ).pipe(Scope.provide(driverScope));
+
           const subscriptions = Context.get(context, Subscriptions);
 
           for (let poll = 0; poll < 128 && (yield* Ref.get(attempts)) === 0; poll += 1) {
@@ -313,6 +327,7 @@ it.effect(
           yield* Scope.close(driverScope, Exit.void);
           const callsAfterClose = yield* Ref.get(calls);
           const attemptsAfterClose = yield* Ref.get(attempts);
+
           yield* TestClock.adjust(100);
           yield* Effect.yieldNow;
           expect(yield* Ref.get(calls)).toBe(callsAfterClose);
@@ -332,23 +347,29 @@ it.effect(
           const calls = yield* Ref.make(0);
           const completed = yield* Ref.make(false);
           const firstScope = yield* Scope.make();
+
           yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void));
+
           const firstContext = yield* Layer.build(
             subscriptionLayer(filename, calls, completed),
           ).pipe(Scope.provide(firstScope));
+
           const firstSubscriptions = Context.get(firstContext, Subscriptions);
           const firstHost = Context.get(firstContext, NodeDurableHost);
           const firstRuntime = Context.get(firstContext, DurableAgentRuntime);
 
           yield* subscribe(firstSubscriptions);
           const initialAgent = yield* makeInitialAgent;
+
           const initialReceipt = yield* firstHost.submit(
             initialAgent,
             { question: "is the workflow registered?" },
             { threadId, principal, idempotencyKey: initialAdmissionKey, definitions },
           );
+
           yield* firstRuntime.processThread(initialAgent, threadId);
           const initialSettlement = yield* firstHost.awaitSettlement(initialReceipt);
+
           expect(initialSettlement.outcome).toBe("completed");
 
           for (let attempt = 0; attempt < 128 && (yield* Ref.get(calls)) === 0; attempt += 1) {
@@ -360,13 +381,16 @@ it.effect(
           yield* Scope.close(firstScope, Exit.void);
           expect(yield* firstHost.admissionOpen).toBe(false);
           const callsAfterClose = yield* Ref.get(calls);
+
           yield* TestClock.adjust(100);
           yield* Effect.yieldNow;
           expect(yield* Ref.get(calls)).toBe(callsAfterClose);
 
           yield* Ref.set(completed, true);
           const secondScope = yield* Scope.make();
+
           yield* Effect.addFinalizer(() => Scope.close(secondScope, Exit.void));
+
           const secondContext = yield* Layer.build(
             subscriptionLayer(filename, calls, completed, (location) =>
               location === "submit:after-admit"
@@ -374,7 +398,9 @@ it.effect(
                 : Effect.void,
             ),
           ).pipe(Scope.provide(secondScope));
+
           const secondSubscriptions = Context.get(secondContext, Subscriptions);
+
           yield* waitForDelivery(
             secondSubscriptions,
             (delivery) => delivery.receipt === null && delivery.retry.attempts > 0,
@@ -382,22 +408,29 @@ it.effect(
           yield* Scope.close(secondScope, Exit.void);
 
           const thirdScope = yield* Scope.make();
+
           yield* Effect.addFinalizer(() => Scope.close(thirdScope, Exit.void));
+
           const thirdContext = yield* Layer.build(
             subscriptionLayer(filename, calls, completed),
           ).pipe(Scope.provide(thirdScope));
+
           const thirdSubscriptions = Context.get(thirdContext, Subscriptions);
           const ledger = Context.get(thirdContext, SubmissionLedger);
           const store = Context.get(thirdContext, SubscriptionStore);
+
           const delivered = yield* waitForDelivery(
             thirdSubscriptions,
             (delivery) => delivery.receipt !== null,
           );
+
           expect(delivered.receipt?.threadId).toBe(threadId);
 
           const delivery = yield* store.delivery(delivered.key);
+
           if (delivery === null)
             return yield* Effect.die("Expected retained subscription delivery");
+
           const admitted = yield* ledger.lookup(
             SubmissionLookupByKey.make({
               threadId,
@@ -405,6 +438,7 @@ it.effect(
               idempotencyKey: delivery.admissionKey,
             }),
           );
+
           expect(Option.isSome(admitted)).toBe(true);
 
           yield* Scope.close(thirdScope, Exit.void);

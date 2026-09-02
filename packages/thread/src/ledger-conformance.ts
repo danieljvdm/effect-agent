@@ -124,11 +124,13 @@ const OTHER_PRINCIPAL = Schema.decodeSync(Principal)("principal-ledger-conforman
 const CONFORMANCE_AGENT = Schema.decodeSync(AgentId)("agent-ledger-conformance");
 const CONFORMANCE_DEPLOYMENT = Schema.decodeSync(DeploymentId)("deployment-ledger-conformance");
 const CONFORMANCE_DEFINITION_DIGEST = Schema.decodeSync(Digest)("d".repeat(64));
+
 const CONFORMANCE_DIGESTS = DefinitionDigests.make({
   agent: CONFORMANCE_DEFINITION_DIGEST,
   model: CONFORMANCE_DEFINITION_DIGEST,
   tools: CONFORMANCE_DEFINITION_DIGEST,
 });
+
 const CONFORMANCE_CREATED_AT = DateTime.toUtc(DateTime.makeUnsafe(1));
 const PRODUCER_A = Schema.decodeSync(ProducerId)("producer-ledger-conformance-a");
 const PRODUCER_B = Schema.decodeSync(ProducerId)("producer-ledger-conformance-b");
@@ -143,6 +145,7 @@ const admissionRequest = Effect.fn("SubmissionLedgerConformance.admissionRequest
   parentLinkage?: ParentLinkage,
 ) {
   const inputDigest = yield* digestJson(input);
+
   return AdmissionRequest.make({
     threadId,
     principal: CONFORMANCE_PRINCIPAL,
@@ -163,7 +166,9 @@ const admitReady = Effect.fn("SubmissionLedgerConformance.admitReady")(function*
 ) {
   const ledger = yield* SubmissionLedger;
   const admitted = yield* ledger.admit(yield* admissionRequest(threadId, idempotencyKey, input));
+
   yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+
   return admitted;
 });
 
@@ -172,6 +177,7 @@ const claimLane = Effect.fn("SubmissionLedgerConformance.claimLane")(function* (
   producerId: ProducerId,
 ) {
   const ledger = yield* SubmissionLedger;
+
   return yield* ledger.claim(ClaimRequest.make({ threadId, producerId }));
 });
 
@@ -179,6 +185,7 @@ const lookupById = Effect.fn("SubmissionLedgerConformance.lookupById")(function*
   submissionId: SubmissionId,
 ) {
   const ledger = yield* SubmissionLedger;
+
   return yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
 });
 
@@ -186,6 +193,7 @@ const recoverySnapshot = Effect.fn("SubmissionLedgerConformance.recoverySnapshot
   submissionId: SubmissionId,
 ) {
   const ledger = yield* SubmissionLedger;
+
   return yield* ledger.loadRecoverySnapshot(RecoverySnapshotRequest.make({ submissionId }));
 });
 
@@ -219,6 +227,7 @@ type ReservationOptions = ReservationIdentity &
 const settlementReservation = Effect.fn("SubmissionLedgerConformance.settlementReservation")(
   function* (options: ReservationOptions) {
     const settlementId = submissionSettlementId(options.submissionId);
+
     const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
       SubmissionSettled.make({
         submissionId: options.submissionId,
@@ -228,6 +237,7 @@ const settlementReservation = Effect.fn("SubmissionLedgerConformance.settlementR
         ...(options.result === undefined ? {} : { result: options.result }),
       }),
     ).pipe(Effect.orDie);
+
     const record = RecordEnvelope.make({
       recordId: submissionSettlementRecordId(options.submissionId),
       family: "thread",
@@ -236,8 +246,10 @@ const settlementReservation = Effect.fn("SubmissionLedgerConformance.settlementR
       deploymentId: CONFORMANCE_DEPLOYMENT,
       payload,
     });
+
     const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie);
     const recordDigest = yield* digestJson(encoded);
+
     return SettlementReservation.make({
       submissionId: options.submissionId,
       ownershipToken: options.ownershipToken,
@@ -254,13 +266,16 @@ const settleClaimed = Effect.fn("SubmissionLedgerConformance.settleClaimed")(fun
   ownershipToken: OwnershipToken,
 ) {
   const ledger = yield* SubmissionLedger;
+
   const reservation = yield* settlementReservation({
     submissionId: admitted.submissionId,
     ownershipToken,
     receiptId: admitted.receiptId,
     outcome: "completed",
   });
+
   yield* ledger.reserveSettlement(reservation);
+
   return yield* ledger.finalizeSettlement(
     SettlementFinalization.make({
       submissionId: admitted.submissionId,
@@ -275,6 +290,7 @@ const advancePastLease = Effect.fn("SubmissionLedgerConformance.advancePastLease
 ) {
   const nowMillis = yield* Clock.currentTimeMillis;
   const waitMillis = Math.max(0, DateTime.toEpochMillis(leaseExpiresAt) - nowMillis) + 1;
+
   yield* TestClock.adjust(Duration.millis(waitMillis));
 });
 
@@ -332,7 +348,9 @@ const admissionIdempotency = conformanceCase(
       const request = yield* admissionRequest(threadId, "admission-key-1", {
         city: "Lisbon",
       });
+
       const first = yield* ledger.admit(request);
+
       yield* ensure(!first.replayed, "The first admission of a key must not report replayed");
       yield* ensure(first.state === "admitted", "A fresh admission must start in state admitted");
 
@@ -340,12 +358,14 @@ const admissionIdempotency = conformanceCase(
         "lookup immediately after admission",
         yield* lookupById(first.submissionId),
       );
+
       yield* ensure(
         afterAdmit.inputDigest === request.inputDigest && afterAdmit.state === "admitted",
         "Admission must be readable with strong consistency immediately after the write",
       );
 
       const replayed = yield* ledger.admit(request);
+
       yield* ensure(
         replayed.replayed &&
           replayed.submissionId === first.submissionId &&
@@ -357,10 +377,12 @@ const admissionIdempotency = conformanceCase(
       const conflicting = yield* admissionRequest(threadId, "admission-key-1", {
         city: "Porto",
       });
+
       const conflict = yield* expectFailure(
         "an admission reusing the key with different canonical input",
         ledger.admit(conflicting),
       );
+
       yield* ensure(
         isAdmissionConflict(conflict) &&
           conflict.existingInputDigest === request.inputDigest &&
@@ -370,16 +392,19 @@ const admissionIdempotency = conformanceCase(
 
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: first.submissionId }));
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: first.submissionId }));
+
       const ready = yield* expectSome(
         "lookup after readiness",
         yield* lookupById(first.submissionId),
       );
+
       yield* ensure(
         ready.state === "ready" && ready.readyAt !== undefined,
         "markReady must be idempotent and record readiness exactly once",
       );
 
       const retryAfterReady = yield* ledger.admit(request);
+
       yield* ensure(
         retryAfterReady.replayed && retryAfterReady.receiptId === first.receiptId,
         "A client retry after readiness must return the original Receipt",
@@ -388,6 +413,7 @@ const admissionIdempotency = conformanceCase(
       const second = yield* ledger.admit(
         yield* admissionRequest(threadId, "admission-key-2", { city: "Faro" }),
       );
+
       yield* ensure(
         second.submissionId !== first.submissionId && second.queueSequence !== first.queueSequence,
         "A different key on the same lane must mint fresh identities and a fresh queue sequence",
@@ -412,6 +438,7 @@ const crossPrincipalAdmissionScoping = conformanceCase(
       const mineRequest = yield* admissionRequest(threadId, "shared-key-1", {
         owner: "mine",
       });
+
       const mine = yield* ledger.admit(mineRequest);
 
       // A DIFFERENT principal admits the SAME (thread, key) with different canonical input.
@@ -427,7 +454,9 @@ const crossPrincipalAdmissionScoping = conformanceCase(
         inputPayload: { owner: "theirs" },
         inputDigest: yield* digestJson({ owner: "theirs" }),
       });
+
       const theirs = yield* ledger.admit(theirsRequest);
+
       yield* ensure(
         !theirs.replayed &&
           theirs.submissionId !== mine.submissionId &&
@@ -438,6 +467,7 @@ const crossPrincipalAdmissionScoping = conformanceCase(
 
       // The first principal's own replay is unaffected by the second principal's admission.
       const mineReplay = yield* ledger.admit(mineRequest);
+
       yield* ensure(
         mineReplay.replayed && mineReplay.submissionId === mine.submissionId,
         "The original principal's replay must still resolve to its own Submission after the other principal admitted",
@@ -455,6 +485,7 @@ const crossPrincipalAdmissionScoping = conformanceCase(
           }),
         ),
       );
+
       const theirsByKey = yield* expectSome(
         "the second principal's scoped lookup",
         yield* ledger.lookup(
@@ -465,6 +496,7 @@ const crossPrincipalAdmissionScoping = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         mineByKey.submissionId === mine.submissionId &&
           theirsByKey.submissionId === theirs.submissionId &&
@@ -486,15 +518,18 @@ const concurrentAdmissionFifo = conformanceCase(
         yield* admissionRequest(threadId, "fifo-key-1", { step: 1 }),
         yield* admissionRequest(threadId, "fifo-key-2", { step: 2 }),
       ];
+
       const admitted = yield* Effect.all(
         requests.map((request) => ledger.admit(request)),
         { concurrency: "unbounded" },
       );
 
       const duplicate = yield* admissionRequest(threadId, "fifo-key-dup", { step: 3 });
+
       const duplicated = yield* Effect.all([ledger.admit(duplicate), ledger.admit(duplicate)], {
         concurrency: "unbounded",
       });
+
       yield* ensure(
         duplicated[0].submissionId === duplicated[1].submissionId &&
           duplicated[0].receiptId === duplicated[1].receiptId &&
@@ -507,6 +542,7 @@ const concurrentAdmissionFifo = conformanceCase(
       );
 
       const lane = [...admitted, duplicated[0]];
+
       yield* ensure(
         new Set(lane.map((result) => result.queueSequence)).size === lane.length,
         "Concurrent admissions on one lane must allocate distinct queue sequences",
@@ -523,11 +559,13 @@ const concurrentAdmissionFifo = conformanceCase(
       );
 
       const expectedOrder = [...lane].sort((a, b) => a.queueSequence - b.queueSequence);
+
       for (const expected of expectedOrder) {
         const claim = yield* expectSome(
           `a claim while ${expected.submissionId} heads the lane`,
           yield* claimLane(threadId, PRODUCER_A),
         );
+
         yield* ensure(
           claim.submissionId === expected.submissionId,
           "Claims must deliver Submissions in ascending queue-sequence order",
@@ -546,6 +584,7 @@ const fifoHeadClaim = conformanceCase(
   ({ ensure, expectSome }) =>
     Effect.gen(function* () {
       const emptyLane = decodeThreadId("ledger-conformance-empty");
+
       yield* ensure(
         Option.isNone(yield* claimLane(emptyLane, PRODUCER_A)),
         "Claiming a lane with no admitted work must return none",
@@ -554,6 +593,7 @@ const fifoHeadClaim = conformanceCase(
       const threadId = decodeThreadId("ledger-conformance-head");
       const first = yield* admitReady(threadId, "head-key-1", { order: 1 });
       const second = yield* admitReady(threadId, "head-key-2", { order: 2 });
+
       yield* ensure(
         second.queueSequence > first.queueSequence,
         "Sequential admissions must allocate increasing queue sequences",
@@ -563,14 +603,17 @@ const fifoHeadClaim = conformanceCase(
         "the first claim on the lane",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       yield* ensure(
         headClaim.submissionId === first.submissionId,
         "A claim must take the lowest unsettled queue sequence, never later work",
       );
+
       const running = yield* expectSome(
         "lookup of the claimed head",
         yield* lookupById(first.submissionId),
       );
+
       yield* ensure(
         running.state === "running",
         "Claiming a ready head must transition it to running with strong read visibility",
@@ -581,10 +624,12 @@ const fifoHeadClaim = conformanceCase(
       );
 
       yield* settleClaimed(first, headClaim.ownershipToken);
+
       const nextClaim = yield* expectSome(
         "the claim after the head settled",
         yield* claimLane(threadId, PRODUCER_B),
       );
+
       yield* ensure(
         nextClaim.submissionId === second.submissionId,
         "Settling the head must make exactly the next queue sequence claimable",
@@ -613,28 +658,33 @@ const leaseExpiryReclaim = conformanceCase(
         "the initial claim",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       const renewal = yield* ledger.renewOwnership(
         RenewOwnershipRequest.make({
           submissionId: admitted.submissionId,
           ownershipToken: firstClaim.ownershipToken,
         }),
       );
+
       yield* ensure(
         DateTime.toEpochMillis(renewal.leaseExpiresAt) >=
           DateTime.toEpochMillis(firstClaim.leaseExpiresAt),
         "Renewal must never shorten the ownership lease",
       );
       const liveToken = renewal.ownershipToken;
+
       yield* ensure(
         Option.isNone(yield* claimLane(threadId, PRODUCER_B)),
         "A renewed live lease must keep the lane blocked for other owners",
       );
 
       yield* advancePastLease(renewal.leaseExpiresAt);
+
       const reclaim = yield* expectSome(
         "the reclaim after lease expiry",
         yield* claimLane(threadId, PRODUCER_B),
       );
+
       yield* ensure(
         reclaim.submissionId === admitted.submissionId &&
           reclaim.attemptId !== firstClaim.attemptId &&
@@ -655,10 +705,12 @@ const leaseExpiryReclaim = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(staleRenew) && staleRenew.actualEpoch === reclaim.producerEpoch,
         "A superseded token must fail renewal with the current epoch reported",
       );
+
       const staleRelease = yield* expectFailure(
         "releasing with the superseded token",
         ledger.releaseOwnership(
@@ -668,7 +720,9 @@ const leaseExpiryReclaim = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(isOwnershipLost(staleRelease), "A superseded token must not release the lane");
+
       const staleMark = yield* expectFailure(
         "marking input applied with the superseded token",
         ledger.markInputApplied(
@@ -680,25 +734,30 @@ const leaseExpiryReclaim = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(staleMark),
         "A superseded token must not mark canonical input applied",
       );
+
       const staleReservation = yield* settlementReservation({
         submissionId: admitted.submissionId,
         ownershipToken: liveToken,
         receiptId: admitted.receiptId,
         outcome: "completed",
       });
+
       const staleReserve = yield* expectFailure(
         "reserving a settlement with the superseded token",
         ledger.reserveSettlement(staleReservation),
       );
+
       yield* ensure(
         isOwnershipLost(staleReserve),
         "A superseded token must not reserve a settlement",
       );
       const afterStale = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         afterStale.reservation === undefined,
         "A fenced settlement reservation must leave no reservation behind",
@@ -713,17 +772,21 @@ const leaseExpiryReclaim = conformanceCase(
 
       const renewalLane = decodeThreadId("ledger-conformance-renewal");
       const renewalWork = yield* admitReady(renewalLane, "renewal-key-1", { work: "renewal" });
+
       const renewalClaim = yield* expectSome(
         "the claim on the renewal lane",
         yield* claimLane(renewalLane, PRODUCER_A),
       );
+
       yield* advancePastLease(renewalClaim.leaseExpiresAt);
+
       const lateRenewal = yield* ledger.renewOwnership(
         RenewOwnershipRequest.make({
           submissionId: renewalWork.submissionId,
           ownershipToken: renewalClaim.ownershipToken,
         }),
       );
+
       yield* ensure(
         DateTime.toEpochMillis(lateRenewal.leaseExpiresAt) >
           DateTime.toEpochMillis(renewalClaim.leaseExpiresAt),
@@ -744,6 +807,7 @@ const releaseMakesHeadClaimable = conformanceCase(
         "the initial claim",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       yield* ledger.releaseOwnership(
         ReleaseOwnershipRequest.make({
           submissionId: admitted.submissionId,
@@ -760,6 +824,7 @@ const releaseMakesHeadClaimable = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(releasedRenew),
         "A released token must no longer renew the lease",
@@ -769,11 +834,13 @@ const releaseMakesHeadClaimable = conformanceCase(
         "the claim immediately after release",
         yield* claimLane(threadId, PRODUCER_B),
       );
+
       yield* ensure(
         reclaim.submissionId === admitted.submissionId &&
           reclaim.producerEpoch > firstClaim.producerEpoch,
         "A released nonterminal head must be claimable immediately with a higher epoch",
       );
+
       const doubleRelease = yield* expectFailure(
         "releasing with the pre-release token after a new claim",
         ledger.releaseOwnership(
@@ -783,6 +850,7 @@ const releaseMakesHeadClaimable = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(doubleRelease),
         "A superseded token must not release the new Attempt's ownership",
@@ -798,6 +866,7 @@ const inputAppliedIdempotency = conformanceCase(
       const threadId = decodeThreadId("ledger-conformance-input");
       const ledger = yield* SubmissionLedger;
       const admitted = yield* admitReady(threadId, "input-key-1", { work: "input" });
+
       const claim = yield* expectSome(
         "the claim before input apply",
         yield* claimLane(threadId, PRODUCER_A),
@@ -809,11 +878,14 @@ const inputAppliedIdempotency = conformanceCase(
         recordId: submissionInputRecordId(admitted.submissionId),
         sequence: decodeSequence(2),
       });
+
       yield* ledger.markInputApplied(marker);
+
       const applied = yield* expectSome(
         "lookup after marking input applied",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         applied.state === "input-applied",
         "Marking input applied must transition the Submission to input-applied",
@@ -821,6 +893,7 @@ const inputAppliedIdempotency = conformanceCase(
 
       yield* ledger.markInputApplied(marker);
       const snapshot = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         snapshot.inputApplied !== undefined &&
           snapshot.inputApplied.recordId === marker.recordId &&
@@ -838,6 +911,7 @@ const settlementLifecycle = conformanceCase(
       const threadId = decodeThreadId("ledger-conformance-settle");
       const ledger = yield* SubmissionLedger;
       const admitted = yield* admitReady(threadId, "settle-key-1", { work: "settle" });
+
       const claim = yield* expectSome(
         "the claim before terminalization",
         yield* claimLane(threadId, PRODUCER_A),
@@ -850,7 +924,9 @@ const settlementLifecycle = conformanceCase(
         outcome: "completed",
         result: { answer: 42 },
       });
+
       const reserved = yield* ledger.reserveSettlement(reservation);
+
       yield* ensure(
         !reserved.replayed &&
           reserved.settlementId === reservation.settlementId &&
@@ -858,16 +934,19 @@ const settlementLifecycle = conformanceCase(
           reserved.recordDigest === reservation.recordDigest,
         "The first reservation must commit the exact reserved record without replay",
       );
+
       const terminalizing = yield* expectSome(
         "lookup after reservation",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         terminalizing.state === "terminalizing",
         "Reserving a settlement must transition the Submission to terminalizing",
       );
 
       const replayedReservation = yield* ledger.reserveSettlement(reservation);
+
       yield* ensure(
         replayedReservation.replayed &&
           replayedReservation.recordDigest === reservation.recordDigest,
@@ -878,7 +957,9 @@ const settlementLifecycle = conformanceCase(
         submissionId: admitted.submissionId,
         settlementId: reservation.settlementId,
       });
+
       const settlement = yield* ledger.finalizeSettlement(finalization);
+
       yield* ensure(
         settlement.submissionId === admitted.submissionId &&
           settlement.settlementId === reservation.settlementId &&
@@ -886,10 +967,12 @@ const settlementLifecycle = conformanceCase(
           settlement.outcome === "completed",
         "Finalization must return the Settlement bound to the admission Receipt",
       );
+
       const settled = yield* expectSome(
         "lookup after finalization",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         settled.state === "settled" && settled.settledOutcome === "completed",
         "Finalization must settle the Submission with its recorded outcome",
@@ -897,6 +980,7 @@ const settlementLifecycle = conformanceCase(
 
       yield* TestClock.adjust("1 second");
       const retried = yield* ledger.finalizeSettlement(finalization);
+
       yield* ensure(
         retried.settlementId === settlement.settlementId &&
           retried.receiptId === settlement.receiptId &&
@@ -913,13 +997,16 @@ const settlementLifecycle = conformanceCase(
         errorTag: "ConformanceFailure",
         message: "The conformance Submission failed",
       } as const;
+
       const failedAdmission = yield* admitReady(threadId, "settle-key-2", {
         work: "fail",
       });
+
       const failedClaim = yield* expectSome(
         "the claim before failed terminalization",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       const failedReservation = yield* settlementReservation({
         submissionId: failedAdmission.submissionId,
         ownershipToken: failedClaim.ownershipToken,
@@ -927,13 +1014,16 @@ const settlementLifecycle = conformanceCase(
         outcome: "failed",
         result: failedDiagnostic,
       });
+
       yield* ledger.reserveSettlement(failedReservation);
+
       const failedSettlement = yield* ledger.finalizeSettlement(
         SettlementFinalization.make({
           submissionId: failedAdmission.submissionId,
           settlementId: failedReservation.settlementId,
         }),
       );
+
       yield* ensure(
         failedSettlement.outcome === "failed" &&
           failedSettlement.failure?.errorTag === failedDiagnostic.errorTag &&
@@ -941,12 +1031,14 @@ const settlementLifecycle = conformanceCase(
         "A failed finalization must return the exact bounded canonical diagnostic",
       );
       yield* TestClock.adjust("1 second");
+
       const replayedFailedSettlement = yield* ledger.finalizeSettlement(
         SettlementFinalization.make({
           submissionId: failedAdmission.submissionId,
           settlementId: failedReservation.settlementId,
         }),
       );
+
       yield* ensure(
         replayedFailedSettlement.failure?.errorTag === failedDiagnostic.errorTag &&
           replayedFailedSettlement.failure.message === failedDiagnostic.message &&
@@ -963,6 +1055,7 @@ const settlementConflicts = conformanceCase(
       const threadId = decodeThreadId("ledger-conformance-settle-conflict");
       const ledger = yield* SubmissionLedger;
       const admitted = yield* admitReady(threadId, "conflict-key-1", { work: "conflict" });
+
       const claim = yield* expectSome(
         "the claim before terminalization",
         yield* claimLane(threadId, PRODUCER_A),
@@ -975,6 +1068,7 @@ const settlementConflicts = conformanceCase(
         outcome: "completed",
         result: { attempt: 1 },
       });
+
       yield* ledger.reserveSettlement(reservation);
 
       const conflictingOutcome = yield* settlementReservation({
@@ -987,10 +1081,12 @@ const settlementConflicts = conformanceCase(
           message: "The conflicting conformance reservation failed",
         },
       });
+
       const outcomeConflict = yield* expectFailure(
         "reserving a different outcome for the same Submission",
         ledger.reserveSettlement(conflictingOutcome),
       );
+
       yield* ensure(
         isSettlementConflict(outcomeConflict) && outcomeConflict.existingOutcome === "completed",
         "A second reservation with a different outcome must conflict with the recorded outcome",
@@ -1003,10 +1099,12 @@ const settlementConflicts = conformanceCase(
         outcome: "completed",
         result: { attempt: 2 },
       });
+
       const contentConflict = yield* expectFailure(
         "reserving the same outcome with different canonical content",
         ledger.reserveSettlement(conflictingContent),
       );
+
       yield* ensure(
         isSettlementConflict(contentConflict) && contentConflict.existingOutcome === "completed",
         "A second reservation with different content must conflict even when outcomes match",
@@ -1023,6 +1121,7 @@ const settlementConflicts = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isSettlementConflict(wrongFinalization) &&
           wrongFinalization.existingOutcome === "completed",
@@ -1035,6 +1134,7 @@ const settlementConflicts = conformanceCase(
           settlementId: reservation.settlementId,
         }),
       );
+
       yield* ensure(
         settlement.outcome === "completed",
         "The originally reserved outcome must remain the one that settles",
@@ -1048,6 +1148,7 @@ const abortIdempotency = conformanceCase(
     Effect.gen(function* () {
       const threadId = decodeThreadId("ledger-conformance-abort");
       const ledger = yield* SubmissionLedger;
+
       const admitted = yield* ledger.admit(
         yield* admissionRequest(threadId, "abort-key-1", { work: "abort" }),
       );
@@ -1059,7 +1160,9 @@ const abortIdempotency = conformanceCase(
           reason: "first abort request",
         }),
       );
+
       yield* TestClock.adjust("1 second");
+
       const repeated = yield* ledger.requestAbort(
         AbortCommand.make({
           submissionId: admitted.submissionId,
@@ -1067,6 +1170,7 @@ const abortIdempotency = conformanceCase(
           reason: "second abort request",
         }),
       );
+
       yield* ensure(
         repeated.reason === intent.reason &&
           repeated.author === intent.author &&
@@ -1074,6 +1178,7 @@ const abortIdempotency = conformanceCase(
         "Repeating an abort command must return the recorded intent unchanged",
       );
       const snapshot = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         snapshot.abortIntent !== undefined && snapshot.abortIntent.reason === intent.reason,
         "The recovery snapshot must expose the recorded abort intent",
@@ -1081,11 +1186,14 @@ const abortIdempotency = conformanceCase(
 
       const settledLane = decodeThreadId("ledger-conformance-abort-settled");
       const settledWork = yield* admitReady(settledLane, "abort-key-2", { work: "settled" });
+
       const claim = yield* expectSome(
         "the claim on the settled lane",
         yield* claimLane(settledLane, PRODUCER_A),
       );
+
       yield* settleClaimed(settledWork, claim.ownershipToken);
+
       const terminalAbort = yield* expectFailure(
         "aborting a settled Submission",
         ledger.requestAbort(
@@ -1096,6 +1204,7 @@ const abortIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isSettlementConflict(terminalAbort) && terminalAbort.existingOutcome === "completed",
         "Abort must never rewrite a terminal outcome",
@@ -1120,22 +1229,28 @@ const scanNonterminalWorklist = conformanceCase(
         "the claim on the first head",
         yield* claimLane(laneA, PRODUCER_A),
       );
+
       yield* settleClaimed(first, firstClaim.ownershipToken);
       yield* expectSome("the claim on the second head", yield* claimLane(laneA, PRODUCER_A));
+
       const otherClaim = yield* expectSome(
         "the claim on the other lane",
         yield* claimLane(laneB, PRODUCER_A),
       );
+
       yield* settleClaimed(settledElsewhere, otherClaim.ownershipToken);
 
       const scanned = yield* ledger.scanNonterminal.pipe(Stream.runCollect);
+
       yield* ensure(
         scanned.every((snapshot) => snapshot.state !== "settled"),
         "scanNonterminal must never emit settled Submissions",
       );
+
       const mine = scanned.filter(
         (snapshot) => snapshot.threadId === laneA || snapshot.threadId === laneB,
       );
+
       yield* ensure(
         mine.length === 2 &&
           mine.at(0)?.submissionId === second.submissionId &&
@@ -1147,6 +1262,7 @@ const scanNonterminalWorklist = conformanceCase(
         "scanNonterminal snapshots must carry the current Submission states",
       );
       const start = scanned.findIndex((snapshot) => snapshot.submissionId === second.submissionId);
+
       yield* ensure(
         start >= 0 && scanned.at(start + 1)?.submissionId === third.submissionId,
         "One lane's unsettled Submissions must be contiguous in (thread, sequence) order",
@@ -1167,6 +1283,7 @@ const lookupByIdAndKey = conformanceCase(
         "lookup by Submission identity",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         byId.submissionId === admitted.submissionId &&
           byId.threadId === threadId &&
@@ -1193,6 +1310,7 @@ const lookupByIdAndKey = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         byKey.submissionId === admitted.submissionId,
         "Lookup by key must resolve to the same Submission as lookup by identity",
@@ -1230,6 +1348,7 @@ const lookupByIdAndKey = conformanceCase(
       );
 
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+
       const readyByKey = yield* expectSome(
         "lookup by key after readiness",
         yield* ledger.lookup(
@@ -1240,6 +1359,7 @@ const lookupByIdAndKey = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         readyByKey.state === "ready" && readyByKey.readyAt !== undefined,
         "Lookups must observe prior writes with strong consistency",
@@ -1256,6 +1376,7 @@ const recoverySnapshotConsistency = conformanceCase(
       const admitted = yield* admitReady(threadId, "recovery-key-1", { work: "recovery" });
 
       const initial = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         initial.submission.state === "ready" &&
           initial.ownership === undefined &&
@@ -1269,7 +1390,9 @@ const recoverySnapshotConsistency = conformanceCase(
         "the claim before snapshotting",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       const owned = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         owned.ownership !== undefined &&
           owned.ownership.attemptId === claim.attemptId &&
@@ -1285,6 +1408,7 @@ const recoverySnapshotConsistency = conformanceCase(
         recordId: submissionInputRecordId(admitted.submissionId),
         sequence: decodeSequence(3),
       });
+
       yield* ledger.markInputApplied(marker);
       yield* ledger.requestAbort(
         AbortCommand.make({
@@ -1293,15 +1417,18 @@ const recoverySnapshotConsistency = conformanceCase(
           reason: "abort during recovery case",
         }),
       );
+
       const reservation = yield* settlementReservation({
         submissionId: admitted.submissionId,
         ownershipToken: claim.ownershipToken,
         receiptId: admitted.receiptId,
         outcome: "aborted",
       });
+
       yield* ledger.reserveSettlement(reservation);
 
       const reserved = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         reserved.inputApplied !== undefined &&
           reserved.inputApplied.recordId === marker.recordId &&
@@ -1329,6 +1456,7 @@ const recoverySnapshotConsistency = conformanceCase(
         }),
       );
       const settled = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         settled.submission.state === "settled" &&
           settled.submission.settledOutcome === "aborted" &&
@@ -1349,13 +1477,16 @@ const joiningPrefixClaim = conformanceCase(
       const host = yield* admitReady(threadId, "join-prefix-host", { work: "host" });
       const second = yield* admitReady(threadId, "join-prefix-2", { queued: 2 });
       const third = yield* admitReady(threadId, "join-prefix-3", { queued: 3 });
+
       // Admitted but never marked ready: the gap that breaks the contiguous prefix.
       const fourth = yield* ledger.admit(
         yield* admissionRequest(threadId, "join-prefix-4", { queued: 4 }),
       );
+
       const fifth = yield* admitReady(threadId, "join-prefix-5", { queued: 5 });
 
       const hostClaim = yield* expectSome("the host claim", yield* claimLane(threadId, PRODUCER_A));
+
       yield* ensure(
         hostClaim.submissionId === host.submissionId,
         "The host must head the lane before joining later work",
@@ -1372,6 +1503,7 @@ const joiningPrefixClaim = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(foreign),
         "claimJoining must be fenced by the host's ownership token",
@@ -1385,6 +1517,7 @@ const joiningPrefixClaim = conformanceCase(
           maxCount: 1,
         }),
       );
+
       yield* ensure(
         first.length === 1 &&
           first[0].submissionId === second.submissionId &&
@@ -1401,6 +1534,7 @@ const joiningPrefixClaim = conformanceCase(
           maxCount: 8,
         }),
       );
+
       yield* ensure(
         rest.length === 1 && rest[0].submissionId === third.submissionId,
         "A repeated claim must skip already-joining rows and stop at the admitted gap",
@@ -1414,6 +1548,7 @@ const joiningPrefixClaim = conformanceCase(
           maxCount: 8,
         }),
       );
+
       yield* ensure(
         blocked.length === 0,
         "An admitted-not-ready row must break the contiguous prefix and hide later ready work",
@@ -1423,14 +1558,17 @@ const joiningPrefixClaim = conformanceCase(
         "lookup of a claimed joining Submission",
         yield* lookupById(second.submissionId),
       );
+
       const fourthState = yield* expectSome(
         "lookup of the gap Submission",
         yield* lookupById(fourth.submissionId),
       );
+
       const fifthState = yield* expectSome(
         "lookup of the ready Submission after the gap",
         yield* lookupById(fifth.submissionId),
       );
+
       yield* ensure(
         secondState.state === "joining" &&
           fourthState.state === "admitted" &&
@@ -1439,6 +1577,7 @@ const joiningPrefixClaim = conformanceCase(
       );
 
       const hostSnapshot = yield* recoverySnapshot(host.submissionId);
+
       yield* ensure(
         hostSnapshot.joins.length === 2 &&
           hostSnapshot.joins[0].submissionId === second.submissionId &&
@@ -1448,12 +1587,14 @@ const joiningPrefixClaim = conformanceCase(
         "The host recovery snapshot must expose the claimed prefix in queue order",
       );
       const joinedSide = yield* recoverySnapshot(second.submissionId);
+
       yield* ensure(
         joinedSide.hostSubmissionId === host.submissionId,
         "A joining Submission's recovery snapshot must expose its host linkage",
       );
 
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: fourth.submissionId }));
+
       const afterGap = yield* ledger.claimJoining(
         ClaimJoiningRequest.make({
           threadId,
@@ -1462,6 +1603,7 @@ const joiningPrefixClaim = conformanceCase(
           maxCount: 8,
         }),
       );
+
       yield* ensure(
         afterGap.length === 2 &&
           afterGap[0].submissionId === fourth.submissionId &&
@@ -1491,6 +1633,7 @@ const revertJoiningReturnsToReady = conformanceCase(
           maxCount: 8,
         }),
       );
+
       yield* ensure(claims.length === 2, "Both queued Submissions must join the host's prefix");
 
       // third's canonical input is appended; second's never is.
@@ -1504,20 +1647,24 @@ const revertJoiningReturnsToReady = conformanceCase(
       );
 
       yield* ledger.revertJoining(RevertJoiningRequest.make({ submissionId: second.submissionId }));
+
       const reverted = yield* expectSome(
         "lookup after revert",
         yield* lookupById(second.submissionId),
       );
+
       yield* ensure(
         reverted.state === "ready",
         "Reverting a pre-append joining Submission must return it to ready",
       );
       const revertedSnapshot = yield* recoverySnapshot(second.submissionId);
+
       yield* ensure(
         revertedSnapshot.hostSubmissionId === undefined,
         "Reverting must clear the host linkage",
       );
       const hostSnapshot = yield* recoverySnapshot(host.submissionId);
+
       yield* ensure(
         hostSnapshot.joins.length === 1 &&
           hostSnapshot.joins[0].submissionId === third.submissionId &&
@@ -1526,18 +1673,22 @@ const revertJoiningReturnsToReady = conformanceCase(
       );
 
       yield* ledger.revertJoining(RevertJoiningRequest.make({ submissionId: second.submissionId }));
+
       const stillReady = yield* expectSome(
         "lookup after repeating the revert",
         yield* lookupById(second.submissionId),
       );
+
       yield* ensure(stillReady.state === "ready", "Repeating revertJoining must be a no-op");
 
       // A post-append joined Submission must NOT revert (DUR-016: it reattaches instead).
       yield* ledger.revertJoining(RevertJoiningRequest.make({ submissionId: third.submissionId }));
+
       const joined = yield* expectSome(
         "lookup of the joined Submission after an attempted revert",
         yield* lookupById(third.submissionId),
       );
+
       yield* ensure(
         joined.state === "joined",
         "revertJoining must be a no-op for an already-joined Submission",
@@ -1551,6 +1702,7 @@ const revertJoiningReturnsToReady = conformanceCase(
           maxCount: 8,
         }),
       );
+
       yield* ensure(
         reclaimed.length === 1 && reclaimed[0].submissionId === second.submissionId,
         "A reverted Submission must be claimable again exactly once",
@@ -1569,6 +1721,7 @@ const markJoinedIdempotency = conformanceCase(
       const second = yield* admitReady(threadId, "mark-joined-2", { queued: 2 });
       const third = yield* admitReady(threadId, "mark-joined-3", { queued: 3 });
       const hostClaim = yield* expectSome("the host claim", yield* claimLane(threadId, PRODUCER_A));
+
       yield* ledger.claimJoining(
         ClaimJoiningRequest.make({
           threadId,
@@ -1584,11 +1737,14 @@ const markJoinedIdempotency = conformanceCase(
         recordId: submissionInputRecordId(second.submissionId),
         sequence: decodeSequence(4),
       });
+
       yield* ledger.markJoined(marker);
+
       const joined = yield* expectSome(
         "lookup after marking joined",
         yield* lookupById(second.submissionId),
       );
+
       yield* ensure(
         joined.state === "joined",
         "Marking the canonical input position must transition joining to joined",
@@ -1596,6 +1752,7 @@ const markJoinedIdempotency = conformanceCase(
 
       yield* ledger.markJoined(marker);
       const snapshot = yield* recoverySnapshot(second.submissionId);
+
       yield* ensure(
         snapshot.submission.state === "joined" &&
           snapshot.hostSubmissionId === host.submissionId &&
@@ -1616,6 +1773,7 @@ const markJoinedIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         !isOwnershipLost(divergent),
         "A divergent join marker must fail as a ledger integrity error, not ownership loss",
@@ -1632,6 +1790,7 @@ const markJoinedIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(isOwnershipLost(stale), "markJoined must be fenced by the host's ownership");
 
       // Repairable from history: the host Attempt dies and a later host Attempt repairs the
@@ -1642,15 +1801,18 @@ const markJoinedIdempotency = conformanceCase(
           ownershipToken: hostClaim.ownershipToken,
         }),
       );
+
       const reclaim = yield* expectSome(
         "the host reclaim after release",
         yield* claimLane(threadId, PRODUCER_B),
       );
+
       yield* ensure(
         reclaim.submissionId === host.submissionId &&
           reclaim.producerEpoch > hostClaim.producerEpoch,
         "The host must be reclaimable while its joined work is pending",
       );
+
       const superseded = yield* expectFailure(
         "repairing the marker with the superseded host token",
         ledger.markJoined(
@@ -1662,6 +1824,7 @@ const markJoinedIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(superseded),
         "A superseded host token must not repair a join marker",
@@ -1674,10 +1837,12 @@ const markJoinedIdempotency = conformanceCase(
           sequence: decodeSequence(6),
         }),
       );
+
       const repaired = yield* expectSome(
         "lookup after the repair",
         yield* lookupById(third.submissionId),
       );
+
       yield* ensure(
         repaired.state === "joined",
         "A later host Attempt must repair the lost join marker from history",
@@ -1695,11 +1860,14 @@ const claimNeverGrantsBlockedHead = conformanceCase(
       const joiningLane = decodeThreadId("ledger-conformance-head-joining");
       const joiningHost = yield* admitReady(joiningLane, "head-joining-host", { work: "host" });
       const joiningSub = yield* admitReady(joiningLane, "head-joining-2", { queued: 2 });
+
       yield* admitReady(joiningLane, "head-joining-3", { queued: 3 });
+
       const joiningHostClaim = yield* expectSome(
         "the joining lane's host claim",
         yield* claimLane(joiningLane, PRODUCER_A),
       );
+
       yield* ledger.claimJoining(
         ClaimJoiningRequest.make({
           threadId: joiningLane,
@@ -1716,10 +1884,12 @@ const claimNeverGrantsBlockedHead = conformanceCase(
       yield* ledger.revertJoining(
         RevertJoiningRequest.make({ submissionId: joiningSub.submissionId }),
       );
+
       const afterRevert = yield* expectSome(
         "the claim after reverting the joining head",
         yield* claimLane(joiningLane, PRODUCER_B),
       );
+
       yield* ensure(
         afterRevert.submissionId === joiningSub.submissionId,
         "Reverting the joining head must make it claimable in FIFO order",
@@ -1729,10 +1899,12 @@ const claimNeverGrantsBlockedHead = conformanceCase(
       const joinedLane = decodeThreadId("ledger-conformance-head-joined");
       const joinedHost = yield* admitReady(joinedLane, "head-joined-host", { work: "host" });
       const joinedSub = yield* admitReady(joinedLane, "head-joined-2", { queued: 2 });
+
       const joinedHostClaim = yield* expectSome(
         "the joined lane's host claim",
         yield* claimLane(joinedLane, PRODUCER_A),
       );
+
       yield* ledger.claimJoining(
         ClaimJoiningRequest.make({
           threadId: joinedLane,
@@ -1749,6 +1921,7 @@ const claimNeverGrantsBlockedHead = conformanceCase(
           sequence: decodeSequence(3),
         }),
       );
+
       const joinedAbort = yield* expectFailure(
         "aborting a joined Submission",
         ledger.requestAbort(
@@ -1759,6 +1932,7 @@ const claimNeverGrantsBlockedHead = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isJoinedToHost(joinedAbort) && joinedAbort.hostSubmissionId === joinedHost.submissionId,
         "Abort of a joined Submission must fail with the host linkage — the abort target is the host",
@@ -1771,14 +1945,18 @@ const claimNeverGrantsBlockedHead = conformanceCase(
 
       // suspended head: durable approval waiting consumes no worker permit.
       const suspendedLane = decodeThreadId("ledger-conformance-head-suspended");
+
       const suspendedHost = yield* admitReady(suspendedLane, "head-suspended-host", {
         work: "host",
       });
+
       const suspendedClaim = yield* expectSome(
         "the suspended lane's claim",
         yield* claimLane(suspendedLane, PRODUCER_A),
       );
+
       const gatedCall = decodeToolCallId("call-head-suspended");
+
       const suspendOutcome = yield* ledger.suspend(
         SuspendRequest.make({
           submissionId: suspendedHost.submissionId,
@@ -1786,6 +1964,7 @@ const claimNeverGrantsBlockedHead = conformanceCase(
           reason: ApprovalPendingSuspension.make({ toolCallIds: [gatedCall] }),
         }),
       );
+
       yield* ensure(suspendOutcome === "suspended", "An undecided approval must suspend durably");
       yield* ensure(
         Option.isNone(yield* claimLane(suspendedLane, PRODUCER_B)),
@@ -1800,10 +1979,12 @@ const claimNeverGrantsBlockedHead = conformanceCase(
           reason: "unblock the suspended head",
         }),
       );
+
       const wokenClaim = yield* expectSome(
         "the claim after the covering decision",
         yield* claimLane(suspendedLane, PRODUCER_B),
       );
+
       yield* ensure(
         wokenClaim.submissionId === suspendedHost.submissionId &&
           wokenClaim.producerEpoch > suspendedClaim.producerEpoch,
@@ -1813,11 +1994,14 @@ const claimNeverGrantsBlockedHead = conformanceCase(
       // unknown head: the DUR-017 blocked lane outlives lease expiry.
       const unknownLane = decodeThreadId("ledger-conformance-head-unknown");
       const unknownHost = yield* admitReady(unknownLane, "head-unknown-host", { work: "host" });
+
       const unknownClaim = yield* expectSome(
         "the unknown lane's claim",
         yield* claimLane(unknownLane, PRODUCER_A),
       );
+
       const unknownCall = decodeToolCallId("call-head-unknown");
+
       yield* ledger.markUnknown(
         MarkUnknownRequest.make({
           submissionId: unknownHost.submissionId,
@@ -1839,10 +2023,12 @@ const claimNeverGrantsBlockedHead = conformanceCase(
           resolution: ResolutionNeverHappened.make(),
         }),
       );
+
       const reopened = yield* expectSome(
         "the claim after the covering resolution",
         yield* claimLane(unknownLane, PRODUCER_B),
       );
+
       yield* ensure(
         reopened.submissionId === unknownHost.submissionId,
         "A covering resolution must reopen the blocked lane",
@@ -1857,10 +2043,12 @@ const approvalDecisionIdempotency = conformanceCase(
       const threadId = decodeThreadId("ledger-conformance-approval");
       const ledger = yield* SubmissionLedger;
       const admitted = yield* admitReady(threadId, "approval-key-1", { work: "approve" });
+
       const claim = yield* expectSome(
         "the claim before decisions",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       const callA = decodeToolCallId("call-approval-a");
       const callB = decodeToolCallId("call-approval-b");
 
@@ -1873,12 +2061,14 @@ const approvalDecisionIdempotency = conformanceCase(
           reason: "policy allows the booking",
         }),
       );
+
       yield* ensure(
         first.decision === "approved" && first.toolCallId === callA,
         "The first decision must record the intent",
       );
 
       yield* TestClock.adjust("1 second");
+
       const replayed = yield* ledger.recordApprovalDecision(
         ApprovalDecisionCommand.make({
           submissionId: admitted.submissionId,
@@ -1888,6 +2078,7 @@ const approvalDecisionIdempotency = conformanceCase(
           reason: "a different reason text",
         }),
       );
+
       yield* ensure(
         replayed.reason === first.reason &&
           replayed.resolver === first.resolver &&
@@ -1907,6 +2098,7 @@ const approvalDecisionIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isApprovalConflict(conflict) &&
           conflict.toolCallId === callA &&
@@ -1924,6 +2116,7 @@ const approvalDecisionIdempotency = conformanceCase(
         }),
       );
       const snapshot = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         snapshot.approvalDecisions.length === 2 &&
           snapshot.approvalDecisions.some(
@@ -1936,6 +2129,7 @@ const approvalDecisionIdempotency = conformanceCase(
       );
 
       yield* settleClaimed(admitted, claim.ownershipToken);
+
       const late = yield* expectFailure(
         "deciding an approval for a settled Submission",
         ledger.recordApprovalDecision(
@@ -1948,6 +2142,7 @@ const approvalDecisionIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isSettlementConflict(late) && late.existingOutcome === "completed",
         "A decision must never land on a settled Submission",
@@ -1960,19 +2155,24 @@ const unknownAbortClaim = conformanceCase(
   ({ ensure, expectFailure, expectSome }) =>
     Effect.gen(function* () {
       const ledger = yield* SubmissionLedger;
+
       for (const abortFirst of [false, true]) {
         const threadId = decodeThreadId(`ledger-conformance-unknown-abort-${abortFirst}`);
         const head = yield* admitReady(threadId, "head", { work: "uncertain" });
+
         const original = yield* expectSome(
           "original claim",
           yield* claimLane(threadId, PRODUCER_A),
         );
+
         const follower = yield* admitReady(threadId, "follower", { work: "later" });
+
         const command = AbortCommand.make({
           submissionId: head.submissionId,
           author: "first-operator",
           reason: "stop without asserting external rollback",
         });
+
         if (abortFirst) yield* ledger.requestAbort(command);
         yield* ledger.markUnknown(
           MarkUnknownRequest.make({
@@ -1995,6 +2195,7 @@ const unknownAbortClaim = conformanceCase(
           );
         }
         const intent = yield* ledger.requestAbort(command);
+
         const duplicate = yield* ledger.requestAbort(
           AbortCommand.make({
             ...command,
@@ -2002,26 +2203,31 @@ const unknownAbortClaim = conformanceCase(
             reason: "lost acknowledgement retry",
           }),
         );
+
         yield* ensure(
           duplicate.author === intent.author &&
             duplicate.reason === intent.reason &&
             sameInstant(duplicate.requestedAt, intent.requestedAt),
           "The first abort audit must win",
         );
+
         const reclaimed = yield* expectSome(
           "unknown head with durable abort",
           yield* claimLane(threadId, PRODUCER_B),
         );
+
         yield* ensure(
           reclaimed.submissionId === head.submissionId &&
             reclaimed.producerEpoch > original.producerEpoch,
           "Abort must claim the head with a fresh fence, never skip to its follower",
         );
         const snapshot = yield* recoverySnapshot(head.submissionId);
+
         yield* ensure(
           snapshot.submission.state === "unknown" && snapshot.unknownResolutions.length === 0,
           "Claiming for abort must not erase uncertainty or manufacture tool resolutions",
         );
+
         const stale = yield* expectFailure(
           "stale owner",
           ledger.reserveSettlement(
@@ -2032,25 +2238,31 @@ const unknownAbortClaim = conformanceCase(
             }),
           ),
         );
+
         yield* ensure(isOwnershipLost(stale), "The original owner must remain fenced");
+
         const reservation = yield* settlementReservation({
           ...head,
           ownershipToken: reclaimed.ownershipToken,
           outcome: "aborted",
         });
+
         yield* ledger.reserveSettlement(reservation);
         yield* ledger.requestAbort(command);
         const settled = yield* ledger.finalizeSettlement(SettlementFinalization.make(reservation));
+
         yield* ensure(
           settled.outcome === "aborted",
           "The abort reservation must survive a duplicate command",
         );
         const late = yield* expectFailure("abort after settlement", ledger.requestAbort(command));
+
         yield* ensure(
           isSettlementConflict(late) && late.existingOutcome === "aborted",
           "A terminal outcome must not change",
         );
         const next = yield* expectSome("follower claim", yield* claimLane(threadId, PRODUCER_B));
+
         yield* ensure(
           next.submissionId === follower.submissionId,
           "Settlement must release the follower",
@@ -2066,10 +2278,12 @@ const unknownResolutionLifecycle = conformanceCase(
       const threadId = decodeThreadId("ledger-conformance-unknown");
       const ledger = yield* SubmissionLedger;
       const admitted = yield* admitReady(threadId, "unknown-key-1", { work: "unknown" });
+
       const claim = yield* expectSome(
         "the claim before the unknown marking",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       const call1 = decodeToolCallId("call-unknown-1");
       const call2 = decodeToolCallId("call-unknown-2");
       const call3 = decodeToolCallId("call-unknown-3");
@@ -2079,12 +2293,15 @@ const unknownResolutionLifecycle = conformanceCase(
         toolCallIds: [call1, call2],
         reason: "the worker died during two supplier calls",
       });
+
       yield* ledger.markUnknown(marking);
       yield* ledger.markUnknown(marking);
+
       const marked = yield* expectSome(
         "lookup after marking unknown",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         marked.state === "unknown",
         "Marking unknown must be idempotent and block the lane",
@@ -2105,10 +2322,12 @@ const unknownResolutionLifecycle = conformanceCase(
           resolution: ResolutionNeverHappened.make(),
         }),
       );
+
       const partiallyResolved = yield* expectSome(
         "lookup after a partial resolution",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         partiallyResolved.state === "unknown" &&
           Option.isNone(yield* claimLane(threadId, PRODUCER_B)),
@@ -2116,6 +2335,7 @@ const unknownResolutionLifecycle = conformanceCase(
       );
 
       yield* TestClock.adjust("1 second");
+
       const divergent = yield* expectFailure(
         "re-resolving the same call divergently",
         ledger.recordUnknownResolution(
@@ -2128,10 +2348,12 @@ const unknownResolutionLifecycle = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isUnknownResolutionConflict(divergent) && divergent.toolCallId === call1,
         "A divergent re-resolution must conflict",
       );
+
       const replayed = yield* ledger.recordUnknownResolution(
         UnknownResolutionCommand.make({
           submissionId: admitted.submissionId,
@@ -2141,6 +2363,7 @@ const unknownResolutionLifecycle = conformanceCase(
           resolution: ResolutionNeverHappened.make(),
         }),
       );
+
       yield* ensure(
         sameInstant(replayed.resolvedAt, first.resolvedAt) && replayed.reason === first.reason,
         "Repeating the same resolution must replay the recorded intent unchanged",
@@ -2166,10 +2389,12 @@ const unknownResolutionLifecycle = conformanceCase(
           }),
         }),
       );
+
       const stillBlocked = yield* expectSome(
         "lookup while the extended set stays open",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         stillBlocked.state === "unknown" && Option.isNone(yield* claimLane(threadId, PRODUCER_B)),
         "The lane must stay blocked while any marked call lacks a resolution",
@@ -2184,23 +2409,28 @@ const unknownResolutionLifecycle = conformanceCase(
           resolution: ResolutionSafeToRetry.make(),
         }),
       );
+
       const reopenedState = yield* expectSome(
         "lookup after the covering resolution",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         reopenedState.state === "input-applied",
         "Covering every marked call must reopen the lane as input-applied",
       );
       const snapshot = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         snapshot.unknownResolutions.length === 3,
         "The recovery snapshot must expose every recorded resolution intent",
       );
+
       const reclaim = yield* expectSome(
         "the claim after the lane reopened",
         yield* claimLane(threadId, PRODUCER_B),
       );
+
       yield* ensure(
         reclaim.submissionId === admitted.submissionId &&
           reclaim.producerEpoch > claim.producerEpoch,
@@ -2208,6 +2438,7 @@ const unknownResolutionLifecycle = conformanceCase(
       );
 
       yield* settleClaimed(admitted, reclaim.ownershipToken);
+
       const late = yield* expectFailure(
         "resolving an unknown call for a settled Submission",
         ledger.recordUnknownResolution(
@@ -2220,6 +2451,7 @@ const unknownResolutionLifecycle = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isSettlementConflict(late),
         "A resolution must never land on a settled Submission",
@@ -2234,10 +2466,12 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
       const threadId = decodeThreadId("ledger-conformance-suspend");
       const ledger = yield* SubmissionLedger;
       const admitted = yield* admitReady(threadId, "suspend-key-1", { work: "suspend" });
+
       const claim = yield* expectSome(
         "the claim before suspension",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       const callA = decodeToolCallId("call-suspend-a");
       const callB = decodeToolCallId("call-suspend-b");
 
@@ -2251,6 +2485,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(isOwnershipLost(foreign), "suspend must be fenced by the owning token");
 
       // The decision raced ahead of the suspend transaction (plan §2.6).
@@ -2263,6 +2498,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           reason: "decided before the suspend committed",
         }),
       );
+
       const immediate = yield* ledger.suspend(
         SuspendRequest.make({
           submissionId: admitted.submissionId,
@@ -2270,14 +2506,17 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           reason: ApprovalPendingSuspension.make({ toolCallIds: [callA] }),
         }),
       );
+
       yield* ensure(
         immediate === "resume-immediately",
         "A fully-decided suspension reason must resume immediately",
       );
+
       const notSuspended = yield* expectSome(
         "lookup after the immediate resume",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         notSuspended.state === "running",
         "An immediate resume must not transition the Submission to suspended",
@@ -2297,16 +2536,20 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           reason: ApprovalPendingSuspension.make({ toolCallIds: [callA, callB] }),
         }),
       );
+
       yield* ensure(
         suspended === "suspended",
         "An undecided call in the reason must suspend durably",
       );
+
       const suspendedState = yield* expectSome(
         "lookup after the suspension",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(suspendedState.state === "suspended", "The suspension must be durable");
       const suspendedSnapshot = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         suspendedSnapshot.suspension !== undefined &&
           suspendedSnapshot.suspension.reason._tag === "ApprovalPending" &&
@@ -2314,6 +2557,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           suspendedSnapshot.approvalDecisions.length === 1,
         "The recovery snapshot must expose the suspension reason and prior decisions",
       );
+
       const ended = yield* expectFailure(
         "renewing after the suspension ended the ownership period",
         ledger.renewOwnership(
@@ -2323,6 +2567,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(ended),
         "Suspension must end the ownership period without settling",
@@ -2337,15 +2582,18 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           reason: "the covering decision",
         }),
       );
+
       const woken = yield* expectSome(
         "lookup after the covering decision",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         woken.state === "input-applied",
         "The covering decision must wake the suspended lane",
       );
       const wokenSnapshot = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         wokenSnapshot.suspension === undefined,
         "Waking must clear the durable suspension",
@@ -2355,7 +2603,9 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
         "the claim after waking",
         yield* claimLane(threadId, PRODUCER_B),
       );
+
       yield* settleClaimed(admitted, reclaim.ownershipToken);
+
       const terminal = yield* expectFailure(
         "suspending a settled Submission",
         ledger.suspend(
@@ -2366,6 +2616,7 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isSettlementConflict(terminal) && terminal.existingOutcome === "completed",
         "Suspension must never land on a settled Submission",
@@ -2383,6 +2634,7 @@ const joinedSettlementLinkageAuthority = conformanceCase(
       const host = yield* admitReady(threadId, "joined-settle-host", { work: "host" });
       const queued = yield* admitReady(threadId, "joined-settle-2", { queued: 2 });
       const hostClaim = yield* expectSome("the host claim", yield* claimLane(threadId, PRODUCER_A));
+
       const claims = yield* ledger.claimJoining(
         ClaimJoiningRequest.make({
           threadId,
@@ -2391,6 +2643,7 @@ const joinedSettlementLinkageAuthority = conformanceCase(
           maxCount: 1,
         }),
       );
+
       yield* ensure(
         claims.length === 1 && claims[0]?.submissionId === queued.submissionId,
         "The queued Submission must join the host's contiguous prefix",
@@ -2404,10 +2657,12 @@ const joinedSettlementLinkageAuthority = conformanceCase(
         receiptId: queued.receiptId,
         outcome: "completed",
       });
+
       const fenced = yield* expectFailure(
         "reserving a joining Submission's settlement without lane ownership",
         ledger.reserveSettlement(joiningReservation),
       );
+
       yield* ensure(
         isOwnershipLost(fenced),
         "A joining Submission's settlement reservation must stay ownership-fenced",
@@ -2421,6 +2676,7 @@ const joinedSettlementLinkageAuthority = conformanceCase(
           sequence: decodeSequence(7),
         }),
       );
+
       // A `joined` lane is never worker-claimable, so no ownership token can exist for it:
       // the recorded host linkage authorizes the reservation and the presented token is not
       // consulted (plan §2.5 — the coordinator's joined-settlement loop and the
@@ -2431,21 +2687,26 @@ const joinedSettlementLinkageAuthority = conformanceCase(
         receiptId: queued.receiptId,
         outcome: "completed",
       });
+
       yield* ledger.reserveSettlement(joinedReservation);
+
       const settlement = yield* ledger.finalizeSettlement(
         SettlementFinalization.make({
           submissionId: queued.submissionId,
           settlementId: submissionSettlementId(queued.submissionId),
         }),
       );
+
       yield* ensure(
         settlement.outcome === "completed",
         "The joined settlement must finalize with the reserved outcome",
       );
+
       const settled = yield* expectSome(
         "lookup after the joined settlement",
         yield* lookupById(queued.submissionId),
       );
+
       yield* ensure(
         settled.state === "settled" && settled.settledOutcome === "completed",
         "The joined Submission must settle terminally",
@@ -2464,6 +2725,7 @@ const childReservationIdempotency = conformanceCase(
 
       const allocation = { turns: 4, toolCalls: 8 };
       const allocationDigest = yield* digestJson(allocation);
+
       const requestFields = {
         reservationId: decodeChildReservationId("child-reservation:run-reserve:call-1"),
         parentSubmissionId: parent.submissionId,
@@ -2472,8 +2734,10 @@ const childReservationIdempotency = conformanceCase(
         allocation,
         allocationDigest,
       };
+
       const request = ChildBudgetReservationRequest.make(requestFields);
       const first = yield* ledger.reserveChildBudget(request);
+
       yield* ensure(
         !first.replayed &&
           first.reservation.status === "reserved" &&
@@ -2484,12 +2748,14 @@ const childReservationIdempotency = conformanceCase(
       );
 
       yield* TestClock.adjust("1 second");
+
       const replayed = yield* ledger.reserveChildBudget(
         ChildBudgetReservationRequest.make({
           ...requestFields,
           allocation: { toolCalls: 8, turns: 4 },
         }),
       );
+
       yield* ensure(
         replayed.replayed &&
           replayed.reservation.status === "reserved" &&
@@ -2499,6 +2765,7 @@ const childReservationIdempotency = conformanceCase(
       );
 
       const divergentAllocation = { turns: 64, toolCalls: 8 };
+
       const divergent = yield* expectFailure(
         "a divergent allocation for the same reservation id",
         ledger.reserveChildBudget(
@@ -2509,6 +2776,7 @@ const childReservationIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isChildReservationConflict(divergent) && divergent.status === "reserved",
         "A divergent allocation must conflict with the recorded reservation",
@@ -2523,12 +2791,14 @@ const childReservationIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isChildReservationConflict(secondId),
         "One parent Tool Call must never own two reservations",
       );
 
       const snapshot = yield* recoverySnapshot(parent.submissionId);
+
       yield* ensure(
         snapshot.childReservations.length === 1 &&
           snapshot.childReservations[0].reservationId === request.reservationId &&
@@ -2548,6 +2818,7 @@ const childReservationFencing = conformanceCase(
       const ledger = yield* SubmissionLedger;
       const parent = yield* admitReady(threadId, "child-fence-parent", { work: "parent" });
       const child = yield* admitReady(childLane, "child-fence-child", { work: "child" });
+
       const firstClaim = yield* expectSome(
         "the first parent claim",
         yield* claimLane(threadId, PRODUCER_A),
@@ -2555,6 +2826,7 @@ const childReservationFencing = conformanceCase(
 
       const allocation = { turns: 2 };
       const allocationDigest = yield* digestJson(allocation);
+
       const requestFields = {
         reservationId: decodeChildReservationId("child-reservation:run-fence:call-1"),
         parentSubmissionId: parent.submissionId,
@@ -2563,16 +2835,20 @@ const childReservationFencing = conformanceCase(
         allocation,
         allocationDigest,
       };
+
       const request = ChildBudgetReservationRequest.make(requestFields);
+
       const foreign = yield* expectFailure(
         "creating a reservation without owning the parent lane",
         ledger.reserveChildBudget(request),
       );
+
       yield* ensure(
         isOwnershipLost(foreign),
         "Reservation creation must be fenced by the parent's live ownership token",
       );
       const afterForeign = yield* recoverySnapshot(parent.submissionId);
+
       yield* ensure(
         afterForeign.childReservations.length === 0,
         "A fenced reservation attempt must leave no row behind",
@@ -2592,10 +2868,12 @@ const childReservationFencing = conformanceCase(
           ownershipToken: firstClaim.ownershipToken,
         }),
       );
+
       const reclaim = yield* expectSome(
         "the replacement parent claim",
         yield* claimLane(threadId, PRODUCER_B),
       );
+
       yield* ensure(
         reclaim.producerEpoch > firstClaim.producerEpoch,
         "The replacement claim must fence the stale parent Attempt",
@@ -2611,6 +2889,7 @@ const childReservationFencing = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(staleAttach),
         "A superseded parent token must not attach a child",
@@ -2627,6 +2906,7 @@ const childReservationFencing = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(staleCreate),
         "A superseded parent token must not create new reservation state",
@@ -2640,6 +2920,7 @@ const childReservationFencing = conformanceCase(
           ownershipToken: firstClaim.ownershipToken,
         }),
       );
+
       yield* ensure(
         staleReplay.replayed && staleReplay.reservation.status === "reserved",
         "An identical reservation replay must return the recorded row even from a stale caller",
@@ -2652,6 +2933,7 @@ const childReservationFencing = conformanceCase(
           childSubmissionId: child.submissionId,
         }),
       );
+
       yield* ensure(
         attached.childSubmissionId === child.submissionId,
         "The live replacement token must attach the child",
@@ -2673,6 +2955,7 @@ const attachChildIdempotency = conformanceCase(
 
       const allocation = { turns: 3 };
       const reservationId = decodeChildReservationId("child-reservation:run-attach:call-1");
+
       yield* ledger.reserveChildBudget(
         ChildBudgetReservationRequest.make({
           reservationId,
@@ -2694,6 +2977,7 @@ const attachChildIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isLedgerError(unknownReservation),
         "Attaching to an unknown reservation must fail as a ledger error",
@@ -2706,6 +2990,7 @@ const attachChildIdempotency = conformanceCase(
           childSubmissionId: child.submissionId,
         }),
       );
+
       yield* ensure(
         attached.childSubmissionId === child.submissionId && attached.status === "reserved",
         "Attaching must record the child on the reservation row",
@@ -2718,6 +3003,7 @@ const attachChildIdempotency = conformanceCase(
           childSubmissionId: child.submissionId,
         }),
       );
+
       yield* ensure(
         replayed.childSubmissionId === child.submissionId,
         "Repeating the identical attachment must be a no-op",
@@ -2733,12 +3019,14 @@ const attachChildIdempotency = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isChildReservationConflict(divergent),
         "A divergent child attachment must conflict with the recorded child",
       );
 
       const snapshot = yield* recoverySnapshot(parent.submissionId);
+
       yield* ensure(
         snapshot.childAttachments.length === 1 &&
           snapshot.childAttachments[0].childSubmissionId === child.submissionId &&
@@ -2761,6 +3049,7 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
 
       const allocation = { turns: 4 };
       const reservationId = decodeChildReservationId("child-reservation:run-freeze:call-1");
+
       yield* ledger.reserveChildBudget(
         ChildBudgetReservationRequest.make({
           reservationId,
@@ -2773,9 +3062,11 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
       );
 
       const accounting = { consumed: { turns: 1 }, released: { turns: 3 } };
+
       const frozen = yield* ledger.beginChildBudgetRelease(
         BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
       );
+
       yield* ensure(
         frozen.status === "releasePending" &&
           frozen.accounting !== undefined &&
@@ -2785,12 +3076,14 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
       );
 
       yield* TestClock.adjust("1 second");
+
       const replayed = yield* ledger.beginChildBudgetRelease(
         BeginChildBudgetReleaseRequest.make({
           reservationId,
           accounting: { released: { turns: 3 }, consumed: { turns: 1 } },
         }),
       );
+
       yield* ensure(
         replayed.status === "releasePending" &&
           replayed.releaseBeganAt !== undefined &&
@@ -2808,21 +3101,25 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isChildReservationConflict(divergent) && divergent.status === "releasePending",
         "A divergent accounting freeze must conflict with the frozen decision",
       );
 
       yield* ledger.releaseChildBudget(ReleaseChildBudgetRequest.make({ reservationId }));
+
       const afterRelease = yield* ledger.beginChildBudgetRelease(
         BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
       );
+
       yield* ensure(
         afterRelease.status === "released" &&
           afterRelease.accounting !== undefined &&
           persistedJsonEquivalent(afterRelease.accounting, accounting),
         "Replaying the identical accounting after release must return the released row",
       );
+
       const divergentAfterRelease = yield* expectFailure(
         "freezing a different accounting decision after release",
         ledger.beginChildBudgetRelease(
@@ -2832,6 +3129,7 @@ const beginReleaseFreezesAccountingOnce = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isChildReservationConflict(divergentAfterRelease) &&
           divergentAfterRelease.status === "released",
@@ -2851,6 +3149,7 @@ const releaseAppliedExactlyOnce = conformanceCase(
 
       const allocation = { turns: 4 };
       const reservationId = decodeChildReservationId("child-reservation:run-release:call-1");
+
       yield* ledger.reserveChildBudget(
         ChildBudgetReservationRequest.make({
           reservationId,
@@ -2866,6 +3165,7 @@ const releaseAppliedExactlyOnce = conformanceCase(
         "releasing before the accounting decision is frozen",
         ledger.releaseChildBudget(ReleaseChildBudgetRequest.make({ reservationId })),
       );
+
       yield* ensure(
         isChildReservationConflict(early) && early.status === "reserved",
         "Release must never skip the releasePending freeze",
@@ -2877,18 +3177,22 @@ const releaseAppliedExactlyOnce = conformanceCase(
           accounting: { consumed: {}, released: { turns: 4 } },
         }),
       );
+
       const released = yield* ledger.releaseChildBudget(
         ReleaseChildBudgetRequest.make({ reservationId }),
       );
+
       yield* ensure(
         released.status === "released" && released.releasedAt !== undefined,
         "Release must transition releasePending to released",
       );
 
       yield* TestClock.adjust("1 second");
+
       const replayed = yield* ledger.releaseChildBudget(
         ReleaseChildBudgetRequest.make({ reservationId }),
       );
+
       yield* ensure(
         replayed.status === "released" &&
           replayed.releasedAt !== undefined &&
@@ -2898,6 +3202,7 @@ const releaseAppliedExactlyOnce = conformanceCase(
       );
 
       const snapshot = yield* recoverySnapshot(parent.submissionId);
+
       yield* ensure(
         snapshot.childReservations.length === 1 &&
           snapshot.childReservations[0].status === "released",
@@ -2918,6 +3223,7 @@ const recordChildSettledWake = conformanceCase(
       const parent = yield* admitReady(parentLane, "child-wake-parent", { work: "parent" });
       const childA = yield* admitReady(childLaneA, "child-wake-a", { child: "a" });
       const childB = yield* admitReady(childLaneB, "child-wake-b", { child: "b" });
+
       const parentClaim = yield* expectSome(
         "the parent claim",
         yield* claimLane(parentLane, PRODUCER_A),
@@ -2941,10 +3247,12 @@ const recordChildSettledWake = conformanceCase(
           }),
         }),
       );
+
       yield* ensure(
         suspended === "suspended",
         "Unsettled children must suspend the parent durably",
       );
+
       const ended = yield* expectFailure(
         "renewing after the waitingForChild suspension ended the ownership period",
         ledger.renewOwnership(
@@ -2954,6 +3262,7 @@ const recordChildSettledWake = conformanceCase(
           }),
         ),
       );
+
       yield* ensure(
         isOwnershipLost(ended),
         "waitingForChild must end the ownership period without settling (SUB-030)",
@@ -2967,19 +3276,23 @@ const recordChildSettledWake = conformanceCase(
         "the first child claim",
         yield* claimLane(childLaneA, PRODUCER_A),
       );
+
       const childReservationA = yield* settlementReservation({
         submissionId: childA.submissionId,
         ownershipToken: childClaimA.ownershipToken,
         receiptId: childA.receiptId,
         outcome: "completed",
       });
+
       yield* ledger.reserveSettlement(childReservationA);
+
       const partial = yield* ledger.recordChildSettled(
         ChildSettledNotification.make({
           parentSubmissionId: parent.submissionId,
           childSubmissionId: childA.submissionId,
         }),
       );
+
       yield* ensure(
         partial === "still-waiting",
         "A settlement notification must not wake the parent while a listed child is unsettled",
@@ -2990,10 +3303,12 @@ const recordChildSettledWake = conformanceCase(
           settlementId: childReservationA.settlementId,
         }),
       );
+
       const stillSuspended = yield* expectSome(
         "lookup while one child is outstanding",
         yield* lookupById(parent.submissionId),
       );
+
       yield* ensure(
         stillSuspended.state === "suspended" &&
           Option.isNone(yield* claimLane(parentLane, PRODUCER_B)),
@@ -3004,19 +3319,23 @@ const recordChildSettledWake = conformanceCase(
         "the second child claim",
         yield* claimLane(childLaneB, PRODUCER_A),
       );
+
       const childReservationB = yield* settlementReservation({
         submissionId: childB.submissionId,
         ownershipToken: childClaimB.ownershipToken,
         receiptId: childB.receiptId,
         outcome: "completed",
       });
+
       yield* ledger.reserveSettlement(childReservationB);
+
       const woken = yield* ledger.recordChildSettled(
         ChildSettledNotification.make({
           parentSubmissionId: parent.submissionId,
           childSubmissionId: childB.submissionId,
         }),
       );
+
       yield* ensure(
         woken === "woken",
         "The covering canonical settlement prefix must wake the parent before child finalization",
@@ -3027,15 +3346,18 @@ const recordChildSettledWake = conformanceCase(
           settlementId: childReservationB.settlementId,
         }),
       );
+
       const awake = yield* expectSome(
         "lookup after the covering settlement",
         yield* lookupById(parent.submissionId),
       );
+
       yield* ensure(
         awake.state === "input-applied",
         "The woken parent must transition suspended(WaitingForChild) to input-applied",
       );
       const wokenSnapshot = yield* recoverySnapshot(parent.submissionId);
+
       yield* ensure(
         wokenSnapshot.suspension === undefined,
         "Waking must clear the durable suspension",
@@ -3047,6 +3369,7 @@ const recordChildSettledWake = conformanceCase(
           childSubmissionId: childA.submissionId,
         }),
       );
+
       yield* ensure(
         replayedNotification === "not-waiting",
         "Replaying a notification after the wake must be an idempotent no-op",
@@ -3056,18 +3379,21 @@ const recordChildSettledWake = conformanceCase(
         "the parent claim after waking",
         yield* claimLane(parentLane, PRODUCER_B),
       );
+
       yield* ensure(
         reclaim.submissionId === parent.submissionId &&
           reclaim.producerEpoch > parentClaim.producerEpoch,
         "The woken lane must grant a fresh fenced Attempt",
       );
       yield* settleClaimed(parent, reclaim.ownershipToken);
+
       const afterSettlement = yield* ledger.recordChildSettled(
         ChildSettledNotification.make({
           parentSubmissionId: parent.submissionId,
           childSubmissionId: childB.submissionId,
         }),
       );
+
       yield* ensure(
         afterSettlement === "not-waiting",
         "A notification for a settled parent must answer not-waiting",
@@ -3087,14 +3413,17 @@ const suspendResumesImmediatelyForSettledChildren = conformanceCase(
       // The child settles BEFORE the parent's suspend transaction commits (spec §12 step 10
       // race): the suspend must observe the settlement and resume immediately.
       const settledChild = yield* admitReady(childLaneA, "child-raced-a", { child: "a" });
+
       const settledClaim = yield* expectSome(
         "the settled child's claim",
         yield* claimLane(childLaneA, PRODUCER_A),
       );
+
       yield* settleClaimed(settledChild, settledClaim.ownershipToken);
       const pendingChild = yield* admitReady(childLaneB, "child-raced-b", { child: "b" });
 
       const parent = yield* admitReady(parentLane, "child-raced-parent", { work: "parent" });
+
       const parentClaim = yield* expectSome(
         "the parent claim",
         yield* claimLane(parentLane, PRODUCER_A),
@@ -3114,14 +3443,17 @@ const suspendResumesImmediatelyForSettledChildren = conformanceCase(
           }),
         }),
       );
+
       yield* ensure(
         immediate === "resume-immediately",
         "A suspend listing only settled children must resume immediately",
       );
+
       const stillRunning = yield* expectSome(
         "lookup after the immediate resume",
         yield* lookupById(parent.submissionId),
       );
+
       yield* ensure(
         stillRunning.state === "running",
         "An immediate resume must not transition the parent to suspended",
@@ -3152,11 +3484,13 @@ const suspendResumesImmediatelyForSettledChildren = conformanceCase(
           }),
         }),
       );
+
       yield* ensure(
         suspended === "suspended",
         "One unsettled listed child must suspend the parent durably",
       );
       const snapshot = yield* recoverySnapshot(parent.submissionId);
+
       yield* ensure(
         snapshot.suspension !== undefined &&
           snapshot.suspension.reason._tag === "WaitingForChild" &&
@@ -3179,19 +3513,23 @@ const admissionParentLinkage = conformanceCase(
         parentSubmissionId: parent.submissionId,
         parentToolCallId: decodeToolCallId("call-linkage"),
       });
+
       const request = yield* admissionRequest(
         childLane,
         "linkage-child-key",
         { task: "research" },
         linkage,
       );
+
       const admitted = yield* ledger.admit(request);
+
       yield* ensure(!admitted.replayed, "The first linked admission must create the child");
 
       const byId = yield* expectSome(
         "lookup of the linked child",
         yield* lookupById(admitted.submissionId),
       );
+
       yield* ensure(
         byId.parentLinkage !== undefined &&
           byId.parentLinkage.parentSubmissionId === parent.submissionId &&
@@ -3199,6 +3537,7 @@ const admissionParentLinkage = conformanceCase(
         "The child snapshot must expose its immutable parent linkage",
       );
       const childSnapshot = yield* recoverySnapshot(admitted.submissionId);
+
       yield* ensure(
         childSnapshot.parentLinkage !== undefined &&
           childSnapshot.parentLinkage.parentSubmissionId === parent.submissionId,
@@ -3206,6 +3545,7 @@ const admissionParentLinkage = conformanceCase(
       );
 
       const replayed = yield* ledger.admit(request);
+
       yield* ensure(
         replayed.replayed &&
           replayed.submissionId === admitted.submissionId &&
@@ -3227,6 +3567,7 @@ const admissionParentLinkage = conformanceCase(
           ),
         ),
       );
+
       yield* ensure(
         isAdmissionConflict(divergentLinkage),
         "A divergent parent linkage must conflict even when the input digest matches",
@@ -3236,6 +3577,7 @@ const admissionParentLinkage = conformanceCase(
         "replaying the admission without its parent linkage",
         ledger.admit(yield* admissionRequest(childLane, "linkage-child-key", { task: "research" })),
       );
+
       yield* ensure(
         isAdmissionConflict(droppedLinkage),
         "Dropping the recorded linkage on replay must conflict",
@@ -3244,20 +3586,24 @@ const admissionParentLinkage = conformanceCase(
       const plain = yield* ledger.admit(
         yield* admissionRequest(childLane, "linkage-plain-key", { task: "plain" }),
       );
+
       const addedLinkage = yield* expectFailure(
         "replaying an unlinked admission with a parent linkage",
         ledger.admit(
           yield* admissionRequest(childLane, "linkage-plain-key", { task: "plain" }, linkage),
         ),
       );
+
       yield* ensure(
         isAdmissionConflict(addedLinkage),
         "Adding a linkage to an unlinked admission on replay must conflict",
       );
+
       const plainSnapshot = yield* expectSome(
         "lookup of the unlinked Submission",
         yield* lookupById(plain.submissionId),
       );
+
       yield* ensure(
         plainSnapshot.parentLinkage === undefined,
         "An unlinked Submission must expose no parent linkage",
@@ -3271,6 +3617,7 @@ const resolveAdmissionAuthority = conformanceCase(
     Effect.gen(function* () {
       const threadId = decodeThreadId("ledger-conformance-resolve");
       const ledger = yield* SubmissionLedger;
+
       const key = SubmissionLookupByKey.make({
         threadId,
         principal: CONFORMANCE_PRINCIPAL,
@@ -3278,6 +3625,7 @@ const resolveAdmissionAuthority = conformanceCase(
       });
 
       const before = yield* ledger.resolveAdmission(key);
+
       yield* ensure(
         before._tag === "NotAdmitted",
         "The authoritative store must prove absence before admission (SUB-031)",
@@ -3286,7 +3634,9 @@ const resolveAdmissionAuthority = conformanceCase(
       const admitted = yield* ledger.admit(
         yield* admissionRequest(threadId, "resolve-key-1", { work: "resolve" }),
       );
+
       const after = yield* ledger.resolveAdmission(key);
+
       yield* ensure(
         after._tag === "Admitted" &&
           after.submission.submissionId === admitted.submissionId &&
@@ -3302,18 +3652,22 @@ const resolveAdmissionAuthority = conformanceCase(
           idempotencyKey: decodeIdempotencyKey("resolve-key-1"),
         }),
       );
+
       yield* ensure(
         foreign._tag === "NotAdmitted",
         "Admission resolution must stay scoped to the requesting principal",
       );
 
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+
       const claim = yield* expectSome(
         "the claim before terminal resolution",
         yield* claimLane(threadId, PRODUCER_A),
       );
+
       yield* settleClaimed(admitted, claim.ownershipToken);
       const settled = yield* ledger.resolveAdmission(key);
+
       yield* ensure(
         settled._tag === "Admitted" &&
           settled.submission.state === "settled" &&
@@ -3357,6 +3711,7 @@ const queuedAbortSettlementAuthority = conformanceCase(
           outcome: "aborted",
         }).pipe(Effect.flatMap((reservation) => ledger.reserveSettlement(reservation))),
       );
+
       yield* ensure(
         isOwnershipLost(unaborted),
         "A queued reservation without a durable abort intent must stay fenced (OwnershipLost)",
@@ -3373,6 +3728,7 @@ const queuedAbortSettlementAuthority = conformanceCase(
           result: { fabricated: true },
         }).pipe(Effect.flatMap((reservation) => ledger.reserveSettlement(reservation))),
       );
+
       yield* ensure(
         isOwnershipLost(wrongOutcome),
         "An abort intent must never authorize a non-aborted settlement outcome",
@@ -3384,13 +3740,16 @@ const queuedAbortSettlementAuthority = conformanceCase(
         receiptId: second.receiptId,
         outcome: "aborted",
       });
+
       const reserved = yield* ledger.reserveSettlement(reservation);
+
       yield* ensure(
         reserved.replayed === false && reserved.outcome === "aborted",
         "The abort intent must authorize the aborted reservation without lane ownership",
       );
       // The crash replay (`terminalizing` + committed reservation) is equally authorized.
       const replayed = yield* ledger.reserveSettlement(reservation);
+
       yield* ensure(
         replayed.replayed === true,
         "Replaying the identical aborted reservation must short-circuit idempotently",
@@ -3403,11 +3762,13 @@ const queuedAbortSettlementAuthority = conformanceCase(
       );
 
       const settled = yield* recoverySnapshot(second.submissionId);
+
       yield* ensure(
         settled.submission.state === "settled" && settled.submission.settledOutcome === "aborted",
         "The aborted queued Submission must settle while the head is still unsettled",
       );
       const headState = yield* recoverySnapshot(head.submissionId);
+
       yield* ensure(
         headState.submission.state === "ready",
         "Settling the aborted queued row must not disturb the unclaimed head",
@@ -3436,12 +3797,14 @@ const abortedSettledRowIsNotAJoiningGap = conformanceCase(
           reason: "cancelled while queued",
         }),
       );
+
       const reservation = yield* settlementReservation({
         submissionId: second.submissionId,
         ownershipToken: BOGUS_TOKEN,
         receiptId: second.receiptId,
         outcome: "aborted",
       });
+
       yield* ledger.reserveSettlement(reservation);
       yield* ledger.finalizeSettlement(
         SettlementFinalization.make({
@@ -3451,10 +3814,12 @@ const abortedSettledRowIsNotAJoiningGap = conformanceCase(
       );
 
       const hostClaim = yield* expectSome("the host claim", yield* claimLane(threadId, PRODUCER_A));
+
       yield* ensure(
         hostClaim.submissionId === host.submissionId,
         "The host must head the lane (the aborted-settled row is out of the queue)",
       );
+
       const claims = yield* ledger.claimJoining(
         ClaimJoiningRequest.make({
           threadId,
@@ -3463,11 +3828,13 @@ const abortedSettledRowIsNotAJoiningGap = conformanceCase(
           maxCount: 8,
         }),
       );
+
       yield* ensure(
         claims.length === 1 && claims[0].submissionId === third.submissionId,
         "The joining prefix must skip the aborted-settled row and claim the later ready work",
       );
       const settled = yield* recoverySnapshot(second.submissionId);
+
       yield* ensure(
         settled.submission.state === "settled" && settled.submission.settledOutcome === "aborted",
         "Walking the prefix must never disturb the aborted-settled row",

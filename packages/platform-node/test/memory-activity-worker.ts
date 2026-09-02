@@ -33,6 +33,7 @@ import {
 const decodeConfig = Effect.fn("MemoryActivityWorker.decodeConfig")(function* () {
   const database = yield* Config.string("EFFECT_AGENT_MEMORY_ACTIVITY_DB");
   const mode = yield* Config.string("EFFECT_AGENT_MEMORY_ACTIVITY_MODE");
+
   return yield* Schema.decodeUnknownEffect(MemoryActivityWorkerConfig)({ database, mode });
 });
 
@@ -48,6 +49,7 @@ const extractionOutput = (record: CanonicalRecordEnvelope, divergent: boolean) =
   if (record.record.payload._tag !== "UserInputRecorded") {
     return Schema.decodeUnknownEffect(ActivityMemoryOutput)({ _tag: "Skip" });
   }
+
   return Schema.decodeUnknownEffect(DanStatement)(record.record.payload.input).pipe(
     Effect.flatMap((statement) =>
       Schema.decodeUnknownEffect(ActivityMemoryOutput)({
@@ -85,8 +87,10 @@ const applyPrepared = Effect.fn("MemoryActivityWorker.applyPrepared")(function* 
   work: PreparedActivity,
 ) {
   const output = yield* Schema.decodeUnknownEffect(ActivityMemoryOutput)(work.output);
+
   if (output._tag === "Skip") return;
   const writer = yield* MemoryWriter;
+
   yield* writer.change(
     yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
       _tag: "Put",
@@ -112,16 +116,20 @@ export const memoryActivityWorker = Effect.gen(function* () {
   const config = yield* decodeConfig();
   const appliedWorkIds = yield* Ref.make<ReadonlyArray<PreparedActivity["workId"]>>([]);
   const extractedUserRecords = yield* Ref.make(0);
+
   const failpoint = MemoryMutationFailpoint.of({
     hit: (point: MemoryMutationPoint) =>
       config.mode === "crash-after-apply" && point === "memory:change:after"
         ? Effect.gen(function* () {
             yield* Console.log(encodedMarker);
+
             return yield* Effect.never;
           })
         : Effect.void,
   });
+
   const sql = SqliteClient.layer({ filename: config.database, busyTimeout: 5_000 });
+
   const adapters = Layer.mergeAll(
     activityProcessorStoreLayer.pipe(Layer.provide(sql)),
     memoryStoreLayerWithFailpoints.pipe(
@@ -130,6 +138,7 @@ export const memoryActivityWorker = Effect.gen(function* () {
     sqliteThreadStoreLayer({ filename: config.database, busyTimeout: 5_000 }),
     NodeCrypto.layer,
   );
+
   const pass = yield* processCommittedActivity({
     key: activityKey,
     owner: config.mode === "crash-after-apply" ? "first-process" : "second-process",
@@ -148,6 +157,7 @@ export const memoryActivityWorker = Effect.gen(function* () {
         Effect.tap(() => Ref.update(appliedWorkIds, (ids) => [...ids, work.workId])),
       ),
   }).pipe(Effect.provide(adapters));
+
   yield* Console.log(
     yield* encodedLine(MemoryActivityWorkerResult, {
       _tag: "MemoryActivityWorkerResult",

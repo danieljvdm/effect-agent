@@ -151,6 +151,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts: Array<Prompt.Prompt> = [];
+
     const model = Model.make(
       "scripted",
       "durable-test",
@@ -163,6 +164,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
               Ref.getAndUpdate(calls, (call) => call + 1).pipe(
                 Effect.map((call) => {
                   prompts.push(request.prompt);
+
                   return Stream.fromIterable(script(call));
                 }),
               ),
@@ -170,6 +172,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
         }),
       ),
     );
+
     return { model, prompts };
   });
 
@@ -187,6 +190,7 @@ const plannerDefinition = Agent.make("durable-planner", {
 });
 
 const RunDisposition = Schema.Literal("application-complete");
+
 const dispositionDefinition = Agent.make("durable-run-disposition", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({
@@ -213,7 +217,9 @@ const Search = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
   success: Schema.Struct({ available: Schema.Boolean }),
 }).annotate(ToolExecutionClass, "readonly");
+
 const searchTools = Toolkit.make(Search);
+
 const searchDefinition = Agent.make("durable-search", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -226,6 +232,7 @@ const searchDefinition = Agent.make("durable-search", {
     toolConcurrency: 1,
   }),
 });
+
 const searchToolLayer = searchTools.toLayer({
   search: () => Effect.succeed({ available: true }),
 });
@@ -235,7 +242,9 @@ const BookProgress = Tool.make("book_progress", {
   success: Schema.Struct({ confirmation: Schema.String }),
   needsApproval: true,
 });
+
 const progressApprovalTools = Toolkit.make(BookProgress);
+
 const progressApprovalDefinition = Agent.make("durable-progress-approval", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -248,6 +257,7 @@ const progressApprovalDefinition = Agent.make("durable-progress-approval", {
     toolConcurrency: 1,
   }),
 });
+
 const progressApprovalToolLayer = progressApprovalTools.toLayer({
   book_progress: () => Effect.succeed({ confirmation: "confirmed-#94" }),
 });
@@ -273,10 +283,12 @@ const baseLayer = Layer.mergeAll(
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
 
 const AnswerCompletionOutput = Schema.Struct({ answer: Schema.String });
+
 const DeliveryCompletionOutput = Schema.Struct({
   messageId: Schema.String,
   delivered: Schema.Boolean,
 });
+
 const isAnswerCompletionOutput = Schema.is(AnswerCompletionOutput);
 const isDeliveryCompletionOutput = Schema.is(DeliveryCompletionOutput);
 
@@ -285,12 +297,15 @@ const corruptCompletionOutput = (output: Schema.Json): Schema.Json => {
   if (isDeliveryCompletionOutput(output)) {
     return { messageId: "hostile-replacement", delivered: output.delivered };
   }
+
   return output;
 };
 
 const corruptCompletionEnvelope = (envelope: CanonicalRecordEnvelope): CanonicalRecordEnvelope => {
   const payload = envelope.record.payload;
+
   if (payload._tag !== "RunCompleted") return envelope;
+
   return CanonicalRecordEnvelope.make({
     ...envelope,
     record: RecordEnvelope.make({
@@ -310,6 +325,7 @@ const corruptedCompletionStoreLayer = Layer.effect(
   ThreadStore,
   Effect.gen(function* () {
     const inner = yield* ThreadStore;
+
     return ThreadStore.of({
       ...inner,
       read: (request) => inner.read(request).pipe(Stream.map(corruptCompletionEnvelope)),
@@ -332,6 +348,7 @@ const corruptedCompletionTestLayer = DurableAgentRuntime.layer.pipe(
 
 const injectProviderExecutedCall = (messages: Schema.Json): Schema.Json => {
   const prompt = Schema.decodeUnknownSync(Prompt.Prompt)(messages);
+
   return Schema.decodeUnknownSync(PersistedJson)(
     Schema.encodeSync(Prompt.Prompt)(
       Prompt.fromMessages([
@@ -353,7 +370,9 @@ const injectProviderExecutedCall = (messages: Schema.Json): Schema.Json => {
 
 const injectProviderCallEnvelope = (envelope: CanonicalRecordEnvelope): CanonicalRecordEnvelope => {
   const payload = envelope.record.payload;
+
   if (payload._tag !== "ModelResponseRecorded") return envelope;
+
   return CanonicalRecordEnvelope.make({
     ...envelope,
     record: RecordEnvelope.make({
@@ -380,6 +399,7 @@ const injectedProviderCallStoreLayer = Layer.effect(
   ThreadStore,
   Effect.gen(function* () {
     const inner = yield* ThreadStore;
+
     return ThreadStore.of({
       ...inner,
       read: (request) => inner.read(request).pipe(Stream.map(injectProviderCallEnvelope)),
@@ -404,7 +424,9 @@ const corruptRunDispositionEnvelope = (
   envelope: CanonicalRecordEnvelope,
 ): CanonicalRecordEnvelope => {
   const payload = envelope.record.payload;
+
   if (payload._tag !== "RunCompleted" || payload.runDisposition === undefined) return envelope;
+
   return CanonicalRecordEnvelope.make({
     ...envelope,
     record: RecordEnvelope.make({
@@ -424,6 +446,7 @@ const corruptedRunDispositionStoreLayer = Layer.effect(
   ThreadStore,
   Effect.gen(function* () {
     const inner = yield* ThreadStore;
+
     return ThreadStore.of({
       ...inner,
       read: (request) => inner.read(request).pipe(Stream.map(corruptRunDispositionEnvelope)),
@@ -475,6 +498,7 @@ const untrustedSettlementLedgerLayer = Layer.effect(
   SubmissionLedger,
   Effect.gen(function* () {
     const inner = yield* SubmissionLedger;
+
     return SubmissionLedger.of({
       ...inner,
       finalizeSettlement: (request) =>
@@ -536,16 +560,20 @@ const progressWaitControlLayer = Layer.effect(
       subscribe: (threadId) =>
         Effect.gen(function* () {
           const wait = yield* hub.subscribe(threadId);
+
           yield* Ref.update(active, (count) => count + 1);
           yield* Effect.addFinalizer(() => Ref.update(active, (count) => count - 1));
           const beforeCheck = yield* Ref.get(subscribeGate);
+
           if (Option.isSome(beforeCheck)) yield* Deferred.await(beforeCheck.value);
+
           return wait;
         }).pipe(
           Effect.map((wait) =>
             Effect.gen(function* () {
               yield* Ref.update(parking, (count) => count + 1);
               const beforePark = yield* Ref.get(parkGate);
+
               if (Option.isSome(beforePark)) yield* Deferred.await(beforePark.value);
               yield* wait;
             }),
@@ -574,13 +602,16 @@ const progressWaitStoreLayer = Layer.effect(
   Effect.gen(function* () {
     const inner = yield* ThreadStore;
     const control = yield* ProgressWaitTestControl;
+
     return ThreadStore.of({
       ...inner,
       read: (request) =>
         Stream.unwrap(
           Ref.update(control.reads, (current) => {
             const next = new Map(current);
+
             next.set(request.threadId, (current.get(request.threadId) ?? 0) + 1);
+
             return next;
           }).pipe(Effect.as(inner.read(request))),
         ),
@@ -615,6 +646,7 @@ const readCount = (control: ProgressWaitTestControl["Service"], threadId: Thread
 const readLog = (threadId: string) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(
       store.read(
         ThreadRead.make({
@@ -632,14 +664,17 @@ const lookupState = (submissionId: SubmissionId) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshot = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     expect(Option.isSome(snapshot)).toBe(true);
     if (Option.isNone(snapshot)) throw new Error("Expected the Submission to exist");
+
     return snapshot.value.state;
   });
 
 const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
   Effect.gen(function* () {
     const control = yield* DurableRuntimeFailpointTestControl;
+
     yield* control.setHandler((hitLocation) =>
       hitLocation === location
         ? Effect.fail(DurableRuntimeFailpointError.make({ location: hitLocation }))
@@ -649,6 +684,7 @@ const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
 
 const clearFailpoint = Effect.gen(function* () {
   const control = yield* DurableRuntimeFailpointTestControl;
+
   yield* control.clear;
 });
 
@@ -656,9 +692,11 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
   const error: unknown = failure.value;
+
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -673,6 +711,7 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"settled"}'));
       const agent = Agent.withModel(plannerDefinition, scripted.model);
       const threadId = decodeThreadId("thread-progress-settlement");
+
       yield* runtime.submit(
         agent,
         { question: "wake on settlement" },
@@ -681,6 +720,7 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
 
       const reserved = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+
       yield* failpoints.setHandler((location) =>
         location === "terminalize:after-reserve"
           ? Deferred.succeed(reserved, undefined).pipe(Effect.andThen(Deferred.await(release)))
@@ -688,21 +728,26 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
       );
       yield* Effect.gen(function* () {
         const processing = yield* Effect.forkChild(runtime.processThread(agent, threadId));
+
         yield* Deferred.await(reserved);
 
         const beforeSettlement = yield* readLog(threadId);
+
         expect(logTags(beforeSettlement)).not.toContain("SubmissionSettled");
         const cursor = beforeSettlement.at(-1)?.sequence;
+
         expect(cursor).toBeDefined();
         if (cursor === undefined) return;
 
         const waiting = yield* Effect.forkChild(runtime.awaitProgress(threadId, cursor));
+
         yield* waitForAtLeast(control.active, 1);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(waiting);
         yield* Fiber.join(processing);
 
         const afterSettlement = yield* readLog(threadId);
+
         expect(afterSettlement.at(-1)?.record.payload._tag).toBe("SubmissionSettled");
         expect(yield* Ref.get(control.active)).toBe(0);
       }).pipe(Effect.ensuring(failpoints.clear));
@@ -713,28 +758,35 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const control = yield* ProgressWaitTestControl;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0 ? approvalCallParts : finalParts('{"answer":"approved"}'),
       );
+
       const agent = Agent.withModel(progressApprovalDefinition, scripted.model);
       const threadId = decodeThreadId("thread-progress-approval");
+
       const receipt = yield* runtime.submit(
         agent,
         { question: "wake at both approval boundaries" },
         submitOptions(threadId, "progress-approval-1"),
       );
+
       const submitted = yield* readLog(threadId);
       const submittedCursor = submitted.at(-1)?.sequence;
+
       expect(submittedCursor).toBeDefined();
       if (submittedCursor === undefined) return;
 
       const awaitingRequest = yield* Effect.forkChild(
         runtime.awaitProgress(threadId, submittedCursor),
       );
+
       yield* waitForAtLeast(control.active, 1);
       yield* runtime.processThread(agent, threadId).pipe(Effect.provide(progressApprovalToolLayer));
       yield* Fiber.join(awaitingRequest);
       const requested = yield* readLog(threadId);
+
       expect(
         requested.some(
           (record) =>
@@ -743,15 +795,19 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
         ),
       ).toBe(true);
       const requestCursor = requested.at(-1)?.sequence;
+
       expect(requestCursor).toBeDefined();
       if (requestCursor === undefined) return;
 
       const parksBeforeDecision = yield* Ref.get(control.parking);
+
       const awaitingDecision = yield* Effect.forkChild(
         Effect.gen(function* () {
           let cursor = requestCursor;
+
           for (;;) {
             const records = yield* readLog(threadId);
+
             if (
               records.some(
                 (record) =>
@@ -762,11 +818,13 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
               return;
             }
             const last = records.at(-1);
+
             if (last !== undefined && last.sequence > cursor) cursor = last.sequence;
             yield* runtime.awaitProgress(threadId, cursor);
           }
         }),
       );
+
       yield* waitForAtLeast(control.parking, parksBeforeDecision + 1);
       yield* runtime.resolveApproval(
         ApprovalDecisionCommand.make({
@@ -783,6 +841,7 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
       yield* runtime.processThread(agent, threadId).pipe(Effect.provide(progressApprovalToolLayer));
       yield* Fiber.join(awaitingDecision);
       const decided = yield* readLog(threadId);
+
       expect(
         decided.some(
           (record) =>
@@ -801,22 +860,28 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"never"}'));
       const agent = Agent.withModel(plannerDefinition, scripted.model);
       const threadId = decodeThreadId("thread-progress-races");
+
       const receipt = yield* runtime.submit(
         agent,
         { question: "race the wait" },
         submitOptions(threadId, "progress-races-1"),
       );
+
       const initial = yield* readLog(threadId);
       const initialCursor = initial.at(-1)?.sequence;
+
       expect(initialCursor).toBeDefined();
       if (initialCursor === undefined) return;
 
       // Force append+notify after registration but before the authoritative check.
       const beforeCheck = yield* Deferred.make<void>();
+
       yield* Ref.set(control.subscribeGate, Option.some(beforeCheck));
+
       const subscribedRace = yield* Effect.forkChild(
         runtime.awaitProgress(threadId, initialCursor),
       );
+
       yield* waitForAtLeast(control.active, 1);
       yield* runtime.abort(
         AbortCommand.make({
@@ -831,16 +896,19 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
 
       const afterAbort = yield* readLog(threadId);
       const abortCursor = afterAbort.at(-1)?.sequence;
+
       expect(abortCursor).toBeDefined();
       if (abortCursor === undefined) return;
 
       // Force a hint after the empty canonical check but before the returned wait Effect parks.
       yield* Ref.set(control.subscribeGate, Option.none());
       const beforePark = yield* Deferred.make<void>();
+
       yield* Ref.set(control.parkGate, Option.some(beforePark));
       const readsBeforeParkRace = yield* readCount(control, threadId);
       const parksBeforeParkRace = yield* Ref.get(control.parking);
       const parkedRace = yield* Effect.forkChild(runtime.awaitProgress(threadId, abortCursor));
+
       yield* waitForAtLeast(control.parking, parksBeforeParkRace + 1);
       yield* scheduler.notify(threadId);
       yield* Deferred.succeed(beforePark, undefined);
@@ -850,6 +918,7 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
 
       // The second wake was deliberately a false positive: storage, not the hint, is truth.
       const final = yield* readLog(threadId);
+
       expect(final.at(-1)?.sequence).toBe(abortCursor);
     }),
   );
@@ -880,6 +949,7 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
         const unrelatedRecords = yield* readLog(unrelatedId);
         const cursor = records.at(-1)?.sequence;
         const unrelatedCursor = unrelatedRecords.at(-1)?.sequence;
+
         expect(cursor).toBeDefined();
         expect(unrelatedCursor).toBeDefined();
         if (cursor === undefined || unrelatedCursor === undefined) return;
@@ -888,9 +958,11 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
         const unrelatedReadsBefore = yield* readCount(control, unrelatedId);
         const first = yield* Effect.forkChild(runtime.awaitProgress(threadId, cursor));
         const second = yield* Effect.forkChild(runtime.awaitProgress(threadId, cursor));
+
         const unrelated = yield* Effect.forkChild(
           runtime.awaitProgress(unrelatedId, unrelatedCursor),
         );
+
         yield* waitForAtLeast(control.active, 3);
         yield* waitForAtLeast(control.parking, 3);
         expect(yield* readCount(control, threadId)).toBe(readsBefore + 2);
@@ -912,9 +984,11 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
         const timed = yield* Effect.forkChild(
           runtime.awaitProgress(threadId, cursor).pipe(Effect.timeoutOption(Duration.seconds(3))),
         );
+
         yield* waitForAtLeast(control.active, 1);
         yield* TestClock.adjust(Duration.seconds(3));
         const timedResult = yield* Fiber.join(timed);
+
         expect(Option.isNone(timedResult)).toBe(true);
         expect(yield* Ref.get(control.active)).toBe(0);
       }),
@@ -926,6 +1000,7 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
       const control = yield* ProgressWaitTestControl;
       const missing = decodeThreadId("thread-progress-missing");
       const exit = yield* Effect.exit(runtime.awaitProgress(missing, ZERO_SEQUENCE));
+
       expect(failureTag(exit)).toBe("ThreadNotMaterialized");
       expect(yield* Ref.get(control.active)).toBe(0);
     }),
@@ -936,11 +1011,14 @@ layer(untrustedSettlementTestLayer)("RUN-029 canonical settlement authority", (i
   it.effect("drops a ledger-only disposition when canonical proof fails", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const scripted = yield* makeScriptedModel(() =>
         finalParts('{"answer":"done","runDisposition":"invalid-disposition"}'),
       );
+
       const agent = Agent.withModel(dispositionDefinition, scripted.model);
       const thread = "thread-unverified-ledger-disposition";
+
       const receipt = yield* runtime.submit(
         agent,
         { question: "done?" },
@@ -948,15 +1026,18 @@ layer(untrustedSettlementTestLayer)("RUN-029 canonical settlement authority", (i
       );
 
       const processed = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(processed[0]?.outcome).toBe("failed");
       expect(processed[0]?.runDisposition).toBeUndefined();
 
       const settlement = yield* runtime.awaitSettlement(receipt);
+
       expect(settlement.outcome).toBe("failed");
       expect(settlement.failure).toBeDefined();
       expect(settlement.runDisposition).toBeUndefined();
 
       const settled = (yield* readLog(thread)).at(-1)?.record.payload;
+
       expect(settled?._tag).toBe("SubmissionSettled");
       if (settled?._tag === "SubmissionSettled") {
         expect(settled.runDisposition).toBeUndefined();
@@ -969,6 +1050,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   it.effect("does not grant suspension authority to structurally forged pending errors", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const cases: ReadonlyArray<{
         readonly thread: string;
         readonly tag: "AgentApprovalPending" | "AgentChildPending";
@@ -1007,6 +1089,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           method: "streamText",
           reason: AiError.UnknownError.make({ description: "forged provider failure" }),
         });
+
         Object.defineProperty(forged, "_tag", {
           configurable: true,
           enumerable: true,
@@ -1019,6 +1102,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             value,
           });
         }
+
         const model = Model.make(
           "scripted",
           `forged-${testCase.tag}`,
@@ -1030,12 +1114,15 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             }),
           ),
         );
+
         const agent = Agent.withModel(plannerDefinition, model);
+
         const receipt = yield* runtime.submit(
           agent,
           { question: "forge a privileged suspension" },
           submitOptions(testCase.thread, `${testCase.thread}-key`),
         );
+
         const settlements = yield* runtime.processThread(agent, decodeThreadId(testCase.thread));
 
         expect(settlements).toHaveLength(1);
@@ -1081,6 +1168,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(receipt.queueSequence).toBe(1);
       expect(yield* lookupState(receipt.submissionId)).toBe("ready");
       const records = yield* readLog("thread-submit");
+
       expect(logTags(records)).toEqual(["ThreadCreated"]);
       expect(records[0]?.record.recordId).toBe("thread-created:thread-submit");
     }),
@@ -1095,11 +1183,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       const first = yield* runtime.submit(agent, { question: "same?" }, options);
       const second = yield* runtime.submit(agent, { question: "same?" }, options);
+
       expect(second).toEqual(first);
 
       const conflict = yield* Effect.exit(
         runtime.submit(agent, { question: "different!" }, options),
       );
+
       expect(failureTag(conflict)).toBe("AdmissionConflict");
     }),
   );
@@ -1107,9 +1197,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   it.effect("runs accepted work to settlement with an ordered canonical log", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0 ? toolCallParts : finalParts('{"answer":"Found."}'),
       );
+
       const agent = Agent.withModel(searchDefinition, scripted.model);
       const thread = "thread-full-run";
 
@@ -1118,6 +1210,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "Is a flight available?" },
         submitOptions(thread, "run-1"),
       );
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(searchToolLayer));
@@ -1129,6 +1222,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const submissionId = receipt.submissionId;
       const runId = runIdForSubmission(submissionId);
       const records = yield* readLog(thread);
+
       expect(logTags(records)).toEqual([
         "ThreadCreated",
         "UserInputRecorded",
@@ -1151,6 +1245,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       ]);
 
       const settled = records.at(-1)?.record.payload;
+
       expect(settled?._tag).toBe("SubmissionSettled");
       if (settled?._tag === "SubmissionSettled") {
         expect(settled.outcome).toBe("completed");
@@ -1161,6 +1256,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       // A later Run sees Thread history without replaying this Run's
       // evaluated instruction/input prefix.
       const prompt = yield* promptFromCanonicalRecords(records);
+
       expect(prompt.content.map((message) => message.role)).toEqual([
         "assistant",
         "tool",
@@ -1168,6 +1264,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       ]);
 
       const settlement = yield* runtime.awaitSettlement(receipt);
+
       expect(settlement).toEqual(settlements[0]);
     }),
   );
@@ -1177,6 +1274,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const scenarios = [
           {
             location: undefined,
@@ -1199,8 +1297,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           const scripted = yield* makeScriptedModel(() =>
             finalParts('{"answer":"done","runDisposition":"application-complete"}'),
           );
+
           const agent = Agent.withModel(dispositionDefinition, scripted.model);
           const threadId = decodeThreadId(scenario.thread);
+
           const receipt = yield* runtime.submit(
             agent,
             { question: "done?" },
@@ -1212,19 +1312,23 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           } else {
             yield* armFailpoint(scenario.location);
             const killed = yield* Effect.exit(runtime.processThread(agent, threadId));
+
             expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
             yield* clearFailpoint;
             yield* runtime.runRecovery;
           }
 
           const settlement = yield* runtime.awaitSettlement(receipt);
+
           expect(settlement.outcome).toBe("completed");
           expect(settlement.runDisposition).toBe("application-complete");
           const records = yield* readLog(scenario.thread);
           const projection = replayThread(threadId, records);
+
           expect(projection.settlements).toHaveLength(1);
           const disposition = projection.settlements[0]?.runDisposition;
           const decodedDisposition = yield* Schema.decodeUnknownEffect(RunDisposition)(disposition);
+
           expect(decodedDisposition).toBe("application-complete");
         }
       }),
@@ -1233,13 +1337,16 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   it.effect("recovers a canonically completed no-tool Turn without another model call", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? finalParts('{"answer":"Committed once."}')
           : finalParts('{"answer":"Wrong duplicate call."}'),
       );
+
       const agent = Agent.withModel(plannerDefinition, scripted.model);
       const thread = "thread-final-turn-recovery";
+
       const receipt = yield* runtime.submit(
         agent,
         { question: "complete once?" },
@@ -1248,17 +1355,20 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       yield* armFailpoint("turn:after-canonical-append");
       const crashed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
       expect(scripted.prompts).toHaveLength(1);
       yield* clearFailpoint;
 
       const settled = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settled).toHaveLength(1);
       expect(settled[0]?.outcome).toBe("completed");
       expect(yield* runtime.awaitSettlement(receipt)).toEqual(settled[0]);
       expect(scripted.prompts).toHaveLength(1);
 
       const payloads = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
       expect(payloads.filter((payload) => payload._tag === "ModelResponseRecorded")).toHaveLength(
         1,
       );
@@ -1276,11 +1386,14 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const PostMessage = Tool.make("post_message", {
           parameters: Schema.Struct({ message: Schema.String }),
           success: Schema.Struct({ messageId: Schema.String }),
         });
+
         const tools = Toolkit.make(PostMessage);
+
         const definition = Agent.make("durable-terminal-delivery", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ messageId: Schema.String, delivered: Schema.Boolean }),
@@ -1297,6 +1410,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             project: ({ result }) => ({ messageId: result.messageId, delivered: true }),
           },
         });
+
         const scripted = yield* makeScriptedModel((call) =>
           call === 0
             ? [
@@ -1311,13 +1425,16 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
               ]
             : finalParts('{"messageId":"wrong-second-call","delivered":false}'),
         );
+
         const handlerCalls = yield* Ref.make(0);
+
         const toolLayer = tools.toLayer({
           post_message: () =>
             Ref.updateAndGet(handlerCalls, (count) => count + 1).pipe(
               Effect.as({ messageId: "message-1" }),
             ),
         });
+
         const agent = Agent.withModel(definition, scripted.model);
         const thread = "thread-terminal-delivery-recovery";
 
@@ -1327,9 +1444,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           submitOptions(thread, "terminal-delivery-1"),
         );
         yield* armFailpoint("turn:after-results-append");
+
         const crashed = yield* Effect.exit(
           runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
         );
+
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         expect(yield* Ref.get(handlerCalls)).toBe(1);
         expect(scripted.prompts).toHaveLength(1);
@@ -1338,11 +1457,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         const settled = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(toolLayer));
+
         expect(settled).toHaveLength(1);
         expect(settled[0]?.outcome).toBe("completed");
         expect(yield* Ref.get(handlerCalls)).toBe(1);
         expect(scripted.prompts).toHaveLength(1);
         const payloads = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
         expect(payloads.filter((payload) => payload._tag === "ModelResponseRecorded")).toHaveLength(
           1,
         );
@@ -1359,11 +1480,14 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const PostMessage = Tool.make("post_message", {
           parameters: Schema.Struct({ message: Schema.String }),
           success: Schema.Struct({ messageId: Schema.String }),
         });
+
         const tools = Toolkit.make(PostMessage);
+
         const definition = Agent.make("durable-over-token-delivery", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ messageId: Schema.String, delivered: Schema.Boolean }),
@@ -1382,6 +1506,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             project: ({ result }) => ({ messageId: result.messageId, delivered: true }),
           },
         });
+
         const scripted = yield* makeScriptedModel(() => [
           {
             type: "tool-call",
@@ -1399,13 +1524,16 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             },
           },
         ]);
+
         const handlerCalls = yield* Ref.make(0);
+
         const toolLayer = tools.toLayer({
           post_message: () =>
             Ref.updateAndGet(handlerCalls, (count) => count + 1).pipe(
               Effect.as({ messageId: "recovered-message-1" }),
             ),
         });
+
         const agent = Agent.withModel(definition, scripted.model);
         const thread = "thread-over-token-terminal-delivery";
 
@@ -1415,9 +1543,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           submitOptions(thread, "over-token-terminal-delivery-1"),
         );
         yield* armFailpoint("turn:after-response-append");
+
         const crashed = yield* Effect.exit(
           runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
         );
+
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         expect(yield* Ref.get(handlerCalls)).toBe(0);
         expect(scripted.prompts).toHaveLength(1);
@@ -1426,11 +1556,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         const settled = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(toolLayer));
+
         expect(settled).toHaveLength(1);
         expect(settled[0]?.outcome).toBe("completed");
         expect(yield* Ref.get(handlerCalls)).toBe(1);
         expect(scripted.prompts).toHaveLength(1);
         const payloads = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
         expect(payloads.at(-1)).toMatchObject({
           _tag: "SubmissionSettled",
           outcome: "completed",
@@ -1445,11 +1577,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const secret = "sensitive-run-disposition-must-not-enter-history";
+
       const scripted = yield* makeScriptedModel(() =>
         finalParts(
           '{"answer":"done","runDisposition":"sensitive-run-disposition-must-not-enter-history"}',
         ),
       );
+
       const agent = Agent.withModel(dispositionDefinition, scripted.model);
       const thread = "thread-run-disposition-invalid";
 
@@ -1458,14 +1592,17 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "done?" },
         submitOptions(thread, "run-disposition-invalid-1"),
       );
+
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
 
       expect(settlements[0]?.outcome).toBe("failed");
       expect(settlements[0]?.runDisposition).toBeUndefined();
       const settlement = yield* runtime.awaitSettlement(receipt);
+
       expect(settlement.outcome).toBe("failed");
       expect(settlement.runDisposition).toBeUndefined();
       const settled = (yield* readLog(thread)).at(-1)?.record.payload;
+
       expect(settled?._tag).toBe("SubmissionSettled");
       if (settled?._tag === "SubmissionSettled") {
         expect(settled.outcome).toBe("failed");
@@ -1484,6 +1621,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         // Deliberately unannotated: an uncertain-class tool normally gains
         // `ToolCallPrepared` records under the P5 split commits — a rejected
         // batch must never durably declare, so none may appear here.
@@ -1491,7 +1629,9 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           parameters: Schema.Struct({ query: Schema.String }),
           success: Schema.Struct({ available: Schema.Boolean }),
         });
+
         const probeTools = Toolkit.make(Probe);
+
         const definition = Agent.make("durable-soft-landing", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({
@@ -1511,11 +1651,14 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             fromOutput: (output) => output.runDisposition,
           },
         });
+
         const handlerStarts = yield* Ref.make(0);
+
         const probeToolLayer = probeTools.toLayer({
           probe: () =>
             Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as({ available: true })),
         });
+
         const scripted = yield* makeScriptedModel((call) =>
           call === 0
             ? [
@@ -1539,6 +1682,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
                 '{"answer":"partial, budget exhausted","runDisposition":"application-complete"}',
               ),
         );
+
         const agent = Agent.withModel(definition, scripted.model);
         const thread = "thread-soft-landing";
 
@@ -1547,6 +1691,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           { question: "Everything about the package?" },
           submitOptions(thread, "soft-landing-1"),
         );
+
         const settlements = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.provide(probeToolLayer));
@@ -1555,6 +1700,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         expect(settlements[0]?.outcome).toBe("completed");
         expect(settlements[0]?.runDisposition).toBeUndefined();
         const settlement = yield* runtime.awaitSettlement(receipt);
+
         expect(settlement.outcome).toBe("completed");
         expect(settlement.runDisposition).toBeUndefined();
         expect(yield* Ref.get(handlerStarts)).toBe(0);
@@ -1562,6 +1708,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         const submissionId = receipt.submissionId;
         const runId = runIdForSubmission(submissionId);
         const records = yield* readLog(thread);
+
         // The rejected Turn commits as ONE single-batch canonical Turn — no
         // `ToolCallPrepared`, no split response batch — and the Submission
         // settles completed with the honest durable finishReason (RUN-011).
@@ -1590,9 +1737,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-1")),
           toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-2")),
         ]);
+
         const settledCalls = records
           .map((envelope) => envelope.record.payload)
           .filter((payload) => payload._tag === "ToolCallSettled");
+
         expect(
           settledCalls.map((payload) => ({
             toolCallId: payload.toolCallId,
@@ -1610,6 +1759,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           });
         }
         const settled = records.at(-1)?.record.payload;
+
         expect(settled?._tag).toBe("SubmissionSettled");
         if (settled?._tag === "SubmissionSettled") {
           expect(settled.outcome).toBe("completed");
@@ -1627,15 +1777,18 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         // A later Run sees the rejected batch as Thread history but
         // not this Run's evaluated instruction/input prefix.
         const prompt = yield* promptFromCanonicalRecords(records);
+
         expect(prompt.content.map((message) => message.role)).toEqual([
           "assistant",
           "tool",
           "assistant",
         ]);
         const toolMessage = prompt.content.find((message) => message.role === "tool");
+
         const toolParts = (toolMessage?.content ?? []).flatMap((part) =>
           part.type === "tool-result" ? [{ id: part.id, isFailure: part.isFailure ?? false }] : [],
         );
+
         expect(toolParts).toEqual([
           { id: "probe-1", isFailure: true },
           { id: "probe-2", isFailure: true },
@@ -1648,6 +1801,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const scenarios = [
           {
             location: "terminalize:after-reserve" as const,
@@ -1660,12 +1814,15 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             key: "soft-landing-append-1",
           },
         ];
+
         for (const scenario of scenarios) {
           const Probe = Tool.make("probe", {
             parameters: Schema.Struct({ query: Schema.String }),
             success: Schema.Struct({ available: Schema.Boolean }),
           });
+
           const probeTools = Toolkit.make(Probe);
+
           const definition = Agent.make("durable-soft-landing-recovery", {
             input: Schema.Struct({ question: Schema.String }),
             output: Schema.Struct({
@@ -1685,9 +1842,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
               fromOutput: (output) => output.runDisposition,
             },
           });
+
           const probeToolLayer = probeTools.toLayer({
             probe: () => Effect.succeed({ available: true }),
           });
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? [
@@ -1711,6 +1870,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
                   '{"answer":"recovered partial","runDisposition":"application-complete"}',
                 ),
           );
+
           const agent = Agent.withModel(definition, scripted.model);
 
           const receipt = yield* runtime.submit(
@@ -1718,23 +1878,29 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             { question: "Everything?" },
             submitOptions(scenario.thread, scenario.key),
           );
+
           yield* armFailpoint(scenario.location);
+
           const killed = yield* Effect.exit(
             runtime
               .processThread(agent, decodeThreadId(scenario.thread))
               .pipe(Effect.provide(probeToolLayer)),
           );
+
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
           yield* runtime.runRecovery;
           const settlement = yield* runtime.awaitSettlement(receipt);
+
           expect(settlement.outcome).toBe("completed");
           expect(settlement.runDisposition).toBeUndefined();
           const records = yield* readLog(scenario.thread);
+
           const settledRecords = records
             .map((envelope) => envelope.record.payload)
             .filter((payload) => payload._tag === "SubmissionSettled");
+
           expect(settledRecords).toHaveLength(1);
           expect(settledRecords[0]).toMatchObject({
             outcome: "completed",
@@ -1758,10 +1924,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "when?" },
         submitOptions(thread, "await-1"),
       );
+
       const waiter = yield* Effect.forkChild(runtime.awaitSettlement(receipt));
+
       yield* runtime.processThread(agent, decodeThreadId(thread));
       yield* TestClock.adjust(Duration.millis(150));
       const settlement = yield* Fiber.join(waiter);
+
       expect(settlement.outcome).toBe("completed");
       expect(settlement.receiptId).toBe(receipt.receiptId);
     }),
@@ -1779,15 +1948,18 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "first" },
         submitOptions(thread, "fifo-1"),
       );
+
       const second = yield* runtime.submit(
         agent,
         { question: "second" },
         submitOptions(thread, "fifo-2"),
       );
+
       expect(first.queueSequence).toBe(1);
       expect(second.queueSequence).toBe(2);
 
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       // P5 (plan §2.5): the active host Run claims the contiguous ready prefix, so the second
       // Submission JOINS the first Run instead of waiting for its own claim — one head
       // settlement, and the joined Submission settles with the host in admitted FIFO order.
@@ -1795,22 +1967,28 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         first.submissionId,
       ]);
       const joinedSettlement = yield* runtime.awaitSettlement(second);
+
       expect(joinedSettlement.outcome).toBe("completed");
 
       const records = yield* readLog(thread);
+
       const settledIds = records
         .filter((envelope) => envelope.record.payload._tag === "SubmissionSettled")
         .map((envelope) => envelope.record.recordId);
+
       expect(settledIds).toEqual([
         submissionSettlementRecordId(first.submissionId),
         submissionSettlementRecordId(second.submissionId),
       ]);
+
       const firstInputSequence = records.find(
         (envelope) => envelope.record.recordId === submissionInputRecordId(first.submissionId),
       )?.sequence;
+
       const secondInputSequence = records.find(
         (envelope) => envelope.record.recordId === submissionInputRecordId(second.submissionId),
       )?.sequence;
+
       expect(firstInputSequence).toBeDefined();
       expect(secondInputSequence).toBeDefined();
       expect(Number(firstInputSequence)).toBeLessThan(Number(secondInputSequence));
@@ -1829,6 +2007,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "abort me" },
         submitOptions(thread, "abort-ready-1"),
       );
+
       const intent = yield* runtime.abort(
         AbortCommand.make({
           submissionId: receipt.submissionId,
@@ -1836,24 +2015,30 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           reason: "user cancelled",
         }),
       );
+
       expect(intent.submissionId).toBe(receipt.submissionId);
 
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
       expect(report?.decision._tag).toBe("SettleAborted");
       expect(report?.disposition).toBe("repaired");
 
       const settlement = yield* runtime.awaitSettlement(receipt);
+
       expect(settlement.outcome).toBe("aborted");
       expect(settlement.runDisposition).toBeUndefined();
 
       const records = yield* readLog(thread);
       const tags = logTags(records);
+
       expect(tags).toContain("AbortRequested");
       expect(tags.indexOf("AbortRequested")).toBeLessThan(tags.indexOf("SubmissionSettled"));
+
       const settled = records.find(
         (envelope) => envelope.record.payload._tag === "SubmissionSettled",
       )?.record.payload;
+
       expect(settled?._tag).toBe("SubmissionSettled");
       if (settled?._tag === "SubmissionSettled") {
         expect(settled.runDisposition).toBeUndefined();
@@ -1875,6 +2060,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           }),
         ),
       );
+
       expect(failureTag(conflict)).toBe("SettlementConflict");
     }),
   );
@@ -1895,16 +2081,19 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "head" },
         submitOptions(thread, "non-head-1"),
       );
+
       const second = yield* runtime.submit(
         agent,
         { question: "cancel me" },
         submitOptions(thread, "non-head-2"),
       );
+
       const third = yield* runtime.submit(
         agent,
         { question: "after the gap" },
         submitOptions(thread, "non-head-3"),
       );
+
       yield* runtime.abort(
         AbortCommand.make({
           submissionId: second.submissionId,
@@ -1915,20 +2104,25 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === second.submissionId);
+
       expect(report?.decision._tag).toBe("SettleAborted");
       expect(report?.disposition).toBe("repaired");
 
       // The aborted non-head settled immediately — the HEAD is still unsettled.
       const settled = yield* runtime.awaitSettlement(second);
+
       expect(settled.outcome).toBe("aborted");
       const ledger = yield* SubmissionLedger;
+
       const headRow = yield* ledger.lookup(
         SubmissionLookupById.make({ submissionId: head.submissionId }),
       );
+
       expect(Option.isSome(headRow) && headRow.value.state !== "settled").toBe(true);
 
       const midRecords = yield* readLog(thread);
       const midTags = logTags(midRecords);
+
       // Never claimed: no model ran and no canonical input exists for the aborted row, and
       // its abort record precedes its settlement (durability §13).
       expect(midRecords.map((envelope) => envelope.record.recordId)).not.toContain(
@@ -1942,20 +2136,25 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       // The head then runs normally and the THIRD Submission joins its Run across the
       // aborted-settled row — the joining-prefix gap rule treats it as a non-gap.
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements.map((settlement) => settlement.submissionId)).toEqual([head.submissionId]);
       const headSettled = yield* runtime.awaitSettlement(head);
+
       expect(headSettled.outcome).toBe("completed");
       const thirdSettled = yield* runtime.awaitSettlement(third);
+
       expect(thirdSettled.outcome).toBe("completed");
 
       // Canonical order: the aborted settlement precedes the head's settlement — that is the
       // documented §7(c) exemption, and the shared invariant checker accepts it.
       const records = yield* readLog(thread);
       const recordIds = records.map((envelope) => envelope.record.recordId);
+
       expect(recordIds.indexOf(submissionSettlementRecordId(second.submissionId))).toBeLessThan(
         recordIds.indexOf(submissionSettlementRecordId(head.submissionId)),
       );
       const integrity = yield* runtime.verify(decodeThreadId(thread));
+
       expect(integrity.ok).toBe(true);
       expect(integrity.checks.find((check) => check.name === "fifo-settlement-order")?.status).toBe(
         "passed",
@@ -1968,6 +2167,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const runtime = yield* DurableAgentRuntime;
       const started = yield* Deferred.make<void>();
       const latch = yield* Deferred.make<void>();
+
       const model = Model.make(
         "scripted",
         "durable-blocked",
@@ -1982,6 +2182,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           }),
         ),
       );
+
       const agent = Agent.withModel(plannerDefinition, model);
       const thread = "thread-abort-running";
 
@@ -1990,7 +2191,9 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "block" },
         submitOptions(thread, "abort-running-1"),
       );
+
       const worker = yield* Effect.forkChild(runtime.processThread(agent, decodeThreadId(thread)));
+
       yield* Deferred.await(started);
 
       yield* runtime.abort(
@@ -2003,15 +2206,18 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       yield* TestClock.adjust(Duration.millis(150));
 
       const settlements = yield* Fiber.join(worker);
+
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("aborted");
       expect(yield* Deferred.isDone(latch)).toBe(false);
 
       const records = yield* readLog(thread);
       const tags = logTags(records);
+
       expect(tags.indexOf("AbortRequested")).toBeGreaterThanOrEqual(0);
       expect(tags.indexOf("AbortRequested")).toBeLessThan(tags.indexOf("SubmissionSettled"));
       const settled = records.at(-1)?.record.payload;
+
       if (settled?._tag === "SubmissionSettled") {
         expect(settled.outcome).toBe("aborted");
       }
@@ -2024,6 +2230,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const started = yield* Deferred.make<void>();
       const latch = yield* Deferred.make<void>();
       const calls = yield* Ref.make(0);
+
       const model = Model.make(
         "scripted",
         "durable-fencing",
@@ -2052,6 +2259,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           }),
         ),
       );
+
       const agent = Agent.withModel(plannerDefinition, model);
       const thread = "thread-fencing";
 
@@ -2064,36 +2272,45 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const staleWorker = yield* Effect.forkChild(
         runtime.processThread(agent, decodeThreadId(thread)),
       );
+
       yield* Deferred.await(started);
 
       // A second Attempt (same producer restarting) supersedes the first: higher epoch.
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("completed");
 
       // Unblock the stale Attempt: its canonical append must be fenced, not committed.
       yield* Deferred.succeed(latch, void 0);
       const staleExit = yield* Fiber.await(staleWorker);
+
       expect(["FenceRejected", "OwnershipLost"]).toContain(failureTag(staleExit));
 
       const records = yield* readLog(thread);
       const runId = runIdForSubmission(receipt.submissionId);
+
       const turnRecords = records.filter(
         (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
       );
+
       expect(turnRecords).toHaveLength(1);
       const firstTurn = turnRecords[0]?.record.payload;
+
       if (firstTurn?._tag === "ModelResponseRecorded") {
         const messages = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(firstTurn.messages);
+
         const text = messages.content
           .filter((message) => message.role === "assistant")
           .flatMap((message) => message.content)
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("");
+
         expect(text).toBe('{"answer":"fresh"}');
       }
       const settledRecords = logTags(records).filter((tag) => tag === "SubmissionSettled");
+
       expect(settledRecords).toHaveLength(1);
     }),
   );
@@ -2109,6 +2326,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       yield* armFailpoint("submit:after-admit");
       const interrupted = yield* Effect.exit(runtime.submit(agent, { question: "kill" }, options));
+
       expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
@@ -2119,8 +2337,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           idempotencyKey: options.idempotencyKey,
         }),
       );
+
       expect(Option.isSome(admitted)).toBe(true);
       const resumed = yield* runtime.submit(agent, { question: "kill" }, options);
+
       if (Option.isSome(admitted)) {
         expect(admitted.value.state).toBe("admitted");
         expect(resumed.submissionId).toBe(admitted.value.submissionId);
@@ -2132,10 +2352,12 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       yield* armFailpoint("submit:after-materialize");
       const options2 = submitOptions(thread, "resume-2");
       const killed = yield* Effect.exit(runtime.submit(agent, { question: "kill" }, options2));
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
       const receipt2 = yield* runtime.submit(agent, { question: "kill" }, options2);
       const resubmitted = yield* runtime.submit(agent, { question: "kill" }, options2);
+
       expect(resubmitted).toEqual(receipt2);
       expect(yield* lookupState(receipt2.submissionId)).toBe("ready");
     }),
@@ -2151,6 +2373,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
         // Kill after admission: nothing durable beyond the ledger row.
         yield* armFailpoint("submit:after-admit");
+
         const killedAdmit = yield* Effect.exit(
           runtime.submit(
             agent,
@@ -2158,11 +2381,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             submitOptions("thread-recover-admit", "recover-1"),
           ),
         );
+
         expect(failureTag(killedAdmit)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         const reports = yield* runtime.runRecovery;
         const admitReport = reports.find((entry) => entry.threadId === "thread-recover-admit");
+
         expect(admitReport?.decision._tag).toBe("CompleteMaterialization");
         expect(admitReport?.disposition).toBe("repaired");
         if (admitReport !== undefined) {
@@ -2172,6 +2397,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
         // Kill after materialization: only the readiness marker is missing.
         yield* armFailpoint("submit:after-materialize");
+
         const killedReady = yield* Effect.exit(
           runtime.submit(
             agent,
@@ -2179,13 +2405,16 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             submitOptions("thread-recover-ready", "recover-2"),
           ),
         );
+
         expect(failureTag(killedReady)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         const readinessReports = yield* runtime.runRecovery;
+
         const repaired = readinessReports.find(
           (report) => report.threadId === "thread-recover-ready",
         );
+
         expect(repaired?.decision._tag).toBe("RepairReadiness");
         expect(repaired?.disposition).toBe("repaired");
         if (repaired !== undefined) {
@@ -2207,26 +2436,33 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "apply once" },
         submitOptions(thread, "claim-kill-1"),
       );
+
       yield* armFailpoint("claim:after-claim");
       const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
       expect(report?.decision._tag).toBe("ApplyInput");
       expect(report?.disposition).toBe("repaired");
 
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
       );
+
       expect(snapshot.inputApplied?.recordId).toBe(submissionInputRecordId(receipt.submissionId));
 
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements[0]?.outcome).toBe("completed");
+
       const inputRecords = (yield* readLog(thread)).filter(
         (envelope) => envelope.record.recordId === submissionInputRecordId(receipt.submissionId),
       );
+
       expect(inputRecords).toHaveLength(1);
     }),
   );
@@ -2243,21 +2479,27 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "mark me" },
         submitOptions(thread, "marker-1"),
       );
+
       yield* armFailpoint("input:after-canonical-append");
       const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
       expect(report?.decision._tag).toBe("RepairInputMarker");
       expect(report?.disposition).toBe("repaired");
 
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements[0]?.outcome).toBe("completed");
+
       const inputRecords = (yield* readLog(thread)).filter(
         (envelope) => envelope.record.recordId === submissionInputRecordId(receipt.submissionId),
       );
+
       expect(inputRecords).toHaveLength(1);
     }),
   );
@@ -2274,22 +2516,28 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "reserve" },
         submitOptions(thread, "reserved-1"),
       );
+
       yield* armFailpoint("terminalize:after-reserve");
       const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
       expect(report?.decision._tag).toBe("AppendReservedSettlement");
       expect(report?.disposition).toBe("repaired");
 
       const settlement = yield* runtime.awaitSettlement(receipt);
+
       expect(settlement.outcome).toBe("completed");
       const records = yield* readLog(thread);
+
       const settledRecords = records.filter(
         (envelope) => envelope.record.payload._tag === "SubmissionSettled",
       );
+
       expect(settledRecords).toHaveLength(1);
       expect(records.map((envelope) => envelope.record.recordId)).toContain(
         recoveryRepairRecordId(receipt.submissionId, "AppendReservedSettlement"),
@@ -2309,26 +2557,32 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "finalize" },
         submitOptions(thread, "finalize-1"),
       );
+
       yield* armFailpoint("terminalize:after-canonical-append");
       const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       // The canonical settlement exists while the ledger row is still nonterminal.
       const beforeRecords = yield* readLog(thread);
+
       expect(logTags(beforeRecords)).toContain("SubmissionSettled");
       expect(yield* lookupState(receipt.submissionId)).not.toBe("settled");
 
       const reports = yield* runtime.runRecovery;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
       expect(report?.decision._tag).toBe("FinalizeLedgerFromHistory");
       expect(report?.disposition).toBe("repaired");
 
       expect(yield* lookupState(receipt.submissionId)).toBe("settled");
       const afterRecords = yield* readLog(thread);
+
       const settledRecords = afterRecords.filter(
         (envelope) => envelope.record.payload._tag === "SubmissionSettled",
       );
+
       expect(settledRecords).toHaveLength(1);
       expect(settledRecords[0]).toEqual(
         beforeRecords.find((envelope) => envelope.record.payload._tag === "SubmissionSettled"),
@@ -2339,9 +2593,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   it.effect("a new Attempt resumes from the last committed Turn boundary", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0 ? toolCallParts : finalParts('{"answer":"Resumed."}'),
       );
+
       const agent = Agent.withModel(searchDefinition, scripted.model);
       const thread = "thread-resume-turn";
 
@@ -2350,19 +2606,23 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "resume?" },
         submitOptions(thread, "resume-turn-1"),
       );
+
       // P5 split commits: the readonly tool Turn commits its response batch at the finish part
       // and its results batch at the next TurnStarted seam — kill right after the results append
       // so Turn 1 is fully canonical and the run is not settled (the P4 boundary, same shape).
       yield* armFailpoint("turn:after-results-append");
+
       const killed = yield* Effect.exit(
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(searchToolLayer)),
       );
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       // Turn 1 (model response + settled Tool batch) is canonical; the run is not settled.
       const runId = runIdForSubmission(receipt.submissionId);
       const committed = yield* readLog(thread);
+
       expect(logTags(committed)).toEqual([
         "ThreadCreated",
         "UserInputRecorded",
@@ -2374,6 +2634,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(searchToolLayer));
+
       expect(settlements[0]?.outcome).toBe("completed");
 
       // The resumed Attempt's model request saw the canonical prompt, tool result included,
@@ -2382,6 +2643,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       // message is the derived run-status line (RUN-024) — neither is canonical.
       expect(scripted.prompts).toHaveLength(2);
       const resumedPrompt = scripted.prompts[1];
+
       expect(resumedPrompt?.content.map((message) => message.role)).toEqual([
         "system",
         "system",
@@ -2392,6 +2654,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       ]);
 
       const records = yield* readLog(thread);
+
       expect(
         records.filter((envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1)),
       ).toHaveLength(1);
@@ -2399,6 +2662,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         modelResponseRecordId(runId, 2),
       );
       const settled = records.at(-1)?.record.payload;
+
       if (settled?._tag === "SubmissionSettled") {
         expect(settled.result).toEqual({ answer: "Resumed." });
       }
@@ -2423,12 +2687,15 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "typed" },
         submitOptions("thread-types", "types-1"),
       );
+
       type SubmitError = Effect.Error<typeof submitProgram>;
       const submitHasAdmissionConflict: AdmissionConflict extends SubmitError ? true : false = true;
+
       const submitHasFailpoint: DurableRuntimeFailpointError extends SubmitError ? true : false =
         true;
 
       const awaitProgram = runtime.awaitSettlement(typeProofReceipt);
+
       type AwaitError = Effect.Error<typeof awaitProgram>;
       type AwaitSuccess = Effect.Success<typeof awaitProgram>;
       const awaitHasConflict: SettlementConflict extends AwaitError ? true : false = true;
@@ -2438,6 +2705,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         Agent.withModel(searchDefinition, scripted.model),
         decodeThreadId("thread-types"),
       );
+
       type WorkerError = Effect.Error<typeof workerProgram>;
       type WorkerServices = Effect.Services<typeof workerProgram>;
       const workerHasFence: FenceRejected extends WorkerError ? true : false = true;
@@ -2487,6 +2755,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         ],
       }),
     ];
+
     const turnTwoAppended: ReadonlyArray<Prompt.Message> = [
       Prompt.makeMessage("assistant", {
         content: [Prompt.makePart("text", { text: '{"answer":"Found."}' })],
@@ -2513,6 +2782,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           deploymentId,
           createdAt,
         });
+
         expect(batchOne.records.map((record) => record.recordId)).toEqual([
           modelResponseRecordId(runId, 1),
           `tool-settled:${runId}:1:call-1`,
@@ -2538,6 +2808,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         ];
 
         const prompt = yield* promptFromCanonicalRecords(journalRecords);
+
         expect(prompt.content.map((message) => message.role)).toEqual([
           "system",
           "user",
@@ -2546,11 +2817,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           "assistant",
         ]);
         const toolMessage = prompt.content.find((message) => message.role === "tool");
+
         expect(
           toolMessage?.content.filter((part) => part.type === "tool-result").map((part) => part.id),
         ).toEqual(["call-1"]);
 
         const projection = yield* projectRunJournal(journalRecords, runId);
+
         expect(projection.committedTurns).toBe(2);
         expect(projection.historyBefore.content).toHaveLength(0);
 
@@ -2558,10 +2831,12 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         const replayed = yield* projectRunJournal(journalRecords, runId);
         const encodedFirst = yield* Schema.encodeEffect(Prompt.Prompt)(projection.prompt);
         const encodedReplayed = yield* Schema.encodeEffect(Prompt.Prompt)(replayed.prompt);
+
         expect(encodedReplayed).toEqual(encodedFirst);
 
         // Another Run's projection treats these records as prior history.
         const other = yield* projectRunJournal(journalRecords, otherRunId);
+
         expect(other.committedTurns).toBe(0);
         expect(other.historyBefore.content).toHaveLength(prompt.content.length);
       }),
@@ -2580,6 +2855,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             createdAt,
           }),
         );
+
         expect(failureTag(exit)).toBe("RunJournalError");
       }),
     );
@@ -2595,7 +2871,9 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           deploymentId,
           createdAt,
         });
+
         const toolRecord = batch.records[1];
+
         expect(toolRecord?.recordId).toBe(toolCallSettledRecordId(runId, 3, callOneId));
         if (toolRecord?.payload._tag === "ToolCallSettled") {
           expect(toolRecord.payload.result).toEqual({ available: true });
@@ -2621,10 +2899,12 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
       );
       yield* armFailpoint("turn:after-canonical-append");
       const crashed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       const recovered = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(recovered)).toBe("RunJournalError");
       expect(scripted.prompts).toHaveLength(1);
     }),
@@ -2633,11 +2913,14 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
   it.effect("rejects a completion-Tool marker that disagrees with its canonical result", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const PostMessage = Tool.make("post_message", {
         parameters: Schema.Struct({ message: Schema.String }),
         success: Schema.Struct({ messageId: Schema.String }),
       });
+
       const tools = Toolkit.make(PostMessage);
+
       const definition = Agent.make("hostile-terminal-delivery", {
         input: Schema.Struct({ question: Schema.String }),
         output: DeliveryCompletionOutput,
@@ -2654,6 +2937,7 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
           project: ({ result }) => ({ messageId: result.messageId, delivered: true }),
         },
       });
+
       const scripted = yield* makeScriptedModel(() => [
         {
           type: "tool-call",
@@ -2664,13 +2948,16 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const handlerCalls = yield* Ref.make(0);
+
       const toolLayer = tools.toLayer({
         post_message: () =>
           Ref.updateAndGet(handlerCalls, (count) => count + 1).pipe(
             Effect.as({ messageId: "canonical-message" }),
           ),
       });
+
       const agent = Agent.withModel(definition, scripted.model);
       const thread = "thread-hostile-tool-completion";
 
@@ -2680,9 +2967,11 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
         submitOptions(thread, "hostile-tool-completion-1"),
       );
       yield* armFailpoint("turn:after-results-append");
+
       const crashed = yield* Effect.exit(
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
       );
+
       expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
       expect(yield* Ref.get(handlerCalls)).toBe(1);
       yield* clearFailpoint;
@@ -2690,6 +2979,7 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
       const recovered = yield* Effect.exit(
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
       );
+
       expect(failureTag(recovered)).toBe("RunJournalError");
       expect(yield* Ref.get(handlerCalls)).toBe(1);
       expect(scripted.prompts).toHaveLength(1);
@@ -2701,11 +2991,14 @@ layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton val
   it.effect("rejects a completion marker mixed with a provider-executed Tool Call", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const PostMessage = Tool.make("post_message", {
         parameters: Schema.Struct({ message: Schema.String }),
         success: Schema.Struct({ messageId: Schema.String }),
       });
+
       const tools = Toolkit.make(PostMessage);
+
       const definition = Agent.make("hostile-mixed-terminal-delivery", {
         input: Schema.Struct({ question: Schema.String }),
         output: DeliveryCompletionOutput,
@@ -2722,6 +3015,7 @@ layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton val
           project: ({ result }) => ({ messageId: result.messageId, delivered: true }),
         },
       });
+
       const scripted = yield* makeScriptedModel(() => [
         {
           type: "tool-call",
@@ -2732,13 +3026,16 @@ layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton val
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
+
       const handlerCalls = yield* Ref.make(0);
+
       const toolLayer = tools.toLayer({
         post_message: () =>
           Ref.updateAndGet(handlerCalls, (count) => count + 1).pipe(
             Effect.as({ messageId: "canonical-message" }),
           ),
       });
+
       const agent = Agent.withModel(definition, scripted.model);
       const thread = "thread-hostile-mixed-tool-completion";
 
@@ -2748,9 +3045,11 @@ layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton val
         submitOptions(thread, "hostile-mixed-tool-completion-1"),
       );
       yield* armFailpoint("turn:after-results-append");
+
       const crashed = yield* Effect.exit(
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
       );
+
       expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
       expect(yield* Ref.get(handlerCalls)).toBe(1);
       yield* clearFailpoint;
@@ -2758,6 +3057,7 @@ layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton val
       const recovered = yield* Effect.exit(
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
       );
+
       expect(failureTag(recovered)).toBe("RunJournalError");
       expect(yield* Ref.get(handlerCalls)).toBe(1);
       expect(scripted.prompts).toHaveLength(1);
@@ -2769,9 +3069,11 @@ layer(corruptedRunDispositionTestLayer)("RUN-029 recovered run disposition valid
   it.effect("rejects a marker whose disposition disagrees with its reconstructed output", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const scripted = yield* makeScriptedModel(() =>
         finalParts('{"answer":"done","runDisposition":"application-complete"}'),
       );
+
       const agent = Agent.withModel(dispositionDefinition, scripted.model);
       const thread = "thread-hostile-run-disposition";
 
@@ -2782,10 +3084,12 @@ layer(corruptedRunDispositionTestLayer)("RUN-029 recovered run disposition valid
       );
       yield* armFailpoint("turn:after-canonical-append");
       const crashed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       const recovered = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+
       expect(failureTag(recovered)).toBe("RunJournalError");
       expect(scripted.prompts).toHaveLength(1);
     }),
@@ -2798,8 +3102,10 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         for (const providerFirst of [true, false]) {
           yield* clearFailpoint;
+
           const hosted = Tool.providerDefined({
             id: "test.hosted_probe",
             customName: "HostedProbe",
@@ -2807,13 +3113,16 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             parameters: Schema.Struct({}),
             success: Schema.String,
           })(undefined);
+
           const probe = Tool.make("probe", {
             parameters: Schema.Struct({}),
             success: Schema.String,
             failure: Schema.String,
             failureMode: "return",
           });
+
           const toolkit = Toolkit.make(hosted, probe);
+
           const definition = Agent.make("mixed-resume-policy", {
             input: Schema.String,
             output: Schema.String,
@@ -2829,6 +3138,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
               toolResultBounds: { maxBytes: 512 },
             }),
           });
+
           const providerCall: Response.StreamPartEncoded = {
             type: "tool-call",
             id: "hosted-1",
@@ -2836,6 +3146,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             params: {},
             providerExecuted: true,
           };
+
           const appCall: Response.StreamPartEncoded = {
             type: "tool-call",
             id: "app-1",
@@ -2843,6 +3154,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             params: {},
             providerExecuted: false,
           };
+
           const scripted = yield* makeScriptedModel((call) =>
             call === 0
               ? [
@@ -2870,30 +3182,39 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
                   ]
                 : finalParts('"done"'),
           );
+
           const agent = Agent.withModel(definition, scripted.model);
           const starts = yield* Ref.make(0);
+
           const handlers = toolkit.toLayer({
             probe: () =>
               Ref.update(starts, (n) => n + 1).pipe(Effect.andThen(Effect.fail("failed"))),
           });
+
           const receipt = yield* runtime.submit(
             agent,
             "probe",
             submitOptions(`mixed-provider-${providerFirst}`, "mixed"),
           );
+
           const run = runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers));
+
           yield* armFailpoint("turn:after-response-append");
           expect(failureTag(yield* Effect.exit(run))).toBe("DurableRuntimeFailpointError");
           expect(yield* Ref.get(starts)).toBe(0);
           const before = yield* readLog(receipt.threadId);
+
           const response = before.find(
             ({ record }) => record.payload._tag === "ModelResponseRecorded",
           )?.record.payload;
+
           if (response?._tag !== "ModelResponseRecorded")
             throw new Error("Expected canonical response");
+
           const recordedPrompt = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(
             response.messages,
           );
+
           expect(
             recordedPrompt.content.flatMap((message) =>
               message.role === "assistant"
@@ -2909,10 +3230,12 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           expect((yield* run)[0]?.outcome).toBe(providerFirst ? "failed" : "completed");
           expect(scripted.prompts).toHaveLength(providerFirst ? 1 : 3);
           expect(yield* Ref.get(starts)).toBe(providerFirst ? 1 : 2);
+
           const journal = yield* projectRunJournal(
             yield* readLog(receipt.threadId),
             runIdForSubmission(receipt.submissionId),
           );
+
           expect(journal.policyUsage.consecutiveToolFailures).toBe(providerFirst ? 0 : 1);
         }
       }),
@@ -2920,19 +3243,23 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
   it.effect("programmatic reservations survive loss before the inner Handler starts", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       for (const location of [
         "policy:before-reservation-append",
         "policy:after-reservation-append",
       ] as const) {
         yield* clearFailpoint;
+
         const inner = Toolkit.make(
           Tool.make("query", { parameters: Schema.Struct({}), success: Schema.String }),
         );
+
         const outer = Toolkit.make(
           Tool.make("orchestrate", { parameters: Schema.Struct({}), success: Schema.String })
             .addDependency(ToolBroker)
             .annotate(ToolExecutionClass, "idempotent"),
         );
+
         const definition = Agent.make("reservation-recovery", {
           input: Schema.String,
           output: Schema.String,
@@ -2946,19 +3273,25 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             onExhaustion: "fail",
           }),
         });
+
         const executions = yield* Ref.make(0);
+
         const handlers = outer
           .toLayer(
             Effect.gen(function* () {
               const innerTools = yield* inner;
+
               return {
                 orchestrate: () =>
                   Effect.gen(function* () {
                     const broker = yield* ToolBroker;
+
                     const pass = yield* broker
                       .openPass(innerTools, { maxResultBytes: 1024 })
                       .pipe(Effect.orDie);
+
                     yield* pass.invoke({ toolName: "query", encodedArguments: {} });
+
                     return "done";
                   }),
               };
@@ -2971,6 +3304,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
               }),
             ),
           );
+
         const scripted = yield* makeScriptedModel(() => [
           {
             type: "tool-call",
@@ -2981,13 +3315,17 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           },
           { type: "finish", reason: "tool-calls", usage },
         ]);
+
         const agent = Agent.withModel(definition, scripted.model);
+
         const receipt = yield* runtime.submit(
           agent,
           "query",
           submitOptions(`programmatic-${location}`, "reservation"),
         );
+
         const run = runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers));
+
         yield* armFailpoint(location);
         expect(failureTag(yield* Effect.exit(run))).toBe("DurableRuntimeFailpointError");
         expect(yield* Ref.get(executions)).toBe(0);
@@ -2997,10 +3335,12 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           location === "policy:before-reservation-append" ? 1 : 0,
         );
         expect(scripted.prompts).toHaveLength(2);
+
         const journal = yield* projectRunJournal(
           yield* readLog(receipt.threadId),
           runIdForSubmission(receipt.submissionId),
         );
+
         expect(journal.policyUsage.programmaticToolCalls).toBe(1);
       }
     }),
@@ -3009,7 +3349,9 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
   it.effect("a durably reserved grace finalization is not granted to the replacement Attempt", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       yield* clearFailpoint;
+
       const definition = Agent.make("grace-recovery", {
         input: searchDefinition.input,
         output: searchDefinition.output,
@@ -3022,43 +3364,54 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           toolConcurrency: 1,
         }),
       });
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0 ? toolCallParts : finalParts('{"answer":"grace"}'),
       );
+
       const agent = Agent.withModel(definition, scripted.model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: "search" },
         submitOptions("grace-reservation-recovery", "grace"),
       );
+
       const run = runtime
         .processThread(agent, receipt.threadId)
         .pipe(Effect.provide(searchToolLayer));
+
       yield* armFailpoint("policy:after-reservation-append");
       expect(failureTag(yield* Effect.exit(run))).toBe("DurableRuntimeFailpointError");
       expect(scripted.prompts).toHaveLength(1);
       yield* clearFailpoint;
       expect((yield* run)[0]?.outcome).toBe("failed");
       expect(scripted.prompts).toHaveLength(1);
+
       const journal = yield* projectRunJournal(
         yield* readLog(receipt.threadId),
         runIdForSubmission(receipt.submissionId),
       );
+
       expect(journal.policyUsage.finalizationUsed).toBe(true);
     }),
   );
   it.effect("replacement Attempts preserve the original Turn, Tool and failure limits", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       for (const limit of ["turns", "tool-calls", "repeated-failures"] as const) {
         yield* clearFailpoint;
+
         const tool = Tool.make("probe", {
           parameters: Schema.Struct({}),
           success: Schema.String,
           failure: Schema.String,
           failureMode: "return",
         });
+
         const toolkit = Toolkit.make(tool);
+
         const definition = Agent.make(`resume-${limit}`, {
           input: Schema.String,
           output: Schema.String,
@@ -3073,6 +3426,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const scripted = yield* makeScriptedModel((call) => [
           {
             type: "tool-call",
@@ -3083,8 +3437,10 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           },
           { type: "finish", reason: "tool-calls", usage },
         ]);
+
         const agent = Agent.withModel(definition, scripted.model);
         const executions = yield* Ref.make(0);
+
         const handlers = toolkit.toLayer({
           probe: () =>
             Ref.update(executions, (n) => n + 1).pipe(
@@ -3093,20 +3449,25 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
               ),
             ),
         });
+
         const receipt = yield* runtime.submit(
           agent,
           "probe",
           submitOptions(`limits-${limit}`, "limits"),
         );
+
         const run = runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers));
+
         yield* armFailpoint("turn:after-results-append");
         for (let attempt = 0; attempt < (limit === "repeated-failures" ? 1 : 2); attempt++) {
           const exit = yield* Effect.exit(run);
+
           expect(exit._tag, `${limit} Attempt ${attempt}: ${JSON.stringify(exit)}`).toBe("Failure");
           expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
         }
         yield* clearFailpoint;
         const settlements = yield* run;
+
         expect(settlements[0]?.outcome).toBe("failed");
         expect(yield* Ref.get(executions)).toBe(2);
         expect(scripted.prompts.length).toBe(limit === "repeated-failures" ? 2 : 3);
@@ -3169,14 +3530,17 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             ? toolCallParts
             : finalParts(JSON.stringify({ answer: `Found the sea. ${"PAD".repeat(1_000)}` })),
         );
+
         yield* runtime.submit(
           Agent.withModel(searchDefinition, first.model),
           { question: "Is a flight available?" },
           submitOptions(thread, "compaction-1"),
         );
+
         const firstSettled = yield* runtime
           .processThread(Agent.withModel(searchDefinition, first.model), decodeThreadId(thread))
           .pipe(Effect.provide(searchToolLayer));
+
         expect(firstSettled[0]?.outcome).toBe("completed");
 
         // Submission 2: a compacting agent whose estimated context exceeds the limit
@@ -3196,12 +3560,15 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             compaction: CompactionPolicy.make({ keepRecentTokens: 10, mode: "summarize" }),
           }),
         });
+
         const second = yield* makeScriptedModel((call) =>
           call === 0
             ? finalParts("Goal: prior run booked the flight")
             : finalParts('{"answer":"compacted"}'),
         );
+
         const compactor = Agent.withModel(compactingDefinition, second.model);
+
         yield* runtime.submit(
           compactor,
           { question: "what happened?" },
@@ -3212,9 +3579,11 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         // Turn's model call: the re-driven Attempt must project the compacted
         // prompt and must NOT append a duplicate record.
         yield* armFailpoint("compaction:after-canonical-append");
+
         const crashed = yield* Effect.exit(
           runtime.processThread(compactor, decodeThreadId(thread)),
         );
+
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         // The hook failure is typed AND ordering holds: the summarizer call
         // ran, but no compacted Turn request started before a successful
@@ -3223,15 +3592,19 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         yield* clearFailpoint;
 
         const settled = yield* runtime.processThread(compactor, decodeThreadId(thread));
+
         expect(settled).toHaveLength(1);
         expect(settled[0]?.outcome).toBe("completed");
 
         const records = yield* readLog(thread);
+
         const compactions = records.filter(
           (envelope) => envelope.record.payload._tag === "CompactionCreated",
         );
+
         expect(compactions).toHaveLength(1);
         const payload = compactions[0]?.record.payload;
+
         if (payload === undefined || payload._tag !== "CompactionCreated") {
           throw new Error("expected a CompactionCreated record");
         }
@@ -3241,6 +3614,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
 
         // The settled Run's final model call saw the compacted view.
         const lastPrompt = second.prompts.at(-1);
+
         if (lastPrompt === undefined) throw new Error("expected captured prompts");
         expect(promptTexts(lastPrompt)).toContain(COMPACTION_SUMMARY_PREFIX);
         // The canonical cutoff is the actual covered prefix, so recovery does not summarize it again.
@@ -3253,11 +3627,13 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
     () => {
       let reference = "EXTERNAL-REVISION-ONE";
       let reads = 0;
+
       const preparation = Layer.succeed(RunContextPreparation, {
         transientContext: {
           load: () =>
             Effect.sync(() => {
               reads += 1;
+
               return Prompt.make([{ role: "user", content: `Untrusted reference: ${reference}` }]);
             }),
         },
@@ -3265,6 +3641,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           estimate: estimatePromptTokens,
           compact: ({ source }) => {
             expect(promptTexts(source)).not.toContain("EXTERNAL-REVISION");
+
             return Stream.succeed({
               kind: "summarize",
               through: 1,
@@ -3273,13 +3650,17 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           },
         }),
       });
+
       return Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const thread = "transient-compaction-recovery";
+
         const first = yield* makeScriptedModel(() =>
           finalParts(JSON.stringify({ answer: "HISTORY ".repeat(800) })),
         );
+
         const initial = Agent.withModel(plannerDefinition, first.model);
+
         yield* runtime.submit(initial, { question: "seed" }, submitOptions(thread, "first"));
         expect((yield* runtime.processThread(initial, decodeThreadId(thread)))[0]?.outcome).toBe(
           "completed",
@@ -3299,13 +3680,17 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             compaction: CompactionPolicy.make({ mode: "summarize", keepRecentTokens: 1 }),
           }),
         });
+
         const second = yield* makeScriptedModel(() => finalParts('"done"'));
         const agent = Agent.withModel(definition, second.model);
+
         yield* runtime.submit(agent, "continue", submitOptions(thread, "second"));
         yield* armFailpoint("compaction:after-canonical-append");
+
         const crashed = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.exit, Effect.ensuring(clearFailpoint));
+
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         expect(second.prompts).toHaveLength(0);
         expect(reads).toBe(1);
@@ -3319,6 +3704,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           "EXTERNAL-REVISION-ONE",
         );
         const records = yield* readLog(thread);
+
         expect(JSON.stringify(records)).not.toContain("EXTERNAL-REVISION");
         expect(
           records.filter(({ record }) => record.payload._tag === "CompactionCreated"),
@@ -3343,6 +3729,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const thread = "custom-compaction-coverage";
+
         const prior = yield* makeScriptedModel((call) =>
           finalParts(
             JSON.stringify({
@@ -3350,11 +3737,14 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             }),
           ),
         );
+
         const original = Agent.withModel(plannerDefinition, prior.model);
+
         for (const key of ["first", "second"]) {
           yield* runtime.submit(original, { question: key }, submitOptions(thread, key));
           yield* runtime.processThread(original, decodeThreadId(thread));
         }
+
         const definition = Agent.make("custom-coverage", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -3369,17 +3759,22 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             compaction: CompactionPolicy.make({ mode: "summarize", keepRecentTokens: 1 }),
           }),
         });
+
         const model = yield* makeScriptedModel(() => finalParts('{"answer":"retained"}'));
         const agent = Agent.withModel(definition, model.model);
+
         yield* runtime.submit(agent, { question: "continue" }, submitOptions(thread, "third"));
         yield* armFailpoint("compaction:after-canonical-append");
+
         const interrupted = yield* runtime
           .processThread(agent, decodeThreadId(thread))
           .pipe(Effect.exit);
+
         expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
         expect(model.prompts).toHaveLength(0);
         yield* clearFailpoint;
         const settled = yield* runtime.processThread(agent, decodeThreadId(thread));
+
         expect(settled[0]?.outcome).toBe("completed");
         expect(model.prompts).toHaveLength(1);
         expect(promptTexts(model.prompts[0] ?? Prompt.empty)).toContain("SECOND KEEP");
@@ -3387,17 +3782,22 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           "custom first-only summary",
         );
         const records = yield* readLog(thread);
+
         const responses = records.filter(
           (entry) => entry.record.payload._tag === "ModelResponseRecorded",
         );
+
         const compactions = records.filter(
           (entry) => entry.record.payload._tag === "CompactionCreated",
         );
+
         expect(compactions).toHaveLength(1);
         const payload = compactions[0]?.record.payload;
+
         if (payload?._tag !== "CompactionCreated") return yield* Effect.die("missing compaction");
         expect(payload.coversThrough).toBe(responses[0]?.sequence);
         const replay = yield* promptFromCanonicalRecords(records);
+
         expect(promptTexts(replay)).toContain("SECOND KEEP");
         expect(promptTexts(replay)).not.toContain("FIRST");
       }).pipe(
@@ -3434,19 +3834,24 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const thread = `compaction-persistence-${scenario.replaceAll(" ", "-")}`;
+
         const summary =
           scenario === "oversized summary"
             ? "é".repeat(65_536) + "s"
             : scenario === "summary at canonical capacity"
               ? "é".repeat(65_536)
               : "custom summary";
+
         if (scenario !== "no prior records") {
           const prior = yield* makeScriptedModel(() => finalParts('{"answer":"ORIGINAL HISTORY"}'));
           const initial = Agent.withModel(plannerDefinition, prior.model);
+
           yield* runtime.submit(initial, { question: "seed" }, submitOptions(thread, "seed"));
           const settled = yield* runtime.processThread(initial, decodeThreadId(thread));
+
           expect(settled[0]?.outcome).toBe("completed");
         }
+
         const definition = Agent.make("persistence-compactor", {
           input: Schema.String,
           output: Schema.String,
@@ -3461,19 +3866,25 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             runStatus: "off",
           }),
         });
+
         const model = yield* makeScriptedModel(() => finalParts('"done"'));
         const agent = Agent.withModel(definition, model.model);
+
         const settled = yield* Effect.gen(function* () {
           const custom = yield* DurableAgentRuntime;
           const receipt = yield* custom.submit(agent, "continue", submitOptions(thread, "compact"));
+
           if (scenario === "replacement after recovery") {
             yield* armFailpoint("compaction:after-canonical-append");
+
             const crashed = yield* custom
               .processThread(agent, receipt.threadId)
               .pipe(Effect.ensuring(clearFailpoint), Effect.exit);
+
             expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
             expect(model.prompts).toHaveLength(0);
           }
+
           return yield* custom.processThread(agent, receipt.threadId);
         }).pipe(
           Effect.provide(
@@ -3533,11 +3944,15 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             ),
           ),
         );
+
         const records = yield* readLog(thread);
+
         const compactions = records.flatMap(({ record }) =>
           record.payload._tag === "CompactionCreated" ? [record.payload] : [],
         );
+
         const replay = yield* promptFromCanonicalRecords(records);
+
         if (scenario === "summary at canonical capacity") {
           expect(settled[0]?.outcome).toBe("completed");
           expect(model.prompts).toHaveLength(1);
@@ -3577,16 +3992,20 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const thread = "invalid-compaction-summary";
+
         const first = yield* makeScriptedModel(() =>
           finalParts(JSON.stringify({ answer: "PADDING".repeat(1_000) })),
         );
+
         const initial = Agent.withModel(plannerDefinition, first.model);
+
         yield* runtime.submit(
           initial,
           { question: "prepare history" },
           submitOptions(thread, "initial"),
         );
         yield* runtime.processThread(initial, decodeThreadId(thread));
+
         const definition = Agent.make("invalid-summary", {
           input: Schema.String,
           output: Schema.String,
@@ -3601,10 +4020,12 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             compaction: CompactionPolicy.make({ keepRecentTokens: 10, mode: "summarize" }),
           }),
         });
+
         const model = yield* makeScriptedModel(() => finalPartsWithUsage("   \n", usageOf(17, 9)));
         const agent = Agent.withModel(definition, model.model);
         const receipt = yield* runtime.submit(agent, "summarize", submitOptions(thread, "invalid"));
         const settlement = (yield* runtime.processThread(agent, receipt.threadId))[0];
+
         expect(settlement?.outcome).toBe("failed");
         expect(settlement?.usageSummary).toMatchObject({
           modelCalls: 1,
@@ -3613,6 +4034,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         });
         expect(model.prompts).toHaveLength(1);
         const records = yield* readLog(thread);
+
         expect(records.at(-1)?.record.payload).toMatchObject({
           _tag: "SubmissionSettled",
           outcome: "failed",
@@ -3622,6 +4044,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           [],
         );
         const prompt = yield* promptFromCanonicalRecords(records);
+
         expect(promptTexts(prompt)).not.toContain(COMPACTION_SUMMARY_PREFIX);
         expect(promptTexts(prompt)).toContain("PADDING");
       }),
@@ -3641,7 +4064,9 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           parameters: Schema.Struct({}),
           success: Schema.String,
         });
+
         const probeTools = Toolkit.make(Probe);
+
         const probeDefinition = Agent.make("durable-probe", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -3654,17 +4079,21 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             toolConcurrency: 1,
           }),
         });
+
         const probeCall = (id: string): ReadonlyArray<Response.StreamPartEncoded> => [
           { type: "tool-call", id, name: "probe", params: {}, providerExecuted: false },
           { type: "finish", reason: "tool-calls", usage: { inputTokens: {}, outputTokens: {} } },
         ];
+
         const calls = yield* Ref.make(0);
+
         const probeLayer = probeTools.toLayer({
           probe: () =>
             Ref.getAndUpdate(calls, (count) => count + 1).pipe(
               Effect.map((count) => (count === 0 ? "OLD".repeat(3_000) : "PAD".repeat(2_000))),
             ),
         });
+
         const prior = yield* makeScriptedModel((call) =>
           call === 0
             ? probeCall("probe-1")
@@ -3672,14 +4101,17 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
               ? probeCall("probe-2")
               : finalParts('{"answer":"probed"}'),
         );
+
         yield* runtime.submit(
           Agent.withModel(probeDefinition, prior.model),
           { question: "sizes?" },
           submitOptions(thread, "cut-1"),
         );
+
         const priorSettled = yield* runtime
           .processThread(Agent.withModel(probeDefinition, prior.model), decodeThreadId(thread))
           .pipe(Effect.provide(probeLayer));
+
         expect(priorSettled[0]?.outcome).toBe("completed");
 
         const compactingDefinition = Agent.make("durable-cut-compactor", {
@@ -3696,32 +4128,41 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             compaction: CompactionPolicy.make({ keepRecentTokens: 400, mode: "summarize" }),
           }),
         });
+
         const second = yield* makeScriptedModel((call) =>
           call === 0 ? finalParts("Goal: sizes probed") : finalParts('{"answer":"kept"}'),
         );
+
         const compactor = Agent.withModel(compactingDefinition, second.model);
+
         yield* runtime.submit(
           compactor,
           { question: "what happened?" },
           submitOptions(thread, "cut-2"),
         );
         const settled = yield* runtime.processThread(compactor, decodeThreadId(thread));
+
         expect(settled[0]?.outcome).toBe("completed");
 
         const records = yield* readLog(thread);
+
         const responses = records.filter(
           (envelope) => envelope.record.payload._tag === "ModelResponseRecorded",
         );
+
         const settleds = records.filter(
           (envelope) => envelope.record.payload._tag === "ToolCallSettled",
         );
+
         const compactions = records.filter(
           (envelope) => envelope.record.payload._tag === "CompactionCreated",
         );
+
         expect(responses.length).toBeGreaterThanOrEqual(3);
         expect(settleds).toHaveLength(2);
         expect(compactions).toHaveLength(1);
         const payload = compactions[0]?.record.payload;
+
         if (payload === undefined || payload._tag !== "CompactionCreated") {
           throw new Error("expected a CompactionCreated record");
         }
@@ -3744,14 +4185,17 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           ? toolCallParts
           : finalParts(JSON.stringify({ answer: `Found the sea. ${"PAD".repeat(1_000)}` })),
       );
+
       yield* runtime.submit(
         Agent.withModel(searchDefinition, first.model),
         { question: "Is a flight available?" },
         submitOptions(thread, "summarizer-usage-1"),
       );
+
       const firstSettled = yield* runtime
         .processThread(Agent.withModel(searchDefinition, first.model), decodeThreadId(thread))
         .pipe(Effect.provide(searchToolLayer));
+
       expect(firstSettled[0]?.outcome).toBe("completed");
 
       const compactingDefinition = Agent.make("durable-usage-compactor", {
@@ -3768,6 +4212,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           compaction: CompactionPolicy.make({ keepRecentTokens: 10, mode: "summarize" }),
         }),
       });
+
       // Call 0 is the pre-Turn summarizer, call 1 the Turn's real response;
       // the Turn's canonical record must carry BOTH calls' usage so a later
       // Attempt re-seeds the summarizer's spend too.
@@ -3776,22 +4221,28 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           ? finalPartsWithUsage("Goal: metered summary", usageOf(30, 10))
           : finalPartsWithUsage('{"answer":"metered"}', usageOf(20, 5)),
       );
+
       const compactor = Agent.withModel(compactingDefinition, second.model);
+
       yield* runtime.submit(
         compactor,
         { question: "what happened?" },
         submitOptions(thread, "summarizer-usage-2"),
       );
       const settled = yield* runtime.processThread(compactor, decodeThreadId(thread));
+
       expect(settled).toHaveLength(1);
       expect(settled[0]?.outcome).toBe("completed");
 
       const records = yield* readLog(thread);
+
       // The compactor's Turn is the newest response record in the log.
       const response = [...records]
         .reverse()
         .find((envelope) => envelope.record.payload._tag === "ModelResponseRecorded");
+
       const payload = response?.record.payload;
+
       if (payload === undefined || payload._tag !== "ModelResponseRecorded") {
         throw new Error("expected the compactor Turn's response record");
       }
@@ -3804,6 +4255,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const thread = "thread-reseed";
+
       const reseedDefinition = Agent.make("durable-reseed", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -3818,26 +4270,32 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           onExhaustion: "fail",
         }),
       });
+
       const scripted = yield* makeScriptedModel((call) =>
         call === 0
           ? toolCallPartsWithUsage(usageOf(900, 50))
           : finalPartsWithUsage('{"answer":"cheap"}', usageOf(200, 50)),
       );
+
       const agent = Agent.withModel(reseedDefinition, scripted.model);
+
       yield* runtime.submit(agent, { question: "reseed?" }, submitOptions(thread, "reseed-1"));
 
       // Crash after the Turn-1 response commit (usage already staged into the
       // canonical record), leaving a declared pending Tool batch to resume.
       yield* armFailpoint("turn:after-response-append");
+
       const crashed = yield* Effect.exit(
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(searchToolLayer)),
       );
+
       expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       const settled = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(searchToolLayer));
+
       // 950 committed tokens re-seed the resumed Attempt. The completion
       // reserve is already unavailable, so recovery fails before another
       // unconstrained model call; without re-seeding it would continue.
@@ -3845,12 +4303,15 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       expect(settled[0]?.outcome).toBe("failed");
 
       const records = yield* readLog(thread);
+
       const response = records.find(
         (envelope) =>
           envelope.record.payload._tag === "ModelResponseRecorded" &&
           envelope.record.payload.turn === 1,
       );
+
       const payload = response?.record.payload;
+
       if (payload === undefined || payload._tag !== "ModelResponseRecorded") {
         throw new Error("expected the Turn 1 response record");
       }
@@ -3867,11 +4328,13 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
       const store = yield* ThreadStore;
       const scripted = yield* makeScriptedModel(() => toolCallParts);
       const agent = Agent.withModel(searchDefinition, scripted.model);
+
       const receipt = yield* runtime.submit(
         agent,
         { question: "missing clock" },
         submitOptions("missing-run-start", "start"),
       );
+
       yield* armFailpoint("turn:after-response-append");
       expect(
         failureTag(
@@ -3881,6 +4344,7 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
         ),
       ).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
+
       const withoutStart = ThreadStore.of({
         ...store,
         read: (request) =>
@@ -3888,6 +4352,7 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
             .read(request)
             .pipe(Stream.filter(({ record }) => record.payload._tag !== "RunStarted")),
       });
+
       const recovered = yield* Effect.exit(
         Effect.flatMap(DurableAgentRuntime, (fresh) =>
           fresh.processThread(agent, receipt.threadId),
@@ -3897,6 +4362,7 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
           Effect.provide(searchToolLayer),
         ),
       );
+
       expect(failureTag(recovered)).toBe("RunJournalError");
       expect(scripted.prompts).toHaveLength(1);
     }),
@@ -3905,29 +4371,35 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
   it.effect("starts the clock once across both Run-start append failpoints", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       for (const location of ["run:before-start-append", "run:after-start-append"] as const) {
         const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
         const agent = Agent.withModel(plannerDefinition, scripted.model);
         const thread = `thread-${location}`;
+
         const receipt = yield* runtime.submit(
           agent,
           { question: "clock" },
           submitOptions(thread, location),
         );
+
         yield* armFailpoint(location);
         const crashed = yield* Effect.exit(runtime.processThread(agent, receipt.threadId));
+
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
         expect(scripted.prompts).toHaveLength(0);
         yield* TestClock.adjust(Duration.seconds(31));
         const settlements = yield* runtime.processThread(agent, receipt.threadId);
         const alreadyStarted = location === "run:after-start-append";
+
         expect(settlements.map((entry) => entry.outcome)).toEqual([
           alreadyStarted ? "failed" : "completed",
         ]);
         expect(scripted.prompts).toHaveLength(alreadyStarted ? 0 : 1);
         const records = yield* readLog(thread);
         const starts = records.filter(({ record }) => record.payload._tag === "RunStarted");
+
         expect(starts).toHaveLength(1);
         expect(starts[0]?.record.payload).toMatchObject({
           runId: runIdForSubmission(receipt.submissionId),
@@ -3943,25 +4415,33 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const scripted = yield* makeScriptedModel((call) =>
           call === 0 ? toolCallParts : finalParts('{"answer":"done"}'),
         );
+
         const agent = Agent.withModel(searchDefinition, scripted.model);
         const thread = "thread-replacement-duration";
+
         const receipt = yield* runtime.submit(
           agent,
           { question: "recover" },
           submitOptions(thread, "duration"),
         );
+
         yield* armFailpoint("turn:after-response-append");
+
         const crashed = yield* Effect.exit(
           runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(searchToolLayer)),
         );
+
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
         const before = yield* readLog(thread);
         const start = before.find(({ record }) => record.payload._tag === "RunStarted");
+
         yield* TestClock.adjust(Duration.seconds(31));
+
         const wider = Agent.withModel(
           Agent.make(searchDefinition.id, {
             input: searchDefinition.input,
@@ -3972,19 +4452,25 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
           }),
           scripted.model,
         );
+
         const rejected = yield* Effect.exit(
           runtime.processThread(wider, receipt.threadId).pipe(Effect.provide(searchToolLayer)),
         );
+
         expect(failureTag(rejected)).toBe("RunJournalError");
         expect(scripted.prompts).toHaveLength(1);
         const after = yield* readLog(thread);
+
         expect(after.find(({ record }) => record.payload._tag === "RunStarted")).toEqual(start);
+
         const settlements = yield* runtime
           .processThread(agent, receipt.threadId)
           .pipe(Effect.provide(searchToolLayer));
+
         expect(settlements.map((entry) => entry.outcome)).toEqual(["failed"]);
         expect(scripted.prompts).toHaveLength(1);
         const settlement = (yield* readLog(thread)).at(-1)?.record.payload;
+
         expect(settlement).toMatchObject({ _tag: "SubmissionSettled", policyLimit: "duration" });
       }),
   );
@@ -3997,11 +4483,13 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
         const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"fresh"}'));
         const agent = Agent.withModel(plannerDefinition, scripted.model);
         const thread = "thread-input-before-start";
+
         const receipt = yield* runtime.submit(
           agent,
           { question: "queued" },
           submitOptions(thread, "queued"),
         );
+
         yield* armFailpoint("claim:after-claim");
         yield* Effect.exit(runtime.processThread(agent, receipt.threadId));
         yield* clearFailpoint;
@@ -4034,9 +4522,11 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
 
   const lastSettlement = (records: ReadonlyArray<CanonicalRecordEnvelope>) => {
     const payload = records.at(-1)?.record.payload;
+
     if (payload?._tag !== "SubmissionSettled") {
       throw new Error("expected the canonical settlement to close the log");
     }
+
     return payload;
   };
 
@@ -4052,6 +4542,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect('RUN-011: a Turn-exhausted soft landing settles with exhausted: "turns"', () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const definition = Agent.make("durable-turns-landing", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4059,21 +4550,26 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
         toolkit: searchTools,
         policy: policyOf({ maxTurns: 1 }),
       });
+
       // Turn 1 declares the permitted batch; the grace Turn past `maxTurns`
       // delivers the constrained final answer (RUN-019).
       const scripted = yield* makeScriptedModel((call) =>
         call === 0 ? toolCallParts : finalParts('{"answer":"turn-bound partial"}'),
       );
+
       const agent = Agent.withModel(definition, scripted.model);
       const thread = "thread-turns-landing";
 
       yield* runtime.submit(agent, { question: "turns?" }, submitOptions(thread, "turns-1"));
+
       const settlements = yield* runtime
         .processThread(agent, decodeThreadId(thread))
         .pipe(Effect.provide(searchToolLayer));
+
       expect(settlements[0]?.outcome).toBe("completed");
 
       const settled = lastSettlement(yield* readLog(thread));
+
       expect(settled.outcome).toBe("completed");
       expect(settled.finishReason).toBe("budget-exhausted");
       expect(settled.exhausted).toBe("turns");
@@ -4085,6 +4581,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect('RUN-011: a token-exhausted soft landing settles with exhausted: "tokens"', () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const definition = Agent.make("durable-tokens-landing", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4092,19 +4589,23 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
         toolkit: Toolkit.empty,
         policy: policyOf({ tokenBudget: 100 }),
       });
+
       // A token-breaching stop response that already decodes settles directly
       // (RUN-025): 90 + 20 tokens against the 100-token budget.
       const scripted = yield* makeScriptedModel(() =>
         finalPartsWithUsage('{"answer":"token-bound partial"}', usageOf(90, 20)),
       );
+
       const agent = Agent.withModel(definition, scripted.model);
       const thread = "thread-tokens-landing";
 
       yield* runtime.submit(agent, { question: "tokens?" }, submitOptions(thread, "tokens-1"));
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements[0]?.outcome).toBe("completed");
 
       const settled = lastSettlement(yield* readLog(thread));
+
       expect(settled.outcome).toBe("completed");
       expect(settled.finishReason).toBe("budget-exhausted");
       expect(settled.exhausted).toBe("tokens");
@@ -4116,6 +4617,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect("RUN-011: a fail-mode token breach settles failed with the typed policyLimit", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const definition = Agent.make("durable-tokens-rail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4123,17 +4625,21 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
         toolkit: Toolkit.empty,
         policy: policyOf({ tokenBudget: 100, onExhaustion: "fail" }),
       });
+
       const scripted = yield* makeScriptedModel(() =>
         finalPartsWithUsage('{"answer":"expensive"}', usageOf(90, 20)),
       );
+
       const agent = Agent.withModel(definition, scripted.model);
       const thread = "thread-tokens-rail";
 
       yield* runtime.submit(agent, { question: "tokens?" }, submitOptions(thread, "tokens-rail-1"));
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements[0]?.outcome).toBe("failed");
 
       const settled = lastSettlement(yield* readLog(thread));
+
       expect(settled.outcome).toBe("failed");
       expect(settled.policyLimit).toBe("tokens");
       expect(settled.finishReason).toBeUndefined();
@@ -4145,6 +4651,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect("RUN-011: a hard cost rail settles failed with the typed policyLimit", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const definition = Agent.make("durable-cost-rail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4155,17 +4662,21 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
         // cost rail regardless of `onExhaustion` (runtime spec §3).
         policy: policyOf({ costBudgetMicrousd: 1_000 }),
       });
+
       const scripted = yield* makeScriptedModel(() =>
         finalPartsWithUsage('{"answer":"priced"}', usageOf(10, 10)),
       );
+
       const agent = Agent.withModel(definition, scripted.model);
       const thread = "thread-cost-rail";
 
       yield* runtime.submit(agent, { question: "cost?" }, submitOptions(thread, "cost-1"));
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements[0]?.outcome).toBe("failed");
 
       const settled = lastSettlement(yield* readLog(thread));
+
       expect(settled.outcome).toBe("failed");
       expect(settled.policyLimit).toBe("cost");
       expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
@@ -4175,6 +4686,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
   it.effect("RUN-011: a duration-exhausted Run settles failed with the typed policyLimit", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
       const definition = Agent.make("durable-duration-rail", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -4182,6 +4694,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
         toolkit: Toolkit.empty,
         policy: policyOf({ maxDuration: "5 seconds" }),
       });
+
       // A model that never finishes streaming: only the duration rail can end
       // this Run.
       const hangingModel = Model.make(
@@ -4195,16 +4708,20 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
           }),
         ),
       );
+
       const agent = Agent.withModel(definition, hangingModel);
       const thread = "thread-duration-rail";
 
       yield* runtime.submit(agent, { question: "slow?" }, submitOptions(thread, "duration-1"));
       const worker = yield* Effect.forkChild(runtime.processThread(agent, decodeThreadId(thread)));
+
       yield* TestClock.adjust(Duration.seconds(6));
       const settlements = yield* Fiber.join(worker);
+
       expect(settlements[0]?.outcome).toBe("failed");
 
       const settled = lastSettlement(yield* readLog(thread));
+
       expect(settled.outcome).toBe("failed");
       expect(settled.policyLimit).toBe("duration");
       expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
@@ -4216,6 +4733,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const scenarios = [
           {
             location: "terminalize:after-reserve" as const,
@@ -4228,6 +4746,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
             key: "policy-append-1",
           },
         ];
+
         for (const scenario of scenarios) {
           const definition = Agent.make("durable-policy-recovery", {
             input: Schema.Struct({ question: Schema.String }),
@@ -4236,9 +4755,11 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
             toolkit: Toolkit.empty,
             policy: policyOf({ tokenBudget: 100, onExhaustion: "fail" }),
           });
+
           const scripted = yield* makeScriptedModel(() =>
             finalPartsWithUsage('{"answer":"expensive"}', usageOf(90, 20)),
           );
+
           const agent = Agent.withModel(definition, scripted.model);
 
           const receipt = yield* runtime.submit(
@@ -4246,20 +4767,26 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
             { question: "tokens?" },
             submitOptions(scenario.thread, scenario.key),
           );
+
           yield* armFailpoint(scenario.location);
+
           const killed = yield* Effect.exit(
             runtime.processThread(agent, decodeThreadId(scenario.thread)),
           );
+
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
           yield* runtime.runRecovery;
           const settlement = yield* runtime.awaitSettlement(receipt);
+
           expect(settlement.outcome).toBe("failed");
           const records = yield* readLog(scenario.thread);
+
           const settledRecords = records
             .map((envelope) => envelope.record.payload)
             .filter((payload) => payload._tag === "SubmissionSettled");
+
           expect(settledRecords).toHaveLength(1);
           expect(settledRecords[0]).toMatchObject({
             outcome: "failed",
@@ -4277,6 +4804,7 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         const definition = Agent.make("durable-priced-usage", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -4290,16 +4818,19 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
             costBudgetMicrousd: 1_000,
           }),
         });
+
         const meteredUsage = {
           inputTokens: { total: 10, uncached: 7, cacheRead: 2, cacheWrite: 1 },
           outputTokens: { total: 10, text: 6, reasoning: 4 },
         };
+
         const scripted = yield* makeScriptedModel(() => [
           { type: "text-start", id: "answer" },
           { type: "text-delta", id: "answer", delta: '{"answer":"priced"}' },
           { type: "text-end", id: "answer" },
           { type: "finish", reason: "stop", usage: meteredUsage },
         ]);
+
         const agent = Agent.withModel(definition, scripted.model);
         const thread = "thread-priced-usage";
 
@@ -4310,6 +4841,7 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
         );
         const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
         const settlement = settlements[0];
+
         expect(settlement?.outcome).toBe("failed");
         expect(settlement?.usageSummary).toMatchObject({
           modelCalls: 1,
@@ -4329,6 +4861,7 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
 
         const payloads = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
         const response = payloads.find((payload) => payload._tag === "ModelResponseRecorded");
+
         expect(response?.modelUsage).toEqual([
           {
             provider: "scripted",
@@ -4341,6 +4874,7 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
           },
         ]);
         const settled = payloads.at(-1);
+
         expect(settled).toMatchObject({
           _tag: "SubmissionSettled",
           outcome: "failed",

@@ -5,6 +5,7 @@ const BoundedIdentifier = Schema.NonEmptyString.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/),
 );
+
 const BoundedText = Schema.NonEmptyString.check(Schema.isMaxLength(4_096));
 const BoundedPath = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 
@@ -12,6 +13,7 @@ export const EvalRunnerVersion = Schema.String.check(
   Schema.isMaxLength(64),
   Schema.isPattern(/^\d+\.\d+\.\d+(?:-[0-9a-z.-]+)?$/),
 );
+
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
 export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.1");
@@ -19,6 +21,7 @@ export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
 );
+
 export type EvalCaseId = typeof EvalCaseId.Type;
 
 export const EvalTrialCount = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 }));
@@ -26,16 +29,19 @@ export const EvalTrialCount = Schema.Int.check(Schema.isBetween({ minimum: 1, ma
 export const EvalDefectId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalDefectId"),
 );
+
 export type EvalDefectId = typeof EvalDefectId.Type;
 
 export const EvalInputDigest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalInputDigest"),
 );
+
 export type EvalInputDigest = typeof EvalInputDigest.Type;
 
 export const EvalObservationSetDigest = Schema.String.check(
   Schema.isPattern(/^[a-f0-9]{64}$/),
 ).pipe(Schema.brand("@effect-agent/example-pr-review-eval/EvalObservationSetDigest"));
+
 export type EvalObservationSetDigest = typeof EvalObservationSetDigest.Type;
 
 export const EvalVariantId = BoundedIdentifier;
@@ -95,10 +101,13 @@ const EvalCaseFields = Schema.Struct({
   Schema.makeFilter(
     (evalCase) => {
       const defectIds = evalCase.expectedDefects.map((defect) => defect.id);
+
       const repositoryKeys = (evalCase.repository?.files ?? []).map(
         (file) => `${file.revision}\0${file.path}`,
       );
+
       const admittedPaths = new Set(evalCase.request.changes.map((change) => change.path));
+
       return (
         new Set(defectIds).size === defectIds.length &&
         new Set(repositoryKeys).size === repositoryKeys.length &&

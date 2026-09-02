@@ -101,8 +101,10 @@ export const phase6TravelPlannerProfile = TravelPlannerCloudflareProfile.make({
 export const phase6TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-p6-deployment",
 );
+
 /** Producer prefix of the DC host; each Object mints `{prefix}:{threadId}`. */
 export const phase6TravelPlannerProducerPrefix = "travel-planner-p6-producer";
+
 /** The full producer identity one DC Thread Object mints for itself. */
 export const phase6TravelPlannerProducerId = (threadId: string): ProducerId =>
   Schema.decodeSync(ProducerId)(`${phase6TravelPlannerProducerPrefix}:${threadId}`);
@@ -143,6 +145,7 @@ const ComparableEnvelope = Schema.Struct({
   sequence: Schema.Number,
   record: Schema.Json,
 });
+
 const decodeComparableEnvelopes = Schema.decodeUnknownEffect(Schema.Array(ComparableEnvelope));
 
 /**
@@ -180,7 +183,9 @@ export const normalizeCrossPlatformTravelPlannerEvidence = Effect.fn(
   const canonical = records.filter(
     (envelope) => envelope.record.payload._tag !== "RepairAnnotated",
   );
+
   const base = yield* normalizeDurableTravelPlannerEvidence(canonical, receipt);
+
   const scrubbed: unknown = JSON.parse(
     JSON.stringify(base)
       .replaceAll(identity.producerId, "{producerId}")
@@ -189,6 +194,7 @@ export const normalizeCrossPlatformTravelPlannerEvidence = Effect.fn(
       .replaceAll(/\d{4}-\d{2}-\d{2}T[0-9:.]+Z/g, "{timestamp}")
       .replaceAll(/"[0-9a-f]{64}"/g, '"{digest}"'),
   );
+
   const comparable = yield* decodeComparableEnvelopes(scrubbed).pipe(
     Effect.mapError((error) =>
       TravelPlannerDurableEvidenceError.make({
@@ -196,11 +202,13 @@ export const normalizeCrossPlatformTravelPlannerEvidence = Effect.fn(
       }),
     ),
   );
+
   const renumbered = comparable.map((entry, index) => ({
     batchId: entry.batchId,
     sequence: index + 1,
     record: entry.record,
   }));
+
   return yield* decodeComparableJson(renumbered).pipe(
     Effect.mapError((error) =>
       TravelPlannerDurableEvidenceError.make({
@@ -345,6 +353,7 @@ export const phase6GatedPlannerModel = Model.make(
         Stream.unwrap(
           Effect.sync(() => {
             const promptJson = JSON.stringify(options.prompt);
+
             return promptJson.includes(phase6FlightCallId)
               ? plannerDecide(promptJson)
               : Stream.fromEffectDrain(awaitPlannerGate(gateMarkerFromPrompt(promptJson))).pipe(
@@ -448,6 +457,7 @@ const bookingReportParts = (marker: string): ReadonlyArray<Response.StreamPartEn
  */
 export const phase6BookingModel = promptAwareModel("travel-planner-phase-5", (promptJson) => {
   const marker = bookingMarkerFromPrompt(promptJson);
+
   return promptJson.includes(phase6BookingToolCallId(marker))
     ? Stream.fromIterable(bookingReportParts(marker))
     : Stream.fromIterable(bookingCallParts(marker));
@@ -471,6 +481,7 @@ const countingGuideLayer = Layer.succeed(
     lookup: (query) =>
       Effect.suspend(() => {
         guideInvocations += 1;
+
         return destinationLookup(query);
       }),
   }),
@@ -609,6 +620,7 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
     );
 
     const researcherBinding = Agent.withModel(DestinationResearcher, phase6ResearcherModel);
+
     const childToolkitLayer = DestinationResearcherToolkitLayer.pipe(
       Layer.provideMerge(countingGuideLayer),
     );

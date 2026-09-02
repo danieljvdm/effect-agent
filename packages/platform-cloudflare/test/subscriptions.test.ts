@@ -32,9 +32,11 @@ declare global {
 
 const partitionName = sourcePartitionName(subscriptionPartition);
 const stubFor = () => env.SUBSCRIPTIONS.get(env.SUBSCRIPTIONS.idFromName(partitionName));
+
 const clientLayer = CloudflareSubscriptionsClient.layer(subscriptionPartition).pipe(
   Layer.provide(Layer.succeed(SubscriptionPartitionNamespace)({ namespace: env.SUBSCRIPTIONS })),
 );
+
 const runClient = <A, E>(effect: Effect.Effect<A, E, Subscriptions | SubscriptionIntake>) =>
   Effect.runPromise(effect.pipe(Effect.provide(clientLayer)));
 
@@ -49,6 +51,7 @@ it("rejects subscription limits that can outlive one safe alarm invocation", asy
       operationTimeoutMillis: 300_000,
     }).pipe(Effect.flip),
   );
+
   expect(failure._tag).toBe("CloudflareSubscriptionConfigError");
 });
 
@@ -87,10 +90,12 @@ for (const [caseIndex, row] of cases.entries()) {
 
     for (let index = 0; index < row.registrations; index += 1) {
       const threadId = subscriptionThreadId(`${caseIndex}-${index}`);
+
       threads.push(threadId);
       await runClient(
         Effect.gen(function* () {
           const subscriptions = yield* Subscriptions;
+
           yield* subscriptions.subscribe(
             { partition: subscriptionPartition, ownerId, principal: subscriptionPrincipal },
             {
@@ -114,6 +119,7 @@ for (const [caseIndex, row] of cases.entries()) {
     await runClient(
       Effect.gen(function* () {
         const intake = yield* SubscriptionIntake;
+
         return yield* intake.accept(subscriptionPrincipal, SubscriptionTestSourceVersion, {
           eventId,
           topic,
@@ -123,12 +129,14 @@ for (const [caseIndex, row] of cases.entries()) {
     );
 
     let delivered = false;
+
     for (let round = 0; round < 200; round += 1) {
       const pageResults = await Promise.allSettled(
         Array.from({ length: row.registrations }, (_, index) =>
           runClient(
             Effect.gen(function* () {
               const subscriptions = yield* Subscriptions;
+
               return yield* subscriptions.listDeliveries(
                 { partition: subscriptionPartition, ownerId, principal: subscriptionPrincipal },
                 {
@@ -141,6 +149,7 @@ for (const [caseIndex, row] of cases.entries()) {
           ),
         ),
       );
+
       if (
         pageResults.every(
           (result) =>

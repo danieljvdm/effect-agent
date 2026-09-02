@@ -40,14 +40,18 @@ const runCommand = Effect.fn("runCommand")(function* (
 ) {
   const formatted = [command, ...args].join(" ");
   const child = yield* ChildProcess.make(command, args, { stderr: "pipe", stdout: "pipe" });
+
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+
   const trimmed = output.trim();
+
   if (exitCode !== 0) {
     return yield* CommandError.make({ command: formatted, exitCode, output: trimmed });
   }
+
   return trimmed;
 });
 
@@ -74,10 +78,13 @@ export const command = CliCommand.make("build-action", { check: checkFlag }, ({ 
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const scratch = path.join(yield* fs.makeTempDirectoryScoped(), "index.mjs");
+
     yield* bundleTo(entry, scratch);
     const fresh = yield* fs.readFileString(scratch);
+
     if (check) {
       const committed = yield* fs.readFileString(bundle);
+
       if (committed !== fresh) {
         return yield* StaleBundleError.make({ bundle });
       }
@@ -86,6 +93,7 @@ export const command = CliCommand.make("build-action", { check: checkFlag }, ({ 
       yield* fs.makeDirectory(path.dirname(bundle), { recursive: true });
       yield* fs.writeFileString(bundle, fresh);
       const stat = yield* fs.stat(bundle);
+
       yield* Console.log(`Bundled ${entry} -> ${bundle} (${stat.size} bytes).`);
     }
   }),

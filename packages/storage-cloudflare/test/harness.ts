@@ -81,6 +81,7 @@ export const OTHER_PRODUCER = id(ProducerId, "producer-do-ledger-other");
 export const TEST_AGENT = id(AdmissionRequest.fields.agentId, "agent-do-ledger");
 export const TEST_DEPLOYMENT = id(DeploymentId, "deployment-do-ledger");
 export const TEST_DEFINITION_DIGEST = Schema.decodeSync(Digest)("a".repeat(64));
+
 export const TEST_DIGESTS = DefinitionDigests.make({
   agent: TEST_DEFINITION_DIGEST,
   model: TEST_DEFINITION_DIGEST,
@@ -94,6 +95,7 @@ export const admission = Effect.fn("DoLedgerTest.admission")(function* (
   parentLinkage?: ParentLinkage,
 ) {
   const inputDigest = yield* digestJson(input);
+
   return AdmissionRequest.make({
     threadId: thread(threadId),
     principal: TEST_PRINCIPAL,
@@ -113,6 +115,7 @@ export const settlementReservation = Effect.fn("DoLedgerTest.settlementReservati
   outcome: SettlementOutcome,
 ) {
   const settlementId = submissionSettlementId(admitted.submissionId);
+
   const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
     SubmissionSettled.make({
       submissionId: admitted.submissionId,
@@ -129,6 +132,7 @@ export const settlementReservation = Effect.fn("DoLedgerTest.settlementReservati
         : {}),
     }),
   ).pipe(Effect.orDie);
+
   const record = RecordEnvelope.make({
     recordId: submissionSettlementRecordId(admitted.submissionId),
     family: "thread",
@@ -137,8 +141,10 @@ export const settlementReservation = Effect.fn("DoLedgerTest.settlementReservati
     deploymentId: TEST_DEPLOYMENT,
     payload,
   });
+
   const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie);
   const recordDigest = yield* digestJson(encoded);
+
   return SettlementReservation.make({
     submissionId: admitted.submissionId,
     ownershipToken,

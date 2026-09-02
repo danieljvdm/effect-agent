@@ -12,8 +12,10 @@ describe("@effect/vitest it.effect inside the workers pool (WP0 probe 3)", () =>
   it.effect("provides a TestClock that drives virtual time inside workerd", () =>
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(Effect.as(Effect.sleep(Duration.seconds(30)), "woke"));
+
       yield* TestClock.adjust("31 seconds");
       const outcome = yield* Fiber.join(fiber);
+
       expect(outcome).toBe("woke");
     }),
   );

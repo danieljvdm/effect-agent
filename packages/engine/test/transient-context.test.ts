@@ -70,6 +70,7 @@ const makeModel = (requests: Array<Prompt.Prompt>) =>
         generateText: () => Effect.succeed([]),
         streamText: (request) => {
           requests.push(request.prompt);
+
           return Stream.fromIterable(finalParts);
         },
       }),
@@ -98,8 +99,10 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected failure");
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
+
   return failure.value;
 };
 
@@ -118,6 +121,7 @@ layer(testLayer)("transient model context", (it) => {
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
       const result = yield* AgentRuntime.run(makeAgent(requests), "question");
+
       expect(result.output).toBe("done");
       expect(requests).toHaveLength(1);
     }),
@@ -127,21 +131,26 @@ layer(testLayer)("transient model context", (it) => {
       Effect.gen(function* () {
         const requests: Array<Prompt.Prompt> = [];
         const agent = makeAgent(requests);
+
         const contextLive = Layer.succeed(RunContextPreparation, {
           transientContext: { load: () => Effect.succeed("project memory") },
         });
+
         const program = Effect.gen(function* () {
           if (entrypoint === "run") yield* AgentRuntime.run(agent, "question");
           else if (entrypoint === "stream") {
             yield* AgentRuntime.stream(agent, "question").pipe(Stream.runDrain);
           } else {
             const handle = yield* AgentRuntime.start(agent, "question");
+
             yield* handle.await;
           }
         });
+
         const contextRequired: RunContextPreparation extends Effect.Services<typeof program>
           ? true
           : false = false;
+
         yield* program.pipe(Effect.provide(contextLive));
 
         expect(contextRequired).toBe(false);
@@ -156,16 +165,19 @@ layer(testLayer)("transient model context", (it) => {
       Effect.gen(function* () {
         const requests: Array<Prompt.Prompt> = [];
         const finalized = yield* Ref.make(0);
+
         const contextLive = Layer.effect(
           RunContextPreparation,
           Effect.gen(function* () {
             const dependency = yield* TransientContextDependency;
+
             yield* Effect.acquireRelease(Effect.void, () =>
               Ref.update(finalized, (count) => count + 1),
             );
             if (phase === "acquisition") {
               return yield* TransientContextFailure.make({ message: dependency.value });
             }
+
             return RunContextPreparation.of({
               transientContext: {
                 load: () =>
@@ -180,20 +192,25 @@ layer(testLayer)("transient model context", (it) => {
             });
           }),
         );
+
         const program = AgentRuntime.run(makeAgent(requests), "question").pipe(
           Effect.provide(contextLive),
         );
+
         const dependencyRequired: TransientContextDependency extends Effect.Services<typeof program>
           ? true
           : false = true;
+
         const acquisitionErrorPreserved: TransientContextFailure extends Effect.Error<
           typeof program
         >
           ? true
           : false = true;
+
         const methodErrorPreserved: MemoryRecallError extends Effect.Error<typeof program>
           ? true
           : false = true;
+
         const result = yield* program.pipe(
           Effect.catchTags({
             TransientContextFailure: (error) => Effect.succeed(error),
@@ -221,6 +238,7 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("fails malformed transient messages before provider I/O", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const malformedMessage = new Proxy(
         { role: "user" as const, content: "valid until read" },
         {
@@ -228,6 +246,7 @@ layer(testLayer)("transient model context", (it) => {
             property === "content" ? 42 : Reflect.get(target, property, receiver),
         },
       );
+
       const exit = yield* AgentRuntime.run(makeAgent(requests), "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: { load: () => Effect.succeed([malformedMessage]) },
@@ -236,6 +255,7 @@ layer(testLayer)("transient model context", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(Schema.is(AgentInputError)(failure)).toBe(true);
       expect(requests).toHaveLength(0);
     }),
@@ -244,6 +264,7 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("budgets oversized transient context before provider I/O", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const exit = yield* AgentRuntime.run(makeAgent(requests, 2_000), "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: { load: () => Effect.succeed("reference".repeat(4_000)) },
@@ -252,6 +273,7 @@ layer(testLayer)("transient model context", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(Schema.is(ContextBudgetError)(failure)).toBe(true);
       expect(requests).toHaveLength(0);
     }),
@@ -260,11 +282,14 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("loads transient context only after threshold compaction succeeds", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const Search = Tool.make("search", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Search);
+
       const model = Model.make(
         "scripted",
         "transient-compaction-order",
@@ -274,6 +299,7 @@ layer(testLayer)("transient model context", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: (request) => {
               requests.push(request.prompt);
+
               return Stream.fromIterable<Response.StreamPartEncoded>([
                 {
                   type: "tool-call",
@@ -292,6 +318,7 @@ layer(testLayer)("transient model context", (it) => {
           }),
         ),
       );
+
       const agent = Agent.withModel(
         Agent.make("transient-compaction-order", {
           input: Schema.String,
@@ -309,8 +336,10 @@ layer(testLayer)("transient model context", (it) => {
         }),
         model,
       );
+
       const loads = yield* Ref.make(0);
       const compactionFailure = CompactionError.make({ message: "compaction unavailable" });
+
       const exit = yield* AgentRuntime.run(agent, "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: {
@@ -335,11 +364,14 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("compacts the canonical basis when the loaded snapshot exceeds admission", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const Search = Tool.make("search", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Search);
+
       const model = Model.make(
         "scripted",
         "transient-post-load-compaction",
@@ -365,11 +397,13 @@ layer(testLayer)("transient model context", (it) => {
                   },
                 ]);
               }
+
               return Stream.fromIterable(finalParts);
             },
           }),
         ),
       );
+
       const agent = Agent.withModel(
         Agent.make("transient-post-load-compaction", {
           input: Schema.String,
@@ -387,9 +421,11 @@ layer(testLayer)("transient model context", (it) => {
         }),
         model,
       );
+
       const loads = yield* Ref.make(0);
       const compactionTargets: Array<number | undefined> = [];
       const toolCalls = yield* Ref.make(0);
+
       const result = yield* AgentRuntime.run(agent, "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: {
@@ -409,6 +445,7 @@ layer(testLayer)("transient model context", (it) => {
                   : 0),
               0,
             );
+
             return (
               messages.length * 50 +
               activeToolResults * 900 +
@@ -417,6 +454,7 @@ layer(testLayer)("transient model context", (it) => {
           },
           compact: (request) => {
             compactionTargets.push(request.targetTokens);
+
             return Stream.succeed({ kind: "clear-tool-results" as const, through: 4 });
           },
         }),
@@ -443,11 +481,14 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("does not carry a prior Turn summary allowance into post-load compaction", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const Search = Tool.make("search", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Search);
+
       const model = Model.make(
         "scripted",
         "transient-prior-summary",
@@ -473,11 +514,13 @@ layer(testLayer)("transient model context", (it) => {
                   },
                 ]);
               }
+
               return Stream.fromIterable(finalParts);
             },
           }),
         ),
       );
+
       const agent = Agent.withModel(
         Agent.make("transient-prior-summary", {
           input: Schema.String,
@@ -495,14 +538,18 @@ layer(testLayer)("transient model context", (it) => {
         }),
         model,
       );
+
       const loads = yield* Ref.make(0);
+
       const compactionPasses: Array<{
         readonly sourceLength: number;
         readonly targetTokens: number | undefined;
         readonly forceSummarize: boolean;
       }> = [];
+
       const toolCalls = yield* Ref.make(0);
       const results = ["first-result", "second-result", "third-result"];
+
       const result = yield* AgentRuntime.run(agent, "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: {
@@ -522,6 +569,7 @@ layer(testLayer)("transient model context", (it) => {
                   : 0),
               0,
             );
+
             return (
               messages.length * 50 +
               activeToolResults * 700 +
@@ -534,6 +582,7 @@ layer(testLayer)("transient model context", (it) => {
               targetTokens: request.targetTokens,
               forceSummarize: request.forceSummarize,
             });
+
             return request.source.content.length === 6
               ? Stream.succeed({
                   kind: "summarize" as const,
@@ -570,6 +619,7 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("reuses one transient snapshot for a same-Turn overflow retry", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const model = Model.make(
         "scripted",
         "transient-overflow-retry",
@@ -579,6 +629,7 @@ layer(testLayer)("transient model context", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: (request) => {
               requests.push(request.prompt);
+
               return requests.length === 1
                 ? Stream.fail(
                     AiError.AiError.make({
@@ -594,6 +645,7 @@ layer(testLayer)("transient model context", (it) => {
           }),
         ),
       );
+
       const agent = Agent.withModel(
         Agent.make("transient-overflow-retry", {
           input: Schema.String,
@@ -611,7 +663,9 @@ layer(testLayer)("transient model context", (it) => {
         }),
         model,
       );
+
       const loads = yield* Ref.make(0);
+
       const result = yield* AgentRuntime.run(agent, "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: {
@@ -636,11 +690,14 @@ layer(testLayer)("transient model context", (it) => {
   it.effect("rejects an oversized transient reload before a grace provider call", () =>
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
+
       const Search = Tool.make("search", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const tools = Toolkit.make(Search);
+
       const model = Model.make(
         "scripted",
         "transient-grace",
@@ -650,6 +707,7 @@ layer(testLayer)("transient model context", (it) => {
             generateText: () => Effect.succeed([]),
             streamText: (request) => {
               requests.push(request.prompt);
+
               return Stream.fromIterable<Response.StreamPartEncoded>(
                 requests.length === 1
                   ? [
@@ -672,6 +730,7 @@ layer(testLayer)("transient model context", (it) => {
           }),
         ),
       );
+
       const agent = Agent.withModel(
         Agent.make("transient-grace", {
           input: Schema.String,
@@ -689,7 +748,9 @@ layer(testLayer)("transient model context", (it) => {
         }),
         model,
       );
+
       const loads = yield* Ref.make(0);
+
       const exit = yield* AgentRuntime.run(agent, "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: {
@@ -706,6 +767,7 @@ layer(testLayer)("transient model context", (it) => {
       );
 
       const failure = failureFrom(exit);
+
       expect(Schema.is(ContextBudgetError)(failure)).toBe(true);
       expect(yield* Ref.get(loads)).toBe(2);
       expect(requests).toHaveLength(1);
@@ -714,24 +776,29 @@ layer(testLayer)("transient model context", (it) => {
 
   it.effect("preserves a per-Run override's typed error and service requirement", () => {
     const requests: Array<Prompt.Prompt> = [];
+
     const program = AgentRuntime.run(makeAgent(requests), "question", {
       transientContext: {
         load: () =>
           Effect.gen(function* () {
             const dependency = yield* TransientContextDependency;
+
             return yield* TransientContextFailure.make({ message: dependency.value });
           }),
       },
     });
+
     const dependencyRequired: TransientContextDependency extends Effect.Services<typeof program>
       ? true
       : false = true;
+
     const failurePreserved: TransientContextFailure extends Effect.Error<typeof program>
       ? true
       : false = true;
 
     return Effect.gen(function* () {
       const exit = yield* program.pipe(Effect.exit);
+
       expect(failureFrom(exit)).toEqual(
         TransientContextFailure.make({ message: "typed dependency" }),
       );
@@ -749,6 +816,7 @@ layer(testLayer)("transient model context", (it) => {
     Effect.gen(function* () {
       const requests: Array<Prompt.Prompt> = [];
       const defect = new Error("transient loader defect");
+
       const exit = yield* AgentRuntime.run(makeAgent(requests), "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: { load: () => Effect.die(defect) },
@@ -770,6 +838,7 @@ layer(testLayer)("transient model context", (it) => {
       const requests: Array<Prompt.Prompt> = [];
       const entered = yield* Deferred.make<void>();
       const released = yield* Deferred.make<void>();
+
       const run = AgentRuntime.run(makeAgent(requests), "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: {
@@ -780,7 +849,9 @@ layer(testLayer)("transient model context", (it) => {
           },
         }),
       );
+
       const fiber = yield* Effect.forkChild(Effect.scoped(run));
+
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
       yield* Deferred.await(released);
@@ -794,6 +865,7 @@ layer(testLayer)("transient model context", (it) => {
       const requests: Array<Prompt.Prompt> = [];
       const entered = yield* Deferred.make<void>();
       const finalized = yield* Ref.make(0);
+
       const fiber = yield* AgentRuntime.run(makeAgent(requests), "question").pipe(
         Effect.provideService(RunContextPreparation, {
           transientContext: {
@@ -805,11 +877,13 @@ layer(testLayer)("transient model context", (it) => {
         }),
         Effect.forkChild,
       );
+
       yield* Deferred.await(entered);
       yield* TestClock.adjust("30 seconds");
       const exit = yield* Fiber.await(fiber);
 
       const failure = failureFrom(exit);
+
       expect(Schema.is(AgentPolicyError)(failure)).toBe(true);
       if (Schema.is(AgentPolicyError)(failure)) expect(failure.limit).toBe("duration");
       expect(yield* Ref.get(finalized)).toBe(1);

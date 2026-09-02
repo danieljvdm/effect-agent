@@ -41,7 +41,9 @@ export const resolveSubscriptionInput = (
       binding.agentId === configuration.agentId &&
       definitionDigestsEqual(binding.definitions, configuration.definitions),
   );
+
   const binding = found[0];
+
   return found.length === 1 && binding !== undefined
     ? Effect.succeed(binding)
     : Effect.fail(SubscriptionError.make({ reason: "unsupported-binding", code: "input-binding" }));
@@ -90,13 +92,16 @@ export const makeSubscriptionInputBinding = Effect.fn("Thread.makeSubscriptionIn
       | Continuation["EncodingServices"]
       | Input["EncodingServices"]
     >();
+
     const invalid = () =>
       SubscriptionSourceError.make({ code: "input-binding-schema", retryable: false });
+
     const encode = <S extends Schema.Top>(schema: S, value: S["Type"]) =>
       Schema.encodeEffect(schema)(value).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(PersistedJson)),
         Effect.mapError(invalid),
       );
+
     return {
       source: options.source,
       agentId: options.agentId,
@@ -113,12 +118,15 @@ export const makeSubscriptionInputBinding = Effect.fn("Thread.makeSubscriptionIn
           const e = yield* Schema.decodeUnknownEffect(options.event)(event.payload).pipe(
             Effect.mapError(invalid),
           );
+
           const p = yield* Schema.decodeUnknownEffect(options.parameters)(
             subscription.configuration.parameters,
           ).pipe(Effect.mapError(invalid));
+
           const c = yield* Schema.decodeUnknownEffect(options.context)(
             subscription.configuration.context,
           ).pipe(Effect.mapError(invalid));
+
           return yield* encode(options.input, yield* options.prepare(e, p, c));
         }).pipe(Effect.provideContext(services)),
     };

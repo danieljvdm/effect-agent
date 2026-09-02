@@ -157,6 +157,7 @@ const validateCompletionMetadata = ({
   finishReason,
 }: CompletionMetadata): string | undefined => {
   const isBudgetExhausted = finishReason === "budget-exhausted";
+
   return isBudgetExhausted === (exhausted !== undefined)
     ? undefined
     : '`exhausted` must be present exactly when `finishReason` is "budget-exhausted"';
@@ -315,4 +316,5 @@ export const RunEvent = Schema.Union([
   SubagentInterrupted,
   SubagentJoined,
 ]);
+
 export type RunEvent = typeof RunEvent.Type;

@@ -25,6 +25,7 @@ const formatNumber = (value: number): string => String(value).replace(/\B(?=(\d{
 
 const findingLabel = (finding: ReviewFinding): string => {
   const appearance = severityAppearance[finding.severity];
+
   return `${appearance.icon} ${appearance.label} · ${finding.category}`;
 };
 
@@ -36,13 +37,16 @@ const severityCounts = (report: ReviewReport) => ({
 
 const renderFindingTally = (input: ReviewPresentationInput): string => {
   const counts = severityCounts(input.report);
+
   const parts = [
     ...(counts.blocking > 0 ? [`🛑 ${String(counts.blocking)} blocking`] : []),
     ...(counts.important > 0 ? [`⚠️ ${String(counts.important)} important`] : []),
     ...(counts.nit > 0 ? [`💅 ${String(counts.nit)} nit`] : []),
   ];
+
   if (parts.length > 0) return parts.join(" · ");
   if (!input.complete || input.exhausted !== undefined) return "None recorded · incomplete";
+
   return input.unresolvedChangeRequests > 0 ? "None recorded" : "✅ None";
 };
 
@@ -53,6 +57,7 @@ const renderVerdict = (
   exhausted: ReviewOutcome["exhausted"],
 ): string => {
   const counts = severityCounts(report);
+
   if (counts.blocking > 0) {
     return `> [!CAUTION]\n> **${countNoun(counts.blocking, "blocking finding")}.** Do not merge until ${counts.blocking === 1 ? "it is" : "they are"} addressed.`;
   }
@@ -71,6 +76,7 @@ const renderVerdict = (
   if (counts.nit > 0) {
     return `> [!NOTE]\n> **${countNoun(counts.nit, "minor finding")}.**`;
   }
+
   return "> [!TIP]\n> **No actionable findings.**";
 };
 
@@ -89,6 +95,7 @@ const renderFindingText = (finding: ReviewFinding): string =>
 const fencedPlainText = (text: string): string => {
   let longestRun = 0;
   let currentRun = 0;
+
   for (const character of text) {
     if (character === "`") {
       currentRun += 1;
@@ -98,6 +105,7 @@ const fencedPlainText = (text: string): string => {
     }
   }
   const fence = "`".repeat(Math.max(3, longestRun + 1));
+
   return `${fence}text\n${text}\n${fence}`;
 };
 
@@ -164,12 +172,14 @@ const renderCoverage = (input: ReviewPresentationInput): string =>
 
 const formatEstimatedUsd = (microusd: number): string => {
   const dollars = microusd / 1_000_000;
+
   const digits =
     (dollars > 0 && dollars < 0.0001) || (dollars >= 0.9999 && dollars < 1)
       ? 6
       : dollars < 1
         ? 4
         : 2;
+
   return `$${dollars.toFixed(digits)}`;
 };
 
@@ -195,7 +205,9 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
       `| **${input.scope === "full" ? "Full diff" : "Incremental"}** | ${renderCoverage(input)} | ${renderFindingTally(input)} |`,
     ].join("\n"),
   ];
+
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+
   if (automaticPause !== undefined) parts.push(automaticPause);
   parts.push("### Summary", input.report.summary);
   if (input.exclusions !== undefined && input.exclusions.length > 0) {
@@ -203,8 +215,10 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
     // bound, including paths whose JSON escaping expands every character.
     const shown: Array<string> = [];
     let chars = 0;
+
     for (const { path, reason } of input.exclusions.slice(0, 30)) {
       const line = `${JSON.stringify(path.slice(0, 512))}: ${exclusionReason[reason]}`;
+
       if (chars + line.length + 1 > 10_000) break;
       shown.push(line);
       chars += line.length + 1;
@@ -232,6 +246,7 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
       `Reviewed commit: ${input.headRevision}. Recheck locations if the branch has moved.`,
       input.report.findings.map(renderFindingText).join("\n\n---\n\n"),
     ].join("\n\n");
+
     parts.push(
       [
         input.report.findings.some((finding) => finding.line === undefined)
@@ -250,31 +265,38 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
 
   const modelLabel =
     input.modelTurns === 0 ? "No model call" : countNoun(input.modelTurns, "model call");
+
   const usage =
     input.modelTurns === 0
       ? ""
       : ` · ${renderInputUsage(input)} / ${formatNumber(input.outputTokens)} output tokens`;
+
   const estimatedCost =
     input.estimatedCost === undefined
       ? ""
       : ` · ≈ ${formatEstimatedUsd(input.estimatedCost.microusd)} at <a href="${input.estimatedCost.url}">${input.estimatedCost.label} rates</a>`;
+
   const pendingCost =
     (input.reservedCostMicrousd ?? 0) === 0
       ? ""
       : ` · up to ${formatEstimatedUsd(input.reservedCostMicrousd ?? 0)} awaiting usage`;
+
   const costLimit =
     input.costLimitMicrousd === undefined
       ? ""
       : ` · $${(input.costLimitMicrousd / 1_000_000).toFixed(6)} spending ceiling`;
+
   const automaticReviewStatus =
     input.automaticReviewsRemaining === 0
       ? ""
       : input.automaticReviewsRemaining === 1
         ? " · 1 automatic review remains"
         : ` · ${String(input.automaticReviewsRemaining)} automatic reviews remain`;
+
   const footer = `<sub>${modelLabel}${usage}${estimatedCost}${pendingCost}${costLimit} · inspected at <code>${input.headRevision.slice(0, 7)}</code>${automaticReviewStatus}</sub>`;
 
   parts.push(footer);
+
   return parts.join("\n\n");
 };
 
@@ -292,8 +314,11 @@ export const renderReviewFailureBody = (input: ReviewFailurePresentationInput): 
     "This attempt does not advance the baseline or clear earlier change requests.",
     "Check the Action log for details. Comment `@effect-agent review full` to retry the full diff.",
   ];
+
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
+
   if (automaticPause !== undefined) parts.push(automaticPause);
+
   return parts.join("\n\n");
 };
 
@@ -310,16 +335,19 @@ export const renderReviewPauseBody = (input: ReviewPausePresentationInput): stri
     input.automaticAttempts === input.automaticReviewLimit
       ? `${String(input.automaticAttempts)} of ${String(input.automaticReviewLimit)} used`
       : `${String(input.automaticAttempts)} recorded · limit ${String(input.automaticReviewLimit)}`;
+
   const lastCompleted =
     input.lastCompletedRevision === undefined
       ? "None"
       : `<code>${input.lastCompletedRevision.slice(0, 7)}</code>`;
+
   const unresolved =
     input.unresolvedChangeRequests === 0
       ? []
       : [
           `> [!CAUTION]\n> **${countNoun(input.unresolvedChangeRequests, "earlier change request")} remains unresolved.** This pause notice does not clear it.`,
         ];
+
   return [
     "## Effect Agent review",
     [
@@ -361,6 +389,7 @@ export const ReviewPresentation: Context.Reference<ReviewPresentation> =
 
 const withTerminalMarker = (body: string, marker: string): string => {
   const visibleBody = body.trimEnd();
+
   return visibleBody.length === 0 ? marker : `${visibleBody}\n\n${marker}`;
 };
 

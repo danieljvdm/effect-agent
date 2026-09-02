@@ -75,9 +75,11 @@ export const phase5TravelPlannerProfile = TravelPlannerBookingProfile.make({
 export const phase5TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-p5-deployment",
 );
+
 export const phase5TravelPlannerProducerId = Schema.decodeSync(ProducerId)(
   "travel-planner-p5-producer",
 );
+
 export const phase5TravelPlannerPrincipal = Schema.decodeSync(Principal)(
   "travel-planner-p5-principal",
 );
@@ -105,6 +107,7 @@ export const phase5TravelPlannerSubmitOptions = (
 export const TravelerRef = Schema.NonEmptyString.pipe(
   Schema.brand("@effect-agent/testing/travel-planner/TravelerRef"),
 );
+
 export type TravelerRef = typeof TravelerRef.Type;
 
 /**
@@ -171,6 +174,7 @@ export class TravelBookingReport extends Schema.Class<TravelBookingReport>("Trav
  * to query external truth — both sides are exported so they cannot drift.
  */
 export const bookFlightIdempotencyKey = (toolCallId: string): string => `book-flight:${toolCallId}`;
+
 export const itineraryStepIdempotencyKey = (toolCallId: string, stepName: string): string =>
   `${toolCallId}:${stepName}`;
 
@@ -252,11 +256,13 @@ export const TravelPlannerPhase5ToolkitLayer = TravelPlannerPhase5Toolkit.toLaye
     Effect.gen(function* () {
       const desk = yield* SupplierBookingDesk;
       const toolCallId = yield* requireToolCallId("book_flight", context.toolCallId);
+
       const record = yield* desk.book({
         operation: "book-flight",
         idempotencyKey: bookFlightIdempotencyKey(toolCallId),
         detail: `flight ${request.quoteId} for ${request.travelerRef} on ${request.departOn}`,
       });
+
       return SupplierBookingConfirmation.make({
         bookingRef: record.bookingRef,
         status: "confirmed",
@@ -267,6 +273,7 @@ export const TravelPlannerPhase5ToolkitLayer = TravelPlannerPhase5Toolkit.toLaye
     Effect.gen(function* () {
       const desk = yield* SupplierBookingDesk;
       const record = yield* desk.cancel(request.bookingRef);
+
       return CancellationConfirmation.make({
         bookingRef: record.bookingRef,
         status: "cancelled",
@@ -277,6 +284,7 @@ export const TravelPlannerPhase5ToolkitLayer = TravelPlannerPhase5Toolkit.toLaye
       const desk = yield* SupplierBookingDesk;
       const step = yield* DurableStep;
       const toolCallId = yield* requireToolCallId("book_itinerary", context.toolCallId);
+
       const bookStep = (
         stepName: "reserve-flight" | "reserve-lodging" | "issue-confirmation",
         detail: string,
@@ -290,18 +298,22 @@ export const TravelPlannerPhase5ToolkitLayer = TravelPlannerPhase5Toolkit.toLaye
             detail,
           }),
         );
+
       const flight = yield* bookStep(
         "reserve-flight",
         `flight ${request.quoteId} for ${request.travelerRef}`,
       );
+
       const lodging = yield* bookStep(
         "reserve-lodging",
         `lodging ${request.destination} for ${request.nights} nights (${request.travelerRef})`,
       );
+
       const confirmation = yield* bookStep(
         "issue-confirmation",
         `itinerary confirmation for ${request.travelerRef}`,
       );
+
       return ItineraryConfirmation.make({
         flightBookingRef: flight.bookingRef,
         lodgingBookingRef: lodging.bookingRef,
@@ -336,6 +348,7 @@ export const TravelSupplierReconcilerLayer: Layer.Layer<
   ToolReconciler,
   Effect.gen(function* () {
     const desk = yield* SupplierBookingDesk;
+
     return ToolReconciler.of({
       reconcile: (evidence) =>
         Effect.gen(function* () {
@@ -343,6 +356,7 @@ export const TravelSupplierReconcilerLayer: Layer.Layer<
             case "book_flight": {
               const key = bookFlightIdempotencyKey(evidence.toolCallId);
               const booking = yield* desk.lookup(key);
+
               if (Option.isSome(booking) && booking.value.status === "confirmed") {
                 const confirmation = yield* encodeConfirmation(
                   SupplierBookingConfirmation.make({
@@ -351,8 +365,10 @@ export const TravelSupplierReconcilerLayer: Layer.Layer<
                     detail: booking.value.detail,
                   }),
                 ).pipe(Effect.flatMap(decodePersistedJson));
+
                 return ReconciliationCompleted.make({ result: confirmation, isFailure: false });
               }
+
               return ReconciliationUncertain.make({
                 reason: `The supplier desk shows no confirmed booking under ${key}; a write may still be in flight.`,
               });
@@ -413,6 +429,7 @@ export class TravelPlannerBookingEvidenceError extends Schema.TaggedError<Travel
 const bookingResultRefs = (result: unknown): ReadonlyArray<string> => {
   if (typeof result !== "object" || result === null) return [];
   const refs: Array<string> = [];
+
   for (const [field, value] of Object.entries(result)) {
     if (
       typeof value === "string" &&
@@ -424,6 +441,7 @@ const bookingResultRefs = (result: unknown): ReadonlyArray<string> => {
       refs.push(value);
     }
   }
+
   return refs;
 };
 
@@ -443,8 +461,10 @@ export const assertSettledBookingsExistAtSupplier = Effect.fn(
   const desk = yield* SupplierBookingDesk;
   const bookings = yield* desk.bookings;
   const knownRefs = new Set<string>(bookings.map((booking) => booking.bookingRef));
+
   for (const envelope of records) {
     const payload = envelope.record.payload;
+
     if (
       payload._tag !== "ToolCallSettled" ||
       payload.isFailure ||

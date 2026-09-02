@@ -66,19 +66,24 @@ const certified = (): Promise<CertificationReport> => {
       // The same combined Layer instance is passed for BOTH ports: Layer memoization builds
       // it once, so ledger and store share one SqlClient over one Durable Object database.
       const adapters = combinedAdapters(storage);
+
       const report = yield* certifyDurableAdapters({
         adapter: { name: "@effect-agent/storage-cloudflare" },
         submissionLedger: adapters,
         threadStore: adapters,
         tierThreeEvidence: TIER3_EVIDENCE,
       });
+
       if (PRINT_REPORT) {
         const encoded = yield* Schema.encodeEffect(CertificationReport)(report).pipe(Effect.orDie);
+
         console.log(JSON.stringify(encoded, null, 2));
       }
+
       return report;
     }).pipe(Effect.provide(BrowserCrypto.layer)),
   );
+
   return cachedPromise;
 };
 
@@ -91,6 +96,7 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
       const report = await certified();
       const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
       const storeCases = report.tier1.filter((result) => result.suite === "thread-store");
+
       expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
       expect(storeCases).toHaveLength(threadStoreConformanceCases.length);
       expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
@@ -102,6 +108,7 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
     "TIER2: every coordinator failpoint leaves a classifiable state and re-drive converges",
     async () => {
       const report = await certified();
+
       expect(report.tier2).toHaveLength(34 * CERTIFICATION_SCENARIOS.length);
       expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
       expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);
@@ -119,12 +126,15 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
     "the certification report round-trips its Schema and names the adapter identity and durability claim",
     async () => {
       const report = await certified();
+
       const encoded = await Effect.runPromise(
         Schema.encodeEffect(CertificationReport)(report).pipe(Effect.orDie),
       );
+
       const decoded = await Effect.runPromise(
         Schema.decodeUnknownEffect(CertificationReport)(encoded).pipe(Effect.orDie),
       );
+
       expect(decoded.format).toBe("effect-agent/certification@2");
       expect(decoded.fullyCertified).toBe(false);
       expect(decoded.adapter.name).toBe("@effect-agent/storage-cloudflare");
@@ -138,6 +148,7 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
     "TIER3: the real eviction/restart loss levers are discharged by the committed DC suites",
     async () => {
       const report = await certified();
+
       expect(report.tier3.status).toBe("recorded-evidence");
       expect(report.tier3.evidence).toEqual(TIER3_EVIDENCE);
       expect(report.tier3.cases).toEqual([]);

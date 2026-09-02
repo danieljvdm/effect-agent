@@ -43,16 +43,20 @@ const BoundedCode = Schema.NonEmptyString.check(Schema.isMaxLength(512 * 1024));
 
 const utf8ByteLength = (value: string): number => {
   let total = 0;
+
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
+
     total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
   }
+
   return total;
 };
 
 const encodedJsonByteLength = (value: unknown): number | undefined => {
   try {
     const encoded = JSON.stringify(value);
+
     return encoded === undefined ? undefined : utf8ByteLength(encoded);
   } catch {
     return undefined;
@@ -212,6 +216,7 @@ const defaultMaxEgressBytes = 64 * 1024;
 // ---------------------------------------------------------------------------
 
 const MAX_RENDER_DEPTH = 24;
+
 const isJsonSchemaRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -228,14 +233,17 @@ const renderJsonSchemaType = (
     throw new Error(`Code Mode cannot render the JSON schema fragment ${JSON.stringify(schema)}`);
   }
   const reference = schema.$ref;
+
   if (typeof reference === "string") {
     const match = /^#\/\$defs\/(.+)$/.exec(reference);
     // JSON-pointer tokens escape `/` as `~1` and `~` as `~0`.
     const key = match === null ? undefined : match[1].replaceAll("~1", "/").replaceAll("~0", "~");
     const resolved = key === undefined ? undefined : defs[key];
+
     if (resolved === undefined) {
       throw new Error(`Code Mode cannot resolve the JSON schema reference ${reference}`);
     }
+
     return renderJsonSchemaType(resolved, defs, depth + 1, indent);
   }
   if (Array.isArray(schema.enum)) {
@@ -245,10 +253,12 @@ const renderJsonSchemaType = (
     return JSON.stringify(schema.const);
   }
   const union = schema.anyOf ?? schema.oneOf;
+
   if (Array.isArray(union)) {
     return union.map((member) => renderJsonSchemaType(member, defs, depth + 1, indent)).join(" | ");
   }
   const type = schema.type;
+
   if (Array.isArray(type)) {
     return type
       .map((member) => renderJsonSchemaType({ ...schema, type: member }, defs, depth + 1, indent))
@@ -272,6 +282,7 @@ const renderJsonSchemaType = (
       if (!("items" in schema)) {
         throw new Error("Code Mode cannot render an array schema without items");
       }
+
       return `ReadonlyArray<${renderJsonSchemaType(schema.items, defs, depth + 1, indent)}>`;
     }
     case "object":
@@ -279,12 +290,15 @@ const renderJsonSchemaType = (
       if (isJsonSchemaRecord(schema.properties)) {
         const required = Array.isArray(schema.required) ? schema.required : [];
         const inner = `${indent}  `;
+
         const fields = Object.entries(schema.properties).map(([key, property]) => {
           const optional = required.includes(key) ? "" : "?";
           // A JSON property name need not be a TypeScript identifier.
           const rendered = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+
           return `${inner}readonly ${rendered}${optional}: ${renderJsonSchemaType(property, defs, depth + 1, inner)};`;
         });
+
         return fields.length === 0 ? "{}" : `{\n${fields.join("\n")}\n${indent}}`;
       }
       if (isJsonSchemaRecord(schema.additionalProperties)) {
@@ -312,6 +326,7 @@ const renderTopLevel = (jsonSchema: unknown, indent: string): string => {
     isJsonSchemaRecord(jsonSchema) && isJsonSchemaRecord(jsonSchema.$defs)
       ? jsonSchema.$defs
       : ({} as Record<string, unknown>);
+
   return renderJsonSchemaType(jsonSchema, defs, 0, indent);
 };
 
@@ -325,25 +340,33 @@ interface ResolvedMethod {
 
 const renderDeclarations = (methods: ReadonlyArray<ResolvedMethod>): string => {
   const namespaces = new Map<string, Array<ResolvedMethod>>();
+
   for (const method of methods) {
     const existing = namespaces.get(method.namespace) ?? [];
+
     existing.push(method);
     namespaces.set(method.namespace, existing);
   }
+
   const blocks = [...namespaces.entries()].map(([namespace, members]) => {
     const lines = members.map((member) => {
       const parameters = renderTopLevel(Tool.getJsonSchema(member.tool), "  ");
       const success = renderTopLevel(Tool.getJsonSchemaFromSchema(member.tool.successSchema), "  ");
+
       // A description is arbitrary text: newlines and comment terminators
       // must not be able to break out of the documentation comment.
       const safeDescription = member.tool.description
         ?.replaceAll("*/", "*\\/")
         .replaceAll(/\s*\n\s*/g, " ");
+
       const description = safeDescription === undefined ? "" : `  /** ${safeDescription} */\n`;
+
       return `${description}  ${member.method}(input: ${parameters}): Promise<${success}>;`;
     });
+
     return `declare const ${namespace}: {\n${lines.join("\n")}\n};`;
   });
+
   return blocks.join("\n\n");
 };
 
@@ -377,13 +400,16 @@ const budgetedLogs = (
   const kept: Array<string> = [];
   let used = 0;
   let truncated = false;
+
   for (const raw of logs) {
     // Per-line cap keeps every kept line inside the BoundedLogLine schema.
     const line =
       raw.length > MAX_EGRESS_LOG_LINE_CHARACTERS
         ? `${raw.slice(0, MAX_EGRESS_LOG_LINE_CHARACTERS - 1)}…`
         : raw;
+
     const bytes = encodedLogLineBytes(line);
+
     if (kept.length >= 4_096 || used + bytes > remainingBytes) {
       truncated = true;
       break;
@@ -395,6 +421,7 @@ const budgetedLogs = (
     // Truncation is never silent: drop kept lines from the end until the
     // marker itself fits inside the budget.
     const markerBytes = encodedLogLineBytes(truncationMarker);
+
     while (kept.length > 0 && used + markerBytes > remainingBytes) {
       used -= encodedLogLineBytes(kept.pop() ?? "");
     }
@@ -402,6 +429,7 @@ const budgetedLogs = (
       kept.push(truncationMarker);
     }
   }
+
   return kept;
 };
 
@@ -431,14 +459,17 @@ const truncateToUtf8Bytes = (value: string, maxBytes: number): string => {
   }
   let output = "";
   let used = 0;
+
   for (const character of value) {
     const bytes = utf8ByteLength(character);
+
     if (used + bytes + 3 > maxBytes) {
       break;
     }
     output += character;
     used += bytes;
   }
+
   return `${output}…`;
 };
 
@@ -468,29 +499,37 @@ const failureEgress = (
     }
     let logs: ReadonlyArray<string> = "logs" in error ? error.logs : [];
     let candidateThrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
+
     if (redact !== undefined) {
       const redacted = yield* redact({ result: candidateThrown ?? null, logs });
+
       logs = redacted.logs;
       candidateThrown = candidateThrown === undefined ? undefined : redacted.result;
     }
+
     const message = truncateToUtf8Bytes(
       boundedMessage(executionFailureMessage(error)),
       maxEgressBytes,
     );
+
     const messageBytes = utf8ByteLength(message);
+
     // `thrown` is included only when it fits TOGETHER with the message inside
     // the aggregate budget, and it reduces the log allowance only when it is
     // actually included.
     const candidateBytes =
       candidateThrown === undefined ? undefined : encodedJsonByteLength(candidateThrown);
+
     const includeThrown =
       candidateThrown !== undefined &&
       candidateBytes !== undefined &&
       messageBytes + candidateBytes <= maxEgressBytes;
+
     const remaining = Math.max(
       0,
       maxEgressBytes - messageBytes - (includeThrown ? (candidateBytes ?? 0) : 0),
     );
+
     return CodeModeFailure.make({
       errorTag: error._tag,
       message,
@@ -509,6 +548,7 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
 ): CodeModeDefinition<Name, Namespaces> => {
   const limits = options.limits ?? defaultLimits;
   const maxEgressBytes = options.maxEgressBytes ?? defaultMaxEgressBytes;
+
   // Fail closed on an invalid egress bound: NaN would make every size
   // comparison false and Infinity would remove the bound entirely.
   if (
@@ -525,11 +565,13 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
   const methods: Array<ResolvedMethod> = [];
   const toolsByName = new Map<string, Tool.Any>();
   const methodToTool = new Map<string, string>();
+
   for (const [namespace, namespaceMethods] of Object.entries(options.tools)) {
     if (Option.isNone(decodeIdentifier(namespace))) {
       throw new Error(`Code Mode namespace ${namespace} is not a valid JavaScript identifier`);
     }
     const entries = Object.entries(namespaceMethods);
+
     if (entries.length === 0) {
       throw new Error(`Code Mode namespace ${namespace} declares no methods`);
     }
@@ -540,18 +582,21 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
         );
       }
       const executionClass = getToolExecutionClass(tool);
+
       if (executionClass !== "readonly") {
         throw new Error(
           `Code Mode rejects Tool ${tool.name} (${namespace}.${method}): its execution class is ${executionClass}; the first slice accepts only Tools annotated readonly (an unannotated Tool reads as uncertain)`,
         );
       }
       const approval = tool.needsApproval;
+
       if (approval !== undefined && approval !== false) {
         throw new Error(
           `Code Mode rejects Tool ${tool.name} (${namespace}.${method}): approval-requiring Tools cannot be invoked programmatically in the ephemeral slice`,
         );
       }
       const existing = toolsByName.get(tool.name);
+
       if (existing !== undefined && existing !== tool) {
         throw new Error(
           `Code Mode selected two different Tools named ${tool.name}; Tool names must identify one Tool`,
@@ -603,6 +648,7 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
     .addDependency(ToolBroker) as CodeModeTool<Name>;
 
   const outerToolkit = Toolkit.make(tool);
+
   /**
    * The nested namespace record collapses into one Toolkit keyed by exact
    * Tool names. The assertion restores the name-keyed record type TypeScript
@@ -628,6 +674,7 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
   ): Effect.Effect<CodeHostCallResult> =>
     Effect.gen(function* () {
       const toolName = methodToTool.get(`${hostCall.namespace}.${hostCall.method}`);
+
       if (toolName === undefined) {
         return {
           _tag: "CodeHostCallFailure",
@@ -637,19 +684,23 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
           },
         } as const;
       }
+
       const outcome: ProgrammaticCallOutcome = yield* pass.invoke({
         toolName,
         encodedArguments: hostCall.argument,
       });
+
       switch (outcome._tag) {
         case "ProgrammaticCallSuccess": {
           const value = decodeBrokerJson(outcome.encodedResult);
+
           return Option.isSome(value)
             ? ({ _tag: "CodeHostCallSuccess", value: value.value } as const)
             : ({ _tag: "CodeHostCallFailure", error: brokerProtocolEnvelope } as const);
         }
         case "ProgrammaticCallFailure": {
           const value = decodeBrokerJson(outcome.encodedResult);
+
           return {
             _tag: "CodeHostCallFailure",
             error: Option.isSome(value) ? value.value : brokerProtocolEnvelope,
@@ -672,10 +723,12 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
         result: execution.value,
         logs: execution.logs,
       };
+
       if (options.redactEgress !== undefined) {
         egress = yield* options.redactEgress(egress);
       }
       const resultBytes = encodedJsonByteLength(egress.result);
+
       if (resultBytes === undefined || resultBytes > maxEgressBytes) {
         return yield* CodeModeFailure.make({
           errorTag: "CodeModeEgressExceeded",
@@ -683,6 +736,7 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
           logs: budgetedLogs(egress.logs, Math.max(0, maxEgressBytes - 256)),
         });
       }
+
       return CodeModeSuccess.make({
         result: egress.result,
         logs: budgetedLogs(egress.logs, maxEgressBytes - resultBytes),
@@ -696,13 +750,16 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
 
     const invoke = Effect.fn(`CodeMode.${name}`)(function* (parameters: { readonly code: string }) {
       const broker = yield* ToolBroker;
+
       const execution = Effect.gen(function* () {
         const pass = yield* broker.openPass(withHandler, {
           maxResultBytes: limits.maxHostCallResultBytes,
         });
+
         const host = CodeExecutionHost.of({
           call: (hostCall) => routeHostCall(pass, hostCall),
         });
+
         return yield* executor
           .execute(executionRequest(parameters.code))
           .pipe(Effect.provideService(CodeExecutionHost, host));
@@ -722,6 +779,7 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
         CodeExecutionResult,
         CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError
       >;
+
       const result = yield* execution.pipe(
         Effect.catch((error) =>
           failureEgress(error, maxEgressBytes, options.redactEgress).pipe(
@@ -729,6 +787,7 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
           ),
         ),
       );
+
       return yield* successEgress(result);
     });
 

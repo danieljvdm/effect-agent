@@ -19,6 +19,7 @@ export class DurableRuntimeFailpointTestControl extends Context.Service<
   static readonly layer = Layer.effectContext(
     Effect.gen(function* () {
       const handler = yield* Ref.make<DurableRuntimeFailpointHandler>(noFailpoint);
+
       return Context.make(
         DurableRuntimeFailpoint,
         DurableRuntimeFailpoint.of({

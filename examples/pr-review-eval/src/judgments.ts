@@ -9,6 +9,7 @@ import {
 } from "./contracts.ts";
 
 const BoundedRationale = Schema.NonEmptyString.check(Schema.isMaxLength(4_096));
+
 const Adjudicator = Schema.NonEmptyString.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/),
@@ -20,6 +21,7 @@ export const EvalAdjudicationLabel = Schema.Literals([
   "invalid",
   "unclear",
 ]);
+
 export type EvalAdjudicationLabel = typeof EvalAdjudicationLabel.Type;
 
 const FindingJudgmentFields = Schema.Struct({
@@ -38,6 +40,7 @@ const FindingJudgmentFields = Schema.Struct({
   Schema.makeFilter(
     (judgment) => {
       const ids = judgment.matchedDefectIds;
+
       return (
         new Set(ids).size === ids.length &&
         (judgment.label === "matches-expected" ? ids.length > 0 : ids.length === 0)
@@ -64,6 +67,7 @@ const JudgmentSetFields = Schema.Struct({
         (judgment) =>
           `${judgment.caseId}\0${judgment.variantId}\0${judgment.trial}\0${judgment.findingIndex}`,
       );
+
       return new Set(keys).size === keys.length;
     },
     { title: "Finding judgment keys are unique" },

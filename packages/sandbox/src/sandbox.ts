@@ -6,6 +6,7 @@ const BoundedArgument = Schema.String.check(Schema.isMaxLength(32 * 1024));
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_ARTIFACT_RULES = 64;
 const BoundedOutputText = Schema.String.check(Schema.isMaxLength(MAX_OUTPUT_BYTES));
+
 export const SANDBOX_DIAGNOSTIC_MAX_LENGTH = 8 * 1024;
 const BoundedDiagnostic = Schema.String.check(Schema.isMaxLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH));
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
@@ -13,6 +14,7 @@ const PositiveNumber = Schema.Finite.check(Schema.isGreaterThan(0));
 const MaxOutputBytes = PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_OUTPUT_BYTES));
 const BoundedArguments = Schema.Array(BoundedArgument).check(Schema.isMaxLength(256));
 const BoundedEnvironmentNames = Schema.Array(BoundedName).check(Schema.isMaxLength(128));
+
 const FinitePositiveDuration = Schema.Duration.pipe(
   Schema.refine(
     (duration): duration is Duration.Duration =>
@@ -20,6 +22,7 @@ const FinitePositiveDuration = Schema.Duration.pipe(
     { expected: "a finite positive duration" },
   ),
 );
+
 const FiniteNonNegativeDuration = Schema.Duration.pipe(
   Schema.refine(
     (duration): duration is Duration.Duration =>
@@ -218,6 +221,7 @@ export const SandboxError = Schema.Union([
   SandboxOutputLimitError,
   SandboxUnsupportedRequestError,
 ]);
+
 export type SandboxError = typeof SandboxError.Type;
 
 /**

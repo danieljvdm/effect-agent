@@ -9,6 +9,7 @@ const boundForeignDiagnostic = (message: string): string =>
 export const safeCauseMessage = (cause: unknown, fallback: string): string => {
   try {
     const message = cause instanceof Error ? cause.message : cause;
+
     return boundForeignDiagnostic(typeof message === "string" ? message : String(message));
   } catch {
     return boundForeignDiagnostic(fallback);
@@ -38,9 +39,12 @@ export const cloudflareFailureSignals = (cause: unknown): CloudflareFailureSigna
     const retryableValue = Reflect.get(cause, "retryable");
     const overloadedValue = Reflect.get(cause, "overloaded");
     const resetValue = Reflect.get(cause, "durableObjectReset");
+
     const retryable =
       typeof retryableValue === "boolean" ? retryableValue : resetValue === true ? true : undefined;
+
     const overloaded = typeof overloadedValue === "boolean" ? overloadedValue : undefined;
+
     return {
       ...(retryable === undefined ? {} : { retryable }),
       ...(overloaded === undefined ? {} : { overloaded }),

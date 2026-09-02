@@ -184,9 +184,11 @@ export const tier2NeverFiredLocations = (
   tier2: ReadonlyArray<CertificationSweepResult>,
 ): ReadonlyArray<DurableRuntimeFailpointLocation> => {
   const fired = new Set<DurableRuntimeFailpointLocation>();
+
   for (const row of tier2) {
     if (row.failpointFired) fired.add(row.location);
   }
+
   return DurableRuntimeFailpointLocation.literals.filter((location) => !fired.has(location)).sort();
 };
 
@@ -196,16 +198,19 @@ export const tier2NeverFiredLocations = (
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
+
 const CHILD_DIGEST_STRINGS = {
   agent: "b".repeat(64),
   model: "c".repeat(64),
   tools: "d".repeat(64),
 } as const;
+
 const CHILD_DIGESTS = DefinitionDigests.make({
   agent: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.agent),
   model: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.model),
   tools: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.tools),
 });
+
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-certification");
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
@@ -257,8 +262,10 @@ const promptShapeModel = (
         generateText: () => Effect.succeed([]),
         streamText: (request) => {
           const hasToolResult = request.prompt.content.some((message) => message.role === "tool");
+
           const parts =
             toolParts === undefined || hasToolResult ? finalParts(finalText) : toolParts;
+
           return Stream.fromIterable(parts);
         },
       }),
@@ -295,7 +302,9 @@ const Book = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 });
+
 const bookToolkit = Toolkit.make(Book);
+
 const uncertainDefinition = Agent.make("certify-uncertain", {
   input: QuestionInput,
   output: AnswerOutput,
@@ -311,7 +320,9 @@ const Itinerary = Tool.make("itinerary", {
   failure: DurableStepError,
   dependencies: [DurableStep],
 });
+
 const itineraryToolkit = Toolkit.make(Itinerary);
+
 const stepsDefinition = Agent.make("certify-steps", {
   input: QuestionInput,
   output: AnswerOutput,
@@ -326,7 +337,9 @@ const BookApproval = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
   needsApproval: true,
 });
+
 const approvalToolkit = Toolkit.make(BookApproval);
+
 const approvalDefinition = Agent.make("certify-approval", {
   input: QuestionInput,
   output: AnswerOutput,
@@ -399,10 +412,12 @@ const identifiers = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
     const counter = yield* Ref.make(0);
+
     const next = <A>(decode: (value: string) => A, prefix: string) =>
       Ref.getAndUpdate(counter, (value) => value + 1).pipe(
         Effect.map((value) => decode(`${prefix}-${value}`)),
       );
+
     return {
       nextThreadId: next(decodeThreadId, "certify-fixture-thread"),
       nextRunId: next(Schema.decodeSync(RunId), "certify-fixture-run"),
@@ -439,15 +454,19 @@ const makeSingleAgentCell = (
   slug: string,
 ): CertificationCell => {
   const threadId = decodeThreadId(`certify-${slug}`);
+
   const submit = Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     const receipt = yield* runtime.submit(
       { definition: { id: definition.id, input: definition.input } },
       { question: `certify ${slug}` },
       submitOptionsFor(slug, threadId),
     );
+
     return [receipt];
   });
+
   return {
     bindings: [resolved],
     submit,
@@ -465,7 +484,9 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
         plainDefinition,
         promptShapeModel("certify-plain", '{"answer":"done"}'),
       );
+
       const resolved = yield* DurableWorkerBinding.make(binding, DIGESTS);
+
       return makeSingleAgentCell(plainDefinition, resolved, slug);
     }
     case "uncertain-tool": {
@@ -477,12 +498,15 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
           toolTurn(toolCallPart("book-1", "book", { ref: `r-${slug}` })),
         ),
       );
+
       const toolLayer = bookToolkit.toLayer({
         book: ({ ref }) => Effect.succeed({ confirmation: `confirmed-${ref}` }),
       });
+
       const resolved = yield* DurableWorkerBinding.make(binding, DIGESTS).pipe(
         Effect.provide(toolLayer),
       );
+
       return makeSingleAgentCell(uncertainDefinition, resolved, slug);
     }
     case "durable-steps": {
@@ -494,26 +518,32 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
           toolTurn(toolCallPart("itinerary-1", "itinerary", { ref: `trip-${slug}` })),
         ),
       );
+
       const toolLayer = itineraryToolkit.toLayer({
         itinerary: ({ ref }) =>
           Effect.gen(function* () {
             const step = yield* DurableStep;
+
             const flight = yield* step.do(
               "reserve-flight",
               Schema.String,
               Effect.succeed(`flight-${ref}`),
             );
+
             const lodging = yield* step.do(
               "reserve-lodging",
               Schema.String,
               Effect.succeed(`lodging-${ref}`),
             );
+
             return { state: `${flight}+${lodging}` };
           }),
       });
+
       const resolved = yield* DurableWorkerBinding.make(binding, DIGESTS).pipe(
         Effect.provide(toolLayer),
       );
+
       return makeSingleAgentCell(stepsDefinition, resolved, slug);
     }
     case "approval": {
@@ -525,12 +555,15 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
           toolTurn(toolCallPart("book-1", "book", { ref: `r-${slug}` })),
         ),
       );
+
       const toolLayer = approvalToolkit.toLayer({
         book: ({ ref }) => Effect.succeed({ confirmation: `confirmed-${ref}` }),
       });
+
       const resolved = yield* DurableWorkerBinding.make(binding, DIGESTS).pipe(
         Effect.provide(toolLayer),
       );
+
       return makeSingleAgentCell(approvalDefinition, resolved, slug);
     }
     case "join": {
@@ -538,11 +571,14 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
         plainDefinition,
         promptShapeModel("certify-join", '{"answer":"host answer"}'),
       );
+
       const resolved = yield* DurableWorkerBinding.make(binding, DIGESTS);
       const threadId = decodeThreadId(`certify-${slug}`);
+
       const submitOne = (key: string, question: string) =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
+
           return yield* runtime.submit(
             { definition: { id: plainDefinition.id, input: plainDefinition.input } },
             { question },
@@ -554,15 +590,18 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
             },
           );
         });
+
       const cell: CertificationCell = {
         bindings: [resolved],
         submit: Effect.gen(function* () {
           const host = yield* submitOne(`certify-key-${slug}-host`, "host question");
           const queued = yield* submitOne(`certify-key-${slug}-queued`, "queued question");
+
           return [host, queued];
         }),
         lanes: () => [threadId],
       };
+
       return cell;
     }
     case "delegation": {
@@ -570,6 +609,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
         childDefinition,
         promptShapeModel("certify-child", '{"answer":"child-answer"}'),
       );
+
       const parentBinding = Agent.withModel(
         coordinatorDefinition,
         promptShapeModel(
@@ -581,36 +621,45 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
           ),
         ),
       );
+
       const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
         mapChildFailure,
         durable: { targetDigests: CHILD_DIGEST_STRINGS },
       }).pipe(Layer.provide(delegationSupport));
+
       const lookupLayer = Toolkit.make(Lookup).toLayer({
         lookup: ({ key }) => Effect.succeed({ value: `found-${key}` }),
       });
+
       const parentResolved = yield* DurableWorkerBinding.make(parentBinding, DIGESTS).pipe(
         Effect.provide(Layer.mergeAll(delegationLayer, lookupLayer)),
       );
+
       const childResolved = yield* DurableWorkerBinding.make(childBinding, CHILD_DIGESTS);
       const threadId = decodeThreadId(`certify-${slug}`);
+
       const cell: CertificationCell = {
         bindings: [parentResolved, childResolved],
         submit: Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
+
           const receipt = yield* runtime.submit(
             { definition: { id: coordinatorDefinition.id, input: coordinatorDefinition.input } },
             { mission: "plan" },
             submitOptionsFor(slug, threadId),
           );
+
           return [receipt];
         }),
         lanes: (receipts) => {
           const parent = receipts.at(0);
+
           return parent === undefined
             ? [threadId]
             : [threadId, childThreadIdFor(parent.submissionId, DELEGATE_CALL)];
         },
       };
+
       return cell;
     }
   }
@@ -634,12 +683,15 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
   const exported = yield* store.export(ThreadExportRequest.make({ threadId: lane }));
   const rows = new Map<SubmissionId, SubmissionSnapshot>();
   const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+
   for (const submission of nonterminal) {
     if (submission.threadId === lane) rows.set(submission.submissionId, submission);
   }
   const named = new Set<SubmissionId>();
+
   for (const envelope of exported.records) {
     const payload = envelope.record.payload;
+
     if (
       payload._tag === "UserInputRecorded" ||
       payload._tag === "SubmissionSettled" ||
@@ -651,14 +703,17 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
   for (const submissionId of named) {
     if (rows.has(submissionId)) continue;
     const found = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
     if (Option.isSome(found) && found.value.threadId === lane) {
       rows.set(submissionId, found.value);
     }
   }
+
   const checkpoint =
     store.checkpoints === undefined
       ? Option.none()
       : yield* store.checkpoints.load(LoadCheckpointRequest.make({ threadId: lane }));
+
   return yield* verifyThreadInvariants({
     export: exported,
     submissions: [...rows.values()],
@@ -671,13 +726,17 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
 
 const failureTagOf = <E>(cause: Cause.Cause<E>): string => {
   const failure = Cause.findErrorOption(cause);
+
   if (Option.isSome(failure)) {
     const error: unknown = failure.value;
+
     if (typeof error === "object" && error !== null && "_tag" in error) {
       return String(error._tag);
     }
+
     return String(error).slice(0, 256);
   }
+
   return "defect";
 };
 
@@ -708,6 +767,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   // One-shot arm: the fault fires at most once anywhere in the cell (initial drive OR a
   // re-drive round's public unblocking operation), modelling one crash at this boundary.
   const fired = yield* Ref.make(false);
+
   yield* control.setHandler((hit) =>
     hit !== location
       ? Effect.void
@@ -723,12 +783,15 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   // Submissions are idempotent (DUR-001): one replay recovers a submit-boundary fault.
   let receipts: ReadonlyArray<Receipt>;
   const firstSubmit = yield* Effect.exit(cell.submit);
+
   if (Exit.isSuccess(firstSubmit)) {
     receipts = firstSubmit.value;
   } else {
     const secondSubmit = yield* Effect.exit(cell.submit);
+
     if (Exit.isFailure(secondSubmit)) {
       yield* control.clear;
+
       return failed(
         `submission replay did not recover: ${failureTagOf(secondSubmit.cause)}`,
         yield* Ref.get(fired),
@@ -745,14 +808,17 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
       const snapshot = yield* ledger.lookup(
         SubmissionLookupById.make({ submissionId: receipt.submissionId }),
       );
+
       if (Option.isNone(snapshot) || snapshot.value.state !== "settled") return false;
     }
+
     return true;
   });
 
   // Re-drive to convergence using ONLY public operations: worker drives, recovery passes,
   // and the authorized DUR-017/approval unblocking paths chosen from `explainThread`.
   let converged = false;
+
   for (let round = 0; round < MAX_REDRIVE_ROUNDS && !converged; round++) {
     // Expire any lease a faulted Attempt left behind (D5): virtual time is the
     // adapter-neutral reclaim lever — a live lease may block every new claim.
@@ -763,6 +829,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
     }
     for (const lane of lanes) {
       const explains = yield* Effect.exit(runtime.explainThread(lane));
+
       if (Exit.isFailure(explains)) continue;
       for (const explanation of explains.value) {
         for (const unknown of explanation.evidence.unknownCalls) {
@@ -783,6 +850,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
           const decided = explanation.evidence.approvalDecisions.some(
             (decision) => decision.toolCallId === pending.toolCallId,
           );
+
           if (decided) continue;
           yield* Effect.exit(
             runtime.resolveApproval(
@@ -799,6 +867,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
       }
     }
     const settled = yield* Effect.exit(allSettled);
+
     converged = Exit.isSuccess(settled) && settled.value;
   }
   yield* control.clear;
@@ -811,8 +880,10 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   // Every lane of the cell must verify in convergence mode with a recomputed digest chain.
   let digestChainVerified = true;
   const failedChecks: Array<string> = [];
+
   for (const lane of lanes) {
     const verdict = yield* Effect.exit(verifyLane(lane, batchProducers));
+
     if (Exit.isFailure(verdict)) {
       return failed(`lane ${lane} could not be verified: ${failureTagOf(verdict.cause)}`, wasFired);
     }
@@ -873,6 +944,7 @@ export const resolveTierThree = Effect.fn("Certification.resolveTierThree")(func
   }
   if (options.crashLever !== undefined) {
     const cases = yield* options.crashLever;
+
     return CertificationTierThreeReport.make({
       status: cases.length === 0 ? "not-exercised" : "exercised",
       evidence: options.tierThreeEvidence ?? [],
@@ -889,6 +961,7 @@ export const resolveTierThree = Effect.fn("Certification.resolveTierThree")(func
       cases: [],
     });
   }
+
   return CertificationTierThreeReport.make({
     status: "not-exercised",
     evidence: [],
@@ -917,12 +990,14 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
   options: CertifyDurableAdaptersOptions<LedgerE, StoreE>,
 ): Effect.Effect<CertificationReport, LedgerE | StoreE, Crypto.Crypto> => {
   const batchProducers = new Map<BatchId, ProducerId>();
+
   // Interpose the candidate store with an append-time capture of each batch's producer
   // identity — the one value the ThreadStore port deliberately does not export — so
   // Tier 2's invariant verification recomputes the FULL digest chain instead of skipping it.
   const capturingStore = Layer.effect(ThreadStore)(
     Effect.gen(function* () {
       const inner = yield* ThreadStore;
+
       return ThreadStore.of({
         ...inner,
         append: (request) =>
@@ -947,6 +1022,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
       abortPollInterval: Duration.millis(50),
     }),
   );
+
   // RUN-036: certification uses the default-none Tool failure observer. Trusted application
   // reporting adds no durable transition and is verified separately from adapter certification.
   const environment = DurableAgentRuntime.layer.pipe(Layer.provideMerge(support));
@@ -960,6 +1036,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
 
     // Tier 2 — coordinator failpoint convergence sweep.
     const tier2: Array<CertificationSweepResult> = [];
+
     for (const scenario of CERTIFICATION_SCENARIOS) {
       for (const location of DurableRuntimeFailpointLocation.literals) {
         tier2.push(yield* runSweepCell(scenario, location, batchProducers, leaseAdvance));
@@ -974,6 +1051,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
     const tier3 = yield* resolveTierThree(capabilities.durability, options);
 
     const generatedAt = yield* nowUtc;
+
     const ok =
       tier1.every((result) => result.status === "passed") &&
       tier2.every((result) => result.status !== "failed") &&

@@ -80,11 +80,13 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
     | Parameters["DecodingServices"]
     | Parameters["EncodingServices"]
   >();
+
   const encode = <S extends Schema.Top>(schema: S, value: S["Type"]) =>
     Schema.encodeEffect(schema)(value).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(PersistedJson)),
       Effect.mapError(invalid),
     );
+
   const normalized = Effect.fn("EventSource.normalized")(function* (event: Event["Type"]) {
     return {
       eventId: options.identity(event),
@@ -92,6 +94,7 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
       payload: yield* encode(options.event, event),
     };
   });
+
   const normalize: EventSource["normalize"] = (value) =>
     Schema.decodeUnknownEffect(PersistedJson)(value).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(options.event)),
@@ -99,28 +102,36 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
       Effect.flatMap(normalized),
       Effect.provideContext(services),
     );
+
   const parameters: EventSource["parameters"] = (value) =>
     Effect.gen(function* () {
       yield* Schema.decodeUnknownEffect(PersistedJson)(value).pipe(Effect.mapError(invalid));
+
       const decoded = yield* Schema.decodeUnknownEffect(options.parameters)(value).pipe(
         Effect.mapError(invalid),
       );
+
       return {
         parameters: yield* encode(options.parameters, decoded),
         matchingKey: options.parameterKey(decoded),
       };
     }).pipe(Effect.provideContext(services));
+
   const matches: EventSource["matches"] = (event, subscription) =>
     Effect.gen(function* () {
       const e = yield* Schema.decodeUnknownEffect(options.event)(event.payload).pipe(
         Effect.mapError(invalid),
       );
+
       const p = yield* Schema.decodeUnknownEffect(options.parameters)(
         subscription.configuration.parameters,
       ).pipe(Effect.mapError(invalid));
+
       return options.matches(e, p);
     }).pipe(Effect.provideContext(services));
+
   const reconcile = options.reconcile;
+
   return {
     source: options.source,
     continuity: options.continuity,
@@ -135,7 +146,9 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
               const p = yield* Schema.decodeUnknownEffect(options.parameters)(
                 subscription.configuration.parameters,
               ).pipe(Effect.mapError(invalid));
+
               const event = yield* reconcile(p);
+
               return event === null ? null : yield* normalized(event);
             }).pipe(Effect.provideContext(services)),
         }),

@@ -15,16 +15,19 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   }
 
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
 describe("TEST-002 scripted Effect AI LanguageModel", () => {
   {
     let asserted = false;
+
     const turns: ReadonlyArray<ScriptedTurnInput> = [
       {
         _tag: "Generate",
@@ -50,8 +53,10 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
             prompt: "hello",
             disableToolCallResolution: true,
           });
+
           const scripted = yield* ScriptedModel;
           const requests = yield* scripted.requests;
+
           yield* scripted.assertExhausted;
 
           expect(asserted).toBe(true);
@@ -70,6 +75,7 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
           prompt: "unexpected",
           disableToolCallResolution: true,
         }).pipe(Effect.exit);
+
         const error = failureFrom(exit);
 
         expect(error._tag).toBe("AiError");
@@ -97,6 +103,7 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
       it.effect("emits parts before a scripted stream failure", () =>
         Effect.gen(function* () {
           const seen: Array<string> = [];
+
           const exit = yield* LanguageModel.streamText({
             prompt: "stream",
             disableToolCallResolution: true,
@@ -109,6 +116,7 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
             Stream.runDrain,
             Effect.exit,
           );
+
           const error = failureFrom(exit);
 
           expect(seen).toEqual(["text-start", "text-delta"]);
@@ -123,6 +131,7 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       const finalized = yield* Deferred.make<void>();
+
       const turns: ReadonlyArray<ScriptedTurnInput> = [
         {
           _tag: "Stream",
@@ -137,6 +146,7 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
         prompt: "wait",
         disableToolCallResolution: true,
       }).pipe(Stream.runDrain, Effect.provide(ScriptedModel.layer(turns)), Effect.forkChild);
+
       yield* Deferred.await(started);
       yield* Fiber.interrupt(fiber);
 
@@ -150,6 +160,7 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
       parts: [{ type: "not-an-effect-ai-part" }],
       termination: { _tag: "Complete" },
     };
+
     const incompletePart: unknown = {
       _tag: "Stream",
       parts: [{ type: "text-delta" }],

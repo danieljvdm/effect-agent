@@ -44,6 +44,7 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
     const { namespace } = yield* ThreadObjectNamespace;
     const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
     const progress = yield* makeWakeSubscriptionHub;
+
     yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
     const notifyLocal = (threadId: ThreadId) =>

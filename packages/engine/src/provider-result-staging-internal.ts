@@ -30,15 +30,19 @@ const snapshotJson = (
   }
   let total = 0;
   const ancestors = new WeakSet<object>();
+
   const add = (bytes: number): boolean => {
     if (bytes > maxBytes - total) return false;
     total += bytes;
+
     return true;
   };
+
   const addString = (value: string): boolean => {
     if (!add(2)) return false;
     for (let index = 0; index < value.length; index += 1) {
       const code = value.charCodeAt(index);
+
       if (code === 0x22 || code === 0x5c) {
         if (!add(2)) return false;
       } else if (code <= 0x1f) {
@@ -51,6 +55,7 @@ const snapshotJson = (
         if (!add(2)) return false;
       } else if (code >= 0xd800 && code <= 0xdbff) {
         const low = value.charCodeAt(index + 1);
+
         if (low >= 0xdc00 && low <= 0xdfff) {
           if (!add(4)) return false;
           index += 1;
@@ -63,8 +68,10 @@ const snapshotJson = (
         return false;
       }
     }
+
     return true;
   };
+
   const visit = (value: unknown, depth: number): Schema.Json | typeof FailedSnapshot => {
     if (depth > maxDepth) return FailedSnapshot;
     if (value === null) return add(4) ? null : FailedSnapshot;
@@ -80,12 +87,14 @@ const snapshotJson = (
           return rejectNonFiniteNumbers ? FailedSnapshot : add(4) ? null : FailedSnapshot;
         }
         const encoded = JSON.stringify(value);
+
         return encoded !== undefined && add(encoded.length) ? value : FailedSnapshot;
       }
       case "object": {
         if (ancestors.has(value)) return FailedSnapshot;
         const isArray = Array.isArray(value);
         const prototype = Object.getPrototypeOf(value);
+
         if (prototype !== (isArray ? Array.prototype : Object.prototype) && prototype !== null) {
           return FailedSnapshot;
         }
@@ -99,6 +108,7 @@ const snapshotJson = (
         try {
           if (isArray) {
             const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+
             if (
               lengthDescriptor === undefined ||
               !("value" in lengthDescriptor) ||
@@ -110,9 +120,11 @@ const snapshotJson = (
             }
             if (!add(1)) return FailedSnapshot;
             const snapshot: Array<Schema.Json> = [];
+
             for (let index = 0; index < lengthDescriptor.value; index += 1) {
               if (index > 0 && !add(1)) return FailedSnapshot;
               const descriptor = Object.getOwnPropertyDescriptor(value, index);
+
               if (descriptor === undefined) {
                 if (!add(4)) return FailedSnapshot;
                 snapshot.push(null);
@@ -120,30 +132,37 @@ const snapshotJson = (
               }
               if (!("value" in descriptor)) return FailedSnapshot;
               const item = visit(descriptor.value, depth + 1);
+
               if (item === FailedSnapshot) return FailedSnapshot;
               snapshot.push(item);
             }
             if (!add(1)) return FailedSnapshot;
             Object.setPrototypeOf(snapshot, null);
+
             return Object.freeze(snapshot);
           }
           if (!add(1)) return FailedSnapshot;
           const entries: Array<readonly [string, Schema.Json]> = [];
           let first = true;
+
           for (const key in value) {
             const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
             if (descriptor === undefined || !descriptor.enumerable) continue;
             if (!("value" in descriptor)) return FailedSnapshot;
             if (!first && !add(1)) return FailedSnapshot;
             first = false;
             if (!addString(key) || !add(1)) return FailedSnapshot;
             const item = visit(descriptor.value, depth + 1);
+
             if (item === FailedSnapshot) return FailedSnapshot;
             entries.push([key, item]);
           }
           if (!add(1)) return FailedSnapshot;
           const snapshot: Record<string, Schema.Json> = Object.fromEntries(entries);
+
           Object.setPrototypeOf(snapshot, null);
+
           return Object.freeze(snapshot);
         } finally {
           ancestors.delete(value);
@@ -155,11 +174,13 @@ const snapshotJson = (
       case "undefined":
         return FailedSnapshot;
     }
+
     return FailedSnapshot;
   };
 
   try {
     const value = visit(root, 0);
+
     return value === FailedSnapshot ? undefined : { value, bytes: total };
   } catch {
     // Revoked or adversarial proxies and reflection failures are protocol-invalid, never trusted.

@@ -16,11 +16,15 @@ interface TelemetryProbe {
 
 // Test-only observations of live invocations, never exported or written to Object storage.
 const probes = new Map<string, TelemetryProbe>();
+
 export const telemetryProbe = (threadId: string): TelemetryProbe => {
   const existing = probes.get(threadId);
+
   if (existing !== undefined) return existing;
   const probe: TelemetryProbe = { invocations: [], layerParents: [], spans: [] };
+
   probes.set(threadId, probe);
+
   return probe;
 };
 
@@ -36,6 +40,7 @@ export const observabilityProbeLayer = Layer.effectDiscard(
     const { ctx } = yield* DurableObjectContext;
     const flusher = yield* OtlpExporter.Flusher;
     const threadId = ctx.id.name ?? ctx.id.toString();
+
     yield* flusher.register(
       Effect.sync(() => {
         flushes.set(threadId, flushCount(threadId) + 1);
@@ -52,11 +57,15 @@ export const observabilityProbeLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         const { ctx } = yield* DurableObjectContext;
         const probe = telemetryProbe(ctx.id.name ?? ctx.id.toString());
+
         probe.layerParents.push(yield* Effect.serviceOption(Tracer.ParentSpan));
+
         return Tracer.make({
           span(options) {
             const span = new Tracer.NativeSpan(options);
+
             probe.spans.push(span);
+
             return span;
           },
         });

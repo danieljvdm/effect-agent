@@ -16,6 +16,7 @@ type Requirements<Value> =
   Value extends Layer.Layer<infer _Output, infer _Error, infer R> ? R : never;
 
 const options = { accountId: "account", apiToken: Redacted.make("token") };
+
 type RestRequirement = Equal<
   Requirements<ReturnType<typeof browserRestCaptureLayer>>,
   HttpClient.HttpClient
@@ -35,6 +36,7 @@ it("loads and composes the REST subpath in a Node-only consumer", async () => {
   const module = await import("@effect-agent/platform-cloudflare/browser-rest-capture");
   const requirement: RestRequirement = true;
   const output: RestOutput = true;
+
   expect(module.browserRestCaptureLayer(options)).toBeDefined();
   expect(requirement && output).toBe(true);
   // This source imports no Worker globals; a cloudflare: runtime dependency would fail this Node test.

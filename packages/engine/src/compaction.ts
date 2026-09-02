@@ -51,10 +51,13 @@ export const isContextOverflowMessage = (text: string): boolean =>
 
 const utf8Length = (text: string): number => {
   let bytes = 0;
+
   for (const character of text) {
     const codePoint = character.codePointAt(0) ?? 0;
+
     bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
   }
+
   return bytes;
 };
 
@@ -65,20 +68,24 @@ const utf8Length = (text: string): number => {
  */
 export const estimateMessageTokens = (message: Prompt.Message): number => {
   let text: string | undefined;
+
   try {
     text = JSON.stringify(message);
   } catch {
     text = undefined;
   }
+
   return text === undefined ? 0 : Math.ceil(utf8Length(text) / 4);
 };
 
 /** Sum of `estimateMessageTokens` over a message array. */
 export const estimatePromptTokens = (messages: ReadonlyArray<Prompt.Message>): number => {
   let total = 0;
+
   for (const message of messages) {
     total += estimateMessageTokens(message);
   }
+
   return total;
 };
 
@@ -137,6 +144,7 @@ const isProtected = (
   if (state.protectedStart >= 0) {
     return index >= state.protectedStart && index < state.protectedEnd;
   }
+
   return source[index]?.role === "system";
 };
 
@@ -144,6 +152,7 @@ const clearedToolMessage = (message: Prompt.Message): Prompt.Message => {
   if (message.role !== "tool" || typeof message.content === "string") {
     return message;
   }
+
   // Structural rebuild keeps the message's pairing identity (same part ids
   // and names) while replacing only the result payloads the model would see.
   return Prompt.makeMessage("tool", {
@@ -187,9 +196,11 @@ export const buildCompactedView = (
     return source;
   }
   const view: Array<Prompt.Message> = [];
+
   if (state.summary !== undefined && state.summarizedThrough > 0) {
     for (let index = 0; index < state.summarizedThrough && index < source.length; index += 1) {
       const message = source[index];
+
       if (message !== undefined && isProtected(state, source, index)) {
         view.push(renderMessage(state, message, index));
       }
@@ -197,18 +208,22 @@ export const buildCompactedView = (
     view.push(summaryMessage(state.summary));
     for (let index = state.summarizedThrough; index < source.length; index += 1) {
       const message = source[index];
+
       if (message !== undefined) {
         view.push(renderMessage(state, message, index));
       }
     }
+
     return view;
   }
   for (let index = 0; index < source.length; index += 1) {
     const message = source[index];
+
     if (message !== undefined) {
       view.push(renderMessage(state, message, index));
     }
   }
+
   return view;
 };
 
@@ -224,6 +239,7 @@ export const choosePruneBound = (
   keepRecentTokens: number,
 ): number => {
   const toolIndices: Array<number> = [];
+
   for (let index = 0; index < source.length; index += 1) {
     if (source[index]?.role === "tool" && !isProtected(state, source, index)) {
       toolIndices.push(index);
@@ -234,16 +250,20 @@ export const choosePruneBound = (
   }
   let budget = keepRecentTokens;
   let newestCleared = -1;
+
   for (let position = toolIndices.length - 1; position >= 0; position -= 1) {
     const index = toolIndices[position];
+
     if (index === undefined) continue;
     const message = source[index];
+
     if (message === undefined) continue;
     if (position === toolIndices.length - 1) {
       budget -= estimateMessageTokens(message);
       continue;
     }
     const cost = estimateMessageTokens(message);
+
     if (budget - cost >= 0 && index >= state.clearedThrough) {
       budget -= cost;
       continue;
@@ -251,6 +271,7 @@ export const choosePruneBound = (
     newestCleared = index;
     break;
   }
+
   return newestCleared === -1
     ? state.clearedThrough
     : Math.max(state.clearedThrough, newestCleared + 1);
@@ -270,8 +291,10 @@ export const chooseSummarizeCut = (
 ): number => {
   let kept = 0;
   let cut = 0;
+
   for (let index = source.length - 1; index >= 0; index -= 1) {
     const message = source[index];
+
     if (message === undefined) continue;
     kept += estimateMessageTokens(renderMessage(state, message, index));
     if (kept >= keepRecentTokens) {
@@ -284,6 +307,7 @@ export const chooseSummarizeCut = (
   while (cut > 0 && source[cut]?.role === "tool") {
     cut -= 1;
   }
+
   return Math.max(cut, state.summarizedThrough);
 };
 
@@ -299,16 +323,19 @@ export const collectCoveredMessages = (
   cut: number,
 ): ReadonlyArray<Prompt.Message> => {
   const covered: Array<Prompt.Message> = [];
+
   for (
     let index = Math.max(0, state.summarizedThrough);
     index < cut && index < source.length;
     index += 1
   ) {
     const message = source[index];
+
     if (message !== undefined && !isProtected(state, source, index)) {
       covered.push(message);
     }
   }
+
   return covered;
 };
 
@@ -325,20 +352,24 @@ const partText = (part: Prompt.Message["content"][number] | string): string => {
     }
     case "tool-call": {
       let params: string;
+
       try {
         params = JSON.stringify(part.params) ?? "";
       } catch {
         params = "";
       }
+
       return `[tool call ${part.name} ${params.slice(0, 500)}]`;
     }
     case "tool-result": {
       let result: string;
+
       try {
         result = JSON.stringify(part.result) ?? "";
       } catch {
         result = "";
       }
+
       return `[tool result ${part.name}: ${result.slice(0, SUMMARY_TOOL_RESULT_CLIP)}]`;
     }
     default: {
@@ -373,6 +404,7 @@ export const renderForSummary = (
 ): string => {
   const joiner = "\n\n";
   const blocks: Array<string> = [];
+
   for (const message of covered) {
     const text =
       typeof message.content === "string"
@@ -381,19 +413,26 @@ export const renderForSummary = (
             .map((part) => partText(part))
             .filter((piece) => piece.length > 0)
             .join("\n");
+
     if (text.length === 0) continue;
+
     const clipped =
       text.length > SUMMARY_MESSAGE_CLIP ? `${text.slice(0, SUMMARY_MESSAGE_CLIP)}…` : text;
+
     blocks.push(`[${message.role}]\n${clipped}`);
   }
+
   const previousBlock =
     previousSummary === undefined ? undefined : `[Previous summary]\n${previousSummary}`;
+
   const fixed =
     (previousBlock === undefined ? 0 : previousBlock.length + joiner.length) +
     COMPACTION_INSTRUCTION.length;
+
   const budget = SUMMARY_INPUT_BUDGET - fixed - SUMMARY_ELISION_RESERVE;
   let selected: ReadonlyArray<string> = blocks;
   let total = 0;
+
   for (const block of blocks) {
     total += block.length + joiner.length;
   }
@@ -405,8 +444,10 @@ export const renderForSummary = (
     let start = 0;
     let end = blocks.length - 1;
     const half = Math.floor(budget / 2);
+
     while (start <= end) {
       const candidate = blocks[start];
+
       if (candidate === undefined || headLength + candidate.length + joiner.length > half) break;
       head.push(candidate);
       headLength += candidate.length + joiner.length;
@@ -414,6 +455,7 @@ export const renderForSummary = (
     }
     while (end >= start) {
       const candidate = blocks[end];
+
       if (
         candidate === undefined ||
         headLength + tailLength + candidate.length + joiner.length > budget
@@ -425,15 +467,18 @@ export const renderForSummary = (
       end -= 1;
     }
     const omitted = end - start + 1;
+
     selected =
       omitted > 0
         ? [...head, `[… ${omitted} messages omitted from summary input …]`, ...tail]
         : [...head, ...tail];
   }
   const lines: Array<string> = [];
+
   if (previousBlock !== undefined) {
     lines.push(previousBlock);
   }
   lines.push(...selected);
+
   return lines.join(joiner);
 };

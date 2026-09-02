@@ -101,6 +101,7 @@ const toolTurn = (
 const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.StreamPartEncoded>) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
+
     const model = Model.make(
       "scripted",
       "admin-operations-test",
@@ -117,6 +118,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
         }),
       ),
     );
+
     return { model };
   });
 
@@ -132,7 +134,9 @@ const Book = Tool.make("book", {
   parameters: Schema.Struct({ ref: Schema.String }),
   success: Schema.Struct({ confirmation: Schema.String }),
 });
+
 const bookTools = Toolkit.make(Book);
+
 const bookDefinition = Agent.make("admin-ops-book", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -140,6 +144,7 @@ const bookDefinition = Agent.make("admin-ops-book", {
   toolkit: bookTools,
   policy,
 });
+
 const bookToolLayer = bookTools.toLayer({
   book: ({ ref }) => Effect.succeed({ confirmation: `confirmed-${ref}` }),
 });
@@ -150,7 +155,9 @@ const BookApproval = Tool.make("book", {
   success: Schema.Struct({ confirmation: Schema.String }),
   needsApproval: true,
 });
+
 const approvalTools = Toolkit.make(BookApproval);
+
 const approvalDefinition = Agent.make("admin-ops-approval", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
@@ -158,6 +165,7 @@ const approvalDefinition = Agent.make("admin-ops-approval", {
   toolkit: approvalTools,
   policy,
 });
+
 const approvalToolLayer = approvalTools.toLayer({
   book: ({ ref }) => Effect.succeed({ confirmation: `confirmed-${ref}` }),
 });
@@ -193,11 +201,13 @@ const authorizerLayer = Layer.effectContext(
   Effect.gen(function* () {
     const denied = yield* Ref.make<ReadonlySet<AuthorizedOperation>>(new Set());
     const seen = yield* Ref.make<ReadonlyArray<OperationAuthorizationRequest>>([]);
+
     const service: OperationAuthorizerService = {
       authorize: (request) =>
         Effect.gen(function* () {
           yield* Ref.update(seen, (all) => [...all, request]);
           const deniedOperations = yield* Ref.get(denied);
+
           if (deniedOperations.has(request.operation)) {
             return yield* OperationDenied.make({
               operation: request.operation,
@@ -208,6 +218,7 @@ const authorizerLayer = Layer.effectContext(
           }
         }),
     };
+
     return Context.make(OperationAuthorizer, service).pipe(
       Context.add(
         AuthorizerTestControl,
@@ -238,6 +249,7 @@ const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
 const readLog = (threadId: string) =>
   Effect.gen(function* () {
     const store = yield* ThreadStore;
+
     return yield* Stream.runCollect(
       store.read(
         ThreadRead.make({
@@ -251,6 +263,7 @@ const readLog = (threadId: string) =>
 const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
   Effect.gen(function* () {
     const control = yield* DurableRuntimeFailpointTestControl;
+
     yield* control.setHandler((hitLocation) =>
       hitLocation === location
         ? Effect.fail(DurableRuntimeFailpointError.make({ location: hitLocation }))
@@ -260,11 +273,13 @@ const armFailpoint = (location: DurableRuntimeFailpointLocation) =>
 
 const clearFailpoint = Effect.gen(function* () {
   const control = yield* DurableRuntimeFailpointTestControl;
+
   yield* control.clear;
 });
 
 const resetAuthorizer = Effect.gen(function* () {
   const control = yield* AuthorizerTestControl;
+
   yield* control.reset;
 });
 
@@ -272,9 +287,11 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
   const error: unknown = failure.value;
+
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -283,7 +300,9 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 const failureValue = <A, E>(exit: Exit.Exit<A, E>): E => {
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
   const failure = Cause.findErrorOption(exit.cause);
+
   if (Option.isNone(failure)) throw new Error("Expected a typed failure");
+
   return failure.value;
 };
 
@@ -297,6 +316,7 @@ const durableStateFingerprint = (threadId: string) =>
     const records = yield* readLog(threadId);
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
     const snapshots: Array<RecoverySnapshot> = [];
+
     for (const submission of nonterminal) {
       if (submission.threadId !== threadId) continue;
       snapshots.push(
@@ -307,6 +327,7 @@ const durableStateFingerprint = (threadId: string) =>
     }
     const encodedRecords = yield* encodeEnvelopes([...records]).pipe(Effect.orDie);
     const encodedSnapshots = yield* encodeSnapshots(snapshots).pipe(Effect.orDie);
+
     return JSON.stringify({ records: encodedRecords, snapshots: encodedSnapshots });
   });
 
@@ -314,26 +335,34 @@ const durableStateFingerprint = (threadId: string) =>
 const makeUnknownLane = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     const scripted = yield* makeScriptedModel((call) =>
       call === 0
         ? toolTurn(toolCall("book-1", "book", { ref: "r-unknown" }))
         : finalParts('{"answer":"never"}'),
     );
+
     const agent = Agent.withModel(bookDefinition, scripted.model);
+
     const receipt = yield* runtime.submit(
       agent,
       { question: "book it" },
       submitOptions(thread, key),
     );
+
     yield* armFailpoint("tools:after-prepared-append");
+
     const killed = yield* Effect.exit(
       runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(bookToolLayer)),
     );
+
     expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
     yield* clearFailpoint;
     const reports = yield* runtime.runRecovery;
     const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+
     expect(report?.disposition).toBe("unknown");
+
     return receipt;
   });
 
@@ -341,21 +370,27 @@ const makeUnknownLane = (thread: string, key: string) =>
 const makeApprovalSuspendedLane = (thread: string, key: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+
     const scripted = yield* makeScriptedModel((call) =>
       call === 0
         ? toolTurn(toolCall("book-1", "book", { ref: "r-approval" }))
         : finalParts('{"answer":"approved"}'),
     );
+
     const agent = Agent.withModel(approvalDefinition, scripted.model);
+
     const receipt = yield* runtime.submit(
       agent,
       { question: "book it" },
       submitOptions(thread, key),
     );
+
     const settlements = yield* runtime
       .processThread(agent, decodeThreadId(thread))
       .pipe(Effect.provide(approvalToolLayer));
+
     expect(settlements).toEqual([]);
+
     return receipt;
   });
 
@@ -365,13 +400,17 @@ const makeSettledLane = (thread: string, key: string) =>
     const runtime = yield* DurableAgentRuntime;
     const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
     const agent = Agent.withModel(plainDefinition, scripted.model);
+
     const receipt = yield* runtime.submit(
       agent,
       { question: "answer" },
       submitOptions(thread, key),
     );
+
     const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
     expect(settlements[0]?.outcome).toBe("completed");
+
     return receipt;
   });
 
@@ -380,8 +419,10 @@ const checkByName = (
   name: IntegrityCheckName,
 ): { readonly status: string; readonly detail?: string | undefined } => {
   const found = report.checks.find((check) => check.name === name);
+
   expect(found, `missing integrity check ${name}`).toBeDefined();
   if (found === undefined) throw new Error(`missing integrity check ${name}`);
+
   return found;
 };
 
@@ -399,6 +440,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         const explanation = yield* runtime.explain(receipt.submissionId);
         const laneExplanations = yield* runtime.explainThread(decodeThreadId(thread));
         const after = yield* durableStateFingerprint(thread);
+
         expect(after).toBe(before);
 
         expect(explanation.submission.submissionId).toBe(receipt.submissionId);
@@ -416,6 +458,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
         // The pure renderer names the decision, its meaning, and the block for the operator.
         const rendered = renderRecoveryExplanation(explanation);
+
         expect(rendered).toContain("AwaitUnknownResolution");
         expect(rendered).toContain("unknown outcome: book#book-1");
         expect(rendered).toContain("disposition unknown");
@@ -427,9 +470,11 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       yield* resetAuthorizer;
       const runtime = yield* DurableAgentRuntime;
       const thread = "thread-admin-verify";
+
       yield* makeSettledLane(thread, "verify-1");
 
       const report = yield* runtime.verify(decodeThreadId(thread));
+
       expect(report.ok).toBe(true);
       expect(report.submissionCount).toBe(1);
       expect(checkByName(report, "schema-round-trip").status).toBe("passed");
@@ -442,10 +487,12 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       // Honest scoping: the port does not export per-batch producer identity, so the runtime
       // operation reports the chain check skipped instead of silently claiming it.
       const digestCheck = checkByName(report, "digest-chain");
+
       expect(digestCheck.status).toBe("skipped");
       expect(digestCheck.detail).toContain("producer identity");
 
       const store = yield* ThreadStore;
+
       const withoutCheckpoints = ThreadStore.of({
         materialize: store.materialize,
         append: store.append,
@@ -454,12 +501,14 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         export: store.export,
         inspectTail: store.inspectTail,
       });
+
       const unsupported = yield* Effect.flatMap(DurableAgentRuntime, (runtime) =>
         runtime.verify(decodeThreadId(thread)),
       ).pipe(
         Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
         Effect.provideService(ThreadStore, withoutCheckpoints),
       );
+
       expect(unsupported.ok).toBe(true);
       expect(checkByName(unsupported, "checkpoint-binding")).toMatchObject({
         status: "skipped",
@@ -483,12 +532,15 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             threadId: decodeThreadId(thread),
           }),
         );
+
         const submissionRow = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: receipt.submissionId }),
         );
+
         expect(Option.isSome(submissionRow)).toBe(true);
         if (Option.isNone(submissionRow)) throw new Error("Expected the Submission row");
         const submissions = [submissionRow.value];
+
         // Single-producer lane: the coordinator wrote every batch, so the test KNOWS the
         // per-batch producer directory the port cannot export.
         const batchProducers = new Map<BatchId, ProducerId>(
@@ -501,6 +553,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           batchProducers,
           requireAllSettled: true,
         });
+
         expect(clean.ok).toBe(true);
         expect(checkByName(clean, "digest-chain").status).toBe("passed");
         expect(checkByName(clean, "all-settled").status).toBe("passed");
@@ -508,7 +561,9 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         // Injected digest break: tamper one record's payload content on a copy.
         const tamperedRecords = exported.records.map((envelope) => {
           const payload = envelope.record.payload;
+
           if (payload._tag !== "UserInputRecorded") return envelope;
+
           return CanonicalRecordEnvelope.make({
             threadId: envelope.threadId,
             batchId: envelope.batchId,
@@ -529,6 +584,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             }),
           });
         });
+
         const digestBroken = yield* verifyThreadInvariants({
           export: ThreadExport.make({
             format: exported.format,
@@ -540,6 +596,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           submissions,
           batchProducers,
         });
+
         expect(digestBroken.ok).toBe(false);
         expect(checkByName(digestBroken, "digest-chain").status).toBe("failed");
         expect(checkByName(digestBroken, "record-identity").status).toBe("passed");
@@ -547,9 +604,11 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         // Injected record-identity duplicate: the last record reuses the first record's id.
         const first = exported.records[0];
         const last = exported.records.at(-1);
+
         expect(first).toBeDefined();
         expect(last).toBeDefined();
         if (first === undefined || last === undefined) throw new Error("Expected records");
+
         const duplicated = [
           ...exported.records.slice(0, -1),
           CanonicalRecordEnvelope.make({
@@ -567,6 +626,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             }),
           }),
         ];
+
         const identityBroken = yield* verifyThreadInvariants({
           export: ThreadExport.make({
             format: exported.format,
@@ -578,6 +638,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           submissions,
           batchProducers,
         });
+
         expect(identityBroken.ok).toBe(false);
         expect(checkByName(identityBroken, "record-identity").status).toBe("failed");
         expect(checkByName(identityBroken, "record-identity").detail).toContain(
@@ -597,11 +658,14 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       // Crash between admission and materialization: the lane is admitted, nothing more.
       yield* armFailpoint("submit:after-admit");
+
       const killed = yield* Effect.exit(
         runtime.submit(agent, { question: "answer" }, submitOptions(thread, "retry-1")),
       );
+
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
+
       const row = yield* ledger.lookup(
         SubmissionLookupByKey.make({
           threadId: decodeThreadId(thread),
@@ -609,6 +673,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           idempotencyKey: decodeIdempotencyKey("retry-1"),
         }),
       );
+
       expect(Option.isSome(row)).toBe(true);
       if (Option.isNone(row)) throw new Error("Expected the admitted Submission");
       expect(row.value.state).toBe("admitted");
@@ -620,15 +685,18 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           reason: "finish the interrupted admission",
         }),
       );
+
       expect(report.decision._tag).toBe("CompleteMaterialization");
       expect(report.disposition).toBe("repaired");
 
       // DUR-013: the executed repair carries its deterministic RepairAnnotated audit record.
       const records = yield* readLog(thread);
+
       const audit = records.find(
         (envelope) =>
           envelope.record.recordId === `repair:${row.value.submissionId}:CompleteMaterialization`,
       )?.record.payload;
+
       expect(audit?._tag).toBe("RepairAnnotated");
       if (audit?._tag === "RepairAnnotated") {
         expect(audit.reason).toBe("recovery:CompleteMaterialization");
@@ -636,6 +704,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       // The repaired lane finishes normally.
       const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
       expect(settlements[0]?.outcome).toBe("completed");
     }),
   );
@@ -646,6 +715,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const runtime = yield* DurableAgentRuntime;
 
       const settled = yield* makeSettledLane("thread-admin-refuse-settled", "refuse-1");
+
       const settledExit = yield* Effect.exit(
         runtime.retry(
           RetryCommand.make({
@@ -655,10 +725,13 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           }),
         ),
       );
+
       const settledRefusal = failureValue(settledExit);
+
       expect(settledRefusal).toMatchObject({ _tag: "RetryRefused", refusal: "settled" });
 
       const unknown = yield* makeUnknownLane("thread-admin-refuse-unknown", "refuse-2");
+
       const unknownExit = yield* Effect.exit(
         runtime.retry(
           RetryCommand.make({
@@ -668,6 +741,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           }),
         ),
       );
+
       expect(failureValue(unknownExit)).toMatchObject({
         _tag: "RetryRefused",
         refusal: "await-unknown-resolution",
@@ -675,6 +749,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       });
 
       const approval = yield* makeApprovalSuspendedLane("thread-admin-refuse-approval", "refuse-3");
+
       const approvalExit = yield* Effect.exit(
         runtime.retry(
           RetryCommand.make({
@@ -684,6 +759,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           }),
         ),
       );
+
       expect(failureValue(approvalExit)).toMatchObject({
         _tag: "RetryRefused",
         refusal: "await-approval-decision",
@@ -703,6 +779,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const approval = yield* makeApprovalSuspendedLane("thread-admin-age-approval", "age-2");
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"queued"}'));
       const agent = Agent.withModel(plainDefinition, scripted.model);
+
       const ready = yield* runtime.submit(
         agent,
         { question: "wait" },
@@ -715,16 +792,19 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const byId = new Map(report.entries.map((entry) => [entry.submissionId, entry]));
 
       const unknownEntry = byId.get(unknown.submissionId);
+
       expect(unknownEntry?.blockedOn).toBe("unknown");
       expect(unknownEntry?.ageSeconds).toBe(120);
       expect(unknownEntry?.severity).toBe("aging");
 
       const approvalEntry = byId.get(approval.submissionId);
+
       expect(approvalEntry?.blockedOn).toBe("approval");
       expect(approvalEntry?.ageSeconds).toBe(120);
       expect(approvalEntry?.severity).toBe("aging");
 
       const readyEntry = byId.get(ready.submissionId);
+
       expect(readyEntry?.blockedOn).toBe("ready-aged");
       expect(readyEntry?.ageSeconds).toBe(120);
       expect(readyEntry?.severity).toBe("aging");
@@ -732,6 +812,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       yield* TestClock.adjust(Duration.seconds(600));
       const later = yield* runtime.scanObligations(thresholds);
       const laterById = new Map(later.entries.map((entry) => [entry.submissionId, entry]));
+
       expect(laterById.get(unknown.submissionId)?.ageSeconds).toBe(720);
       expect(laterById.get(unknown.submissionId)?.severity).toBe("overdue");
       expect(laterById.get(ready.submissionId)?.severity).toBe("overdue");
@@ -745,13 +826,16 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const ledger = yield* SubmissionLedger;
       const wake = yield* WakeScheduler;
       const control = yield* AuthorizerTestControl;
+
       yield* control.reset;
       yield* control.deny(["awaitSettlement", "abort"]);
       const accesses: Array<string> = [];
+
       const protectedAccess = (name: string) =>
         Effect.sync(() => {
           accesses.push(name);
         });
+
       const guardedLedger = SubmissionLedger.of({
         ...ledger,
         lookup: (request) => protectedAccess("lookup").pipe(Effect.andThen(ledger.lookup(request))),
@@ -762,10 +846,13 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         requestAbort: (request) =>
           protectedAccess("abort").pipe(Effect.andThen(ledger.requestAbort(request))),
       });
+
       const failpoints = yield* DurableRuntimeFailpointTestControl;
+
       yield* failpoints.setHandler(() => protectedAccess("failpoint"));
       yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(receipt)))).toBe(
           "OperationDenied",
         );
@@ -808,10 +895,12 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const forbidden = yield* makeSettledLane("thread-receipt-forbidden", "forbidden");
       const ledger = yield* SubmissionLedger;
       const accesses: Array<string> = [];
+
       const note = (name: string) =>
         Effect.sync(() => {
           accesses.push(name);
         });
+
       const guardedLedger = SubmissionLedger.of({
         ...ledger,
         lookup: (request) => note("lookup").pipe(Effect.andThen(ledger.lookup(request))),
@@ -820,6 +909,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         loadRecoverySnapshot: (request) =>
           note("recovery").pipe(Effect.andThen(ledger.loadRecoverySnapshot(request))),
       });
+
       const authorizer: OperationAuthorizerService = {
         authorize: (request) =>
           request.threadId === allowed.threadId
@@ -831,20 +921,24 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
                 }),
               ),
       };
+
       yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
+
         expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(forbidden)))).toBe(
           "OperationDenied",
         );
         expect(accesses).toEqual([]);
 
         const mixed = { ...forbidden, threadId: allowed.threadId };
+
         expect(failureTag(yield* Effect.exit(runtime.awaitSettlement(mixed)))).toBe(
           "OperationDenied",
         );
         expect(accesses).toEqual(["lookup"]);
 
         const settlement = yield* runtime.awaitSettlement(allowed);
+
         expect(settlement.submissionId).toBe(allowed.submissionId);
         expect(settlement.outcome).toBe("completed");
       }).pipe(
@@ -876,9 +970,12 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       ]);
 
       const explainExit = yield* Effect.exit(runtime.explain(receipt.submissionId));
+
       expect(failureTag(explainExit)).toBe("OperationDenied");
       const verifyExit = yield* Effect.exit(runtime.verify(decodeThreadId(thread)));
+
       expect(failureTag(verifyExit)).toBe("OperationDenied");
+
       const retryExit = yield* Effect.exit(
         runtime.retry(
           RetryCommand.make({
@@ -888,17 +985,23 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           }),
         ),
       );
+
       expect(failureTag(retryExit)).toBe("OperationDenied");
       const wakeExit = yield* Effect.exit(runtime.wake(decodeThreadId(thread)));
+
       expect(failureTag(wakeExit)).toBe("OperationDenied");
+
       const scanExit = yield* Effect.exit(
         runtime.scanObligations(
           ObligationThresholds.make({ agingSeconds: 60, overdueSeconds: 600 }),
         ),
       );
+
       expect(failureTag(scanExit)).toBe("OperationDenied");
       const observeExit = yield* Effect.exit(Stream.runCollect(runtime.observe(receipt)));
+
       expect(failureTag(observeExit)).toBe("OperationDenied");
+
       const resolveExit = yield* Effect.exit(
         runtime.resolveUnknown(
           UnknownResolutionCommand.make({
@@ -910,7 +1013,9 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           }),
         ),
       );
+
       expect(failureTag(resolveExit)).toBe("OperationDenied");
+
       const approvalExit = yield* Effect.exit(
         runtime.resolveApproval(
           ApprovalDecisionCommand.make({
@@ -922,12 +1027,15 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           }),
         ),
       );
+
       expect(failureTag(approvalExit)).toBe("OperationDenied");
 
       // Fail-closed means fail-before-effect: nothing was read into a repair, nothing written.
       const after = yield* durableStateFingerprint(thread);
+
       expect(after).toBe(before);
       const requests = yield* control.requests;
+
       expect(requests.map((request) => request.operation)).toEqual([
         "explain",
         "verify",
@@ -942,6 +1050,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       // The denial policy lifts and the default possession behavior is restored.
       yield* control.reset;
       const explanation = yield* runtime.explain(receipt.submissionId);
+
       expect(explanation.decision._tag).toBe("NoAction");
       expect(explanation.disposition).toBe("none");
     }),
@@ -955,16 +1064,21 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       const explainEffect: Effect.Effect<RecoveryExplanation, DurableExplainFailure> =
         runtime.explain(receipt.submissionId);
+
       const explainLane: Effect.Effect<
         ReadonlyArray<RecoveryExplanation>,
         DurableExplainFailure
       > = runtime.explainThread(threadId);
+
       const verifyEffect: Effect.Effect<IntegrityReport, DurableVerifyFailure> =
         runtime.verify(threadId);
+
       const retryEffect: Effect.Effect<RecoveryReport, DurableRetryFailure> = runtime.retry(
         RetryCommand.make({ submissionId: receipt.submissionId, author: "a", reason: "b" }),
       );
+
       const wakeEffect: Effect.Effect<void, OperationDenied> = runtime.wake(threadId);
+
       const scanEffect: Effect.Effect<ObligationReport, DurableObligationFailure> =
         runtime.scanObligations(ObligationThresholds.make({ agingSeconds: 1, overdueSeconds: 2 }));
 
@@ -975,6 +1089,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       yield* wakeEffect;
       yield* scanEffect;
       const retryExit = yield* Effect.exit(retryEffect);
+
       expect(failureTag(retryExit)).toBe("RetryRefused");
     }),
   );

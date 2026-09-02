@@ -23,10 +23,13 @@ export const compareScheduleNames = (left: string, right: string): number => {
   const leftPoints = Array.from(left, (value) => value.codePointAt(0) ?? 0);
   const rightPoints = Array.from(right, (value) => value.codePointAt(0) ?? 0);
   const length = Math.min(leftPoints.length, rightPoints.length);
+
   for (let index = 0; index < length; index += 1) {
     const compared = (leftPoints[index] ?? 0) - (rightPoints[index] ?? 0);
+
     if (compared !== 0) return compared;
   }
+
   return leftPoints.length - rightPoints.length;
 };
 
@@ -43,6 +46,7 @@ export const scheduleKeyOf = (record: ScheduleRecord): ScheduleKey => ({
 /** Pending recovery always outranks preparation, even after pause or cancellation. */
 export const scheduleDeadline = (record: ScheduleRecord): number | null => {
   if (record.pending !== null) return record.pending.retry.nextAttemptAtMillis;
+
   return record.state === "active" ? record.nextAtMillis : null;
 };
 
@@ -74,6 +78,7 @@ export const applyScheduleChange = (
       if (record.configurationRevision !== change.expectedRevision) {
         return conflict(record, "revision");
       }
+
       return changed(record, {
         configuration: change.configuration,
         configurationRevision: record.configurationRevision + 1,
@@ -103,6 +108,7 @@ export const applyScheduleChange = (
           updatedAtMillis: change.nowMillis,
         });
       }
+
       return changed(record, {
         state: "active",
         nextAtMillis: change.nextAtMillis,
@@ -113,13 +119,16 @@ export const applyScheduleChange = (
     case "Prepare": {
       const configuration = record.configuration;
       const envelope = change.envelope;
+
       const cursorAdvances =
         configuration.timing._tag === "At"
           ? change.nextAtMillis === null
           : change.nextAtMillis !== null && change.nextAtMillis > envelope.intendedAtMillis;
+
       const destinationMatches =
         configuration.destination._tag === "FreshThread" ||
         configuration.destination.threadId === envelope.threadId;
+
       if (
         record.configurationRevision !== change.expectedRevision ||
         record.nextAtMillis !== change.expectedCursor ||
@@ -141,6 +150,7 @@ export const applyScheduleChange = (
       ) {
         return conflict(record, "revision");
       }
+
       return changed(record, {
         nextAtMillis: change.nextAtMillis,
         pending: {
@@ -165,6 +175,7 @@ export const applyScheduleChange = (
       ) {
         return conflict(record, "revision");
       }
+
       return changed(record, {
         state: "paused",
         updatedAtMillis: change.nowMillis,
@@ -175,6 +186,7 @@ export const applyScheduleChange = (
       if (record.pending?.envelope.occurrenceId !== change.occurrenceId) {
         return Result.succeed(record);
       }
+
       return changed(record, {
         pending: null,
         updatedAtMillis: change.nowMillis,
@@ -191,12 +203,14 @@ export const applyScheduleChange = (
         return Result.succeed(record);
       }
       const current = record.pending.retry;
+
       if (
         change.retry.attempts <= current.attempts ||
         change.retry.nextAttemptAtMillis < current.nextAttemptAtMillis
       ) {
         return Result.succeed(record);
       }
+
       return changed(record, {
         pending: { envelope: record.pending.envelope, retry: change.retry },
         updatedAtMillis: change.nowMillis,
@@ -206,6 +220,7 @@ export const applyScheduleChange = (
       if (record.pending?.envelope.occurrenceId !== change.occurrenceId) {
         return Result.succeed(record);
       }
+
       return changed(record, {
         state: record.state === "active" ? "paused" : record.state,
         pending: null,

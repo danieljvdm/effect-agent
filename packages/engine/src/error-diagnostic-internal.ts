@@ -14,6 +14,7 @@ const ownStringDiagnostic = (
   }
   try {
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
+
     return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "string"
       ? boundedDiagnostic(descriptor.value, maxCharacters)
       : undefined;
@@ -25,7 +26,9 @@ const ownStringDiagnostic = (
 /** Total, bounded projection for opaque failures. It never invokes arbitrary coercion hooks. */
 export const errorMessage = (error: unknown): string => {
   const message = ownStringDiagnostic(error, "message", DIAGNOSTIC_MESSAGE_LIMIT);
+
   if (message !== undefined) return message;
+
   return typeof error === "string"
     ? boundedDiagnostic(error, DIAGNOSTIC_MESSAGE_LIMIT)
     : "Unknown error";

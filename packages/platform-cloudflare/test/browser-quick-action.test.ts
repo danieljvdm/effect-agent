@@ -40,12 +40,14 @@ interface RecordedCall {
 const makeBinding = (responses: ReadonlyArray<Response | Error>) => {
   const calls: Array<RecordedCall> = [];
   let index = 0;
+
   const respond = (
     action: RecordedCall["action"],
     options: unknown,
   ): Effect.Effect<Response, BrowserQuickActionRpcError> => {
     calls.push({ action, options });
     const next = responses[index];
+
     index += 1;
     if (next === undefined) {
       return Effect.fail(
@@ -55,10 +57,12 @@ const makeBinding = (responses: ReadonlyArray<Response | Error>) => {
         }),
       );
     }
+
     return next instanceof Error
       ? Effect.fail(BrowserQuickActionRpcError.make({ action, cause: next }))
       : Effect.succeed(next);
   };
+
   const binding: BrowserQuickActionClient = {
     screenshot: (options) => respond("screenshot", options),
     content: (options) => respond("content", options),
@@ -67,6 +71,7 @@ const makeBinding = (responses: ReadonlyArray<Response | Error>) => {
     scrape: (options) => respond("scrape", options),
     json: (options) => respond("json", options),
   };
+
   return { binding, calls };
 };
 
@@ -100,6 +105,7 @@ const capture = (
   Effect.runPromise(
     Effect.gen(function* () {
       const port = yield* PageCapture;
+
       return yield* port.capture(input);
     }).pipe(Effect.provide(captureLayer(binding, workersAi))),
   );
@@ -112,6 +118,7 @@ const captureError = (
   Effect.runPromise(
     Effect.gen(function* () {
       const port = yield* PageCapture;
+
       return yield* port.capture(input).pipe(Effect.flip);
     }).pipe(Effect.provide(captureLayer(binding, workersAi))),
   );
@@ -158,34 +165,42 @@ type NativeBrowserRunIsLayerInput = Equal<BrowserQuickActionCaptureOptions["brow
 describe("Browser Run Quick Action PageCapture adapter", () => {
   it("assembles named handlers and enforces their host policy through the native binding", async () => {
     const calls: Array<unknown> = [];
+
     const browser: BrowserRun = {
       fetch: () => Promise.reject(new Error("Unexpected fetch")),
       quickAction: (action, options) => {
         calls.push({ action, options });
+
         return Promise.resolve(jsonResponse({ success: true, result: "# Pricing" }));
       },
     };
+
     const ReadPage = WebCapture.make("read_page", {
       description: "Read pricing",
       urls: ["docs.example.com"],
       actions: ["markdown"],
     });
+
     const live = CloudflareBrowser.layer(ReadPage, { browser });
 
     expectTypeOf(live).toEqualTypeOf<
       Layer.Layer<Tool.HandlersFor<{ read_page: typeof ReadPage.tool }>>
     >();
+
     const results = await Effect.runPromise(
       Effect.gen(function* () {
         const toolkit = yield* Toolkit.make(ReadPage.tool);
+
         const allowed = yield* toolkit.handle("read_page", {
           url: "https://docs.example.com/pricing",
           action: "markdown",
         });
+
         const denied = yield* toolkit.handle("read_page", {
           url: "https://attacker.example/pricing",
           action: "markdown",
         });
+
         return [yield* Stream.runCollect(allowed), yield* Stream.runCollect(denied)];
       }).pipe(Effect.provide(live)),
     );
@@ -201,6 +216,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
   it("requires explicit Workers AI authority and preserves extraction decoder requirements", async () => {
     class Decoder extends Context.Service<Decoder, { readonly value: string }>()("test/Decoder") {}
+
     const Extract = WebCapture.makeExtract("extract_page", {
       description: "Extract pricing",
       urls: ["docs.example.com"],
@@ -215,15 +231,20 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
         ),
       }),
     });
+
     const events: Array<string> = [];
+
     const browser: BrowserRun = {
       fetch: () => Promise.reject(new Error("Unexpected fetch")),
       quickAction: (action) => {
         events.push(action);
+
         return Promise.resolve(jsonResponse({ success: true, result: { name: "Pro" } }));
       },
     };
+
     const denied = CloudflareBrowser.layer(Extract, { browser });
+
     const allowed = CloudflareBrowser.layer(Extract, {
       browser,
       workersAi: {
@@ -237,12 +258,16 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     expectTypeOf(allowed).toEqualTypeOf<
       Layer.Layer<Tool.HandlersFor<{ extract_page: typeof Extract.tool }>, never, Decoder>
     >();
+
     const invoke = Effect.gen(function* () {
       const toolkit = yield* Toolkit.make(Extract.tool);
       const output = yield* toolkit.handle("extract_page", { url: "https://docs.example.com/" });
+
       return yield* Stream.runCollect(output);
     });
+
     const decoder = Layer.succeed(Decoder, { value: " plan" });
+
     const refused = await Effect.runPromise(
       invoke.pipe(Effect.provide(denied.pipe(Layer.provideMerge(decoder)))),
     );
@@ -251,6 +276,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       { result: { _tag: "WebCaptureFailure", errorTag: "PageCaptureUnsupportedError" } },
     ]);
     expect(events).toEqual([]);
+
     const result = await Effect.runPromise(
       invoke.pipe(Effect.provide(allowed.pipe(Layer.provideMerge(decoder)))),
     );
@@ -266,6 +292,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       },
       { browser },
     );
+
     expectTypeOf(fallible).toEqualTypeOf<
       Layer.Layer<Tool.HandlersFor<{ extract_page: typeof Extract.tool }>, "setup">
     >();
@@ -275,6 +302,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     const browserProof: BrowserBindingAuthorityIsVisible = true;
     const workersAiProof: WorkersAiAuthorityIsVisible = true;
     const nativeBindingProof: NativeBrowserRunIsLayerInput = true;
+
     expect(browserProof).toBe(true);
     expect(workersAiProof).toBe(true);
     expect(nativeBindingProof).toBe(true);
@@ -287,6 +315,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
         { headers: { "Content-Type": "application/json", "X-Browser-Ms-Used": "1234" } },
       ),
     ]);
+
     const result = await capture(
       binding,
       request(CapturePageMarkdown.make({}), {
@@ -302,6 +331,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
         },
       }),
     );
+
     expect(calls).toHaveLength(1);
     expect(calls[0].action).toBe("markdown");
     expect(calls[0].options).toMatchObject({
@@ -319,6 +349,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
   it("decodes native content, links, and explicitly authorized structured envelopes", async () => {
     const rawHtml = "<!doctype html><h1>Pricing</h1>";
+
     const { binding, calls } = makeBinding([
       jsonResponse({ success: true, result: rawHtml }),
       jsonResponse({
@@ -327,16 +358,20 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       }),
       jsonResponse({ success: true, result: { plans: [{ name: "Pro" }] } }),
     ]);
+
     const content = await capture(binding, request(CapturePageContent.make({})));
+
     expect(content.output).toMatchObject({ _tag: "PageContentCaptured", html: rawHtml });
 
     const links = await capture(binding, request(CapturePageLinks.make({})));
+
     expect(links.output).toMatchObject({
       _tag: "PageLinksCaptured",
       links: ["https://docs.example.com/a", "https://docs.example.com/b"],
     });
 
     const authorized: Array<PageCaptureRequest["action"]["_tag"]> = [];
+
     const structured = await capture(
       binding,
       request(CapturePageStructured.make({ responseFormat: { type: "object" } })),
@@ -348,6 +383,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
           }),
       },
     );
+
     expect(structured.output).toMatchObject({
       _tag: "PageStructuredCaptured",
       value: { plans: [{ name: "Pro" }] },
@@ -412,6 +448,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       ["https://docs.example.com/a", "x".repeat(8 * 1024 + 1)],
       Array.from({ length: 4_097 }, () => "https://a"),
     ];
+
     const { binding } = makeBinding(
       hostilePayloads.map((result) => jsonResponse({ success: true, result })),
     );
@@ -427,6 +464,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
   it("rejects success bodies outside the native BrowserRun response envelope", async () => {
     const rawFailure = JSON.stringify({ success: false, errors: "page content" });
     const rawSuccess = JSON.stringify({ success: true, result: "page content" });
+
     const { binding } = makeBinding([
       new Response(rawFailure, { headers: { "Content-Type": "text/markdown; charset=utf-8" } }),
       new Response(rawSuccess, { headers: { "Content-Type": "text/plain" } }),
@@ -457,9 +495,11 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       reason: "authorization",
       message: "Workers AI is outside this tenant's provider budget",
     });
+
     const refused = await captureError(binding, structured, {
       authorizeAndAccount: () => Effect.fail(denial),
     });
+
     expect(refused).toMatchObject({
       _tag: "PageCaptureInferencePolicyError",
       provider: "cloudflare-workers-ai",
@@ -473,6 +513,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
   it("maps 429 responses to typed rate/quota failures with the backoff hint", async () => {
     const privateDiagnostic = "token=host-only-secret";
+
     const { binding } = makeBinding([
       new Response(`Too many requests; ${privateDiagnostic}`, {
         status: 429,
@@ -480,7 +521,9 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       }),
       new Response(`Browser time limit exceeded for today; ${privateDiagnostic}`, { status: 429 }),
     ]);
+
     const rate = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(rate).toMatchObject({
       _tag: "PageCaptureRateLimitedError",
       reason: "rate",
@@ -492,6 +535,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       message: expect.stringContaining(privateDiagnostic),
     });
     const quota = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(quota).toMatchObject({
       _tag: "PageCaptureRateLimitedError",
       reason: "quota",
@@ -512,12 +556,14 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     ]);
 
     const error = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(error).toMatchObject({ _tag: "PageCaptureRateLimitedError", reason: "rate" });
     expect(error).not.toHaveProperty("retryAfterMillis");
   });
 
   it("keeps remote failures typed: 4xx, 5xx, and reported envelope errors", async () => {
     const privateDiagnostic = "token=host-only-secret";
+
     const { binding } = makeBinding([
       new Response(`bad request; ${privateDiagnostic}`, { status: 400 }),
       new Response(`internal; ${privateDiagnostic}`, { status: 500 }),
@@ -527,7 +573,9 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       }),
       jsonResponse({ result: "missing success discriminator" }),
     ]);
+
     const navigation = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(navigation).toMatchObject({
       _tag: "PageCaptureNavigationError",
       message: "The Quick Action answered HTTP 400",
@@ -538,6 +586,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     });
 
     const protocol = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(protocol).toMatchObject({
       _tag: "PageCaptureProtocolError",
       message: "The Quick Action answered HTTP 500",
@@ -548,6 +597,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     });
 
     const envelope = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(envelope).toMatchObject({
       _tag: "PageCaptureNavigationError",
       message: "The Quick Action reported a navigation failure",
@@ -564,16 +614,19 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
   it("enforces the output byte budget on the encoded response", async () => {
     const { binding } = makeBinding([jsonResponse({ success: true, result: "x".repeat(4_096) })]);
+
     const error = await captureError(
       binding,
       request(CapturePageMarkdown.make({}), { maxOutputBytes: 1_024 }),
     );
+
     expect(error).toMatchObject({ _tag: "PageCaptureOutputLimitError", limit: 1_024 });
   });
 
   it("stops oversized streams at the first exceeding chunk and releases their reader", async () => {
     let chunksRead = 0;
     let canceled = false;
+
     const stream = new ReadableStream<Uint8Array>(
       {
         pull(controller) {
@@ -586,6 +639,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       },
       { highWaterMark: 0 },
     );
+
     const { binding } = makeBinding([new Response(stream)]);
 
     const error = await captureError(
@@ -608,10 +662,12 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       Effect.gen(function* () {
         const readStarted = yield* Deferred.make<void>();
         let canceled = false;
+
         const stream = new ReadableStream<Uint8Array>(
           {
             pull() {
               Effect.runSync(Deferred.succeed(readStarted, undefined));
+
               return new Promise<void>(() => {});
             },
             cancel() {
@@ -620,13 +676,17 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
           },
           { highWaterMark: 0 },
         );
+
         const { binding } = makeBinding([new Response(stream)]);
+
         const program = Effect.gen(function* () {
           const port = yield* PageCapture;
+
           return yield* port.capture(request(CapturePageMarkdown.make({})));
         }).pipe(Effect.provide(captureLayer(binding)));
 
         const fiber = yield* Effect.forkChild(program);
+
         yield* Deferred.await(readStarted);
         yield* Fiber.interrupt(fiber);
 
@@ -639,14 +699,17 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
   it("rejects kitesurf typed without calling the binding and types binding rejections", async () => {
     const foreignCause = new Error("binding exploded; token=host-only-secret");
     const { binding, calls } = makeBinding([foreignCause]);
+
     const unsupported = await captureError(
       binding,
       request(CapturePageMarkdown.make({}), { engine: "kitesurf" }),
     );
+
     expect(unsupported).toMatchObject({ _tag: "PageCaptureUnsupportedError", feature: "engine" });
     expect(calls).toHaveLength(0);
 
     const failure = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(failure).toMatchObject({
       _tag: "PageCaptureProtocolError",
       message: "The browser binding rejected the Quick Action",
@@ -657,6 +720,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
   it("preserves foreign stream-read failures inside the typed protocol error", async () => {
     const foreignCause = new Error("response stream exploded; token=host-only-secret");
+
     const response = new Response(
       new ReadableStream<Uint8Array>({
         pull() {
@@ -664,9 +728,11 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
         },
       }),
     );
+
     const { binding } = makeBinding([response]);
 
     const failure = await captureError(binding, request(CapturePageMarkdown.make({})));
+
     expect(failure).toMatchObject({
       _tag: "PageCaptureProtocolError",
       message: "Reading the Quick Action response failed",

@@ -60,6 +60,7 @@ export const McpClientProtocolVersion = Schema.Literals([
   McpProtocol.v2025_03_26.protocolVersion,
   McpProtocol.v2024_11_05.protocolVersion,
 ]);
+
 export type McpClientProtocolVersion = typeof McpClientProtocolVersion.Type;
 
 const OFFERED_PROTOCOL_VERSION: McpClientProtocolVersion = McpProtocol.v2025_11_25.protocolVersion;
@@ -154,6 +155,7 @@ const decodeInitializeProtocolVersion = Schema.decodeUnknownOption(InitializePro
 
 const ServerRequest = Schema.Struct({ _tag: Schema.Literal("Request"), tag: Schema.String });
 const isServerRequest = Schema.is(ServerRequest);
+
 const isJsonRpcRequest = (message: unknown): message is RpcMessage.RequestEncoded =>
   isServerRequest(message);
 
@@ -264,6 +266,7 @@ const consumeEventStream = Effect.fn("McpHttpTransport.consumeEventStream")(func
 ) {
   let buffer = "";
   let pendingBytes = 0;
+
   const dispatchEvent = (block: string): Effect.Effect<void> => {
     const data = block
       .split(/\r?\n/)
@@ -273,6 +276,7 @@ const consumeEventStream = Effect.fn("McpHttpTransport.consumeEventStream")(func
 
     return data.length === 0 ? Effect.void : deliver(data);
   };
+
   const drain = (final: boolean): Effect.Effect<void> =>
     Effect.suspend(() => {
       const blocks: Array<string> = [];
@@ -499,6 +503,7 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
   const maxMessageBytes = options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
   const serialization = RpcSerialization.ndJsonRpc({ maxBufferSize: maxMessageBytes });
   const parser = serialization.makeUnsafe();
+
   const handle = yield* spawner
     .spawn(
       ChildProcess.make(options.command, [...(options.args ?? [])], {
@@ -515,10 +520,12 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
         }),
       ),
     );
+
   const outbound = yield* Queue.unbounded<string>();
   // Once the process is gone every later send fails immediately instead of
   // queueing behind a writer that no longer exists.
   let closed: RpcClientError.RpcClientError | undefined;
+
   const closedWith = (message: string, cause?: unknown): RpcClientError.RpcClientError =>
     (closed ??= protocolDefect(message, cause));
 
@@ -557,6 +564,7 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
           (clientId) => writeResponse(clientId, { _tag: "ClientProtocolError", error }),
           { discard: true },
         );
+
       const deliver = (chunk: Uint8Array): Effect.Effect<void> =>
         Effect.suspend(() => {
           let messages: ReadonlyArray<unknown>;
@@ -584,6 +592,7 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
             { discard: true },
           );
         });
+
       const enqueue = (message: unknown): Effect.Effect<void, RpcClientError.RpcClientError> =>
         Effect.suspend(() => {
           if (closed !== undefined) return Effect.fail(closed);
@@ -703,6 +712,7 @@ const makeMcpTool = (tool: McpSchema.Tool, trustToolAnnotations: boolean): McpTo
     // `return` hands the typed failure to the model the same way.
     failureMode: "return",
   });
+
   const title = tool.title ?? tool.annotations?.title;
 
   if (title !== undefined) dynamic = dynamic.annotate(Tool.Title, title);
@@ -759,10 +769,12 @@ const connectServer = Effect.fn("McpClient.connect")(function* <R>(
 ): Effect.fn.Return<McpConnectedServer, McpConnectionError, Scope.Scope | R> {
   const serverId = transport.serverId;
   const protocol = yield* transport.protocol;
+
   const client = yield* RpcClient.make(McpSchema.ClientRpcs, {
     spanPrefix: "McpClient",
     spanAttributes: { "mcp.server_id": serverId },
   }).pipe(Effect.provideService(RpcClient.Protocol, protocol));
+
   const initialized = yield* client
     .initialize({
       protocolVersion: OFFERED_PROTOCOL_VERSION,
@@ -770,6 +782,7 @@ const connectServer = Effect.fn("McpClient.connect")(function* <R>(
       clientInfo,
     })
     .pipe(failClosed(serverId, `MCP initialize with ${serverId} failed`));
+
   const negotiated = yield* Schema.decodeUnknownEffect(McpClientProtocolVersion)(
     initialized.protocolVersion,
   ).pipe(
@@ -819,6 +832,7 @@ const connectServer = Effect.fn("McpClient.connect")(function* <R>(
         }),
       ),
     );
+
     const result = yield* client["tools/call"]({ name, arguments: args }).pipe(
       Effect.mapError((error) =>
         McpToolCallFailed.make({
@@ -870,6 +884,7 @@ const connectServer = Effect.fn("McpClient.connect")(function* <R>(
       `MCP server ${serverId} advertised tools that cannot form a Toolkit`,
     ),
   });
+
   const handlers = toolkit.toLayer(
     Object.fromEntries(
       tools.map((tool) => [tool.name, (params: unknown) => callTool(tool.name, params)] as const),

@@ -61,6 +61,7 @@ export const drainDelegationUntil = async (
 ): Promise<void> => {
   const rounds = options?.rounds ?? 600;
   let lastDeliveryError: unknown;
+
   for (let round = 0; round < rounds; round++) {
     if (await predicate()) return;
     for (const thread of threads) {
@@ -76,12 +77,15 @@ export const drainDelegationUntil = async (
     await sleep(10);
   }
   const lanes: Record<string, unknown> = {};
+
   for (const thread of threads) {
     const rows = await laneRows(thread, SUBAGENTS);
+
     const tags = await readCanonical(thread, SUBAGENTS).then(
       (records) => records.map((envelope) => envelope.record.payload._tag),
       (error) => [`<read failed: ${String(error)}>`],
     );
+
     lanes[thread] = { rows, tags };
   }
   throw new Error(
@@ -96,8 +100,10 @@ export const allLanesSettled =
   async (): Promise<boolean> => {
     for (const thread of threads) {
       const rows = await laneRows(thread, SUBAGENTS);
+
       if (rows.length === 0 || rows.some((row) => row.state !== "settled")) return false;
     }
+
     return true;
   };
 
@@ -120,6 +126,7 @@ export const waitFor = async (
  */
 const withAbortedInstanceRetry = async <A>(probe: () => Promise<A>): Promise<A> => {
   let lastError: unknown;
+
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
       return await probe();
@@ -140,6 +147,7 @@ const sqlProbe = <Row extends object>(
       Effect.runPromise(
         Effect.gen(function* () {
           const sql = yield* SqlClientService.SqlClient;
+
           return yield* query(sql).pipe(Effect.orDie);
         }).pipe(Effect.provide(SqliteClient.layer({ storage: state.storage }))),
       ),
@@ -187,9 +195,11 @@ export const payloadsOf = (
 export const startedPayloadOf = async (parent: string): Promise<SubagentStarted> => {
   const records = await readCanonical(parent, SUBAGENTS);
   const payload = payloadsOf(records, "SubagentStarted")[0]?.record.payload;
+
   if (payload?._tag !== "SubagentStarted") {
     throw new Error(`Expected one SubagentStarted record on ${parent}`);
   }
+
   return payload;
 };
 
@@ -197,6 +207,7 @@ export const startedPayloadOf = async (parent: string): Promise<SubagentStarted>
 export const parentOutcomeOf = async (parent: string): Promise<string | undefined> => {
   const records = await readCanonical(parent, SUBAGENTS);
   const payload = payloadsOf(records, "SubmissionSettled")[0]?.record.payload;
+
   return payload !== undefined && "outcome" in payload && typeof payload.outcome === "string"
     ? payload.outcome
     : undefined;
@@ -232,23 +243,28 @@ export const assertDelegationConverged = async (
   const child = childThreadOf(expectation.receipt, expectation.ref);
 
   const parentRecords = await readCanonical(parent, SUBAGENTS);
+
   expect(payloadsOf(parentRecords, "SubagentRequested")).toHaveLength(1);
   expect(payloadsOf(parentRecords, "SubagentStarted")).toHaveLength(1);
   expect(payloadsOf(parentRecords, "SubagentJoined")).toHaveLength(1);
 
   const childRecords = await readCanonical(child, SUBAGENTS);
+
   expect(payloadsOf(childRecords, "ThreadCreated")).toHaveLength(1);
   expect(payloadsOf(childRecords, "SubagentLineageRecorded")).toHaveLength(1);
 
   const started = await startedPayloadOf(parent);
+
   expect(started.childThreadId).toBe(child);
 
   // The child lane in ITS OWN Object: exactly the one admitted Submission, settled, and its
   // canonical settlement carrying the Receipt the start link recorded (one child Receipt).
   const childLane = await laneRows(child, SUBAGENTS);
+
   expect(childLane.map((row) => row.submission_id)).toEqual([started.childSubmissionId]);
   expect(childLane[0]?.state).toBe("settled");
   const childSettled = payloadsOf(childRecords, "SubmissionSettled")[0]?.record.payload;
+
   if (childSettled?._tag !== "SubmissionSettled") {
     throw new Error(`Expected one SubmissionSettled record on ${child}`);
   }
@@ -258,11 +274,14 @@ export const assertDelegationConverged = async (
   // The delegation call settled exactly once, atomically joined (SUB-019).
   const runId = runIdForSubmission(expectation.receipt.submissionId);
   const settledRecordId = toolCallSettledRecordId(runId, 1, delegateCallOf(expectation.ref));
+
   const delegationSettled = parentRecords.filter(
     (envelope) => envelope.record.recordId === settledRecordId,
   );
+
   expect(delegationSettled).toHaveLength(1);
   const delegationPayload = delegationSettled[0]?.record.payload;
+
   expect(delegationPayload?._tag).toBe("ToolCallSettled");
   if (delegationPayload?._tag === "ToolCallSettled") {
     expect(delegationPayload.isFailure).toBe(expectation.delegationResult.isFailure);
@@ -274,6 +293,7 @@ export const assertDelegationConverged = async (
   expect(await parentOutcomeOf(parent)).toBe(expectation.outcome);
   expect(await reservationStatuses(parent)).toEqual(["released"]);
   const markers = await settlementMarkers(parent);
+
   expect(markers).toEqual([
     {
       parent_submission_id: expectation.receipt.submissionId,
@@ -292,6 +312,7 @@ export const assertDelegationConverged = async (
 
   await assertConvergence(parent, { namespace: SUBAGENTS });
   await assertConvergence(child, { namespace: SUBAGENTS });
+
   return started;
 };
 

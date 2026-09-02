@@ -24,9 +24,11 @@ describe("ThreadStore port schemas", () => {
   it.effect("round-trips tail inspection requests and results", () =>
     Effect.gen(function* () {
       const request = ThreadTailRequest.make({ threadId });
+
       const decodedRequest = yield* Schema.encodeEffect(ThreadTailRequest)(request).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(ThreadTailRequest)),
       );
+
       expect(decodedRequest).toEqual(request);
 
       const tail = ThreadTail.make({
@@ -35,9 +37,11 @@ describe("ThreadStore port schemas", () => {
         tailDigest: digest,
         producerEpoch: epoch(2),
       });
+
       const decodedTail = yield* Schema.encodeEffect(ThreadTail)(tail).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(ThreadTail)),
       );
+
       expect(decodedTail).toEqual(tail);
 
       const emptyTail = ThreadTail.make({
@@ -46,6 +50,7 @@ describe("ThreadStore port schemas", () => {
         tailDigest: EMPTY_TAIL_DIGEST,
         producerEpoch: epoch(1),
       });
+
       expect(
         yield* Schema.encodeEffect(ThreadTail)(emptyTail).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(ThreadTail)),
@@ -57,14 +62,17 @@ describe("ThreadStore port schemas", () => {
   it.effect("round-trips every append conflict reason with and without the tail hint", () =>
     Effect.gen(function* () {
       const reasons = ["batch-digest", "record-identity", "tail"] as const;
+
       yield* Effect.forEach(
         reasons,
         (reason) =>
           Effect.gen(function* () {
             const bare = AppendConflict.make({ threadId, batchId, reason });
+
             const decodedBare = yield* Schema.encodeEffect(AppendConflict)(bare).pipe(
               Effect.flatMap(Schema.decodeUnknownEffect(AppendConflict)),
             );
+
             expect(decodedBare.reason).toBe(reason);
             expect(decodedBare.actualTailSequence).toBeUndefined();
             expect(decodedBare.actualTailDigest).toBeUndefined();
@@ -79,9 +87,11 @@ describe("ThreadStore port schemas", () => {
         actualTailSequence: sequence(7),
         actualTailDigest: digest,
       });
+
       const decodedHinted = yield* Schema.encodeEffect(AppendConflict)(hinted).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(AppendConflict)),
       );
+
       expect(decodedHinted.actualTailSequence).toBe(sequence(7));
       expect(decodedHinted.actualTailDigest).toBe(digest);
     }),
@@ -95,12 +105,14 @@ describe("ThreadStore port schemas", () => {
         batchId,
         reason: "unknown-reason",
       }).pipe(Effect.flip);
+
       expect(failure._tag).toBe("SchemaError");
     }),
   );
 
   it("names every shared conformance case uniquely", () => {
     const names = threadStoreConformanceCases.map((conformanceCase) => conformanceCase.name);
+
     expect(new Set(names).size).toBe(names.length);
   });
 });

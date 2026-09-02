@@ -12,6 +12,7 @@ const MAX_DIAGNOSTIC_LENGTH = 8_000;
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 const BoundedMarkdown = Schema.String.check(Schema.isMaxLength(MAX_PAGE_BYTES));
 const BoundedMessage = Schema.String.check(Schema.isMaxLength(MAX_DIAGNOSTIC_LENGTH));
+
 const HttpStatus = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(100),
   Schema.isLessThanOrEqualTo(599),
@@ -54,6 +55,7 @@ export const PageCrawlRecordStatus = Schema.Literals([
   "errored",
   "cancelled",
 ]);
+
 export type PageCrawlRecordStatus = typeof PageCrawlRecordStatus.Type;
 
 /** Bounded origin metadata when Cloudflare reached the URL. */
@@ -128,6 +130,7 @@ export const PageCrawlError = Schema.Union([
   PageCrawlLimitError,
   PageCrawlTerminalError,
 ]);
+
 export type PageCrawlError = typeof PageCrawlError.Type;
 
 /** Scoped exact-host crawl stream. Provider job identity and polling stay adapter-private. */

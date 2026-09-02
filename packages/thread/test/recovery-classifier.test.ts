@@ -315,22 +315,26 @@ describe("recovery classifier crash matrix", () => {
       snapshot("admitted"),
       evidence({ threadMaterialized: false }),
     );
+
     expect(decision._tag).toBe("CompleteMaterialization");
     expect(decision.submissionId).toBe(SUBMISSION_ID);
   });
 
   it("kill submit:after-materialize — admitted with a Thread repairs readiness", () => {
     const decision = classifyRecovery(snapshot("admitted"), evidence());
+
     expect(decision._tag).toBe("RepairReadiness");
   });
 
   it("kill ledger:mark-ready:after — ready and unclaimed applies input", () => {
     const decision = classifyRecovery(snapshot("ready"), evidence());
+
     expect(decision._tag).toBe("ApplyInput");
   });
 
   it("kill claim:after-claim — running without canonical input re-applies input", () => {
     const decision = classifyRecovery(snapshot("running", { ownership }), evidence());
+
     expect(decision._tag).toBe("ApplyInput");
   });
 
@@ -339,6 +343,7 @@ describe("recovery classifier crash matrix", () => {
       snapshot("running", { ownership }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("RepairInputMarker");
   });
 
@@ -347,6 +352,7 @@ describe("recovery classifier crash matrix", () => {
       snapshot("input-applied", { ownership, inputApplied: inputMarker }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("ResumeFromTurnBoundary");
   });
 
@@ -355,6 +361,7 @@ describe("recovery classifier crash matrix", () => {
       snapshot("input-applied", { inputApplied: inputMarker }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("ResumeFromTurnBoundary");
   });
 
@@ -366,6 +373,7 @@ describe("recovery classifier crash matrix", () => {
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("AppendReservedSettlement");
     if (decision._tag === "AppendReservedSettlement") {
       expect(decision.settlementId).toBe(submissionSettlementId(SUBMISSION_ID));
@@ -381,6 +389,7 @@ describe("recovery classifier crash matrix", () => {
       }),
       evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
     );
+
     expect(decision._tag).toBe("FinalizeLedgerFromHistory");
     if (decision._tag === "FinalizeLedgerFromHistory") {
       expect(decision.outcome).toBe("completed");
@@ -392,6 +401,7 @@ describe("recovery classifier crash matrix", () => {
       snapshot("running", { ownership }),
       evidence({ inputRecorded: true, recordedSettlementOutcome: "failed" }),
     );
+
     expect(decision._tag).toBe("FinalizeLedgerFromHistory");
     if (decision._tag === "FinalizeLedgerFromHistory") {
       expect(decision.settlementId).toBe(submissionSettlementId(SUBMISSION_ID));
@@ -404,11 +414,13 @@ describe("recovery classifier crash matrix", () => {
       snapshot("terminalizing", { reservation: reservation("aborted", true) }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("FinalizeLedgerFromHistory");
   });
 
   it("abort of ready, inactive work settles aborted without an Attempt", () => {
     const decision = classifyRecovery(snapshot("ready", { abortIntent }), evidence());
+
     expect(decision._tag).toBe("SettleAborted");
   });
 
@@ -417,6 +429,7 @@ describe("recovery classifier crash matrix", () => {
       snapshot("input-applied", { inputApplied: inputMarker, abortIntent }),
       evidence({ inputRecorded: true, abortRecorded: true }),
     );
+
     expect(decision._tag).toBe("SettleAborted");
   });
 
@@ -425,6 +438,7 @@ describe("recovery classifier crash matrix", () => {
       snapshot("terminalizing", { reservation: reservation("completed", false), abortIntent }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("AppendReservedSettlement");
   });
 
@@ -433,6 +447,7 @@ describe("recovery classifier crash matrix", () => {
       snapshot("settled", { abortIntent }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("NoAction");
   });
 });
@@ -446,6 +461,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
         declaredPendingBatch: DeclaredPendingBatchEvidence.make({ turn: 2, callCount: 2 }),
       }),
     );
+
     expect(decision._tag).toBe("ResumePendingToolBatch");
     if (decision._tag === "ResumePendingToolBatch") {
       expect(decision.turn).toBe(2);
@@ -457,6 +473,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
       snapshot("input-applied", { inputApplied: inputMarker }),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("MarkUnknown");
     if (decision._tag === "MarkUnknown") {
       expect(decision.openToolCallIds).toEqual([CALL_ONE]);
@@ -471,6 +488,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
         openToolCalls: [openCall(CALL_ONE), openCall(CALL_TWO)],
       }),
     );
+
     expect(decision._tag).toBe("MarkUnknown");
     if (decision._tag === "MarkUnknown") {
       expect(decision.openToolCallIds).toEqual([CALL_ONE, CALL_TWO]);
@@ -484,6 +502,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
       snapshot("running", { ownership, inputApplied: inputMarker }),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("MarkUnknown");
   });
 
@@ -496,6 +515,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
         openToolCalls: [openCall(CALL_ONE)],
       }),
     );
+
     expect(decision._tag).toBe("FinalizeLedgerFromHistory");
   });
 
@@ -504,6 +524,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
       snapshot("terminalizing", { reservation: reservation("failed", false) }),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("AppendReservedSettlement");
   });
 
@@ -512,6 +533,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
       snapshot("settled"),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("NoAction");
   });
 
@@ -520,6 +542,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
       snapshot("running", { ownership, abortIntent }),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("SettleAborted");
   });
 
@@ -528,6 +551,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
       snapshot("unknown", { inputApplied: inputMarker }),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("AwaitUnknownResolution");
   });
 
@@ -542,6 +566,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
         openToolCalls: [openCall(CALL_ONE), openCall(CALL_TWO)],
       }),
     );
+
     expect(decision._tag).not.toBe("MarkUnknown");
     expect(decision._tag).toBe("AwaitUnknownResolution");
   });
@@ -560,6 +585,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
         openToolCalls: [openCall(CALL_ONE), openCall(CALL_TWO)],
       }),
     );
+
     expect(decision._tag).toBe("ApplyUnknownResolutions");
   });
 
@@ -568,6 +594,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
       snapshot("unknown", { inputApplied: inputMarker }),
       evidence({ inputRecorded: true, openToolCalls: [] }),
     );
+
     expect(decision._tag).toBe("ApplyUnknownResolutions");
   });
 });
@@ -578,6 +605,7 @@ describe("recovery classifier P5 approval rows (plan §4.3)", () => {
       snapshot("running", { ownership, inputApplied: inputMarker }),
       evidence({ inputRecorded: true, approvalsPending: [pendingApproval(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("AwaitApprovalDecision");
   });
 
@@ -586,6 +614,7 @@ describe("recovery classifier P5 approval rows (plan §4.3)", () => {
       snapshot("suspended", { inputApplied: inputMarker, suspension }),
       evidence({ inputRecorded: true, approvalsPending: [pendingApproval(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("AwaitApprovalDecision");
   });
 
@@ -598,6 +627,7 @@ describe("recovery classifier P5 approval rows (plan §4.3)", () => {
       }),
       evidence({ inputRecorded: true, approvalsPending: [pendingApproval(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("ResumeSuspended");
   });
 
@@ -613,6 +643,7 @@ describe("recovery classifier P5 approval rows (plan §4.3)", () => {
         declaredPendingBatch: DeclaredPendingBatchEvidence.make({ turn: 1, callCount: 1 }),
       }),
     );
+
     expect(decision._tag).toBe("ResumePendingToolBatch");
   });
 
@@ -625,6 +656,7 @@ describe("recovery classifier P5 approval rows (plan §4.3)", () => {
         declaredPendingBatch: DeclaredPendingBatchEvidence.make({ turn: 1, callCount: 1 }),
       }),
     );
+
     expect(decision._tag).toBe("AwaitApprovalDecision");
   });
 
@@ -633,6 +665,7 @@ describe("recovery classifier P5 approval rows (plan §4.3)", () => {
       snapshot("suspended", { inputApplied: inputMarker, suspension, abortIntent }),
       evidence({ inputRecorded: true, approvalsPending: [pendingApproval(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("SettleAborted");
   });
 });
@@ -643,6 +676,7 @@ describe("recovery classifier P5 joined-input rows (plan §4.3, DUR-016)", () =>
       snapshot("joining", { hostSubmissionId: HOST_SUBMISSION_ID }),
       evidence({ inputRecorded: false }),
     );
+
     expect(decision._tag).toBe("RevertJoining");
   });
 
@@ -651,6 +685,7 @@ describe("recovery classifier P5 joined-input rows (plan §4.3, DUR-016)", () =>
       snapshot("joining", { hostSubmissionId: HOST_SUBMISSION_ID }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("RepairJoinMarker");
   });
 
@@ -659,6 +694,7 @@ describe("recovery classifier P5 joined-input rows (plan §4.3, DUR-016)", () =>
       snapshot("joined", { hostSubmissionId: HOST_SUBMISSION_ID }),
       evidence({ inputRecorded: true, joinedInputCovered: false }),
     );
+
     expect(decision._tag).toBe("AwaitHostSettlement");
     if (decision._tag === "AwaitHostSettlement") {
       expect(decision.hostSubmissionId).toBe(HOST_SUBMISSION_ID);
@@ -670,6 +706,7 @@ describe("recovery classifier P5 joined-input rows (plan §4.3, DUR-016)", () =>
       snapshot("joined", { hostSubmissionId: HOST_SUBMISSION_ID }),
       evidence({ inputRecorded: true, hostSettlementOutcome: "completed" }),
     );
+
     expect(decision._tag).toBe("SettleJoinedWithHost");
     if (decision._tag === "SettleJoinedWithHost") {
       expect(decision.outcome).toBe("completed");
@@ -681,6 +718,7 @@ describe("recovery classifier P5 joined-input rows (plan §4.3, DUR-016)", () =>
       snapshot("joined", { hostSubmissionId: HOST_SUBMISSION_ID }),
       evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
     );
+
     expect(decision._tag).toBe("FinalizeLedgerFromHistory");
   });
 });
@@ -698,6 +736,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
       running(),
       evidence({ inputRecorded: true, openDelegationCalls: [delegationCall(CALL_DELEGATE)] }),
     );
+
     expect(decision._tag).toBe("ResumePendingToolBatch");
     if (decision._tag === "ResumePendingToolBatch") {
       expect(decision.turn).toBe(1);
@@ -709,6 +748,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
       running({ childReservations: [childReservation()] }),
       evidence({ inputRecorded: true, openDelegationCalls: [delegationCall(CALL_DELEGATE)] }),
     );
+
     expect(decision._tag).toBe("ResumePendingToolBatch");
   });
 
@@ -717,6 +757,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
       running({ childReservations: [childReservation()] }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("ReleaseOrphanChildReservation");
     if (decision._tag === "ReleaseOrphanChildReservation") {
       expect(decision.reservationIds).toEqual([RESERVATION_ONE]);
@@ -733,6 +774,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("CompleteChildAdmission");
     if (decision._tag === "CompleteChildAdmission") {
       expect(decision.toolCallId).toBe(CALL_DELEGATE);
@@ -749,6 +791,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("AwaitChildAdmissionResolution");
   });
 
@@ -760,6 +803,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         openDelegationCalls: [delegationCall(CALL_DELEGATE, { requested: true })],
       }),
     );
+
     expect(decision._tag).toBe("AwaitChildAdmissionResolution");
   });
 
@@ -773,6 +817,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("RepairSubagentStartLink");
     if (decision._tag === "RepairSubagentStartLink") {
       expect(decision.toolCallId).toBe(CALL_DELEGATE);
@@ -796,6 +841,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("EnsureWaitingForChild");
     if (decision._tag === "EnsureWaitingForChild") {
       expect(decision.children).toEqual([waitingChild(CALL_DELEGATE, CHILD_ONE)]);
@@ -826,6 +872,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("EnsureWaitingForChild");
     if (decision._tag === "EnsureWaitingForChild") {
       expect(decision.children).toEqual([
@@ -853,6 +900,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("AwaitChildSettlement");
   });
 
@@ -865,6 +913,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("AwaitChildSettlement");
   });
 
@@ -884,6 +933,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("ResumeWaitingParent");
     if (decision._tag === "ResumeWaitingParent") {
       expect(decision.children).toEqual([waitingChild(CALL_DELEGATE, CHILD_ONE)]);
@@ -907,6 +957,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("ApplyJoinAccounting");
     if (decision._tag === "ApplyJoinAccounting") {
       expect(decision.toolCallId).toBe(CALL_DELEGATE);
@@ -923,6 +974,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("ApplyJoinAccounting");
     if (decision._tag === "ApplyJoinAccounting") {
       expect(decision.reservationId).toBe(RESERVATION_ONE);
@@ -936,6 +988,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("ResumeFromTurnBoundary");
   });
 
@@ -951,6 +1004,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("ResumeFromTurnBoundary");
   });
 
@@ -965,6 +1019,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("AwaitApprovalDecision");
   });
 
@@ -985,6 +1040,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         ],
       }),
     );
+
     expect(decision._tag).toBe("FinalizeLedgerFromHistory");
   });
 });
@@ -1010,6 +1066,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
         ],
       }),
     );
+
     expect(decision._tag).toBe("PropagateChildAbort");
     if (decision._tag === "PropagateChildAbort") {
       expect(decision.children).toEqual([waitingChild(CALL_DELEGATE, CHILD_ONE)]);
@@ -1039,6 +1096,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
         ],
       }),
     );
+
     expect(decision._tag).toBe("PropagateChildAbort");
   });
 
@@ -1051,6 +1109,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
         openDelegationCalls: [delegationCall(CALL_DELEGATE)],
       }),
     );
+
     expect(decision._tag).toBe("MarkUnknown");
     if (decision._tag === "MarkUnknown") {
       expect(decision.openToolCallIds).toEqual([CALL_ONE]);
@@ -1065,6 +1124,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
         openToolCalls: [openCall(CALL_DELEGATE, 1, "delegate_destination_research")],
       }),
     );
+
     expect(decision._tag).toBe("MarkUnknown");
   });
 
@@ -1077,6 +1137,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
       }),
       evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("MarkUnknown");
   });
 
@@ -1095,6 +1156,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("ResumeWaitingParent");
     if (decision._tag === "ResumeWaitingParent") {
       expect(decision.children).toEqual([
@@ -1112,6 +1174,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("AwaitChildSettlement");
   });
 
@@ -1124,6 +1187,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
       }),
       evidence({ inputRecorded: true, approvalsPending: [pendingApproval(CALL_ONE)] }),
     );
+
     expect(decision._tag).toBe("ResumeSuspended");
   });
 });
@@ -1143,6 +1207,7 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
         ],
       }),
     );
+
     expect(decision._tag).toBe("AwaitChildAdmissionResolution");
   });
 
@@ -1156,6 +1221,7 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
         ],
       }),
     );
+
     expect(decision._tag).toBe("ReleaseOrphanChildReservation");
     if (decision._tag === "ReleaseOrphanChildReservation") {
       expect(decision.reservationIds).toEqual([RESERVATION_ONE]);
@@ -1172,6 +1238,7 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
         ],
       }),
     );
+
     expect(decision._tag).toBe("RepairSubagentStartLink");
   });
 
@@ -1191,6 +1258,7 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
         ],
       }),
     );
+
     expect(decision._tag).toBe("ResumeWaitingParent");
   });
 
@@ -1211,6 +1279,7 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
         ],
       }),
     );
+
     expect(decision._tag).toBe("ApplyJoinAccounting");
   });
 
@@ -1221,6 +1290,7 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
       }),
       evidence({ inputRecorded: true }),
     );
+
     expect(decision._tag).toBe("SettleAborted");
   });
 
@@ -1229,6 +1299,7 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
       aborting(),
       evidence({ inputRecorded: true, openDelegationCalls: [delegationCall(CALL_DELEGATE)] }),
     );
+
     expect(decision._tag).toBe("SettleAborted");
   });
 });
@@ -1248,6 +1319,7 @@ describe("recovery classifier rows (SUB-016 establishment race, DUR-004/DUR-012 
       snapshot("admitted", { parentLinkage }),
       evidence({ threadMaterialized: false }),
     );
+
     expect(decision._tag).toBe("AwaitParentEstablishment");
     if (decision._tag === "AwaitParentEstablishment") {
       expect(decision.parentSubmissionId).toBe(HOST_SUBMISSION_ID);
@@ -1259,6 +1331,7 @@ describe("recovery classifier rows (SUB-016 establishment race, DUR-004/DUR-012 
     // The race window includes a crash between the parent's materialize and its lineage
     // append: readiness self-repair stays deferred until the lineage record is canonical.
     const decision = classifyRecovery(snapshot("admitted", { parentLinkage }), evidence());
+
     expect(decision._tag).toBe("AwaitParentEstablishment");
   });
 
@@ -1267,6 +1340,7 @@ describe("recovery classifier rows (SUB-016 establishment race, DUR-004/DUR-012 
       snapshot("admitted", { parentLinkage }),
       evidence({ subagentLineageRecorded: true }),
     );
+
     expect(decision._tag).toBe("RepairReadiness");
   });
 
@@ -1278,11 +1352,13 @@ describe("recovery classifier rows (SUB-016 establishment race, DUR-004/DUR-012 
       snapshot("admitted", { parentLinkage }),
       evidence({ threadMaterialized: false, subagentLineageRecorded: true }),
     );
+
     expect(decision._tag).toBe("CompleteMaterialization");
   });
 
   it("a ROOT admitted Submission never consults lineage evidence", () => {
     const decision = classifyRecovery(snapshot("admitted"), evidence());
+
     expect(decision._tag).toBe("RepairReadiness");
   });
 
@@ -1291,6 +1367,7 @@ describe("recovery classifier rows (SUB-016 establishment race, DUR-004/DUR-012 
     // decision and the EXECUTOR settles a non-head ready row immediately at the current tail
     // (settlement order of never-run work is not execution order; DUR-004 bounds execution).
     const decision = classifyRecovery(snapshot("ready", { abortIntent }), evidence());
+
     expect(decision._tag).toBe("SettleAborted");
   });
 
@@ -1299,6 +1376,7 @@ describe("recovery classifier rows (SUB-016 establishment race, DUR-004/DUR-012 
       snapshot("terminalizing", { reservation: reservation("aborted", false), abortIntent }),
       evidence(),
     );
+
     expect(decision._tag).toBe("AppendReservedSettlement");
   });
 });

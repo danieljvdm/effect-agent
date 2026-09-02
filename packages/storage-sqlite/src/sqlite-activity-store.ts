@@ -111,14 +111,19 @@ const decodeProgress = Effect.fn("SqliteActivityStore.decodeProgress")(function*
   const header = yield* Schema.decodeEffect(Schema.fromJsonString(StoredVersionHeader))(value).pipe(
     Effect.mapError(() => storeError(operation, "corrupt")),
   );
+
   if (header.version !== STORAGE_VERSION) {
     return yield* storeError(operation, "incompatible");
   }
+
   const progress = yield* Schema.decodeEffect(Schema.fromJsonString(ActivityProgress))(value).pipe(
     Effect.mapError(() => storeError(operation, "corrupt")),
   );
+
   const canonical = yield* encodeProgress(progress, operation);
+
   if (canonical !== value) return yield* storeError(operation, "corrupt");
+
   return progress;
 });
 
@@ -135,6 +140,7 @@ const validateProgress = Effect.fn("SqliteActivityStore.validateProgress")(funct
   ) {
     return yield* storeError(operation, "corrupt");
   }
+
   return progress;
 });
 
@@ -170,19 +176,23 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
             version INTEGER NOT NULL
           )
         `;
+
         const metadataRows = yield* sql<Record<string, unknown>>`
           SELECT version FROM effect_agent_activity_metadata
           WHERE component = ${METADATA_COMPONENT}
         `;
+
         const metadata = yield* decodeRows(
           ActivityMetadataRow,
           metadataRows,
           "decode activity schema version",
         );
+
         if (metadata.length > 1) {
           return yield* storeError("decode activity schema version", "corrupt");
         }
         const currentVersion = metadata[0]?.version;
+
         if (currentVersion !== undefined && currentVersion !== STORAGE_VERSION) {
           return yield* storeError("initialize activity schema", "incompatible");
         }
@@ -191,11 +201,13 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
             SELECT name FROM sqlite_master
             WHERE type = 'table' AND name = ${STATE_TABLE}
           `;
+
           const existing = yield* decodeRows(
             ActivityTableRow,
             tableRows,
             "inspect activity schema",
           );
+
           if (existing.length > 0) {
             return yield* storeError("initialize activity schema", "incompatible");
           }
@@ -244,14 +256,18 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
       `,
       operation,
     );
+
     const rows = yield* decodeRows(ActivityStateRow, rawRows, operation);
+
     if (rows.length === 0) return null;
     if (rows.length !== 1) return yield* storeError(operation, "corrupt");
     const row = rows[0];
+
     if (row.format_version !== STORAGE_VERSION) {
       return yield* storeError(operation, "incompatible");
     }
     const progress = yield* decodeProgress(row.progress_json, operation);
+
     yield* validateProgress(progress, operation);
     if (
       !sameKey(progress.key, key) ||
@@ -265,6 +281,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     ) {
       return yield* storeError(operation, "corrupt");
     }
+
     return progress;
   });
 
@@ -275,7 +292,9 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
       sql<Record<string, unknown>>`SELECT changes() AS changed`,
       operation,
     );
+
     const rows = yield* decodeRows(ActivityChangeCountRow, rawRows, operation);
+
     if (rows.length !== 1 || rows[0].changed !== 1) {
       return yield* storeError(operation, "corrupt");
     }
@@ -286,6 +305,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     operation: string,
   ) {
     const progressJson = yield* encodeProgress(progress, operation);
+
     yield* sql`
       INSERT INTO effect_agent_activity_processor_state_v1 (
         processor_id, processor_version, thread_id, format_version, through_sequence,
@@ -305,6 +325,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     operation: string,
   ) {
     const progressJson = yield* encodeProgress(next, operation);
+
     yield* sql`
       UPDATE effect_agent_activity_processor_state_v1
       SET format_version = ${STORAGE_VERSION},
@@ -328,6 +349,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     requireSequence: boolean,
   ): Effect.fn.Return<ActivityProgress, ActivityOwnershipLost> {
     const now = yield* Clock.currentTimeMillis;
+
     if (
       progress === null ||
       !sameKey(progress.key, claim.key) ||
@@ -338,6 +360,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     ) {
       return yield* ownershipLost(claim);
     }
+
     return progress;
   });
 
@@ -345,6 +368,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     "SqliteActivityStore.inspect",
   )(function* (key) {
     const decodedKey = yield* decodeInput(ActivityProcessorKey, key, "inspect activity progress");
+
     return yield* readProgress(decodedKey, "inspect activity progress");
   });
 
@@ -352,18 +376,22 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     function* (request) {
       const operation = "claim activity progress";
       const decoded = yield* decodeInput(ActivityClaimRequest, request, operation);
+
       yield* failpoint.hit("activity:claim:before");
+
       const claimed = yield* sql
         .withTransaction(
           Effect.gen(function* () {
             const current = yield* readProgress(decoded.key, operation);
             const now = yield* Clock.currentTimeMillis;
+
             if (current !== null && current.owner !== null && current.leaseExpiresAt > now) {
               return yield* ActivityBusy.make({
                 key: decoded.key,
                 leaseExpiresAt: current.leaseExpiresAt,
               });
             }
+
             const next = yield* Schema.decodeUnknownEffect(ActivityProgress)({
               version: STORAGE_VERSION,
               key: decoded.key,
@@ -374,16 +402,21 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
               pending: current?.pending ?? null,
               advancedAt: current?.advancedAt ?? null,
             }).pipe(Effect.mapError(() => storeError(operation, "corrupt")));
+
             if (current === null) yield* insertProgress(next, operation);
             else yield* updateProgress(current, next, operation);
             yield* failpoint.hit("activity:claim:after-state");
             const result = makeClaim(next);
+
             if (result === null) return yield* storeError(operation, "corrupt");
+
             return result;
           }),
         )
         .pipe(Effect.catchTag("SqlError", () => Effect.fail(storeError(operation))));
+
       yield* failpoint.hit("activity:claim:after");
+
       return claimed;
     },
   );
@@ -394,7 +427,9 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     const operation = "prepare activity output";
     const claim = yield* decodeInput(ActivityClaim, request.claim, operation);
     const work = yield* decodeInput(PreparedActivity, request.work, operation);
+
     yield* failpoint.hit("activity:prepare:before");
+
     const result = yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -403,23 +438,29 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
             claim,
             true,
           );
+
           if (current.pending !== null) {
             if (sameWork(current.pending, work)) {
               return { work: current.pending, changed: false } as const;
             }
+
             return yield* ActivityWorkConflict.make({ key: claim.key, workId: work.workId });
           }
           if (!sameKey(work.key, claim.key) || work.sequence !== current.throughSequence + 1) {
             return yield* ActivityWorkConflict.make({ key: claim.key, workId: work.workId });
           }
           const next = ActivityProgress.make({ ...current, pending: work });
+
           yield* updateProgress(current, next, operation);
           yield* failpoint.hit("activity:prepare:after-state");
+
           return { work, changed: true } as const;
         }),
       )
       .pipe(Effect.catchTag("SqlError", () => Effect.fail(storeError(operation))));
+
     if (result.changed) yield* failpoint.hit("activity:prepare:after");
+
     return result.work;
   });
 
@@ -429,7 +470,9 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
     const operation = "advance activity progress";
     const claim = yield* decodeInput(ActivityClaim, request.claim, operation);
     const workId = yield* decodeInput(Digest, request.workId, operation);
+
     yield* failpoint.hit("activity:advance:before");
+
     const nextClaim = yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -438,24 +481,31 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
             claim,
             true,
           );
+
           if (current.pending === null || current.pending.workId !== workId) {
             return yield* ActivityWorkConflict.make({ key: claim.key, workId });
           }
+
           const next = ActivityProgress.make({
             ...current,
             throughSequence: current.pending.sequence,
             pending: null,
             advancedAt: yield* Clock.currentTimeMillis,
           });
+
           yield* updateProgress(current, next, operation);
           yield* failpoint.hit("activity:advance:after-state");
           const result = makeClaim(next);
+
           if (result === null) return yield* storeError(operation, "corrupt");
+
           return result;
         }),
       )
       .pipe(Effect.catchTag("SqlError", () => Effect.fail(storeError(operation))));
+
     yield* failpoint.hit("activity:advance:after");
+
     return nextClaim;
   });
 
@@ -464,11 +514,13 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
   )(function* (claim) {
     const operation = "release activity claim";
     const decoded = yield* decodeInput(ActivityClaim, claim, operation);
+
     yield* failpoint.hit("activity:release:before");
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const current = yield* readProgress(decoded.key, operation);
+
           if (
             current === null ||
             current.owner !== decoded.owner ||
@@ -477,6 +529,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
             return yield* ownershipLost(decoded);
           }
           const next = ActivityProgress.make({ ...current, owner: null, leaseExpiresAt: 0 });
+
           yield* updateProgress(current, next, operation);
           yield* failpoint.hit("activity:release:after-state");
         }),

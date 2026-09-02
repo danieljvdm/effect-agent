@@ -24,6 +24,7 @@ export class CatalogLifecycleCounts extends Schema.Class<CatalogLifecycleCounts>
   acquired: Schema.Natural,
   finalized: Schema.Natural,
 }) {}
+
 export class CatalogLifecycle extends Context.Service<
   CatalogLifecycle,
   {
@@ -37,6 +38,7 @@ export class CatalogLifecycle extends Context.Service<
     Effect.gen(function* () {
       const acquired = yield* Ref.make(0);
       const finalized = yield* Ref.make(0);
+
       return CatalogLifecycle.of({
         markAcquired: Ref.update(acquired, (n) => n + 1),
         markFinalized: Ref.update(finalized, (n) => n + 1),
@@ -54,11 +56,13 @@ const flight = FlightOption.make({
   estimatedCents: 180_000,
   currency: "USD",
 });
+
 const lodging = LodgingOption.make({
   lodging: "Bloomsbury House · refundable studio · 4 nights",
   estimatedCents: 104_000,
   currency: "USD",
 });
+
 const activities = ActivitySearchResult.make({
   activities: ["British Museum timed entry", "Thames evening walk"],
 });
@@ -85,6 +89,7 @@ export const ReverseCompletionToolkitLayer = Effect.gen(function* () {
   const releaseFlight = yield* Deferred.make<void>();
   const releaseLodging = yield* Deferred.make<void>();
   const releaseActivity = yield* Deferred.make<void>();
+
   const awaitRelease = <A>(
     started: Deferred.Deferred<void>,
     release: Deferred.Deferred<void>,
@@ -94,6 +99,7 @@ export const ReverseCompletionToolkitLayer = Effect.gen(function* () {
       Effect.andThen(Deferred.await(release)),
       Effect.as(value),
     );
+
   return {
     controls: {
       flightStarted: Deferred.await(flightStarted),
@@ -115,7 +121,9 @@ export const FlightCatalogLayer = Layer.effect(
   FlightCatalog,
   Effect.gen(function* () {
     const lifecycle = yield* CatalogLifecycle;
+
     yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
+
     return FlightCatalog.of({
       search: (query) =>
         query.origin === query.destination
@@ -129,11 +137,14 @@ export const FlightCatalogLayer = Layer.effect(
     });
   }),
 );
+
 export const LodgingCatalogLayer = Layer.effect(
   LodgingCatalog,
   Effect.gen(function* () {
     const lifecycle = yield* CatalogLifecycle;
+
     yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
+
     return LodgingCatalog.of({
       search: (query) =>
         query.nights < 1
@@ -147,11 +158,14 @@ export const LodgingCatalogLayer = Layer.effect(
     });
   }),
 );
+
 export const ActivityCatalogLayer = Layer.effect(
   ActivityCatalog,
   Effect.gen(function* () {
     const lifecycle = yield* CatalogLifecycle;
+
     yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
+
     return ActivityCatalog.of({
       search: (query) =>
         query.destination === ""
@@ -165,10 +179,12 @@ export const ActivityCatalogLayer = Layer.effect(
     });
   }),
 );
+
 /** Stable supplier-side booking identity, minted deterministically from the idempotency key. */
 export const BookingRef = Schema.NonEmptyString.pipe(
   Schema.brand("@effect-agent/testing/travel-planner/BookingRef"),
 );
+
 export type BookingRef = typeof BookingRef.Type;
 
 /** The supplier desk operations the P5 booking Tools and Steps invoke. */
@@ -179,6 +195,7 @@ export const SupplierOperation = Schema.Literals([
   "reserve-lodging",
   "issue-confirmation",
 ]);
+
 export type SupplierOperation = typeof SupplierOperation.Type;
 
 /**
@@ -287,7 +304,9 @@ export class SupplierBookingDesk extends Context.Service<
             request.idempotencyKey,
             (current.counts.get(request.idempotencyKey) ?? 0) + 1,
           );
+
           const existing = current.bookings.get(request.idempotencyKey);
+
           const record =
             existing ??
             SupplierBookingRecord.make({
@@ -297,18 +316,24 @@ export class SupplierBookingDesk extends Context.Service<
               detail: request.detail,
               status: "confirmed",
             });
+
           const bookings =
             existing === undefined
               ? new Map(current.bookings).set(request.idempotencyKey, record)
               : current.bookings;
+
           const hold = Option.fromNullishOr(current.holds.get(request.idempotencyKey));
+
           const holds = Option.isSome(hold)
             ? (() => {
                 const next = new Map(current.holds);
+
                 next.delete(request.idempotencyKey);
+
                 return next;
               })()
             : current.holds;
+
           return [
             { record, hold },
             { bookings, counts, holds },
@@ -319,9 +344,11 @@ export class SupplierBookingDesk extends Context.Service<
         Ref.modify(state, (current) => {
           const key = cancelBookingIdempotencyKey(bookingRef);
           const counts = new Map(current.counts).set(key, (current.counts.get(key) ?? 0) + 1);
+
           const existingEntry = [...current.bookings.entries()].find(
             ([, record]) => record.bookingRef === bookingRef,
           );
+
           if (existingEntry === undefined) {
             return [
               { record: Option.none<SupplierBookingRecord>(), hold: Option.none() },
@@ -329,19 +356,25 @@ export class SupplierBookingDesk extends Context.Service<
             ] as const;
           }
           const [storeKey, existing] = existingEntry;
+
           const cancelled =
             existing.status === "cancelled"
               ? existing
               : SupplierBookingRecord.make({ ...existing, status: "cancelled" });
+
           const bookings = new Map(current.bookings).set(storeKey, cancelled);
           const hold = Option.fromNullishOr(current.holds.get(key));
+
           const holds = Option.isSome(hold)
             ? (() => {
                 const next = new Map(current.holds);
+
                 next.delete(key);
+
                 return next;
               })()
             : current.holds;
+
           return [
             { record: Option.some(cancelled), hold },
             { bookings, counts, holds },
@@ -372,10 +405,12 @@ export class SupplierBookingDesk extends Context.Service<
           Effect.gen(function* () {
             const held = yield* Deferred.make<void>();
             const release = yield* Deferred.make<void>();
+
             yield* Ref.update(state, (current) => ({
               ...current,
               holds: new Map(current.holds).set(idempotencyKey, { held, release }),
             }));
+
             return {
               held: Deferred.await(held),
               release: Deferred.succeed(release, undefined).pipe(Effect.asVoid),
@@ -403,12 +438,14 @@ export const TravelGuidanceLayer = Layer.succeed(
       ),
   }),
 );
+
 export const DeterministicIdGeneratorLayer = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
     const thread = yield* Ref.make(0);
     const run = yield* Ref.make(0);
     const turn = yield* Ref.make(0);
+
     return IdGenerator.of({
       nextThreadId: Ref.updateAndGet(thread, (n) => n + 1).pipe(
         Effect.map((n) => Schema.decodeSync(ThreadId)(`thread-${n}`)),
@@ -422,6 +459,7 @@ export const DeterministicIdGeneratorLayer = Layer.effect(
     });
   }),
 );
+
 export const TravelPlannerRuntimeLayer = Layer.mergeAll(
   RunContextPreparationPassthrough,
   ThreadHistory.layerTransient,

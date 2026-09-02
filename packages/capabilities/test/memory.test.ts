@@ -52,6 +52,7 @@ const found = (...passages: ReadonlyArray<MemoryPassage>): MemoryLookup => ({
   _tag: "Found",
   passages,
 });
+
 const source = (id: string, result: MemoryLookup, essential = false): MemoryRecallSource => ({
   id,
   essential,
@@ -65,11 +66,13 @@ describe("bounded memory recall", () => {
         ...passage("profile", "Personal preference"),
         authority: "private-personal-authority",
       });
+
       const project = MemoryPassage.make({
         ...personal,
         authority: "private-project-authority",
         content: { ...personal.content, text: "Project preference" },
       });
+
       for (const next of [
         project,
         MemoryPassage.make({ ...personal, authority: project.authority }),
@@ -78,6 +81,7 @@ describe("bounded memory recall", () => {
           [source("personal-reader", found(personal)), source("project-reader", found(next))],
           limits,
         );
+
         expect(recalled.passages).toEqual([personal, next]);
         expect(recalled.outcomes.map((outcome) => outcome.selected)).toEqual([1, 1]);
         expect(recalled.text).toContain('"authority":"memory-authority:1"');
@@ -85,10 +89,12 @@ describe("bounded memory recall", () => {
         expect(recalled.text).not.toContain(personal.authority);
         expect(recalled.text).not.toContain(project.authority);
       }
+
       const shared = yield* Memory.recall(
         [source("primary", found(personal)), source("replica", found(personal))],
         limits,
       );
+
       expect(shared.passages).toEqual([personal]);
       expect(shared.outcomes[1]).toMatchObject({ selected: 0, deduplicated: 1 });
       expect(
@@ -104,6 +110,7 @@ describe("bounded memory recall", () => {
         ).pipe(Effect.flip),
       ).toMatchObject({ reason: "invalid-input" });
       const unqualified = passage("profile", "Unqualified preference");
+
       expect(
         (yield* Memory.recall(
           [source("first", found(unqualified)), source("second", found(unqualified))],
@@ -119,6 +126,7 @@ describe("bounded memory recall", () => {
           limits,
         )).passages,
       ).toEqual([personal, unqualified]);
+
       const bounded = yield* Memory.recall(
         [
           source(
@@ -132,6 +140,7 @@ describe("bounded memory recall", () => {
         ],
         { ...limits, maxSources: 2 },
       );
+
       expect(bounded.passages).toHaveLength(2);
       expect(bounded.outcomes[1]).toMatchObject({ selected: 0, omitted: 1 });
     }),
@@ -145,11 +154,14 @@ describe("bounded memory recall", () => {
           ...passage("notes", "# Proposal\nUse a queue for retries."),
           authority: "shared-notes",
         });
+
         const external = passage("external", "Adam proposes synchronous delivery.");
+
         const recalled = yield* Memory.recall(
           [source("known", found(markdown), true), source("remote", found(external, markdown))],
           limits,
         );
+
         expect(recalled.passages).toEqual([markdown, external]);
         expect(recalled.outcomes[1]).toMatchObject({ selected: 1, deduplicated: 1 });
         expect(recalled.text).toContain("Untrusted reference material");
@@ -173,6 +185,7 @@ describe("bounded memory recall", () => {
       const small = passage("small", "A bounded passage 🌊");
       const large = passage("large", "oversize ".repeat(2_000));
       const one = yield* Memory.recall([source("known", found(small))], limits);
+
       const recalled = yield* Memory.recall(
         [source("ranked", found(large, small, passage("third", "later")))],
         MemoryRecallLimits.make({
@@ -182,19 +195,24 @@ describe("bounded memory recall", () => {
           maxTokens: one.bytes,
         }),
       );
+
       expect(recalled.passages).toEqual([small]);
       expect(recalled.bytes).toBe(one.bytes);
       expect(recalled.outcomes[0]).toMatchObject({ selected: 1, omitted: 2 });
+
       const tokenLimited = yield* Memory.recall(
         [source("known", found(small))],
         limits,
         () => limits.maxTokens + 1,
       );
+
       expect(tokenLimited.passages).toEqual([]);
+
       const essential = yield* Memory.recall(
         [source("essential", found(large), true)],
         limits,
       ).pipe(Effect.flip);
+
       expect(essential).toMatchObject({
         _tag: "MemoryRecallError",
         reason: "budget",
@@ -208,10 +226,12 @@ describe("bounded memory recall", () => {
     () =>
       Effect.gen(function* () {
         const unavailable: MemoryLookup = { _tag: "Unavailable", message: "offline" };
+
         const stale: MemoryLookup = {
           _tag: "InsufficientFreshness",
           message: "view has not caught up",
         };
+
         const result = yield* Memory.recall(
           [
             source("none", { _tag: "NoMatch" }, true),
@@ -220,6 +240,7 @@ describe("bounded memory recall", () => {
           ],
           limits,
         );
+
         expect(result.outcomes.map((outcome) => outcome.status)).toEqual([
           "NoMatch",
           "Unavailable",
@@ -240,15 +261,19 @@ describe("bounded memory recall", () => {
       Effect.gen(function* () {
         const first = passage("claim", "use a queue");
         const second = passage("claim", "deliver synchronously");
+
         const unknownFirst = MemoryPassage.make({
           ...first,
           source: MemorySourceReference.make({ ...first.source, revision: null }),
         });
+
         const unknownSecond = MemoryPassage.make({ ...second, source: unknownFirst.source });
+
         const result = yield* Memory.recall(
           [source("unknown", found(unknownFirst, unknownSecond, unknownFirst))],
           limits,
         );
+
         expect(result.passages).toEqual([unknownFirst, unknownSecond]);
         expect(result.outcomes[0]).toMatchObject({ selected: 2, deduplicated: 1 });
         expect(result.text).toContain("not independent corroboration");
@@ -264,6 +289,7 @@ describe("bounded memory recall", () => {
     Effect.gen(function* () {
       for (const revision of ["r1", null]) {
         const original = passage("claim", "use a queue");
+
         const first = MemoryPassage.make({
           ...original,
           source: MemorySourceReference.make({ ...original.source, revision }),
@@ -272,6 +298,7 @@ describe("bounded memory recall", () => {
             metadata: { topic: "queue", details: { a: 1, b: [{ x: 2, y: 3 }, 4] } },
           }),
         });
+
         const reordered = MemoryPassage.make({
           ...first,
           content: MemoryContent.make({
@@ -279,9 +306,12 @@ describe("bounded memory recall", () => {
             metadata: { details: { b: [{ y: 3, x: 2 }, 4], a: 1 }, topic: "queue" },
           }),
         });
+
         const recalled = yield* Memory.recall([source("known", found(first, reordered))], limits);
+
         expect(recalled.passages).toEqual([first]);
         expect(recalled.outcomes[0]).toMatchObject({ selected: 1, deduplicated: 1 });
+
         const changed = MemoryPassage.make({
           ...first,
           content: MemoryContent.make({
@@ -289,7 +319,9 @@ describe("bounded memory recall", () => {
             metadata: { topic: "queue", details: { a: 1, b: [4, { x: 2, y: 3 }] } },
           }),
         });
+
         const program = Memory.recall([source("changed", found(first, changed))], limits);
+
         if (revision === null) {
           expect((yield* program).passages).toEqual([first, changed]);
         } else {
@@ -306,15 +338,18 @@ describe("bounded memory recall", () => {
         const compact = passage("claim", "deliver synchronously");
         const oversized = passage("claim", "use a queue ".repeat(2_000));
         const one = yield* Memory.recall([source("compact", found(compact))], limits);
+
         const bounded = MemoryRecallLimits.make({
           ...limits,
           maxBytes: one.bytes,
           maxTokens: one.estimatedTokens,
         });
+
         const omitted = yield* Memory.recall(
           [source("omitted", found(oversized, oversized))],
           bounded,
         );
+
         expect(omitted.outcomes[0]).toMatchObject({ selected: 0, deduplicated: 0, omitted: 2 });
         expect(
           yield* Memory.recall([source("conflicting", found(oversized, compact))], bounded).pipe(
@@ -333,15 +368,19 @@ describe("bounded memory recall", () => {
     () =>
       Effect.gen(function* () {
         const known = passage("known", "large 🌊 ".repeat(256));
+
         const unknown = MemoryPassage.make({
           ...known,
           source: MemorySourceReference.make({ ...known.source, revision: null }),
         });
+
         const inputBytes = [known, unknown].reduce(
           (total, item) => total + new TextEncoder().encode(JSON.stringify(item)).byteLength,
           0,
         );
+
         let laterReads = 0;
+
         const sources = [
           source("known", found(known)),
           source("unknown", found(unknown)),
@@ -350,15 +389,18 @@ describe("bounded memory recall", () => {
             essential: false,
             read: Effect.sync(() => {
               laterReads += 1;
+
               return found();
             }),
           },
         ];
+
         const bounded = MemoryRecallLimits.make({
           ...limits,
           maxBytes: 1,
           maxInputBytes: inputBytes - 1,
         });
+
         expect(yield* Memory.recall(sources, bounded).pipe(Effect.flip)).toMatchObject({
           _tag: "MemoryRecallError",
           reason: "budget",
@@ -366,6 +408,7 @@ describe("bounded memory recall", () => {
         });
         expect(laterReads).toBe(0);
         const exact = yield* Memory.recall(sources, { ...bounded, maxInputBytes: inputBytes });
+
         expect(exact.passages).toEqual([]);
         expect(exact.outcomes.map((outcome) => outcome.omitted)).toEqual([1, 1, 0]);
         expect(laterReads).toBe(1);
@@ -378,15 +421,19 @@ describe("bounded memory recall", () => {
       Effect.gen(function* () {
         const first = passage("first", "first source");
         const second = passage("second", "second source");
+
         const result = yield* Memory.recall(
           [source("remote", found(first, second))],
           MemoryRecallLimits.make({ ...limits, maxSources: 1 }),
         );
+
         expect(result.passages).toEqual([first]);
         let calls = 0;
+
         const estimated = yield* Memory.recall([source("remote", found(first))], limits, () =>
           ++calls === 1 ? 100 : Number.NaN,
         );
+
         expect(calls).toBe(1);
         expect(estimated.estimatedTokens).toBe(100);
       }),
@@ -395,15 +442,20 @@ describe("bounded memory recall", () => {
   it.effect("rejects malformed adapter results and invalid token estimates", () =>
     Effect.gen(function* () {
       const malformed = { ...passage("malformed", "text") };
+
       Reflect.set(malformed, "source", { id: "missing provenance" });
+
       const error = yield* Memory.recall([source("remote", found(malformed))], limits).pipe(
         Effect.flip,
       );
+
       expect(error).toMatchObject({ reason: "invalid-input", sourceId: "remote" });
+
       const metadata = {
         ...passage("metadata", "text"),
         content: { ...passage("metadata", "text").content },
       };
+
       Reflect.set(metadata.content, "metadata", { giant: "x".repeat(8_193) });
       expect(
         yield* Memory.recall([source("metadata", found(metadata))], limits).pipe(Effect.flip),
@@ -423,13 +475,16 @@ describe("bounded memory recall", () => {
   it.effect("retains expected reader errors and defects and finalizes temporary readers", () =>
     Effect.gen(function* () {
       const finalized = yield* Ref.make(0);
+
       for (const failure of [Effect.fail("offline" as const), Effect.die("reader defect")]) {
         const read = Effect.acquireRelease(Effect.void, () =>
           Ref.update(finalized, (n) => n + 1),
         ).pipe(Effect.andThen(failure));
+
         const exit = yield* Memory.recall([{ id: "remote", essential: false, read }], limits).pipe(
           Effect.exit,
         );
+
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
           expect(Cause.pretty(exit.cause)).toMatch(/offline|reader defect/);
@@ -456,17 +511,21 @@ describe("bounded memory recall", () => {
     Effect.gen(function* () {
       const finalized = yield* Ref.make(0);
       const started = yield* Deferred.make<void>();
+
       const read = Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
         Ref.update(finalized, (n) => n + 1),
       ).pipe(Effect.andThen(Effect.never));
+
       const timeout = yield* Memory.recall([{ id: "slow", essential: false, read }], limits).pipe(
         Effect.forkChild,
       );
+
       yield* Deferred.await(started);
       yield* TestClock.adjust(1_000);
       expect(yield* Fiber.join(timeout).pipe(Effect.flip)).toMatchObject({ reason: "timeout" });
       expect(yield* Ref.get(finalized)).toBe(1);
       const entered = yield* Deferred.make<void>();
+
       const interrupted = yield* Memory.recall(
         [
           {
@@ -479,6 +538,7 @@ describe("bounded memory recall", () => {
         ],
         limits,
       ).pipe(Effect.forkChild);
+
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(interrupted);
       expect(yield* Ref.get(finalized)).toBe(2);
@@ -505,16 +565,21 @@ it("preserves reader E/R and discharges only the recall-owned Scope", () => {
     ],
     limits,
   );
+
   const error: Effect.Error<typeof program> = "remote-failure";
+
   const taggedError: Effect.Error<typeof program> = MemoryRecallError.make({
     reason: "timeout",
     message: "timed out",
   });
+
   const requirement: [Effect.Services<typeof program>] extends [Corpus] ? true : false = true;
   const readerRequired: [Corpus] extends [Effect.Services<typeof program>] ? true : false = true;
+
   const exactErrors: [Effect.Error<typeof program>] extends ["remote-failure" | MemoryRecallError]
     ? true
     : false = true;
+
   expect([error, taggedError._tag, requirement, readerRequired, exactErrors]).toEqual([
     "remote-failure",
     "MemoryRecallError",

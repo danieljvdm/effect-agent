@@ -53,10 +53,12 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
     throw new Error("Expected the Effect to fail");
   }
   const failure = Cause.findErrorOption(exit.cause);
+
   expect(Option.isSome(failure)).toBe(true);
   if (Option.isNone(failure)) {
     throw new Error("Expected a typed failure in the Cause");
   }
+
   return failure.value;
 };
 
@@ -76,6 +78,7 @@ const instanceFromJsonSchema = (schema: unknown): unknown => {
     throw new Error(`live-shaped substitute cannot instantiate ${JSON.stringify(schema)}`);
   }
   const record = schema as Record<string, unknown>;
+
   if (Array.isArray(record.enum)) {
     return record.enum[0];
   }
@@ -85,13 +88,16 @@ const instanceFromJsonSchema = (schema: unknown): unknown => {
         typeof record.properties === "object" && record.properties !== null
           ? (record.properties as Record<string, unknown>)
           : {};
+
       const required = Array.isArray(record.required) ? record.required : [];
       const instance: Record<string, unknown> = {};
+
       for (const key of required) {
         if (typeof key === "string") {
           instance[key] = instanceFromJsonSchema(properties[key]);
         }
       }
+
       return instance;
     }
     case "string":
@@ -127,12 +133,14 @@ const liveShapedModel = (captured: Array<Prompt.Prompt>) =>
         streamText: (options) => {
           captured.push(options.prompt);
           const contract = contractMessages(options.prompt).at(0);
+
           if (contract === undefined) {
             return Stream.fromIterable(
               finalParts("Here is a prose summary of the answer, as requested."),
             );
           }
           const advertised: unknown = JSON.parse(contract.slice(contract.indexOf("\n\n") + 2));
+
           return Stream.fromIterable(
             finalParts(JSON.stringify(instanceFromJsonSchema(advertised))),
           );
@@ -162,9 +170,11 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         parameters: Schema.Struct({ query: Schema.String }),
         success: Schema.Struct({ available: Schema.Boolean }),
       });
+
       const tools = Toolkit.make(Search);
       const requests: Array<Prompt.Prompt> = [];
       const histories: Array<Prompt.Prompt> = [];
+
       const model = Model.make(
         "scripted",
         "two-turn-contract",
@@ -172,6 +182,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           LanguageModel.LanguageModel,
           Effect.gen(function* () {
             const turn = yield* Ref.make(0);
+
             return yield* LanguageModel.make({
               generateText: () => Effect.succeed([]),
               streamText: (options) =>
@@ -179,6 +190,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
                   Ref.getAndUpdate(turn, (value) => value + 1).pipe(
                     Effect.map((value) => {
                       requests.push(options.prompt);
+
                       return Stream.fromIterable<Response.StreamPartEncoded>(
                         value === 0
                           ? [
@@ -200,6 +212,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("contract-two-turn", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -207,7 +220,9 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         toolkit: tools,
         policy,
       });
+
       const agent = Agent.withModel(definition, model);
+
       const toolLayer = tools.toLayer({
         search: () => Effect.succeed({ available: true }),
       });
@@ -226,6 +241,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
 
         expect(requests).toHaveLength(2);
         const [first, second] = requests;
+
         // Trailing user message on each request: the derived run-status line
         // (RUN-024), another non-canonical request projection.
         expect(first?.content.map((message) => message.role)).toEqual([
@@ -245,6 +261,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         for (const request of requests) {
           expect(request === undefined ? [] : contractMessages(request)).toHaveLength(1);
           const contract = systemText(request!.content[1]!);
+
           expect(contract.startsWith(contractMarker)).toBe(true);
           expect(contract).toContain('"answer"');
           expect(contract).toContain('"type": "object"');
@@ -263,6 +280,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     "TEST-016 a live-shaped model conforms because the engine communicated the Schema it had never seen",
     () => {
       const captured: Array<Prompt.Prompt> = [];
+
       const definition = Agent.make("contract-live-shaped", {
         input: Schema.Struct({ question: Schema.String }),
         // Deliberately no JSON-shape prose in the instructions: conformance
@@ -272,10 +290,12 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         toolkit: Toolkit.empty,
         policy,
       });
+
       const agent = Agent.withModel(definition, liveShapedModel(captured));
 
       return Effect.gen(function* () {
         const result = yield* AgentRuntime.run(agent, { question: "How many items?" });
+
         expect(result.output).toEqual({ answer: "live-shaped", itemCount: 1 });
         expect(captured).toHaveLength(1);
         expect(contractMessages(captured[0]!)).toHaveLength(1);
@@ -290,9 +310,11 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         parameters: Schema.Struct({ message: Schema.String }),
         success: Schema.Struct({ answer: Schema.String, itemCount: Schema.Int }),
       });
+
       const tools = Toolkit.make(DeliverReply);
       const captured: Array<Prompt.Prompt> = [];
       const histories: Array<Prompt.Prompt> = [];
+
       const definition = Agent.make("contract-completion-tool", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String, itemCount: Schema.Int }),
@@ -301,7 +323,9 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         policy,
         completion: { tool: "deliver_reply", project: ({ result }) => result },
       });
+
       const agent = Agent.withModel(definition, liveShapedModel(captured));
+
       const toolLayer = tools.toLayer({
         deliver_reply: () =>
           Effect.die("A final-text response must not invoke the completion Tool"),
@@ -313,11 +337,14 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           { question: "How many items?" },
           { onHistory: (history) => Effect.sync(() => void histories.push(history)) },
         ).pipe(Effect.provide(toolLayer));
+
         expect(result.output).toEqual({ answer: "live-shaped", itemCount: 1 });
         expect(captured).toHaveLength(1);
         const request = captured[0];
+
         if (request === undefined) throw new Error("Missing model request");
         const contracts = contractMessages(request);
+
         expect(contracts).toHaveLength(1);
         expect(contracts[0]?.split("\n\n")[0]).toBe(
           'Final output contract: when the task is complete without calling the "deliver_reply" completion Tool, the final assistant message must be only ' +
@@ -335,6 +362,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     "an unrenderable output Schema falls back to the prior behavior and the live-shaped model reproduces the issue #41 failure",
     () => {
       const captured: Array<Prompt.Prompt> = [];
+
       // A trailing rest element cannot be represented as JSON Schema by the
       // pinned Effect derivation, so no contract can be rendered.
       const definition = Agent.make("contract-unrenderable", {
@@ -344,13 +372,16 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         toolkit: Toolkit.empty,
         policy,
       });
+
       const agent = Agent.withModel(definition, liveShapedModel(captured));
 
       return Effect.gen(function* () {
         const exit = yield* AgentRuntime.run(agent, { question: "How many items?" }).pipe(
           Effect.exit,
         );
+
         const failure = failureFrom(exit);
+
         expect(failure).toBeInstanceOf(AgentOutputError);
         expect((failure as AgentOutputError).message).toContain("not valid JSON");
         expect(captured).toHaveLength(1);
@@ -369,6 +400,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     () => {
       const captured: Array<Prompt.Prompt> = [];
       const observedContracts: Array<string | undefined> = [];
+
       const definition = Agent.make("contract-context-visibility", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -376,6 +408,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         toolkit: Toolkit.empty,
         policy,
       });
+
       const agent = Agent.withModel(definition, liveShapedModel(captured));
 
       return Effect.gen(function* () {
@@ -387,17 +420,20 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
               prepare: (request) =>
                 Effect.sync(() => {
                   observedContracts.push(request.outputContract);
+
                   return { prompt: request.source };
                 }),
             },
           },
         );
+
         expect(result.output).toEqual({ answer: "live-shaped" });
         expect(observedContracts).toHaveLength(1);
         // Byte-equal with the message actually appended to the request: an
         // adapter compacting toward a model-input limit can reserve exactly
         // this overhead before the engine composes the final request.
         const appended = contractMessages(captured[0]!).at(0);
+
         expect(appended).toBeDefined();
         expect(observedContracts[0]).toBe(appended);
       });
@@ -411,15 +447,19 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         parameters: Schema.Struct({ query: Schema.String }),
         success: Schema.Struct({ available: Schema.Boolean }),
       });
+
       const tools = Toolkit.make(Search);
       const observedContracts: Array<string | undefined> = [];
       const warnings: Array<string> = [];
+
       const logger = Logger.make<unknown, void>(({ logLevel, message }) => {
         const rendered = Array.isArray(message) ? message.join(" ") : String(message);
+
         if (logLevel === "Warn" && rendered.includes("cannot render to JSON Schema")) {
           warnings.push(rendered);
         }
       });
+
       const model = Model.make(
         "scripted",
         "two-turn-unrenderable",
@@ -427,6 +467,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           LanguageModel.LanguageModel,
           Effect.gen(function* () {
             const turn = yield* Ref.make(0);
+
             return yield* LanguageModel.make({
               generateText: () => Effect.succeed([]),
               streamText: () =>
@@ -454,6 +495,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           }),
         ),
       );
+
       const definition = Agent.make("contract-unrenderable-two-turn", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.TupleWithRest(Schema.Tuple([Schema.String]), [Schema.Int, Schema.String]),
@@ -461,12 +503,15 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         toolkit: tools,
         policy,
       });
+
       const agent = Agent.withModel(definition, model);
+
       const toolLayer = tools.toLayer({
         search: () => Effect.succeed({ available: true }),
       });
 
       const observedOwnKeys: Array<boolean> = [];
+
       return Effect.gen(function* () {
         const result = yield* AgentRuntime.run(
           agent,
@@ -477,6 +522,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
                 Effect.sync(() => {
                   observedContracts.push(request.outputContract);
                   observedOwnKeys.push(Object.hasOwn(request, "outputContract"));
+
                   return { prompt: request.source };
                 }),
             },
@@ -509,8 +555,10 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       toolkit: Toolkit.empty,
       policy,
     });
+
     const first = outputSchemaContract(definition);
     const second = outputSchemaContract(definition);
+
     expect(second).toEqual(first);
     expect(first._tag).toBe("rendered");
     if (first._tag === "rendered") {
@@ -521,6 +569,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       );
       expect(first.message).toContain('"answer"');
     }
+
     return Effect.void;
   });
 
@@ -529,6 +578,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       parameters: Schema.Struct({ answer: Schema.String }),
       success: Schema.Void,
     });
+
     const definition = Agent.make("required-completion-contract", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
@@ -543,6 +593,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     });
 
     const contract = outputSchemaContract(definition);
+
     expect(contract._tag).toBe("rendered");
     if (contract._tag === "rendered") {
       expect(contract.message).toContain('required completion Tool "complete"');
@@ -550,22 +601,26 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       expect(contract.message).not.toContain("final assistant message must be only JSON");
       expect(contract.message).not.toContain('"answer"');
     }
+
     return Effect.void;
   });
 
   it.effect("inserts after the last system message, extending the last contiguous block", () => {
     const contract = "contract-text";
     const system = (content: string) => Prompt.makeMessage("system", { content });
+
     const user = Prompt.makeMessage("user", {
       content: [Prompt.makePart("text", { text: "hi" })],
     });
 
     const roles = (prompt: Prompt.Prompt) => prompt.content.map((message) => message.role);
     const empty = insertOutputContract(Prompt.empty, contract);
+
     expect(roles(empty)).toEqual(["system"]);
     expect(systemText(empty.content[0]!)).toBe(contract);
 
     const userOnly = insertOutputContract(Prompt.fromMessages([user]), contract);
+
     expect(roles(userOnly)).toEqual(["system", "user"]);
     expect(systemText(userOnly.content[0]!)).toBe(contract);
 
@@ -573,6 +628,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       Prompt.fromMessages([system("a"), system("b"), user]),
       contract,
     );
+
     expect(roles(doubleSystem)).toEqual(["system", "system", "system", "user"]);
     expect(systemText(doubleSystem.content[2]!)).toBe(contract);
 
@@ -584,8 +640,10 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
       Prompt.fromMessages([system("old-thread"), user, system("new-instructions"), user]),
       contract,
     );
+
     expect(roles(resumed)).toEqual(["system", "user", "system", "system", "user"]);
     expect(systemText(resumed.content[3]!)).toBe(contract);
+
     return Effect.void;
   });
 });

@@ -29,6 +29,7 @@ const resolveRepositoryRoot = Effect.fn("resetDevelopmentStorage.resolveReposito
   function* () {
     const path = yield* Path.Path;
     const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
+
     return path.resolve(path.dirname(scriptPath), "..");
   },
 );
@@ -64,6 +65,7 @@ const validateTarget = Effect.fn("resetDevelopmentStorage.validateTarget")(funct
   }
 
   const parent = path.dirname(target);
+
   if (!(yield* fs.exists(parent))) {
     return yield* UnsafeStorageTarget.make({
       target,
@@ -73,6 +75,7 @@ const validateTarget = Effect.fn("resetDevelopmentStorage.validateTarget")(funct
 
   const canonicalParent = yield* fs.realPath(parent);
   const relativeParent = path.relative(canonicalRoot, canonicalParent);
+
   if (
     relativeParent === ".." ||
     relativeParent.startsWith(`..${path.sep}`) ||
@@ -86,6 +89,7 @@ const validateTarget = Effect.fn("resetDevelopmentStorage.validateTarget")(funct
 
   if (yield* fs.exists(target)) {
     const info = yield* fs.stat(target);
+
     if (info.type !== "File") {
       return yield* UnsafeStorageTarget.make({
         target,
@@ -117,6 +121,7 @@ const resetStorage = Effect.fn("resetDevelopmentStorage")(function* (options: {
 
   if (existing.length === 0) {
     yield* Console.log(`No development SQLite files exist for ${target}.`);
+
     return;
   }
 
@@ -125,6 +130,7 @@ const resetStorage = Effect.fn("resetDevelopmentStorage")(function* (options: {
     yield* Effect.forEach(existing, (file) => Console.log(`- ${file}`), {
       discard: true,
     });
+
     return;
   }
 

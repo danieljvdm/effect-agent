@@ -36,6 +36,7 @@ export class ToolSpanFailure extends AiError.AiError.extend<ToolSpanFailure>(
 }
 
 const TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE = "@effect-agent/engine/ToolSpanFailureMarker";
+
 const terminalOutcomeTokens = new WeakMap<
   object,
   {
@@ -50,7 +51,9 @@ export const annotateToolSpanTerminalOutcome = (
   failureMarker?: ToolSpanFailure,
 ): Effect.Effect<void> => {
   const token = {};
+
   terminalOutcomeTokens.set(token, { outcome, failureMarker });
+
   return Effect.annotateCurrentSpan({
     "effect_agent.tool.outcome": outcome,
     [TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE]: token,
@@ -64,18 +67,22 @@ export const stripToolSpanFailures = <E>(
   const found = cause.reasons.some(
     (reason) => Cause.isFailReason(reason) && reason.error === marker,
   );
+
   if (!found) {
     // Effect v4 Cause is a flat collection of Reasons. Object-identity absence proves only that
     // this invocation's marker is absent: another ToolSpanFailure may still be a genuine handler
     // failure, so retain both the exact Cause object and its complete error union.
     return { found: false, residual: cause };
   }
+
   const reasons = cause.reasons.filter((reason) => {
     if (Cause.isFailReason(reason) && reason.error === marker) {
       return false;
     }
+
     return true;
   });
+
   return { found: true, residual: Cause.fromReasons(reasons) };
 };
 
@@ -89,6 +96,7 @@ export const restoreToolSpanFailureCause = <E, Original>(
   readonly restored: Cause.Cause<E | Original | ToolSpanFailure>;
 } => {
   const { found, residual } = stripToolSpanFailures(cause, marker);
+
   return {
     found,
     restored: original === undefined ? residual : Cause.combine(original, residual),
@@ -150,6 +158,7 @@ class IsolatedToolSpan implements Tracer.Span {
 
   end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {
     if (this.status._tag === "Ended") return;
+
     // Early downstream closure can own terminal telemetry from a no-fail stream finalizer, where
     // the private typed marker is intentionally captured because there is no consumer left to
     // observe it. Once present, the bounded outcome annotation is authoritative for this completed
@@ -160,6 +169,7 @@ class IsolatedToolSpan implements Tracer.Span {
         : this.#terminalOutcome === "success"
           ? Exit.succeed(undefined)
           : exit;
+
     this.status = {
       _tag: "Ended",
       startTime: this.status.startTime,
@@ -188,11 +198,13 @@ class IsolatedToolSpan implements Tracer.Span {
     if (key === TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE) {
       if (typeof value === "object" && value !== null) {
         const terminal = terminalOutcomeTokens.get(value);
+
         if (terminal !== undefined) {
           this.#terminalOutcome = terminal.outcome;
           this.#terminalFailure = terminal.failureMarker;
         }
       }
+
       return;
     }
     this.attributes.set(key, value);
@@ -233,16 +245,20 @@ interface IsolatedToolTracer {
  */
 export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTracer => {
   const defects: Array<unknown> = [];
+
   const recordDefect = (defect: unknown): void => {
     if (defects.length < MAX_REPORTED_SPAN_LIFECYCLE_DEFECTS) defects.push(defect);
   };
+
   let delegateContext: Tracer.Tracer["context"];
+
   try {
     delegateContext = delegate.context?.bind(delegate);
   } catch (defect) {
     recordDefect(defect);
     delegateContext = undefined;
   }
+
   const context: Tracer.Tracer["context"] =
     delegateContext === undefined
       ? undefined
@@ -253,6 +269,7 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
             | { readonly _tag: "Failed"; readonly error: unknown };
           let evaluation: Evaluation = { _tag: "Pending" };
           const currentEvaluation = (): Evaluation => evaluation;
+
           const evaluate = (currentFiber: Fiber.Fiber<unknown, unknown>): X => {
             switch (evaluation._tag) {
               case "Succeeded":
@@ -262,7 +279,9 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
               case "Pending": {
                 try {
                   const value = primitive["~effect/Effect/evaluate"](currentFiber);
+
                   evaluation = { _tag: "Succeeded", value };
+
                   return value;
                 } catch (error) {
                   evaluation = { _tag: "Failed", error };
@@ -271,6 +290,7 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
               }
             }
           };
+
           const guardedPrimitive: Tracer.EffectPrimitive<X> = {
             ["~effect/Effect/evaluate"]: evaluate,
           };
@@ -279,18 +299,22 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
             delegateContext(guardedPrimitive, fiber);
           } catch (defect) {
             const observed = currentEvaluation();
+
             switch (observed._tag) {
               case "Failed":
                 throw observed.error;
               case "Succeeded":
                 recordDefect(defect);
+
                 return observed.value;
               case "Pending":
                 recordDefect(defect);
+
                 return evaluate(fiber);
             }
           }
           const observed = currentEvaluation();
+
           switch (observed._tag) {
             case "Failed":
               throw observed.error;
@@ -300,14 +324,17 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
               return evaluate(fiber);
           }
         };
+
   const tracer = Tracer.make({
     context,
     span(options) {
       let delegateSpan: Tracer.Span;
+
       try {
         delegateSpan = delegate.span(options);
       } catch (defect) {
         recordDefect(defect);
+
         // This native span is deliberately not handed to the host exporter. It only preserves
         // Effect's current-span contract so Tool behavior continues without observable tracing.
         return new Tracer.NativeSpan(options);
@@ -323,18 +350,22 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
         } catch (closeDefect) {
           recordDefect(closeDefect);
         }
+
         return new Tracer.NativeSpan(options);
       }
     },
   });
+
   const reportLifecycleDefects = Effect.suspend(() => {
     const pending = defects.splice(0);
+
     return Effect.forEach(
       pending,
       (defect) => isolateToolDerivative(ErrorReporter.report(Cause.die(defect))),
       { discard: true },
     );
   });
+
   return { tracer, reportLifecycleDefects };
 };
 
@@ -369,6 +400,7 @@ export class ToolSpanTelemetry extends Context.Service<
         isolateEffectSpanLifecycle: (effect) =>
           Effect.suspend(() => {
             const isolated = makeIsolatedToolTracer(delegate);
+
             return effect.pipe(
               Effect.provideService(Tracer.Tracer, isolated.tracer),
               // `Effect.ensuring` runs after the measured span's finalizer, matching the Stream
@@ -382,6 +414,7 @@ export class ToolSpanTelemetry extends Context.Service<
             Effect.flatMap((parentOption) => {
               if (Option.isNone(parentOption)) return effect;
               const parent = parentOption.value;
+
               // Effect AI annotates its current span with decoded Tool parameters before forking
               // the handler. Keep those annotations on a local span that is never handed to the
               // host tracer. DisablePropagation makes explicit handler spans filter past this
@@ -395,6 +428,7 @@ export class ToolSpanTelemetry extends Context.Service<
                 kind: "internal",
                 sampled: parent.sampled,
               });
+
               return effect.pipe(
                 Effect.withParentSpan(local),
                 Effect.onExit((exit) =>
@@ -409,6 +443,7 @@ export class ToolSpanTelemetry extends Context.Service<
           Stream.unwrap(
             Effect.sync(() => {
               const isolated = makeIsolatedToolTracer(delegate);
+
               return stream.pipe(
                 Stream.provideService(Tracer.Tracer, isolated.tracer),
                 // `Stream.ensuring` runs after the canonical span's own finalizer, so creation,

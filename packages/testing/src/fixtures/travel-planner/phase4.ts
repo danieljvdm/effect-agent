@@ -67,9 +67,11 @@ export const phase4TravelPlannerProfile = TravelPlannerDurabilityProfile.make({
 export const phase4TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-p4-deployment",
 );
+
 export const phase4TravelPlannerProducerId = Schema.decodeSync(ProducerId)(
   "travel-planner-p4-producer",
 );
+
 export const phase4TravelPlannerPrincipal = Schema.decodeSync(Principal)(
   "travel-planner-p4-principal",
 );
@@ -112,6 +114,7 @@ export const DurableSearchFlights = Tool.make("search_flights", {
   failureMode: "error",
   dependencies: [FlightCatalog],
 }).annotate(ToolExecutionClass, "readonly");
+
 export const DurableSearchLodging = Tool.make("search_lodging", {
   parameters: Schema.Struct(LodgingQuery.fields),
   success: LodgingOption,
@@ -119,6 +122,7 @@ export const DurableSearchLodging = Tool.make("search_lodging", {
   failureMode: "error",
   dependencies: [LodgingCatalog],
 }).annotate(ToolExecutionClass, "readonly");
+
 export const DurableSearchActivities = Tool.make("search_activities", {
   parameters: Schema.Struct(ActivityQuery.fields),
   success: ActivitySearchResult,
@@ -208,7 +212,9 @@ export const travelPlanFromDurableSettlement = Effect.fn(
   const settlements = records.flatMap((envelope) =>
     envelope.record.payload._tag === "SubmissionSettled" ? [envelope.record.payload] : [],
   );
+
   const settled = settlements.at(0);
+
   if (settled === undefined) {
     return yield* TravelPlannerDurableEvidenceError.make({
       message: "The canonical Thread Log has no SubmissionSettled record.",
@@ -219,6 +225,7 @@ export const travelPlanFromDurableSettlement = Effect.fn(
       message: `The Submission settled ${settled.outcome} without a completed itinerary result.`,
     });
   }
+
   return yield* Schema.decodeUnknownEffect(TravelPlan)(settled.result).pipe(
     Effect.mapError((error) =>
       TravelPlannerDurableEvidenceError.make({
@@ -252,16 +259,19 @@ export const normalizeDurableTravelPlannerEvidence = Effect.fn(
       }),
     ),
   );
+
   const comparable = encoded.map((envelope) => ({
     batchId: envelope.batchId,
     sequence: envelope.sequence,
     record: envelope.record,
   }));
+
   const substituted: unknown = JSON.parse(
     JSON.stringify(comparable)
       .replaceAll(receipt.submissionId, "{submissionId}")
       .replaceAll(receipt.receiptId, "{receiptId}"),
   );
+
   return yield* decodeComparableJson(substituted).pipe(
     Effect.mapError((error) =>
       TravelPlannerDurableEvidenceError.make({
