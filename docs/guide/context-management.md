@@ -299,6 +299,120 @@ snapshot. `RunContextRequest.source` is the current Attempt's official pre-prepa
 use its stable identities or an application-owned query when retrieval requires canonical durable
 state.
 
+### Correct or withdraw a remembered source {#memory-lifecycle}
+
+`MemoryReader` and `MemoryWriter` are separate optional capabilities. Use a reader to validate
+search or cache candidates against the current source. A writer is appropriate only when its
+adapter can atomically check an expected revision and retain idempotency receipts. A read-only
+corpus needs no writer. An external memory service can implement these ports without copying its
+corpus into a framework store.
+
+The host selects a namespace and access scope. A document explicitly lists the scopes allowed to
+recall it; an empty list grants none. No scope name, shared persona, channel, or DM is enabled by
+default. Call `revalidateMemoryLookup(candidates, access, limits)` inside the reader supplied to
+`recallMemory`, immediately before composition. It requires only `MemoryReader`. The optional
+third argument accepts `maxInputBytes` from the recall limits, defaulting to 16 MiB and capped
+at 64 MiB. Revalidation reads one authoritative source at a time and checks aggregate UTF-8
+replacement JSON before retaining it, including duplicate passages. Exceeding this bound fails
+with `MemoryRecallError` reason `budget` before reading later source groups. A single reader
+result and its schema decoding precede the aggregate retention bound.
+
+Validation binds each returned passage's private authority to the host-selected namespace,
+replacing any candidate-supplied authority. Combining independently authorized namespaces
+therefore preserves their distinct source identities without exposing namespace values in model text.
+Validation reloads each candidate's source, excludes missing, withdrawn, or access-revoked
+documents, and replaces stale text with the current document. Even a same-revision excerpt gets
+its attribution and metadata from the current source. It survives only if its text occurs there.
+The usual recall budget can omit a replacement that no longer fits. Source failures stay typed;
+the consumer must explicitly choose any optional fallback.
+
+```ts twoslash
+import { MemoryContent, MemoryKey, MemoryWriter } from "@effect-agent/core";
+import { Effect } from "effect";
+
+const key = MemoryKey.make({ namespace: "team-a", id: "queue-discussion" });
+
+export const correctDiscussion = Effect.fn("correctDiscussion")(function* (
+  content: MemoryContent,
+  expectedRevision: string,
+  operationId: string,
+) {
+  const writer = yield* MemoryWriter;
+  return yield* writer.change({
+    _tag: "Put",
+    key,
+    operationId,
+    expectedRevision,
+    locator: "chat://engineering/42",
+    content,
+    scopes: ["participating-channels"],
+  });
+});
+
+export const withdrawDiscussion = Effect.fn("withdrawDiscussion")(function* (
+  expectedRevision: string,
+  operationId: string,
+) {
+  const writer = yield* MemoryWriter;
+  return yield* writer.change({
+    _tag: "Withdraw",
+    key,
+    operationId,
+    expectedRevision,
+    reason: "Withdrawn by the source owner",
+  });
+});
+```
+
+Create a source with `Put` and `expectedRevision: null`. Later writes use the current revision;
+a competing edit returns `MemoryConflict` without discarding the winning edit. Every replacement
+records its predecessor reference. `modifiedAt` tracks the update, while the caller's original
+activity, recording, and extraction times remain separate. Applications decide how to correct
+attribution, resolve conflicting claims, and age discussions or commitments. Timestamps alone
+never choose a winning claim.
+
+Retry an uncertain write with its original `operationId` and exactly the same Schema-encoded
+command. A successful replay returns the original receipt's document and does not undo later
+edits or withdrawal. Reusing an operation ID for different content returns
+`MemoryOperationConflict`. Revalidate the returned document before recall because a receipt can
+describe an older revision.
+
+Withdrawal is terminal for that source ID within its namespace. A committed withdrawal excludes the
+source from validation checks begun afterward. The same rule applies after access revocation.
+An already captured view, including a same-Turn provider retry, may finish. This guarantee needs
+an authoritative reader; an eventually consistent service must refuse a view it cannot validate.
+Do not run the SQLite reader inside a caller-owned stale snapshot transaction.
+
+Withdrawal governs future recall. Original Thread records, past model outputs, idempotency
+receipts, and backups have separate retention policies. Sensitive-information screening is best
+effort and does not authorize sharing or guarantee privacy.
+
+For a local persistent source, install the optional SQLite adapter:
+
+```ts twoslash
+import { memoryStoreLayer } from "@effect-agent/storage-sqlite";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { Layer } from "effect";
+
+export const MemoryLive = memoryStoreLayer.pipe(
+  Layer.provide(SqliteClient.layer({ filename: "memory.sqlite" })),
+);
+```
+
+`memoryStoreLayer` provides both ports and creates only its own memory tables. It does not
+initialize Thread history or a Submission Ledger. `memoryReaderLayer` checks an existing schema
+without creating tables or starting a write transaction, and supports `SqliteClient.layer({
+filename, readonly: true })`. It fails with `MemoryStorageError` when the schema is absent or
+incompatible; initialize it through `memoryStoreLayer` in the writer process first.
+The connection belongs to its Layer's Scope. The adapter rejects a change before writing when
+its canonical command, document, or receipt-result JSON exceeds 16,777,216 JavaScript string code
+units. `memoryStoreLayerWithFailpoints` accepts a `MemoryMutationFailpoint` service for transaction
+and lost-acknowledgement tests. Replayed receipts must match their original command's predecessor,
+result kind, content, locator, scopes, and withdrawal reason; mismatches fail as corrupt data.
+Recall and validation helpers add named Effect spans without source text or metadata annotations.
+`RecalledMemory.outcomes` reports source availability and selected, deduplicated, and omitted counts;
+the host decides which diagnostics to retain and who can inspect them.
+
 <a id="tool-results-are-bounded-at-the-source"></a>
 
 ## Limit tool output

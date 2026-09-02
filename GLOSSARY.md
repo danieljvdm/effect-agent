@@ -281,6 +281,18 @@ Run directly, and otherwise the Run takes at most one constrained grace Turn
 
 ## Persistence concepts
 
+**Memory source**
+
+Application-owned readable content used across Threads. References preserve the source's identity,
+revision or revision uncertainty, original attribution, and activity time. Search indexes and
+caches are derivatives; transient recalled text is not canonical Thread history.
+
+**Memory withdrawal**
+
+A terminal change that excludes a source from future authoritative recall checks. Checks begun
+after successful withdrawal exclude it; already captured views may finish. Original history,
+past outputs, idempotency receipts, and backups have separate retention policies.
+
 **Canonical Record**  
 An immutable, schema-versioned fact in the Thread Log. Canonical Records are the only
 recovery truth.
