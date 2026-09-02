@@ -697,10 +697,21 @@ describe("review provider boundary", () => {
               ]);
             if (url.pathname.includes("/compare/"))
               return json(httpRequest, { merge_base_commit: { sha: "base" } });
+            if (url.pathname === "/graphql")
+              return json(httpRequest, {
+                data: {
+                  repository: {
+                    object: {
+                      oid: "base",
+                      file: { path: "src/value.ts", oid: "base-tree-blob", isGenerated: false },
+                    },
+                  },
+                },
+              });
             if (url.pathname.includes("/git/commits/")) {
               const revision = url.pathname.split("/").at(-1);
 
-              expect(["reviewed-head", "head"]).toContain(revision);
+              expect(["base", "reviewed-head", "head"]).toContain(revision);
 
               return json(httpRequest, { sha: revision, tree: { sha: `${revision}-tree` } });
             }
@@ -898,6 +909,17 @@ describe("review provider boundary", () => {
               return json(httpRequest, {
                 merge_base_commit: {
                   sha: url.pathname.endsWith("...reviewed-head") ? "old-base" : "base",
+                },
+              });
+            if (url.pathname === "/graphql")
+              return json(httpRequest, {
+                data: {
+                  repository: {
+                    object: {
+                      oid: "base",
+                      file: { path: "src/value.ts", oid: "base-blob", isGenerated: false },
+                    },
+                  },
                 },
               });
             if (url.pathname.includes("/git/commits/")) {

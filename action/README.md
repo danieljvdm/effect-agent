@@ -107,6 +107,17 @@ supplied patches completes. The comment shows up to 30 exclusions; the Action lo
 them. Paths excluded only by input capacity remain available to bounded source tools, while ignore
 rules and unsupported or unreadable entries continue to block access.
 
+### Generated files
+
+Modified and deleted generated files are ignored before reading their contents, using GitHub's
+classification at the trusted PR merge base. Removing their attributes or ignore rules in the PR
+does not change that classification, including during incremental reviews. New paths, renames,
+permission changes, and unsupported entries follow normal admission rules. Classification failures
+leave the review incomplete.
+Classification attempts have a separate 100-file limit. Ignored generated files do not consume
+review capacity. After that limit, remaining files follow normal admission rules without automatic
+generated-file exclusion.
+
 ## Spending and prompt caching
 
 Every review attempt has a fixed **$0.999999 admission ceiling**. The Action keeps the configured

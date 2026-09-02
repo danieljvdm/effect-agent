@@ -1,12 +1,13 @@
 import { ReviewRepository } from "@effect-agent/pr-review";
 import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, Config, ConfigProvider, Effect, Exit, Option, Ref, Schema } from "effect";
+import { describe, expect, expectTypeOf, it, layer } from "@effect/vitest";
+import { Cause, Config, ConfigProvider, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
 import { Response } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
   estimateGpt56CostMicrousd,
+  GeneratedFileClassification,
   hydrateExactChanges,
   IncrementalScopeUnavailable,
   makeReviewRepository,
@@ -416,6 +417,91 @@ describe("Manual command acknowledgement", () => {
 });
 
 describe("Incremental review scope", () => {
+  it.effect.each([
+    { mode: "full", unavailable: false },
+    { mode: "incremental", unavailable: false },
+    { mode: "incremental", unavailable: true },
+  ] as const)(
+    "classifies deleted artifacts at the trusted merge base: $mode, unavailable=$unavailable",
+    ({ mode, unavailable }) =>
+      Effect.gen(function* () {
+        const path = "retired-action/dist/index.mjs";
+        const published: Array<typeof PublishedReviewBody.Type> = [];
+        const classified: Array<string> = [];
+
+        const client = HttpClient.make((request, url) => {
+          let body: unknown;
+
+          if (url.pathname.endsWith("/pulls/12")) {
+            body = pullRequestWire("Delete generated output", "target", "head");
+          } else if (request.method === "GET" && url.pathname.endsWith("/reviews")) {
+            body = [
+              reviewHistoryWire(1, reviewMarker(false), "reviewed-head", "2026-08-25T00:00:00Z"),
+            ];
+          } else if (url.pathname.endsWith("/files")) {
+            body = [{ filename: path, status: "removed", additions: 0, deletions: 58_601 }];
+          } else if (url.pathname.includes("/compare/")) {
+            body = { merge_base_commit: { sha: "trusted-base" } };
+          } else if (url.pathname.includes("/git/commits/")) {
+            const revision = url.pathname.split("/").at(-1);
+
+            body = { sha: revision, tree: { sha: `${revision}-tree` } };
+          } else if (url.pathname.includes("/git/trees/")) {
+            const tree = url.pathname.split("/").at(-1);
+
+            body = {
+              sha: tree,
+              truncated: false,
+              tree:
+                tree === "head-tree"
+                  ? []
+                  : [{ path, mode: "100644", type: "blob", sha: `${tree}-blob`, size: 2_138_832 }],
+            };
+          } else if (url.pathname === "/graphql") {
+            if (request.body._tag !== "Uint8Array") throw new Error("Expected GraphQL JSON");
+
+            const query = Schema.decodeUnknownSync(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  variables: Schema.Struct({ revision: Schema.String, path: Schema.String }),
+                }),
+              ),
+            )(new TextDecoder().decode(request.body.body));
+
+            expect(query.variables.path).toBe(path);
+            classified.push(query.variables.revision);
+            body = unavailable
+              ? { errors: [{ message: "classification unavailable" }] }
+              : {
+                  data: {
+                    repository: {
+                      object: {
+                        oid: "trusted-base",
+                        file: { path, oid: "trusted-base-tree-blob", isGenerated: true },
+                      },
+                    },
+                  },
+                };
+          } else if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
+            published.push(decodePublishedReview(request));
+            body = { html_url: "https://github.test/review" };
+          } else {
+            return Effect.die(`must not read bundle contents or call a model: ${url.href}`);
+          }
+
+          return Effect.succeed(jsonResponse(request, body));
+        });
+
+        const exit = yield* runReviewAction(client, { PR_REVIEW_MODE: mode }).pipe(Effect.exit);
+
+        expect(classified).toEqual(["trusted-base"]);
+        expect(Exit.isSuccess(exit)).toBe(!unavailable);
+        expect(published).toHaveLength(1);
+        expect(published[0]?.body).toContain(reviewMarker(false, !unavailable));
+        if (!unavailable) expect(published[0]?.body).toContain("1 ignored");
+      }),
+  );
+
   it.effect("completes a binary-only PR without fetching blobs or calling a model", () =>
     Effect.gen(function* () {
       const published = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
@@ -978,7 +1064,11 @@ describe("GPT-5.6 cost estimation", () => {
   });
 });
 
-describe("exact review delta", () => {
+const noGeneratedFiles = Layer.succeed(GeneratedFileClassification, {
+  isGenerated: () => Effect.succeed(false),
+});
+
+layer(noGeneratedFiles)("exact review delta", (it) => {
   const treeSnapshot = (
     revision: string,
     files: Readonly<Record<string, string>>,
@@ -1000,6 +1090,166 @@ describe("exact review delta", () => {
         ? Effect.die(`must not hydrate ${path}`)
         : Effect.succeed(files[path] ?? ""),
   });
+
+  it.effect("keeps review capacity after exhausting generated classification requests", () =>
+    Effect.gen(function* () {
+      const generated = Array.from(
+        { length: 100 },
+        (_, index) => `generated/${String(index).padStart(3, "0")}.ts`,
+      );
+
+      const source = Array.from(
+        { length: 101 },
+        (_, index) => `src/${String(index).padStart(3, "0")}.ts`,
+      );
+
+      const paths = [...generated, ...source];
+
+      const base = treeSnapshot(
+        "base",
+        Object.fromEntries(paths.map((path) => [path, "export const value = 1;\n"])),
+        new Set(generated),
+      );
+
+      const head = treeSnapshot(
+        "head",
+        Object.fromEntries(
+          [...generated.slice(50), ...source].map((path) => [path, "export const value = 2;\n"]),
+        ),
+        new Set(generated),
+      );
+
+      const hydration = hydrateExactChanges({
+        files: paths.map((path) => file(path, undefined)),
+        changedPaths: paths,
+        base,
+        head,
+        ignore: [],
+      });
+
+      expectTypeOf<
+        Effect.Services<typeof hydration>
+      >().toEqualTypeOf<GeneratedFileClassification>();
+      expectTypeOf<Effect.Error<typeof hydration>>().toEqualTypeOf<GitHubApiFailure>();
+      const classified: Array<string> = [];
+
+      const surface = yield* hydration.pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: (path) =>
+            Effect.sync(() => {
+              classified.push(path);
+
+              return path.startsWith("generated/");
+            }),
+        }),
+      );
+
+      expect(classified).toEqual(generated);
+      expect(surface.ignoredPaths).toEqual(generated);
+      expect(surface.changes.map((change) => change.path)).toEqual(source.slice(0, 100));
+      expect(surface.unreviewedPaths).toEqual(["src/100.ts"]);
+      expect(surface.exclusions).toEqual([{ path: "src/100.ts", reason: "file-limit" }]);
+    }),
+  );
+
+  it.effect("ignores a deleted generated bundle before reading it, even after policy removal", () =>
+    Effect.gen(function* () {
+      const path = "retired-action/dist/index.mjs";
+
+      const base = treeSnapshot(
+        "trusted-base",
+        {
+          [path]: "x".repeat(2_138_832),
+          ".gitattributes": "retired-action/dist/** linguist-generated=true\n",
+        },
+        new Set([path]),
+      );
+
+      const head = treeSnapshot("head", {});
+
+      const surface = yield* hydrateExactChanges({
+        files: base.paths.map((path) => ({ ...file(path, undefined), status: "removed" })),
+        changedPaths: base.paths,
+        base,
+        head,
+        ignore: [],
+      }).pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: (candidate) => Effect.succeed(candidate === path),
+        }),
+      );
+
+      expect(surface.ignoredPaths).toEqual([path]);
+      expect(surface.unreviewedPaths).toEqual([]);
+      expect(surface.changes.map((change) => change.path)).toEqual([".gitattributes"]);
+
+      const repository = makeReviewRepository({
+        base,
+        head,
+        ignore: [],
+        unavailablePaths: surface.unavailablePaths,
+      });
+
+      expect(
+        yield* repository
+          .readFile({ path, revision: "base", startLine: 1, lineCount: 1 })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "ReviewContextError" });
+    }),
+  );
+
+  it.effect("reviews new paths, renames, and mode changes despite generated classifications", () =>
+    Effect.gen(function* () {
+      const renamed: ChangedFile = {
+        ...file("src/new.ts", undefined),
+        previousPath: "generated/old.ts",
+        status: "renamed",
+      };
+
+      const before = treeSnapshot("base", {
+        "generated/old.ts": "export const value = 1;\n",
+        "generated/mode.ts": "export const mode = 1;\n",
+      });
+
+      const after = treeSnapshot("head", {
+        "src/new.ts": "export const value = 1;\n",
+        "generated/added.ts": "export const added = 1;\n",
+        "generated/mode.ts": "export const mode = 1;\n",
+      });
+
+      const surface = yield* hydrateExactChanges({
+        files: [
+          renamed,
+          file("generated/added.ts", undefined),
+          file("generated/mode.ts", undefined),
+        ],
+        changedPaths: [...before.paths, ...after.paths],
+        base: before,
+        head: {
+          ...after,
+          entry: (path) => {
+            const entry = after.entry(path);
+
+            return path === "generated/mode.ts" && entry !== undefined
+              ? { ...entry, mode: "100755" }
+              : entry;
+          },
+        },
+        ignore: [],
+      }).pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: () => Effect.die("structural changes must remain reviewable"),
+        }),
+      );
+
+      expect(surface.ignoredPaths).toEqual([]);
+      expect(surface.changes.map((change) => change.path)).toEqual([
+        "generated/added.ts",
+        "generated/mode.ts",
+        "src/new.ts",
+      ]);
+    }),
+  );
 
   it.effect("hydrates a provider-declared pure rename as one bounded old-to-new patch", () =>
     Effect.gen(function* () {
