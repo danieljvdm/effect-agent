@@ -32,3 +32,5 @@ export * from "./do-storage-config.ts";
 export * from "./do-storage-failpoint.ts";
 export * from "./port-protocol.ts";
 export * from "./routing.ts";
+export * from "./do-memory-store.ts";
+export * from "./memory-protocol.ts";

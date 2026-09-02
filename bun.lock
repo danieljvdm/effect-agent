@@ -63,6 +63,28 @@
         "wrangler": "catalog:",
       },
     },
+    "examples/cloudflare-memory": {
+      "name": "@effect-agent/example-cloudflare-memory",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/capabilities": "workspace:*",
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect-agent/storage-cloudflare": "workspace:*",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+        "effect-cf": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "catalog:",
+        "@types/node": "catalog:",
+        "esbuild": "catalog:",
+        "miniflare": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+        "wrangler": "catalog:",
+      },
+    },
     "examples/code-mode-cloudflare": {
       "name": "@effect-agent/example-code-mode-cloudflare",
       "version": "0.0.0",
@@ -249,7 +271,7 @@
     },
     "packages/capabilities": {
       "name": "@effect-agent/capabilities",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -268,7 +290,7 @@
     },
     "packages/core": {
       "name": "@effect-agent/core",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -280,7 +302,7 @@
     },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -297,7 +319,7 @@
     },
     "packages/engine": {
       "name": "@effect-agent/engine",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
       },
@@ -313,7 +335,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -351,7 +373,7 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -373,7 +395,7 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -406,7 +428,7 @@
     },
     "packages/sandbox": {
       "name": "@effect-agent/sandbox",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -418,7 +440,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/sandbox": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -436,8 +458,9 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
+        "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
@@ -458,7 +481,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -476,7 +499,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -495,7 +518,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -520,7 +543,7 @@
     },
     "packages/thread": {
       "name": "@effect-agent/thread",
-      "version": "0.1.0-beta.39",
+      "version": "0.1.0-beta.40",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -815,6 +838,8 @@
     "@effect-agent/engine": ["@effect-agent/engine@workspace:packages/engine"],
 
     "@effect-agent/example-browser-run-worker-proof": ["@effect-agent/example-browser-run-worker-proof@workspace:examples/browser-run-worker-proof"],
+
+    "@effect-agent/example-cloudflare-memory": ["@effect-agent/example-cloudflare-memory@workspace:examples/cloudflare-memory"],
 
     "@effect-agent/example-code-mode-cloudflare": ["@effect-agent/example-code-mode-cloudflare@workspace:examples/code-mode-cloudflare"],
 

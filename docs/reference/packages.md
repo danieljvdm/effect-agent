@@ -151,6 +151,9 @@ Accepts injected Object handles without importing `cloudflare:workers`.
 Rejects incompatible stored versions; `CurrentDoStorageVersion` identifies the supported version.
 Failpoints and eviction helpers are in `@effect-agent/storage-cloudflare/testing`.
 
+`doMemoryStoreLayer` supplies optional memory ports using storage-backed SQLite transactions.
+The separate memory protocol defines bounded batch requests, responses, and typed errors.
+
 ### `@effect-agent/platform-cloudflare`
 
 Assembles the durable host, RPC client, alarms, and Code Mode executor.
@@ -158,6 +161,9 @@ See the [Cloudflare guide](../platforms/cloudflare) for bindings, service lifeti
 The [Code Mode guide](../guide/code-mode#run-generated-code-on-cloudflare) covers the independent
 Dynamic Worker executor and Worker Loader binding.
 `ThreadObject.Options.toolFailureObserver` installs a local tool-failure observer.
+
+`makeMemoryObjectClass` and `makeCloudflareMemoryClient` share namespace-owned memory across
+Threads, with one authoritative batch RPC per recall. See [shared memory](../platforms/cloudflare#shared-memory).
 
 Browser adapters use separate imports:
 

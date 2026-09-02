@@ -151,6 +151,118 @@ For updates, call `readPage`, then `awaitProgress`, then read after the last rec
 Scope progress waits so interruption cancels them remotely.
 Expose these Effects through your application's HTTP or RPC API.
 
+## Shared memory {#shared-memory}
+
+Memory is optional and belongs in a separate SQLite Durable Object per host-selected
+`MemoryNamespace`, not in a Thread Object. Multiple Threads and application ingestion jobs can
+use the same owner. Canonical Thread history, extraction, and scheduling remain separate.
+
+The [compiling setup](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/memory.ts) defines a namespace,
+owner authorization Layer, `ProjectMemory` class, and conditional update caller. Register the class:
+
+```jsonc
+{
+  "durable_objects": {
+    "bindings": [{ "name": "MEMORIES", "class_name": "ProjectMemory" }],
+  },
+  "exports": {
+    "ProjectMemory": { "type": "durable-object", "storage": "sqlite" },
+  },
+}
+```
+
+Add `@effect-agent/storage-cloudflare` and `@effect-agent/capabilities` alongside the packages above.
+The owner assembles `doMemoryStoreLayerWithFailpoints` with `SqliteClient.layer({ storage: ctx.storage })`.
+Its storage-backed transaction commits the revision and operation receipt together. Local users can
+instead provide `doMemoryStoreLayer(ctx.storage)` directly. Neither path imports Node storage.
+
+Bind the namespace and principal in authenticated host code. Never accept them from model output:
+
+```ts twoslash
+// @types: @cloudflare/workers-types
+import {
+  MemoryAccess,
+  MemoryLookup,
+  MemoryNamespace,
+  MemoryRecallLimits,
+} from "@effect-agent/core";
+import { recallMemory } from "@effect-agent/capabilities";
+import {
+  makeCloudflareMemoryClient,
+  MemoryObjectNamespace,
+  type MemoryObjectRpc,
+} from "@effect-agent/platform-cloudflare";
+import { Effect, Schema } from "effect";
+
+const Projects = MemoryNamespace.define({
+  name: "app/projects",
+  version: 1,
+  identity: Schema.String,
+});
+const access = MemoryAccess.make({
+  namespace: Projects.make("authorized-project"),
+  scope: "project",
+});
+const limits = MemoryRecallLimits.make({
+  maxSources: 16,
+  maxItems: 32,
+  maxBytes: 32000,
+  maxTokens: 32000,
+  maxInputBytes: 1000000,
+  timeoutMillis: 5000,
+});
+
+export const recall = (
+  binding: DurableObjectNamespace<MemoryObjectRpc>,
+  candidates: MemoryLookup,
+) =>
+  Effect.gen(function* () {
+    const client = yield* makeCloudflareMemoryClient(access, "authenticated-principal");
+    return yield* recallMemory(
+      [{ id: "project", essential: true, read: client.revalidate(candidates, limits) }],
+      limits,
+    );
+  }).pipe(Effect.provideService(MemoryObjectNamespace, { namespace: binding }));
+```
+
+One `revalidate` sends all admitted candidates in one RPC to `namespace.address`. The owner verifies
+its name, request namespace, principal, and scope; it then reads each distinct source locally once.
+Passage ordering and authoritative attribution survive the round trip. `recallMemory` applies the
+final rendered item, byte, and token budgets on the caller. Oversized batches fail typed and are never
+split into per-document calls. There is deliberately no remote per-document `MemoryReader` Layer.
+
+For an external semantic index, call `client.revalidateSemantic(search, profile, limits)` with its
+`MemoryIndexSearch` result. Embedding and search stay application-owned. This one RPC checks current
+generation, revision, locator, exact UTF-8 ranges, scope, and withdrawal before returning `result.lookup`.
+Stale scored candidates are omitted. Ordinary cached lookup revalidation instead replaces stale text
+with the current document, matching local recall. Neither path trusts cached attribution.
+
+Default owner limits are 16 distinct sources, 1 MiB encoded request, 4 MiB encoded response,
+16 MiB revalidation input, and a 10-second deadline. `makeMemoryObjectClass` accepts `rpcLimits` and
+`storageLimits`. Storage defaults cap encoded rows at 1,900,000 bytes, 10,000 documents, 100,000
+operation receipts, and 512 MiB of conservatively accounted row data. SQLite page/index overhead is
+not included. Tombstones and receipts count toward capacity; there is no automatic pruning. A
+replacement conservatively charges both the old and new document while admitting the write.
+
+Expected failures cross RPC in Schema-defined envelopes. `MemoryRpcError` distinguishes denied,
+protocol, budget, timeout, and unavailable failures; source and write errors retain their domain tags.
+`cloudflareMemoryWriterLayer(access, principal)` adapts the client for an application's committed
+activity destination, preserving domain errors and mapping transport failures to `MemoryStorageError`.
+The application still owns invoking `processCommittedActivity` and persisting its progress.
+
+Successful writes are visible to checks begun afterward. Already captured views may finish.
+Caller interruption stops waiting but does not promise remote cancellation; the owner enforces its
+own deadline and finalizes request-scoped work. A failed or timed-out write may have committed.
+Retry only its identical operation ID and command to recover the original receipt. Changed commands
+with the same ID fail; withdrawal is terminal. Owner eviction preserves SQLite records and receipts.
+
+Named Effect spans cover calls and local validation without adding source text, private namespace
+values, or metadata to span attributes. Keep RPC bindings private and audit host authorization.
+
+The [opt-in deployed benchmark](https://github.com/danieljvdm/effect-agent/tree/main/examples/cloudflare-memory) measures 1, 4, 8, and
+16 sources plus duplicate-heavy candidates, with separate validation-RPC and full-recall durations.
+Local SQLite and workerd runs do not establish deployed latency.
+
 ## Recovery and limits
 
 Alarms recover pending work after eviction without another user request.

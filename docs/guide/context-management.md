@@ -492,6 +492,8 @@ units. `memoryStoreLayerWithFailpoints` accepts a `MemoryMutationFailpoint` serv
 and lost-acknowledgement tests. Replayed receipts must match their original command's predecessor,
 result kind, content, locator, scopes, and withdrawal reason; mismatches fail as corrupt data.
 Recall and validation helpers add named Effect spans without source text or metadata annotations.
+For shared Worker memory, use the [Cloudflare memory owner](../platforms/cloudflare#shared-memory).
+It validates an entire candidate batch locally and returns one attributed response over one RPC.
 `RecalledMemory.outcomes` reports source availability and selected, deduplicated, and omitted counts;
 the host decides which diagnostics to retain and who can inspect them.
 

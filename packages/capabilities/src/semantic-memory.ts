@@ -1,19 +1,19 @@
 import {
   type MemoryNamespace,
   MemoryDocument,
-  type MemoryIndexCandidate,
   MemoryIndexError,
   MemoryIndexQuery,
   MemoryIndexSearch,
   MemoryIndexSource,
   MemoryKey,
   MemoryLookup,
-  MemoryPassage,
   MemoryReader,
   MemoryStorageError,
   SemanticMemoryChunk,
   SemanticMemoryIndex,
   SemanticMemoryProfile,
+  SemanticMemoryError,
+  revalidateSemanticMemoryCandidates,
 } from "@effect-agent/core";
 import { Clock, Crypto, Effect, Encoding, Schema } from "effect";
 import { EmbeddingModel } from "effect/unstable/ai";
@@ -23,20 +23,7 @@ import { MemoryAccess } from "./memory-lifecycle.ts";
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const InputTokens = Schema.NullOr(Schema.Natural);
 
-export class SemanticMemoryError extends Schema.TaggedError<SemanticMemoryError>()(
-  "SemanticMemoryError",
-  {
-    operation: Schema.NonEmptyString,
-    reason: Schema.Literals([
-      "invalid-input",
-      "invalid-embedding",
-      "budget",
-      "timeout",
-      "source-changed",
-      "unavailable",
-    ]),
-  },
-) {}
+export { SemanticMemoryError } from "@effect-agent/core";
 
 export class SemanticIndexLimits extends Schema.Class<SemanticIndexLimits>(
   "@effect-agent/capabilities/SemanticIndexLimits",
@@ -386,102 +373,14 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
           ),
         ),
       );
-    if (
-      found.candidates.length > checkedLimits.maxCandidates ||
-      found.scannedChunks > checkedLimits.maxScannedChunks ||
-      found.scannedChunks < found.candidates.length
-    ) {
-      return yield* MemoryIndexError.make({
-        operation: "validate candidate bounds",
-        reason: "corrupt",
-      });
-    }
-    const groups = new Map<
-      string,
-      {
-        readonly key: MemoryKey;
-        readonly candidates: Array<{
-          readonly rank: number;
-          readonly candidate: MemoryIndexCandidate;
-        }>;
-      }
-    >();
-    const rankedPassages: Array<{ readonly rank: number; readonly passage: MemoryPassage }> = [];
-    let staleExcluded = 0;
-    let unauthorizedExcluded = 0;
-    for (const [rank, candidate] of found.candidates.entries()) {
-      if (
-        candidate.key.namespace.address !== checkedAccess.namespace.address ||
-        candidate.source.id !== candidate.key.id ||
-        candidate.score < checkedLimits.minScore
-      ) {
-        return yield* MemoryIndexError.make({
-          operation: "validate candidate identity",
-          reason: "corrupt",
-        });
-      }
-      const group = groups.get(candidate.key.id);
-      if (group === undefined) {
-        groups.set(candidate.key.id, { key: candidate.key, candidates: [{ rank, candidate }] });
-      } else group.candidates.push({ rank, candidate });
-    }
-    const maxSourceBytes = checkedLimits.maxSourceBytes ?? 16_777_216;
-    let sourceBytes = 0;
-    for (const group of groups.values()) {
-      yield* Effect.yieldNow;
-      const document = yield* readDocument(group.key);
-      if (document === null || document._tag === "WithdrawnMemoryDocument") {
-        staleExcluded += group.candidates.length;
-        continue;
-      }
-      if (!document.scopes.includes(checkedAccess.scope)) {
-        unauthorizedExcluded += group.candidates.length;
-        continue;
-      }
-      const current = group.candidates.filter(
-        ({ candidate }) =>
-          document.generation === candidate.sourceGeneration &&
-          document.source.revision === candidate.source.revision &&
-          document.source.locator === candidate.source.locator,
-      );
-      staleExcluded += group.candidates.length - current.length;
-      if (current.length === 0) continue;
-      const encoded = JSON.stringify(document);
-      const remainingSourceBytes = maxSourceBytes - sourceBytes;
-      const encodedBytes = encoded.length <= remainingSourceBytes ? byteLength(encoded) : undefined;
-      if (encodedBytes === undefined || encodedBytes > remainingSourceBytes) {
-        return yield* SemanticMemoryError.make({
-          operation: "query source bytes",
-          reason: "budget",
-        });
-      }
-      sourceBytes += encodedBytes;
-      const encodedDocument = Encoding.encodeHex(document.content.text);
-      for (const { rank, candidate } of current) {
-        if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
-          staleExcluded += 1;
-          continue;
-        }
-        rankedPassages.push({
-          rank,
-          passage: MemoryPassage.make({
-            version: 1,
-            authority: checkedAccess.namespace.address,
-            source: document.source,
-            passageId: candidate.passageId,
-            content: { ...document.content, text: candidate.text },
-          }),
-        });
-      }
-    }
-    const passages = rankedPassages
-      .sort((left, right) => left.rank - right.rank)
-      .map(({ passage }) => passage);
+    const validated = yield* revalidateSemanticMemoryCandidates(
+      found,
+      checkedAccess,
+      profile,
+      checkedLimits,
+    );
     return SemanticQueryResult.make({
-      lookup: passages.length === 0 ? { _tag: "NoMatch" } : { _tag: "Found", passages },
-      scannedChunks: found.scannedChunks,
-      staleExcluded,
-      unauthorizedExcluded,
+      ...validated,
       queryBytes,
       inputTokens: response.usage.inputTokens ?? null,
       startedAt,
@@ -496,21 +395,3 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
     }),
   );
 });
-
-const sameExcerpt = (
-  encodedDocument: string,
-  candidate: {
-    readonly startByte: number;
-    readonly endByte: number;
-    readonly text: string;
-  },
-  maxChunkBytes: number,
-): boolean => {
-  const hex = Encoding.encodeHex(candidate.text);
-  return (
-    candidate.startByte < candidate.endByte &&
-    hex.length / 2 === candidate.endByte - candidate.startByte &&
-    hex.length / 2 <= maxChunkBytes &&
-    encodedDocument.slice(candidate.startByte * 2, candidate.endByte * 2) === hex
-  );
-};

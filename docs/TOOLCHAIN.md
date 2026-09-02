@@ -43,6 +43,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | ----------------------------------- | ----------------------------------------------------- |
 | `packages/*`                        | Framework and private PR-review integration packages  |
 | `examples/demo`                     | Local browser app                                     |
+| `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
 | `examples/providers`                | Provider bindings and persistent-history example      |
 | `examples/pr-work-orders`           | Trusted local work-order implementation               |
 | `examples/pr-work-order-ingress`    | GitHub dispatch and isolated publication              |

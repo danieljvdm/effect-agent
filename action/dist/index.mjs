@@ -32881,6 +32881,94 @@ var applyMemoryWrite = exports_Effect.fn("applyMemoryWrite")(function* (current,
   const document = yield* exports_Schema.decodeUnknownEffect(MemoryDocument.Wire)(next).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "memory transition", reason: "invalid-input" })));
   return yield* MemoryDocument.restore(write2.key.namespace, document);
 });
+// packages/core/src/memory-revalidation.ts
+var RevalidationLimits = exports_Schema.Struct({
+  maxInputBytes: MemoryRecallLimits.fields.maxInputBytes,
+  maxSourceBytes: MemoryRecallLimits.fields.maxInputBytes
+});
+
+class MemoryAccessWire extends exports_Schema.Class("@effect-agent/capabilities/MemoryAccess")({
+  namespace: MemoryKey.Wire.fields.namespace,
+  scope: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024))
+}) {
+}
+var MemoryAccess = {
+  Wire: MemoryAccessWire,
+  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryAccessWire)(fields), {
+    namespace: fields.namespace
+  })
+};
+var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(function* (lookup2, access3, limits = {}) {
+  const decodedLimits = yield* exports_Schema.decodeUnknownEffect(RevalidationLimits)(limits).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid revalidation limits" })));
+  const decodedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess.Wire)(access3).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" })));
+  const decoded = yield* exports_Schema.decodeUnknownEffect(MemoryLookup)(lookup2).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Malformed memory candidates" })));
+  if (decoded._tag !== "Found")
+    return decoded;
+  const reader = yield* MemoryReader;
+  const groups = new Map;
+  for (const [index2, candidate] of decoded.passages.entries()) {
+    const group2 = groups.get(candidate.source.id);
+    if (group2 === undefined)
+      groups.set(candidate.source.id, [{ candidate, index: index2 }]);
+    else
+      group2.push({ candidate, index: index2 });
+  }
+  const passages = [];
+  const maxInputBytes = decodedLimits.maxInputBytes ?? 16777216;
+  let inputBytes = 0;
+  let sourceBytes = 0;
+  for (const [sourceId, group2] of groups) {
+    yield* exports_Effect.yieldNow;
+    const key = MemoryKey.make({ namespace: decodedAccess.namespace, id: sourceId });
+    const document = yield* reader.get(key).pipe(exports_Effect.flatMap((value4) => exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument.Wire))(value4).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" })))));
+    if (document !== null && (document.key.namespace.address !== key.namespace.address || document.key.id !== key.id || document.source.id !== key.id)) {
+      return yield* MemoryStorageError.make({
+        operation: "validate source identity",
+        reason: "corrupt"
+      });
+    }
+    if (document === null || document._tag === "WithdrawnMemoryDocument" || !document.scopes.includes(decodedAccess.scope))
+      continue;
+    if (decodedLimits.maxSourceBytes !== undefined) {
+      sourceBytes += exports_Encoding.encodeHex(JSON.stringify(document)).length / 2;
+      if (sourceBytes > decodedLimits.maxSourceBytes)
+        return yield* MemoryRecallError.make({
+          reason: "budget",
+          sourceId,
+          message: "Authoritative memory source byte budget exceeded"
+        });
+    }
+    for (const { candidate, index: index2 } of group2) {
+      const sameExcerpt = document.source.revision === candidate.source.revision && document.content.text.includes(candidate.content.text);
+      const passage = MemoryPassage.make({
+        version: 1,
+        authority: decodedAccess.namespace.address,
+        source: document.source,
+        passageId: sameExcerpt ? candidate.passageId : "document",
+        content: {
+          ...document.content,
+          text: sameExcerpt ? candidate.content.text : document.content.text
+        }
+      });
+      const encoded = JSON.stringify(passage);
+      const remaining2 = maxInputBytes - inputBytes;
+      const encodedBytes = encoded.length <= remaining2 ? exports_Encoding.encodeHex(encoded).length / 2 : undefined;
+      if (encodedBytes === undefined || encodedBytes > remaining2) {
+        return yield* MemoryRecallError.make({
+          reason: "budget",
+          sourceId,
+          message: "Revalidated memory input encoding budget exceeded"
+        });
+      }
+      inputBytes += encodedBytes;
+      passages.push({ passage, index: index2 });
+    }
+  }
+  return passages.length === 0 ? { _tag: "NoMatch" } : {
+    _tag: "Found",
+    passages: passages.sort((left, right) => left.index - right.index).map(({ passage }) => passage)
+  };
+});
 // packages/core/src/semantic-memory.ts
 var Identity3 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
 var Positive = exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
@@ -33011,6 +33099,137 @@ class SemanticMemoryIndex extends exports_Context.Service()("@effect-agent/core/
     };
   }
 }
+// packages/core/src/semantic-memory-revalidation.ts
+class SemanticMemoryError extends exports_Schema.TaggedError()("SemanticMemoryError", {
+  operation: exports_Schema.NonEmptyString,
+  reason: exports_Schema.Literals([
+    "invalid-input",
+    "invalid-embedding",
+    "budget",
+    "timeout",
+    "source-changed",
+    "unavailable"
+  ])
+}) {
+}
+
+class SemanticCandidateLimits extends exports_Schema.Class("@effect-agent/core/SemanticCandidateLimits")({
+  maxCandidates: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 128 })),
+  maxScannedChunks: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 65536 })),
+  maxSourceBytes: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 67108864 }))),
+  minScore: exports_Schema.Finite.check(exports_Schema.isBetween({ minimum: -1, maximum: 1 }))
+}) {
+}
+
+class SemanticCandidateResult extends exports_Schema.Class("@effect-agent/core/SemanticCandidateResult")({
+  lookup: MemoryLookup,
+  scannedChunks: exports_Schema.Natural,
+  staleExcluded: exports_Schema.Natural,
+  unauthorizedExcluded: exports_Schema.Natural
+}) {
+}
+var byteLength = (text2) => exports_Encoding.encodeHex(text2).length / 2;
+var readDocument = exports_Effect.fn("semanticCandidates.readDocument")(function* (key) {
+  const reader = yield* MemoryReader;
+  const document = yield* reader.get(key).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument.Wire))), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryStorageError.make({ operation: "validate semantic source", reason: "corrupt" }))));
+  if (document !== null && (document.key.namespace.address !== key.namespace.address || document.key.id !== key.id || document.source.id !== key.id))
+    return yield* MemoryStorageError.make({
+      operation: "validate semantic source identity",
+      reason: "corrupt"
+    });
+  return document;
+});
+var revalidateSemanticMemoryCandidates = exports_Effect.fn("revalidateSemanticMemoryCandidates")(function* (found, access3, profile, limits) {
+  const input = yield* exports_Schema.decodeUnknownEffect(exports_Schema.Struct({
+    found: MemoryIndexSearch.Wire,
+    access: MemoryAccess.Wire,
+    profile: SemanticMemoryProfile,
+    limits: SemanticCandidateLimits
+  }))({ found, access: access3, profile, limits }).pipe(exports_Effect.mapError(() => MemoryIndexError.make({ operation: "validate candidates", reason: "corrupt" })));
+  found = input.found;
+  access3 = input.access;
+  profile = input.profile;
+  limits = input.limits;
+  if (found.candidates.length > limits.maxCandidates || found.scannedChunks > limits.maxScannedChunks || found.scannedChunks < found.candidates.length) {
+    return yield* MemoryIndexError.make({
+      operation: "validate candidate bounds",
+      reason: "corrupt"
+    });
+  }
+  const groups = new Map;
+  const rankedPassages = [];
+  let staleExcluded = 0;
+  let unauthorizedExcluded = 0;
+  for (const [rank, candidate] of found.candidates.entries()) {
+    if (candidate.key.namespace.address !== access3.namespace.address || candidate.source.id !== candidate.key.id || candidate.score < limits.minScore) {
+      return yield* MemoryIndexError.make({
+        operation: "validate candidate identity",
+        reason: "corrupt"
+      });
+    }
+    const group2 = groups.get(candidate.key.id);
+    if (group2 === undefined) {
+      groups.set(candidate.key.id, { key: candidate.key, candidates: [{ rank, candidate }] });
+    } else
+      group2.candidates.push({ rank, candidate });
+  }
+  const maxSourceBytes = limits.maxSourceBytes ?? 16777216;
+  let sourceBytes = 0;
+  for (const group2 of groups.values()) {
+    yield* exports_Effect.yieldNow;
+    const document = yield* readDocument(group2.key);
+    if (document === null || document._tag === "WithdrawnMemoryDocument") {
+      staleExcluded += group2.candidates.length;
+      continue;
+    }
+    if (!document.scopes.includes(access3.scope)) {
+      unauthorizedExcluded += group2.candidates.length;
+      continue;
+    }
+    const current = group2.candidates.filter(({ candidate }) => document.generation === candidate.sourceGeneration && document.source.revision === candidate.source.revision && document.source.locator === candidate.source.locator);
+    staleExcluded += group2.candidates.length - current.length;
+    if (current.length === 0)
+      continue;
+    const encoded = JSON.stringify(document);
+    const remainingSourceBytes = maxSourceBytes - sourceBytes;
+    const encodedBytes = encoded.length <= remainingSourceBytes ? byteLength(encoded) : undefined;
+    if (encodedBytes === undefined || encodedBytes > remainingSourceBytes) {
+      return yield* SemanticMemoryError.make({
+        operation: "query source bytes",
+        reason: "budget"
+      });
+    }
+    sourceBytes += encodedBytes;
+    const encodedDocument = exports_Encoding.encodeHex(document.content.text);
+    for (const { rank, candidate } of current) {
+      if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
+        staleExcluded += 1;
+        continue;
+      }
+      rankedPassages.push({
+        rank,
+        passage: MemoryPassage.make({
+          version: 1,
+          authority: access3.namespace.address,
+          source: document.source,
+          passageId: candidate.passageId,
+          content: { ...document.content, text: candidate.text }
+        })
+      });
+    }
+  }
+  const passages = rankedPassages.sort((left, right) => left.rank - right.rank).map(({ passage }) => passage);
+  return SemanticCandidateResult.make({
+    lookup: passages.length === 0 ? { _tag: "NoMatch" } : { _tag: "Found", passages },
+    scannedChunks: found.scannedChunks,
+    staleExcluded,
+    unauthorizedExcluded
+  });
+});
+var sameExcerpt = (encodedDocument, candidate, maxChunkBytes) => {
+  const hex2 = exports_Encoding.encodeHex(candidate.text);
+  return candidate.startByte < candidate.endByte && hex2.length / 2 === candidate.endByte - candidate.startByte && hex2.length / 2 <= maxChunkBytes && encodedDocument.slice(candidate.startByte * 2, candidate.endByte * 2) === hex2;
+};
 // packages/core/src/run-policy-usage.ts
 var RunPolicyUsage = exports_Schema.Struct({
   committedTurns: exports_Schema.Natural,
@@ -36799,8 +37018,8 @@ var intrinsicArrayBufferByteLength = (value4) => {
   if (arrayBufferByteLengthGetter === undefined)
     return;
   try {
-    const byteLength = Reflect.apply(arrayBufferByteLengthGetter, value4, []);
-    return Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : undefined;
+    const byteLength2 = Reflect.apply(arrayBufferByteLengthGetter, value4, []);
+    return Number.isSafeInteger(byteLength2) && byteLength2 >= 0 ? byteLength2 : undefined;
   } catch {
     return;
   }
@@ -36909,8 +37128,8 @@ var boundedValueFootprint = (root, maxBytes, knownSafePrototypes = new Set, maxD
         if (ArrayBuffer.isView(value4)) {
           if (!intrinsicViewPrototypes.has(prototype))
             return false;
-          const byteLength = intrinsicViewBackingByteLength(value4);
-          if (byteLength === undefined || !add5(byteLength))
+          const byteLength2 = intrinsicViewBackingByteLength(value4);
+          if (byteLength2 === undefined || !add5(byteLength2))
             return false;
           if (prototype !== DataView.prototype) {
             const length = intrinsicTypedArrayLength(value4);
@@ -44273,98 +44492,9 @@ var recallMemory = exports_Effect.fn("recallMemory")(function* (sources, limits,
     orElse: () => exports_Effect.fail(MemoryRecallError.make({ reason: "timeout", message: "Recall deadline exceeded" }))
   }));
 });
-// packages/capabilities/src/memory-lifecycle.ts
-var RevalidationLimits = exports_Schema.Struct({
-  maxInputBytes: MemoryRecallLimits.fields.maxInputBytes
-});
-
-class MemoryAccessWire extends exports_Schema.Class("@effect-agent/capabilities/MemoryAccess")({
-  namespace: MemoryKey.Wire.fields.namespace,
-  scope: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1024))
-}) {
-}
-var MemoryAccess = {
-  Wire: MemoryAccessWire,
-  make: (fields) => Object.assign(exports_Schema.decodeUnknownSync(MemoryAccessWire)(fields), {
-    namespace: fields.namespace
-  })
-};
-var revalidateMemoryLookup = exports_Effect.fn("revalidateMemoryLookup")(function* (lookup2, access3, limits = {}) {
-  const decodedLimits = yield* exports_Schema.decodeUnknownEffect(RevalidationLimits)(limits).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid revalidation limits" })));
-  const decodedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess.Wire)(access3).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" })));
-  const decoded = yield* exports_Schema.decodeUnknownEffect(MemoryLookup)(lookup2).pipe(exports_Effect.mapError(() => MemoryRecallError.make({ reason: "invalid-input", message: "Malformed memory candidates" })));
-  if (decoded._tag !== "Found")
-    return decoded;
-  const reader = yield* MemoryReader;
-  const groups = new Map;
-  for (const [index2, candidate] of decoded.passages.entries()) {
-    const group2 = groups.get(candidate.source.id);
-    if (group2 === undefined)
-      groups.set(candidate.source.id, [{ candidate, index: index2 }]);
-    else
-      group2.push({ candidate, index: index2 });
-  }
-  const passages = [];
-  const maxInputBytes = decodedLimits.maxInputBytes ?? 16777216;
-  let inputBytes = 0;
-  for (const [sourceId, group2] of groups) {
-    const key = MemoryKey.make({ namespace: decodedAccess.namespace, id: sourceId });
-    const document = yield* reader.get(key).pipe(exports_Effect.flatMap((value4) => exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument.Wire))(value4).pipe(exports_Effect.mapError(() => MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" })))));
-    if (document !== null && (document.key.namespace.address !== key.namespace.address || document.key.id !== key.id || document.source.id !== key.id)) {
-      return yield* MemoryStorageError.make({
-        operation: "validate source identity",
-        reason: "corrupt"
-      });
-    }
-    if (document === null || document._tag === "WithdrawnMemoryDocument" || !document.scopes.includes(decodedAccess.scope))
-      continue;
-    for (const { candidate, index: index2 } of group2) {
-      const sameExcerpt = document.source.revision === candidate.source.revision && document.content.text.includes(candidate.content.text);
-      const passage = MemoryPassage.make({
-        version: 1,
-        authority: decodedAccess.namespace.address,
-        source: document.source,
-        passageId: sameExcerpt ? candidate.passageId : "document",
-        content: {
-          ...document.content,
-          text: sameExcerpt ? candidate.content.text : document.content.text
-        }
-      });
-      const encoded = JSON.stringify(passage);
-      const remaining2 = maxInputBytes - inputBytes;
-      const encodedBytes3 = encoded.length <= remaining2 ? exports_Encoding.encodeHex(encoded).length / 2 : undefined;
-      if (encodedBytes3 === undefined || encodedBytes3 > remaining2) {
-        return yield* MemoryRecallError.make({
-          reason: "budget",
-          sourceId,
-          message: "Revalidated memory input encoding budget exceeded"
-        });
-      }
-      inputBytes += encodedBytes3;
-      passages.push({ passage, index: index2 });
-    }
-  }
-  return passages.length === 0 ? { _tag: "NoMatch" } : {
-    _tag: "Found",
-    passages: passages.sort((left, right) => left.index - right.index).map(({ passage }) => passage)
-  };
-});
 // packages/capabilities/src/semantic-memory.ts
 var Timestamp4 = exports_Schema.Finite.check(exports_Schema.isGreaterThanOrEqualTo(0));
 var InputTokens = exports_Schema.NullOr(exports_Schema.Natural);
-
-class SemanticMemoryError extends exports_Schema.TaggedError()("SemanticMemoryError", {
-  operation: exports_Schema.NonEmptyString,
-  reason: exports_Schema.Literals([
-    "invalid-input",
-    "invalid-embedding",
-    "budget",
-    "timeout",
-    "source-changed",
-    "unavailable"
-  ])
-}) {
-}
 
 class SemanticIndexLimits extends exports_Schema.Class("@effect-agent/capabilities/SemanticIndexLimits")({
   maxSourceBytes: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 4194304 })),
@@ -44415,7 +44545,7 @@ var utf82 = (text2) => {
   const hex2 = exports_Encoding.encodeHex(text2);
   return Uint8Array.from({ length: hex2.length / 2 }, (_, index2) => Number.parseInt(hex2.slice(index2 * 2, index2 * 2 + 2), 16));
 };
-var byteLength = (text2) => exports_Encoding.encodeHex(text2).length / 2;
+var byteLength2 = (text2) => exports_Encoding.encodeHex(text2).length / 2;
 var invalid2 = (operation) => SemanticMemoryError.make({ operation, reason: "invalid-input" });
 var asSource = (document) => MemoryIndexSource.make({
   key: document.key,
@@ -44423,7 +44553,7 @@ var asSource = (document) => MemoryIndexSource.make({
   sourceGeneration: document.generation
 });
 var sameSource = (left, right) => left.key.namespace.address === right.key.namespace.address && left.key.id === right.key.id && left.generation === right.generation && left.source.revision === right.source.revision && left.source.locator === right.source.locator && left._tag === right._tag;
-var readDocument = exports_Effect.fn("semanticMemory.readDocument")(function* (key) {
+var readDocument2 = exports_Effect.fn("semanticMemory.readDocument")(function* (key) {
   const reader = yield* MemoryReader;
   const document = yield* reader.get(key).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(exports_Schema.NullOr(MemoryDocument.Wire))), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryStorageError.make({ operation: "validate semantic source", reason: "corrupt" }))));
   if (document !== null && (document.key.namespace.address !== key.namespace.address || document.key.id !== key.id || document.source.id !== key.id)) {
@@ -44450,7 +44580,7 @@ var embeddings = exports_Effect.fn("semanticMemory.embeddings")(function* (input
   return response;
 });
 var chunkText = exports_Effect.fn("semanticMemory.chunkText")(function* (text2, profile, limits) {
-  if (byteLength(text2) > limits.maxSourceBytes) {
+  if (byteLength2(text2) > limits.maxSourceBytes) {
     return yield* SemanticMemoryError.make({ operation: "chunk source", reason: "budget" });
   }
   const chunks2 = [];
@@ -44458,7 +44588,7 @@ var chunkText = exports_Effect.fn("semanticMemory.chunkText")(function* (text2, 
   let startByte = 0;
   let currentBytes = 0;
   for (const codepoint of text2) {
-    const size9 = byteLength(codepoint);
+    const size9 = byteLength2(codepoint);
     if (currentBytes + size9 > profile.maxChunkBytes) {
       chunks2.push({
         ordinal: chunks2.length,
@@ -44495,7 +44625,7 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
     const startedAt = yield* exports_Clock.currentTimeMillis;
     const index2 = yield* SemanticMemoryIndex;
     const profile = yield* exports_Schema.decodeUnknownEffect(SemanticMemoryProfile)(index2.profile).pipe(exports_Effect.mapError(() => invalid2("index profile")));
-    const document = yield* readDocument(checkedKey);
+    const document = yield* readDocument2(checkedKey);
     if (document === null || document._tag === "WithdrawnMemoryDocument") {
       if (document !== null)
         yield* index2.withdraw(asSource(document));
@@ -44528,7 +44658,7 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
         vector: [...vector]
       }));
     }
-    const latest = yield* readDocument(checkedKey);
+    const latest = yield* readDocument2(checkedKey);
     if (latest === null || !sameSource(document, latest)) {
       if (latest?._tag === "WithdrawnMemoryDocument")
         yield* index2.withdraw(asSource(latest));
@@ -44542,7 +44672,7 @@ var indexMemorySource = exports_Effect.fn("indexMemorySource")(function* (key, l
       key: checkedKey,
       status: "Indexed",
       embeddedChunks: chunks2.length,
-      embeddedBytes: byteLength(document.content.text),
+      embeddedBytes: byteLength2(document.content.text),
       inputTokens: response.usage.inputTokens ?? null,
       startedAt,
       finishedAt: yield* exports_Clock.currentTimeMillis
@@ -44556,7 +44686,7 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
   const checkedQuery = yield* exports_Schema.decodeUnknownEffect(exports_Schema.NonEmptyString)(query).pipe(exports_Effect.mapError(() => invalid2("query text")));
   const checkedAccess = yield* exports_Schema.decodeUnknownEffect(MemoryAccess.Wire)(access3).pipe(exports_Effect.mapError(() => invalid2("query access")));
   const checkedLimits = yield* exports_Schema.decodeUnknownEffect(SemanticQueryLimits)(limits).pipe(exports_Effect.mapError(() => invalid2("query limits")));
-  const queryBytes = byteLength(checkedQuery);
+  const queryBytes = byteLength2(checkedQuery);
   if (queryBytes > checkedLimits.maxQueryBytes)
     return yield* SemanticMemoryError.make({ operation: "query bytes", reason: "budget" });
   return yield* exports_Effect.gen(function* () {
@@ -44577,80 +44707,9 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
       minScore: checkedLimits.minScore,
       maxScannedChunks: checkedLimits.maxScannedChunks
     })).pipe(exports_Effect.flatMap(exports_Schema.decodeUnknownEffect(MemoryIndexSearch.Wire)), exports_Effect.catchTag("SchemaError", () => exports_Effect.fail(MemoryIndexError.make({ operation: "validate candidates", reason: "corrupt" }))));
-    if (found.candidates.length > checkedLimits.maxCandidates || found.scannedChunks > checkedLimits.maxScannedChunks || found.scannedChunks < found.candidates.length) {
-      return yield* MemoryIndexError.make({
-        operation: "validate candidate bounds",
-        reason: "corrupt"
-      });
-    }
-    const groups = new Map;
-    const rankedPassages = [];
-    let staleExcluded = 0;
-    let unauthorizedExcluded = 0;
-    for (const [rank, candidate] of found.candidates.entries()) {
-      if (candidate.key.namespace.address !== checkedAccess.namespace.address || candidate.source.id !== candidate.key.id || candidate.score < checkedLimits.minScore) {
-        return yield* MemoryIndexError.make({
-          operation: "validate candidate identity",
-          reason: "corrupt"
-        });
-      }
-      const group2 = groups.get(candidate.key.id);
-      if (group2 === undefined) {
-        groups.set(candidate.key.id, { key: candidate.key, candidates: [{ rank, candidate }] });
-      } else
-        group2.candidates.push({ rank, candidate });
-    }
-    const maxSourceBytes = checkedLimits.maxSourceBytes ?? 16777216;
-    let sourceBytes = 0;
-    for (const group2 of groups.values()) {
-      yield* exports_Effect.yieldNow;
-      const document = yield* readDocument(group2.key);
-      if (document === null || document._tag === "WithdrawnMemoryDocument") {
-        staleExcluded += group2.candidates.length;
-        continue;
-      }
-      if (!document.scopes.includes(checkedAccess.scope)) {
-        unauthorizedExcluded += group2.candidates.length;
-        continue;
-      }
-      const current = group2.candidates.filter(({ candidate }) => document.generation === candidate.sourceGeneration && document.source.revision === candidate.source.revision && document.source.locator === candidate.source.locator);
-      staleExcluded += group2.candidates.length - current.length;
-      if (current.length === 0)
-        continue;
-      const encoded = JSON.stringify(document);
-      const remainingSourceBytes = maxSourceBytes - sourceBytes;
-      const encodedBytes3 = encoded.length <= remainingSourceBytes ? byteLength(encoded) : undefined;
-      if (encodedBytes3 === undefined || encodedBytes3 > remainingSourceBytes) {
-        return yield* SemanticMemoryError.make({
-          operation: "query source bytes",
-          reason: "budget"
-        });
-      }
-      sourceBytes += encodedBytes3;
-      const encodedDocument = exports_Encoding.encodeHex(document.content.text);
-      for (const { rank, candidate } of current) {
-        if (!sameExcerpt(encodedDocument, candidate, profile.maxChunkBytes)) {
-          staleExcluded += 1;
-          continue;
-        }
-        rankedPassages.push({
-          rank,
-          passage: MemoryPassage.make({
-            version: 1,
-            authority: checkedAccess.namespace.address,
-            source: document.source,
-            passageId: candidate.passageId,
-            content: { ...document.content, text: candidate.text }
-          })
-        });
-      }
-    }
-    const passages = rankedPassages.sort((left, right) => left.rank - right.rank).map(({ passage }) => passage);
+    const validated = yield* revalidateSemanticMemoryCandidates(found, checkedAccess, profile, checkedLimits);
     return SemanticQueryResult.make({
-      lookup: passages.length === 0 ? { _tag: "NoMatch" } : { _tag: "Found", passages },
-      scannedChunks: found.scannedChunks,
-      staleExcluded,
-      unauthorizedExcluded,
+      ...validated,
       queryBytes,
       inputTokens: response.usage.inputTokens ?? null,
       startedAt,
@@ -44661,10 +44720,6 @@ var querySemanticMemory = exports_Effect.fn("querySemanticMemory")(function* (qu
     orElse: () => exports_Effect.fail(SemanticMemoryError.make({ operation: "query memory", reason: "timeout" }))
   }));
 });
-var sameExcerpt = (encodedDocument, candidate, maxChunkBytes) => {
-  const hex2 = exports_Encoding.encodeHex(candidate.text);
-  return candidate.startByte < candidate.endByte && hex2.length / 2 === candidate.endByte - candidate.startByte && hex2.length / 2 <= maxChunkBytes && encodedDocument.slice(candidate.startByte * 2, candidate.endByte * 2) === hex2;
-};
 // packages/capabilities/src/scheduling.ts
 var PositiveInt10 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var RunSchedulingOverride = exports_Schema.Union([

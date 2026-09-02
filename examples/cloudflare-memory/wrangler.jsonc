@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "effect-agent-memory-benchmark",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "MEMORIES", "class_name": "ProjectMemory" },
+      { "name": "THREADS", "class_name": "BenchmarkThread" },
+    ],
+  },
+  "exports": {
+    "ProjectMemory": { "type": "durable-object", "storage": "sqlite" },
+    "BenchmarkThread": { "type": "durable-object", "storage": "sqlite" },
+  },
+}

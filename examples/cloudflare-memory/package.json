@@ -1,0 +1,30 @@
+{
+  "name": "@effect-agent/example-cloudflare-memory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "measure": "node --experimental-transform-types src/measure-main.ts",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/capabilities": "workspace:*",
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect-agent/storage-cloudflare": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "effect-cf": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "miniflare": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "catalog:"
+  }
+}
