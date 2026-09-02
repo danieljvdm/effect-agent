@@ -62,6 +62,10 @@ it.live(
             ? '<main>Private dashboard</main><a href="/next">Continue</a>'
             : "Not authenticated";
         } else if (url.pathname === "/next") body = "Useful next page";
+        else if (url.pathname === "/standalone")
+          body = '<section><input autocomplete="username"><input type="password"></section>'.repeat(
+            2,
+          );
         else if (url.pathname === "/pay")
           body = '<iframe src="https://processor.test/fields"></iframe>';
         else if (url.pathname === "/fields")
@@ -136,6 +140,59 @@ it.live(
       let phase = "open";
       yield* Effect.gen(function* () {
         const handle = yield* (yield* ProtectedBrowser).open(policy);
+        phase = "standalone-fields";
+        yield* handle.navigate(
+          ProtectedBrowserNavigate.make({ url: "https://alpha.test/standalone" }),
+        );
+        const standalone = yield* handle.observe;
+        expect(standalone.controls).toHaveLength(4);
+        for (const control of standalone.controls) {
+          expect(control.role).toBe("unsupported");
+          expect(
+            yield* handle
+              .listCredentialOffers(
+                ListCredentialOffers.make({ kind: "login", target: control.ref }),
+              )
+              .pipe(Effect.flip),
+          ).toMatchObject({ reason: "unsupported", dispatch: "not-dispatched" });
+        }
+        expect(
+          yield* native(() =>
+            page.evaluate("[...document.querySelectorAll('input')].map(el => el.value)"),
+          ),
+        ).toEqual(["", "", "", ""]);
+        for (const attribute of ["name", "autocomplete", "action"]) {
+          phase = `oversized-${attribute}`;
+          yield* handle.navigate(
+            ProtectedBrowserNavigate.make({ url: "https://alpha.test/login" }),
+          );
+          const observed = yield* handle.observe;
+          const field = observed.controls.find((control) => control.role === "password")!;
+          const offers = yield* handle.listCredentialOffers(
+            ListCredentialOffers.make({ kind: "login", target: field.ref }),
+          );
+          // Build the hostile attribute in the page, not in the test's CDP request.
+          yield* native(() =>
+            page.evaluate(
+              `document.querySelector('${attribute === "action" ? "form" : "input[type=password]"}').setAttribute('${attribute}', 'x'.repeat(1024 * 1024))`,
+            ),
+          );
+          expect(
+            yield* handle
+              .useCredential(
+                UseCredential.make({
+                  offer: offers[0]!.ref,
+                  fields: [{ ref: field.ref, role: "password" }],
+                }),
+              )
+              .pipe(Effect.flip),
+          ).toMatchObject({ reason: "stale-reference", dispatch: "not-dispatched" });
+          // Successful discovery proves the browser omitted the oversized record before host decoding.
+          expect(
+            (yield* handle.observe).controls.some((control) => control.role === "password"),
+          ).toBe(false);
+        }
+        expect(resolutions).toBe(0);
         for (const host of ["alpha.test", "beta.test"]) {
           phase = `${host}:login`;
           yield* handle.navigate(ProtectedBrowserNavigate.make({ url: `https://${host}/login` }));

@@ -404,16 +404,19 @@ export const browserRunProtectedLayer = () =>
                 const candidates = yield* access
                   .list({ caller: principal, kind: decoded.kind, target: control.target })
                   .pipe(Effect.mapError((error) => fail(error.reason)));
+                const now = yield* Clock.currentTimeMillis;
+                for (const [ref, offer] of offers) if (offer.expires <= now) offers.delete(ref);
                 if (candidates.length > 16 || offers.size + candidates.length > 64)
                   return yield* fail("limit");
                 if (!sameTarget(control.target, (yield* target(decoded.target)).target))
                   return yield* fail("stale-reference");
-                const expires = (yield* Clock.currentTimeMillis) + 60_000;
+                const expires = now + 60_000;
                 const result: Array<CredentialOffer> = [];
+                const pending: typeof offers = new Map();
                 for (const candidate of candidates) {
                   const metadata = yield* decode(CredentialOfferMetadata, candidate.metadata);
                   const ref = crypto.randomUUID();
-                  offers.set(ref, {
+                  pending.set(ref, {
                     caller: principal,
                     key: candidate.key,
                     target: control.target,
@@ -423,7 +426,9 @@ export const browserRunProtectedLayer = () =>
                   });
                   result.push(CredentialOffer.make({ ref, kind: decoded.kind, metadata }));
                 }
-                return yield* bounded(result);
+                yield* bounded(result);
+                for (const [ref, offer] of pending) offers.set(ref, offer);
+                return result;
               }),
             ),
           useCredential: (request) =>

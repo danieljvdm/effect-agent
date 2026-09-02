@@ -55,6 +55,7 @@ const fixture = (kind: "login" | "card" = "login") => {
   let disposed = false;
   const filled: Array<string> = [];
   let cleanup: "confirmed" | "unconfirmed" = "confirmed";
+  let listOverride: BrowserCredentialAccess["Service"]["list"] | undefined;
   let resolveOverride: BrowserCredentialAccess["Service"]["resolve"] | undefined;
   let fillOverride: ProtectedBrowserTransport["fill"] | undefined;
   let navigateOverride: ProtectedBrowserTransport["navigate"] | undefined;
@@ -116,12 +117,13 @@ const fixture = (kind: "login" | "card" = "login") => {
     caller: Effect.sync(() => Redacted.make(principal)),
     list: (request) =>
       granted && Redacted.value(request.caller) === "alice"
-        ? Effect.succeed([
+        ? (listOverride?.(request) ??
+          Effect.succeed([
             {
               key: Redacted.make("vault-private-key"),
               metadata: CredentialOfferMetadata.make({ label: "personal" }),
             },
-          ])
+          ]))
         : Effect.fail(new CredentialAccessError({ reason: "denied" })),
     authorize: (request) =>
       Effect.suspend(() =>
@@ -200,6 +202,9 @@ const fixture = (kind: "login" | "card" = "login") => {
     },
     setResolve: (value: typeof resolveOverride) => {
       resolveOverride = value;
+    },
+    setList: (value: typeof listOverride) => {
+      listOverride = value;
     },
     setFill: (value: typeof fillOverride) => {
       fillOverride = value;
@@ -413,6 +418,72 @@ it.effect.each([
     expect(error.dispatch).toBe("not-dispatched");
     expect(f.stats().resolved).toBe(0);
     expect(f.filled).toEqual([]);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect("reclaims expired offers without discarding still-live offers at capacity", () => {
+  const f = fixture();
+  f.setList(() =>
+    Effect.succeed(
+      Array.from({ length: 16 }, () => ({
+        key: Redacted.make("vault-private-key"),
+        metadata: CredentialOfferMetadata.make({ label: "personal" }),
+      })),
+    ),
+  );
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+    const list = handle.listCredentialOffers(
+      ListCredentialOffers.make({ kind: "login", target: f.controls[0]!.ref }),
+    );
+    const expired = yield* list;
+    yield* TestClock.adjust("30 seconds");
+    const live = yield* list;
+    yield* list;
+    yield* list;
+    yield* TestClock.adjust("29999 millis");
+    expect(yield* list.pipe(Effect.flip)).toMatchObject({ reason: "limit" });
+    yield* TestClock.adjust("1 milli");
+    const refreshed = yield* list;
+    expect(refreshed).toHaveLength(16);
+    expect(
+      yield* handle
+        .useCredential(UseCredential.make({ offer: expired[0]!.ref, fields: f.fields }))
+        .pipe(Effect.flip),
+    ).toMatchObject({ reason: "stale-reference", dispatch: "not-dispatched" });
+    for (const offer of [live[0]!, refreshed[0]!]) {
+      expect(
+        yield* handle.useCredential(UseCredential.make({ offer: offer.ref, fields: f.fields })),
+      ).toMatchObject({ milestone: "filled" });
+    }
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect("failed oversized lists do not consume credential-offer capacity", () => {
+  const f = fixture();
+  f.setList(() =>
+    Effect.succeed(
+      Array.from({ length: 16 }, () => ({
+        key: Redacted.make("vault-private-key"),
+        metadata: CredentialOfferMetadata.make({ label: "x".repeat(200) }),
+      })),
+    ),
+  );
+  return Effect.gen(function* () {
+    const handle = yield* (yield* ProtectedBrowser).open(
+      InteractiveBrowserPolicy.make({ ...policy, maxReturnedBytes: 1024 }),
+    );
+    const list = handle.listCredentialOffers(
+      ListCredentialOffers.make({ kind: "login", target: f.controls[0]!.ref }),
+    );
+    for (let attempt = 0; attempt < 5; attempt++)
+      expect(yield* list.pipe(Effect.flip)).toMatchObject({ reason: "limit" });
+    f.setList(undefined);
+    const offers = yield* list;
+    expect(offers).toHaveLength(1);
+    expect(
+      yield* handle.useCredential(UseCredential.make({ offer: offers[0]!.ref, fields: f.fields })),
+    ).toMatchObject({ milestone: "filled" });
   }).pipe(Effect.scoped, Effect.provide(f.layer));
 });
 

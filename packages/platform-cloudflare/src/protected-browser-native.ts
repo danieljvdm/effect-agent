@@ -33,6 +33,7 @@ declare module "@cloudflare/puppeteer" {
 
 // This fixed program runs in an isolated world. Pages cannot replace its native DOM methods.
 // Handles retain actual nodes; a selector is never reconstructed from an opaque reference.
+const maxAttributeLength = 2048;
 const inspectFrame = `(() => {
   const doc = document;
   const forms = [];
@@ -42,13 +43,21 @@ const inspectFrame = `(() => {
     const form = el.form ?? null;
     let formIndex = forms.indexOf(form);
     if (formIndex < 0) { formIndex = forms.length; forms.push(form); }
-    const type = (el.type ?? '').toLowerCase();
-    const autocomplete = (el.autocomplete ?? '').trim().split(/\\s+/).at(-1);
+    const action = form ? (el.hasAttribute('formaction') ? el.formAction : form.action || doc.URL) : doc.URL;
+    const method = form ? (el.hasAttribute('formmethod') ? el.formMethod : form.method) : '';
+    const enctype = form?.enctype ?? '';
+    const name = el.name ?? '';
+    const completion = el.getAttribute('autocomplete') ?? '';
+    const inputType = el.type ?? '';
+    // Reject before parsing, fingerprinting or CDP transfer. Truncation could hide a target change.
+    if ([action, method, enctype, name, completion, inputType].some(value => value.length > ${maxAttributeLength})) return null;
+    const type = inputType.toLowerCase();
+    const autocomplete = completion.trim().toLowerCase().split(/\\s+/).at(-1);
     const cardRoles = { 'cc-name':'card-name', 'cc-number':'card-number', 'cc-exp':'card-expiry',
       'cc-exp-month':'card-expiry-month', 'cc-exp-year':'card-expiry-year', 'cc-csc':'card-security-code' };
     let role = 'unsupported';
     const nativeField = el instanceof HTMLInputElement || el instanceof HTMLSelectElement;
-    if (nativeField && !['submit','button'].includes(type) && !el.disabled && !el.readOnly && el.getClientRects().length > 0) {
+    if (nativeField && form && !['submit','button'].includes(type) && !el.disabled && !el.readOnly && el.getClientRects().length > 0) {
       if (el instanceof HTMLInputElement && type === 'password') role = 'password';
       else if (['text','email','tel','number','month',''].includes(type) || el instanceof HTMLSelectElement) {
         if (cardRoles[autocomplete]) role = cardRoles[autocomplete];
@@ -58,21 +67,20 @@ const inspectFrame = `(() => {
     } else if (el instanceof HTMLButtonElement || (el instanceof HTMLInputElement && ['submit','button'].includes(type))) {
       if (!el.disabled) role = type === 'submit' && form ? 'submit' : type === 'button' ? 'button' : 'unsupported';
     } else if (el instanceof HTMLAnchorElement) role = 'link';
-    const action = form ? (el.hasAttribute('formaction') ? el.formAction : form.action || doc.URL) : doc.URL;
-    const method = form ? (el.hasAttribute('formmethod') ? el.formMethod : form.method) : '';
-    const fingerprint = JSON.stringify([role, action, method, form?.enctype, el.name, el.autocomplete, type]);
+    const fingerprint = JSON.stringify([role, action, method, enctype, name, completion, type]);
     return { role, formIndex, action, fingerprint,
       label: (el.labels?.[0]?.textContent ?? el.getAttribute('aria-label') ?? el.textContent ?? '').slice(0,200) };
   };
+  const expose = ({role, formIndex, action, label}) => ({role, formIndex, action, label});
   const original = elements.map(describe);
   const validate = (index) => {
     const current = describe(elements[index]);
     if (!current || !original[index] || current.fingerprint !== original[index].fingerprint ||
       current.formIndex !== original[index].formIndex) return null;
-    return current;
+    return expose(current);
   };
   return {
-    doc, elements, original, validate,
+    doc, elements, original: original.map(current => current && expose(current)), validate,
     text: () => {
       if (doc !== document) return null;
       const clone = doc.body?.cloneNode(true);
@@ -108,8 +116,7 @@ const inspectFrame = `(() => {
 const Description = Schema.Struct({
   role: ProtectedBrowserControl.fields.role,
   formIndex: Schema.Natural,
-  action: Schema.String,
-  fingerprint: Schema.String,
+  action: Schema.String.check(Schema.isMaxLength(maxAttributeLength)),
   label: Schema.String.check(Schema.isMaxLength(200)),
 });
 const Descriptions = Schema.Array(Schema.NullOr(Description)).check(Schema.isMaxLength(65));

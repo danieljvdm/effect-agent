@@ -404,12 +404,16 @@ The runtime protocol needs no site-specific selectors:
 
 References bind actual nodes, documents, frames, forms, and roles. Node replacement, changed
 form/action/role, frame navigation, rediscovery, or 60 seconds of elapsed time invalidates them.
-Offers expire after 60 seconds, are single-use, and bind caller, kind, and target. A private lock
+Offers expire after 60 seconds, are single-use, and bind caller, kind, and target. Listing reclaims
+expired offers from the 64-offer session capacity; failed lists retain no new offers. A private lock
 spans checks, resolution, mutation, and post-use checks; competing operations return `busy`.
 The adapter uses an isolated browser world and native setters, not model-provided JavaScript.
 
 Supported controls are native username/email/password inputs, native login form submission, and
-standard `cc-*` card fields, including native selects. HTTPS frames may be same- or cross-origin
+standard `cc-*` card fields, including native selects. Credential fields must have an associated
+native form, either by containment or an explicit `form` attribute. Standalone fields are unsupported.
+Inspection rejects action URLs or fingerprint attributes longer than 2,048 characters inside the
+browser before serialization; fingerprints remain in the browser. HTTPS frames may be same- or cross-origin
 when every involved origin is allowed. Opaque frames, popups, shadow/custom controls, CAPTCHA,
 OTP, passkeys, wallets, and 3DS have no automation fallback. Invalid native form requirements
 produce `needs-attention`. Card filling never submits a purchase. Filling can itself execute page
