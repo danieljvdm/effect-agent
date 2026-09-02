@@ -878,6 +878,95 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
+  it.effect(
+    "publishes Action artifacts atomically without changing source commits",
+    () =>
+      Effect.gen(function* () {
+        const workflow = yield* readWorkflow(".github/workflows/ci.yml");
+        const publisher = workflow.jobs["publish-action"];
+        expect(publisher?.needs).toEqual(["checks", "test", "build"]);
+        expect(publisher?.if).toBe(
+          "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
+        );
+        expect(publisher?.permissions).toEqual({ contents: "write" });
+        const script = workflowStep(
+          workflow,
+          "publish-action",
+          "Publish immutable source tag and advance action-v1",
+        )?.run;
+        if (script === undefined) return yield* Effect.die("Missing Action publisher");
+
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "action-release-test-" });
+        const source = `${root}/source`;
+        const remote = `${root}/remote.git`;
+        yield* runFixtureCommand(root, "git", ["init", "--bare", remote]);
+        yield* runFixtureCommand(root, "git", ["init", "--initial-branch=main", source]);
+        const git = (...args: ReadonlyArray<string>) => runFixtureCommand(source, "git", args);
+        yield* git("config", "user.name", "Action release test");
+        yield* git("config", "user.email", "action-test@example.test");
+        yield* git("config", "commit.gpgsign", "false");
+        yield* git("config", "core.hooksPath", `${source}/.git/hooks`);
+        yield* git("remote", "add", "origin", remote);
+        yield* fs.writeFileString(`${source}/.gitignore`, "action/dist/\n");
+        yield* git("add", ".gitignore");
+        yield* git("commit", "-m", "Source without generated output");
+        yield* git("push", "origin", "main");
+        const firstSource = yield* git("rev-parse", "HEAD");
+        yield* git("checkout", "--detach", firstSource);
+        yield* fs.makeDirectory(`${source}/action/dist`, { recursive: true });
+        const bundle = "console.log('exact CI artifact');\n";
+        yield* fs.writeFileString(`${source}/action/dist/index.mjs`, bundle);
+        const publish = (sha: string) =>
+          runFixtureCommand(source, "env", [
+            `GITHUB_SHA=${sha}`,
+            `GITHUB_STEP_SUMMARY=${root}/summary`,
+            "bash",
+            "-c",
+            script,
+          ]);
+        const remoteGit = (...args: ReadonlyArray<string>) =>
+          runFixtureCommand(root, "git", ["--git-dir", remote, ...args]);
+
+        yield* publish(firstSource);
+        const firstRelease = yield* remoteGit("rev-parse", "action-v1");
+        expect(yield* remoteGit("rev-parse", `action-${firstSource}`)).toBe(firstRelease);
+        expect(yield* remoteGit("rev-parse", "action-v1^")).toBe(firstSource);
+        expect(yield* remoteGit("show", "action-v1:action/dist/index.mjs")).toBe(bundle.trim());
+        expect(yield* remoteGit("ls-tree", "-r", "--name-only", "main")).toBe(".gitignore");
+        yield* publish(firstSource);
+        expect(yield* remoteGit("rev-parse", "action-v1")).toBe(firstRelease);
+
+        yield* git("checkout", "main");
+        yield* git("commit", "--allow-empty", "-m", "Next validated source");
+        const secondSource = yield* git("rev-parse", "HEAD");
+        yield* git("push", "origin", "main");
+        yield* git("checkout", "--detach", secondSource);
+        yield* fs.makeDirectory(`${source}/action/dist`, { recursive: true });
+        yield* fs.writeFileString(`${source}/action/dist/index.mjs`, bundle);
+        yield* publish(firstSource);
+        expect(yield* remoteGit("rev-parse", "action-v1")).toBe(firstRelease);
+
+        // Reject the moving channel to prove the immutable tag cannot leak out
+        // of a failed publication. Removing the hook then exercises a retry.
+        const hook = `${remote}/hooks/update`;
+        yield* fs.writeFileString(hook, '#!/bin/sh\n[ "$1" != "refs/tags/action-v1" ]\n');
+        yield* fs.chmod(hook, 0o755);
+        expect(Exit.isFailure(yield* Effect.exit(publish(secondSource)))).toBe(true);
+        expect(yield* remoteGit("rev-parse", "action-v1")).toBe(firstRelease);
+        expect(yield* remoteGit("tag", "--list", `action-${secondSource}`)).toBe("");
+        yield* fs.remove(hook);
+        yield* git("checkout", "--detach", secondSource);
+        yield* fs.makeDirectory(`${source}/action/dist`, { recursive: true });
+        yield* fs.writeFileString(`${source}/action/dist/index.mjs`, bundle);
+        yield* publish(secondSource);
+        expect(yield* remoteGit("rev-parse", "action-v1^")).toBe(secondSource);
+        expect(yield* remoteGit("rev-parse", `action-${firstSource}`)).toBe(firstRelease);
+        expect(yield* remoteGit("ls-tree", "-r", "--name-only", "main")).toBe(".gitignore");
+      }),
+    { timeout: 30_000 },
+  );
+
   it.effect("keeps generated release PRs behind a trusted integrity gate", () =>
     Effect.gen(function* () {
       const [ciWorkflow, reviewWorkflow, releaseWorkflow, rootManifest] = yield* Effect.all([
@@ -897,7 +986,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         push: { branches: ["main"] },
         pull_request: { "paths-ignore": generatedPaths },
       });
-      expect(ciWorkflow.jobs.checks?.if).toBe("${{ github.event_name == 'pull_request' }}");
+      expect(ciWorkflow.jobs.checks?.if).toBeUndefined();
       expect(ciWorkflow.jobs.test?.if).toBeUndefined();
       expect(ciWorkflow.jobs.build?.if).toBeUndefined();
       expect(ciWorkflow.jobs["release-integrity"]).toBeUndefined();
@@ -928,7 +1017,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       );
       expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
       const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
-      expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@main");
+      expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@action-v1");
       expect(reviewStep?.with?.mode).toContain("'auto'");
       expect(reviewStep?.with?.mode).toContain("'incremental'");
       expect(reviewStep?.with?.command).toContain("github.event.comment.body");

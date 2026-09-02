@@ -2,7 +2,7 @@
 # tests, build) with a fan-in `ready` job so the branch-protection check name
 # stays `ready`.
 #
-# Main runs tests and builds to publish baselines that new PRs can restore.
+# Main also publishes the validated Action bundle on distribution tags.
 # PR caches remain scoped to their merge refs. Each job has a separate cache
 # namespace, and Vite Task checks each task's inputs before replaying it.
 name: CI
@@ -37,7 +37,6 @@ env:
 jobs:
   checks:
     name: Static checks
-    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -67,7 +66,7 @@ jobs:
             vite-task-checks-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
             vite-task-checks-${{ runner.os }}-
 
-      - name: Format, lint, type checks, and action-bundle freshness
+      - name: Format, lint, and type checks
         run: ./node_modules/.bin/vp run check
 
       - name: Save Vite Task cache
@@ -176,12 +175,70 @@ jobs:
       - name: Build packages, examples, and docs
         run: ./node_modules/.bin/vp run -v build
 
+      - name: Upload the Action bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-review-action
+          path: action/dist/index.mjs
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Save Vite Task cache
         if: success()
         uses: actions/cache/save@v4
         with:
           path: node_modules/.vite/task-cache
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
+
+  publish-action:
+    name: Publish Action
+    needs: [checks, test, build]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the validated source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download this run's Action bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-review-action
+          path: action/dist
+
+      # Keep publication outside the Effect build script: this job installs
+      # no dependencies and executes no repository code with write authority.
+      # Tags point to a child of the validated source commit. Neither main nor
+      # feature branches ever receive the generated output.
+      - name: Publish immutable source tag and advance action-v1
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHANNEL_REF=refs/tags/action-v1
+          RELEASE_REF="refs/tags/action-${GITHUB_SHA}"
+          PREVIOUS_CHANNEL="$(git ls-remote origin "$CHANNEL_REF" | cut -f1)"
+          LATEST_MAIN="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$LATEST_MAIN" != "$GITHUB_SHA" ]; then
+            echo "Skipping superseded source commit $GITHUB_SHA."
+            exit 0
+          fi
+          EXISTING_RELEASE="$(git ls-remote origin "$RELEASE_REF" | cut -f1)"
+          if [ -n "$EXISTING_RELEASE" ]; then
+            echo "Action for $GITHUB_SHA is already published at $EXISTING_RELEASE."
+            exit 0
+          fi
+          test -s action/dist/index.mjs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --force action/dist/index.mjs
+          git -c core.hooksPath=/dev/null commit -m "Build Action from $GITHUB_SHA"
+          git push --atomic --force-with-lease="$CHANNEL_REF:$PREVIOUS_CHANNEL" origin \
+            "HEAD:$RELEASE_REF" "HEAD:$CHANNEL_REF"
+          echo "Published danieljvdm/effect-agent/action@$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
 
   # Fan-in for branch protection: the required status check is named `ready`.
   # It runs even after a PR gate fails, and never posts a main-push ready check.
