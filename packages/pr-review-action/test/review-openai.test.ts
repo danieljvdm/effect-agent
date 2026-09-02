@@ -194,6 +194,75 @@ const payload: OpenAiSchema.CreateResponse = {
 };
 
 describe("review provider boundary", () => {
+  it.effect("continues PR #291's affordable research beyond eight turns", () =>
+    Effect.gen(function* () {
+      // First eight rows are observed usage; continuation is scripted, not a live quality claim.
+      const usage = [
+        rawUsage(9_128, 396, 0, 8_903),
+        rawUsage(17_567, 234, 8_903, 8_439),
+        rawUsage(24_532, 506, 17_342, 6_965),
+        rawUsage(29_042, 179, 24_307, 4_510),
+        rawUsage(30_127, 52, 28_817, 1_085),
+        rawUsage(30_267, 45, 29_902, 140),
+        rawUsage(30_737, 158, 30_042, 470),
+        rawUsage(31_707, 55, 30_512, 970),
+        rawUsage(33_219, 286, 31_475, 1_512),
+        rawUsage(34_000, 200, 32_987, 788),
+      ];
+      const researchBatches = [4, 4, 4, 4, 1, 1, 4, 1, 1];
+      const sent: Array<WireRequest> = [];
+      const native = yield* makeNative(
+        HttpClient.make((httpRequest, url) =>
+          Effect.sync(() => {
+            const current = usage[sent.length];
+            if (current === undefined) throw new Error("Unexpected additional model request");
+            if (url.pathname.endsWith("/input_tokens"))
+              return json(httpRequest, {
+                object: "response.input_tokens",
+                input_tokens: current.input_tokens,
+              });
+            const wire = decodeWire(httpRequest);
+            const batch = researchBatches[sent.length];
+            sent.push(wire);
+            return sse(
+              httpRequest,
+              sent.length,
+              batch === undefined || typeof wire.tool_choice === "object"
+                ? [submit]
+                : Array.from({ length: batch }, () => read),
+              current,
+            );
+          }),
+        ),
+      );
+      const provider = yield* makeReviewOpenAi({
+        client: native,
+        model: "gpt-5.6-sol",
+        cacheKey: "pr-291-turns",
+      });
+      const result = yield* makeReviewer({ model, costControl: provider.costControl })
+        .review(request)
+        .pipe(
+          Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+          Effect.provideService(ReviewRepository, repository),
+        );
+      expect(sent).toHaveLength(10);
+      expect(sent[8]?.tool_choice).toEqual(sent[0]?.tool_choice);
+      expect(result.exhausted).toBeUndefined();
+      expect(result.incomplete).toBeUndefined();
+      expect(result.usage.estimatedCostMicrousd).toBeLessThan(REVIEW_COST_LIMIT_MICROUSD);
+      expect(
+        reviewPublicationFailure({
+          blockingFindings: 0,
+          unreviewedPaths: 0,
+          unresolvedChangeRequests: 0,
+          exhausted: result.exhausted,
+          incomplete: result.incomplete,
+        }),
+      ).toBeUndefined();
+    }),
+  );
+
   it.effect("continues research with the remaining allowance after PR #252's usage", () =>
     Effect.gen(function* () {
       const sent: Array<WireRequest> = [];
@@ -414,7 +483,11 @@ describe("review provider boundary", () => {
             return sse(
               httpRequest,
               sent.length,
-              sent.length === 9 ? [submit] : sent.length === 1 ? [record, read] : [read],
+              sent.length === 9
+                ? [submit]
+                : Array.from({ length: sent.length === 8 ? 9 : 8 }, (_, index) =>
+                    sent.length === 1 && index === 0 ? record : read,
+                  ),
               rawUsage(input, 100, sent.length === 1 ? 0 : input - 1_000),
             );
           }),
@@ -443,7 +516,7 @@ describe("review provider boundary", () => {
       expect(completion.input.slice(0, research.input.length - 1)).toEqual(
         research.input.slice(0, -1),
       );
-      expect(result.exhausted).toBe("turns");
+      expect(result.exhausted).toBe("tool-calls");
       expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
       expect(result.usage.estimatedCostMicrousd).toBeLessThan(REVIEW_COST_LIMIT_MICROUSD);
     }),
@@ -1286,6 +1359,79 @@ describe("review provider boundary", () => {
           yield* provider.client.createResponse(payload).pipe(Effect.flip);
           expect(counts).toBe(mode === "interrupt" ? 1 : 2);
         }
+      }),
+  );
+
+  it.effect.each(["estimate", "count", "after-finding"] as const)(
+    "preserves an input-token refusal at %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const recorded = mode === "after-finding";
+        const densePatch = request.changes[0]!.patch.padEnd(
+          256_000,
+          mode === "estimate" ? "漢" : "a漢a",
+        );
+        const input = ReviewRequest.make({
+          ...request,
+          changes: [
+            ReviewChange.make({ path: finding.path, patch: densePatch }),
+            ReviewChange.make({ path: "src/later.ts", patch: "@@ -0,0 +1 @@\n+later" }),
+          ],
+        });
+        let counts = 0;
+        let sends = 0;
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens")) {
+                counts += 1;
+                expect(JSON.stringify(decodeWire(httpRequest).input)).toContain(
+                  densePatch.slice(-100),
+                );
+                return json(httpRequest, {
+                  object: "response.input_tokens",
+                  input_tokens: recorded && sends === 0 ? 128_000 : 128_001,
+                });
+              }
+              sends += 1;
+              return sse(httpRequest, sends, [record], rawUsage(100_000, 1_000));
+            }),
+          ),
+        );
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "input-token-limit",
+        });
+        const result = yield* makeReviewer({ model, costControl: provider.costControl })
+          .review(input)
+          .pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+            Effect.provideService(ReviewRepository, repository),
+          );
+
+        expect(sends).toBe(recorded ? 1 : 0);
+        expect(counts).toBe(mode === "estimate" ? 0 : recorded ? 2 : 1);
+        expect(result).toMatchObject({
+          incomplete: true,
+          exhausted: "tokens",
+          turns: sends,
+          pendingPaths: recorded ? ["src/later.ts"] : [finding.path, "src/later.ts"],
+          usage: { estimatedCostMicrousd: recorded ? 520_000 : 0, reservedCostMicrousd: 0 },
+        });
+        expect(result.report.findings.map(({ title }) => title)).toEqual(
+          recorded ? [finding.title] : [],
+        );
+        expect(result.resolutions).toBeUndefined();
+        expect(
+          reviewPublicationFailure({
+            blockingFindings: 0,
+            unreviewedPaths: result.pendingPaths?.length ?? 0,
+            unresolvedChangeRequests: 0,
+            exhausted: result.exhausted,
+            incomplete: result.incomplete,
+          }),
+        ).toMatchObject({ _tag: "IncompleteReview" });
       }),
   );
 

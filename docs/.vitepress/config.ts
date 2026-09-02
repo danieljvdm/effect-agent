@@ -65,9 +65,10 @@ export default defineConfig({
           tsModule: ts,
           tsLibDirectory: dirname(ts.getDefaultLibFilePath({})),
           vfsRoot: resolve(import.meta.dirname, "../snippets/travel-planner"),
-          // Re-read imported snippets when the dev server rebuilds a page.
-          cache: false,
-          fsCache: false,
+          // VitePress sets production mode before loading build configuration.
+          // Reuse compiler state within a build, but re-read snippets in dev.
+          cache: process.env.NODE_ENV === "production",
+          fsCache: process.env.NODE_ENV === "production",
           compilerOptions: {
             target: ts.ScriptTarget.ES2023,
             module: ts.ModuleKind.ESNext,

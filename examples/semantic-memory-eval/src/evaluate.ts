@@ -4,7 +4,7 @@ import {
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  recallMemory,
+  Memory,
 } from "@effect-agent/capabilities";
 import {
   MemoryKey,
@@ -184,7 +184,7 @@ const lookupFromIds = Effect.fn("SemanticMemoryEvaluation.lookupFromIds")(functi
 });
 
 const recall = (id: string, lookup: MemoryLookup) =>
-  recallMemory([{ id, essential: false, read: Effect.succeed(lookup) }], RECALL_LIMITS);
+  Memory.recall([{ id, essential: false, read: Effect.succeed(lookup) }], RECALL_LIMITS);
 
 const tokenize = (text: string): ReadonlySet<string> =>
   new Set(text.toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? []);

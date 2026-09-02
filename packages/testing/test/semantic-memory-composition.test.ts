@@ -2,10 +2,11 @@ import {
   MemoryAccess,
   indexMemorySource,
   querySemanticMemory,
-  recallMemory,
+  Memory,
 } from "@effect-agent/capabilities";
 import {
   MemoryNamespace,
+  MemoryScope,
   MemoryKey,
   MemoryWriter,
   SemanticMemoryIndex,
@@ -27,7 +28,7 @@ const TestNamespace = MemoryNamespace.define({
 });
 
 const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
-const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
+const access = MemoryAccess.make({ namespace: key.namespace, scope: MemoryScope.make("channel") });
 const profile = SemanticMemoryProfile.make({
   version: 1,
   provider: "deterministic-port-fixture",
@@ -96,7 +97,7 @@ it.effect(
       });
       yield* indexMemorySource(key, indexLimits);
       const initial = yield* querySemanticMemory("queue", access, queryLimits);
-      const recalled = yield* recallMemory(
+      const recalled = yield* Memory.recall(
         [{ id: "semantic", essential: true, read: Effect.succeed(initial.lookup) }],
         {
           maxSources: 1,

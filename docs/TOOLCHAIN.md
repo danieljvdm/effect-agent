@@ -28,6 +28,8 @@ SQL implementations they use.
 version for development. Its D1 peer is aligned with Effect. Consumers provide the shared runtime.
 
 Root overrides keep Effect, its Node platform, and Vitest on one version.
+The docs deployment runs Alchemy under Bun, so the root also installs Alchemy's
+optional `@effect/platform-bun` peer at the shared Effect version.
 Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
 The Code Mode example also uses a Vite task for its Miniflare tests.
@@ -43,6 +45,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | ----------------------------------- | ----------------------------------------------------- |
 | `packages/*`                        | Framework and private PR-review integration packages  |
 | `examples/demo`                     | Local browser app                                     |
+| `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
 | `examples/providers`                | Provider bindings and persistent-history example      |
 | `examples/pr-work-orders`           | Trusted local work-order implementation               |
 | `examples/pr-work-order-ingress`    | GitHub dispatch and isolated publication              |
@@ -119,7 +122,9 @@ Edit those files to change its examples. A `twoslash` fence enables type hovers 
 validation during `vp run docs:build`. Relative imports resolve from that snippet directory.
 
 Twoslash uses the pinned `typescript-twoslash` JavaScript compiler API; repository checks use
-TypeScript 7. Keep compiler validation enabled. Do not suppress errors with `noErrors` or
+TypeScript 7. Production builds reuse Twoslash compiler and filesystem caches within the process;
+the dev server disables both so imported snippet edits remain visible.
+Keep compiler validation enabled. Do not suppress errors with `noErrors` or
 `noErrorValidation`.
 
 Keep `yield*` inside a generator, such as `Effect.gen(function* () { ... })`.
@@ -263,8 +268,8 @@ The verified generated Changesets PR uses the release flow above.
 Explicit `@effect-agent review` comments still request review.
 
 Each test-matrix job has its own task-cache key. Successful task results are saved even when
-another task fails. Main pushes run tests to populate shared caches; static checks, builds, and
-the `ready` fan-in run on PRs. Main test runs are not cancelled by newer pushes.
+another task fails. Main pushes run tests and builds to populate shared caches; static checks and
+the `ready` fan-in run only on PRs. Main runs are not cancelled by newer pushes.
 Tests are reused only when task inputs match, never solely because paths did not change.
 
 The pre-commit hook runs `vp check --fix` on staged JavaScript and TypeScript.

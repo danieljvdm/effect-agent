@@ -308,6 +308,12 @@ An application-defined name, version, and Schema-validated identity addressing m
 operation receipts, and index entries. The canonical address is portable across adapters.
 Definition versions select distinct namespaces, not document revisions. Host code owns authorization.
 
+**Memory scope**
+
+A host-defined visibility label carried by memory access and active documents. The `MemoryScope`
+brand distinguishes it from caller identity. A matching label is a recall filter, not proof of
+authentication or permission to write; the host's authorization policy remains authoritative.
+
 **Semantic memory index**
 
 A disposable ranking derivative tied to one embedding model and chunking profile. Its candidates

@@ -2,7 +2,7 @@
 # tests, build) with a fan-in `ready` job so the branch-protection check name
 # stays `ready`.
 #
-# Main runs only tests to publish a baseline that new PRs can restore.
+# Main runs tests and builds to publish baselines that new PRs can restore.
 # PR caches remain scoped to their merge refs. Each job has a separate cache
 # namespace, and Vite Task checks each task's inputs before replaying it.
 name: CI
@@ -146,7 +146,6 @@ jobs:
 
   build:
     name: Build
-    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -175,7 +174,7 @@ jobs:
             vite-task-build-${{ runner.os }}-
 
       - name: Build packages, examples, and docs
-        run: ./node_modules/.bin/vp run build
+        run: ./node_modules/.bin/vp run -v build
 
       - name: Save Vite Task cache
         if: success()

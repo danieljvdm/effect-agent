@@ -25,7 +25,8 @@
     "@effect-agent/example-pr-work-order-ingress": "0.0.0",
     "@effect-agent/example-browser-run-worker-proof": "0.0.0",
     "@effect-agent/example-pr-review-eval": "0.0.0",
-    "@effect-agent/example-semantic-memory-eval": "0.0.0"
+    "@effect-agent/example-semantic-memory-eval": "0.0.0",
+    "@effect-agent/example-cloudflare-memory": "0.0.0"
   },
   "changesets": [
     "activity-progress-integrity",
@@ -51,6 +52,7 @@
     "cloudflare-binding-layers",
     "cloudflare-code-mode-host-bridge",
     "cloudflare-context-compactor",
+    "cloudflare-shared-memory",
     "code-mode-drop-allow-experimental",
     "code-mode-pass-scope",
     "committed-memory-processing",
@@ -123,6 +125,7 @@
     "semantic-source-identity-budget",
     "semantic-vector-capacity",
     "shared-effect-peer",
+    "shared-subagent-defaults",
     "silent-web-capture-errors",
     "simple-platform-layers",
     "stable-testing-release-artifacts",

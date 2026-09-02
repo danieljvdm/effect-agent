@@ -1,11 +1,19 @@
-import { Agent } from "@effect-agent/core";
+import {
+  Agent,
+  MemoryWrite,
+  MemoryLookup,
+  MemoryDocument,
+  RecalledMemory,
+} from "@effect-agent/core";
 import { OperationDenied, ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread";
-import { Context, Crypto, Effect, Layer } from "effect";
+import { Context, Crypto, Effect, Layer, Schema } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
 import {
   ThreadObject,
+  MemoryObject,
+  CloudflareMemoryClient,
   makeScheduleOwnerObjectClass,
   makeSubscriptionPartitionObjectClass,
   ThreadObjectNamespace,
@@ -32,6 +40,15 @@ import {
   storageEvictionFailpoint,
 } from "./fixtures.ts";
 import {
+  memoryAuthorizer,
+  memoryFailpoints,
+  memoryCalls,
+  memoryAccess,
+  memoryPrincipal,
+  memoryRecallLimits,
+  MemoryProjects,
+} from "./memory-fixtures.ts";
+import {
   failNextFlush,
   flushCount,
   observabilityProbeLayer,
@@ -43,6 +60,16 @@ import {
   subscriptionFailpointLayer,
   subscriptionSourcesLayer,
 } from "./subscription-fixtures.ts";
+
+export class TestMemoryObject extends MemoryObject.make(memoryAuthorizer, {
+  failpoints: memoryFailpoints,
+}) {
+  override memory(encoded: string): Promise<string> {
+    const name = this.ctx.id.name ?? "";
+    memoryCalls.set(name, (memoryCalls.get(name) ?? 0) + 1);
+    return super.memory(encoded);
+  }
+}
 
 /**
  * The WP3 test Worker entry: the REAL `ThreadObject.make` output under three
@@ -247,6 +274,42 @@ const progressIncarnation = (ctx: DurableObjectState): number => {
 };
 
 export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOptions) {
+  memoryChange(project: string, encoded: unknown) {
+    return this[DurableObject.RunSymbol](
+      Effect.gen(function* () {
+        const env = yield* WorkerEnvironment;
+        const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
+          access: memoryAccess(project),
+          principal: memoryPrincipal,
+        });
+        const write = yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)(encoded);
+        const document = yield* client.change({
+          ...write,
+          key: {
+            ...write.key,
+            namespace: yield* MemoryProjects.restore(write.key.namespace.address),
+          },
+        });
+        return yield* Schema.encodeEffect(MemoryDocument.Wire)(document);
+      }),
+    );
+  }
+
+  memoryRecall(project: string, encoded: unknown) {
+    return this[DurableObject.RunSymbol](
+      Effect.gen(function* () {
+        const env = yield* WorkerEnvironment;
+        const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
+          access: memoryAccess(project),
+          principal: memoryPrincipal,
+        });
+        const lookup = yield* Schema.decodeUnknownEffect(MemoryLookup)(encoded);
+        return yield* client
+          .recall(lookup, memoryRecallLimits)
+          .pipe(Effect.flatMap(Schema.encodeEffect(RecalledMemory)));
+      }),
+    );
+  }
   override async awaitProgressEncoded(encoded: unknown): Promise<unknown> {
     progressIncarnation(this.ctx);
     setProgressWaiterCount(this.ctx, (progressWaiterCounts.get(this.ctx) ?? 0) + 1);

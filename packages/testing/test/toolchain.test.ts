@@ -98,6 +98,7 @@ const privatePackageNames = ["pr-review-action"] as const;
 const providerConsumingPackages = new Set<string>();
 const exampleNames = [
   "browser-run-worker-proof",
+  "cloudflare-memory",
   "code-mode-cloudflare",
   "demo",
   "pr-work-order-ingress",
@@ -900,7 +901,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       });
       expect(ciWorkflow.jobs.checks?.if).toBe("${{ github.event_name == 'pull_request' }}");
       expect(ciWorkflow.jobs.test?.if).toBeUndefined();
-      expect(ciWorkflow.jobs.build?.if).toBe("${{ github.event_name == 'pull_request' }}");
+      expect(ciWorkflow.jobs.build?.if).toBeUndefined();
       expect(ciWorkflow.jobs["release-integrity"]).toBeUndefined();
 
       const readyJob = ciWorkflow.jobs.ready;

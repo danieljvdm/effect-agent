@@ -9,6 +9,7 @@ export default defineConfig({
       "src/durability.ts",
       "src/testing.ts",
       "src/github-workflow-source.ts",
+      "src/sql-memory-store.ts",
     ],
     dts: true,
     sourcemap: true,

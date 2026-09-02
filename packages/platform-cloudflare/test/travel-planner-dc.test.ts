@@ -276,8 +276,17 @@ describe("DC Travel Planner — eviction equivalence", () => {
     armRuntimeEviction(thread, "terminalize:after-reserve");
     const receipt = await submitPlanner(thread);
 
-    // NO further client call on this lane: the persisted alarm alone converges it.
-    await drainAlarmsUntil(thread, allSettled(thread));
+    // Alarms alone drive recovery. The ledger settles before recoverSubmission appends
+    // its repair audit, so read-only probes must wait for both before taking the snapshot.
+    await drainAlarmsUntil(thread, async () => {
+      if (!(await allSettled(thread)())) return false;
+      const records = await readCanonical(thread);
+      return records.some(
+        ({ record: { payload } }) =>
+          payload._tag === "RepairAnnotated" &&
+          payload.reason === "recovery:AppendReservedSettlement",
+      );
+    });
     expect(armedEvictionsRemaining(thread)).toBe(0);
     await assertConvergence(thread);
 

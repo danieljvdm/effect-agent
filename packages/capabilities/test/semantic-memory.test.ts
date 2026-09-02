@@ -1,5 +1,6 @@
 import {
   MemoryNamespace,
+  MemoryScope,
   ActiveMemoryDocument,
   type MemoryDocument,
   MemoryIndexCandidate,
@@ -36,7 +37,7 @@ import {
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  recallMemory,
+  Memory,
 } from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
@@ -46,7 +47,7 @@ const TestNamespace = MemoryNamespace.define({
 });
 
 const key = MemoryKey.make({ namespace: TestNamespace.make("team"), id: "proposal" });
-const access = MemoryAccess.make({ namespace: key.namespace, scope: "channel" });
+const access = MemoryAccess.make({ namespace: key.namespace, scope: MemoryScope.make("channel") });
 const profile = SemanticMemoryProfile.make({
   version: 1,
   provider: "test",
@@ -315,7 +316,7 @@ describe("optional semantic workflows", () => {
             },
           ],
         });
-        const recalled = yield* recallMemory(
+        const recalled = yield* Memory.recall(
           [{ id: "semantic", essential: true, read: Effect.succeed(queried.lookup) }],
           { ...recallLimits, maxItems: 1 },
         );
@@ -324,7 +325,7 @@ describe("optional semantic workflows", () => {
         expect(recalled.text).toContain('"observers":["Chad"]');
         expect(recalled.text).not.toContain(access.namespace.address);
         expect(recalled.text).toContain('"authority":"memory-authority:1"');
-        const limited = yield* recallMemory(
+        const limited = yield* Memory.recall(
           [{ id: "semantic", essential: false, read: Effect.succeed(queried.lookup) }],
           { ...recallLimits, maxTokens: recalled.estimatedTokens - 1 },
         );
@@ -478,7 +479,11 @@ describe("optional semantic workflows", () => {
       ]) {
         test.state.current = current;
         expect(
-          yield* querySemanticMemory("queue", access, { ...queryLimits, maxSourceBytes: 1 }),
+          yield* querySemanticMemory("queue", access, {
+            ...queryLimits,
+            maxSourceBytes: 1,
+            maxOutputBytes: 1,
+          }),
         ).toMatchObject({
           lookup: { _tag: "NoMatch" },
           staleExcluded:
@@ -487,6 +492,48 @@ describe("optional semantic workflows", () => {
             current?._tag === "ActiveMemoryDocument" && current.scopes.length === 0 ? 2 : 0,
         });
       }
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("counts repeated provenance in the semantic output byte budget", () => {
+    const test = probe();
+    const current = ActiveMemoryDocument.make({
+      ...document,
+      content: {
+        ...document.content,
+        attributions: document.content.attributions.map((attribution) => ({
+          ...attribution,
+          interpretation: '"🌊"\\'.repeat(128),
+        })),
+        metadata: { evidence: "🌊".repeat(128) },
+      },
+    });
+    test.state.current = current;
+    test.state.candidates = [candidate("Dan 🌊"), candidate("Dan 🌊")];
+    const expected = {
+      version: 1,
+      authority: access.namespace.address,
+      source: current.source,
+      passageId: "chunk:0",
+      content: { ...current.content, text: "Dan 🌊" },
+    };
+    const outputBytes = new TextEncoder().encode(JSON.stringify(expected)).byteLength * 2;
+    return Effect.gen(function* () {
+      const exact = yield* querySemanticMemory("queue", access, {
+        ...queryLimits,
+        maxOutputBytes: outputBytes,
+      });
+      expect(exact.lookup).toEqual({ _tag: "Found", passages: [expected, expected] });
+      expect(
+        yield* querySemanticMemory("queue", access, {
+          ...queryLimits,
+          maxOutputBytes: outputBytes - 1,
+        }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "SemanticMemoryError",
+        operation: "query output bytes",
+        reason: "budget",
+      });
     }).pipe(Effect.provide(test.layer));
   });
 

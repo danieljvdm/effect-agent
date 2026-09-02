@@ -20,6 +20,11 @@ RIGHT-side anchors and publishes against the inspected head. A stopped run prese
 recorded before research ended. Preparation failures publish a failure marker. Blocking findings
 request changes and fail the Action after publication; other outcomes remain comments.
 
+Reviews with findings include a **Copy all findings** dropdown. Expand it and use the code
+block's copy button to copy every finding from that review, including paths, inline line numbers
+when available, and the inspected commit. The block reminds coding agents to verify findings
+before making changes. It opens by default when any finding has no inline comment.
+
 A complete pass with no new blockers can dismiss this bot's earlier change requests, but only
 when the reviewer explicitly verifies every blocker in each selected review against current source.
 The dismissal records the inspected commit and the fixing evidence. A clean delta, changed line,
@@ -87,6 +92,12 @@ reasoning. Admission never assumes a cache hit. The ledger releases unused reser
 validating the response's usage, model, tier, and counted bounds. Failed, interrupted, or unmetered
 requests retain their possible charge; the transport does not automatically retry them.
 
+Character admission does not guarantee a token fit. If the engine's context estimate or the
+provider's exact count exceeds the input limit, the Action publishes an incomplete token-budget
+result, preserves earlier findings, and lists batches that never started as unreviewed. A refusal
+before the first model call reports zero spend and reserves nothing. The attempt stops without
+truncating patches or retrying paid inference.
+
 The non-inference token count has a 10-second timeout per attempt and retries at most once for
 timeouts, transport failures, or HTTP 408, 429, 500, 502, 503, and 504. Other HTTP failures and
 malformed counts fail immediately. Exhausted preflight fails closed before spending admission;
@@ -121,7 +132,7 @@ The Action admits implementation and configuration changes before documentation 
 with alphabetical order within each group. The reviewer divides admitted patches into sequential
 batches of at most 256,000 patch characters, with a fresh model context for each batch. Each patch
 belongs to one batch and remains complete. Every batch can read the same authorized base/head source
-to investigate interactions with other files. One spending ledger, 8-turn allowance, 64-tool-call
+to investigate interactions with other files. One spending ledger, 64-turn allowance, 64-tool-call
 allowance, 5-minute deadline, and 24-finding capacity cover the entire attempt. Findings survive a
 later batch's expected failure; stopping leaves the remaining batches explicitly unreviewed.
 
@@ -130,7 +141,8 @@ duplicated old/new context. A large remaining input can still prevent another ca
 $1, because admission must cover a cache miss. Refusal logs report the counted input, remaining
 balance, and minimum possible request reservation. The Action's spending admission replaces the
 reviewer's cumulative token quota, so reusing cached context does not force early finalization.
-The 8 research turns, 64 tool calls, 5 minutes, and 128,000-token context bounds still apply.
+The 64-turn safety bound matches the tool-call allowance, so an eight-turn cutoff no longer ends
+affordable serial research. The 64 tool calls, 5 minutes, and 128,000-token context bounds still apply.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
@@ -142,7 +154,8 @@ the research tool definitions and their order in the encoded request.
 Compaction can change prefixes, and routing and cache availability still affect hits. See
 [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 
-Input admission allows at most 100 candidate files, 80,000 characters per patch, and 8 MB of hydrated
-base/head source. The batch size does not exclude later patches. A file that exceeds the remaining
+Input admission allows at most 100 candidate files, 256,000 characters per patch, and 8 MB of hydrated
+base/head source. A complete patch may occupy an entire batch; there is no smaller per-file cap.
+The batch size does not exclude later patches. A file that exceeds the remaining
 source allowance is excluded without preventing smaller later files from fitting. These bounds
 limit input preparation independently of the shared inference spending ceiling.

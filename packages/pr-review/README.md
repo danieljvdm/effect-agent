@@ -57,12 +57,14 @@ could abort delivery.
 An optional `costControl` reports the host's pre-request spending admission and provider usage.
 Supplying it replaces the cumulative token quota and completion reserve with that admission.
 Cached reads still contribute to usage diagnostics, but cannot force early token finalization.
-The 8-turn, 64-tool-call, 5-minute, and 128,000-token context bounds remain in force. A cost
+Cost-admitted runs allow up to 64 turns, matching the 64-tool-call allowance, while retaining
+the shared 5-minute and 128,000-token context bounds. Uncapped runs retain eight turns. A cost
 estimator alone does not disable the token quota. Capped hosts own model-visible spending feedback
 at their provider boundary; the generic turn/tool status is disabled for these runs. The Action
 counts its outgoing spending status before admission and keeps it outside the reusable cache prefix.
 With `costControl`, large requests run in sequential batches of at most 256,000 patch characters,
-preserving the host's file order and keeping each patch complete. Each batch has a fresh context
+preserving the host's file order and keeping each patch complete. One patch may use the full
+256,000-character batch capacity. Each batch has a fresh context
 and the same source service. All batches share the host ledger, turn and tool allowances, deadline,
 and 24-finding capacity. They stop on an incomplete result or exhaustion. `pendingPaths` identifies
 admitted patches never sent to a model, including a batch refused before paid inference. Hosts
@@ -84,6 +86,9 @@ disclosed separately and do not by themselves mark the admitted patches unfinish
 complete result is not proof that the repository is defect-free.
 With `costControl`, an accounted provider attempt also returns an incomplete outcome after an
 expected failure, even without findings, so hosts can publish its usage and outstanding charges.
+An engine context-limit failure or the host's
+`costControl.snapshot.inputLimitExceeded` returns an incomplete `exhausted: "tokens"` outcome,
+even before any paid attempt. Batches that never started remain in `pendingPaths`.
 Otherwise failures without recorded findings remain typed. Defects and interruption still
 propagate, and these records belong to the current run's Scope, not persistent storage.
 The report retains recorded findings before adding newly submitted findings, removes exact

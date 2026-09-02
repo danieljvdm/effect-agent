@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-cloudflare",
-  "version": "0.1.0-beta.40",
+  "version": "0.1.0-beta.41",
   "description": "Durable Object SQLite storage adapters and the routed port protocol for Effect Agent on Cloudflare.",
   "license": "MIT",
   "repository": {
@@ -25,6 +25,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@effect-agent/core": "workspace:*",
     "@effect-agent/thread": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@effect/sql-sqlite-do": "catalog:"
