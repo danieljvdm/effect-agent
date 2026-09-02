@@ -182,6 +182,7 @@ interface Reservation {
 
 interface Spending {
   readonly stopped: boolean;
+  readonly inputLimitExceeded: boolean;
   readonly closed: boolean;
   readonly modelCalls: number;
   readonly pending: ReadonlyMap<number, Reservation>;
@@ -207,6 +208,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   }
   const state = yield* Ref.make<Spending>({
     stopped: false,
+    inputLimitExceeded: false,
     closed: false,
     modelCalls: 0,
     pending: new Map(),
@@ -309,6 +311,12 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       Effect.catch(() => refuse("Unable to count the review input before paid inference.")),
     );
     if (inputTokens > MAX_INPUT_TOKENS) {
+      yield* Ref.update(state, (current) => ({ ...current, inputLimitExceeded: true }));
+      yield* Effect.logInfo("Review input-token limit reached before dispatch", {
+        modelCalls: before.modelCalls,
+        inputTokens,
+        inputTokenLimit: MAX_INPUT_TOKENS,
+      });
       return yield* refuse("The counted review input exceeds the 128,000-token price boundary.");
     }
     const requestedOutputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
@@ -449,6 +457,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     snapshot: Effect.map(Ref.get(state), (current) =>
       ReviewCostSnapshot.make({
         stopped: current.stopped,
+        ...(current.inputLimitExceeded ? { inputLimitExceeded: true } : {}),
         modelCalls: current.modelCalls,
         usage: ReviewUsage.make({
           inputTokens: current.input,

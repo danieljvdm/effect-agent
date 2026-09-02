@@ -1,8 +1,9 @@
-import type {
-  ReviewFinding,
-  ReviewOutcome,
-  ReviewReport,
-  ReviewSeverity,
+import {
+  MAX_REVIEW_PATCH_CHARS,
+  type ReviewFinding,
+  type ReviewOutcome,
+  type ReviewReport,
+  type ReviewSeverity,
 } from "@effect-agent/pr-review";
 import { Context, Schema } from "effect";
 
@@ -121,7 +122,7 @@ const exclusionReason: Record<ReviewExclusion["reason"], string> = {
   "unsupported-entry": "Not a regular file",
   "source-read-failed": "Source could not be read as bounded UTF-8 text",
   "patch-unavailable": "Exact patch could not be generated within the diff bounds",
-  "patch-limit": "Patch exceeds 80,000 characters",
+  "patch-limit": `Patch exceeds ${formatNumber(MAX_REVIEW_PATCH_CHARS)} characters`,
   "review-stopped": "Review stopped before this batch started",
 };
 

@@ -1,6 +1,7 @@
 import {
   isCommentableLine,
   makeReviewer,
+  MAX_REVIEW_PATCH_CHARS,
   ReviewChange,
   ReviewContextError,
   ReviewFileList,
@@ -55,7 +56,6 @@ import {
 
 export { estimateGpt56CostMicrousd } from "./review-openai.ts";
 
-const MAX_PATCH_CHARS = 80_000;
 const MAX_REVIEW_FILES = 100;
 const MAX_HYDRATED_SOURCE_BYTES = 8_000_000;
 
@@ -402,13 +402,13 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     if (
       exactPatch === undefined ||
       exactPatch.length === 0 ||
-      exactPatch.length > MAX_PATCH_CHARS
+      exactPatch.length > MAX_REVIEW_PATCH_CHARS
     ) {
       exclude(
         unreviewedPaths,
         file,
         basePath,
-        exactPatch !== undefined && exactPatch.length > MAX_PATCH_CHARS
+        exactPatch !== undefined && exactPatch.length > MAX_REVIEW_PATCH_CHARS
           ? "patch-limit"
           : "patch-unavailable",
       );
@@ -741,6 +741,7 @@ export const reviewActionProgram = Effect.gen(function* () {
               Effect.logInfo("Review accounting totals", {
                 modelCalls: snapshot.modelCalls,
                 costLimited: snapshot.stopped,
+                inputLimited: snapshot.inputLimitExceeded === true,
                 ...snapshot.usage,
                 costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
               }),

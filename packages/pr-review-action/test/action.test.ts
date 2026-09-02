@@ -1087,11 +1087,49 @@ describe("exact review delta", () => {
       }),
   );
 
+  it.effect.each(["added", "removed"] as const)(
+    "admits complete large %s files that fit a review batch",
+    (status) =>
+      Effect.gen(function* () {
+        const contents: Record<string, string> = {
+          "formal/DurableSubmission.tla": "state transition and invariant definition\n".repeat(
+            2_700,
+          ),
+          "formal/SubagentEstablishment.tla":
+            "child establishment and ownership invariant\n".repeat(2_100),
+        };
+        const paths = Object.keys(contents);
+        const surface = yield* hydrateExactChanges({
+          files: paths.map((path) => ({ ...file(path, undefined), status })),
+          changedPaths: paths,
+          base: treeSnapshot("base", status === "removed" ? contents : {}),
+          head: treeSnapshot("head", status === "added" ? contents : {}),
+          ignore: [],
+        });
+
+        expect(surface.exclusions).toEqual([]);
+        expect(surface.unreviewedPaths).toEqual([]);
+        expect(surface.changes.map((change) => change.path)).toEqual(paths);
+        for (const change of surface.changes) {
+          const source = contents[change.path] ?? "";
+          const prefix = status === "added" ? "+" : "-";
+          expect(change.patch.length).toBeGreaterThan(80_000);
+          expect(change.patch).toContain(
+            source
+              .trimEnd()
+              .split("\n")
+              .map((line) => `${prefix}${line}`)
+              .join("\n"),
+          );
+        }
+      }),
+  );
+
   it.effect("keeps oversized patches readable as context without claiming they were reviewed", () =>
     Effect.gen(function* () {
       const path = "src/large.ts";
       const base = treeSnapshot("base", {});
-      const head = treeSnapshot("head", { [path]: "export const large = true;\n".repeat(4_000) });
+      const head = treeSnapshot("head", { [path]: "export const large = true;\n".repeat(10_000) });
       const surface = yield* hydrateExactChanges({
         files: [file(path, undefined)],
         changedPaths: [path],

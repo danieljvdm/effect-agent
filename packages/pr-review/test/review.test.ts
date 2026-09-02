@@ -93,13 +93,13 @@ const emptyRepository = ReviewRepository.of({
   findFiles: () => Effect.succeed(ReviewFileList.make({ paths: [], truncated: false })),
 });
 
-const largeRequest = (count: number) =>
+const largeRequest = (count: number, patchCharacters = 70_014) =>
   ReviewRequest.make({
     ...request,
     changes: Array.from({ length: count }, (_, index) =>
       ReviewChange.make({
         path: `src/part-${String(index)}.ts`,
-        patch: `@@ -0,0 +1 @@\n+${"x".repeat(70_000)}`,
+        patch: "@@ -0,0 +1 @@\n+".padEnd(patchCharacters, "x"),
       }),
     ),
   });
@@ -269,7 +269,7 @@ describe("review output boundary", () => {
         ),
       );
       const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
-        .review(ReviewRequest.make({ ...largeRequest(4), followUps: [followUp] }))
+        .review(ReviewRequest.make({ ...largeRequest(2, 256_000), followUps: [followUp] }))
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
       expect(outcome.resolutions).toEqual([resolution]);
       expect(outcome.turns).toBe(2);
@@ -736,9 +736,9 @@ new mode 100755`;
 
   it.effect("PRR-002 preserves large literal patches without duplicating context", () =>
     Effect.gen(function* () {
-      const manyContextLines = Array.from({ length: 7_000 }, () => " context").join("\n");
-      const rawPatch = `@@ -1,7001 +1,7001 @@\n${manyContextLines}\n-old\n+new`;
-      expect(rawPatch.length).toBeLessThan(80_000);
+      const manyContextLines = Array.from({ length: 12_000 }, () => " context").join("\n");
+      const rawPatch = `@@ -1,12001 +1,12001 @@\n${manyContextLines}\n-old\n+new`;
+      expect(rawPatch.length).toBeGreaterThan(80_000);
       const largeRequest = ReviewRequest.make({
         ...request,
         changes: [ReviewChange.make({ path: "src/index.ts", patch: rawPatch })],
