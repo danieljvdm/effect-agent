@@ -14,6 +14,8 @@ import {
 import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   type CanonicalRecordEnvelope,
+  compileRegistrations,
+  DefinitionDigestInput,
   AbortCommand,
   ThreadRead,
   ThreadStore,
@@ -460,6 +462,100 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
+  it.effect("builds captured Tool services once per Attempt and finalizes before replacement", () =>
+    Effect.gen(function* () {
+      const lifecycle: Array<string> = [];
+      const observed: Array<string> = [];
+      const probe = Tool.make("scope_probe", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const toolkit = Toolkit.make(probe);
+      const definition = Agent.make("attempt-scoped-tool-services", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Call the probe twice.",
+        toolkit,
+        policy,
+      });
+      const scripted = yield* makeScriptedModel((call) =>
+        call % 3 < 2
+          ? toolTurn(toolCall(`scope-${call}`, "scope_probe", {}))
+          : finalParts('{"answer":"done"}'),
+      );
+      const bindings = yield* compileRegistrations([
+        {
+          agent: Agent.withModel(definition, scripted.model),
+          definitions: DefinitionDigestInput.make({
+            agent: "scope-1",
+            model: "scope-1",
+            tools: ["scope-1"],
+          }),
+          attemptLayer: ({ attemptId }) =>
+            toolkit.toLayer(
+              Effect.gen(function* () {
+                yield* Effect.acquireRelease(
+                  Effect.sync(() => lifecycle.push(`open:${attemptId}`)),
+                  () => Effect.sync(() => lifecycle.push(`close:${attemptId}`)),
+                );
+                return {
+                  scope_probe: () =>
+                    Effect.sync(() => {
+                      observed.push(attemptId);
+                      return "ready";
+                    }),
+                };
+              }),
+            ),
+        },
+      ]);
+      const runtime = yield* DurableAgentRuntime;
+      for (let run = 0; run < 2; run++) {
+        const threadId = `attempt-scope-${run}`;
+        yield* runtime.submit(
+          { definition },
+          { question: "probe" },
+          { ...submitOptions(threadId, threadId), definitions: bindings[0]!.digests },
+        );
+        yield* runtime.processThreadResolved(decodeThreadId(threadId), bindings);
+      }
+      expect(observed).toHaveLength(4);
+      expect(observed[0]).toBe(observed[1]);
+      expect(observed[2]).toBe(observed[3]);
+      expect(observed[0]).not.toBe(observed[2]);
+      expect(lifecycle).toEqual([
+        `open:${observed[0]}`,
+        `close:${observed[0]}`,
+        `open:${observed[2]}`,
+        `close:${observed[2]}`,
+      ]);
+      const interruptedThread = "attempt-scope-replacement";
+      yield* runtime.submit(
+        { definition },
+        { question: "probe" },
+        {
+          ...submitOptions(interruptedThread, interruptedThread),
+          definitions: bindings[0]!.digests,
+        },
+      );
+      yield* armFailpoint("turn:after-results-append");
+      const interrupted = yield* runtime
+        .processThreadResolved(decodeThreadId(interruptedThread), bindings)
+        .pipe(Effect.exit);
+      expect(Exit.isFailure(interrupted)).toBe(true);
+      expect(lifecycle.at(-1)).toBe(`close:${observed[4]}`);
+      yield* clearFailpoint;
+      yield* runtime.processThreadResolved(decodeThreadId(interruptedThread), bindings);
+      expect(observed).toHaveLength(6);
+      expect(observed[4]).not.toBe(observed[5]);
+      expect(lifecycle.slice(-4)).toEqual([
+        `open:${observed[4]}`,
+        `close:${observed[4]}`,
+        `open:${observed[5]}`,
+        `close:${observed[5]}`,
+      ]);
+    }),
+  );
   it.effect("an ordinary delegate_export is never replayed after its external effect", () =>
     Effect.gen(function* () {
       yield* resetReconciler;

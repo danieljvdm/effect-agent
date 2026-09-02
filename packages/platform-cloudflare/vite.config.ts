@@ -42,6 +42,7 @@ export default defineConfig({
       "src/subscriptions.ts",
       "src/browser-quick-action.ts",
       "src/interactive-browser.ts",
+      "src/protected-browser.ts",
       "src/browser-rest-capture.ts",
       "src/browser-rest-crawl.ts",
     ],
@@ -94,6 +95,7 @@ export default defineConfig({
             "test/code-mode/**",
             "test/interactive-browser-actions.test.ts",
             "test/interactive-browser-native.test.ts",
+            "test/protected-browser-native.test.ts",
             "test/travel-planner-dc.test.ts",
           ],
         },
@@ -104,6 +106,7 @@ export default defineConfig({
           include: [
             "test/interactive-browser-actions.test.ts",
             "test/interactive-browser-native.test.ts",
+            "test/protected-browser-native.test.ts",
           ],
         },
       },

@@ -33,6 +33,13 @@ const proofResult = () =>
       handoffActive: true,
       closed: true,
     },
+    protectedBrowser: {
+      loginLayouts: 2,
+      authenticatedContinuation: true,
+      revokedOfferRefused: true,
+      cardFilled: true,
+      closed: true,
+    },
   });
 
 describe("Browser Run Worker proof deployment resource", () => {

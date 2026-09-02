@@ -40,7 +40,20 @@ The deployment credential stays in the local workflow. Only the account ID and t
 token enter the temporary Worker; deleting the Worker also removes that secret. Remote browser
 cleanup must confirm exact-session termination before the proof succeeds.
 
-Set these values before opting in:
+After the general session closes, a fresh protected session uses ordinary Effect AI Tools with
+opaque references against this Worker's controlled `/protected/` fixtures. Two login layouts
+accept dummy credentials and return an authenticated dashboard; a same-origin iframe accepts a
+dummy card. The proof rejects a revoked offer, continues browsing without exposing field values,
+and requires confirmed exact-session cleanup. These public fixtures contain no real accounts,
+payments, vaults, or production authorization. The host trusts these recipients not to echo
+credentials and treats Cloudflare administrators/token holders as trusted operators.
+
+The local native Chromium test also exercises different HTTPS origins and a cross-origin processor
+frame. The hosted proof uses one origin; it does not establish PCI compliance or secrecy against
+hostile recipients. Ordinary CI does not establish hosted-provider behavior: run the opt-in command
+with your account to verify it. Protected sessions never create a viewer, handoff, or recording.
+
+Required environment:
 
 - `CLOUDFLARE_ACCOUNT_ID`: the 32-character account ID;
 - `CLOUDFLARE_API_TOKEN`: a token that can read and edit Workers Scripts, held as an Effect

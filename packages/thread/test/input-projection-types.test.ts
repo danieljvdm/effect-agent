@@ -9,7 +9,7 @@ import {
   Schema,
   SchemaGetter,
   type Scope,
-  type Layer,
+  Layer,
 } from "effect";
 import { Toolkit, type LanguageModel, type Model, Tool } from "effect/unstable/ai";
 
@@ -243,6 +243,31 @@ const proveRegistrationRequirements = (
   ]);
 
   void rejectedMixedModel;
+
+  const scoped = compileRegistrations([
+    {
+      agent: definition,
+      model: firstModel,
+      definitions: DefinitionDigestInput.make({ agent: "direct", model: "direct", tools: [] }),
+      attemptLayer: () =>
+        Layer.effect(InstructionContext)(Effect.map(LookupDependency, (text) => ({ text }))),
+    },
+    {
+      agent: first,
+      definitions: DefinitionDigestInput.make({ agent: "scoped", model: "scoped", tools: [] }),
+      attemptLayer: () =>
+        Layer.effect(InstructionContext)(Effect.map(LookupDependency, (text) => ({ text }))),
+    },
+  ]);
+  const scopedRequirements: Assert<
+    Equal<
+      Effect.Services<typeof scoped>,
+      Crypto.Crypto | InputProjection | ProviderInfrastructure | LookupDependency
+    >
+  > = true;
+  const scopedErrors: Assert<Equal<Effect.Error<typeof scoped>, DigestError>> = true;
+  void scopedRequirements;
+  void scopedErrors;
 
   const identityOnly = {
     agentId: first.definition.id,
