@@ -28,6 +28,8 @@ SQL implementations they use.
 version for development. Its D1 peer is aligned with Effect. Consumers provide the shared runtime.
 
 Root overrides keep Effect, its Node platform, and Vitest on one version.
+The docs deployment runs Alchemy under Bun, so the root also installs Alchemy's
+optional `@effect/platform-bun` peer at the shared Effect version.
 Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
 The Code Mode example also uses a Vite task for its Miniflare tests.
