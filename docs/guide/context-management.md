@@ -415,6 +415,160 @@ the host decides which diagnostics to retain and who can inspect them.
 
 <a id="tool-results-are-bounded-at-the-source"></a>
 
+### Process committed Thread activity {#committed-memory}
+
+`processCommittedActivity` is an optional, finite pass over one application-selected Thread.
+The host chooses the processor ID and version, eligible records, extractor, destination, sharing
+scope, invocation schedule, and Thread discovery. No background worker starts when the package
+is imported. A read-only corpus or direct Markdown recall needs none of these services.
+
+The pass claims its own processor lease and receives any pending output atomically with that
+claim. It captures `ThreadStore.inspectTail` once and reads
+bounded, contiguous pages through that prefix. Records appended afterward belong to a later
+pass. Pending work beyond the captured tail fails as `noncontiguous`, including when progress and
+Thread storage were restored to different points. `PersistentHistory` exposes the batch from a
+successful Run together; durable Runs expose
+incremental committed records. A record's presence is evidence of its commit, not evidence that
+the whole Run succeeded. Eligibility rules must account for that distinction.
+
+For each record the processor saves a Schema-encoded extraction, applies that saved output, and
+then advances its separate cursor. The work ID depends on processor, version, Thread, and
+sequence, never the worker or clock. Advancing clears pending output in the same transaction;
+there is no separate pending-work read per record. A saved output wins over re-extraction after restart. Its
+canonical record digest excludes the adapter's opaque observation cursor. Another processor
+version has independent progress; changing a version is an application decision about
+reprocessing and destination identities.
+
+The destination must reconcile the work ID durably before returning. If application and progress
+storage are separate, application can repeat after a lost acknowledgment. Keep its receipts for
+as long as pending output can return, including supported backup/restore windows. Conditional
+writes must prevent delayed work from overwriting later corrections or withdrawals. The SQLite
+memory writer supplies those properties; an ordinary non-idempotent external effect does not.
+
+This example opts a structured Dan–Chad discussion into a scope the host also grants Tim. Its
+extraction policy accepts only original user statements. An assistant repeating the statement
+does not become another witness. Applications that extract assistant references should retain
+the original `originId` instead of assigning independent evidence identity.
+
+```ts twoslash
+import { MemoryContent, MemoryKey, MemoryWrite, MemoryWriter, ThreadId } from "@effect-agent/core";
+import {
+  ActivityPassLimits,
+  ActivityProcessorKey,
+  processCommittedActivity,
+  type CanonicalRecordEnvelope,
+  type PreparedActivity,
+} from "@effect-agent/thread";
+import { Clock, DateTime, Effect, Schema } from "effect";
+
+// The application owns this message format and which Threads use it.
+const Statement = Schema.Struct({
+  speaker: Schema.NonEmptyString,
+  observer: Schema.NonEmptyString,
+  text: Schema.NonEmptyString,
+  activityAt: Schema.NullOr(Schema.Finite),
+  interpretation: Schema.NonEmptyString,
+});
+
+const extract = Effect.fn("extractDiscussion")(function* (entry: CanonicalRecordEnvelope) {
+  if (entry.record.payload._tag !== "UserInputRecorded") return null;
+  const statement = yield* Schema.decodeUnknownEffect(Statement)(entry.record.payload.input);
+  const locator = `thread://${entry.threadId}/records/${entry.record.recordId}`;
+  const content = yield* MemoryContent.makeEffect({
+    text: statement.text,
+    attributions: [
+      {
+        originId: `${entry.threadId}:${entry.record.recordId}`,
+        speaker: statement.speaker,
+        observers: [statement.observer],
+        locator,
+        activityAt: statement.activityAt,
+        interpretation: statement.interpretation,
+      },
+    ],
+    metadata: {
+      threadId: entry.threadId,
+      recordId: entry.record.recordId,
+      recordSchemaVersion: entry.record.schemaVersion,
+      sequence: entry.sequence,
+    },
+    recordedAt: DateTime.toEpochMillis(entry.record.createdAt),
+    extractedAt: yield* Clock.currentTimeMillis,
+  });
+  return yield* Schema.encodeEffect(MemoryContent)(content);
+});
+
+const apply = Effect.fn("applyDiscussion")(function* (work: PreparedActivity) {
+  const content = yield* Schema.decodeUnknownEffect(Schema.NullOr(MemoryContent))(work.output);
+  if (content === null) return;
+  const writer = yield* MemoryWriter;
+  const command = yield* Schema.decodeUnknownEffect(MemoryWrite)({
+    _tag: "Put",
+    key: MemoryKey.make({ namespace: "dan-discussions", id: work.workId }),
+    operationId: work.workId,
+    expectedRevision: null,
+    locator: `memory://dan-discussions/${work.workId}`,
+    content: {
+      ...content,
+      metadata: { ...content.metadata, sourceRecordDigest: work.recordDigest },
+    },
+    scopes: ["dan-approved-chad-and-tim"],
+  });
+  yield* writer.change(command);
+});
+
+const key = ActivityProcessorKey.make({
+  processorId: "discussion-statements",
+  processorVersion: "1",
+  threadId: Schema.decodeSync(ThreadId)("dan-chad"),
+});
+const limits = ActivityPassLimits.make({
+  maxRecords: 128,
+  pageSize: 16,
+  timeoutMillis: 30_000,
+  leaseMillis: 31_000,
+});
+
+// Supply a unique owner for each worker lifetime and the application's Layers.
+const ingest = (owner: string) => processCommittedActivity({ key, owner, limits, extract, apply });
+```
+
+The optional SQLite progress Layer can share a connection with the memory writer. Supply the
+host's existing `ThreadStore` and `Crypto` Layer to the pass as well; the processor never uses
+Thread ownership epochs, `SubmissionLedger`, or engine checkpoints for its own progress.
+
+```ts twoslash
+import { activityProcessorStoreLayer, memoryStoreLayer } from "@effect-agent/storage-sqlite";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { Layer } from "effect";
+
+const MemoryProcessing = Layer.mergeAll(activityProcessorStoreLayer, memoryStoreLayer).pipe(
+  Layer.provide(SqliteClient.layer({ filename: "memory.sqlite" })),
+);
+```
+
+Every claim acquisition allocates a fresh fencing epoch, including reacquisition by the same
+owner after release. Expired or superseded workers cannot replace pending output or advance
+progress. A destination invocation already in flight may finish the saved output, so its own
+idempotency and conditional writes remain required. Extraction and application each own a Scope;
+the pass has a deadline and release gets at most another 500ms. If release fails, the lease
+expires. The failpoint-enabled Layer exposes initialization and each mutation before, inside,
+and after its transaction for recovery tests.
+SQLite rejects activity progress whose JSON exceeds 16,777,216 JavaScript string code units before
+writing, with `ActivityStoreError` reason `invalid-input`. Rejected writes leave prior progress intact.
+
+`ActivityProcessorStore.inspect` exposes the per-processor, per-version, per-Thread cursor,
+pending work, and last advancement time. A successful pass reports its captured tail, through
+sequence, and remaining records in that prefix. These are per-Thread watermarks, not a global
+freshness promise. Process selected Threads with bounded `Effect.forEach` and handle each pass's
+typed result independently when one failed Thread should not hold back others.
+
+For the example workflow, the healthy commit-to-recallable target is 60 seconds. Hosts must
+measure that interval from the source commit to successful authoritative recall and choose a
+schedule that meets it. Recorded, extracted, advanced, indexed, and accessed times describe
+different events; none replaces the original activity time. An embedding index has its own
+progress and readiness, and must not advance this extraction cursor.
+
 ## Limit tool output
 
 Every application tool result, including MCP output, passes through `toolResultBounds` once before

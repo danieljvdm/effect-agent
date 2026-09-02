@@ -297,6 +297,12 @@ past outputs, idempotency receipts, and backups have separate retention policies
 An immutable, schema-versioned fact in the Thread Log. Canonical Records are the only
 recovery truth.
 
+**Activity processor**
+
+An optional application-invoked consumer of committed Thread records. Its versioned, per-Thread
+progress and prepared output are separate from canonical history, engine checkpoints, and
+submission ownership. The application owns extraction, destination idempotency, and sharing.
+
 **Thread Log**
 The ordered, append-only sequence of Canonical Records for one Thread.
 

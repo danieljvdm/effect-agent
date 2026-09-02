@@ -34,8 +34,8 @@ Before 1.0, APIs and stored data may change without a migration path.
 MCP validates connections and tool discovery through `McpConnector` and `connectMcp`.
 Your application implements the transport and remote handlers; no stdio or HTTP client is bundled.
 
-Nested delegation, handoff, detached subagents, runtime Skills, a framework-owned persistent agent
-memory service, arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
+Nested delegation, handoff, detached subagents, runtime Skills, a framework-owned memory
+extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
 Applications own domain state. `recallMemory` reads bounded passages from sources they select; it
 does not store them. Thread history and compaction summaries do not replace application state.
 
@@ -101,6 +101,9 @@ Follow the [local process walkthrough](../guide/sandbox#run-a-trusted-local-proc
 
 Thread records, storage contracts, recovery, durable execution, scheduling, and subscriptions.
 `compileRegistrations` hashes version declarations and captures agent services for workers.
+Optional `processCommittedActivity` runs bounded, resumable passes with separate processor
+progress. The host owns record eligibility, extraction, and durable output application. See
+[committed memory processing](../guide/context-management#committed-memory).
 
 | Import                            | Use                                                    |
 | --------------------------------- | ------------------------------------------------------ |
@@ -124,6 +127,10 @@ The independent `memoryStoreLayer` supplies optional `MemoryReader` and `MemoryW
 for conditional document updates and terminal withdrawal. It initializes only memory tables.
 Use `memoryReaderLayer` when the application needs no writer. See
 [memory lifecycle](../guide/context-management#memory-lifecycle).
+
+`activityProcessorStoreLayer` provides independent leases, prepared output, and per-Thread
+progress for finite committed-activity passes. Its tables and fencing epochs are separate from
+the Thread journal and submission ledger.
 
 ### `@effect-agent/platform-node`
 
