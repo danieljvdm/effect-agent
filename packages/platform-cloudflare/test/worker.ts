@@ -1,5 +1,10 @@
-import { recallMemory, RecalledMemory } from "@effect-agent/capabilities";
-import { Agent, MemoryWrite, MemoryLookup, MemoryDocument } from "@effect-agent/core";
+import {
+  Agent,
+  MemoryWrite,
+  MemoryLookup,
+  MemoryDocument,
+  RecalledMemory,
+} from "@effect-agent/core";
 import { OperationDenied, ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread";
 import { Context, Crypto, Effect, Layer, Schema } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
@@ -299,10 +304,9 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
           principal: memoryPrincipal,
         });
         const lookup = yield* Schema.decodeUnknownEffect(MemoryLookup)(encoded);
-        return yield* recallMemory(
-          [{ id: "project", essential: true, read: client.revalidate(lookup, memoryRecallLimits) }],
-          memoryRecallLimits,
-        ).pipe(Effect.flatMap(Schema.encodeEffect(RecalledMemory)));
+        return yield* client
+          .recall(lookup, memoryRecallLimits)
+          .pipe(Effect.flatMap(Schema.encodeEffect(RecalledMemory)));
       }),
     );
   }

@@ -1,4 +1,4 @@
-import { recallMemory, revalidateMemoryLookup } from "@effect-agent/capabilities";
+import { Memory, revalidateMemoryLookup } from "@effect-agent/capabilities";
 import {
   MemoryNamespace,
   MemoryScope,
@@ -248,7 +248,7 @@ const runTim = Effect.fn("MemoryActivityTest.runTim")(function* (
       threadId: timThreadId,
       transientContext: {
         load: () =>
-          recallMemory(
+          Memory.recall(
             [
               {
                 id: "authoritative-team-memory",

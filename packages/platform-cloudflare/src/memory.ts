@@ -2,6 +2,7 @@ import {
   type MemoryLookup,
   type MemoryReader,
   type MemoryWrite,
+  Memory,
   MemoryAccess,
   MemoryDocument,
   MemoryMutationFailpoint,
@@ -53,8 +54,8 @@ export class MemoryObjectNamespace extends Context.Service<
 export const memoryObjectName = (namespace: MemoryNamespace.Any): string => namespace.address;
 
 /**
- * Effect-native, host-bound memory client. Revalidate the entire admitted lookup once,
- * then supply its result to recallMemory. No retries or per-source splitting occur here.
+ * Effect-native, host-bound memory client. Recall revalidates the entire admitted lookup
+ * in one RPC and renders it locally. No retries or per-source splitting occur here.
  * Interrupted callers stop waiting; the owner has its own deadline. A timed-out write
  * may have committed: reconcile by sending the identical operation ID and command.
  */
@@ -162,7 +163,25 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
       return response.result;
     }).pipe((effect) => withinDeadline(effect, validated.timeoutMillis));
   });
-  return { revalidate, revalidateSemantic, change };
+  /**
+   * Revalidate in one owner RPC, then render whole passages within the caller's budget.
+   * The bound source is essential: unavailable/stale results and matches that cannot fit
+   * fail instead of silently producing empty context. No-match remains successful.
+   * The single outcome has sourceId "memory". No embedding or candidate search is performed.
+   * Use revalidate with Memory.recall for multiple readers sharing one output budget.
+   */
+  const recall = Effect.fn("CloudflareMemoryClient.recall")(function* (
+    lookup: MemoryLookup,
+    limits: MemoryRecallLimits,
+    estimateTokens?: (text: string) => number,
+  ) {
+    return yield* Memory.recall(
+      [{ id: "memory", essential: true, read: revalidate(lookup, limits) }],
+      limits,
+      estimateTokens,
+    );
+  });
+  return { recall, revalidate, revalidateSemantic, change };
 });
 
 export const CloudflareMemoryClient = {

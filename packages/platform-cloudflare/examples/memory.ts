@@ -1,4 +1,4 @@
-import type { MemoryWrite } from "@effect-agent/core";
+import type { MemoryLookup, MemoryRecallLimits, MemoryWrite } from "@effect-agent/core";
 import { MemoryAccess, MemoryNamespace, MemoryScope } from "@effect-agent/core";
 import {
   MemoryOwnerAuthorizer,
@@ -44,4 +44,17 @@ export const correctProjectMemory = Effect.fn("example.correctProjectMemory")(fu
     yield* Schema.decodeUnknownEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
   );
   return yield* client.change(write);
+});
+
+/** Candidates are application-selected; recall validates and renders them in one operation. */
+export const recallProjectMemory = Effect.fn("example.recallProjectMemory")(function* (
+  namespace: ReturnType<typeof Projects.make>,
+  candidates: MemoryLookup,
+  limits: MemoryRecallLimits,
+) {
+  const memory = yield* CloudflareMemoryClient.make(
+    MemoryAccess.make({ namespace, scope: MemoryScope.make("project") }),
+    yield* Schema.decodeUnknownEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
+  );
+  return yield* memory.recall(candidates, limits);
 });

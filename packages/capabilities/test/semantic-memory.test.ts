@@ -37,7 +37,7 @@ import {
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  recallMemory,
+  Memory,
 } from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
@@ -316,7 +316,7 @@ describe("optional semantic workflows", () => {
             },
           ],
         });
-        const recalled = yield* recallMemory(
+        const recalled = yield* Memory.recall(
           [{ id: "semantic", essential: true, read: Effect.succeed(queried.lookup) }],
           { ...recallLimits, maxItems: 1 },
         );
@@ -325,7 +325,7 @@ describe("optional semantic workflows", () => {
         expect(recalled.text).toContain('"observers":["Chad"]');
         expect(recalled.text).not.toContain(access.namespace.address);
         expect(recalled.text).toContain('"authority":"memory-authority:1"');
-        const limited = yield* recallMemory(
+        const limited = yield* Memory.recall(
           [{ id: "semantic", essential: false, read: Effect.succeed(queried.lookup) }],
           { ...recallLimits, maxTokens: recalled.estimatedTokens - 1 },
         );

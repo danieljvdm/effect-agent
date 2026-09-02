@@ -80,7 +80,7 @@ Transforms change the model prompt, not stored input or history. Use
 
 ## Recall application-owned sources {#recall-memory}
 
-`recallMemory` turns readable, application-selected sources into a bounded transient model view.
+`Memory.recall` turns readable, application-selected sources into a bounded transient model view.
 The framework does not own a memory database, write recalled material, or build an embedding
 index. An Agent that does not need context loading requires no context service, memory reader,
 or store. `RunContextPreparationPassthrough` remains available to explicitly disable inherited
@@ -104,7 +104,7 @@ unknown.
 This source reads a known Markdown note without a store or adapter:
 
 ```ts twoslash
-import { recallMemory } from "@effect-agent/capabilities";
+import { Memory } from "@effect-agent/capabilities";
 import {
   MemoryAttribution,
   MemoryContent,
@@ -156,7 +156,7 @@ const lookup: MemoryLookup = { _tag: "Found", passages: [note] };
 
 export const projectNotes: RunTransientContextHook<MemoryRecallError> = {
   load: () =>
-    recallMemory(
+    Memory.recall(
       [{ id: "project-notes", essential: true, read: Effect.succeed(lookup) }],
       limits,
     ).pipe(
@@ -196,7 +196,7 @@ and `RunOptions.transientContext` hooks override the corresponding service field
 Other service fields remain active. Attached children inherit the host context service, not the
 parent's per-Run overrides.
 
-`recallMemory` renders positional `memory:N` reference IDs and provenance for that one result.
+`Memory.recall` renders positional `memory:N` reference IDs and provenance for that one result.
 `RecalledMemory.outcomes` separately reports what happened at each source. The rendered envelope
 and every citation remain untrusted model input. Validate model claims against
 `RecalledMemory.passages` before presenting them as sourced facts.
@@ -230,7 +230,7 @@ Keep authorization, credentials, and query policy inside an application service.
 one read method; it does not create a durable copy, write to the corpus, or create embeddings:
 
 ```ts twoslash
-import { recallMemory } from "@effect-agent/capabilities";
+import { Memory } from "@effect-agent/capabilities";
 import { type MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "@effect-agent/core";
 import { RunContextPreparation, type RunTransientContextHook } from "@effect-agent/engine";
 import { Context, Effect, Layer } from "effect";
@@ -257,7 +257,7 @@ export const ExternalCorpusMemoryLive = Layer.effect(
     const corpus = yield* ExternalCorpus;
     const transientContext: RunTransientContextHook<MemoryRecallError> = {
       load: () =>
-        recallMemory(
+        Memory.recall(
           [
             {
               id: "team-corpus",
@@ -387,7 +387,7 @@ corpus into a framework store.
 The host selects a namespace and access scope. A document explicitly lists the scopes allowed to
 recall it; an empty list grants none. No scope name, shared persona, channel, or DM is enabled by
 default. Call `revalidateMemoryLookup(candidates, access, limits)` inside the reader supplied to
-`recallMemory`, immediately before composition. It requires only `MemoryReader`. The optional
+`Memory.recall`, immediately before composition. It requires only `MemoryReader`. The optional
 third argument accepts `maxInputBytes` from the recall limits, defaulting to 16 MiB and capped
 at 64 MiB. Revalidation reads one authoritative source at a time and checks aggregate UTF-8
 replacement JSON before retaining it, including duplicate passages. Exceeding this bound fails
@@ -694,7 +694,7 @@ import {
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  recallMemory,
+  Memory,
 } from "@effect-agent/capabilities";
 import {
   MemoryKey,
@@ -728,7 +728,7 @@ export const refresh = (key: MemoryKey<typeof namespace>) =>
   );
 
 export const recall = (query: string) =>
-  recallMemory(
+  Memory.recall(
     [
       {
         id: "team-semantic",
@@ -763,7 +763,7 @@ Provide the same index instance, `MemoryReader`, and native `EmbeddingModel` to 
 Refresh also requires Effect `Crypto`. The provider Layer owns its resources; the index belongs
 to its Layer's Scope. Captured index methods fail after that Scope closes. Put `recall` in the
 transient-context hook above. The final envelope, including attribution and citations, must fit
-`recallMemory`'s item, UTF-8 byte, and token limits; the engine separately admits the full prompt.
+`Memory.recall`'s item, UTF-8 byte, and token limits; the engine separately admits the full prompt.
 `essential: false` permits explicitly returned unavailable outcomes. It does not swallow errors.
 Map only intended expected failures to an `Unavailable` lookup in application policy.
 `SemanticQueryLimits.maxOutputBytes` bounds aggregate UTF-8 JSON passage output before retention,
@@ -976,7 +976,7 @@ stores, and applies the artifact.
 
 `RetainedFact` values remain artifact metadata. They do not enter the prompt or a separate memory
 store automatically. This path is separate from `ContextCompactor`; the interpreter does not call
-`applyCompaction`. `recallMemory` is the optional read path for application-owned sources; it does
+`applyCompaction`. `Memory.recall` is the optional read path for application-owned sources; it does
 not persist passages or turn compaction artifacts into memory.
 
 ## Track usage {#observing-usage}

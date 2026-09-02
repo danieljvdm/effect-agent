@@ -187,7 +187,6 @@ import {
   MemoryRecallLimits,
   MemoryScope,
 } from "@effect-agent/core";
-import { recallMemory } from "@effect-agent/capabilities";
 import { CloudflareMemoryClient, type MemoryObjectRpc } from "@effect-agent/platform-cloudflare";
 import { Principal } from "@effect-agent/thread";
 import { Effect, Schema } from "effect";
@@ -219,10 +218,7 @@ export const recall = (
       access,
       principal: Principal.make("authenticated-principal"),
     });
-    return yield* recallMemory(
-      [{ id: "project", essential: true, read: client.revalidate(candidates, limits) }],
-      limits,
-    );
+    return yield* client.recall(candidates, limits);
   });
 ```
 
@@ -238,11 +234,22 @@ after authentication; `.make` is suitable for trusted constants. Scopes are none
 most 1,024 characters, and principals are nonempty strings of at most 256 characters. Both encode
 as ordinary strings on the wire. Brands prevent category mix-ups; they do not grant authorization.
 
-One `revalidate` sends all admitted candidates in one RPC to `namespace.address`. The owner verifies
+One `recall` sends all admitted candidates in one RPC to `namespace.address`. The owner verifies
 its name, request namespace, principal, and scope; it then reads each distinct source locally once.
-Passage ordering and authoritative attribution survive the round trip. `recallMemory` applies the
-final rendered item, byte, and token budgets on the caller. Oversized batches fail typed and are never
+Passage ordering and authoritative attribution survive the round trip. The client applies the
+final rendered item, byte, and token budgets locally and returns `RecalledMemory`. Oversized batches fail typed and are never
 split into per-document calls. There is deliberately no remote per-document `MemoryReader` Layer.
+
+The bound source is essential: unavailable or insufficiently fresh results fail, as do matches
+that cannot fit the output budget. No-match succeeds with empty text. The result has one source
+outcome with `sourceId: "memory"`. An optional third argument supplies the selected model's token
+estimator; without it, recall conservatively estimates one token per UTF-8 byte. The recall deadline
+covers revalidation and local composition; the engine still enforces its full per-call context budget.
+
+Use `client.revalidate(candidates, limits)` when you need validated passages without rendering.
+To combine multiple readers under one shared budget, use `Memory.recall` from `@effect-agent/core`
+or `@effect-agent/capabilities` with their revalidation effects as sources. It retains explicit source
+IDs and essential/optional policy for that multi-reader case.
 
 For an external semantic index, call `client.revalidateSemantic(search, profile, limits)` with its
 `MemoryIndexSearch` result. Embedding and search stay application-owned. This one RPC checks current

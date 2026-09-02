@@ -1,4 +1,4 @@
-import { recallMemory } from "@effect-agent/capabilities";
+import { Memory } from "@effect-agent/capabilities";
 import { MemoryAccess } from "@effect-agent/core";
 import {
   MemoryObject,
@@ -111,7 +111,7 @@ export class BenchmarkThread extends ThreadObject.make(ThreadObject.layer([]), {
           const current = yield* client.revalidate(lookup, limits);
           validationRpcMillis = (yield* Clock.currentTimeMillis) - start;
           validatedBytes = memoryWireBytes(JSON.stringify(current));
-          const recalled = yield* recallMemory(
+          const recalled = yield* Memory.recall(
             [{ id: "project", essential: true, read: Effect.succeed(current) }],
             limits,
           );

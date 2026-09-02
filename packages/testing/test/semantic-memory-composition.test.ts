@@ -2,7 +2,7 @@ import {
   MemoryAccess,
   indexMemorySource,
   querySemanticMemory,
-  recallMemory,
+  Memory,
 } from "@effect-agent/capabilities";
 import {
   MemoryNamespace,
@@ -97,7 +97,7 @@ it.effect(
       });
       yield* indexMemorySource(key, indexLimits);
       const initial = yield* querySemanticMemory("queue", access, queryLimits);
-      const recalled = yield* recallMemory(
+      const recalled = yield* Memory.recall(
         [{ id: "semantic", essential: true, read: Effect.succeed(initial.lookup) }],
         {
           maxSources: 1,

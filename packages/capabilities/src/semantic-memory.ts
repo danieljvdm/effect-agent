@@ -76,7 +76,7 @@ export const SemanticIndexResult = {
     }),
 };
 
-/** Candidates have already passed current-source checks; compose lookup with recallMemory. */
+/** Candidates have already passed current-source checks; compose lookup with Memory.recall. */
 export class SemanticQueryResult extends Schema.Class<SemanticQueryResult>(
   "@effect-agent/capabilities/SemanticQueryResult",
 )({
@@ -323,7 +323,7 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* <
  * generation/revision/locator candidates. Its default is 16 MiB; exhaustion returns no partial
  * result. Reader allocation, decoding, and one source serialization precede this bound.
  *
- * Compose result.lookup through recallMemory to enforce the final rendered item/byte/token
+ * Compose result.lookup through Memory.recall to enforce the final rendered item/byte/token
  * budget and overall deadline. An empty result says nothing about undiscovered sources.
  * Checks begun before an acknowledged correction/withdrawal may finish with their already
  * captured source view.

@@ -3,6 +3,7 @@ export * from "./errors.ts";
 export * from "./events.ts";
 export * from "./identifiers.ts";
 export * from "./memory.ts";
+export * from "./memory-recall.ts";
 export * from "./memory-lifecycle.ts";
 export * from "./memory-revalidation.ts";
 export * from "./memory-namespace.ts";
