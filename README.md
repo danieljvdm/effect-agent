@@ -79,8 +79,7 @@ Your application owns authorization and isolation. The local sandbox runs truste
 isolation. For MCP, your application supplies the connector transport. Read the
 [host isolation requirements](docs/guide/operations.md#authorization-and-isolation) before deploying.
 
-For GitHub integrations, see the [read-only PR reviewer](packages/pr-review/README.md) and the
-separate [work-order Action](work-order-action/README.md).
+For GitHub integrations, see the [read-only PR reviewer](packages/pr-review/README.md).
 
 ## Development
 
