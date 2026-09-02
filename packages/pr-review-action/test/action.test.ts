@@ -1019,50 +1019,90 @@ describe("exact review delta", () => {
     }),
   );
 
-  it.effect.each([false, true])("ignores a binary rename in either direction: %s", (reverse) =>
+  it.effect.each([false, true])("preserves the textual side of a binary rename: %s", (reverse) =>
     Effect.gen(function* () {
-      const previousPath = reverse ? "assets/unknown" : "assets/icon.png";
-      const path = reverse ? "assets/icon.png" : "assets/unknown";
+      const previousPath = reverse ? "src/icon.ts" : "assets/icon.png";
+      const path = reverse ? "assets/icon.png" : "src/icon.ts";
+      const content = "export const icon = true;\n";
+      const base = treeSnapshot("base", { [previousPath]: content }, new Set(["assets/icon.png"]));
+      const head = treeSnapshot("head", { [path]: content }, new Set(["assets/icon.png"]));
       const surface = yield* hydrateExactChanges({
         files: [{ ...file(path, undefined), previousPath, status: "renamed" }],
         changedPaths: [previousPath, path],
-        base: treeSnapshot("base", { [previousPath]: "binary" }, new Set([previousPath])),
-        head: treeSnapshot("head", { [path]: "binary" }, new Set([path])),
+        base,
+        head,
         ignore: [],
       });
-      expect(surface.ignoredPaths).toEqual([path]);
-      expect(surface.changes).toEqual([]);
-      expect([...surface.unavailablePaths].sort()).toEqual([previousPath, path].sort());
+      expect(surface.ignoredPaths).toEqual(["assets/icon.png"]);
+      expect(surface.unreviewedPaths).toEqual([]);
+      expect(surface.changes).toHaveLength(1);
+      expect(surface.changes[0]?.path).toBe("src/icon.ts");
+      expect(surface.changes[0]?.patch).toContain(`${reverse ? "-" : "+"}${content}`);
+      expect(surface.changes[0]?.patch).not.toContain("rename from");
+      const repository = makeReviewRepository({
+        base,
+        head,
+        ignore: [],
+        unavailablePaths: surface.unavailablePaths,
+      });
+      expect(
+        (yield* repository.findFiles({ revision: reverse ? "base" : "head", query: "src/" })).paths,
+      ).toEqual(["src/icon.ts"]);
+      yield* repository.readFile({
+        revision: reverse ? "base" : "head",
+        path: "src/icon.ts",
+        startLine: 1,
+        lineCount: 1,
+      });
     }),
   );
 
-  it.effect.each([false, true])(
-    "does not let detected binary content hide a source read failure: %s",
-    (failedRead) =>
+  it.effect.each(
+    (["addition", "deletion", "binary", "failure"] as const).flatMap((mode) =>
+      [false, true].map((renamed) => ({ mode, renamed })),
+    ),
+  )(
+    "preserves text and read failures beside content-detected binaries: $mode, renamed=$renamed",
+    ({ mode, renamed }) =>
       Effect.gen(function* () {
         const path = "assets/unknown";
+        const previousPath = renamed ? "assets/old" : path;
+        const textPath = mode === "deletion" ? previousPath : path;
         const surface = yield* hydrateExactChanges({
-          files: [],
-          changedPaths: [path],
+          files: renamed ? [{ ...file(path, undefined), previousPath, status: "renamed" }] : [],
+          changedPaths: renamed ? [previousPath, path] : [path],
           ignore: [],
           base: {
-            ...treeSnapshot("base", { [path]: "binary" }),
-            readTextFile: () => Effect.fail(BinaryBlob.make({ sha: "binary" })),
+            ...treeSnapshot("base", { [previousPath]: "binary" }),
+            readTextFile: () =>
+              mode === "deletion"
+                ? Effect.succeed("text")
+                : Effect.fail(BinaryBlob.make({ sha: "binary" })),
           },
           head: {
             ...treeSnapshot("head", { [path]: "text" }),
             readTextFile: () =>
-              failedRead
+              mode === "failure"
                 ? Effect.fail(
                     GitHubApiFailure.make({ operation: "get Git blob", reason: "unavailable" }),
                   )
-                : Effect.succeed("text"),
+                : mode === "addition"
+                  ? Effect.succeed("text")
+                  : Effect.fail(BinaryBlob.make({ sha: "binary" })),
           },
         });
-        expect(surface.ignoredPaths).toEqual(failedRead ? [] : [path]);
-        expect(surface.unreviewedPaths).toEqual(failedRead ? [path] : []);
-        expect(surface.changes).toEqual([]);
-        expect(surface.unavailablePaths.has(path)).toBe(true);
+        expect(surface.ignoredPaths).toEqual(mode === "binary" ? [path] : []);
+        expect(surface.unreviewedPaths).toEqual(mode === "failure" ? [path] : []);
+        if (mode === "addition" || mode === "deletion") {
+          expect(surface.changes).toHaveLength(1);
+          expect(surface.changes[0]?.path).toBe(textPath);
+          expect(surface.changes[0]?.patch).toContain(mode === "addition" ? "+text" : "-text");
+          expect(surface.changes[0]?.patch).not.toContain("rename from");
+          expect(surface.unavailablePaths.has(textPath)).toBe(false);
+        } else {
+          expect(surface.changes).toEqual([]);
+          expect(surface.unavailablePaths.has(path)).toBe(true);
+        }
       }),
   );
 

@@ -89563,7 +89563,11 @@ var hydrateExactChanges = Effect_exports.fn("hydrateExactChanges")(function* (in
   const activeRenames = /* @__PURE__ */ new Map();
   for (const file2 of input.files) {
     const previousPath = file2.previousPath;
-    if (file2.status === "renamed" && previousPath !== void 0 && input.base.entry(previousPath) !== void 0 && input.base.entry(file2.path) === void 0 && input.head.entry(previousPath) === void 0 && input.head.entry(file2.path) !== void 0) {
+    if (file2.status === "renamed" && previousPath !== void 0 && // A rename across binary/text formats is a textual addition or deletion,
+    // not one ignored change. Leave its two tree paths as separate candidates.
+    (isBinaryAssetPath(previousPath) === isBinaryAssetPath(file2.path) || [previousPath, file2.path].some(
+      (path) => input.ignore.some((pattern) => matchesIgnore(path, pattern))
+    )) && input.base.entry(previousPath) !== void 0 && input.base.entry(file2.path) === void 0 && input.head.entry(previousPath) === void 0 && input.head.entry(file2.path) !== void 0) {
       activeRenames.set(previousPath, file2);
       activeRenames.set(file2.path, file2);
     }
@@ -89591,7 +89595,6 @@ var hydrateExactChanges = Effect_exports.fn("hydrateExactChanges")(function* (in
     if (reason !== void 0) exclusions.push(ReviewExclusion.make({ path: file2.path, reason }));
     if (reason === void 0 || reason === "unsupported-entry" || reason === "source-read-failed") {
       unavailablePaths.add(file2.path).add(basePath);
-      if (file2.previousPath !== void 0) unavailablePaths.add(file2.previousPath);
     }
   };
   let admittedPaths = 0;
@@ -89600,7 +89603,7 @@ var hydrateExactChanges = Effect_exports.fn("hydrateExactChanges")(function* (in
     (left, right) => Number(documentationPath(left.file.path)) - Number(documentationPath(right.file.path)) || (left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0)
   )) {
     const ignored = [file2.path, ...basePath === file2.path ? [] : [basePath]].some(
-      (path) => isBinaryAssetPath(path) || input.ignore.some((pattern) => matchesIgnore(path, pattern))
+      (path2) => isBinaryAssetPath(path2) || input.ignore.some((pattern) => matchesIgnore(path2, pattern))
     );
     if (ignored) {
       exclude(ignoredPaths, file2, basePath);
@@ -89640,45 +89643,54 @@ var hydrateExactChanges = Effect_exports.fn("hydrateExactChanges")(function* (in
       exclude(unreviewedPaths, file2, basePath, "source-read-failed");
       continue;
     }
-    if (contents.success.before === void 0 || contents.success.after === void 0) {
+    const beforeBinary = contents.success.before === void 0;
+    const afterBinary = contents.success.after === void 0;
+    if ((beforeBinary || afterBinary) && (beforeBinary || beforeEntry === void 0) && (afterBinary || afterEntry === void 0)) {
       hydratedSourceBytes += estimatedSourceBytes;
       exclude(ignoredPaths, file2, basePath);
       continue;
     }
-    hydratedSourceBytes += sourceSizesKnown ? estimatedSourceBytes : contents.success.before.length + contents.success.after.length;
+    const before = contents.success.before ?? "";
+    const after = contents.success.after ?? "";
+    const path = afterBinary ? basePath : file2.path;
+    if (basePath !== file2.path) {
+      if (beforeBinary) unavailablePaths.add(basePath);
+      if (afterBinary) unavailablePaths.add(file2.path);
+    }
+    hydratedSourceBytes += sourceSizesKnown ? estimatedSourceBytes : before.length + after.length;
     if (hydratedSourceBytes > MAX_HYDRATED_SOURCE_BYTES) {
       exclude(unreviewedPaths, file2, basePath, "source-limit");
       continue;
     }
-    const patch3 = basePath === file2.path && contents.success.before === contents.success.after && beforeEntry !== void 0 && afterEntry !== void 0 && beforeEntry.mode !== afterEntry.mode ? [
+    const patch3 = basePath === file2.path && !beforeBinary && !afterBinary && before === after && beforeEntry !== void 0 && afterEntry !== void 0 && beforeEntry.mode !== afterEntry.mode ? [
       `diff --git a/${file2.path} b/${file2.path}`,
       `old mode ${beforeEntry.mode}`,
       `new mode ${afterEntry.mode}`
     ].join("\n") : makeExactPatch({
-      path: file2.path,
-      basePath,
-      headPath: file2.path,
+      path,
+      basePath: beforeBinary || afterBinary ? path : basePath,
+      headPath: path,
       baseRevision: input.base.revision,
       headRevision: input.head.revision,
-      before: contents.success.before,
-      after: contents.success.after
+      before,
+      after
     });
-    const exactPatch = patch3 !== void 0 && basePath !== file2.path ? [
+    const exactPatch = patch3 !== void 0 && basePath !== file2.path && !beforeBinary && !afterBinary ? [
       `diff --git a/${basePath} b/${file2.path}`,
       `rename from ${basePath}`,
       `rename to ${file2.path}`,
       patch3
     ].join("\n") : patch3;
-    if (exactPatch === void 0 || exactPatch.length === 0 || exactPatch.length > MAX_REVIEW_PATCH_CHARS) {
+    if (path.length > 512 || exactPatch === void 0 || exactPatch.length === 0 || exactPatch.length > MAX_REVIEW_PATCH_CHARS) {
       exclude(
         unreviewedPaths,
         file2,
         basePath,
-        exactPatch !== void 0 && exactPatch.length > MAX_REVIEW_PATCH_CHARS ? "patch-limit" : "patch-unavailable"
+        path.length > 512 ? "path-limit" : exactPatch !== void 0 && exactPatch.length > MAX_REVIEW_PATCH_CHARS ? "patch-limit" : "patch-unavailable"
       );
       continue;
     }
-    changes2.push(ReviewChange.make({ path: file2.path, patch: exactPatch }));
+    changes2.push(ReviewChange.make({ path, patch: exactPatch }));
   }
   return { changes: changes2, unreviewedPaths, ignoredPaths, unavailablePaths, exclusions };
 });

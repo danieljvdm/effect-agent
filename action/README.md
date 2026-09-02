@@ -24,6 +24,9 @@ not incomplete coverage, and are unavailable to source tools. A binary-only PR n
 model call. SVG, JSON, XML, and other text assets remain reviewable. API failures, malformed
 responses, invalid UTF-8 without NUL bytes, and source-size limits still fail coverage checks.
 Binary detection by content retains the existing file and byte read limits.
+When a rename or content replacement crosses between binary and text, the textual side
+is still reviewed as an addition or deletion. Explicit ignore rules continue to exclude
+an entire rename when either path matches.
 
 One bounded review run assesses every admitted patch before using immutable base and head source
 to resolve specific questions about plausible defects. Straightforward changes can finish from
