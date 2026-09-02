@@ -1,4 +1,4 @@
 interface:
   display_name: "Pull Requests"
-  short_description: "Open PRs with short summaries and useful visuals"
-  default_prompt: "Use $open-pull-request to prepare this PR with a brief summary and a screenshot or video when useful."
+  short_description: "Explain PRs with architecture diagrams and API examples"
+  default_prompt: "Use $open-pull-request to prepare this PR with a brief summary, architecture diagrams or API examples where useful, and visual evidence for UI changes."

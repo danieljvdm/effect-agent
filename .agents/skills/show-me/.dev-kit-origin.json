@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "selector": "show-me",
+  "name": "show-me",
+  "baseDigest": "sha256:be24b98422f4e577f95eff91b1a46c82b7b063356923c466c11f596a920ed51b",
+  "source": {
+    "type": "git",
+    "source": "humanlayer-skills",
+    "repository": "https://github.com/humanlayer/skills.git",
+    "resolved": "3c2629142c5d437428269b1b722b08c0b87f574d"
+  }
+}
