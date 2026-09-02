@@ -36,7 +36,6 @@ const recommendedOxlintConfig = {
     // Oxlint's `extends` composition requires a package name or absolute path
     // for a JS plugin specifier — a relative path is only accepted at the
     // top-level `jsPlugins`, so these are resolved against this file.
-    { name: "effect", specifier: new URL("./oxlint/plugin-effect.js", import.meta.url).pathname },
     { name: "stylistic", specifier: new URL("./oxlint/plugin-style.js", import.meta.url).pathname },
   ],
   plugins: ["import", "react", "vitest"],

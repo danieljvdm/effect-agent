@@ -25,7 +25,7 @@ import { Prompt, Tool } from "effect/unstable/ai";
  */
 
 /** Rendering outcome for one definition's output Schema. */
-export type OutputContract =
+type OutputContract =
   | {
       readonly _tag: "rendered";
       /** The complete system-message text: directive plus the derived JSON Schema. */

@@ -1234,11 +1234,10 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
 });
 
 /**
- * P7 §7(a)/(c) classifier rows (plan §7 WP7): the AwaitParentEstablishment establishment-race
- * fix — model-checked before implementation in `formal/SubagentEstablishmentFix.cfg` — and the
+ * Classifier rows for the AwaitParentEstablishment establishment-race fix and the
  * position-blind SettleAborted precedence pin for queued-abort settlement.
  */
-describe("recovery classifier P7 WP7 rows (SUB-016 establishment race, DUR-004/DUR-012 queued abort)", () => {
+describe("recovery classifier rows (SUB-016 establishment race, DUR-004/DUR-012 queued abort)", () => {
   const parentLinkage = ParentLinkage.make({
     parentSubmissionId: HOST_SUBMISSION_ID,
     parentToolCallId: CALL_ONE,
@@ -1288,7 +1287,7 @@ describe("recovery classifier P7 WP7 rows (SUB-016 establishment race, DUR-004/D
   });
 
   it("an aborted never-claimed ready Submission classifies SettleAborted regardless of queue position", () => {
-    // P7 §7(c): the classifier is deliberately position-blind — SettleAborted names the one
+    // The classifier is deliberately position-blind: SettleAborted names the one
     // decision and the EXECUTOR settles a non-head ready row immediately at the current tail
     // (settlement order of never-run work is not execution order; DUR-004 bounds execution).
     const decision = classifyRecovery(snapshot("ready", { abortIntent }), evidence());

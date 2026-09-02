@@ -204,14 +204,9 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
   }, 60_000);
 
   it("a child never runs a Turn before its lineage record is canonical", async () => {
-    // P7 §7(a), model-checked FIRST (WP3): under the pre-P7 discipline TLC reaches the
-    // interleaving in which the admitted child self-repairs readiness, claims, and runs a
-    // Turn with no canonical lineage record (`formal/SubagentEstablishmentRace.cfg`); under
-    // the AwaitParentEstablishment discipline the race is eliminated and liveness is
-    // preserved (`formal/SubagentEstablishmentFix.cfg`). This row pins the implemented
-    // discipline cross-Object: the parent Object dies at subagent:after-admit on EVERY pass
-    // while the child's own alarms run — the admitted, lineage-less child must defer to the
-    // parent's establishment (SUB-016), never run ahead of it.
+    // The admitted, lineage-less child must defer to the parent's establishment
+    // (SUB-016), never run ahead of it. This row pins the discipline cross-Object: the parent
+    // Object dies at subagent:after-admit on EVERY pass while the child's own alarms run.
     const location: DurableRuntimeFailpointLocation = "subagent:after-admit";
     const ref = lane("child-awaits-lineage");
     const faultSuffix = `:${delegateCallIdFor(ref)}`;
