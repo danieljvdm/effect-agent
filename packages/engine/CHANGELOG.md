@@ -1,5 +1,18 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.41
+
+### Minor Changes
+
+- [#281](https://github.com/danieljvdm/effect-agent/pull/281) [`edfa7dc`](https://github.com/danieljvdm/effect-agent/commit/edfa7dc6693dea2a84366f5053826ffa87f7c587) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Derive delegation schemas and mappings from child definitions, inherit omitted policy defaults within shared reservation limits, and accept model Layers directly for subagent execution and durable registration.
+
+  BEHAVIOR CHANGE: Durable delegations enforce shared reservation caps; configure identical `parentCaps` when multiple delegation policies share a parent Run.
+
+### Patch Changes
+
+- Updated dependencies [[`e21d6da`](https://github.com/danieljvdm/effect-agent/commit/e21d6da596b97c98ace533c3fa42fe9767d127e1), [`edfa7dc`](https://github.com/danieljvdm/effect-agent/commit/edfa7dc6693dea2a84366f5053826ffa87f7c587)]:
+  - @effect-agent/core@0.1.0-beta.41
+
 ## 0.1.0-beta.40
 
 ### Minor Changes

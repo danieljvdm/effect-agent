@@ -1,5 +1,13 @@
 # @effect-agent/storage-memory
 
+## 0.1.0-beta.41
+
+### Patch Changes
+
+- Updated dependencies [[`e21d6da`](https://github.com/danieljvdm/effect-agent/commit/e21d6da596b97c98ace533c3fa42fe9767d127e1), [`edfa7dc`](https://github.com/danieljvdm/effect-agent/commit/edfa7dc6693dea2a84366f5053826ffa87f7c587)]:
+  - @effect-agent/core@0.1.0-beta.41
+  - @effect-agent/thread@0.1.0-beta.41
+
 ## 0.1.0-beta.40
 
 ### Minor Changes
