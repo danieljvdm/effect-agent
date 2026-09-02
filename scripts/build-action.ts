@@ -48,7 +48,7 @@ const bundleTo = Effect.fn("bundleTo")(function* (entry: string, outfile: string
     "--target=node24",
     "--format=esm",
     // Bundled CommonJS dependencies still require Node built-ins at runtime.
-    '--banner:js=import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+    '--banner:js=import { createRequire as __actionCreateRequire } from "node:module"; const require = __actionCreateRequire(import.meta.url);',
     `--outfile=${outfile}`,
   ]);
 });
