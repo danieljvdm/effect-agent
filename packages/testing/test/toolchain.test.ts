@@ -1087,7 +1087,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(readyStep?.run).toContain('test "$BUILD_RESULT" = "success"');
 
       expect(reviewWorkflow.on).toEqual({
-        pull_request: {
+        pull_request_target: {
           types: ["opened", "reopened", "ready_for_review", "synchronize"],
           "paths-ignore": generatedPaths,
         },
