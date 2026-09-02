@@ -1,5 +1,16 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.42
+
+### Patch Changes
+
+- [#296](https://github.com/danieljvdm/effect-agent/pull/296) [`be25a77`](https://github.com/danieljvdm/effect-agent/commit/be25a771bf987891e1830f60889badaa4e051391) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Let cost-admitted reviews continue beyond eight turns within the existing spending, tool-call, time, and context limits. Keep uncapped reviews at eight turns.
+
+- [#291](https://github.com/danieljvdm/effect-agent/pull/291) [`8f2f5cf`](https://github.com/danieljvdm/effect-agent/commit/8f2f5cf36c1bf33071610aabbd18387d33dde0fe) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Accept complete patches up to the 256,000-character review batch capacity instead of excluding files above 80,000 characters.
+  Return incomplete token-budget results with unreviewed paths when input exceeds the engine or provider context limit, including before the first paid request.
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.42
+
 ## 0.1.0-beta.41
 
 ### Patch Changes

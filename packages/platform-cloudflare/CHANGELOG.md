@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.42
+
+### Patch Changes
+
+- [#290](https://github.com/danieljvdm/effect-agent/pull/290) [`8323d0d`](https://github.com/danieljvdm/effect-agent/commit/8323d0db6fe882e4c2a84e4a14c20ff871257072) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Export `layerFromBindings` from the package root to assemble a Cloudflare durable runtime from resolved Agent Bindings.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.42
+  - @effect-agent/engine@0.1.0-beta.42
+  - @effect-agent/sandbox@0.1.0-beta.42
+  - @effect-agent/thread@0.1.0-beta.42
+  - @effect-agent/storage-cloudflare@0.1.0-beta.42
+
 ## 0.1.0-beta.41
 
 ### Minor Changes
