@@ -122,6 +122,58 @@ boundary before ordinary external effects. If the runtime cannot determine wheth
 happened, it records an Unknown Outcome and waits for an explicit resolution. It never replays the
 call automatically. See [Persistence & durability](../concepts/durability).
 
+## Connect MCP servers {#mcp}
+
+`McpClient.layer` provides `McpConnector` over real transports. `McpHttpTransport.make` speaks
+Streamable HTTP and needs `HttpClient`; `McpStdioTransport.make` runs a local server process and
+needs `ChildProcessSpawner`, which `NodeServices.layer` supplies on Node.js. Both requirements
+stay in the Layer's `R`.
+
+```ts
+import {
+  connectMcp,
+  McpClient,
+  McpConnectionRequest,
+  McpHttpTransport,
+} from "@effect-agent/capabilities";
+import { FetchHttpClient } from "effect/unstable/http";
+import { Effect, Layer } from "effect";
+
+const McpLive = McpClient.layer([
+  McpHttpTransport.make({ serverId: "docs", url: "https://mcp.example.com/mcp" }),
+]).pipe(Layer.provide(FetchHttpClient.layer));
+
+const program = Effect.gen(function* () {
+  const connection = yield* connectMcp(
+    McpConnectionRequest.make({
+      serverId: "docs",
+      maxToolCount: 16,
+      maxToolDescriptionBytes: 1_024,
+      maxDiscoveryBytes: 65_536,
+      connectTimeoutMillis: 5_000,
+    }),
+  );
+  // Merge `connection.toolkit` into the agent's toolkit and provide
+  // `connection.handlers` with the application's other tool handlers.
+  return connection;
+});
+```
+
+`connectMcp` negotiates a protocol revision, lists tools within the request bounds, and returns
+dynamic Effect AI tools whose handlers forward `tools/call`. Provide the returned `handlers` Layer
+wherever the agent runs. The connection lives in the caller's Scope; closing it ends the session
+or stops the process. Server-initiated requests such as sampling and elicitation are declined.
+
+Remote tools stay ordinary tools: they are `uncertain` by default, need approval and authorization
+like any other tool, and receive an Unknown Outcome after process loss. Set `trustToolAnnotations`
+on a transport to let the server's `readOnlyHint` and `idempotentHint` choose the execution class.
+A tool with `isError` fails the call with `McpToolCallFailed`. Set `expectedToolkitSchemaDigest`
+on the request to reject a server whose tools changed since the agent was authored.
+
+Remote servers are untrusted input. Bound their tool descriptions and results with the request
+limits and `toolResultBounds`, supply credentials through the transport headers or `HttpClient`,
+and keep local server commands under application control.
+
 ## Delegate to an agent
 
 `Subagent.define` exposes a child agent as a tool with explicit input and result projections.

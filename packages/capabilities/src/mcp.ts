@@ -1,4 +1,15 @@
-import { Context, Crypto, Duration, Effect, Encoding, JsonSchema, Schema } from "effect";
+import {
+  Context,
+  Crypto,
+  Duration,
+  Effect,
+  Encoding,
+  JsonSchema,
+  type Layer,
+  Option,
+  Schema,
+  type Scope,
+} from "effect";
 import { Tool, type Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
 
@@ -17,7 +28,14 @@ export class McpServerIdentity extends Schema.Class<McpServerIdentity>(
   implementation: McpSchema.Implementation,
 }) {}
 
-/** Requested hard limits for an adapter-owned MCP connection and discovery response. */
+/**
+ * Requested hard limits for an adapter-owned MCP connection and discovery response.
+ *
+ * `expectedToolkitSchemaDigest` pins the tool contract an Agent was authored
+ * against: when a connector derives its Toolkit from live discovery, a server
+ * that adds, removes, or reshapes a tool fails closed instead of silently
+ * changing what the model can call.
+ */
 export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
   "@effect-agent/capabilities/McpConnectionRequest",
 )({
@@ -26,7 +44,19 @@ export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
   maxToolDescriptionBytes: PositiveInt,
   maxDiscoveryBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
   connectTimeoutMillis: PositiveInt,
+  expectedToolkitSchemaDigest: Schema.optionalKey(Sha256Digest),
 }) {}
+
+/**
+ * Tool annotation carrying the `outputSchema` an MCP server advertised for a
+ * dynamic Tool. A dynamic Tool's Effect success Schema describes the client's
+ * result envelope, not the wire contract, so discovery validation compares this
+ * annotation instead.
+ */
+export class McpToolOutputSchema extends Context.Service<
+  McpToolOutputSchema,
+  McpSchema.ToolJsonSchema
+>()("@effect-agent/capabilities/McpToolOutputSchema") {}
 
 /** Typed remote connection failure; no remote execution is claimed exactly-once. */
 export class McpConnectionError extends Schema.TaggedError<McpConnectionError>()(
@@ -70,18 +100,25 @@ export class McpDiscovery extends Schema.Class<McpDiscovery>(
   toolkitSchemaDigest: Sha256Digest,
 }) {}
 
-/** Raw adapter result before the framework validates count and byte limits. */
+/**
+ * Raw adapter result before the framework validates count and byte limits.
+ * A connector that executes tools remotely supplies `handlers`; a connector
+ * serving an application-authored Toolkit leaves them to the application.
+ */
 export interface McpConnectedServer {
   readonly identity: McpServerIdentity;
   readonly capabilities: McpSchema.ServerCapabilities;
   readonly tools: ReadonlyArray<McpSchema.Tool>;
   readonly toolkit: Toolkit.Any;
+  readonly handlers?: Layer.Layer<Tool.Handler<string>> | undefined;
 }
 
 /** Scoped validated MCP connection with native Effect AI dynamic Toolkit values. */
 export interface McpConnection {
   readonly discovery: McpDiscovery;
   readonly toolkit: Toolkit.Any;
+  /** Handler Layer for `toolkit` when the connector executes tools remotely. */
+  readonly handlers?: Layer.Layer<Tool.Handler<string>> | undefined;
 }
 
 /** Adapter port for native Effect AI MCP protocol/schema integration. */
@@ -90,7 +127,7 @@ export class McpConnector extends Context.Service<
   {
     readonly connect: (
       request: McpConnectionRequest,
-    ) => Effect.Effect<McpConnectedServer, McpConnectionError, import("effect").Scope.Scope>;
+    ) => Effect.Effect<McpConnectedServer, McpConnectionError, Scope.Scope>;
   }
 >()("@effect-agent/capabilities/McpConnector") {}
 
@@ -142,6 +179,20 @@ const utf8 = (value: string): Uint8Array => {
     bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   }
   return bytes;
+};
+
+/**
+ * The `outputSchema` a Toolkit member claims. Authored Tools derive it from
+ * their success Schema; dynamic Tools carry the discovered schema as an
+ * annotation because their success Schema is the client's result envelope.
+ */
+const toolkitOutputSchema = (tool: Tool.Any): JsonSchema.JsonSchema | undefined => {
+  if (Tool.isDynamic(tool)) {
+    return Option.getOrUndefined(Context.getOption(tool.annotations, McpToolOutputSchema));
+  }
+  const derived = flattenTopLevelRef(Tool.getJsonSchemaFromSchema(tool.successSchema));
+
+  return derived.type === "object" ? derived : undefined;
 };
 
 const digestJson = Effect.fn("digestMcpSchema")(function* (serverId: string, value: unknown) {
@@ -230,11 +281,11 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
     try: () =>
       Object.values(server.toolkit.tools)
         .map((tool) => {
-          const outputSchema = flattenTopLevelRef(Tool.getJsonSchemaFromSchema(tool.successSchema));
+          const outputSchema = toolkitOutputSchema(tool);
           return {
             name: tool.name,
             inputSchema: flattenTopLevelRef(Tool.getJsonSchema(tool)),
-            ...(outputSchema.type === "object" ? { outputSchema } : {}),
+            ...(outputSchema === undefined ? {} : { outputSchema }),
           };
         })
         .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)),
@@ -251,6 +302,15 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
     return yield* McpToolkitMismatch.make({
       serverId: request.serverId,
       message: "Native Effect AI Toolkit schemas do not match MCP tool discovery",
+    });
+  }
+  if (
+    request.expectedToolkitSchemaDigest !== undefined &&
+    request.expectedToolkitSchemaDigest !== toolkitDigest
+  ) {
+    return yield* McpToolkitMismatch.make({
+      serverId: request.serverId,
+      message: `MCP tool discovery digest ${toolkitDigest} does not match the expected ${request.expectedToolkitSchemaDigest}`,
     });
   }
   const encoded = yield* Schema.encodeEffect(
@@ -332,5 +392,6 @@ export const connectMcp = Effect.fn("connectMcp")(function* (request: McpConnect
   return {
     discovery,
     toolkit: server.toolkit,
+    ...(server.handlers === undefined ? {} : { handlers: server.handlers }),
   } satisfies McpConnection;
 });
