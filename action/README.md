@@ -132,7 +132,7 @@ The Action admits implementation and configuration changes before documentation 
 with alphabetical order within each group. The reviewer divides admitted patches into sequential
 batches of at most 256,000 patch characters, with a fresh model context for each batch. Each patch
 belongs to one batch and remains complete. Every batch can read the same authorized base/head source
-to investigate interactions with other files. One spending ledger, 8-turn allowance, 64-tool-call
+to investigate interactions with other files. One spending ledger, 64-turn allowance, 64-tool-call
 allowance, 5-minute deadline, and 24-finding capacity cover the entire attempt. Findings survive a
 later batch's expected failure; stopping leaves the remaining batches explicitly unreviewed.
 
@@ -141,7 +141,8 @@ duplicated old/new context. A large remaining input can still prevent another ca
 $1, because admission must cover a cache miss. Refusal logs report the counted input, remaining
 balance, and minimum possible request reservation. The Action's spending admission replaces the
 reviewer's cumulative token quota, so reusing cached context does not force early finalization.
-The 8 research turns, 64 tool calls, 5 minutes, and 128,000-token context bounds still apply.
+The 64-turn safety bound matches the tool-call allowance, so an eight-turn cutoff no longer ends
+affordable serial research. The 64 tool calls, 5 minutes, and 128,000-token context bounds still apply.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status

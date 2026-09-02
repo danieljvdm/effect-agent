@@ -770,7 +770,7 @@ new mode 100755`;
     }),
   );
 
-  it.effect("shares the turn allowance across batches and reports patches it never supplied", () =>
+  it.effect("continues affordable patch batches beyond eight model calls", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0);
       const input = largeRequest(27);
@@ -785,10 +785,10 @@ new mode 100755`;
       expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
-      expect(yield* Ref.get(calls)).toBe(8);
-      expect(outcome.exhausted).toBe("turns");
-      expect(outcome.incomplete).toBe(true);
-      expect(outcome.pendingPaths).toEqual(input.changes.slice(24).map((change) => change.path));
+      expect(yield* Ref.get(calls)).toBe(9);
+      expect(outcome.exhausted).toBeUndefined();
+      expect(outcome.incomplete).toBeUndefined();
+      expect(outcome.pendingPaths).toBeUndefined();
     }),
   );
 

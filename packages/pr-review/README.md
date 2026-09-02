@@ -57,7 +57,8 @@ could abort delivery.
 An optional `costControl` reports the host's pre-request spending admission and provider usage.
 Supplying it replaces the cumulative token quota and completion reserve with that admission.
 Cached reads still contribute to usage diagnostics, but cannot force early token finalization.
-The 8-turn, 64-tool-call, 5-minute, and 128,000-token context bounds remain in force. A cost
+Cost-admitted runs allow up to 64 turns, matching the 64-tool-call allowance, while retaining
+the shared 5-minute and 128,000-token context bounds. Uncapped runs retain eight turns. A cost
 estimator alone does not disable the token quota. Capped hosts own model-visible spending feedback
 at their provider boundary; the generic turn/tool status is disabled for these runs. The Action
 counts its outgoing spending status before admission and keeps it outside the reusable cache prefix.
