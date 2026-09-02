@@ -45601,9 +45601,10 @@ var reviewRecording = exports_Toolkit.make(exports_Tool.make("record_finding", {
   failure: ReviewVerificationError,
   failureMode: "return"
 }).annotate(exports_Tool.Strict, true).annotate(exports_Tool.Readonly, true));
+var MAX_REVIEW_TOOL_CALLS = 64;
 var reviewPolicy = (costAdmitted) => AgentPolicy.make({
-  maxTurns: 8,
-  maxToolCalls: 64,
+  maxTurns: costAdmitted ? MAX_REVIEW_TOOL_CALLS : 8,
+  maxToolCalls: MAX_REVIEW_TOOL_CALLS,
   maxDuration: "5 minutes",
   toolConcurrency: 4,
   repeatedFailureLimit: 0,
@@ -45710,6 +45711,7 @@ var validatedFindings = exports_Effect.fn("validatedFindings")(function* (reques
   });
 });
 var makeReviewer = (options3) => {
+  const policy2 = reviewPolicy(options3.costControl !== undefined);
   const reviewer = Agent.withModel(Agent.make("pr-review", {
     input: ReviewRequest,
     inputPrompt: formatRequest,
@@ -45721,7 +45723,7 @@ var makeReviewer = (options3) => {
       required: true,
       project: ({ parameters }) => parameters
     },
-    policy: reviewPolicy(options3.costControl !== undefined),
+    policy: policy2,
     description: "Review every admitted change and report concrete defects.",
     metadata: { deploymentClass: "E", surface: "read-only" }
   }), options3.model);
@@ -45777,8 +45779,8 @@ var makeReviewer = (options3) => {
       const priorCost = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
       const result4 = yield* AgentRuntime.run(reviewer, batch, {
         ...runOptions,
-        turnAllowance: 8 - usedTurns,
-        toolCallAllowance: 64 - totals.toolCalls
+        turnAllowance: policy2.maxTurns - usedTurns,
+        toolCallAllowance: policy2.maxToolCalls - totals.toolCalls
       }).pipe(exports_Effect.provide(recordingLayer(batch)), exports_Effect.result);
       const saved = yield* exports_Ref.get(recorded);
       const cost2 = options3.costControl === undefined ? undefined : yield* options3.costControl.snapshot;
@@ -45824,8 +45826,8 @@ var makeReviewer = (options3) => {
     let resolutions = [];
     for (const [index2, changes2] of batches.entries()) {
       const totals = yield* budget2.snapshot;
-      if ((yield* exports_Ref.get(modelCalls)) >= 8 || totals.toolCalls >= 64) {
-        exhausted = totals.toolCalls >= 64 ? "tool-calls" : "turns";
+      if ((yield* exports_Ref.get(modelCalls)) >= policy2.maxTurns || totals.toolCalls >= policy2.maxToolCalls) {
+        exhausted = totals.toolCalls >= policy2.maxToolCalls ? "tool-calls" : "turns";
         incomplete = true;
         break;
       }
