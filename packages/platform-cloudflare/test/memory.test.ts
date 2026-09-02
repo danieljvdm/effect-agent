@@ -22,9 +22,9 @@ import {
 } from "@effect-agent/storage-cloudflare";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { makeCloudflareMemoryClient, MemoryObjectNamespace } from "../src/memory.ts";
+import { CloudflareMemoryClient, MemoryObjectNamespace } from "../src/index.ts";
 import {
   memoryAccess,
   memoryCalls,
@@ -50,9 +50,7 @@ let counter = 0;
 const project = () => `memory-${counter++}`;
 const stub = (name: string) => env.MEMORIES.getByName(MemoryProjects.make(name).address);
 const client = (name: string, principal = "application") =>
-  makeCloudflareMemoryClient(memoryAccess(name), principal).pipe(
-    Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }),
-  );
+  CloudflareMemoryClient.fromBinding(env.MEMORIES, { access: memoryAccess(name), principal });
 const decode = (encoded: string) =>
   Schema.decodeSync(Schema.fromJsonString(MemoryOwnerResponse))(encoded);
 const encodedCandidates = (ids: ReadonlyArray<string>) =>
@@ -380,7 +378,7 @@ describe("shared Cloudflare memory owner", () => {
         expect(
           yield* denied.revalidate({ _tag: "NoMatch" }, memoryRecallLimits).pipe(Effect.flip),
         ).toMatchObject({ reason: "denied" });
-        const scope = yield* makeCloudflareMemoryClient(
+        const scope = yield* CloudflareMemoryClient.make(
           { ...memoryAccess(name), scope: "foreign" },
           "application",
         ).pipe(Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }));
@@ -406,10 +404,15 @@ describe("shared Cloudflare memory owner", () => {
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "budget" });
         expect(memoryCalls.get(MemoryProjects.make(name).address)).toBe(1);
-        const tiny = yield* makeCloudflareMemoryClient(memoryAccess(name), "application", {
-          ...defaultMemoryRpcLimits,
-          maxRequestBytes: 256,
-        }).pipe(Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }));
+        const bounded = CloudflareMemoryClient.fromBinding(env.MEMORIES, {
+          access: memoryAccess(name),
+          principal: "application",
+          rpcLimits: { ...defaultMemoryRpcLimits, maxRequestBytes: 256 },
+        });
+        expectTypeOf<Effect.Services<typeof bounded>>().toEqualTypeOf<never>();
+        const injected = CloudflareMemoryClient.make(memoryAccess(name), "application");
+        expectTypeOf<Effect.Services<typeof injected>>().toEqualTypeOf<MemoryObjectNamespace>();
+        const tiny = yield* bounded;
         expect(
           yield* tiny
             .revalidate(memoryCandidates(["source"]), memoryRecallLimits)

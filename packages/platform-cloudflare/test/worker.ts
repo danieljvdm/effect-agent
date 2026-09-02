@@ -7,9 +7,8 @@ import { OtlpExporter } from "effect/unstable/observability";
 
 import {
   ThreadObject,
-  makeMemoryObjectClass,
-  makeCloudflareMemoryClient,
-  MemoryObjectNamespace,
+  MemoryObject,
+  CloudflareMemoryClient,
   makeScheduleOwnerObjectClass,
   makeSubscriptionPartitionObjectClass,
   ThreadObjectNamespace,
@@ -56,7 +55,7 @@ import {
   subscriptionSourcesLayer,
 } from "./subscription-fixtures.ts";
 
-export class TestMemoryObject extends makeMemoryObjectClass(memoryAuthorizer, {
+export class TestMemoryObject extends MemoryObject.make(memoryAuthorizer, {
   failpoints: memoryFailpoints,
 }) {
   override memory(encoded: string): Promise<string> {
@@ -273,9 +272,10 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {
         const env = yield* WorkerEnvironment;
-        const client = yield* makeCloudflareMemoryClient(memoryAccess(project), "application").pipe(
-          Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }),
-        );
+        const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
+          access: memoryAccess(project),
+          principal: "application",
+        });
         const write = yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)(encoded);
         const document = yield* client.change({
           ...write,
@@ -293,9 +293,10 @@ export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOp
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {
         const env = yield* WorkerEnvironment;
-        const client = yield* makeCloudflareMemoryClient(memoryAccess(project), "application").pipe(
-          Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }),
-        );
+        const client = yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
+          access: memoryAccess(project),
+          principal: "application",
+        });
         const lookup = yield* Schema.decodeUnknownEffect(MemoryLookup)(encoded);
         return yield* recallMemory(
           [{ id: "project", essential: true, read: client.revalidate(lookup, memoryRecallLimits) }],

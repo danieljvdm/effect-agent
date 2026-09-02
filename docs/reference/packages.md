@@ -162,7 +162,7 @@ The [Code Mode guide](../guide/code-mode#run-generated-code-on-cloudflare) cover
 Dynamic Worker executor and Worker Loader binding.
 `ThreadObject.Options.toolFailureObserver` installs a local tool-failure observer.
 
-`makeMemoryObjectClass` and `makeCloudflareMemoryClient` share namespace-owned memory across
+`MemoryObject.make` and `CloudflareMemoryClient` share namespace-owned memory across
 Threads, with one authoritative batch RPC per recall. See [shared memory](../platforms/cloudflare#shared-memory).
 
 Browser adapters use separate imports:

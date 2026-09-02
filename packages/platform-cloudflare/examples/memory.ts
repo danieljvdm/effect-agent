@@ -7,7 +7,7 @@ import {
 } from "@effect-agent/storage-cloudflare";
 import { Effect, Layer, Schema } from "effect";
 
-import { makeMemoryObjectClass, makeCloudflareMemoryClient } from "../src/memory.ts";
+import { MemoryObject, CloudflareMemoryClient } from "../src/memory.ts";
 
 export const Projects = MemoryNamespace.define({
   name: "application/projects",
@@ -31,14 +31,14 @@ const authorizer = Layer.effect(
   }),
 );
 
-export class ProjectMemory extends makeMemoryObjectClass(authorizer) {}
+export class ProjectMemory extends MemoryObject.make(authorizer) {}
 
 /** Called by any authorized Thread or ingestion job, not by the framework automatically. */
 export const correctProjectMemory = Effect.fn("example.correctProjectMemory")(function* (
   namespace: ReturnType<typeof Projects.make>,
   write: MemoryWrite<ReturnType<typeof Projects.make>>,
 ) {
-  const client = yield* makeCloudflareMemoryClient(
+  const client = yield* CloudflareMemoryClient.make(
     MemoryAccess.make({ namespace, scope: "project" }),
     `tenant:${namespace.identity.tenantId}`,
   );

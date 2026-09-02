@@ -1,9 +1,8 @@
 import { recallMemory } from "@effect-agent/capabilities";
 import { MemoryAccess } from "@effect-agent/core";
 import {
-  makeMemoryObjectClass,
-  makeCloudflareMemoryClient,
-  MemoryObjectNamespace,
+  MemoryObject,
+  CloudflareMemoryClient,
   ThreadObject,
 } from "@effect-agent/platform-cloudflare";
 import {
@@ -65,7 +64,7 @@ const placement = () =>
     ),
   );
 
-export class ProjectMemory extends makeMemoryObjectClass(policy) {
+export class ProjectMemory extends MemoryObject.make(policy) {
   placement() {
     return this[DurableObject.RunSymbol](placement());
   }
@@ -73,10 +72,10 @@ export class ProjectMemory extends makeMemoryObjectClass(policy) {
 
 const memoryClient = Effect.fn("benchmark.client")(function* (name: BenchmarkCase) {
   const env = yield* WorkerEnvironment;
-  return yield* makeCloudflareMemoryClient(
-    MemoryAccess.make({ namespace: Projects.make(name), scope: "benchmark" }),
-    "benchmark",
-  ).pipe(Effect.provideService(MemoryObjectNamespace, { namespace: env.MEMORIES }));
+  return yield* CloudflareMemoryClient.fromBinding(env.MEMORIES, {
+    access: MemoryAccess.make({ namespace: Projects.make(name), scope: "benchmark" }),
+    principal: "benchmark",
+  });
 });
 
 /** Real Thread host; no models are registered or invoked by this memory-only benchmark. */

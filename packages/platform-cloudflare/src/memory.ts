@@ -1,5 +1,7 @@
-import type { MemoryLookup, MemoryReader, MemoryWrite } from "@effect-agent/core";
 import {
+  type MemoryLookup,
+  type MemoryReader,
+  type MemoryWrite,
   MemoryAccess,
   MemoryDocument,
   MemoryMutationFailpoint,
@@ -12,11 +14,9 @@ import {
   type SemanticCandidateLimits,
   type SemanticMemoryProfile,
 } from "@effect-agent/core";
-import type {
-  DoMemoryStorageLimits,
-  MemoryOwnerAuthorizer,
-} from "@effect-agent/storage-cloudflare";
 import {
+  type DoMemoryStorageLimits,
+  type MemoryOwnerAuthorizer,
   decodeMemoryWire,
   defaultDoMemoryStorageLimits,
   defaultMemoryRpcLimits,
@@ -57,7 +57,7 @@ export const memoryObjectName = (namespace: MemoryNamespace.Any): string => name
  * Interrupted callers stop waiting; the owner has its own deadline. A timed-out write
  * may have committed: reconcile by sending the identical operation ID and command.
  */
-export const makeCloudflareMemoryClient = Effect.fn("makeCloudflareMemoryClient")(function* <
+const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
   Namespace extends MemoryNamespace.Any,
 >(
   access: MemoryAccess<Namespace>,
@@ -161,6 +161,26 @@ export const makeCloudflareMemoryClient = Effect.fn("makeCloudflareMemoryClient"
   return { revalidate, revalidateSemantic, change };
 });
 
+export const CloudflareMemoryClient = {
+  /** Bind access and principal using the MemoryObjectNamespace supplied by the application. */
+  make: makeMemoryClient,
+  /** Use a resolved Worker or Durable Object binding without manual service provisioning. */
+  fromBinding: Effect.fn("CloudflareMemoryClient.fromBinding")(function* <
+    Namespace extends MemoryNamespace.Any,
+  >(
+    binding: DurableObjectNamespace<MemoryObjectRpc>,
+    options: {
+      readonly access: MemoryAccess<Namespace>;
+      readonly principal: string;
+      readonly rpcLimits?: MemoryRpcLimits;
+    },
+  ) {
+    return yield* makeMemoryClient(options.access, options.principal, options.rpcLimits).pipe(
+      Effect.provideService(MemoryObjectNamespace, { namespace: binding }),
+    );
+  }),
+};
+
 /**
  * Optional activity-processor destination. Keeps domain write errors intact; transport,
  * authorization and deadline failures become the existing MemoryStorageError contract.
@@ -174,7 +194,7 @@ export const cloudflareMemoryWriterLayer = (
   Layer.effect(
     MemoryWriter,
     Effect.gen(function* () {
-      const client = yield* makeCloudflareMemoryClient(access, principal, limits);
+      const client = yield* CloudflareMemoryClient.make(access, principal, limits);
       return MemoryWriter.fromAdapter({
         change: (write) =>
           client.change(write).pipe(
@@ -214,7 +234,7 @@ export interface MemoryObjectClass {
  * after restoring its namespace definition from MemoryOwnerIdentity. Do not retain
  * cleanup-scoped resources in the host Layer; it lives for the DO incarnation.
  */
-export const makeMemoryObjectClass = <E>(
+const makeMemoryObject = <E>(
   host: Layer.Layer<
     MemoryOwnerAuthorizer,
     E,
@@ -266,4 +286,9 @@ export const makeMemoryObjectClass = <E>(
   return EffectCfDurableObject.make(runtime, {
     rpc: { memory: (encoded: string) => handleMemoryOwnerRequest(encoded, options.rpcLimits) },
   });
+};
+
+export const MemoryObject = {
+  /** Build the SQLite Durable Object class with the application's owner authorization Layer. */
+  make: makeMemoryObject,
 };

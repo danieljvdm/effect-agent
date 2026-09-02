@@ -187,11 +187,7 @@ import {
   MemoryRecallLimits,
 } from "@effect-agent/core";
 import { recallMemory } from "@effect-agent/capabilities";
-import {
-  makeCloudflareMemoryClient,
-  MemoryObjectNamespace,
-  type MemoryObjectRpc,
-} from "@effect-agent/platform-cloudflare";
+import { CloudflareMemoryClient, type MemoryObjectRpc } from "@effect-agent/platform-cloudflare";
 import { Effect, Schema } from "effect";
 
 const Projects = MemoryNamespace.define({
@@ -217,13 +213,22 @@ export const recall = (
   candidates: MemoryLookup,
 ) =>
   Effect.gen(function* () {
-    const client = yield* makeCloudflareMemoryClient(access, "authenticated-principal");
+    const client = yield* CloudflareMemoryClient.fromBinding(binding, {
+      access,
+      principal: "authenticated-principal",
+    });
     return yield* recallMemory(
       [{ id: "project", essential: true, read: client.revalidate(candidates, limits) }],
       limits,
     );
-  }).pipe(Effect.provideService(MemoryObjectNamespace, { namespace: binding }));
+  });
 ```
+
+`CloudflareMemoryClient.fromBinding` accepts a resolved binding from either a Worker or another
+Durable Object. It provisions `MemoryObjectNamespace` internally; constructing the client does not
+make an RPC. Applications that provide that service once through their Effect Layers can use
+`CloudflareMemoryClient.make(access, principal)` instead. Both return the same Effect-native client
+with the same validation and budgets.
 
 One `revalidate` sends all admitted candidates in one RPC to `namespace.address`. The owner verifies
 its name, request namespace, principal, and scope; it then reads each distinct source locally once.
@@ -242,7 +247,7 @@ at the owner's `maxResponseBytes`; the final envelope is checked separately. Dup
 fails with `SemanticMemoryError` reason `budget` before an oversized result is assembled.
 
 Default owner limits are 16 distinct sources, 1 MiB encoded request, 4 MiB encoded response,
-16 MiB revalidation input, and a 10-second deadline. `makeMemoryObjectClass` accepts `rpcLimits` and
+16 MiB revalidation input, and a 10-second deadline. `MemoryObject.make` accepts `rpcLimits` and
 `storageLimits`. Storage defaults cap encoded rows at 1,900,000 bytes, 10,000 documents, 100,000
 operation receipts, and 512 MiB of conservatively accounted row data. SQLite page/index overhead is
 not included. Tombstones and receipts count toward capacity; there is no automatic pruning. A
