@@ -1,7 +1,14 @@
 # Effect Agent PR Review action
 
-This directory is the published GitHub Action path. It contains the consumer
-contract in `action.yml` and the committed JavaScript bundle in `dist/`.
+This directory contains the GitHub Action contract in `action.yml`. CI builds
+the JavaScript bundle and commits it only on distribution tags.
+
+Use `danieljvdm/effect-agent/action@action-v1` for the latest validated release,
+or pin the distribution commit SHA reported by CI for an immutable version.
+Each release also has an immutable `action-<source-commit-sha>` tag.
+New source commits, including `@main`, do not contain a runnable bundle. Switch
+to a distribution ref to receive updates. Older SHA pins that contain a bundle
+continue to work.
 
 The private
 [`@effect-agent/pr-review-action`](../packages/pr-review-action) workspace
@@ -9,11 +16,20 @@ owns the source and tests. The public
 [`@effect-agent/pr-review`](../packages/pr-review) package remains provider-
 and transport-neutral.
 
-Rebuild the committed bundle with `vp run action:build`.
-`vp run action:build --check` compares a fresh esbuild bundle byte-for-byte without
-changing tracked files. Only changes that affect the emitted JavaScript require a
-bundle update, including changes in shared framework dependencies. After resolving
-source conflicts, rebuild the bundle instead of hand-merging generated JavaScript.
+Build locally with `vp run action:build`. The generated `action/dist/` directory
+is ignored by Git. `vp run ready` also builds the Action; no bundle update or
+generated-file merge is needed in a source PR.
+
+After a push to `main` passes static checks, tests, and builds, CI publishes that
+run's bundle in a child commit of the validated source. It creates the immutable
+tag and advances `action-v1` atomically. Failed or superseded runs leave the
+previous release available. Publication installs no dependencies and runs no
+project code with repository write permission. Package releases remain separate.
+
+For the initial cutover, seed `action-v1` with the last validated source commit
+that still contains the bundle before switching workflows. Subsequent main CI
+runs advance that tag automatically. When rebasing an older feature branch,
+keep the deletion of `action/dist/index.mjs`.
 
 ## Review behavior
 

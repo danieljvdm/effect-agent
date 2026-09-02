@@ -419,8 +419,10 @@ describe("Incremental review scope", () => {
   it.effect("completes a binary-only PR without fetching blobs or calling a model", () =>
     Effect.gen(function* () {
       const published = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+
       const client = HttpClient.make((request, url) => {
         let response: unknown;
+
         if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
           return Ref.update(published, (values) => [
             ...values,
@@ -441,9 +443,11 @@ describe("Incremental review scope", () => {
           response = { merge_base_commit: { sha: "base" } };
         } else if (url.pathname.includes("/git/commits/")) {
           const sha = url.pathname.endsWith("/base") ? "base" : "head";
+
           response = { sha, tree: { sha: `${sha}-tree` } };
         } else if (url.pathname.includes("/git/trees/")) {
           const sha = url.pathname.endsWith("/base-tree") ? "base-tree" : "head-tree";
+
           response = {
             sha,
             truncated: false,
@@ -463,10 +467,13 @@ describe("Incremental review scope", () => {
         } else {
           return Effect.die(`unexpected request ${request.method} ${url.href}`);
         }
+
         return Effect.succeed(jsonResponse(request, response));
       });
+
       yield* runReviewAction(client);
       const reviews = yield* Ref.get(published);
+
       expect(reviews).toHaveLength(1);
       expect(reviews[0]?.body).toContain("1 ignored");
       expect(reviews[0]?.body).toContain(reviewMarker(true, true));
@@ -1033,8 +1040,10 @@ describe("exact review delta", () => {
         "assets/archive.zip",
         "assets/manual.pdf",
       ];
+
       const text = { "src/main.ts": "export const value = 1;", "assets/icon.svg": "<svg/>" };
       const base = treeSnapshot("base", {});
+
       const head = treeSnapshot(
         "head",
         {
@@ -1044,6 +1053,7 @@ describe("exact review delta", () => {
         },
         new Set([...binaries, "assets/unchanged.jpg"]),
       );
+
       const surface = yield* hydrateExactChanges({
         files: [],
         changedPaths: [...binaries, ...Object.keys(text)],
@@ -1051,15 +1061,18 @@ describe("exact review delta", () => {
         head,
         ignore: [],
       });
+
       expect(surface.ignoredPaths).toEqual([...binaries].sort());
       expect(surface.unreviewedPaths).toEqual([]);
       expect(surface.changes.map(({ path }) => path)).toEqual(Object.keys(text).sort());
+
       const repository = makeReviewRepository({
         base,
         head,
         ignore: [],
         unavailablePaths: surface.unavailablePaths,
       });
+
       expect((yield* repository.findFiles({ revision: "head", query: "assets/" })).paths).toEqual([
         "assets/icon.svg",
       ]);
@@ -1078,6 +1091,7 @@ describe("exact review delta", () => {
       const content = "export const icon = true;\n";
       const base = treeSnapshot("base", { [previousPath]: content }, new Set(["assets/icon.png"]));
       const head = treeSnapshot("head", { [path]: content }, new Set(["assets/icon.png"]));
+
       const surface = yield* hydrateExactChanges({
         files: [{ ...file(path, undefined), previousPath, status: "renamed" }],
         changedPaths: [previousPath, path],
@@ -1085,18 +1099,21 @@ describe("exact review delta", () => {
         head,
         ignore: [],
       });
+
       expect(surface.ignoredPaths).toEqual(["assets/icon.png"]);
       expect(surface.unreviewedPaths).toEqual([]);
       expect(surface.changes).toHaveLength(1);
       expect(surface.changes[0]?.path).toBe("src/icon.ts");
       expect(surface.changes[0]?.patch).toContain(`${reverse ? "-" : "+"}${content}`);
       expect(surface.changes[0]?.patch).not.toContain("rename from");
+
       const repository = makeReviewRepository({
         base,
         head,
         ignore: [],
         unavailablePaths: surface.unavailablePaths,
       });
+
       expect(
         (yield* repository.findFiles({ revision: reverse ? "base" : "head", query: "src/" })).paths,
       ).toEqual(["src/icon.ts"]);
@@ -1120,6 +1137,7 @@ describe("exact review delta", () => {
         const path = "assets/unknown";
         const previousPath = renamed ? "assets/old" : path;
         const textPath = mode === "deletion" ? previousPath : path;
+
         const surface = yield* hydrateExactChanges({
           files: renamed ? [{ ...file(path, undefined), previousPath, status: "renamed" }] : [],
           changedPaths: renamed ? [previousPath, path] : [path],
@@ -1143,6 +1161,7 @@ describe("exact review delta", () => {
                   : Effect.fail(BinaryBlob.make({ sha: "binary" })),
           },
         });
+
         expect(surface.ignoredPaths).toEqual(mode === "binary" ? [path] : []);
         expect(surface.unreviewedPaths).toEqual(mode === "failure" ? [path] : []);
         if (mode === "addition" || mode === "deletion") {

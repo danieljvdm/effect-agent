@@ -408,6 +408,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     // Preserve any textual side as an addition/deletion instead of dropping it.
     const beforeBinary = contents.success.before === undefined;
     const afterBinary = contents.success.after === undefined;
+
     if (
       (beforeBinary || afterBinary) &&
       (beforeBinary || beforeEntry === undefined) &&
@@ -420,6 +421,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     const before = contents.success.before ?? "";
     const after = contents.success.after ?? "";
     const path = afterBinary ? basePath : file.path;
+
     if (basePath !== file.path) {
       if (beforeBinary) unavailablePaths.add(basePath);
       if (afterBinary) unavailablePaths.add(file.path);
