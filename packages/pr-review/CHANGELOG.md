@@ -1,5 +1,16 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.40
+
+### Minor Changes
+
+- [#275](https://github.com/danieljvdm/effect-agent/pull/275) [`4db5096`](https://github.com/danieljvdm/effect-agent/commit/4db5096dc9add7c057b1b4f018f0dc726c391c6b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Verify host-supplied prior blockers against current source and return explicit resolutions after complete review. Let the GitHub Action dismiss verified bot change requests while keeping new findings scoped to the current diff.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.40
+
 ## 0.1.0-beta.39
 
 ### Minor Changes

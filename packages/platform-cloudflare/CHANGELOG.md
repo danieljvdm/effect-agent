@@ -1,5 +1,20 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.40
+
+### Patch Changes
+
+- [#280](https://github.com/danieljvdm/effect-agent/pull/280) [`614a81d`](https://github.com/danieljvdm/effect-agent/commit/614a81db4f9d121ac209cc56fc6d420f43f4ab1b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Compose WebCapture tool handlers and a Worker browser binding with `CloudflareBrowser.layer(ReadPage, { browser: env.BROWSER })`. Pass an explicit `workersAi` authorization and accounting policy to enable structured extraction.
+
+- [#280](https://github.com/danieljvdm/effect-agent/pull/280) [`614a81d`](https://github.com/danieljvdm/effect-agent/commit/614a81db4f9d121ac209cc56fc6d420f43f4ab1b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Assemble Cloudflare Code Mode, REST capture tools, interactive browsers, and thread clients with platform-owned Layer constructors. Register Node agents through `NodeDurableHost.layerRegistered(registrations, options)` while preserving application service requirements and host-scoped cleanup.
+
+- Updated dependencies [[`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`720e6d9`](https://github.com/danieljvdm/effect-agent/commit/720e6d952cf14cf61a6550c01473938fd46a1e74), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`1432833`](https://github.com/danieljvdm/effect-agent/commit/14328336cd3480c5ddda8447f522591eb99eaaeb), [`c36fe73`](https://github.com/danieljvdm/effect-agent/commit/c36fe73d2d226f9271c6dd60071159b0d82862ae), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`018f1ad`](https://github.com/danieljvdm/effect-agent/commit/018f1ad8455a0075b9cf764f85fe9b6972f07eb7), [`0fbcbbf`](https://github.com/danieljvdm/effect-agent/commit/0fbcbbf3c8c2ca7595543e545baddb0c6f965436)]:
+  - @effect-agent/thread@0.1.0-beta.40
+  - @effect-agent/core@0.1.0-beta.40
+  - @effect-agent/engine@0.1.0-beta.40
+  - @effect-agent/storage-cloudflare@0.1.0-beta.40
+  - @effect-agent/sandbox@0.1.0-beta.40
+
 ## 0.1.0-beta.39
 
 ### Minor Changes
