@@ -7,7 +7,7 @@ import {
 } from "@effect-agent/engine";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Exit, Layer, Ref, Schema, Stream } from "effect";
+import { Context, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import {
   LanguageModel,
   McpProtocol,
@@ -17,7 +17,6 @@ import {
   Tool,
   Toolkit,
 } from "effect/unstable/ai";
-import { Sse } from "effect/unstable/encoding";
 import {
   FetchHttpClient,
   HttpClient,
@@ -372,8 +371,18 @@ describe("MCP client requirements", () => {
     const stdioLayer: Layer.Layer<McpConnector, never, ChildProcessSpawner.ChildProcessSpawner> =
       McpClient.layer([McpStdioTransport.make({ serverId: "fixture", command: process.execPath })]);
 
+    const mixedLayer: Layer.Layer<
+      McpConnector,
+      never,
+      HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+    > = McpClient.layer([
+      httpTransport(false),
+      McpStdioTransport.make({ serverId: "local", command: process.execPath }),
+    ]);
+
     expect(Layer.isLayer(httpLayer)).toBe(true);
     expect(Layer.isLayer(stdioLayer)).toBe(true);
+    expect(Layer.isLayer(mixedLayer)).toBe(true);
   });
 });
 
@@ -401,27 +410,29 @@ interface ObservedRequest {
   readonly protocolVersion: string | undefined;
 }
 
+/** One SSE event carrying a JSON-RPC message, with the non-data fields a resumable server emits. */
+const sseBody = (message: unknown): string =>
+  `event: message\nid: 7\nretry: 1000\ndata: ${JSON.stringify(message)}\n\n`;
+
 const sseResponse = (
   request: HttpClientRequest.HttpClientRequest,
-  id: string | number,
-  result: unknown,
+  message: unknown,
   headers?: Record<string, string>,
 ) =>
   HttpClientResponse.fromWeb(
     request,
-    new globalThis.Response(
-      Sse.encoder.write({
-        _tag: "Event",
-        event: "message",
-        id: undefined,
-        data: JSON.stringify({ jsonrpc: "2.0", id, result }),
-      }),
-      {
-        status: 200,
-        headers: { "content-type": "text/event-stream", ...headers },
-      },
-    ),
+    new globalThis.Response(sseBody(message), {
+      status: 200,
+      headers: { "content-type": "text/event-stream", ...headers },
+    }),
   );
+
+const sseResult = (
+  request: HttpClientRequest.HttpClientRequest,
+  id: string | number,
+  result: unknown,
+  headers?: Record<string, string>,
+) => sseResponse(request, { jsonrpc: "2.0", id, result }, headers);
 
 const scriptedSseServer = Effect.gen(function* () {
   const observed = yield* Ref.make<ReadonlyArray<ObservedRequest>>([]);
@@ -454,7 +465,7 @@ const scriptedSseServer = Effect.gen(function* () {
       }
       switch (message.method) {
         case "initialize": {
-          return sseResponse(
+          return sseResult(
             request,
             message.id,
             {
@@ -466,18 +477,46 @@ const scriptedSseServer = Effect.gen(function* () {
           );
         }
         case "tools/list": {
-          return sseResponse(request, message.id, {
+          return sseResult(request, message.id, {
             tools: [
               {
                 name: "echo",
                 description: "Echo over SSE.",
                 inputSchema: { type: "object", properties: { message: { type: "string" } } },
               },
+              {
+                name: "strict",
+                description: "Rejects every call with a JSON-RPC error.",
+                inputSchema: { type: "object" },
+              },
+              {
+                name: "silent",
+                description: "Accepts the request and never answers it.",
+                inputSchema: { type: "object" },
+              },
             ],
           });
         }
         case "tools/call": {
-          return sseResponse(request, message.id, {
+          const params = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))(
+            message.params,
+          );
+
+          if (Option.isSome(params) && params.value.name === "silent") {
+            return HttpClientResponse.fromWeb(
+              request,
+              new globalThis.Response(null, { status: 202 }),
+            );
+          }
+          if (Option.isSome(params) && params.value.name === "strict") {
+            return sseResponse(request, {
+              jsonrpc: "2.0",
+              id: message.id,
+              error: { code: -32602, message: "Invalid params: strict rejects everything" },
+            });
+          }
+
+          return sseResult(request, message.id, {
             content: [{ type: "text", text: "echoed" }],
             structuredContent: { echoed: "sse" },
           });
@@ -505,43 +544,98 @@ const scriptedSseServer = Effect.gen(function* () {
 });
 
 describe("MCP client over server-sent events", () => {
-  it.effect("decodes SSE responses, propagates the session, and ends it with the Scope", () =>
-    Effect.gen(function* () {
-      const server = yield* scriptedSseServer;
-      const connector = McpClient.layer([httpTransport(false)]).pipe(
-        Layer.provide(Layer.succeed(HttpClient.HttpClient, server.client)),
-      );
+  it.effect(
+    "decodes SSE responses, propagates the session, and ends it with the caller's Scope",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* scriptedSseServer;
+        const connector = McpClient.layer([httpTransport(false)]).pipe(
+          Layer.provide(Layer.succeed(HttpClient.HttpClient, server.client)),
+        );
 
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const connection = yield* connectMcp(request);
+        // The connector Layer stays alive for the whole test; only the
+        // connection's own Scope closes, and that alone must end the session.
+        yield* Effect.gen(function* () {
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const connection = yield* connectMcp(request);
 
-          expect(connection.discovery.identity.implementation.name).toBe("scripted-sse");
+              expect(connection.discovery.identity.implementation.name).toBe("scripted-sse");
 
-          const echoed = yield* callHandler(connection, "echo", { message: "x" }).pipe(
-            Effect.provide(connection.handlers!),
+              const echoed = yield* callHandler(connection, "echo", { message: "x" }).pipe(
+                Effect.provide(connection.handlers!),
+              );
+
+              expect((echoed.result as McpToolResult).structuredContent).toEqual({ echoed: "sse" });
+
+              // A JSON-RPC error outside the MCP error union still reaches the
+              // model as a failed tool result instead of aborting the batch.
+              const strict = yield* callHandler(connection, "strict", {}).pipe(
+                Effect.provide(connection.handlers!),
+              );
+
+              expect(strict.isFailure).toBe(true);
+              expect(strict.result).toBeInstanceOf(McpToolCallFailed);
+              expect((strict.result as McpToolCallFailed).reason).toBe("protocol-error");
+
+              // An exchange that ends without a response for the request fails
+              // that call promptly instead of waiting for an outer timeout.
+              const silent = yield* callHandler(connection, "silent", {}).pipe(
+                Effect.provide(connection.handlers!),
+              );
+
+              expect(silent.isFailure).toBe(true);
+              expect((silent.result as McpToolCallFailed).message).toContain("without answering");
+            }),
           );
 
-          expect((echoed.result as McpToolResult).structuredContent).toEqual({ echoed: "sse" });
+          const observed = yield* Ref.get(server.observed);
+          const methods = observed.map((entry) => entry.method ?? entry.httpMethod);
+
+          expect(methods).toEqual([
+            "initialize",
+            "notifications/initialized",
+            "tools/list",
+            "tools/call",
+            "tools/call",
+            "tools/call",
+            "DELETE",
+          ]);
+          expect(observed[0]!.sessionId).toBeUndefined();
+          expect(observed[1]!.hasId).toBe(false);
+          for (const entry of observed.slice(1)) {
+            expect(entry.sessionId).toBe("session-1");
+            expect(entry.protocolVersion).toBe("2025-06-18");
+          }
+        }).pipe(Effect.provide(Layer.merge(connector, NodeCrypto.layer)));
+      }),
+  );
+});
+
+describe("MCP client over a stdio process that exits", () => {
+  it.effect(
+    "fails the connection instead of hanging when the server process exits",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const error = yield* connectMcp(request).pipe(Effect.flip);
+
+          expect(error._tag).toBe("McpConnectionError");
         }),
-      ).pipe(Effect.provide(Layer.merge(connector, NodeCrypto.layer)));
-
-      const observed = yield* Ref.get(server.observed);
-      const methods = observed.map((entry) => entry.method ?? entry.httpMethod);
-
-      expect(methods).toEqual([
-        "initialize",
-        "notifications/initialized",
-        "tools/list",
-        "tools/call",
-        "DELETE",
-      ]);
-      expect(observed[0]!.sessionId).toBeUndefined();
-      expect(observed[1]!.hasId).toBe(false);
-      for (const entry of observed.slice(1)) {
-        expect(entry.sessionId).toBe("session-1");
-        expect(entry.protocolVersion).toBe("2025-06-18");
-      }
-    }),
+      ).pipe(
+        Effect.provide(
+          Layer.merge(
+            McpClient.layer([
+              McpStdioTransport.make({
+                serverId: "fixture",
+                command: process.execPath,
+                args: ["-e", "process.exit(0)"],
+              }),
+            ]).pipe(Layer.provide(NodeServices.layer)),
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    15_000,
   );
 });

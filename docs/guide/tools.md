@@ -162,7 +162,9 @@ const program = Effect.gen(function* () {
 `connectMcp` negotiates a protocol revision, lists tools within the request bounds, and returns
 dynamic Effect AI tools whose handlers forward `tools/call`. Provide the returned `handlers` Layer
 wherever the agent runs. The connection lives in the caller's Scope; closing it ends the session
-or stops the process. Server-initiated requests such as sampling and elicitation are declined.
+or stops the process. Server-initiated requests such as sampling and elicitation are declined, and
+event streams are not resumed after a disconnect. A stdio `env` is added to the inherited
+environment.
 
 Remote tools stay ordinary tools: they are `uncertain` by default, need approval and authorization
 like any other tool, and receive an Unknown Outcome after process loss. Set `trustToolAnnotations`

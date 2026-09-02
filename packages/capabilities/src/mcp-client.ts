@@ -1,6 +1,7 @@
 import { ToolExecutionClass, type ToolExecutionClassValue } from "@effect-agent/engine";
 import {
   Cause,
+  Context,
   Effect,
   Encoding,
   Layer,
@@ -8,13 +9,12 @@ import {
   Predicate,
   Queue,
   Schema,
-  type Scope,
+  Scope,
   Stream,
 } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import * as McpProtocol from "effect/unstable/ai/McpProtocol";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
-import { Sse } from "effect/unstable/encoding";
 import {
   Headers,
   HttpClient,
@@ -250,29 +250,67 @@ const readBoundedText = Effect.fn("McpHttpTransport.readBoundedText")(function* 
   return chunks.join("");
 });
 
-const isSseRetry = (error: unknown): boolean =>
-  Predicate.hasProperty(error, "_tag") && error._tag === "Retry";
-
 /**
- * Delivers the `data` of each `text/event-stream` event as it arrives through
- * Effect's SSE decoder, retaining at most `maxBytes` of a pending event. A
- * server retry directive ends the stream without failing the request.
+ * Delivers the `data` of each `text/event-stream` event as it arrives. Only
+ * `data` fields carry JSON-RPC messages; `event`, `id`, `retry`, and comment
+ * lines are ignored because this client never resumes a stream, so a server
+ * retry directive neither ends the stream nor fails the request. At most
+ * `maxBytes` of an unterminated event stays buffered.
  */
 const consumeEventStream = Effect.fn("McpHttpTransport.consumeEventStream")(function* (
   response: HttpClientResponse.HttpClientResponse,
   maxBytes: number,
   deliver: (data: string) => Effect.Effect<void>,
 ) {
+  let buffer = "";
+  let pendingBytes = 0;
+  const dispatchEvent = (block: string): Effect.Effect<void> => {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice("data:".length).replace(/^ /, ""))
+      .join("\n");
+
+    return data.length === 0 ? Effect.void : deliver(data);
+  };
+  const drain = (final: boolean): Effect.Effect<void> =>
+    Effect.suspend(() => {
+      const blocks: Array<string> = [];
+
+      while (true) {
+        const match = /\r?\n\r?\n/.exec(buffer);
+
+        if (match === null) break;
+        blocks.push(buffer.slice(0, match.index));
+        buffer = buffer.slice(match.index + match[0].length);
+      }
+      if (final && buffer.length > 0) {
+        blocks.push(buffer);
+        buffer = "";
+      }
+      pendingBytes = byteLength(buffer);
+
+      return Effect.forEach(blocks, dispatchEvent, { discard: true });
+    });
+
   yield* response.stream.pipe(
     Stream.decodeText(),
-    Stream.pipeThroughChannelOrFail(Sse.decode({ maxEventSize: maxBytes })),
-    Stream.runForEach((event) => (event.data.length === 0 ? Effect.void : deliver(event.data))),
-    Effect.catch((error) =>
-      isSseRetry(error)
-        ? Effect.void
-        : Effect.fail(protocolDefect("Could not read the MCP event stream", error)),
+    Stream.runForEach((chunk) => {
+      buffer += chunk;
+      pendingBytes += byteLength(chunk);
+      if (pendingBytes > maxBytes) {
+        return Effect.fail(protocolDefect(`MCP event stream buffered more than ${maxBytes} bytes`));
+      }
+
+      return drain(false);
+    }),
+    Effect.mapError((error) =>
+      isRpcClientError(error)
+        ? error
+        : protocolDefect("Could not read the MCP event stream", error),
     ),
   );
+  yield* drain(true);
 });
 
 const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
@@ -287,6 +325,8 @@ const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
   let sessionId: string | undefined;
   let protocolVersion: string | undefined;
   let initializeRequestId: string | number | undefined;
+  /** Request ids whose JSON-RPC response has been delivered. */
+  const answered = new Set<string | number>();
 
   const transportHeaders = (): Headers.Headers =>
     Headers.merge(
@@ -357,6 +397,7 @@ const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
                 writeResponse,
                 respond: (response) => encode(response).pipe(Effect.flatMap(post), Effect.ignore),
                 onExit: (exit) => {
+                  answered.add(exit.requestId);
                   if (exit.requestId !== initializeRequestId || exit.exit._tag !== "Success") {
                     return;
                   }
@@ -369,15 +410,21 @@ const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
           );
         });
 
+      /**
+       * Posts one message and delivers whatever the server answers. A request
+       * whose HTTP exchange completes without a JSON-RPC response for its id
+       * (for example a `202`, an `id: null` error, or a stream that ends
+       * early) fails that request instead of leaving its caller waiting.
+       */
       const dispatch = Effect.fn("McpHttpTransport.dispatch")(function* (
         clientId: number,
         message: unknown,
+        requestId?: string | number,
       ) {
         const response = yield* post(yield* encode(message));
         const responseSession = response.headers[MCP_SESSION_ID_HEADER];
 
         if (responseSession !== undefined) sessionId = responseSession;
-        if (response.status === 202 || response.status === 204) return;
         if (response.status < 200 || response.status >= 300) {
           return yield* protocolDefect(
             `MCP server ${options.serverId} answered HTTP ${response.status}`,
@@ -385,14 +432,31 @@ const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
         }
         const contentType = response.headers["content-type"] ?? "";
 
-        if (contentType.startsWith("text/event-stream")) {
-          return yield* consumeEventStream(response, maxMessageBytes, (data) =>
-            deliver(clientId, data),
-          );
-        }
-        const text = yield* readBoundedText(response, maxMessageBytes);
+        if (response.status !== 202 && response.status !== 204) {
+          if (contentType.startsWith("text/event-stream")) {
+            yield* consumeEventStream(response, maxMessageBytes, (data) => deliver(clientId, data));
+          } else {
+            const text = yield* readBoundedText(response, maxMessageBytes);
 
-        if (text.length > 0) yield* deliver(clientId, text);
+            if (text.length > 0) yield* deliver(clientId, text);
+          }
+        }
+        if (requestId !== undefined && !answered.has(requestId)) {
+          yield* writeResponse(clientId, {
+            _tag: "Exit",
+            requestId,
+            exit: {
+              _tag: "Failure",
+              cause: [
+                {
+                  _tag: "Die",
+                  defect: `MCP server ${options.serverId} closed the HTTP exchange without answering request ${String(requestId)}`,
+                },
+              ],
+            },
+          });
+        }
+        answered.delete(requestId ?? "");
       });
 
       const send: RpcClient.Protocol["Service"]["send"] = (clientId, request) => {
@@ -403,7 +467,7 @@ const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
             }
             if (request.tag === "initialize") initializeRequestId = request.id;
 
-            return dispatch(clientId, request);
+            return dispatch(clientId, request, request.id);
           }
           case "Interrupt": {
             return dispatch(clientId, {
@@ -439,7 +503,7 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
     .spawn(
       ChildProcess.make(options.command, [...(options.args ?? [])], {
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-        ...(options.env === undefined ? {} : { env: options.env }),
+        ...(options.env === undefined ? {} : { env: options.env, extendEnv: true }),
       }),
     )
     .pipe(
@@ -452,11 +516,28 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
       ),
     );
   const outbound = yield* Queue.unbounded<string>();
+  // Once the process is gone every later send fails immediately instead of
+  // queueing behind a writer that no longer exists.
+  let closed: RpcClientError.RpcClientError | undefined;
+  const closedWith = (message: string, cause?: unknown): RpcClientError.RpcClientError =>
+    (closed ??= protocolDefect(message, cause));
 
   yield* Stream.fromQueue(outbound).pipe(
     Stream.encodeText,
     Stream.run(handle.stdin),
-    Effect.ignore,
+    Effect.matchCauseEffect({
+      onSuccess: () =>
+        Effect.sync(() => closedWith(`MCP server process ${options.serverId} closed stdin`)),
+      onFailure: (cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Effect.sync(() =>
+              closedWith(
+                `Writing to MCP server process ${options.serverId} failed`,
+                Cause.squash(cause),
+              ),
+            ),
+    }),
     Effect.forkScoped,
   );
   yield* handle.stderr.pipe(
@@ -505,6 +586,7 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
         });
       const enqueue = (message: unknown): Effect.Effect<void, RpcClientError.RpcClientError> =>
         Effect.suspend(() => {
+          if (closed !== undefined) return Effect.fail(closed);
           const encoded = parser.encode(message);
 
           if (typeof encoded !== "string") {
@@ -518,12 +600,12 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
         Stream.runForEach(deliver),
         Effect.matchCauseEffect({
           onSuccess: () =>
-            broadcast(protocolDefect(`MCP server process ${options.serverId} closed stdout`)),
+            broadcast(closedWith(`MCP server process ${options.serverId} closed stdout`)),
           onFailure: (cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void
               : broadcast(
-                  protocolDefect(
+                  closedWith(
                     `Reading MCP server process ${options.serverId} failed`,
                     Cause.squash(cause),
                   ),
@@ -650,6 +732,12 @@ const errorText = (content: ReadonlyArray<typeof McpSchema.ContentBlock.Type>): 
     .join("\n")
     .slice(0, 4 * 1024);
 
+const describeDefect = (defect: unknown): string =>
+  (Predicate.hasProperty(defect, "message") && Predicate.isString(defect.message)
+    ? defect.message
+    : String(defect)
+  ).slice(0, 4 * 1024);
+
 const connectionError = (serverId: string, message: string) => (cause: unknown) =>
   McpConnectionError.make({ serverId, message, cause });
 
@@ -742,6 +830,20 @@ const connectServer = Effect.fn("McpClient.connect")(function* <R>(
           message: error.message,
         }),
       ),
+      // A JSON-RPC error the MCP error union cannot decode (or any other
+      // malformed reply) surfaces as a defect from the RPC client. It is still
+      // the server's answer, so it reaches the model as a failed tool result
+      // rather than aborting the batch.
+      Effect.catchDefect((defect) =>
+        Effect.fail(
+          McpToolCallFailed.make({
+            serverId,
+            tool: name,
+            reason: "protocol-error",
+            message: describeDefect(defect),
+          }),
+        ),
+      ),
     );
 
     if (result.isError === true) {
@@ -762,9 +864,14 @@ const connectServer = Effect.fn("McpClient.connect")(function* <R>(
     });
   });
 
-  const toolkit: McpToolkit = Toolkit.make(
-    ...tools.map((tool) => makeMcpTool(tool, transport.trustToolAnnotations)),
-  );
+  const toolkit: McpToolkit = yield* Effect.try({
+    try: () =>
+      Toolkit.make(...tools.map((tool) => makeMcpTool(tool, transport.trustToolAnnotations))),
+    catch: connectionError(
+      serverId,
+      `MCP server ${serverId} advertised tools that cannot form a Toolkit`,
+    ),
+  });
   const handlers = toolkit.toLayer(
     Object.fromEntries(
       tools.map((tool) => [tool.name, (params: unknown) => callTool(tool.name, params)] as const),
@@ -780,39 +887,62 @@ const connectServer = Effect.fn("McpClient.connect")(function* <R>(
   } satisfies McpConnectedServer;
 });
 
+/** Platform services one transport needs, as declared by `McpServerTransport<R>`. */
+export type McpTransportRequirements<Transport> =
+  Transport extends McpServerTransport<infer R> ? R : never;
+
+const makeConnectorLayer = <R>(
+  transports: ReadonlyArray<McpServerTransport<R>>,
+  options: { readonly clientInfo?: McpSchema.Implementation | undefined } | undefined,
+): Layer.Layer<McpConnector, never, R> =>
+  Layer.effect(McpConnector)(
+    Effect.gen(function* () {
+      const services = yield* Effect.context<R>();
+      const byServerId = new Map(transports.map((transport) => [transport.serverId, transport]));
+      const clientInfo = options?.clientInfo ?? defaultMcpClientInfo;
+
+      return McpConnector.of({
+        connect: (request) => {
+          const transport = byServerId.get(request.serverId);
+
+          if (transport === undefined) {
+            return Effect.fail(
+              McpConnectionError.make({
+                serverId: request.serverId,
+                message: `No MCP transport is configured for server '${request.serverId}'`,
+              }),
+            );
+          }
+
+          // The Layer supplies the transport's platform services, but the
+          // connection must live and die with the caller's Scope, never the
+          // Layer's.
+          return connectServer(transport, request, clientInfo).pipe(
+            Effect.updateContext((caller: Context.Context<Scope.Scope>) =>
+              Context.merge(Context.merge(caller, services), Context.pick(Scope.Scope)(caller)),
+            ),
+          );
+        },
+      });
+    }),
+  );
+
 /**
  * `McpConnector` over real transports. Each `connect` acquires the transport
  * in the caller's Scope, negotiates a protocol revision, lists tools within the
  * request bounds, and returns dynamic Effect AI Tools plus the handler Layer
- * that forwards their calls. Platform services stay visible in `R`.
+ * that forwards their calls. The Layer requires the union of every
+ * transport's platform services.
  */
 export const McpClient = {
-  layer: <R = never>(
-    transports: ReadonlyArray<McpServerTransport<R>>,
+  layer: <const Transports extends ReadonlyArray<McpServerTransport<unknown>>>(
+    transports: Transports,
     options?: { readonly clientInfo?: McpSchema.Implementation | undefined },
-  ): Layer.Layer<McpConnector, never, R> =>
-    Layer.effect(McpConnector)(
-      Effect.gen(function* () {
-        const services = yield* Effect.context<R>();
-        const byServerId = new Map(transports.map((transport) => [transport.serverId, transport]));
-        const clientInfo = options?.clientInfo ?? defaultMcpClientInfo;
-
-        return McpConnector.of({
-          connect: (request) => {
-            const transport = byServerId.get(request.serverId);
-
-            if (transport === undefined) {
-              return Effect.fail(
-                McpConnectionError.make({
-                  serverId: request.serverId,
-                  message: `No MCP transport is configured for server '${request.serverId}'`,
-                }),
-              );
-            }
-
-            return connectServer(transport, request, clientInfo).pipe(Effect.provide(services));
-          },
-        });
-      }),
+  ): Layer.Layer<McpConnector, never, McpTransportRequirements<Transports[number]>> =>
+    makeConnectorLayer(
+      // Type-level only: each element declares its own `R`, and the Layer
+      // requires their union. Nothing about the values changes.
+      transports as ReadonlyArray<McpServerTransport<McpTransportRequirements<Transports[number]>>>,
+      options,
     ),
 } as const;
