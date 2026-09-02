@@ -758,6 +758,10 @@ transient-context hook above. The final envelope, including attribution and cita
 `recallMemory`'s item, UTF-8 byte, and token limits; the engine separately admits the full prompt.
 `essential: false` permits explicitly returned unavailable outcomes. It does not swallow errors.
 Map only intended expected failures to an `Unavailable` lookup in application policy.
+`SemanticQueryLimits.maxOutputBytes` bounds aggregate UTF-8 JSON passage output before retention,
+including repeated attribution and metadata. It defaults to 16 MiB, accepts at most 64 MiB, and
+fails with `SemanticMemoryError` reason `budget`. Source-byte limits count each distinct source
+once; they do not substitute for this output bound or the final rendered recall limits.
 
 Chunking greedily packs complete Unicode codepoints up to `maxChunkBytes`. It neither summarizes
 nor silently drops a source suffix. Chunk IDs include a digest of the whole profile and the

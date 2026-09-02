@@ -210,6 +210,10 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
               limits.maxSourceBytes,
               request.limits.maxSourceBytes ?? 16_777_216,
             ),
+            maxOutputBytes: Math.min(
+              limits.maxResponseBytes,
+              request.limits.maxOutputBytes ?? 16_777_216,
+            ),
           },
         );
         return { _tag: "Semantic", access: request.access, result };

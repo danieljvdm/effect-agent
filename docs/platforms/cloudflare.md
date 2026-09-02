@@ -236,6 +236,10 @@ For an external semantic index, call `client.revalidateSemantic(search, profile,
 generation, revision, locator, exact UTF-8 ranges, scope, and withdrawal before returning `result.lookup`.
 Stale scored candidates are omitted. Ordinary cached lookup revalidation instead replaces stale text
 with the current document, matching local recall. Neither path trusts cached attribution.
+Semantic validation counts the complete UTF-8 JSON of every accepted passage before retaining it,
+including repeated metadata and attribution. Its `maxOutputBytes` defaults to 16 MiB and is capped
+at the owner's `maxResponseBytes`; the final envelope is checked separately. Duplicate-heavy output
+fails with `SemanticMemoryError` reason `budget` before an oversized result is assembled.
 
 Default owner limits are 16 distinct sources, 1 MiB encoded request, 4 MiB encoded response,
 16 MiB revalidation input, and a 10-second deadline. `makeMemoryObjectClass` accepts `rpcLimits` and

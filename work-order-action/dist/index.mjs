@@ -33263,6 +33263,7 @@ class SemanticCandidateLimits extends exports_Schema.Class("@effect-agent/core/S
   maxCandidates: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 128 })),
   maxScannedChunks: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 65536 })),
   maxSourceBytes: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 67108864 }))),
+  maxOutputBytes: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 67108864 }))),
   minScore: exports_Schema.Finite.check(exports_Schema.isBetween({ minimum: -1, maximum: 1 }))
 }) {
 }
@@ -33320,7 +33321,9 @@ var revalidateSemanticMemoryCandidates = exports_Effect.fn("revalidateSemanticMe
       group2.candidates.push({ rank, candidate });
   }
   const maxSourceBytes = limits.maxSourceBytes ?? 16777216;
+  const maxOutputBytes = limits.maxOutputBytes ?? 16777216;
   let sourceBytes = 0;
+  let outputBytes = 0;
   for (const group2 of groups.values()) {
     yield* exports_Effect.yieldNow;
     const document = yield* readDocument(group2.key);
@@ -33352,16 +33355,24 @@ var revalidateSemanticMemoryCandidates = exports_Effect.fn("revalidateSemanticMe
         staleExcluded += 1;
         continue;
       }
-      rankedPassages.push({
-        rank,
-        passage: MemoryPassage.make({
-          version: 1,
-          authority: access3.namespace.address,
-          source: document.source,
-          passageId: candidate.passageId,
-          content: { ...document.content, text: candidate.text }
-        })
+      const passage = MemoryPassage.make({
+        version: 1,
+        authority: access3.namespace.address,
+        source: document.source,
+        passageId: candidate.passageId,
+        content: { ...document.content, text: candidate.text }
       });
+      const encodedPassage = JSON.stringify(passage);
+      const remainingOutputBytes = maxOutputBytes - outputBytes;
+      const passageBytes = encodedPassage.length <= remainingOutputBytes ? byteLength(encodedPassage) : undefined;
+      if (passageBytes === undefined || passageBytes > remainingOutputBytes) {
+        return yield* SemanticMemoryError.make({
+          operation: "query output bytes",
+          reason: "budget"
+        });
+      }
+      outputBytes += passageBytes;
+      rankedPassages.push({ rank, passage });
     }
   }
   const passages = rankedPassages.sort((left, right) => left.rank - right.rank).map(({ passage }) => passage);
@@ -44635,6 +44646,7 @@ class SemanticQueryLimits extends exports_Schema.Class("@effect-agent/capabiliti
   maxCandidates: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 128 })),
   maxScannedChunks: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 65536 })),
   maxSourceBytes: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 67108864 }))),
+  maxOutputBytes: SemanticCandidateLimits.fields.maxOutputBytes,
   minScore: exports_Schema.Finite.check(exports_Schema.isBetween({ minimum: -1, maximum: 1 })),
   timeoutMillis: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 1, maximum: 60000 }))
 }) {

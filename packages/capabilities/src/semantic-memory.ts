@@ -13,6 +13,7 @@ import {
   SemanticMemoryIndex,
   SemanticMemoryProfile,
   SemanticMemoryError,
+  SemanticCandidateLimits,
   revalidateSemanticMemoryCandidates,
 } from "@effect-agent/core";
 import { Clock, Crypto, Effect, Encoding, Schema } from "effect";
@@ -43,6 +44,8 @@ export class SemanticQueryLimits extends Schema.Class<SemanticQueryLimits>(
   maxSourceBytes: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 67_108_864 })),
   ),
+  /** Aggregate UTF-8 JSON passage bytes, including repeated provenance; defaults to 16 MiB. */
+  maxOutputBytes: SemanticCandidateLimits.fields.maxOutputBytes,
   minScore: Schema.Finite.check(Schema.isBetween({ minimum: -1, maximum: 1 })),
   timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60_000 })),
 }) {}

@@ -4,6 +4,7 @@ import {
   MemoryIndexCandidate,
   MemoryIndexSearch,
   SemanticMemoryProfile,
+  SemanticCandidateLimits,
   MemoryReader,
   MemoryWriter,
 } from "@effect-agent/core";
@@ -173,6 +174,110 @@ describe("shared Cloudflare memory owner", () => {
         expect(next.staleExcluded).toBe(2);
       }),
     ));
+  it("rejects duplicate-expanded semantic output before reading later sources or encoding the RPC response", async () => {
+    const name = project();
+    await runInDurableObject(stub(name), (_instance, state) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const writer = yield* MemoryWriter;
+          const reader = yield* MemoryReader;
+          const put = memoryPut(name, "a");
+          const first = yield* writer.change(
+            MemoryWrite.make({
+              ...put,
+              content: {
+                ...put.content,
+                attributions: put.content.attributions.map((attribution) => ({
+                  ...attribution,
+                  interpretation: '"🌊"\\'.repeat(256),
+                })),
+                metadata: { evidence: "🌊".repeat(128) },
+              },
+            }),
+          );
+          const second = yield* writer.change(memoryPut(name, "b"));
+          const candidate = (document: typeof first) =>
+            MemoryIndexCandidate.make({
+              key: document.key,
+              source: document.source,
+              sourceGeneration: document.generation,
+              passageId: "chunk-0",
+              ordinal: 0,
+              startByte: 0,
+              endByte: 6,
+              text: `text-${document.key.id}`,
+              score: 1,
+              indexedAt: 1,
+            });
+          const request: MemoryOwnerRequest = {
+            _tag: "RevalidateSemantic",
+            version: 1,
+            access: memoryAccess(name),
+            principal: "application",
+            deadlineMillis: (yield* Clock.currentTimeMillis) + 1000,
+            profile: SemanticMemoryProfile.make({
+              version: 1,
+              provider: "test",
+              model: "test",
+              modelRevision: "1",
+              dimensions: 1,
+              chunker: "utf8-codepoint@1",
+              maxChunkBytes: 8192,
+              distance: "cosine",
+            }),
+            found: MemoryIndexSearch.make({ candidates: [candidate(first)], scannedChunks: 1 }),
+            limits: SemanticCandidateLimits.make({
+              maxCandidates: 128,
+              maxScannedChunks: 128,
+              minScore: 0,
+            }),
+          };
+          const ownerLimits = { ...defaultMemoryRpcLimits, maxResponseBytes: 4096 };
+          const reads: Array<string> = [];
+          const counted = MemoryReader.fromAdapter({
+            get: (key) =>
+              Effect.suspend(() => {
+                reads.push(key.id);
+                return reader.get(key);
+              }),
+          });
+          const single = yield* handleMemoryOwnerRequest(
+            yield* encodeMemoryWire(MemoryOwnerRequest, request, 1_048_576),
+            ownerLimits,
+          );
+          expect(decode(single)).toMatchObject({ _tag: "Semantic" });
+          const expanded = {
+            ...request,
+            found: MemoryIndexSearch.make({
+              candidates: [
+                ...Array.from({ length: 127 }, () => candidate(first)),
+                candidate(second),
+              ],
+              scannedChunks: 128,
+            }),
+          };
+          const response = yield* handleMemoryOwnerRequest(
+            yield* encodeMemoryWire(MemoryOwnerRequest, expanded, 1_048_576),
+            ownerLimits,
+          ).pipe(Effect.provideService(MemoryReader, counted));
+          expect(decode(response)).toMatchObject({
+            _tag: "Failed",
+            failure: {
+              _tag: "SemanticMemoryError",
+              operation: "query output bytes",
+              reason: "budget",
+            },
+          });
+          expect(reads).toEqual(["a"]);
+          expect(new TextEncoder().encode(response).byteLength).toBeLessThanOrEqual(4096);
+        }).pipe(
+          Effect.provideService(MemoryOwnerIdentity, { namespace: MemoryProjects.make(name) }),
+          Effect.provideService(MemoryOwnerAuthorizer, { authorize: () => Effect.void }),
+          Effect.provide(doMemoryStoreLayer(state.storage)),
+        ),
+      ),
+    );
+  });
   it("shares updates between two Thread Objects and uses one owner RPC for multi-source recall", async () => {
     const name = project();
     // The binding's production interface omits test-only methods; resolve the actual fixture type.

@@ -30,6 +30,10 @@ export class SemanticCandidateLimits extends Schema.Class<SemanticCandidateLimit
   maxSourceBytes: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 67_108_864 })),
   ),
+  /** Aggregate UTF-8 JSON passage bytes, including repeated provenance; defaults to 16 MiB. */
+  maxOutputBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 67_108_864 })),
+  ),
   minScore: Schema.Finite.check(Schema.isBetween({ minimum: -1, maximum: 1 })),
 }) {}
 
@@ -66,7 +70,12 @@ const readDocument = Effect.fn("semanticCandidates.readDocument")(function* (key
   return document;
 });
 
-/** Revalidate one ranked batch locally. No embedding or index access; stale scored text is excluded. */
+/**
+ * Revalidate one ranked batch locally. No embedding or index access; stale scored text is excluded.
+ * Charge each accepted passage's full JSON encoding before retaining it, including duplicates and
+ * authoritative metadata/attribution. maxOutputBytes bounds their aggregate, not source reads or
+ * a transport envelope. One passage is constructed at a time before this check.
+ */
 export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticMemoryCandidates")(
   function* (
     found: MemoryIndexSearch,
@@ -130,7 +139,9 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
       } else group.candidates.push({ rank, candidate });
     }
     const maxSourceBytes = limits.maxSourceBytes ?? 16_777_216;
+    const maxOutputBytes = limits.maxOutputBytes ?? 16_777_216;
     let sourceBytes = 0;
+    let outputBytes = 0;
     for (const group of groups.values()) {
       yield* Effect.yieldNow;
       const document = yield* readDocument(group.key);
@@ -166,16 +177,25 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
           staleExcluded += 1;
           continue;
         }
-        rankedPassages.push({
-          rank,
-          passage: MemoryPassage.make({
-            version: 1,
-            authority: access.namespace.address,
-            source: document.source,
-            passageId: candidate.passageId,
-            content: { ...document.content, text: candidate.text },
-          }),
+        const passage = MemoryPassage.make({
+          version: 1,
+          authority: access.namespace.address,
+          source: document.source,
+          passageId: candidate.passageId,
+          content: { ...document.content, text: candidate.text },
         });
+        const encodedPassage = JSON.stringify(passage);
+        const remainingOutputBytes = maxOutputBytes - outputBytes;
+        const passageBytes =
+          encodedPassage.length <= remainingOutputBytes ? byteLength(encodedPassage) : undefined;
+        if (passageBytes === undefined || passageBytes > remainingOutputBytes) {
+          return yield* SemanticMemoryError.make({
+            operation: "query output bytes",
+            reason: "budget",
+          });
+        }
+        outputBytes += passageBytes;
+        rankedPassages.push({ rank, passage });
       }
     }
     const passages = rankedPassages
