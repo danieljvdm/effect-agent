@@ -1,12 +1,13 @@
 import { ReviewRepository } from "@effect-agent/pr-review";
 import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, Config, ConfigProvider, Effect, Exit, Option, Ref, Schema } from "effect";
+import { describe, expect, expectTypeOf, it, layer } from "@effect/vitest";
+import { Cause, Config, ConfigProvider, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
 import { Response } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
   estimateGpt56CostMicrousd,
+  GeneratedFileClassification,
   hydrateExactChanges,
   IncrementalScopeUnavailable,
   makeReviewRepository,
@@ -1063,7 +1064,11 @@ describe("GPT-5.6 cost estimation", () => {
   });
 });
 
-describe("exact review delta", () => {
+const noGeneratedFiles = Layer.succeed(GeneratedFileClassification, {
+  isGenerated: () => Effect.succeed(false),
+});
+
+layer(noGeneratedFiles)("exact review delta", (it) => {
   const treeSnapshot = (
     revision: string,
     files: Readonly<Record<string, string>>,
@@ -1086,6 +1091,67 @@ describe("exact review delta", () => {
         : Effect.succeed(files[path] ?? ""),
   });
 
+  it.effect("keeps review capacity after exhausting generated classification requests", () =>
+    Effect.gen(function* () {
+      const generated = Array.from(
+        { length: 100 },
+        (_, index) => `generated/${String(index).padStart(3, "0")}.ts`,
+      );
+
+      const source = Array.from(
+        { length: 101 },
+        (_, index) => `src/${String(index).padStart(3, "0")}.ts`,
+      );
+
+      const paths = [...generated, ...source];
+
+      const base = treeSnapshot(
+        "base",
+        Object.fromEntries(paths.map((path) => [path, "export const value = 1;\n"])),
+        new Set(generated),
+      );
+
+      const head = treeSnapshot(
+        "head",
+        Object.fromEntries(
+          [...generated.slice(50), ...source].map((path) => [path, "export const value = 2;\n"]),
+        ),
+        new Set(generated),
+      );
+
+      const hydration = hydrateExactChanges({
+        files: paths.map((path) => file(path, undefined)),
+        changedPaths: paths,
+        base,
+        head,
+        ignore: [],
+      });
+
+      expectTypeOf<
+        Effect.Services<typeof hydration>
+      >().toEqualTypeOf<GeneratedFileClassification>();
+      expectTypeOf<Effect.Error<typeof hydration>>().toEqualTypeOf<GitHubApiFailure>();
+      const classified: Array<string> = [];
+
+      const surface = yield* hydration.pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: (path) =>
+            Effect.sync(() => {
+              classified.push(path);
+
+              return path.startsWith("generated/");
+            }),
+        }),
+      );
+
+      expect(classified).toEqual(generated);
+      expect(surface.ignoredPaths).toEqual(generated);
+      expect(surface.changes.map((change) => change.path)).toEqual(source.slice(0, 100));
+      expect(surface.unreviewedPaths).toEqual(["src/100.ts"]);
+      expect(surface.exclusions).toEqual([{ path: "src/100.ts", reason: "file-limit" }]);
+    }),
+  );
+
   it.effect("ignores a deleted generated bundle before reading it, even after policy removal", () =>
     Effect.gen(function* () {
       const path = "retired-action/dist/index.mjs";
@@ -1107,8 +1173,11 @@ describe("exact review delta", () => {
         base,
         head,
         ignore: [],
-        isGenerated: (candidate) => Effect.succeed(candidate === path),
-      });
+      }).pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: (candidate) => Effect.succeed(candidate === path),
+        }),
+      );
 
       expect(surface.ignoredPaths).toEqual([path]);
       expect(surface.unreviewedPaths).toEqual([]);
@@ -1167,8 +1236,11 @@ describe("exact review delta", () => {
           },
         },
         ignore: [],
-        isGenerated: () => Effect.die("structural changes must remain reviewable"),
-      });
+      }).pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: () => Effect.die("structural changes must remain reviewable"),
+        }),
+      );
 
       expect(surface.ignoredPaths).toEqual([]);
       expect(surface.changes.map((change) => change.path)).toEqual([

@@ -114,6 +114,9 @@ classification at the trusted PR merge base. Removing their attributes or ignore
 does not change that classification, including during incremental reviews. New paths, renames,
 permission changes, and unsupported entries follow normal admission rules. Classification failures
 leave the review incomplete.
+Classification attempts have a separate 100-file limit. Ignored generated files do not consume
+review capacity. After that limit, remaining files follow normal admission rules without automatic
+generated-file exclusion.
 
 ## Spending and prompt caching
 

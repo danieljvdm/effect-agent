@@ -19,9 +19,11 @@ import {
   Config,
   ConfigProvider,
   Console,
+  Context,
   Effect,
   Exit,
   FileSystem,
+  Layer,
   Option,
   Result,
   Schema,
@@ -59,6 +61,7 @@ import {
 export { estimateGpt56CostMicrousd } from "./review-openai.ts";
 
 const MAX_REVIEW_FILES = 100;
+const MAX_GENERATED_CLASSIFICATIONS = 100;
 const MAX_HYDRATED_SOURCE_BYTES = 8_000_000;
 
 const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
@@ -256,6 +259,12 @@ const matchesIgnore = (path: string, rawPattern: string): boolean => {
 const documentationPath = (path: string): boolean =>
   /(^|\/)(docs?|\.changeset)(\/|$)|\.(md|mdx|rst|txt|adoc)$/i.test(path);
 
+/** The host classifies paths at a trusted revision, never at a PR-controlled head. */
+export class GeneratedFileClassification extends Context.Service<
+  GeneratedFileClassification,
+  { readonly isGenerated: (path: string) => Effect.Effect<boolean, GitHubApiFailure> }
+>()("@effect-agent/pr-review-action/GeneratedFileClassification") {}
+
 /** Hydrate exact patches in implementation-first order; the reviewer batches large input. */
 export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (input: {
   readonly files: ReadonlyArray<ChangedFile>;
@@ -263,9 +272,8 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   readonly base: RepositorySnapshot;
   readonly head: RepositorySnapshot;
   readonly ignore: ReadonlyArray<string>;
-  /** Omit to disable automatic exclusions. The host must use a trusted revision, not a PR head. */
-  readonly isGenerated?: (path: string) => Effect.Effect<boolean, GitHubApiFailure>;
 }) {
+  const classification = yield* GeneratedFileClassification;
   const metadata = new Map(input.files.map((file) => [file.path, file] as const));
   const activeRenames = new Map<string, ChangedFile>();
 
@@ -332,6 +340,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   };
 
   let admittedPaths = 0;
+  let classificationAttempts = 0;
   let hydratedSourceBytes = 0;
 
   for (const { file, basePath } of [...candidates.values()].sort(
@@ -357,7 +366,6 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       );
       continue;
     }
-    admittedPaths += 1;
     const beforeEntry = input.base.entry(basePath);
     const afterEntry = input.head.entry(file.path);
 
@@ -366,6 +374,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
         (beforeEntry.type !== "blob" || beforeEntry.mode === "120000")) ||
       (afterEntry !== undefined && (afterEntry.type !== "blob" || afterEntry.mode === "120000"))
     ) {
+      admittedPaths += 1;
       exclude(unreviewedPaths, file, basePath, "unsupported-entry");
       continue;
     }
@@ -373,12 +382,15 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       basePath === file.path &&
       beforeEntry !== undefined &&
       (afterEntry === undefined || beforeEntry.mode === afterEntry.mode) &&
-      input.isGenerated !== undefined &&
-      (yield* input.isGenerated(file.path))
+      classificationAttempts < MAX_GENERATED_CLASSIFICATIONS
     ) {
-      exclude(ignoredPaths, file, basePath);
-      continue;
+      classificationAttempts += 1;
+      if (yield* classification.isGenerated(file.path)) {
+        exclude(ignoredPaths, file, basePath);
+        continue;
+      }
     }
+    admittedPaths += 1;
 
     const sourceSizesKnown =
       (beforeEntry === undefined || beforeEntry.size !== undefined) &&
@@ -783,9 +795,14 @@ export const reviewActionProgram = Effect.gen(function* () {
       base: comparison.base,
       head: comparison.head,
       ignore,
-      isGenerated: (path) =>
-        generatedAt.pipe(Effect.flatMap((snapshot) => github.isGenerated(snapshot, path))),
-    });
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(GeneratedFileClassification, {
+          isGenerated: (path) =>
+            generatedAt.pipe(Effect.flatMap((snapshot) => github.isGenerated(snapshot, path))),
+        }),
+      ),
+    );
 
     const reviewRepository = makeReviewRepository({
       base: comparison.base,
