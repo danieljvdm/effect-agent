@@ -8,6 +8,7 @@ import {
   RunToolAuthorization,
   ToolExecutionClass,
 } from "@effect-agent/engine";
+import { layerFromBindings } from "@effect-agent/platform-cloudflare";
 import {
   type DoStorageFailpointHandler,
   type DoStorageFailpointLocation,
@@ -41,7 +42,6 @@ import type {
   ThreadMaintenanceFailpointHandler,
   ThreadMaintenanceFailpointLocation,
 } from "../src/index.ts";
-import { layerFromBindings } from "../src/layers.ts";
 
 /**
  * Workerd-safe eviction-harness fixtures (plan §3, §4 WP3). The vitest pool runs test files
