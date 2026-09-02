@@ -11,7 +11,10 @@ import {
   ThreadRead,
   ThreadStore,
   DefinitionDigests,
+  DefinitionDigestInput,
   Digest,
+  digestDefinitions,
+  compileRegistrations,
   DurableAgentRuntime,
   DurableRuntimeFailpointError,
   DurableWorkerBinding,
@@ -20,7 +23,7 @@ import {
   childThreadIdFor,
   type DurableRuntimeFailpointLocation,
 } from "@effect-agent/thread";
-import { NodeFileSystem } from "@effect/platform-node";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
@@ -52,6 +55,126 @@ const readLog = Effect.fn("AllowanceTest.readLog")(function* (threadId: ThreadId
   const store = yield* ThreadStore;
   return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1024 })));
 });
+
+it.effect("shares a durable delegation pool across calls and SQLite reopen", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "subagent-shared-budget-" });
+      const target = Agent.make("shared-budget-child", {
+        input: Schema.String,
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+      });
+      const delegation = Subagent.define("delegate_shared_budget", {
+        target,
+        failureMode: "return",
+      });
+      const versions = DefinitionDigestInput.make({
+        agent: "shared-budget-v1",
+        model: "scripted-v1",
+        tools: [],
+      });
+      const sharedDigests = yield* digestDefinitions(versions).pipe(
+        Effect.provide(NodeCrypto.layer),
+      );
+      const childModel = Model.make(
+        "scripted",
+        "shared-child",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () => Stream.fromIterable(finalParts),
+          }),
+        ),
+      );
+      const parent = Agent.withModel(
+        Agent.make("shared-budget-parent", {
+          input: Schema.String,
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Delegate twice.",
+          toolkit: Toolkit.make(delegation.tool),
+          policy: { maxTurns: 3, maxToolCalls: 2, toolConcurrency: 1 },
+        }),
+        Model.make(
+          "scripted",
+          "shared-parent",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                const count = request.prompt.content.filter(
+                  (message) => message.role === "tool",
+                ).length;
+                return Stream.fromIterable(
+                  count < 2 ? toolTurn(`shared-${count}`, delegation.name, "question") : finalParts,
+                );
+              },
+            }),
+          ),
+        ),
+      );
+      const handlers = SubagentRuntime.layer(delegation, childModel, {
+        durable: { targetDigests: sharedDigests },
+      }).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
+      const bindings = yield* compileRegistrations([
+        { agent: parent, definitions: versions },
+        { agent: target, model: childModel, definitions: versions },
+      ]).pipe(Effect.provide([handlers, NodeCrypto.layer]));
+      const parentId = Schema.decodeSync(ThreadId)("shared-budget-parent");
+      const runtimeLayer = () =>
+        NodeDurableRuntime.layer({
+          filename: `${directory}/shared.sqlite`,
+          deploymentId: "shared-budget",
+          producerId: "shared-budget",
+        });
+      yield* Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const receipt = yield* runtime.submit(parent, "start", {
+          threadId: parentId,
+          principal: Schema.decodeSync(Principal)("test"),
+          idempotencyKey: Schema.decodeSync(IdempotencyKey)("shared"),
+          definitions: sharedDigests,
+        });
+        expect(yield* runtime.processThreadResolved(parentId, bindings)).toEqual([]);
+        yield* runtime.processThreadResolved(
+          childThreadIdFor(receipt.submissionId, Schema.decodeSync(ToolCallId)("shared-0")),
+          bindings,
+        );
+        return receipt;
+      }).pipe(Effect.provide(runtimeLayer()));
+      yield* Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        expect((yield* runtime.processThreadResolved(parentId, bindings))[0]?.outcome).toBe(
+          "completed",
+        );
+        const log = yield* readLog(parentId);
+        expect(
+          log.filter(({ record }) => record.payload._tag === "SubagentRequested"),
+        ).toHaveLength(1);
+        const settlements = log
+          .filter(({ record }) => record.payload._tag === "ToolCallSettled")
+          .map(({ record }) => record.payload);
+        expect(settlements).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              result: { output: { answer: "partial" }, budgetExhausted: false },
+            }),
+            expect.objectContaining({
+              result: expect.objectContaining({
+                _tag: "SubagentExecutionFailure",
+                errorTag: "SubagentBudgetExhausted",
+              }),
+            }),
+          ]),
+        );
+      }).pipe(Effect.provide(runtimeLayer()));
+    }),
+  ).pipe(Effect.provide(NodeFileSystem.layer)),
+);
 
 it.effect(
   "persists child allowances through establishment faults, approval suspension, and SQLite reopen without replenishing usage",
@@ -124,12 +247,7 @@ it.effect(
             output: Schema.Struct({ answer: Schema.String }),
             instructions: "Probe until the budget is exhausted.",
             toolkit: tools,
-            policy: AgentPolicy.make({
-              maxTurns: 12,
-              maxToolCalls: row.definition,
-              maxDuration: "5 minutes",
-              toolConcurrency: 1,
-            }),
+            policy: { maxToolCalls: row.definition },
           });
           // Prompt-derived calls survive replacement runtimes without a live model counter.
           const child = Agent.withModel(
@@ -211,7 +329,7 @@ it.effect(
               ),
             ),
           );
-          const delegationLayer = SubagentRuntime.layer(delegation, child, {
+          const delegationLayer = SubagentRuntime.layer(delegation, child.model, {
             mapChildFailure: (failure) => new ProbeFailed({ tag: failure._tag }),
             durable: { targetDigests: digests },
           }).pipe(Layer.provide([handlers, SubagentReservationsMemoryLive, IdGenerator.layer]));
@@ -300,11 +418,17 @@ it.effect(
               expect(
                 parentLog.find(({ record }) => record.payload._tag === "SubagentRequested")?.record
                   .payload,
-              ).toMatchObject({ toolCallAllowance: row.effective });
+              ).toMatchObject({
+                toolCallAllowance: row.effective,
+                policy: { maxTurns: 3, toolConcurrency: 1 },
+              });
               expect(
                 childLog.find(({ record }) => record.payload._tag === "SubagentLineageRecorded")
                   ?.record.payload,
-              ).toMatchObject({ toolCallAllowance: row.effective });
+              ).toMatchObject({
+                toolCallAllowance: row.effective,
+                policy: { maxTurns: 3, toolConcurrency: 1 },
+              });
               expect(
                 parentLog.find(({ record }) => record.payload._tag === "ToolCallSettled")?.record
                   .payload,

@@ -8,8 +8,7 @@ import {
   type RunDispositionDeclaration,
 } from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
-import type { Crypto } from "effect";
-import { type Option, Effect, type Layer, Schema } from "effect";
+import { type Crypto, type Option, Effect, type Layer, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
 import { digestDefinitions, type DigestError } from "./digest.ts";
@@ -207,14 +206,25 @@ export const resolveWorkerBinding = (
   return Effect.succeed(exact);
 };
 
-/** Application version declarations paired with one executable Agent Binding. */
-export interface AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgentBinding> {
-  readonly agent: A;
-  readonly definitions: DefinitionDigestInput;
-}
+/** Application versions and a model Layer, supplied directly or through an existing Binding. */
+export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgentBinding> =
+  | { readonly agent: A; readonly model?: never; readonly definitions: DefinitionDigestInput }
+  | {
+      readonly agent: A["definition"];
+      readonly model: A["model"];
+      readonly definitions: DefinitionDigestInput;
+    };
 
-type EntryRequirements<Entry> =
-  Entry extends AgentRegistration<infer A> ? DurableWorkerRequirements<A> : never;
+type EntryRequirements<Entry> = Entry extends {
+  readonly agent: infer A extends ExecutableAgentBinding;
+}
+  ? DurableWorkerRequirements<A>
+  : Entry extends {
+        readonly agent: infer D extends ExecutableDefinition;
+        readonly model: infer M extends ExecutableAgentBinding["model"];
+      }
+    ? DurableWorkerRequirements<{ readonly definition: D; readonly model: M }>
+    : never;
 
 type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> = [
   Entries[number],
@@ -222,11 +232,12 @@ type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> 
   ? never
   : EntryRequirements<Entries[number]>;
 
-const compileRegistration = <A extends ExecutableAgentBinding>(
-  entry: AgentRegistration<A>,
-): Effect.Effect<ResolvedBinding, DigestError, Crypto.Crypto | DurableWorkerRequirements<A>> =>
+const compileRegistration = (entry: AgentRegistration) =>
   Effect.flatMap(digestDefinitions(entry.definitions), (digests) =>
-    DurableWorkerBinding.make(entry.agent, digests),
+    DurableWorkerBinding.make(
+      entry.model === undefined ? entry.agent : { definition: entry.agent, model: entry.model },
+      digests,
+    ),
   );
 
 /** Compile heterogeneous Agent descriptors into exact, dependency-closed worker registrations. */

@@ -98,6 +98,27 @@ export type AgentPolicyInput = Readonly<
 
 /** Schema class for finite agent run limits. */
 export class AgentPolicy extends Schema.Class<AgentPolicy>("AgentPolicy")(AgentPolicyFields) {
+  /** Resolve an optional declaration against finite standalone or parent defaults. */
+  static resolve(input: Partial<AgentPolicyInput> = {}, parent?: AgentPolicy): AgentPolicy {
+    return AgentPolicy.make({
+      maxTurns: 12,
+      maxToolCalls: 24,
+      maxDuration: "5 minutes",
+      toolConcurrency: 4,
+      ...parent,
+      ...input,
+      // A smaller token budget must not inherit a reserve larger than itself.
+      ...(input.completionReserveTokens !== undefined || parent === undefined
+        ? {}
+        : {
+            completionReserveTokens: Math.min(
+              parent.completionReserveTokens,
+              input.tokenBudget ?? parent.tokenBudget ?? parent.completionReserveTokens,
+            ),
+          }),
+    });
+  }
+
   /** Normalize and validate finite policy bounds, throwing on invalid input. */
   static override make(input: AgentPolicyInput): AgentPolicy {
     const completionReserveTokens =

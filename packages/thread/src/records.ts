@@ -1,5 +1,7 @@
 import {
   AgentId,
+  AgentPolicy,
+  SubagentBudgetReservation,
   AttemptId,
   ThreadId,
   DelegationId,
@@ -656,6 +658,8 @@ export class SubagentRequested extends Schema.TaggedClass<SubagentRequested>(
   childIdempotencyKey: BoundedName,
   /** Effective invocation bound, already clamped to the delegation and child Definition. */
   toolCallAllowance: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  policy: Schema.optionalKey(Schema.toCodecJson(AgentPolicy)),
+  budget: Schema.optionalKey(SubagentBudgetReservation),
 }) {}
 
 /**
@@ -714,6 +718,7 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
   grantDigest: Digest,
   /** Copied from the canonical request before readiness; restored for every child Attempt. */
   toolCallAllowance: SubagentRequested.fields.toolCallAllowance,
+  policy: SubagentRequested.fields.policy,
 }) {}
 
 /**

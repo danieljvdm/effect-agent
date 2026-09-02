@@ -1,5 +1,7 @@
 import type {
   AgentId,
+  AgentPolicy,
+  SubagentBudgetReservation,
   ThreadId,
   DelegationDepth,
   DelegationId,
@@ -508,6 +510,9 @@ export interface RunSubagentDigests {
  * one existing child.
  */
 export interface RunSubagentEstablishRequest {
+  /** Resolved child defaults and ceilings, fixed before admission and restored on recovery. */
+  readonly policy?: AgentPolicy | undefined;
+  readonly budget?: SubagentBudgetReservation | undefined;
   readonly toolCallId: ToolCallId;
   readonly delegationId: DelegationId;
   readonly targetAgentId: AgentId;

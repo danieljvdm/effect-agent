@@ -4,7 +4,7 @@ import type { AiError, LanguageModel, Model, Prompt, Tool, Toolkit } from "effec
 
 import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./errors.ts";
 import { AgentId } from "./identifiers.ts";
-import type { AgentPolicy } from "./policy.ts";
+import { AgentPolicy, type AgentPolicyInput } from "./policy.ts";
 
 /** Prompt input produced directly or by an Effect that preserves its failure and requirements. */
 export type InstructionResult<E = never, R = never> =
@@ -89,6 +89,8 @@ export interface Definition<
   readonly toolkit: ToolkitValue;
   /** Finite execution bounds enforced by the runtime. */
   readonly policy: AgentPolicy;
+  /** Explicit policy fields, retained so delegated runs can inherit omitted fields. */
+  readonly policyOverrides?: Partial<AgentPolicyInput> | undefined;
   /** Optional successful Tool result that projects directly to the Agent output and settles. */
   readonly completion?: CompletionToolDeclaration | undefined;
   readonly runDisposition?: RunDispositionValue | undefined;
@@ -113,7 +115,7 @@ export interface DefinitionOptions<
   readonly instructions: Instructions;
   readonly inputPrompt?: InputPromptValue | undefined;
   readonly toolkit: ToolkitValue;
-  readonly policy: AgentPolicy;
+  readonly policy?: Partial<AgentPolicyInput> | undefined;
   readonly completion?: CompletionToolFor<ToolkitValue, OutputSchema["Type"]> | undefined;
   readonly runDisposition?: RunDispositionValue | undefined;
   readonly description?: string | undefined;
@@ -369,7 +371,7 @@ export namespace Agent {
       readonly instructions: unknown;
       readonly inputPrompt?: unknown;
       readonly toolkit: Toolkit.Any;
-      readonly policy: AgentPolicy;
+      readonly policy?: Partial<AgentPolicyInput> | undefined;
       readonly completion?: CompletionToolDeclaration | undefined;
       readonly runDisposition?: RunDispositionDeclaration<never, Schema.Top> | undefined;
       readonly description?: string | undefined;
@@ -378,6 +380,8 @@ export namespace Agent {
   ): AnyDefinition {
     return Object.freeze({
       ...options,
+      policy: AgentPolicy.resolve(options.policy),
+      policyOverrides: Object.freeze({ ...options.policy }),
       id: S.decodeSync(AgentId)(id),
       metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
       completion:

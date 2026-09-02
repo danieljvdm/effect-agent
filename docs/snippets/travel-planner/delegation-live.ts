@@ -1,5 +1,5 @@
 import { SubagentReservationsMemoryLive, SubagentRuntime } from "@effect-agent/capabilities";
-import { Agent, IdGenerator } from "@effect-agent/core";
+import { IdGenerator } from "@effect-agent/core";
 import {
   AgentRuntime,
   ThreadHistory,
@@ -11,12 +11,9 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { Coordinator } from "./coordinator.ts";
 import { Research, ResearchFailed } from "./delegation.ts";
-import { Researcher } from "./researcher.ts";
 import { TravelToolsLive } from "./tools.ts";
 
-const ChildBinding = Agent.withModel(Researcher, OpenAiLanguageModel.model("gpt-4.1-mini"));
-
-const ResearchLive = SubagentRuntime.layer(Research, ChildBinding, {
+const ResearchLive = SubagentRuntime.layer(Research, OpenAiLanguageModel.model("gpt-4.1-mini"), {
   mapChildFailure: (error) => ResearchFailed.make({ reason: error._tag }),
 }).pipe(Layer.provide(TravelToolsLive));
 

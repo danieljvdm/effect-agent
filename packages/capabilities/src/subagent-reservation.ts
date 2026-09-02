@@ -1,4 +1,10 @@
-import { RunId, ToolCallId } from "@effect-agent/core";
+import {
+  RunId,
+  ToolCallId,
+  SubagentDelegationCaps,
+  SubagentReservationAmounts,
+} from "@effect-agent/core";
+export { SubagentDelegationCaps, SubagentReservationAmounts } from "@effect-agent/core";
 import { Context, Effect, Layer, Ref, Schema, type Scope, Semaphore } from "effect";
 
 const Natural = Schema.Natural;
@@ -41,30 +47,7 @@ export const SubagentBudgetDimension = Schema.Literals([
 ]);
 export type SubagentBudgetDimension = typeof SubagentBudgetDimension.Type;
 
-/** Finite delegable caps for one parent Run. Absent means not configured; present values are finite. */
-export class SubagentDelegationCaps extends Schema.Class<SubagentDelegationCaps>(
-  "@effect-agent/capabilities/SubagentDelegationCaps",
-)({
-  maxTotalChildInvocations: Schema.optionalKey(Natural),
-  maxConcurrentChildren: Schema.optionalKey(Natural),
-  maxTurns: Schema.optionalKey(Natural),
-  maxToolCalls: Schema.optionalKey(Natural),
-  maxDurationMillis: Schema.optionalKey(Natural),
-  maxInputTokens: Schema.optionalKey(Natural),
-  maxOutputTokens: Schema.optionalKey(Natural),
-  maxCostMicrousd: Schema.optionalKey(Natural),
-  maxResultBytes: Schema.optionalKey(Natural),
-}) {}
-
-const AmountFields = {
-  turns: Natural,
-  toolCalls: Natural,
-  durationMillis: Natural,
-  inputTokens: Natural,
-  outputTokens: Natural,
-  costMicrousd: Natural,
-  resultBytes: Natural,
-} as const;
+const AmountFields = SubagentReservationAmounts.fields;
 
 const OptionalAmountFields = {
   turns: Schema.optionalKey(Natural),
@@ -75,11 +58,6 @@ const OptionalAmountFields = {
   costMicrousd: Schema.optionalKey(Natural),
   resultBytes: Schema.optionalKey(Natural),
 } as const;
-
-/** Exact amounts across every reservable delegation dimension. */
-export class SubagentReservationAmounts extends Schema.Class<SubagentReservationAmounts>(
-  "@effect-agent/capabilities/SubagentReservationAmounts",
-)(AmountFields) {}
 
 /** Observed child usage. An absent dimension was never reported and settles conservatively. */
 export class SubagentObservedUsage extends Schema.Class<SubagentObservedUsage>(

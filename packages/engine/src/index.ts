@@ -5960,6 +5960,7 @@ function streamWithCompletion<
               options.parentLink?.depth ?? 0,
               history,
               preparation,
+              agent.definition.policy,
             ),
           ).pipe(
             Context.add(RunEventSink, closedRunEventSink),
@@ -7443,6 +7444,8 @@ const spawnWithParent = (
  * reject nested delegation (SUB-029).
  */
 export interface AgentSpawnerService {
+  /** Resolved defaults for this parent Run; never includes its tools or handlers. */
+  readonly policy: AgentPolicy;
   readonly depth: number;
   readonly parent: AgentSpawnerParent;
   readonly spawn: <
@@ -7543,7 +7546,9 @@ const makeAgentSpawner = (
   depth: number,
   history: ThreadHistory["Service"],
   preparation: RunContextPreparation["Service"],
+  policy: AgentPolicy,
 ): AgentSpawnerService => ({
+  policy,
   depth,
   parent,
   spawn: spawnWithParent(parent, depth, history, preparation),

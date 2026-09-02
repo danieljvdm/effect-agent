@@ -32058,12 +32058,196 @@ var ToolCallId = identifier2("ToolCallId");
 var DelegationId = identifier2("DelegationId");
 var EventOffset = identifier2("EventOffset");
 
+// packages/core/src/tool-result.ts
+var ENVELOPE_FLOOR_BYTES = 256;
+
+class ToolResultBounds extends exports_Schema.Class("ToolResultBounds")({
+  maxBytes: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(ENVELOPE_FLOOR_BYTES))
+}) {
+}
+
+class TruncatedToolResult extends exports_Schema.Class("TruncatedToolResult")({
+  truncatedToolResult: exports_Schema.Literal(true),
+  originalBytes: exports_Schema.Natural,
+  head: exports_Schema.String,
+  tail: exports_Schema.String
+}) {
+}
+
+class UnserializableToolResult extends exports_Schema.Class("UnserializableToolResult")({
+  unserializableToolResult: exports_Schema.Literal(true),
+  reason: exports_Schema.String.check(exports_Schema.isMaxLength(256))
+}) {
+}
+var unserializableToolResult = (cause) => {
+  let reason;
+  try {
+    const message = cause instanceof Error ? cause.message : cause;
+    reason = typeof message === "string" ? message : String(message);
+  } catch {
+    reason = "unserializable value";
+  }
+  const build2 = (clipped2) => exports_Schema.encodeSync(UnserializableToolResult)(UnserializableToolResult.make({
+    unserializableToolResult: true,
+    reason: clipped2
+  }));
+  let clipped = takePrefixWithinBytes(reason, 128);
+  let sentinel = build2(clipped);
+  while (clipped.length > 0 && utf8ByteLength(JSON.stringify(sentinel)) > 256) {
+    const last3 = clipped.codePointAt(clipped.length - 1);
+    clipped = clipped.slice(0, clipped.length - (last3 !== undefined && last3 > 65535 ? 2 : 1));
+    sentinel = build2(clipped);
+  }
+  return sentinel;
+};
+var codePointUtf8Length = (codePoint) => {
+  if (codePoint < 128)
+    return 1;
+  if (codePoint < 2048)
+    return 2;
+  if (codePoint < 65536)
+    return 3;
+  return 4;
+};
+var utf8ByteLength = (value4) => {
+  let bytes = 0;
+  let index2 = 0;
+  while (index2 < value4.length) {
+    const codePoint = value4.codePointAt(index2) ?? 0;
+    bytes += codePointUtf8Length(codePoint);
+    index2 += codePoint > 65535 ? 2 : 1;
+  }
+  return bytes;
+};
+var takePrefixWithinBytes = (value4, maxBytes) => {
+  let bytes = 0;
+  let index2 = 0;
+  while (index2 < value4.length) {
+    const codePoint = value4.codePointAt(index2) ?? 0;
+    const width = codePointUtf8Length(codePoint);
+    if (bytes + width > maxBytes)
+      break;
+    bytes += width;
+    index2 += codePoint > 65535 ? 2 : 1;
+  }
+  return value4.slice(0, index2);
+};
+var takeSuffixWithinBytes = (value4, maxBytes) => {
+  let bytes = 0;
+  let index2 = value4.length;
+  while (index2 > 0) {
+    const unit = value4.charCodeAt(index2 - 1);
+    const isLowSurrogate = unit >= 56320 && unit <= 57343;
+    const pairStart = isLowSurrogate && index2 >= 2 ? index2 - 2 : index2 - 1;
+    const codePoint = value4.codePointAt(pairStart) ?? 0;
+    const width = codePointUtf8Length(codePoint);
+    if (bytes + width > maxBytes)
+      break;
+    bytes += width;
+    index2 = pairStart;
+  }
+  return value4.slice(index2);
+};
+var applyToolResultBounds = (encodedJson, bounds) => {
+  const originalBytes = utf8ByteLength(encodedJson);
+  if (originalBytes <= bounds.maxBytes)
+    return encodedJson;
+  const render = (head5, tail) => JSON.stringify(exports_Schema.encodeSync(TruncatedToolResult)(TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head: head5, tail })));
+  const minimal = render("", "");
+  const contentBudget = bounds.maxBytes - utf8ByteLength(minimal);
+  if (contentBudget <= 0)
+    return minimal;
+  let headBudget = Math.floor(contentBudget / 2);
+  let tailBudget = contentBudget - headBudget;
+  for (;; ) {
+    const head5 = takePrefixWithinBytes(encodedJson, headBudget);
+    const tail = takeSuffixWithinBytes(encodedJson, tailBudget);
+    const output = render(head5, tail);
+    const outputBytes = utf8ByteLength(output);
+    if (outputBytes <= bounds.maxBytes)
+      return output;
+    if (headBudget === 0 && tailBudget === 0)
+      return minimal;
+    const shrink = Math.max(1, Math.ceil((outputBytes - bounds.maxBytes) / 2));
+    headBudget = Math.max(0, headBudget - shrink);
+    tailBudget = Math.max(0, tailBudget - shrink);
+  }
+};
+
+// packages/core/src/policy.ts
+var PositiveInt = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var NonNegativeInt = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0));
+var CompactionMode = exports_Schema.Literals(["prune", "summarize", "prune-then-summarize"]);
+
+class CompactionPolicy extends exports_Schema.Class("CompactionPolicy")({
+  keepRecentTokens: PositiveInt,
+  mode: CompactionMode
+}) {
+  static make(input = {}) {
+    return super.make({
+      keepRecentTokens: input.keepRecentTokens ?? 20000,
+      mode: input.mode ?? "prune-then-summarize"
+    });
+  }
+}
+var FinitePositiveDuration = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
+var OnExhaustion = exports_Schema.Literals(["final-answer", "fail"]);
+var AgentPolicyFields = exports_Schema.Struct({
+  maxTurns: PositiveInt,
+  maxToolCalls: PositiveInt,
+  maxDuration: FinitePositiveDuration,
+  toolConcurrency: PositiveInt,
+  repeatedFailureLimit: NonNegativeInt,
+  onExhaustion: OnExhaustion,
+  tokenBudget: exports_Schema.optionalKey(PositiveInt),
+  completionReserveTokens: NonNegativeInt,
+  costBudgetMicrousd: exports_Schema.optionalKey(NonNegativeInt),
+  contextTokenLimit: exports_Schema.optionalKey(PositiveInt),
+  toolResultBounds: ToolResultBounds,
+  runStatus: exports_Schema.Literals(["appended", "off"]),
+  compaction: CompactionPolicy
+});
+
+class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields) {
+  static resolve(input = {}, parent) {
+    return AgentPolicy.make({
+      maxTurns: 12,
+      maxToolCalls: 24,
+      maxDuration: "5 minutes",
+      toolConcurrency: 4,
+      ...parent,
+      ...input,
+      ...input.completionReserveTokens !== undefined || parent === undefined ? {} : {
+        completionReserveTokens: Math.min(parent.completionReserveTokens, input.tokenBudget ?? parent.tokenBudget ?? parent.completionReserveTokens)
+      }
+    });
+  }
+  static make(input) {
+    const completionReserveTokens = input.completionReserveTokens ?? (input.tokenBudget === undefined ? 4096 : Math.min(4096, Math.floor(input.tokenBudget / 5)));
+    if (input.tokenBudget !== undefined && completionReserveTokens > input.tokenBudget) {
+      throw new Error("completionReserveTokens cannot exceed tokenBudget");
+    }
+    return super.make({
+      ...input,
+      maxDuration: exports_Duration.fromInputUnsafe(input.maxDuration),
+      repeatedFailureLimit: input.repeatedFailureLimit ?? 3,
+      onExhaustion: input.onExhaustion ?? "final-answer",
+      toolResultBounds: input.toolResultBounds ?? ToolResultBounds.make({ maxBytes: 50 * 1024 }),
+      runStatus: input.runStatus ?? "appended",
+      completionReserveTokens,
+      compaction: input.compaction ?? CompactionPolicy.make()
+    });
+  }
+}
+
 // packages/core/src/agent.ts
 var Agent;
 ((Agent) => {
   function make51(id2, options3) {
     return Object.freeze({
       ...options3,
+      policy: AgentPolicy.resolve(options3.policy),
+      policyOverrides: Object.freeze({ ...options3.policy }),
       id: exports_Schema.decodeSync(AgentId)(id2),
       metadata: options3.metadata === undefined ? undefined : Object.freeze({ ...options3.metadata }),
       completion: options3.completion === undefined ? undefined : Object.freeze({ ...options3.completion }),
@@ -32179,6 +32363,36 @@ var AgentError = exports_Schema.Union([
   ContextBudgetError
 ]);
 // packages/core/src/subagent.ts
+var Natural2 = exports_Schema.Natural;
+
+class SubagentDelegationCaps extends exports_Schema.Class("@effect-agent/capabilities/SubagentDelegationCaps")({
+  maxTotalChildInvocations: exports_Schema.optionalKey(Natural2),
+  maxConcurrentChildren: exports_Schema.optionalKey(Natural2),
+  maxTurns: exports_Schema.optionalKey(Natural2),
+  maxToolCalls: exports_Schema.optionalKey(Natural2),
+  maxDurationMillis: exports_Schema.optionalKey(Natural2),
+  maxInputTokens: exports_Schema.optionalKey(Natural2),
+  maxOutputTokens: exports_Schema.optionalKey(Natural2),
+  maxCostMicrousd: exports_Schema.optionalKey(Natural2),
+  maxResultBytes: exports_Schema.optionalKey(Natural2)
+}) {
+}
+var AmountFields = {
+  turns: Natural2,
+  toolCalls: Natural2,
+  durationMillis: Natural2,
+  inputTokens: Natural2,
+  outputTokens: Natural2,
+  costMicrousd: Natural2,
+  resultBytes: Natural2
+};
+
+class SubagentReservationAmounts extends exports_Schema.Class("@effect-agent/capabilities/SubagentReservationAmounts")(AmountFields) {
+}
+var SubagentBudgetReservation = exports_Schema.Struct({
+  caps: SubagentDelegationCaps,
+  allocation: SubagentReservationAmounts
+});
 var DelegationDepth = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1));
 var delegationToolPrefix = "delegate_";
 var DelegationTool = exports_Context.Reference("@effect-agent/core/DelegationTool", {
@@ -32941,174 +33155,6 @@ class SemanticMemoryIndex extends exports_Context.Service()("@effect-agent/core/
         return MemoryIndexSearch.make({ ...checked, candidates });
       })
     };
-  }
-}
-// packages/core/src/tool-result.ts
-var ENVELOPE_FLOOR_BYTES = 256;
-
-class ToolResultBounds extends exports_Schema.Class("ToolResultBounds")({
-  maxBytes: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(ENVELOPE_FLOOR_BYTES))
-}) {
-}
-
-class TruncatedToolResult extends exports_Schema.Class("TruncatedToolResult")({
-  truncatedToolResult: exports_Schema.Literal(true),
-  originalBytes: exports_Schema.Natural,
-  head: exports_Schema.String,
-  tail: exports_Schema.String
-}) {
-}
-
-class UnserializableToolResult extends exports_Schema.Class("UnserializableToolResult")({
-  unserializableToolResult: exports_Schema.Literal(true),
-  reason: exports_Schema.String.check(exports_Schema.isMaxLength(256))
-}) {
-}
-var unserializableToolResult = (cause) => {
-  let reason;
-  try {
-    const message = cause instanceof Error ? cause.message : cause;
-    reason = typeof message === "string" ? message : String(message);
-  } catch {
-    reason = "unserializable value";
-  }
-  const build2 = (clipped2) => exports_Schema.encodeSync(UnserializableToolResult)(UnserializableToolResult.make({
-    unserializableToolResult: true,
-    reason: clipped2
-  }));
-  let clipped = takePrefixWithinBytes(reason, 128);
-  let sentinel = build2(clipped);
-  while (clipped.length > 0 && utf8ByteLength(JSON.stringify(sentinel)) > 256) {
-    const last3 = clipped.codePointAt(clipped.length - 1);
-    clipped = clipped.slice(0, clipped.length - (last3 !== undefined && last3 > 65535 ? 2 : 1));
-    sentinel = build2(clipped);
-  }
-  return sentinel;
-};
-var codePointUtf8Length = (codePoint) => {
-  if (codePoint < 128)
-    return 1;
-  if (codePoint < 2048)
-    return 2;
-  if (codePoint < 65536)
-    return 3;
-  return 4;
-};
-var utf8ByteLength = (value4) => {
-  let bytes = 0;
-  let index2 = 0;
-  while (index2 < value4.length) {
-    const codePoint = value4.codePointAt(index2) ?? 0;
-    bytes += codePointUtf8Length(codePoint);
-    index2 += codePoint > 65535 ? 2 : 1;
-  }
-  return bytes;
-};
-var takePrefixWithinBytes = (value4, maxBytes) => {
-  let bytes = 0;
-  let index2 = 0;
-  while (index2 < value4.length) {
-    const codePoint = value4.codePointAt(index2) ?? 0;
-    const width = codePointUtf8Length(codePoint);
-    if (bytes + width > maxBytes)
-      break;
-    bytes += width;
-    index2 += codePoint > 65535 ? 2 : 1;
-  }
-  return value4.slice(0, index2);
-};
-var takeSuffixWithinBytes = (value4, maxBytes) => {
-  let bytes = 0;
-  let index2 = value4.length;
-  while (index2 > 0) {
-    const unit = value4.charCodeAt(index2 - 1);
-    const isLowSurrogate = unit >= 56320 && unit <= 57343;
-    const pairStart = isLowSurrogate && index2 >= 2 ? index2 - 2 : index2 - 1;
-    const codePoint = value4.codePointAt(pairStart) ?? 0;
-    const width = codePointUtf8Length(codePoint);
-    if (bytes + width > maxBytes)
-      break;
-    bytes += width;
-    index2 = pairStart;
-  }
-  return value4.slice(index2);
-};
-var applyToolResultBounds = (encodedJson, bounds) => {
-  const originalBytes = utf8ByteLength(encodedJson);
-  if (originalBytes <= bounds.maxBytes)
-    return encodedJson;
-  const render = (head5, tail) => JSON.stringify(exports_Schema.encodeSync(TruncatedToolResult)(TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head: head5, tail })));
-  const minimal = render("", "");
-  const contentBudget = bounds.maxBytes - utf8ByteLength(minimal);
-  if (contentBudget <= 0)
-    return minimal;
-  let headBudget = Math.floor(contentBudget / 2);
-  let tailBudget = contentBudget - headBudget;
-  for (;; ) {
-    const head5 = takePrefixWithinBytes(encodedJson, headBudget);
-    const tail = takeSuffixWithinBytes(encodedJson, tailBudget);
-    const output = render(head5, tail);
-    const outputBytes = utf8ByteLength(output);
-    if (outputBytes <= bounds.maxBytes)
-      return output;
-    if (headBudget === 0 && tailBudget === 0)
-      return minimal;
-    const shrink = Math.max(1, Math.ceil((outputBytes - bounds.maxBytes) / 2));
-    headBudget = Math.max(0, headBudget - shrink);
-    tailBudget = Math.max(0, tailBudget - shrink);
-  }
-};
-
-// packages/core/src/policy.ts
-var PositiveInt = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-var NonNegativeInt = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0));
-var CompactionMode = exports_Schema.Literals(["prune", "summarize", "prune-then-summarize"]);
-
-class CompactionPolicy extends exports_Schema.Class("CompactionPolicy")({
-  keepRecentTokens: PositiveInt,
-  mode: CompactionMode
-}) {
-  static make(input = {}) {
-    return super.make({
-      keepRecentTokens: input.keepRecentTokens ?? 20000,
-      mode: input.mode ?? "prune-then-summarize"
-    });
-  }
-}
-var FinitePositiveDuration = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
-var OnExhaustion = exports_Schema.Literals(["final-answer", "fail"]);
-var AgentPolicyFields = exports_Schema.Struct({
-  maxTurns: PositiveInt,
-  maxToolCalls: PositiveInt,
-  maxDuration: FinitePositiveDuration,
-  toolConcurrency: PositiveInt,
-  repeatedFailureLimit: NonNegativeInt,
-  onExhaustion: OnExhaustion,
-  tokenBudget: exports_Schema.optionalKey(PositiveInt),
-  completionReserveTokens: NonNegativeInt,
-  costBudgetMicrousd: exports_Schema.optionalKey(NonNegativeInt),
-  contextTokenLimit: exports_Schema.optionalKey(PositiveInt),
-  toolResultBounds: ToolResultBounds,
-  runStatus: exports_Schema.Literals(["appended", "off"]),
-  compaction: CompactionPolicy
-});
-
-class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields) {
-  static make(input) {
-    const completionReserveTokens = input.completionReserveTokens ?? (input.tokenBudget === undefined ? 4096 : Math.min(4096, Math.floor(input.tokenBudget / 5)));
-    if (input.tokenBudget !== undefined && completionReserveTokens > input.tokenBudget) {
-      throw new Error("completionReserveTokens cannot exceed tokenBudget");
-    }
-    return super.make({
-      ...input,
-      maxDuration: exports_Duration.fromInputUnsafe(input.maxDuration),
-      repeatedFailureLimit: input.repeatedFailureLimit ?? 3,
-      onExhaustion: input.onExhaustion ?? "final-answer",
-      toolResultBounds: input.toolResultBounds ?? ToolResultBounds.make({ maxBytes: 50 * 1024 }),
-      runStatus: input.runStatus ?? "appended",
-      completionReserveTokens,
-      compaction: input.compaction ?? CompactionPolicy.make()
-    });
   }
 }
 // packages/core/src/run-policy-usage.ts
@@ -36522,39 +36568,39 @@ var ApprovalDenyAll = exports_Layer.succeed(ApprovalResolver)({
   })))
 });
 // packages/capabilities/src/budget.ts
-var Natural2 = exports_Schema.Natural;
+var Natural3 = exports_Schema.Natural;
 var BudgetLevel = exports_Schema.Literals(["global", "tenant", "agent", "thread", "run"]);
 
 class UsageTotals extends exports_Schema.Class("@effect-agent/capabilities/UsageTotals")({
-  inputTokens: Natural2,
-  outputTokens: Natural2,
-  cacheReadInputTokens: Natural2,
-  cacheWriteInputTokens: Natural2,
-  lastInputTokens: Natural2,
-  lastOutputTokens: Natural2,
-  toolCalls: Natural2,
-  costMicrousd: Natural2,
-  elapsedMillis: Natural2
+  inputTokens: Natural3,
+  outputTokens: Natural3,
+  cacheReadInputTokens: Natural3,
+  cacheWriteInputTokens: Natural3,
+  lastInputTokens: Natural3,
+  lastOutputTokens: Natural3,
+  toolCalls: Natural3,
+  costMicrousd: Natural3,
+  elapsedMillis: Natural3
 }) {
 }
 
 class UsageDelta extends exports_Schema.Class("@effect-agent/capabilities/UsageDelta")({
-  modelCalls: Natural2,
-  inputTokens: Natural2,
-  outputTokens: Natural2,
-  cacheReadInputTokens: Natural2,
-  cacheWriteInputTokens: Natural2,
-  toolCalls: Natural2,
-  costMicrousd: Natural2
+  modelCalls: Natural3,
+  inputTokens: Natural3,
+  outputTokens: Natural3,
+  cacheReadInputTokens: Natural3,
+  cacheWriteInputTokens: Natural3,
+  toolCalls: Natural3,
+  costMicrousd: Natural3
 }) {
 }
 
 class UsageBudgetLimits extends exports_Schema.Class("@effect-agent/capabilities/UsageBudgetLimits")({
-  maxInputTokens: exports_Schema.optionalKey(Natural2),
-  maxOutputTokens: exports_Schema.optionalKey(Natural2),
-  maxToolCalls: exports_Schema.optionalKey(Natural2),
-  maxCostMicrousd: exports_Schema.optionalKey(Natural2),
-  maxDurationMillis: exports_Schema.optionalKey(Natural2)
+  maxInputTokens: exports_Schema.optionalKey(Natural3),
+  maxOutputTokens: exports_Schema.optionalKey(Natural3),
+  maxToolCalls: exports_Schema.optionalKey(Natural3),
+  maxCostMicrousd: exports_Schema.optionalKey(Natural3),
+  maxDurationMillis: exports_Schema.optionalKey(Natural3)
 }) {
 }
 
@@ -36569,8 +36615,8 @@ class BudgetExceeded extends exports_Schema.TaggedError()("BudgetExceeded", {
   scopeLevel: BudgetLevel,
   scopeId: exports_Schema.NonEmptyString,
   limit: exports_Schema.Literals(["input-tokens", "output-tokens", "tool-calls", "cost", "duration"]),
-  limitValue: Natural2,
-  observedValue: Natural2
+  limitValue: Natural3,
+  observedValue: Natural3
 }) {
 }
 
@@ -40819,7 +40865,7 @@ function streamWithCompletion(agentValue, input, runOptions = {}, onCompleted) {
         agentId: context3.agentId,
         threadId: context3.threadId,
         runId: context3.runId
-      }, options3.parentLink?.depth ?? 0, history, preparation)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
+      }, options3.parentLink?.depth ?? 0, history, preparation, agent2.definition.policy)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
       return started.pipe(exports_Stream.concat(deadline), exports_Stream.catch((error2) => {
         const terminal = exports_Stream.fromEffect(exports_Effect.gen(function* () {
           if (error2 instanceof AgentApprovalPending || error2 instanceof AgentChildPending) {
@@ -41460,7 +41506,8 @@ var spawnWithParent = (parent, depth, history, preparation) => exports_Effect.fn
 
 class AgentSpawner extends exports_Context.Service()("@effect-agent/engine/AgentSpawner") {
 }
-var makeAgentSpawner = (parent, depth, history, preparation) => ({
+var makeAgentSpawner = (parent, depth, history, preparation, policy2) => ({
+  policy: policy2,
   depth,
   parent,
   spawn: spawnWithParent(parent, depth, history, preparation)
@@ -44752,7 +44799,7 @@ var RunSchedulingOverride = exports_Schema.Union([
   exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
 ]);
 // packages/capabilities/src/subagent-reservation.ts
-var Natural3 = exports_Schema.Natural;
+var Natural4 = exports_Schema.Natural;
 var BudgetReservationId = exports_Schema.NonEmptyString.pipe(exports_Schema.brand("@effect-agent/capabilities/BudgetReservationId"));
 var decodeBudgetReservationId = exports_Schema.decodeSync(BudgetReservationId);
 var makeBudgetReservationId = (parentRunId, parentToolCallId) => decodeBudgetReservationId(`${encodeURIComponent(parentRunId)}:${encodeURIComponent(parentToolCallId)}`);
@@ -44767,40 +44814,16 @@ var SubagentBudgetDimension = exports_Schema.Literals([
   "cost",
   "result-bytes"
 ]);
-
-class SubagentDelegationCaps extends exports_Schema.Class("@effect-agent/capabilities/SubagentDelegationCaps")({
-  maxTotalChildInvocations: exports_Schema.optionalKey(Natural3),
-  maxConcurrentChildren: exports_Schema.optionalKey(Natural3),
-  maxTurns: exports_Schema.optionalKey(Natural3),
-  maxToolCalls: exports_Schema.optionalKey(Natural3),
-  maxDurationMillis: exports_Schema.optionalKey(Natural3),
-  maxInputTokens: exports_Schema.optionalKey(Natural3),
-  maxOutputTokens: exports_Schema.optionalKey(Natural3),
-  maxCostMicrousd: exports_Schema.optionalKey(Natural3),
-  maxResultBytes: exports_Schema.optionalKey(Natural3)
-}) {
-}
-var AmountFields = {
-  turns: Natural3,
-  toolCalls: Natural3,
-  durationMillis: Natural3,
-  inputTokens: Natural3,
-  outputTokens: Natural3,
-  costMicrousd: Natural3,
-  resultBytes: Natural3
-};
+var AmountFields2 = SubagentReservationAmounts.fields;
 var OptionalAmountFields = {
-  turns: exports_Schema.optionalKey(Natural3),
-  toolCalls: exports_Schema.optionalKey(Natural3),
-  durationMillis: exports_Schema.optionalKey(Natural3),
-  inputTokens: exports_Schema.optionalKey(Natural3),
-  outputTokens: exports_Schema.optionalKey(Natural3),
-  costMicrousd: exports_Schema.optionalKey(Natural3),
-  resultBytes: exports_Schema.optionalKey(Natural3)
+  turns: exports_Schema.optionalKey(Natural4),
+  toolCalls: exports_Schema.optionalKey(Natural4),
+  durationMillis: exports_Schema.optionalKey(Natural4),
+  inputTokens: exports_Schema.optionalKey(Natural4),
+  outputTokens: exports_Schema.optionalKey(Natural4),
+  costMicrousd: exports_Schema.optionalKey(Natural4),
+  resultBytes: exports_Schema.optionalKey(Natural4)
 };
-
-class SubagentReservationAmounts extends exports_Schema.Class("@effect-agent/capabilities/SubagentReservationAmounts")(AmountFields) {
-}
 
 class SubagentObservedUsage extends exports_Schema.Class("@effect-agent/capabilities/SubagentObservedUsage")(OptionalAmountFields) {
 }
@@ -44836,7 +44859,7 @@ class SubagentReservationView extends exports_Schema.Class("@effect-agent/capabi
 class SubagentParentBudgetView extends exports_Schema.Class("@effect-agent/capabilities/SubagentParentBudgetView")({
   parentRunId: RunId,
   caps: SubagentDelegationCaps,
-  totalChildInvocations: Natural3,
+  totalChildInvocations: Natural4,
   available: SubagentAvailableAmounts,
   cumulativeOverrun: SubagentReservationAmounts,
   reservations: exports_Schema.Array(SubagentReservationView)
@@ -44846,8 +44869,8 @@ class SubagentParentBudgetView extends exports_Schema.Class("@effect-agent/capab
 class SubagentBudgetExhausted extends exports_Schema.TaggedError()("SubagentBudgetExhausted", {
   parentRunId: RunId,
   dimension: SubagentBudgetDimension,
-  limitValue: Natural3,
-  observedValue: Natural3
+  limitValue: Natural4,
+  observedValue: Natural4
 }) {
 }
 
@@ -44875,7 +44898,7 @@ class SubagentParentBudgetConflict extends exports_Schema.TaggedError()("Subagen
 
 class SubagentParentBudgetActive extends exports_Schema.TaggedError()("SubagentParentBudgetActive", {
   parentRunId: RunId,
-  openReservations: Natural3
+  openReservations: Natural4
 }) {
 }
 
@@ -45238,7 +45261,7 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
 
 // packages/capabilities/src/subagent.ts
 var PositiveInt11 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-var Natural4 = exports_Schema.Natural;
+var Natural5 = exports_Schema.Natural;
 var FinitePositiveDuration4 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var SubagentPolicyFields = exports_Schema.Struct({
   maxChildren: PositiveInt11,
@@ -45248,7 +45271,7 @@ var SubagentPolicyFields = exports_Schema.Struct({
   maxDuration: FinitePositiveDuration4,
   maxInputTokens: exports_Schema.optionalKey(PositiveInt11),
   maxOutputTokens: exports_Schema.optionalKey(PositiveInt11),
-  maxCostMicrousd: exports_Schema.optionalKey(Natural4),
+  maxCostMicrousd: exports_Schema.optionalKey(Natural5),
   maxResultBytes: exports_Schema.optionalKey(PositiveInt11)
 });
 

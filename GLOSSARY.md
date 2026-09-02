@@ -17,7 +17,8 @@ construction without hiding Layer requirements or acquiring provider resources.
 
 **Agent Registration**
 
-An Agent Binding paired with explicit Agent, Model, and Tool version declarations. Runtime
+An Agent Definition and model Layer, or an existing Agent Binding, paired with explicit Agent,
+Model, and Tool version declarations. Runtime
 construction hashes the declarations and captures the Binding's required services in its Scope.
 Durable workers match the registered identity and hashes before executing queued work.
 
@@ -163,7 +164,9 @@ Subagent owns a child Thread with explicit parent linkage.
 
 **Delegation Definition**
 An immutable declaration that exposes one target Agent Definition to a parent as an Effect AI
-Tool, with explicit input/result projections, authority, budget, and policy bounds.
+Tool. Input schemas and identity mapping default to the child's input. The default result wraps
+its output with an exhaustion marker. Custom projections, authority, budget, and policy bounds
+remain explicit when needed.
 
 **Subagent Invocation**
 One parent Tool Call that runs one declared Subagent. Its child Thread is fresh and distinct;

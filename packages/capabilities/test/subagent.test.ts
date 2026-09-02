@@ -1494,6 +1494,12 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         encodedChildInput: { question: "research:paris" },
         encodedGrant: { allowedToolNames: [], maxDepth: 1 },
         encodedAllocation: expectedEncodedAllocation,
+        toolCallAllowance: 1,
+        policy: AgentPolicy.make({ ...childPolicy, maxDuration: "10 seconds" }),
+        budget: {
+          caps: delegationCapsFromPolicy(researchPolicy),
+          allocation: delegationAllocationFromPolicy(researchPolicy),
+        },
       });
     }),
   );
@@ -2090,9 +2096,7 @@ const typedDelegation = Subagent.define("delegate_typed", {
   policy: researchPolicy,
 });
 
-const typedBinding = Agent.withModel(typedChildDefinition, typedModel);
-
-const typedLayer = SubagentRuntime.layer(typedDelegation, typedBinding, {
+const typedLayer = SubagentRuntime.layer(typedDelegation, typedModel, {
   mapChildFailure: (failure) => ResearchDelegationFailed.make({ childErrorTag: failure._tag }),
 });
 
@@ -2707,6 +2711,149 @@ const allowanceCoordinator = Agent.make("allowance-coordinator", {
     maxDuration: "30 seconds",
     toolConcurrency: 2,
   }),
+});
+
+layer(TestServices)("derived subagent declarations", (it) => {
+  it.effect("inherits defaults, clamps child overrides, and keeps partial results visible", () =>
+    Effect.gen(function* () {
+      for (const overrides of [
+        undefined,
+        { onExhaustion: "final-answer" as const, maxToolCalls: 20 },
+      ]) {
+        const starts = yield* Ref.make(0);
+        const delegation = Subagent.define("delegate_defaults", {
+          target: Agent.make("defaults-child", {
+            input: ChildInput,
+            output: ChildOutput,
+            instructions: "Probe, then answer as JSON.",
+            toolkit: probeToolkit,
+            policy: overrides,
+          }),
+          failureMode: "return",
+        });
+        const parent = Agent.make("defaults-parent", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Delegate.",
+          toolkit: Toolkit.make(delegation.tool),
+          policy: { maxTurns: 3, maxToolCalls: 1, toolConcurrency: 1, onExhaustion: "fail" },
+        });
+        const model = probingChildModel([
+          { topic: "defaults", declares: 2, answer: '{"answer":"partial"}' },
+        ]);
+        const childLayer = SubagentRuntime.layer(delegation, model).pipe(
+          Layer.provide(
+            probeToolkit.toLayer({
+              probe_doc: () => Ref.update(starts, (n) => n + 1).pipe(Effect.as("found")),
+            }),
+          ),
+        );
+        const handle = yield* AgentRuntime.start(parent, "start").pipe(
+          Effect.provide([
+            childLayer,
+            delegatingModel(
+              "defaults-parent",
+              delegation.name,
+              [{ id: "defaults", params: { question: "research:defaults" } }],
+              '"done"',
+            ),
+          ]),
+        );
+        const completed = yield* handle.await;
+        const result = findEvent(yield* handle.events, "ToolCallSucceeded");
+        expect(result).toMatchObject({
+          result:
+            overrides === undefined
+              ? {
+                  _tag: "SubagentExecutionFailure",
+                  classification: "child-failed",
+                  errorTag: "AgentPolicyError",
+                  message: "The child Run failed",
+                }
+              : { output: { answer: "partial" }, budgetExhausted: true },
+        });
+        expect(yield* Ref.get(starts)).toBe(0);
+        const reservations = yield* SubagentReservations;
+        const snapshot = yield* reservations.parentSnapshot(completed.runId);
+        expect(snapshot.totalChildInvocations).toBe(1);
+        expectSettledOnce(snapshot.reservations[0]);
+      }
+    }),
+  );
+
+  it.effect(
+    "derives schemas without re-decoding transformed input and allows only a result projection",
+    () =>
+      Effect.gen(function* () {
+        const input = Schema.Struct({ amount: Schema.NumberFromString });
+        const target = Agent.make("transformed-child", {
+          input,
+          output: ChildOutput,
+          instructions: ({ amount }) => `Amount ${amount + 1}`,
+          toolkit: Toolkit.empty,
+        });
+        const delegation = Subagent.define("delegate_transformed", { target });
+        const projected = Subagent.define("delegate_projected_result", {
+          target,
+          success: Schema.String,
+          projectResult: (output) => Effect.succeed(output.answer),
+        });
+        const prompt = yield* Ref.make<unknown>(undefined);
+        const parent = Agent.make("transformed-parent", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Delegate.",
+          toolkit: Toolkit.make(delegation.tool),
+        });
+        const handle = yield* AgentRuntime.start(parent, "start").pipe(
+          Effect.provide([
+            SubagentRuntime.layer(
+              delegation,
+              answeringModel("transformed", '{"answer":"ok"}', prompt),
+            ),
+            delegatingModel(
+              "transformed-parent",
+              delegation.name,
+              [{ id: "transformed", params: { amount: "41" } }],
+              '"done"',
+            ),
+          ]),
+        );
+        yield* handle.await;
+        expect(findEvent(yield* handle.events, "ToolCallSucceeded")).toMatchObject({
+          result: { output: { answer: "ok" }, budgetExhausted: false },
+        });
+        expect(JSON.stringify(yield* Ref.get(prompt))).toContain("Amount 42");
+        expect(
+          yield* projected.projectResult(
+            { answer: "public" },
+            { budgetExhausted: false },
+            { amount: 41 },
+          ),
+        ).toBe("public");
+        const proofs: [
+          Assert<Equal<Tool.Parameters<typeof delegation.tool>, { readonly amount: number }>>,
+          Assert<
+            Equal<
+              Tool.Success<typeof delegation.tool>,
+              { readonly output: { readonly answer: string }; readonly budgetExhausted: boolean }
+            >
+          >,
+        ] = [true, true];
+        expect(proofs).toEqual([true, true]);
+      }),
+  );
+
+  it("rejects a binding for a different target before acquiring resources", () => {
+    const delegation = Subagent.define("delegate_identity", { target: childDefinition });
+    const other = { ...childDefinition };
+    expect(() =>
+      SubagentRuntime.layer(
+        delegation,
+        Agent.withModel(other, answeringModel("other", '{"answer":"wrong"}')),
+      ),
+    ).toThrow(/exact target/);
+  });
 });
 
 layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => {
