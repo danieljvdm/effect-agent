@@ -105,6 +105,7 @@ const exampleNames = [
   "pr-review-eval",
   "providers",
   "repo-ops",
+  "semantic-memory-eval",
 ] as const;
 const effectTestPackageNames = [
   "capabilities",

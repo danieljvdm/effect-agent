@@ -147,6 +147,10 @@ export default defineConfig({
         cache: false,
         command: "bun --cwd examples/pr-review-eval src/main.ts",
       },
+      "semantic-memory-eval": {
+        cache: false,
+        command: "node --experimental-transform-types examples/semantic-memory-eval/src/main.ts",
+      },
     },
   },
 });
