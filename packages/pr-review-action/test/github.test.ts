@@ -622,8 +622,52 @@ describe("GitHub tree comparison", () => {
 
       const failure = yield* comparison.head.readTextFile(path).pipe(Effect.flip);
 
-      expect(failure.reason).toContain(`returned blob ${"c".repeat(40)}`);
-      expect(failure.reason).toContain(`requested blob ${headBlob}`);
+      expect(failure).toMatchObject({
+        _tag: "GitHubApiFailure",
+        reason: expect.stringContaining(
+          `returned blob ${"c".repeat(40)} for requested blob ${headBlob}`,
+        ),
+      });
     }),
+  );
+
+  it.effect.each([
+    { bytes: new Uint8Array([65, 0, 66]), size: 3, tag: "BinaryBlob" },
+    { bytes: new Uint8Array([65, 0, 66]), size: 4, tag: "GitHubApiFailure" },
+    { bytes: new Uint8Array([255]), size: 1, tag: "GitHubApiFailure" },
+  ])(
+    "classifies verified binary bytes without swallowing malformed source: %#",
+    ({ bytes, size, tag }) =>
+      Effect.gen(function* () {
+        const path = "assets/unknown";
+        const blob = "a".repeat(40);
+        const client = HttpClient.make((request, url) => {
+          const body = url.pathname.includes("/git/commits/")
+            ? {
+                sha: url.pathname.endsWith(baseRevision) ? baseRevision : headRevision,
+                tree: { sha: headTree },
+              }
+            : url.pathname.includes("/git/trees/")
+              ? { sha: headTree, truncated: false, tree: [entry(path, blob)] }
+              : { sha: blob, size, encoding: "base64", content: Encoding.encodeBase64(bytes) };
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new globalThis.Response(JSON.stringify(body), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          );
+        });
+        const github = yield* makeGitHubClient({
+          repository,
+          pullRequest: 12,
+          token: Redacted.make("github-token"),
+          apiUrl: "https://api.github.test",
+        }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+        const comparison = yield* github.compareTrees(baseRevision, headRevision);
+        expect((yield* comparison.head.readTextFile(path).pipe(Effect.flip))._tag).toBe(tag);
+      }),
   );
 });

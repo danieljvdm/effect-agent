@@ -165,7 +165,7 @@ export interface TreeComparisonView {
 export interface RepositorySnapshot {
   readonly revision: string;
   readonly paths: ReadonlyArray<string>;
-  readonly readTextFile: (path: string) => Effect.Effect<string, GitHubApiFailure>;
+  readonly readTextFile: (path: string) => Effect.Effect<string, GitHubApiFailure | BinaryBlob>;
   readonly entry: (path: string) =>
     | {
         readonly sha: string;
@@ -180,6 +180,18 @@ export class GitHubApiFailure extends Schema.TaggedError<GitHubApiFailure>()("Gi
   operation: Schema.String,
   reason: Schema.String,
 }) {}
+
+/** A verified blob containing NUL bytes, not a failed GitHub read. */
+export class BinaryBlob extends Schema.TaggedError<BinaryBlob>()("BinaryBlob", {
+  sha: Revision,
+}) {}
+
+// These formats are outside the text review scope even when their bytes happen
+// to decode as UTF-8. Keep textual assets such as SVG, JSON, and XML reviewable.
+export const isBinaryAssetPath = (path: string): boolean =>
+  /\.(png|jpe?g|gif|webp|avif|heic|heif|ico|icns|bmp|tiff?|psd|woff2?|ttf|otf|eot|mp3|mp4|m4[av]|wav|ogg|flac|aac|aiff|mov|webm|avi|mkv|pdf|zip|gz|bz2|xz|7z|rar|tar|jar|wasm|exe|dll|so|dylib|class|pyc|sqlite3?|db)$/i.test(
+    path,
+  );
 
 export class StaleReviewHead extends Schema.TaggedError<StaleReviewHead>()("StaleReviewHead", {
   inspectedHead: Revision,
@@ -495,10 +507,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       });
     }
     if (bytes.includes(0)) {
-      return yield* GitHubApiFailure.make({
-        operation: "decode Git blob",
-        reason: `blob ${sha} is not textual`,
-      });
+      return yield* BinaryBlob.make({ sha });
     }
     const content = yield* Effect.try({
       try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
