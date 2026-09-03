@@ -333,7 +333,6 @@ const runReleaseWorkflowStep = Effect.fn("toolchainTest.runReleaseWorkflowStep")
     readonly prState?: string;
     readonly fetchedSha?: string;
     readonly failingEndpoint?: string;
-    readonly strictReady: string | undefined;
     readonly verifiedHeadSha: string;
     readonly verifyOutcome: string;
   },
@@ -395,9 +394,6 @@ case "$ENDPOINT" in
     test "$QUERY" = ".object.sha"
     printf '%s\\n' "$GH_STUB_BASE_SHA"
     ;;
-  "repos/$GITHUB_REPOSITORY/rules/branches/main")
-    printf '%s\\n' "$GH_STUB_RULES" | jq -r "$QUERY"
-    ;;
   *) echo "Unexpected gh endpoint: $ENDPOINT" >&2; exit 64 ;;
 esac
 `,
@@ -436,15 +432,6 @@ esac
         state: options.prState ?? "open",
       }),
       GH_STUB_HEAD_SHA: options.currentHeadSha,
-      GH_STUB_RULES: JSON.stringify([
-        {
-          type: "required_status_checks",
-          parameters: {
-            strict_required_status_checks_policy: (options.strictReady ?? "true") === "true",
-            required_status_checks: [{ context: "ready" }],
-          },
-        },
-      ]),
       GH_TOKEN: "test-token",
       GIT_STUB_CAPTURE: fetchPath,
       GIT_STUB_FETCHED_SHA: options.fetchedSha ?? options.currentHeadSha,
@@ -1363,7 +1350,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           expectedBaseSha: baseSha,
           headRef: "changeset-release/main",
           headRepository: "effect-agent/release-check-fixture",
-          strictReady: "true",
           verifiedHeadSha: "",
           verifyOutcome: "skipped",
         };
@@ -1434,7 +1420,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           readonly currentHeadSha?: string;
           readonly headRef?: string;
           readonly headRepository?: string;
-          readonly strictReady?: string;
           readonly prState?: string;
           readonly verifiedHeadSha?: string;
           readonly verifyOutcome?: string;
@@ -1448,7 +1433,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             headRef: overrides.headRef,
             headRepository: overrides.headRepository,
             prState: overrides.prState,
-            strictReady: overrides.strictReady,
             verifiedHeadSha: overrides.verifiedHeadSha ?? verifiedHeadSha,
             verifyOutcome: overrides.verifyOutcome ?? "success",
             failingEndpoint: overrides.failingEndpoint,
@@ -1497,13 +1481,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(changedBase.invocation).toContain("conclusion=failure\n");
         expect(changedBase.invocation).toContain(
           "output[title]=Generated release base changed during verification\n",
-        );
-
-        const nonStrictRule = yield* run({ strictReady: "false" });
-
-        expect(nonStrictRule.invocation).toContain("conclusion=failure\n");
-        expect(nonStrictRule.invocation).toContain(
-          "output[title]=Strict required-check policy is missing\n",
         );
 
         const forkHead = yield* run({ headRepository: "someone-else/effect-agent" });

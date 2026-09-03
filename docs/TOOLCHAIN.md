@@ -159,8 +159,9 @@ base. A push without changesets is eligible only if it is that exact generated r
 Generated-file path filters reduce duplicate CI; exact-tree verification authorizes the release.
 Unexpected paths, changed lineage, or incomplete verification fail closed.
 
-Keep strict up-to-date enforcement for the required `ready` check. The reporting job rechecks
-the PR head, source, base, and rules before posting success to the verified commit.
+The reporting job rechecks the PR head, source, and base before posting success to the verified
+commit. It does not require strict up-to-date branch rules. Without strict mode, a later advance
+of `main` does not automatically invalidate an existing successful check.
 Commit SHAs come from Git branch refs because PR SHA fields can lag after a force-push.
 Checks attach only to the resolved verification commit, never a newer unverified head.
 If setup fails before resolving that commit, the job fails without posting a check.

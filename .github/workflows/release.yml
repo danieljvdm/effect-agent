@@ -13,11 +13,6 @@
 # CLI — no npm token or OTP anywhere. Each package on npmjs.com must list this
 # workflow file (release.yml) as its trusted publisher for the exchange to
 # succeed.
-#
-# Keep the `main` ruleset's required `ready` check in strict/up-to-date mode.
-# The generated check is attached to an immutable PR head; strict mode makes a
-# later base advance invalidate that success for merge purposes until the
-# Changesets branch is regenerated and checked again.
 name: Release
 
 on:
@@ -216,7 +211,6 @@ jobs:
           IFS=$'\t' read -r CURRENT_HEAD_REPOSITORY CURRENT_HEAD_REF CURRENT_BASE_REF PR_STATE <<< "$PR_IDENTITY"
           CURRENT_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/changeset-release/main" --jq '.object.sha')"
           CURRENT_BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
-          STRICT_READY="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" --jq 'any(.[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true and any(.parameters.required_status_checks[]; .context == "ready"))')"
 
           if [ "$VERIFY_OUTCOME" != "success" ]; then
             TITLE="Generated release tree did not verify"
@@ -232,9 +226,6 @@ jobs:
           elif [ "$CURRENT_BASE_REF" != "main" ] || [ "$PR_STATE" != "open" ]; then
             TITLE="Generated release target changed during verification"
             SUMMARY="The pull request is no longer open against the trusted main branch."
-          elif [ "$STRICT_READY" != "true" ]; then
-            TITLE="Strict required-check policy is missing"
-            SUMMARY="The main branch must require the ready check and require branches to be up to date before merging."
           else
             CONCLUSION="success"
             TITLE="Generated release tree verified"
