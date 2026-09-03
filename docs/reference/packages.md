@@ -8,8 +8,9 @@ description: Choose packages, adapters, and providers for your application.
 Start with `effect-agent@beta`. It includes core, engine, and capabilities.
 Install storage, platform, sandbox, and testing packages as needed.
 
-Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.111`;
-this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.111`.
+Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.112`;
+this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.112`.
+The Cloudflare platform requires `effect@^4.0.0-rc.112` and `effect-cf@^0.40.0`.
 Before 1.0, APIs and stored data may change without a migration path.
 
 ## Find a capability {#capability-inventory}

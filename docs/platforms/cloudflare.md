@@ -14,9 +14,9 @@ SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Also install `effect@4.0.0-rc.111`, `effect-cf@^0.37.0`, `@effect-agent/core@beta`,
-`@effect-agent/thread@beta`, `@effect/ai-openai@4.0.0-rc.111`, and
-`@effect/platform-browser@4.0.0-rc.111` for the examples below.
+Also install `effect@4.0.0-rc.112`, `effect-cf@^0.40.0`, `@effect-agent/core@beta`,
+`@effect-agent/thread@beta`, `@effect/ai-openai@4.0.0-rc.112`, and
+`@effect/platform-browser@4.0.0-rc.112` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
 ## Create the thread object
@@ -116,6 +116,7 @@ Use `options.eventLayer` for per-event observability and resources. Use
   "name": "travel-planner",
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [{ "name": "THREADS", "class_name": "TravelThread" }],
   },
@@ -126,6 +127,7 @@ Use `options.eventLayer` for per-event observability and resources. Use
 ```
 
 Match `THREADS` to `namespaceBinding` and `TravelThread` to the exported class.
+Enable `nodejs_compat` for the async context support used by `effect-cf`.
 See Cloudflare's [class configuration guide](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
 for Workers using the older `migrations` array.
 

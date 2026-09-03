@@ -1,10 +1,11 @@
+import type { JsonSchema } from "effect";
 import {
   Context,
   Crypto,
   Duration,
   Effect,
   Encoding,
-  JsonSchema,
+  JsonPointer,
   type Layer,
   Option,
   Schema,
@@ -150,7 +151,11 @@ const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): JsonSchema.JsonSchem
 
   if (typeof ref !== "string" || defs === undefined) return schema;
 
-  return JsonSchema.resolve$ref(ref, defs) ?? schema;
+  const key = ref.startsWith("#/$defs/")
+    ? JsonPointer.unescapeToken(ref.slice("#/$defs/".length))
+    : undefined;
+
+  return key !== undefined && Object.hasOwn(defs, key) ? defs[key] : schema;
 };
 
 const canonicalJson = (value: Schema.Json): Schema.Json => {

@@ -868,6 +868,13 @@ export const make = <
     RuntimeServices | ApplicationServices | EventServices
   >;
 
+  type NativeOptions = EffectCfDurableObject.DurableObjectOptions<
+    RuntimeServices | ApplicationServices,
+    EventServices,
+    EventLayerError,
+    typeof rpc
+  >;
+
   const EffectCfThreadObject = EffectCfDurableObject.make<
     RuntimeServices | ApplicationServices,
     ThreadObjectInitializationError | ApplicationError,
@@ -882,7 +889,10 @@ export const make = <
     initialize: Effect.void,
     rpc,
     alarm: () => alarmEndpoint,
-  });
+    // This host owns the raw alarm and supplies event services through options.eventLayer.
+    // Upstream's conditional alarm-registration check cannot reduce over generic application
+    // services. Options and the rpc satisfies check above retain their Effect requirements.
+  } as NativeOptions);
 
   // effect-cf's class type keeps `alarm` optional even when the handler option is present. This
   // concrete override reflects this factory's stronger contract while delegating execution to

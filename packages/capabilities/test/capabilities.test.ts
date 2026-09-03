@@ -1402,11 +1402,15 @@ describe("capability contracts", () => {
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
-  it.effect("binds MCP server identity and every advertised Toolkit schema", () =>
+  it.effect("binds MCP server identity and resolves escaped named Toolkit schemas", () =>
     Effect.gen(function* () {
       const Search = Tool.make("search", {
-        parameters: Schema.Struct({ query: Schema.String }),
-        success: Schema.Struct({ answer: Schema.String }),
+        parameters: Schema.Struct({ query: Schema.String }).annotate({
+          identifier: "Search/Query~v1",
+        }),
+        success: Schema.Struct({ answer: Schema.String }).annotate({
+          identifier: "Search/Answer~v1",
+        }),
       });
 
       const toolkit = Toolkit.make(Search);
@@ -1430,8 +1434,18 @@ describe("capability contracts", () => {
       const matching = McpSchema.Tool.make({
         name: "search",
         description: "bounded",
-        inputSchema: Tool.getJsonSchema(Search),
-        outputSchema: Tool.getJsonSchemaFromSchema(Search.successSchema),
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: "object",
+          properties: { answer: { type: "string" } },
+          required: ["answer"],
+          additionalProperties: false,
+        },
       });
 
       const discovery = yield* validateMcpDiscovery(request, {

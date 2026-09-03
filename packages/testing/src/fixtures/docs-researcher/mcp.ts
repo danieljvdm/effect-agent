@@ -5,7 +5,8 @@ import {
   McpToolkitMismatch,
   type McpConnection,
 } from "@effect-agent/capabilities";
-import { Effect, JsonSchema, Layer, Schema } from "effect";
+import type { JsonSchema } from "effect";
+import { Effect, JsonPointer, Layer, Schema } from "effect";
 import { Tool } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
 
@@ -60,7 +61,12 @@ const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): McpSchema.ToolJsonSc
   }
 
   const defs = decodeJsonSchemaDefinitions(schema["$defs"]);
-  const resolved = JsonSchema.resolve$ref(ref, defs);
+
+  const key = ref.startsWith("#/$defs/")
+    ? JsonPointer.unescapeToken(ref.slice("#/$defs/".length))
+    : undefined;
+
+  const resolved = key !== undefined && Object.hasOwn(defs, key) ? defs[key] : undefined;
 
   return decodeToolJsonSchema(resolved ?? schema);
 };

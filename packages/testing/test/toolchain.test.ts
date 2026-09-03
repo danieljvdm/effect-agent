@@ -2367,7 +2367,7 @@ Exercise the generated release verifier.
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
 
-          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.111");
+          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.112");
           expect(manifest.devDependencies?.effect).toBe("catalog:");
           expect(manifest.dependencies?.effect).toBeUndefined();
           expect(manifest.optionalDependencies?.effect).toBeUndefined();
