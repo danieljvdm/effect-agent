@@ -125,6 +125,8 @@ it.live(
         expect(yield* Ref.get(childModel.calls)).toBe(2);
       }).pipe(Effect.provide(stack));
     }).pipe(Effect.scoped, Effect.provide(platform)),
+  // Both SQLite hosts restart before the cleanup wait, which allows up to ten seconds.
+  30_000,
 );
 
 it.live(
