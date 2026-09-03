@@ -37,6 +37,12 @@ running within the same limits. The review stays incomplete and withholds all re
 Discovery stops on failures, invalid submissions, exhausted budgets, or 24 accepted findings
 before another batch. Unstarted patches remain pending; incomplete batches are not retried.
 
+An incomplete discovery submission may include an `incompleteReason` of up to 600 characters naming
+unfinished work or missing evidence. Its stage diagnostic retains that model-reported explanation, including when
+later batches complete. It is optional, unverified display text and must not enter telemetry.
+Host stop reasons and completeness remain separate; an explanation never authorizes a retry or
+closes a prior blocker. The Action displays up to four explanations and keeps the rest in diagnostics.
+
 Final submissions retain findings that pass host validation, up to the existing 24-finding limit.
 Rejected findings or an invalid resolution array make the review incomplete and withhold all
 resolutions. With no recorded findings, a structurally valid submission containing only rejected

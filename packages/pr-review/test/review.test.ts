@@ -305,6 +305,8 @@ layer(testLayer)("review output boundary", (it) => {
                     findings: [],
                     ...(mode === "omitted" ? {} : { resolutions: [resolution] }),
                     incomplete: mode === "incomplete",
+                    incompleteReason:
+                      "The changed retry path still needs its helper implementation.",
                   }),
                 ),
               ),
@@ -340,6 +342,11 @@ layer(testLayer)("review output boundary", (it) => {
         );
 
         expect(outcome.resolutions ?? []).toEqual(mode === "complete" ? [resolution] : []);
+        expect(outcome.diagnostics?.stages[0]?.incompleteReason).toBe(
+          mode === "incomplete"
+            ? "The changed retry path still needs its helper implementation."
+            : undefined,
+        );
       }),
   );
 
@@ -426,6 +433,7 @@ layer(testLayer)("review output boundary", (it) => {
       expect(outcome.exhausted).toBeUndefined();
       expect(outcome.report.summary).toContain("remaining change has not been verified");
       expect(outcome.diagnostics?.stages[0]?.declaredAssessment).toBe("incomplete");
+      expect(outcome.diagnostics?.stages[0]?.incompleteReason).toBeUndefined();
     }),
   );
 
@@ -454,6 +462,10 @@ layer(testLayer)("review output boundary", (it) => {
                 return response({
                   findings: [submittedFinding(current, 1)],
                   incomplete: call === 1,
+                  incompleteReason:
+                    call === 1
+                      ? "The retry helper was unavailable; its failure cleanup remains unresolved."
+                      : "This complete batch must not retain a limitation.",
                 });
               }),
             ),
@@ -475,6 +487,13 @@ layer(testLayer)("review output boundary", (it) => {
           "complete",
         ]);
         expect(outcome.diagnostics?.stages[0]?.stopReason).toBe("declared-incomplete");
+        expect(outcome.diagnostics?.stages.map(({ incompleteReason }) => incompleteReason)).toEqual(
+          [
+            "The retry helper was unavailable; its failure cleanup remains unresolved.",
+            undefined,
+            undefined,
+          ],
+        );
       }),
   );
 

@@ -283,6 +283,30 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
           : []),
       ].join("\n\n"),
     );
+
+    const limitations = discoveryStages.filter(
+      (stage) => stage.declaredAssessment === "incomplete" && stage.incompleteReason !== undefined,
+    );
+
+    if (limitations.length > 0) {
+      const shown = limitations.slice(0, 4);
+
+      parts.push(
+        [
+          "Model-reported limitations, not independently verified:",
+          fencedPlainText(
+            shown
+              .map((stage) => `Batch ${String(stage.batch + 1)}: ${stage.incompleteReason}`)
+              .join("\n\n"),
+          ),
+          ...(shown.length < limitations.length
+            ? [
+                `${String(limitations.length - shown.length)} more limitations retained in diagnostics.`,
+              ]
+            : []),
+        ].join("\n\n"),
+      );
+    }
   }
   if (input.stageCosts !== undefined) {
     parts.push(

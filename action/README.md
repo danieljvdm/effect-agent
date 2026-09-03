@@ -131,6 +131,10 @@ supplied patches completes. The comment shows up to 30 exclusions; the Action lo
 them. Paths excluded only by input capacity remain available to bounded source tools, while ignore
 rules and unsupported or unreadable entries continue to block access.
 
+When the model supplies an explanation, the comment shows up to four short, model-reported
+limitations. These do not replace host coverage checks or establish a defect. Remaining explanations
+stay in outcome diagnostics; the Action does not log their prose.
+
 ### Generated files
 
 Modified and deleted generated files are ignored before reading their contents, using GitHub's

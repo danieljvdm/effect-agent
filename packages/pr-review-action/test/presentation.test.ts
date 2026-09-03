@@ -4,6 +4,8 @@ import {
   ReviewDiagnostics,
   ReviewFinding,
   ReviewReport,
+  ReviewStageDiagnostic,
+  ReviewUsage,
 } from "@effect-agent/pr-review";
 import { describe, expect, it } from "@effect/vitest";
 
@@ -383,7 +385,7 @@ The new route accepts requests without checking the caller.
     }
   });
 
-  it("keeps maximum findings and adversarial excluded paths within the publication bound", () => {
+  it("bounds findings, excluded paths and model-reported limitations in publication", () => {
     const findings = Array.from({ length: 24 }, (_, index) =>
       ReviewFinding.make({
         path: `src/${String(index).padStart(2, "0")}${"x".repeat(506)}`,
@@ -396,6 +398,36 @@ The new route accepts requests without checking the caller.
 
     const body = renderReviewBody({
       report: ReviewReport.make({ summary: "x".repeat(6_000), findings }),
+      diagnostics: ReviewDiagnostics.make({
+        strategy: "baseline",
+        requestDigest: "a".repeat(64),
+        discovery: "incomplete",
+        verification: "not-requested",
+        patchesSupplied: 100,
+        candidates: [],
+        activity: [],
+        droppedActivityCount: 0,
+        droppedCandidateCount: 0,
+        stages: Array.from({ length: 100 }, (_, batch) =>
+          ReviewStageDiagnostic.make({
+            stage: "discovery",
+            batch,
+            completion: "incomplete",
+            declaredAssessment: "incomplete",
+            incompleteReason: `${"`".repeat(595)} ${String(batch).padStart(4, "0")}`,
+            modelCalls: 1,
+            toolCalls: 0,
+            usage: ReviewUsage.make({
+              inputTokens: 0,
+              uncachedInputTokens: 0,
+              cachedInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              outputTokens: 0,
+            }),
+            suppliedPaths: [],
+          }),
+        ),
+      }),
       automaticReviewsRemaining: 1,
       scope: "full",
       suppliedPatches: 24,
@@ -405,7 +437,7 @@ The new route accepts requests without checking the caller.
       ),
       ignoredFiles: 0,
       modelTurns: 9,
-      complete: true,
+      complete: false,
       unresolvedChangeRequests: 0,
       inputTokens: 1_000,
       uncachedInputTokens: 1_000,
@@ -417,6 +449,10 @@ The new route accepts requests without checking the caller.
 
     expect(body.length).toBeLessThanOrEqual(100_000);
     expect(body).toContain("more excluded paths. See the Action log for the full list.");
+    expect(body).toContain("Model-reported limitations, not independently verified:");
+    expect(body).toContain(`${"`".repeat(596)}text\nBatch 1: ${"`".repeat(595)} 0000`);
+    expect(body).toContain("96 more limitations retained in diagnostics.");
+    expect(body).not.toContain(`${"`".repeat(595)} 0004`);
     for (const finding of findings) {
       expect(body.split(finding.title)).toHaveLength(2);
     }

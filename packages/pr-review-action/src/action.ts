@@ -216,7 +216,18 @@ const logReviewDiagnostics = Effect.fn("logReviewDiagnostics")(function* (
     droppedCandidateCount: diagnostics.droppedCandidateCount,
   });
   for (const entry of diagnostics.activity) yield* Effect.logInfo("Review source activity", entry);
-  for (const stage of diagnostics.stages) yield* Effect.logInfo("Review stage", stage);
+  for (const stage of diagnostics.stages)
+    yield* Effect.logInfo("Review stage", {
+      stage: stage.stage,
+      batch: stage.batch,
+      completion: stage.completion,
+      declaredAssessment: stage.declaredAssessment,
+      stopReason: stage.stopReason,
+      modelCalls: stage.modelCalls,
+      toolCalls: stage.toolCalls,
+      usage: stage.usage,
+      suppliedPaths: stage.suppliedPaths,
+    });
   for (const candidate of diagnostics.candidates) {
     yield* Effect.logInfo("Review candidate disposition", {
       id: candidate.id,
