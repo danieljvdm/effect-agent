@@ -739,6 +739,7 @@ it.effect.each(["interrupt", "timeout"] as const)(
           yield* (yield* ProtectedBrowserDispatch).mark;
           writes++;
           yield* Deferred.succeed(entered, undefined);
+
           return yield* Effect.never;
         }),
       );

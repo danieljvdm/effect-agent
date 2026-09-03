@@ -739,11 +739,14 @@ describe("shared Cloudflare memory owner", () => {
 
         const timeoutStarted = yield* Deferred.make<void>();
         const timeoutFinished = yield* Deferred.make<void>();
+
         slowStarted.set(address, timeoutStarted);
         slowFinished.set(address, timeoutFinished);
+
         const timed = yield* memory
           .recall({ _tag: "NoMatch" }, { ...memoryRecallLimits, timeoutMillis: 10 })
           .pipe(Effect.flip, Effect.forkChild);
+
         yield* Deferred.await(timeoutStarted);
         yield* TestClock.adjust("10 millis");
         expect(yield* Fiber.join(timed)).toMatchObject({ reason: "timeout" });

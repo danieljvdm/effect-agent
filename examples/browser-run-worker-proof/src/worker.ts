@@ -129,6 +129,7 @@ const proofLayer = Layer.unwrap(
         ),
       ),
     );
+
     const browserRunLayer = Layer.mergeAll(quickActionLayer, interactiveLayer, protectedLayer);
 
     return Layer.merge(
@@ -352,6 +353,7 @@ export default Worker.make(
   proofLayer.pipe(Layer.provideMerge(BrowserCrypto.layer)),
   Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
+
     return yield* new URL(request.url).pathname.startsWith("/protected/")
       ? protectedFixture(request).pipe(
           Effect.catch(() => Effect.succeed(new Response("Fixture failed", { status: 500 }))),

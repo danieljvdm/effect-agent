@@ -135,6 +135,7 @@ export const memoryAuthorizer = Layer.effect(
     Layer.effect(Clock.Clock)(
       Effect.gen(function* () {
         const { namespace } = yield* MemoryOwnerIdentity;
+
         return memoryClocks.get(namespace.address) ?? (yield* Clock.Clock);
       }),
     ),

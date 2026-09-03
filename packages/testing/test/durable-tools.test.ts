@@ -466,11 +466,14 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
     Effect.gen(function* () {
       const lifecycle: Array<string> = [];
       const observed: Array<string> = [];
+
       const probe = Tool.make("scope_probe", {
         parameters: Schema.Struct({}),
         success: Schema.String,
       });
+
       const toolkit = Toolkit.make(probe);
+
       const definition = Agent.make("attempt-scoped-tool-services", {
         input: Schema.Struct({ question: Schema.String }),
         output: Schema.Struct({ answer: Schema.String }),
@@ -478,11 +481,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         toolkit,
         policy,
       });
+
       const scripted = yield* makeScriptedModel((call) =>
         call % 3 < 2
           ? toolTurn(toolCall(`scope-${call}`, "scope_probe", {}))
           : finalParts('{"answer":"done"}'),
       );
+
       const bindings = yield* compileRegistrations([
         {
           agent: Agent.withModel(definition, scripted.model),
@@ -498,10 +503,12 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
                   Effect.sync(() => lifecycle.push(`open:${attemptId}`)),
                   () => Effect.sync(() => lifecycle.push(`close:${attemptId}`)),
                 );
+
                 return {
                   scope_probe: () =>
                     Effect.sync(() => {
                       observed.push(attemptId);
+
                       return "ready";
                     }),
                 };
@@ -509,9 +516,12 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             ),
         },
       ]);
+
       const runtime = yield* DurableAgentRuntime;
+
       for (let run = 0; run < 2; run++) {
         const threadId = `attempt-scope-${run}`;
+
         yield* runtime.submit(
           { definition },
           { question: "probe" },
@@ -530,6 +540,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         `close:${observed[2]}`,
       ]);
       const interruptedThread = "attempt-scope-replacement";
+
       yield* runtime.submit(
         { definition },
         { question: "probe" },
@@ -539,9 +550,11 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         },
       );
       yield* armFailpoint("turn:after-results-append");
+
       const interrupted = yield* runtime
         .processThreadResolved(decodeThreadId(interruptedThread), bindings)
         .pipe(Effect.exit);
+
       expect(Exit.isFailure(interrupted)).toBe(true);
       expect(lifecycle.at(-1)).toBe(`close:${observed[4]}`);
       yield* clearFailpoint;

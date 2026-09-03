@@ -168,6 +168,7 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
         // from the intentionally erased public shape, so specialize the driver back to A here.
         const run = driver as unknown as CapturedAttempt<A>;
         const execute = run(agent, threadId, claim);
+
         const scoped =
           attemptLayer === undefined
             ? execute
@@ -182,6 +183,7 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
                   ),
                 ),
               );
+
         return scoped.pipe(Effect.provide(context)) as Effect.Effect<
           Option.Option<Settlement>,
           DurableWorkerFailure

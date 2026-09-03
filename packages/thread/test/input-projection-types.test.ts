@@ -259,13 +259,16 @@ const proveRegistrationRequirements = (
         Layer.effect(InstructionContext)(Effect.map(LookupDependency, (text) => ({ text }))),
     },
   ]);
+
   const scopedRequirements: Assert<
     Equal<
       Effect.Services<typeof scoped>,
       Crypto.Crypto | InputProjection | ProviderInfrastructure | LookupDependency
     >
   > = true;
+
   const scopedErrors: Assert<Equal<Effect.Error<typeof scoped>, DigestError>> = true;
+
   void scopedRequirements;
   void scopedErrors;
 

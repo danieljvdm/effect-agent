@@ -53,6 +53,7 @@ describe("InteractiveBrowser schemas", () => {
         Scope.Scope | BrowserCredentialAccess
       >
     > = true;
+
     const channels: Equal<
       Extract<
         keyof ProtectedBrowserHandle,
@@ -60,6 +61,7 @@ describe("InteractiveBrowser schemas", () => {
       >,
       never
     > = true;
+
     expect(open && channels).toBe(true);
     for (const origin of [
       "https://example.com/",
