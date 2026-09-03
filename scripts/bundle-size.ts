@@ -206,6 +206,76 @@ const revision = Effect.fn("bundleSize.revision")(function* (root: string) {
   return code === 0 ? output.trim() : "unversioned checkout";
 }, Effect.scoped);
 
+// Size alone cannot prove that tree shaking preserves required initialization.
+// Execute a real consumer against the same published files used by the report.
+const verifyRuntime = Effect.fn("bundleSize.verifyRuntime")(
+  function* (options: {
+    readonly root: string;
+    readonly dependencies: string;
+    readonly output: string;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.realPath(options.root);
+
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        build({
+          absWorkingDir: root,
+          entryPoints: { entry: path.join(root, "fixtures", "runtime-smoke.ts") },
+          outdir: options.output,
+          outExtension: { ".js": ".mjs" },
+          nodePaths: [options.dependencies],
+          bundle: true,
+          treeShaking: true,
+          minify: true,
+          splitting: true,
+          format: "esm",
+          platform: "node",
+          target: "es2022",
+          define: { "process.env.NODE_ENV": '"production"', "import.meta.main": "true" },
+          legalComments: "none",
+          write: false,
+          logLevel: "silent",
+        }),
+      catch: (cause) =>
+        new BundleSizeError({
+          message: `Could not bundle runtime smoke check: ${String(cause)}`,
+          cause,
+        }),
+    });
+
+    yield* fs.makeDirectory(options.output, { recursive: true });
+    for (const file of result.outputFiles) {
+      yield* fs.writeFile(file.path, file.contents);
+    }
+
+    const child = yield* ChildProcess.make("node", [path.join(options.output, "entry.mjs")], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, code] = yield* Effect.all(
+      [
+        Stream.mkString(Stream.decodeText(child.stdout)),
+        Stream.mkString(Stream.decodeText(child.stderr)),
+        child.exitCode,
+      ],
+      { concurrency: 3 },
+    );
+
+    yield* fs.writeFileString(path.join(options.output, "result.txt"), stdout + stderr);
+    if (code !== 0) {
+      return yield* new BundleSizeError({
+        message: `Bundled runtime smoke check exited ${code}: ${stdout}${stderr}`,
+      });
+    }
+  },
+  Effect.scoped,
+  Effect.timeout("30 seconds"),
+);
+
 const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
   root: string,
   fixtureDirectory: string,
@@ -268,6 +338,16 @@ const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
 
         return { name: fixture.name, size, missing };
       }),
+    ).pipe(
+      Effect.tap(() =>
+        allowMissing
+          ? Effect.void
+          : verifyRuntime({
+              root: stage,
+              dependencies: path.join(root, "node_modules"),
+              output: path.join(output, "runtime-smoke"),
+            }),
+      ),
     ),
   );
 

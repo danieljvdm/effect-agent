@@ -13,6 +13,7 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
     "./CodeExecutor": "./src/CodeExecutor.ts",

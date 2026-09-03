@@ -13,6 +13,7 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
     "./DoMemoryStore": "./src/DoMemoryStore.ts",

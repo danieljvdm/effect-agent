@@ -283,6 +283,12 @@ targets, pack entries, and declared workspace dependencies. The purity check use
 targets as well as known test-module paths to prevent production entry points from reaching
 test-only code. Choosing supported APIs and useful public groups still requires review.
 
+Audited packages declare `"sideEffects": []`, as Effect does, so bundlers can discard unused
+modules. This describes import-time behavior, not whether exported operations perform effects.
+Keep I/O and registration inside Effects and Layers. Recheck the declaration when adding an
+import-time initializer or upgrading a dependency with startup behavior. The Cloudflare platform
+package remains unmarked because its optional Puppeteer adapters patch globals on import.
+
 ## Bundle size comparisons
 
 Pull requests run the **Bundle size** workflow against the exact base and head commits.
@@ -300,6 +306,16 @@ not bundle workspace source or externalize Effect. It uses minified ESM, a brows
 the remaining output, and **total** counts each chunk once. These are byte measurements, not
 startup timing or a promise about another bundler. Newly introduced export paths show `n/a`
 for the base. Build failures fail the report; size increases are informational.
+
+Use direct module paths at lazy-loading boundaries. With the measured esbuild configuration,
+statically importing `Agent` from the root and dynamically importing `AgentRuntime` from the same
+root pulls the runtime into the initial chunk. Direct `effect-agent/Agent` and
+`effect-agent/AgentRuntime` imports preserve a deferred runtime chunk; shared Effect dependencies
+still count toward the initial load.
+
+The comparison also bundles and executes `runtime-smoke.ts` against the PR's staged packages.
+This Node check verifies root/direct bindings and a deterministic agent run after minification
+and tree shaking. It is excluded from browser byte totals, and failure prevents a success report.
 
 To reproduce locally, install dependencies and run `vp run -F './packages/*' build` in each
 checkout, then run from the PR checkout:

@@ -403,6 +403,12 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             `export { agent } from "./agent-${kind}.ts"; export const loadRuntime = () => import("./runtime-${kind}.ts");`,
           );
         }
+        const smoke = path.join(fixtures, "runtime-smoke.ts");
+
+        yield* fs.writeFileString(
+          smoke,
+          'import { agent } from "effect-agent/Agent"; if (!agent.startsWith("shared")) throw new Error("wrong bundled value");',
+        );
         // Exercise canonicalization even on hosts without macOS's /var symlink.
         const alias = path.join(scratch, "head-link");
 
@@ -449,6 +455,19 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(
           second.fixtures.find((fixture) => fixture.name === "agent-root")?.base,
         ).not.toBeNull();
+        // A smaller but broken bundle must fail, not publish a successful report.
+        yield* fs.writeFileString(smoke, 'throw new Error("broken bundled runtime");');
+
+        const brokenRuntime = yield* Effect.flip(
+          compareBundles({
+            root: alias,
+            base: path.join(scratch, "base"),
+            output: path.join(scratch, "report"),
+          }),
+        );
+
+        expect(brokenRuntime.message).toContain("broken bundled runtime");
+        expect(yield* fs.exists(path.join(scratch, "report", "report.json"))).toBe(false);
         // A missing head export is a failed measurement, never a zero-size success.
         yield* fs.copyFile(
           baseManifest,

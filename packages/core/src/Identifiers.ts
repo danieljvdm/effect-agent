@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import * as Schema from "effect/Schema";
 
 const identifier = <const Name extends string>(name: Name) =>
   Schema.NonEmptyString.pipe(Schema.brand(`@effect-agent/core/${name}`));
