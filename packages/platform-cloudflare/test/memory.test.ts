@@ -26,6 +26,7 @@ import {
 import { Principal } from "@effect-agent/thread";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import type { cloudflareMemoryWriterLayer } from "../src/index.ts";
@@ -41,6 +42,7 @@ import {
   memoryRecallLimits,
   slowStarted,
   slowFinished,
+  memoryClocks,
 } from "./memory-fixtures.ts";
 import type { TestMemoryObject, TestThreadObject } from "./worker.ts";
 
@@ -714,6 +716,15 @@ describe("shared Cloudflare memory owner", () => {
 
         slowStarted.set(address, started);
         slowFinished.set(address, finished);
+        // The real RPC owner and client share virtual time; setup cannot exhaust the deadline.
+        memoryClocks.set(address, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            slowStarted.delete(address);
+            slowFinished.delete(address);
+            memoryClocks.delete(address);
+          }),
+        );
         const memory = yield* client(name, Principal.make("slow"));
 
         const pending = yield* memory
@@ -722,19 +733,31 @@ describe("shared Cloudflare memory owner", () => {
 
         yield* Deferred.await(started);
         yield* Fiber.interrupt(pending);
+        expect(yield* Deferred.isDone(finished)).toBe(false);
+        yield* TestClock.adjust("100 millis");
         yield* Deferred.await(finished);
 
-        const timeout = yield* memory
-          .recall({ _tag: "NoMatch" }, { ...memoryRecallLimits, timeoutMillis: 10 })
-          .pipe(Effect.flip);
+        const timeoutStarted = yield* Deferred.make<void>();
+        const timeoutFinished = yield* Deferred.make<void>();
 
-        expect(timeout).toMatchObject({ reason: "timeout" });
+        slowStarted.set(address, timeoutStarted);
+        slowFinished.set(address, timeoutFinished);
+
+        const timed = yield* memory
+          .recall({ _tag: "NoMatch" }, { ...memoryRecallLimits, timeoutMillis: 10 })
+          .pipe(Effect.flip, Effect.forkChild);
+
+        yield* Deferred.await(timeoutStarted);
+        yield* TestClock.adjust("10 millis");
+        expect(yield* Fiber.join(timed)).toMatchObject({ reason: "timeout" });
+        yield* Deferred.await(timeoutFinished);
+
         const normal = yield* client(name);
 
         expect(yield* normal.revalidate({ _tag: "NoMatch" }, memoryRecallLimits)).toEqual({
           _tag: "NoMatch",
         });
-      }).pipe(Effect.scoped),
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));
 
   it("fails closed when authorization defects", () =>

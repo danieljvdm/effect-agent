@@ -2,9 +2,9 @@
   "version": 1,
   "selector": "open-pull-request",
   "name": "open-pull-request",
-  "baseDigest": "sha256:14596520a07ccfdb3743dfa826d8b3de8605f3e8205dcdcce70396acab9ed6b1",
+  "baseDigest": "sha256:3398339f2a6ee147e3285ffd6f300dc2789396f3468515ecb42256c3f8e37a6b",
   "source": {
     "type": "bundled",
-    "version": "0.17.0"
+    "version": "1.0.2"
   }
 }

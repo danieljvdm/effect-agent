@@ -8,7 +8,7 @@ import {
   type RunDispositionDeclaration,
 } from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
-import { type Crypto, type Option, Effect, type Layer, Schema } from "effect";
+import { type Crypto, type Option, Effect, Layer, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
 import { digestDefinitions, type DigestError } from "./digest.ts";
@@ -143,23 +143,54 @@ export interface ResolvedBinding extends CapturedBinding {
   readonly digests: DefinitionDigests;
 }
 
-const capture = <A extends ExecutableAgentBinding>(
-  agent: A,
-): Effect.Effect<CapturedBinding, never, DurableWorkerRequirements<A>> =>
-  Effect.map(Effect.context<DurableWorkerRequirements<A>>(), (context): CapturedBinding => ({
-    agentId: agent.definition.id,
-    attempt: (driver, threadId, claim) => {
-      // Registration closes one concrete Binding before heterogeneous registrations are
-      // collected. TypeScript cannot instantiate the higher-rank RuntimeBinding parameters
-      // from the intentionally erased public shape, so specialize the driver back to A here.
-      const run = driver as unknown as CapturedAttempt<A>;
+/** Trusted claim identity for resolving per-Attempt application services. Not model input. */
+export interface AgentAttemptContext {
+  readonly threadId: ThreadId;
+  readonly submissionId: Claim["submissionId"];
+  readonly attemptId: Claim["attemptId"];
+}
 
-      return run(agent, threadId, claim).pipe(Effect.provide(context)) as Effect.Effect<
-        Option.Option<Settlement>,
-        DurableWorkerFailure
-      >;
-    },
-  }));
+const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = never>(
+  agent: A,
+  attemptLayer?: (context: AgentAttemptContext) => Layer.Layer<Provides, never, Requires>,
+): Effect.Effect<
+  CapturedBinding,
+  never,
+  Exclude<DurableWorkerRequirements<A>, Provides> | Requires
+> =>
+  Effect.map(
+    Effect.context<Exclude<DurableWorkerRequirements<A>, Provides> | Requires>(),
+    (context): CapturedBinding => ({
+      agentId: agent.definition.id,
+      attempt: (driver, threadId, claim) => {
+        // Registration closes one concrete Binding before heterogeneous registrations are
+        // collected. TypeScript cannot instantiate the higher-rank RuntimeBinding parameters
+        // from the intentionally erased public shape, so specialize the driver back to A here.
+        const run = driver as unknown as CapturedAttempt<A>;
+        const execute = run(agent, threadId, claim);
+
+        const scoped =
+          attemptLayer === undefined
+            ? execute
+            : execute.pipe(
+                Effect.provide(
+                  Layer.fresh(
+                    attemptLayer({
+                      threadId,
+                      submissionId: claim.submissionId,
+                      attemptId: claim.attemptId,
+                    }),
+                  ),
+                ),
+              );
+
+        return scoped.pipe(Effect.provide(context)) as Effect.Effect<
+          Option.Option<Settlement>,
+          DurableWorkerFailure
+        >;
+      },
+    }),
+  );
 
 /**
  * Build one exact worker registration from an executable Agent Binding and
@@ -211,15 +242,24 @@ export const resolveWorkerBinding = (
 };
 
 /** Application versions and a model Layer, supplied directly or through an existing Binding. */
-export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgentBinding> =
+export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgentBinding> = (
   | { readonly agent: A; readonly model?: never; readonly definitions: DefinitionDigestInput }
   | {
       readonly agent: A["definition"];
       readonly model: A["model"];
       readonly definitions: DefinitionDigestInput;
-    };
+    }
+) & {
+  /**
+   * Build fresh services for exactly one fenced Attempt, across all its Tool/model turns.
+   * Finalizes on completion, suspension, failure and interruption. Never reused after eviction.
+   * Resolve invocation authority from the trusted claim identity, not captured caller state.
+   * Keep fallible resource acquisition lazy in typed Tool operations; this Layer cannot fail.
+   */
+  readonly attemptLayer?: (context: AgentAttemptContext) => Layer.Layer<never, never, unknown>;
+};
 
-type EntryRequirements<Entry> = Entry extends {
+type EntryWorkerRequirements<Entry> = Entry extends {
   readonly agent: infer A extends ExecutableAgentBinding;
 }
   ? DurableWorkerRequirements<A>
@@ -230,19 +270,36 @@ type EntryRequirements<Entry> = Entry extends {
     ? DurableWorkerRequirements<{ readonly definition: D; readonly model: M }>
     : never;
 
+type EntryRequirements<Entry> = Entry extends {
+  readonly attemptLayer: (
+    context: AgentAttemptContext,
+  ) => Layer.Layer<infer Provides, never, infer Requires>;
+}
+  ? Exclude<EntryWorkerRequirements<Entry>, Provides> | Requires
+  : EntryWorkerRequirements<Entry>;
+
 type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> = [
   Entries[number],
 ] extends [never]
   ? never
   : EntryRequirements<Entries[number]>;
 
-const compileRegistration = (entry: AgentRegistration) =>
-  Effect.flatMap(digestDefinitions(entry.definitions), (digests) =>
-    DurableWorkerBinding.make(
-      entry.model === undefined ? entry.agent : { definition: entry.agent, model: entry.model },
-      digests,
-    ),
-  );
+const compileRegistration = <Entry extends AgentRegistration>(
+  entry: Entry,
+): Effect.Effect<ResolvedBinding, DigestError, Crypto.Crypto | EntryRequirements<Entry>> =>
+  Effect.flatMap(
+    digestDefinitions(entry.definitions),
+    (digests) =>
+      Effect.map(
+        capture(
+          entry.model === undefined ? entry.agent : { definition: entry.agent, model: entry.model },
+          entry.attemptLayer,
+        ),
+        (binding): ResolvedBinding => ({ ...binding, digests }),
+      ),
+    // The erased descriptor accepts arbitrary provided services. Restore the concrete entry's
+    // Exclude<worker requirements, provided services> | layer requirements at this collection seam.
+  ) as Effect.Effect<ResolvedBinding, DigestError, Crypto.Crypto | EntryRequirements<Entry>>;
 
 /** Compile heterogeneous Agent descriptors into exact, dependency-closed worker registrations. */
 export const compileRegistrations = <const Entries extends ReadonlyArray<AgentRegistration>>(

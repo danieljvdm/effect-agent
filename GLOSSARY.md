@@ -21,6 +21,8 @@ An Agent Definition and model Layer, or an existing Agent Binding, paired with e
 Model, and Tool version declarations. Runtime
 construction hashes the declarations and captures the Binding's required services in its Scope.
 Durable workers match the registered identity and hashes before executing queued work.
+An optional `attemptLayer` builds invocation-specific services for one fenced Attempt, rather than
+capturing caller authority or live resources in the runtime's long-lived Scope.
 
 **Agent Runtime**  
 The Effect module that interprets an Agent Definition or Binding. The ephemeral runtime executes immediately;
