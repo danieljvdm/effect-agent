@@ -59,9 +59,9 @@ Saving thread history does not make a run durable. Durable execution is availabl
 [Node.js with SQLite](docs/platforms/node.md) and
 [Cloudflare Workers with Durable Objects](docs/platforms/cloudflare.md).
 
-On Node, the optional [`@effect-agent/workflow` host](docs/platforms/node.md#workflow) can
-drive the same durable runtime through an injected Effect `WorkflowEngine`. Its SQL-backed
-single-process setup preserves the same agent definitions and canonical settlement contract.
+The optional [`@effect-agent/workflow` host](docs/guide/workflows.md) drives the same durable
+runtime through an injected Effect `WorkflowEngine`. Platform adapters supply storage and repair
+scheduling while preserving the same agent definitions and canonical settlement contract.
 Use `AgentWorkflow.execute(agent, input, { name })` inside a native `Workflow.toLayer` handler
 to suspend for pending work and return the Agent's typed output when it settles.
 

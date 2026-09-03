@@ -1,16 +1,16 @@
 import { dirname, resolve } from "node:path";
 
+import { NodeServices } from "@effect/platform-node";
 import { transformerTwoslash } from "@shikijs/vitepress-twoslash";
+import { Effect } from "effect";
 import ts from "typescript-twoslash";
 import { defineConfig } from "vitepress";
 
+import { type SocialPage, writeSocialImages } from "./social-images.ts";
 import tokyoNightLight from "./theme/tokyo-night-light.json";
 
 const siteUrl = "https://effect-agent.com";
-const socialImage = `${siteUrl}/social-card.png`;
-
-const socialImageAlt =
-  "Effect Agent. An agent harness toolkit for TypeScript. Built on Effect and Effect AI.";
+const socialPages = new Map<string, SocialPage>();
 
 export default defineConfig({
   lang: "en-US",
@@ -28,31 +28,44 @@ export default defineConfig({
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "Effect Agent" }],
     ["meta", { property: "og:locale", content: "en_US" }],
-    ["meta", { property: "og:image", content: socialImage }],
     ["meta", { property: "og:image:type", content: "image/png" }],
     ["meta", { property: "og:image:width", content: "1200" }],
     ["meta", { property: "og:image:height", content: "630" }],
-    ["meta", { property: "og:image:alt", content: socialImageAlt }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
-    ["meta", { name: "twitter:image", content: socialImage }],
-    ["meta", { name: "twitter:image:alt", content: socialImageAlt }],
   ],
   // Preview crawlers read the built HTML. Use VitePress's resolved title and
   // description so guide links keep their own metadata, including title templates.
-  transformHead({ page, title, description }) {
+  transformHead({ page, pageData, title, description }) {
     if (page === "404.md") return [];
 
     const path = page.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, "");
     const url = new URL(path, `${siteUrl}/`).href;
+    const imagePath = `social/${page.replace(/\.md$/, ".png")}`;
+    const socialImage = new URL(imagePath, `${siteUrl}/`).href;
+    const socialImageAlt = `${title}. ${description}`;
+
+    socialPages.set(page, { title: pageData.title, description, url, imagePath });
 
     return [
       ["link", { rel: "canonical", href: url }],
       ["meta", { property: "og:url", content: url }],
       ["meta", { property: "og:title", content: title }],
       ["meta", { property: "og:description", content: description }],
+      ["meta", { property: "og:image", content: socialImage }],
+      ["meta", { property: "og:image:alt", content: socialImageAlt }],
       ["meta", { name: "twitter:title", content: title }],
       ["meta", { name: "twitter:description", content: description }],
+      ["meta", { name: "twitter:image", content: socialImage }],
+      ["meta", { name: "twitter:image:alt", content: socialImageAlt }],
     ];
+  },
+  buildEnd({ srcDir, outDir }) {
+    return Effect.runPromise(
+      writeSocialImages(srcDir, outDir, socialPages.values()).pipe(
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+    );
   },
   markdown: {
     theme: { light: { ...tokyoNightLight, type: "light" }, dark: "tokyo-night" },
@@ -118,6 +131,7 @@ export default defineConfig({
         text: "Extensions",
         items: [
           { text: "Subagents", link: "/guide/subagents" },
+          { text: "Effect Workflows", link: "/guide/workflows" },
           { text: "Sandbox execution", link: "/guide/sandbox" },
           { text: "Code Mode", link: "/guide/code-mode" },
           { text: "Browser tools", link: "/guide/browser" },

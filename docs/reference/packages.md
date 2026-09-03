@@ -86,7 +86,7 @@ implementations.
 | Run or stream an agent                  | [Execution](../guide/run-agents)                                  | Model, tool handlers, history policy                         |
 | Retain completed threads                | [History](../guide/threads#retain-completed-runs)                 | Store and thread IDs                                         |
 | Recover work after a crash              | [Durability](../concepts/durability)                              | Registered agents, workers, storage, authorization           |
-| Drive durable work with Effect Workflow | [Workflow host](../platforms/node#workflow)                       | Workflow engine, dispatch store, repair trigger              |
+| Drive durable work with Effect Workflow | [Effect Workflows](../guide/workflows)                            | Workflow engine, dispatch store, repair trigger              |
 | Prune or summarize context              | [Context management](../guide/context-management)                 | Context limits and compaction policy                         |
 | Recall application-owned sources        | [Context management](../guide/context-management#recall-memory)   | Readable passages, provenance, query policy                  |
 | Remember in the background              | [Remembering](../guide/context-management#background-remembering) | Durable jobs, source policy, extraction, merging and cleanup |
@@ -220,9 +220,9 @@ Its required `principal` supplies the identity for workflow-originated submissio
 schedule startup and repeated repair. The shared package starts no polling loop and imports no
 Node or Cloudflare implementation.
 
-See the [Node Workflow setup](../platforms/node#workflow) for the SQL-backed single-process
-assembly, engine substitution, and cancellation semantics. Install it separately from
-`effect-agent`.
+See the [Effect Workflows guide](../guide/workflows) for host composition, engine substitution,
+and cancellation semantics, including the [Node.js SQL setup](../guide/workflows#node).
+Install it separately from `effect-agent`.
 
 ### `@effect-agent/storage-memory`
 
@@ -261,7 +261,8 @@ before closing storage. See the [Node.js guide](../platforms/node).
 
 The optional `@effect-agent/platform-node/NodeWorkflow` import supplies `SqlWorkflowDispatchStore`
 over an injected `SqlClient` and `NodeWorkflowRepairTrigger` with scoped startup and polling.
-Pair them with `NodeDurableAgentRuntime.layerRegistered` and `WorkflowAgentHost.layer`; this assembly does not start
+Pair them with `NodeDurableAgentRuntime.layerRegistered` and `WorkflowAgentHost.layer` as shown
+in the [Workflow guide's Node.js setup](../guide/workflows#node). This assembly does not start
 the ordinary Node worker loop.
 
 ### `@effect-agent/storage-cloudflare`
