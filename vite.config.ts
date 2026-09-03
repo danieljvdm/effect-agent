@@ -145,6 +145,10 @@ export default defineConfig({
       scripts: true,
     },
     tasks: {
+      "release:publish": {
+        cache: false,
+        command: "bun scripts/release-publish.ts",
+      },
       "pr-review-eval": {
         cache: false,
         command: "bun --cwd examples/pr-review-eval src/main.ts",
