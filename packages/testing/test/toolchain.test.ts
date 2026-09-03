@@ -97,6 +97,7 @@ const packageNames = [
   "storage-memory",
   "storage-sqlite",
   "testing",
+  "workflow",
 ] as const;
 
 const privatePackageNames = ["pr-review-action"] as const;
@@ -127,6 +128,7 @@ const effectTestPackageNames = [
   "storage-memory",
   "storage-sqlite",
   "testing",
+  "workflow",
 ] as const;
 
 const productionPackageNames = [
@@ -143,6 +145,7 @@ const productionPackageNames = [
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
+  "workflow",
 ] as const;
 
 // Only these two packages may carry Cloudflare dependencies. The shared
@@ -172,6 +175,7 @@ const inwardPackageNames = [
   "thread",
   "storage-memory",
   "storage-sqlite",
+  "workflow",
 ] as const;
 
 const cloudflareOnlyDependencies = new Set(["@effect/sql-sqlite-do"]);
@@ -218,7 +222,7 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
     "storage-cloudflare",
     "testing",
   ],
-  "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite"],
+  "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite", "workflow"],
   "pr-review": ["effect-agent"],
   sandbox: ["core"],
   "sandbox-local": ["core", "sandbox"],
@@ -226,6 +230,7 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
   "storage-cloudflare": ["core", "thread", "testing"],
   "storage-memory": ["core", "thread"],
   "storage-sqlite": ["core", "thread"],
+  workflow: ["core", "thread", "engine", "storage-memory"],
   testing: [
     "capabilities",
     "core",
@@ -1252,7 +1257,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       );
 
       expect(publishStep?.run).toContain("sha256sum --check --strict SHA256SUMS");
-      expect(publishStep?.run).toContain("([.packages[].name] | unique | length) == 14");
+      expect(publishStep?.run).toContain("([.packages[].name] | unique | length) == 15");
       expect(publishStep?.run).toContain("([.packages[].version] | unique) == [$expectedVersion]");
       expect(publishStep?.run).toContain(
         "repos/${GITHUB_REPOSITORY}/contents/packages/${PACKAGE_DIRECTORY}/package.json?ref=${GITHUB_SHA}",
@@ -1288,7 +1293,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         "Verify manifest and create package tags",
       );
 
-      expect(tagStep?.run).toContain("([.packages[].name] | unique | length) == 14");
+      expect(tagStep?.run).toContain("([.packages[].name] | unique | length) == 15");
       expect(tagStep?.run).toContain("([.packages[].version] | unique) == [$expectedVersion]");
       expect(tagStep?.run).toContain('.distTag == "beta"');
       expect(tagStep?.run).toContain(

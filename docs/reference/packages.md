@@ -14,21 +14,22 @@ Before 1.0, APIs and stored data may change without a migration path.
 
 ## Find a capability {#capability-inventory}
 
-| Need                                   | Guide                                                           | Your application supplies                          |
-| -------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
-| Run or stream an agent                 | [Execution](../guide/run-agents)                                | Model, tool handlers, history policy               |
-| Retain completed threads               | [History](../guide/threads#retain-completed-runs)               | Store and thread IDs                               |
-| Recover work after a crash             | [Durability](../concepts/durability)                            | Registered agents, workers, storage, authorization |
-| Prune or summarize context             | [Context management](../guide/context-management)               | Context limits and compaction policy               |
-| Recall application-owned sources       | [Context management](../guide/context-management#recall-memory) | Readable passages, provenance, query policy        |
-| Require approval or limit spending     | [Run hooks](../guide/run-agents#operational-hooks)              | Approval policy, budget hooks, cost estimates      |
-| Delegate to another agent              | [Subagents](../guide/subagents)                                 | Targets, bindings, permissions, budgets            |
-| Schedule new input                     | [Scheduling](../guide/operations#scheduled-input)               | Owner policy, registered inputs, driver            |
-| React to external events               | [Subscriptions](../guide/operations#event-subscriptions)        | Authenticated source, preparation, authorization   |
-| Run generated JavaScript               | [Code Mode](../guide/code-mode)                                 | Read-only tools and an isolated executor           |
-| Run trusted local commands             | [Sandbox execution](../guide/sandbox)                           | Executable, environment, output and time limits    |
-| Capture, crawl, or interact with pages | [Browser tools](../guide/browser)                               | Browser binding or credentials, target policy      |
-| Call tools on an MCP server            | [MCP servers](../guide/tools#mcp)                               | Transport, `HttpClient` or process spawner, bounds |
+| Need                                    | Guide                                                           | Your application supplies                          |
+| --------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
+| Run or stream an agent                  | [Execution](../guide/run-agents)                                | Model, tool handlers, history policy               |
+| Retain completed threads                | [History](../guide/threads#retain-completed-runs)               | Store and thread IDs                               |
+| Recover work after a crash              | [Durability](../concepts/durability)                            | Registered agents, workers, storage, authorization |
+| Drive durable work with Effect Workflow | [Workflow host](../platforms/node#workflow)                     | Workflow engine, dispatch store, repair trigger    |
+| Prune or summarize context              | [Context management](../guide/context-management)               | Context limits and compaction policy               |
+| Recall application-owned sources        | [Context management](../guide/context-management#recall-memory) | Readable passages, provenance, query policy        |
+| Require approval or limit spending      | [Run hooks](../guide/run-agents#operational-hooks)              | Approval policy, budget hooks, cost estimates      |
+| Delegate to another agent               | [Subagents](../guide/subagents)                                 | Targets, bindings, permissions, budgets            |
+| Schedule new input                      | [Scheduling](../guide/operations#scheduled-input)               | Owner policy, registered inputs, driver            |
+| React to external events                | [Subscriptions](../guide/operations#event-subscriptions)        | Authenticated source, preparation, authorization   |
+| Run generated JavaScript                | [Code Mode](../guide/code-mode)                                 | Read-only tools and an isolated executor           |
+| Run trusted local commands              | [Sandbox execution](../guide/sandbox)                           | Executable, environment, output and time limits    |
+| Capture, crawl, or interact with pages  | [Browser tools](../guide/browser)                               | Browser binding or credentials, target policy      |
+| Call tools on an MCP server             | [MCP servers](../guide/tools#mcp)                               | Transport, `HttpClient` or process spawner, bounds |
 
 ### Limits and unsupported features {#compaction-and-unsupported-capabilities}
 
@@ -110,12 +111,29 @@ Optional `processCommittedActivity` runs bounded, resumable passes with separate
 progress. The host owns record eligibility, extraction, and durable output application. See
 [committed memory processing](../guide/context-management#committed-memory).
 
+Custom drivers can advance one FIFO-head Attempt with `processThreadHeadResolved` and apply one
+submission's recovery decision with `recoverSubmission`. `submissionStatus` is the authorized
+nonblocking read; `inspectSubmissionStatus` is reserved for trusted workers. Pending status and
+an empty processing result do not imply completion.
+
 | Import                            | Use                                                    |
 | --------------------------------- | ------------------------------------------------------ |
 | `@effect-agent/thread/history`    | `PersistentHistory` and history contracts              |
 | `@effect-agent/thread/durability` | Durable runtime and accepted-work contracts            |
 | `@effect-agent/thread/github`     | GitHub event source                                    |
 | `@effect-agent/thread/testing`    | Certification, conformance runners, failpoint controls |
+
+### `@effect-agent/workflow`
+
+Optional `WorkflowDurableHost` over an injected upstream Effect `WorkflowEngine`. It reuses the
+durable runtime's admission, journal recovery, authorization, and settlement protocol.
+`WorkflowDispatchStore` retains dispatch intents; `WorkflowRepairTrigger` requires the host to
+schedule startup and repeated repair. The shared package starts no polling loop and imports no
+Node or Cloudflare implementation.
+
+See the [Node Workflow setup](../platforms/node#workflow) for the SQL-backed single-process
+assembly, engine substitution, and cancellation semantics. Install it separately from
+`effect-agent`.
 
 ### `@effect-agent/storage-memory`
 
@@ -146,6 +164,11 @@ Registers agent bindings before execution, recovers before admission, and releas
 before closing storage. See the [Node.js guide](../platforms/node).
 
 `NodeDurableRuntimeOptions.toolFailureObserver` installs a local tool-failure observer.
+
+The optional `@effect-agent/platform-node/workflow` import supplies `SqlWorkflowDispatchStore`
+over an injected `SqlClient` and `NodeWorkflowRepairTrigger` with scoped startup and polling.
+Pair them with `NodeDurableRuntime.layer` and `WorkflowDurableHost`; this assembly does not start
+the ordinary Node worker loop.
 
 ### `@effect-agent/storage-cloudflare`
 
@@ -202,7 +225,7 @@ adds GitHub admission, source retrieval, provider setup, and report publication 
 
 ## Examples {#leaf-examples}
 
-- [Provider examples](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers): OpenAI, Anthropic, and retained history.
+- [Provider examples](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers): OpenAI, Anthropic, retained history, and an injected SQL-backed Workflow engine.
 - [Chat demo](https://github.com/danieljvdm/effect-agent/tree/main/examples/demo): steering, follow-ups, approval cards, and budget limits, with a credential-free scripted profile.
 - [Code Mode warehouse](https://github.com/danieljvdm/effect-agent/tree/main/examples/code-mode-cloudflare): generated JavaScript querying a SQLite Durable Object through brokered read-only tools. Start with the [Code Mode guide](../guide/code-mode).
 - [Hosted browser proof](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-run-worker-proof): an opt-in temporary Worker deployment exercising capture, screenshots, interactive actions, Live View, and handoff. See [browser setup](../guide/browser).

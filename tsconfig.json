@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/workflow" },
     { "path": "./examples/cloudflare-memory" },
     {
       "path": "./packages/effect-agent"

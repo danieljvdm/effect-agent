@@ -14,13 +14,16 @@
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/testing": "workspace:*",
     "@effect-agent/thread": "workspace:*",
+    "@effect-agent/workflow": "workspace:*",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

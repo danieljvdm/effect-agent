@@ -1,12 +1,12 @@
 {
-  "name": "@effect-agent/platform-node",
+  "name": "@effect-agent/workflow",
   "version": "0.1.0-beta.42",
-  "description": "Class DN layer assembly for Effect Agent: the durable Node/SQLite runtime host, wake scheduler, and ownership drain.",
+  "description": "Effect Workflow execution for the existing durable Agent runtime.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/danieljvdm/effect-agent.git",
-    "directory": "packages/platform-node"
+    "directory": "packages/workflow"
   },
   "files": [
     "dist",
@@ -14,8 +14,7 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./workflow": "./src/workflow.ts"
+    ".": "./src/index.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -27,15 +26,12 @@
   },
   "dependencies": {
     "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
-    "@effect-agent/storage-sqlite": "workspace:*",
-    "@effect-agent/thread": "workspace:*",
-    "@effect-agent/workflow": "workspace:*",
-    "@effect/platform-node": "catalog:",
-    "@effect/sql-sqlite-node": "catalog:"
+    "@effect-agent/thread": "workspace:*"
   },
   "devDependencies": {
-    "@effect-agent/capabilities": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
+    "@effect-agent/storage-memory": "workspace:*",
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",

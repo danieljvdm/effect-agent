@@ -392,6 +392,7 @@ jobs:
           storage-memory	@effect-agent/storage-memory
           storage-sqlite	@effect-agent/storage-sqlite
           testing	@effect-agent/testing
+          workflow	@effect-agent/workflow
           PACKAGES
           if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]+$ ]]; then
             echo "Trusted release commit is not on the beta prerelease train." >&2
@@ -415,9 +416,10 @@ jobs:
               "@effect-agent/storage-memory",
               "@effect-agent/storage-sqlite",
               "@effect-agent/testing",
+              "@effect-agent/workflow",
               "effect-agent"
             ] | sort) and
-            ([.packages[].name] | unique | length) == 14 and
+            ([.packages[].name] | unique | length) == 15 and
             ([.packages[].version] | unique) == [$expectedVersion] and
             all(.packages[];
               .distTag == "beta" and
@@ -565,6 +567,7 @@ jobs:
           storage-memory	@effect-agent/storage-memory
           storage-sqlite	@effect-agent/storage-sqlite
           testing	@effect-agent/testing
+          workflow	@effect-agent/workflow
           PACKAGES
           if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]+$ ]]; then
             echo "Trusted release commit is not on the beta prerelease train." >&2
@@ -588,9 +591,10 @@ jobs:
               "@effect-agent/storage-memory",
               "@effect-agent/storage-sqlite",
               "@effect-agent/testing",
+              "@effect-agent/workflow",
               "effect-agent"
             ] | sort) and
-            ([.packages[].name] | unique | length) == 14 and
+            ([.packages[].name] | unique | length) == 15 and
             ([.packages[].version] | unique) == [$expectedVersion] and
             all(.packages[];
               .distTag == "beta" and

@@ -17,6 +17,7 @@ export {
 export * from "./digest.ts";
 export * from "./durable-failpoint.ts";
 export * from "./durable-runtime.ts";
+export * from "./submission-status.ts";
 export * from "./invariants.ts";
 export * from "./ledger.ts";
 export * from "./operation-authorizer.ts";

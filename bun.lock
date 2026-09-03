@@ -17,6 +17,7 @@
         "@effect-agent/storage-memory": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-browser": "catalog:",
@@ -181,13 +182,16 @@
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/sandbox": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/testing": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@effect/sql-sqlite-node": "catalog:",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -349,6 +353,7 @@
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
       },
@@ -519,6 +524,26 @@
         "@effect-agent/engine": "workspace:*",
       },
       "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.111",
+      },
+    },
+    "packages/workflow": {
+      "name": "@effect-agent/workflow",
+      "version": "0.1.0-beta.42",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/thread": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
+        "@effect-agent/storage-memory": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
@@ -845,6 +870,8 @@
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
 
     "@effect-agent/thread": ["@effect-agent/thread@workspace:packages/thread"],
+
+    "@effect-agent/workflow": ["@effect-agent/workflow@workspace:packages/workflow"],
 
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-rc.111", "", { "peerDependencies": { "effect": "^4.0.0-rc.111" } }, "sha512-doqlATNFhAr993J2+F3RFDv64KnevRrrBAcNAlj8IYBB61eZMsJr2y/dDE0JJ9M2Ok/k/BzBkgcFJqMC0bQP+A=="],
 

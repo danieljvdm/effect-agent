@@ -59,6 +59,25 @@ least once and may repeat. Applications still need idempotency, reconciliation, 
 Use the same agent definition for ephemeral runs and durable registration. Durable hosts also
 need storage, versioned registrations, and a recovery driver. See the platform setup guides above.
 
+The optional [`WorkflowDurableHost`](../platforms/node#workflow) drives this runtime through an
+injected Effect `WorkflowEngine`. Replacing the engine Layer leaves the agent definitions and
+durable driver unchanged. The certified SQL setup is a single Node process; it adds no fleet or
+Cloudflare Workflow guarantee.
+
+Each native Workflow advances a submission through journal recovery and bounded Attempts.
+Pending work, approvals, unknown outcomes, and native suspension remain unfinished until the
+canonical log contains a Settlement. Infrastructure failures suspend the Workflow for repair.
+Ordinary tools remain ordinary tools; the driver does not wrap them in replayable Activities.
+
+Admission, dispatch intent storage, and native Workflow storage commit independently. A required
+host-owned repair trigger discovers accepted work and retries retained dispatch intents after
+lost hints or process loss. An intent remains until native success identifies the matching
+canonical Settlement. No cross-database transaction encloses an agent execution.
+
+Interrupting an observer or settlement waiter detaches it. Abort and resolution commands use the
+durable runtime's authorization and intent protocol. Native Workflow interruption is not the
+agent cancellation API. Each Attempt releases its ownership and resources before suspension.
+
 ## Admission and recovery
 
 The runtime returns a Receipt after durable ledger admission, thread materialization, and
