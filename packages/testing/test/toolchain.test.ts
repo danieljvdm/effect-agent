@@ -17,6 +17,7 @@ import { Command } from "effect/unstable/cli";
 import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
+import { compareBundles } from "../../../scripts/bundle-size.ts";
 import {
   command as releaseCommand,
   PublishManifest,
@@ -337,6 +338,136 @@ const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> 
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
 layer(NodeServices.layer)("workspace toolchain", (it) => {
+  it.effect(
+    "compares built checkouts independently and counts shared and deferred chunks once",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "bundle-comparison-test-" });
+
+        for (const side of ["base", "head"]) {
+          const root = path.join(scratch, side);
+          const pkg = path.join(root, "packages", "effect-agent");
+
+          yield* fs.makeDirectory(path.join(pkg, "dist"), { recursive: true });
+          yield* fs.makeDirectory(path.join(root, "node_modules", "effect"), { recursive: true });
+          yield* fs.writeFileString(path.join(root, "package.json"), '{"catalog":{}}');
+          yield* fs.writeFileString(
+            path.join(root, "node_modules", "effect", "package.json"),
+            '{"version":"test"}',
+          );
+          yield* fs.writeFileString(
+            path.join(pkg, "package.json"),
+            JSON.stringify({
+              name: "effect-agent",
+              version: "1.0.0",
+              type: "module",
+              exports: {
+                ".": "./src/index.ts",
+                "./Agent": "./src/Agent.ts",
+                "./AgentRuntime": "./src/AgentRuntime.ts",
+              },
+            }),
+          );
+
+          // No src directory: accidentally measuring source instead of published
+          // artifacts must fail. The two checkouts also contain different values.
+          const modules = {
+            index: 'export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs";',
+            Agent: 'export { shared as agent } from "./shared.mjs";',
+            AgentRuntime: `import { shared } from "./shared.mjs"; export const run = [shared, ${JSON.stringify(side.repeat(side === "head" ? 20000 : 10000))}];`,
+            shared: `export const shared = ${JSON.stringify("shared".repeat(200))};`,
+          };
+
+          for (const [name, source] of Object.entries(modules)) {
+            yield* fs.writeFileString(path.join(pkg, "dist", `${name}.mjs`), source);
+            yield* fs.writeFileString(path.join(pkg, "dist", `${name}.d.mts`), "export {};");
+          }
+        }
+        const head = path.join(scratch, "head");
+        const fixtures = path.join(head, "scripts", "bundle");
+
+        yield* fs.makeDirectory(fixtures, { recursive: true });
+        for (const kind of ["root", "module"]) {
+          yield* fs.writeFileString(
+            path.join(fixtures, `agent-${kind}.ts`),
+            `export { agent } from "effect-agent${kind === "module" ? "/Agent" : ""}";`,
+          );
+          yield* fs.writeFileString(
+            path.join(fixtures, `runtime-${kind}.ts`),
+            `export { run } from "effect-agent${kind === "module" ? "/AgentRuntime" : ""}";`,
+          );
+          yield* fs.writeFileString(
+            path.join(fixtures, `lazy-${kind}.ts`),
+            `export { agent } from "./agent-${kind}.ts"; export const loadRuntime = () => import("./runtime-${kind}.ts");`,
+          );
+        }
+        // Exercise canonicalization even on hosts without macOS's /var symlink.
+        const alias = path.join(scratch, "head-link");
+
+        yield* fs.symlink(head, alias);
+
+        const report = yield* compareBundles({
+          root: alias,
+          base: path.join(scratch, "base"),
+          output: path.join(scratch, "report"),
+        });
+
+        const lazy = report.fixtures.find((fixture) => fixture.name === "lazy-module");
+
+        expect(lazy).toBeDefined();
+        expect(lazy!.head.initial.raw).toBeLessThan(2000);
+        expect(lazy!.head.deferred.raw).toBeGreaterThan(80000);
+        expect(lazy!.base!.deferred.raw).toBeLessThan(41000);
+        expect(lazy!.head.chunks.filter((chunk) => chunk.initial)).toHaveLength(2);
+        expect(lazy!.head.total.raw).toBe(lazy!.head.initial.raw + lazy!.head.deferred.raw);
+        expect(lazy!.head.total.gzip).toBe(lazy!.head.initial.gzip + lazy!.head.deferred.gzip);
+        expect(report.fixtures.every((fixture) => fixture.head.initial.raw > 0)).toBe(true);
+
+        // A newly introduced direct entry gets no fake zero/unchanged baseline.
+        const baseManifest = path.join(scratch, "base", "packages", "effect-agent", "package.json");
+
+        yield* fs.writeFileString(
+          baseManifest,
+          JSON.stringify({
+            name: "effect-agent",
+            version: "1.0.0",
+            type: "module",
+            exports: { ".": "./src/index.ts" },
+          }),
+        );
+
+        const second = yield* compareBundles({
+          root: alias,
+          base: path.join(scratch, "base"),
+          output: path.join(scratch, "report"),
+        });
+
+        expect(second.fixtures.find((fixture) => fixture.name === "agent-module")?.base).toBeNull();
+        expect(yield* fs.exists(path.join(scratch, "report", "base", "agent-module"))).toBe(false);
+        expect(
+          second.fixtures.find((fixture) => fixture.name === "agent-root")?.base,
+        ).not.toBeNull();
+        // A missing head export is a failed measurement, never a zero-size success.
+        yield* fs.copyFile(
+          baseManifest,
+          path.join(head, "packages", "effect-agent", "package.json"),
+        );
+
+        const failure = yield* Effect.flip(
+          compareBundles({
+            root: alias,
+            base: path.join(scratch, "base"),
+            output: path.join(scratch, "report"),
+          }),
+        );
+
+        expect(failure._tag).toBe("BundleSizeError");
+        expect(yield* fs.exists(path.join(scratch, "report", "report.json"))).toBe(false);
+      }),
+  );
+
   it.effect("executes an Effect program through the Vite+ test runner", () =>
     Effect.sync(() => {
       expect("ready").toBe("ready");

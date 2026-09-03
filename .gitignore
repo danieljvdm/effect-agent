@@ -1,6 +1,8 @@
 node_modules
 dist
 .worktrees
+.bundle-base
+.bundle-report
 coverage
 .vite
 .playwright-cli/

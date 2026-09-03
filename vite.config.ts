@@ -166,6 +166,10 @@ export default defineConfig({
       scripts: true,
     },
     tasks: {
+      "bundle:compare": {
+        cache: false,
+        command: "bun scripts/bundle-size.ts",
+      },
       "release:publish": {
         cache: false,
         command: "bun scripts/release-publish.ts",

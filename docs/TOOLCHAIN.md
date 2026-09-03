@@ -283,6 +283,38 @@ targets, pack entries, and declared workspace dependencies. The purity check use
 targets as well as known test-module paths to prevent production entry points from reaching
 test-only code. Choosing supported APIs and useful public groups still requires review.
 
+## Bundle size comparisons
+
+Pull requests run the **Bundle size** workflow against the exact base and head commits.
+Like [Effect's bundle check](https://github.com/Effect-TS/effect/tree/main/packages/tools/bundle),
+it bundles small consumer fixtures against built packages. Each checkout installs its own
+lockfile. The comparison uses the PR's esbuild version and the same fixture source for both sides.
+
+The fixtures in `scripts/bundle` cover agent construction, importing the runtime's `run` function,
+and loading that runtime on demand, through both the root and direct module imports. The
+analyzer stages copies of `dist` and uses the release publisher's manifest conversion. It does
+not bundle workspace source or externalize Effect. It uses minified ESM, a browser target,
+`es2022`, production mode, and gzip level 9 per emitted chunk.
+
+**Initial** counts the entry and every statically reachable shared chunk. **Deferred** counts
+the remaining output, and **total** counts each chunk once. These are byte measurements, not
+startup timing or a promise about another bundler. Newly introduced export paths show `n/a`
+for the base. Build failures fail the report; size increases are informational.
+
+To reproduce locally, install dependencies and run `vp run -F './packages/*' build` in each
+checkout, then run from the PR checkout:
+
+```sh
+vp run bundle:compare -- --base-dir /path/to/base-checkout
+```
+
+`.bundle-report/report.md` contains the table; `report.json` contains exact raw/gzip bytes,
+revisions, Effect versions, and chunk membership. Each fixture also gets emitted `.mjs` files,
+an esbuild `meta.json`, and `modules.txt` with module contributions. The metafile can be opened
+in [esbuild's analyzer](https://esbuild.github.io/analyze/). CI attaches these as `bundle-stats`
+and `bundle-analysis` artifacts and updates one PR comment through a separate trusted workflow.
+The comment workflow becomes active after it is merged into the default branch.
+
 ## CI and hooks
 
 PR CI runs static checks, tests, and builds, then reports the required `ready` result.
