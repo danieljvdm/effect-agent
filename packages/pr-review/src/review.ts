@@ -1,4 +1,16 @@
-import { Cause, Crypto, DateTime, Effect, Encoding, Exit, Ref, Result, Schema } from "effect";
+import {
+  Cause,
+  Context,
+  Crypto,
+  DateTime,
+  Effect,
+  Encoding,
+  Exit,
+  Layer,
+  Ref,
+  Result,
+  Schema,
+} from "effect";
 import {
   Agent,
   AgentPolicy,
@@ -237,6 +249,20 @@ export class ReviewDiagnostics extends Schema.Class<ReviewDiagnostics>(
   droppedCandidateCount: Schema.Natural,
   stages: Schema.Array(ReviewStageDiagnostic).check(Schema.isMaxLength(101)),
 }) {}
+
+/** Receives one final snapshot per review, including defects and interruption after setup. */
+export class ReviewDiagnosticsSink extends Context.Service<
+  ReviewDiagnosticsSink,
+  { readonly record: (diagnostics: ReviewDiagnostics) => Effect.Effect<void> }
+>()("@effect-agent/pr-review/ReviewDiagnosticsSink") {
+  /** Discard finalization snapshots when the caller only needs returned outcome diagnostics. */
+  static readonly layerNoop: Layer.Layer<ReviewDiagnosticsSink> = Layer.succeed(
+    ReviewDiagnosticsSink,
+    {
+      record: () => Effect.void,
+    },
+  );
+}
 
 export class ReviewStageCostSnapshot extends Schema.Class<ReviewStageCostSnapshot>(
   "@effect-agent/pr-review/ReviewStageCostSnapshot",
@@ -621,8 +647,6 @@ export interface ReviewerOptions<Provider, ModelProvides, ModelRequires> {
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
   readonly costControl?: ReviewCostControl | undefined;
   readonly strategy?: ReviewStrategy | undefined;
-  /** Runs once at scoped finalization, including defects and interruption; never receives source. */
-  readonly onDiagnostics?: ((diagnostics: ReviewDiagnostics) => Effect.Effect<void>) | undefined;
 }
 
 const reviewSummary = (request: ReviewRequest, findings: ReadonlyArray<ReviewFinding>): string => {
@@ -784,6 +808,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const deadline = DateTime.add(startedAt, { minutes: 5 });
       const requestDigest = yield* reviewRequestDigest(request);
       const repository = yield* ReviewRepository;
+      const diagnosticsSink = yield* ReviewDiagnosticsSink;
       const activity = yield* Ref.make<ReadonlyArray<ReviewActivity>>([]);
       const droppedActivityCount = yield* Ref.make(0);
       const droppedCandidateCount = yield* Ref.make(0);
@@ -842,11 +867,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         });
       });
 
-      if (options.onDiagnostics !== undefined) {
-        const observe = options.onDiagnostics;
-
-        yield* Effect.addFinalizer(() => diagnostics().pipe(Effect.flatMap(observe)));
-      }
+      yield* Effect.addFinalizer(() => diagnostics().pipe(Effect.flatMap(diagnosticsSink.record)));
       if (options.costControl?.beginStage !== undefined)
         yield* options.costControl.beginStage("discovery");
 

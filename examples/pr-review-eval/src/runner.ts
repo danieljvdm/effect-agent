@@ -1,4 +1,9 @@
-import { ReviewDiagnostics, type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review";
+import {
+  ReviewDiagnostics,
+  ReviewDiagnosticsSink,
+  type ReviewOutcome,
+  type ReviewRequest,
+} from "@effect-agent/pr-review";
 import {
   Cause,
   Clock,
@@ -7,6 +12,7 @@ import {
   DateTime,
   Effect,
   Exit,
+  Layer,
   Ref,
   Result,
   Schema,
@@ -49,7 +55,6 @@ export interface EvalVariant<Requirements> {
 export interface EvalTrialContext {
   readonly runId: string;
   readonly cacheNamespace: EvalInputDigest;
-  readonly onDiagnostics: (diagnostics: ReviewDiagnostics) => Effect.Effect<void>;
 }
 
 const FinalizationDiagnostic = Schema.Struct({
@@ -126,10 +131,14 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
       .review(job.evalCase.request, {
         runId: job.runId,
         cacheNamespace,
-        onDiagnostics: (value) => Ref.set(latestDiagnostics, value),
       })
       .pipe(
-        Effect.provide(repositoryLayer(job.evalCase.repository)),
+        Effect.provide([
+          repositoryLayer(job.evalCase.repository),
+          Layer.succeed(ReviewDiagnosticsSink, {
+            record: (value) => Ref.set(latestDiagnostics, value),
+          }),
+        ]),
         Effect.onExit((exit) =>
           Effect.gen(function* () {
             if (
@@ -160,6 +169,10 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
 
   const finishedAt = yield* clock.monotonicTimeNanos;
 
+  const diagnostics = Result.isFailure(result)
+    ? (result.failure.diagnostics ?? (yield* Ref.get(latestDiagnostics)))
+    : undefined;
+
   return EvalObservation.make({
     version: 1,
     runnerVersion: CURRENT_RUNNER_VERSION,
@@ -184,9 +197,7 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
       : EvalTrialFailed.make({
           errorTag: result.failure.errorTag,
           message: result.failure.message,
-          ...(result.failure.diagnostics === undefined
-            ? {}
-            : { diagnostics: result.failure.diagnostics }),
+          ...(diagnostics === undefined ? {} : { diagnostics }),
           ...(result.failure.estimatedCostMicrousd === undefined
             ? {}
             : { estimatedCostMicrousd: result.failure.estimatedCostMicrousd }),

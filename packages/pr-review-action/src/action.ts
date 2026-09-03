@@ -6,6 +6,7 @@ import {
   ReviewContextError,
   type ReviewCostSnapshot,
   type ReviewDiagnostics,
+  ReviewDiagnosticsSink,
   ReviewFileList,
   ReviewFinding,
   type ReviewOutcome,
@@ -947,7 +948,6 @@ export const reviewActionProgram = Effect.gen(function* () {
 
     const reviewer = makeReviewer({
       strategy: "baseline",
-      onDiagnostics: logReviewDiagnostics,
       model: OpenAiLanguageModel.model(modelName, {
         max_output_tokens: 32_000,
         store: false,
@@ -976,6 +976,7 @@ export const reviewActionProgram = Effect.gen(function* () {
         }),
       )
       .pipe(
+        Effect.provide(Layer.succeed(ReviewDiagnosticsSink, { record: logReviewDiagnostics })),
         Effect.provideService(ReviewRepository, reviewRepository),
         Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
         Effect.onExit(() =>

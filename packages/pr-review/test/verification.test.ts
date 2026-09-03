@@ -11,6 +11,7 @@ import {
   ReviewContextError,
   ReviewCostSnapshot,
   type ReviewDiagnostics,
+  ReviewDiagnosticsSink,
   ReviewFileList,
   ReviewFinding,
   ReviewFollowUp,
@@ -149,7 +150,9 @@ const verificationFeedback = (prompt: Prompt.Prompt) =>
       : [],
   );
 
-layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
+const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop);
+
+layer(testLayer)("mandatory candidate verification", (it) => {
   it.effect.each([
     "contiguous",
     "overlapping",
@@ -262,7 +265,6 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
 
       const outcome = yield* makeReviewer({
         strategy: "verified",
-        onDiagnostics: (entry) => Ref.update(observed, (entries) => [...entries, entry]),
         costControl: {
           beginStage: (stage) => Ref.update(stages, (current) => [...current, stage]),
           snapshot: Effect.sync(() =>
@@ -337,6 +339,9 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
       })
         .review(request)
         .pipe(
+          Effect.provideService(ReviewDiagnosticsSink, {
+            record: (entry) => Ref.update(observed, (entries) => [...entries, entry]),
+          }),
           Effect.provideService(ReviewRepository, {
             ...emptyRepository,
             readFile: (input) =>
@@ -883,7 +888,6 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
 
         const program = makeReviewer({
           strategy: "verified",
-          onDiagnostics: (value) => Ref.set(observed, value),
           model: scriptedModel(
             (prompt, tools) => {
               calls += 1;
@@ -912,7 +916,12 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
           ),
         })
           .review(request)
-          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+          .pipe(
+            Effect.provideService(ReviewDiagnosticsSink, {
+              record: (value) => Ref.set(observed, value),
+            }),
+            Effect.provideService(ReviewRepository, emptyRepository),
+          );
 
         const fiber = yield* Effect.forkChild(program);
 
@@ -984,7 +993,6 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
 
         const fiber = yield* makeReviewer({
           strategy: "verified",
-          onDiagnostics: (value) => Ref.set(observed, value),
           model: scriptedModel((_prompt, tools) => {
             expect(isVerifier(tools)).toBe(false);
             calls += 1;
@@ -1000,7 +1008,13 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
           }),
         })
           .review(request)
-          .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+          .pipe(
+            Effect.provideService(ReviewDiagnosticsSink, {
+              record: (value) => Ref.set(observed, value),
+            }),
+            Effect.provideService(ReviewRepository, emptyRepository),
+            Effect.forkChild,
+          );
 
         yield* Deferred.await(started);
         if (mode === "interrupt") yield* Fiber.interrupt(fiber);

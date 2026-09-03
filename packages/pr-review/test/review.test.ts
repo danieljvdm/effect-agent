@@ -29,6 +29,7 @@ import {
   ReviewChange,
   ReviewContextError,
   ReviewCostSnapshot,
+  ReviewDiagnosticsSink,
   ReviewFileList,
   ReviewFinding,
   ReviewFollowUp,
@@ -188,7 +189,9 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
     )
     .at(0) ?? "";
 
-layer(NodeCrypto.layer)("review output boundary", (it) => {
+const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop);
+
+layer(testLayer)("review output boundary", (it) => {
   it.effect.each(["complete", "incomplete", "excluded", "cost", "omitted"] as const)(
     "returns only explicit resolutions after complete coverage: %s",
     (mode) =>
@@ -231,7 +234,7 @@ layer(NodeCrypto.layer)("review output boundary", (it) => {
         );
 
         expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
-          ReviewRepository | Crypto.Crypto
+          ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
         >();
         expectTypeOf<
           Extract<Effect.Error<typeof review>, ReviewVerificationError>
@@ -380,7 +383,7 @@ layer(NodeCrypto.layer)("review output boundary", (it) => {
       }).review(request);
 
       expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
-        ReviewRepository | Crypto.Crypto
+        ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
       >();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       expectTypeOf<
@@ -867,7 +870,7 @@ new mode 100755`;
       }).review(input);
 
       expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
-        ReviewRepository | Crypto.Crypto
+        ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
       >();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
@@ -1080,12 +1083,22 @@ type TypedReviews = ReturnType<typeof typedReviews>;
 
 const pricingTypeProofs: readonly [
   Assert<Equal<EffectError<TypedReviews["controlled"]>, EffectError<TypedReviews["unpriced"]>>>,
-  Assert<Equal<EffectRequirements<TypedReviews["controlled"]>, ReviewRepository | Crypto.Crypto>>,
+  Assert<
+    Equal<
+      EffectRequirements<TypedReviews["controlled"]>,
+      ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+    >
+  >,
   Assert<Equal<EffectError<TypedReviews["priced"]>, EffectError<TypedReviews["unpriced"]>>>,
   Assert<
     Equal<EffectRequirements<TypedReviews["priced"]>, EffectRequirements<TypedReviews["unpriced"]>>
   >,
-  Assert<Equal<EffectRequirements<TypedReviews["priced"]>, ReviewRepository | Crypto.Crypto>>,
+  Assert<
+    Equal<
+      EffectRequirements<TypedReviews["priced"]>,
+      ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+    >
+  >,
   Assert<Equal<Effect.Success<TypedReviews["priced"]>, ReviewOutcome>>,
   Assert<
     Equal<
@@ -1094,7 +1107,12 @@ const pricingTypeProofs: readonly [
     >
   >,
   Assert<Equal<EffectError<TypedReviews["verified"]>, EffectError<TypedReviews["unpriced"]>>>,
-  Assert<Equal<EffectRequirements<TypedReviews["verified"]>, ReviewRepository | Crypto.Crypto>>,
+  Assert<
+    Equal<
+      EffectRequirements<TypedReviews["verified"]>,
+      ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+    >
+  >,
 ] = [true, true, true, true, true, true, true, true, true];
 
 void pricingTypeProofs;

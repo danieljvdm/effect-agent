@@ -1,6 +1,6 @@
 import {
   type ReviewRepository,
-  type ReviewDiagnostics,
+  type ReviewDiagnosticsSink,
   type ReviewStrategy,
   makeReviewer,
   type ReviewRequest,
@@ -22,7 +22,7 @@ import {
   reviewModelPricing,
 } from "@effect-agent/pr-review-action/review-openai";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Config, Crypto, Effect, Layer, Option, Ref, Schema } from "effect";
+import { Config, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { AiError } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -41,11 +41,7 @@ const ReviewerErrorView = Schema.Struct({
   message: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4_096))),
 });
 
-const reviewerFailure = (
-  error: unknown,
-  estimatedCostMicrousd?: number,
-  diagnostics?: ReviewDiagnostics,
-): EvalReviewerFailure => {
+const reviewerFailure = (error: unknown, estimatedCostMicrousd?: number): EvalReviewerFailure => {
   // Provider messages and Tool parameters may contain source or credentials.
   const diagnostic = AiError.isAiError(error)
     ? {
@@ -63,7 +59,6 @@ const reviewerFailure = (
   return EvalReviewerFailure.make({
     ...diagnostic,
     ...(estimatedCostMicrousd === undefined ? {} : { estimatedCostMicrousd }),
-    ...(diagnostics === undefined ? {} : { diagnostics }),
   });
 };
 
@@ -145,7 +140,6 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
         request: ReviewRequest,
         trial?: EvalTrialContext,
       ) {
-        const diagnostics = yield* Ref.make<ReviewDiagnostics | undefined>(undefined);
         const crypto = yield* Crypto.Crypto;
 
         const cacheKey =
@@ -162,10 +156,6 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
 
         const reviewer = makeReviewer({
           strategy,
-          onDiagnostics: (value) =>
-            Ref.set(diagnostics, value).pipe(
-              Effect.andThen(trial?.onDiagnostics(value) ?? Effect.void),
-            ),
           model: OpenAiLanguageModel.model(configuration.model, {
             max_output_tokens: configuration.maxOutputTokens,
             reasoning: { effort: configuration.reasoningEffort },
@@ -183,18 +173,14 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
           Effect.catch((error) =>
             provider.costControl.snapshot.pipe(
               Effect.flatMap((snapshot) =>
-                Ref.get(diagnostics).pipe(
-                  Effect.flatMap((value) =>
-                    Effect.fail(
-                      reviewerFailure(error, snapshot.usage.estimatedCostMicrousd, value),
-                    ),
-                  ),
-                ),
+                Effect.fail(reviewerFailure(error, snapshot.usage.estimatedCostMicrousd)),
               ),
             ),
           ),
         );
       }),
-    } satisfies EvalVariant<OpenAiClient.OpenAiClient | ReviewRepository | Crypto.Crypto>;
+    } satisfies EvalVariant<
+      OpenAiClient.OpenAiClient | ReviewRepository | ReviewDiagnosticsSink | Crypto.Crypto
+    >;
   },
 );

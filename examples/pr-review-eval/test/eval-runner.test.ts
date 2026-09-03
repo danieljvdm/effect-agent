@@ -6,6 +6,7 @@ import {
   type ReviewRepository,
   ReviewRequest,
   ReviewDiagnostics,
+  ReviewDiagnosticsSink,
 } from "@effect-agent/pr-review";
 import { ScriptedModel } from "@effect-agent/testing";
 import { OpenAiClient } from "@effect/ai-openai";
@@ -13,6 +14,7 @@ import { NodeServices } from "@effect/platform-node";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import {
   type Crypto,
+  Cause,
   Deferred,
   Console,
   Effect,
@@ -129,6 +131,20 @@ const successfulOutcome = ReviewOutcome.make({
   },
 });
 
+const failedVerificationDiagnostics = (inputDigest: EvalInputDigest) =>
+  ReviewDiagnostics.make({
+    strategy: "verified",
+    requestDigest: inputDigest,
+    discovery: "complete",
+    verification: "failed",
+    patchesSupplied: 1,
+    candidates: [],
+    activity: [],
+    droppedActivityCount: 0,
+    droppedCandidateCount: 0,
+    stages: [],
+  });
+
 describe("PR-review model eval", () => {
   it.effect("retains bounded final diagnostics while a defect propagates", () =>
     Effect.gen(function* () {
@@ -140,28 +156,19 @@ describe("PR-review model eval", () => {
       const logged: Array<unknown> = [];
       let invocations = 0;
 
-      const diagnostics = ReviewDiagnostics.make({
-        strategy: "verified",
-        requestDigest: evalCase.inputDigest,
-        discovery: "complete",
-        verification: "failed",
-        patchesSupplied: 1,
-        candidates: [],
-        activity: [],
-        droppedActivityCount: 0,
-        droppedCandidateCount: 0,
-        stages: [],
-      });
+      const diagnostics = failedVerificationDiagnostics(evalCase.inputDigest);
 
-      const variant: EvalVariant<never> = {
+      const variant: EvalVariant<ReviewDiagnosticsSink> = {
         configuration: configuration("defect"),
-        review: (_request, trial) =>
+        review: () =>
           Effect.gen(function* () {
+            const sink = yield* ReviewDiagnosticsSink;
+
             invocations += 1;
-            yield* trial?.onDiagnostics(diagnostics) ?? Effect.void;
+            yield* Effect.addFinalizer(() => sink.record(diagnostics));
 
             return yield* Effect.die("private defect payload");
-          }),
+          }).pipe(Effect.scoped),
       };
 
       const exit = yield* runEvalSuite(suite, [variant], {
@@ -180,6 +187,7 @@ describe("PR-review model eval", () => {
       );
 
       expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") expect(Cause.hasDies(exit.cause)).toBe(true);
       expect(invocations).toBe(1);
       expect(logged).toHaveLength(1);
       expect(String(logged[0])).toContain('"type":"eval-trial-finalization"');
@@ -385,7 +393,7 @@ describe("PR-review model eval", () => {
       const model = Model.make("scripted", "eval", Layer.succeedContext(scripted));
       const reviewer = makeReviewer({ model });
 
-      const variant: EvalVariant<ReviewRepository | Crypto.Crypto> = {
+      const variant: EvalVariant<ReviewRepository | ReviewDiagnosticsSink | Crypto.Crypto> = {
         configuration: configuration("scripted"),
         review: (input) =>
           reviewer.review(input).pipe(
@@ -477,7 +485,7 @@ describe("PR-review model eval", () => {
           estimateCostMicrousd: () => Effect.succeed({ costMicrousd: 12 }),
         });
 
-        const variant: EvalVariant<ReviewRepository | Crypto.Crypto> = {
+        const variant: EvalVariant<ReviewRepository | ReviewDiagnosticsSink | Crypto.Crypto> = {
           configuration: configuration("partial"),
           review: (input) =>
             reviewer.review(input).pipe(
@@ -529,7 +537,17 @@ describe("PR-review model eval", () => {
       type Review = ReturnType<typeof variant.review>;
       expectTypeOf<Effect.Error<Review>>().toEqualTypeOf<EvalReviewerFailure>();
       expectTypeOf<Effect.Services<Review>>().toEqualTypeOf<
-        OpenAiClient.OpenAiClient | ReviewRepository | Crypto.Crypto
+        OpenAiClient.OpenAiClient | ReviewRepository | ReviewDiagnosticsSink | Crypto.Crypto
+      >();
+
+      const stream = runEvalSuite(yield* makeSuite(), [variant], {
+        trials: 1,
+        concurrency: 1,
+        caseIds: [],
+      });
+
+      expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<
+        OpenAiClient.OpenAiClient | Crypto.Crypto
       >();
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
       expect(variant.configuration.reviewerProfile).toBe("diff-review-v5-capped");
@@ -797,6 +815,14 @@ describe("PR-review model eval", () => {
     () =>
       Effect.gen(function* () {
         const suite = yield* makeSuite();
+        const evalCase = suite.cases[0];
+
+        if (evalCase === undefined) return yield* Effect.die("Missing fixture");
+        const console = yield* Console.Console;
+        const logged: Array<unknown> = [];
+
+        const diagnostics = failedVerificationDiagnostics(evalCase.inputDigest);
+
         const acquired = yield* Deferred.make<void>();
         const released = yield* Deferred.make<void>();
         const calls = yield* Ref.make(0);
@@ -805,18 +831,21 @@ describe("PR-review model eval", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pr-review-interrupted-" });
         const output = `${directory}/observations.jsonl`;
 
-        const variant: EvalVariant<Scope.Scope> = {
+        const variant: EvalVariant<ReviewDiagnosticsSink> = {
           configuration: configuration("interruptible"),
           review: () =>
             Effect.gen(function* () {
               if ((yield* Ref.updateAndGet(calls, (count) => count + 1)) === 1) {
                 return successfulOutcome;
               }
+              const sink = yield* ReviewDiagnosticsSink;
 
               return yield* Effect.acquireRelease(Deferred.succeed(acquired, undefined), () =>
-                Deferred.succeed(released, undefined),
+                sink
+                  .record(diagnostics)
+                  .pipe(Effect.andThen(Deferred.succeed(released, undefined))),
               ).pipe(Effect.andThen(Effect.never));
-            }),
+            }).pipe(Effect.scoped),
         };
 
         const fiber = yield* writeObservations(
@@ -828,6 +857,12 @@ describe("PR-review model eval", () => {
             open: (path, options) =>
               fs.open(path, options).pipe(Effect.tap((file) => Ref.set(opened, Option.some(file)))),
           }),
+          Effect.provideService(Console.Console, {
+            ...console,
+            error: (...values: ReadonlyArray<unknown>) => {
+              logged.push(...values);
+            },
+          }),
           Effect.forkChild,
         );
 
@@ -838,10 +873,16 @@ describe("PR-review model eval", () => {
         expect(decoded.map((observation) => observation.trial)).toEqual([1]);
         expect(decoded[0]?.result._tag).toBe("Succeeded");
         yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
 
+        expect(exit._tag).toBe("Failure");
+        if (exit._tag === "Failure") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
         expect(yield* Deferred.isDone(released)).toBe(true);
         expect(yield* fs.readFileString(output)).toBe(persisted);
         expect(yield* Ref.get(calls)).toBe(2);
+        expect(logged).toHaveLength(1);
+        expect(String(logged[0])).toContain('"stop":"interrupted"');
+        expect(String(logged[0])).toContain('"verification":"failed"');
         const handle = yield* Ref.get(opened);
 
         expect(Option.isSome(handle)).toBe(true);
@@ -960,12 +1001,16 @@ describe("PR-review model eval", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("bounds concurrent trials and records typed reviewer failures", () =>
+  it.effect("bounds concurrent trials and isolates typed-failure diagnostics", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
       const active = yield* Ref.make(0);
       const maximum = yield* Ref.make(0);
       const gate = yield* Deferred.make<void>();
+      const failures = yield* Ref.make(0);
+      const firstRecorded = yield* Deferred.make<void>();
+      const secondRecorded = yield* Deferred.make<void>();
+      const inputDigest = yield* digestReviewRequest(request);
 
       const successful: EvalVariant<never> = {
         configuration: configuration("successful"),
@@ -982,13 +1027,39 @@ describe("PR-review model eval", () => {
           }),
       };
 
-      const failing: EvalVariant<never> = {
+      const failing: EvalVariant<ReviewDiagnosticsSink> = {
         configuration: configuration("failing"),
         review: () =>
-          EvalReviewerFailure.make({
-            errorTag: "RateLimitError",
-            message: "Provider declined the trial",
-            estimatedCostMicrousd: 13,
+          Effect.gen(function* () {
+            const sink = yield* ReviewDiagnosticsSink;
+            const call = yield* Ref.updateAndGet(failures, (count) => count + 1);
+
+            const diagnostics = ReviewDiagnostics.make({
+              ...failedVerificationDiagnostics(inputDigest),
+              droppedActivityCount: call,
+            });
+
+            if (call === 2) yield* Deferred.await(firstRecorded);
+            if (call !== 3) yield* sink.record(diagnostics);
+            if (call === 1) {
+              yield* Deferred.succeed(firstRecorded, undefined);
+              yield* Deferred.await(secondRecorded);
+            }
+            if (call === 2) yield* Deferred.succeed(secondRecorded, undefined);
+
+            return yield* EvalReviewerFailure.make({
+              errorTag: "RateLimitError",
+              message: "Provider declined the trial",
+              estimatedCostMicrousd: 13,
+              ...(call === 2
+                ? {
+                    diagnostics: ReviewDiagnostics.make({
+                      ...diagnostics,
+                      droppedActivityCount: 20,
+                    }),
+                  }
+                : {}),
+            });
           }),
       };
 
@@ -1013,6 +1084,16 @@ describe("PR-review model eval", () => {
               observation.result.estimatedCostMicrousd === 13,
           ),
       ).toBe(true);
+      expect(
+        observations
+          .filter((observation) => observation.result._tag === "Failed")
+          .sort((left, right) => left.trial - right.trial)
+          .map((observation) =>
+            observation.result._tag === "Failed"
+              ? observation.result.diagnostics?.droppedActivityCount
+              : undefined,
+          ),
+      ).toEqual([1, 20, undefined, 4]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

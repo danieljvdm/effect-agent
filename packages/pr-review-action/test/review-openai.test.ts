@@ -1,6 +1,7 @@
 import {
   makeReviewer,
   ReviewChange,
+  ReviewDiagnosticsSink,
   ReviewFileList,
   ReviewRepository,
   ReviewRequest,
@@ -18,6 +19,7 @@ import {
   Encoding,
   Exit,
   Fiber,
+  Layer,
   Logger,
   Option,
   Redacted,
@@ -213,7 +215,9 @@ const payload: OpenAiSchema.CreateResponse = {
   store: false,
 };
 
-layer(NodeCrypto.layer)("review provider boundary", (it) => {
+const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop);
+
+layer(testLayer)("review provider boundary", (it) => {
   it.effect.each(["refused", "truncated"] as const)(
     "keeps the verifier allowance after discovery is %s without resetting the ledger",
     (stop) =>

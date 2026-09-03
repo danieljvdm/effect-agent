@@ -12,8 +12,11 @@ const program = reviewer
   .pipe(
     Effect.provideService(ReviewRepository, repository),
     Effect.provideService(Crypto.Crypto, crypto),
+    Effect.provide(ReviewDiagnosticsSink.layerNoop),
   );
 ```
+
+`ReviewDiagnosticsSink` receives final diagnostics, including on cancellation; this example discards them.
 
 The host owns credentials, source read limits, spending admission through `costControl`, and
 publication. Incomplete or exhausted results, excluded paths, and pending patches mean unfinished
