@@ -1,5 +1,21 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.46
+
+### Minor Changes
+
+- [#313](https://github.com/danieljvdm/effect-agent/pull/313) [`c1a6e6a`](https://github.com/danieljvdm/effect-agent/commit/c1a6e6a915be73a49b2c266e2df74256f44c25e2) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Import module namespaces from package roots, or import declarations from their explicit PascalCase module paths, following the package map's migration examples. Discard unused modules from audited packages when bundling consumers.
+  BEHAVIOR CHANGE: Replace flat declaration imports, lowercase aggregate paths, cross-package aliases, and internal helper imports with their documented owning modules; use `MemoryThreadStoreLive` instead of `MemoryStorageLive`.
+
+### Patch Changes
+
+- Updated dependencies [[`c1a6e6a`](https://github.com/danieljvdm/effect-agent/commit/c1a6e6a915be73a49b2c266e2df74256f44c25e2), [`cebe728`](https://github.com/danieljvdm/effect-agent/commit/cebe728685cf9f45c1d9579273222a865bb8109d)]:
+  - @effect-agent/core@0.1.0-beta.46
+  - @effect-agent/engine@0.1.0-beta.46
+  - @effect-agent/storage-cloudflare@0.1.0-beta.46
+  - @effect-agent/sandbox@0.1.0-beta.46
+  - @effect-agent/thread@0.1.0-beta.46
+
 ## 0.1.0-beta.45
 
 ### Minor Changes
