@@ -248,6 +248,11 @@ the Thread journal and submission ledger.
 
 ### `@effect-agent/platform-node`
 
+`NodeDurableHost.layer(registrations, options)` acquires storage, recovers pending work, and
+starts a bounded worker pool. `NodeDurableHost.run` observes that pool and propagates worker
+failure to the application. Provide the host Layer once around the supervised application;
+its Scope closes admission and joins workers before releasing runtime resources.
+
 Assembles SQLite storage, recovery, and workers through `NodeDurableHost`.
 Registers agent bindings before execution, recovers before admission, and releases ownership
 before closing storage. See the [Node.js guide](../platforms/node).

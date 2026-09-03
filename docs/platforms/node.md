@@ -14,64 +14,48 @@ A bounded worker pool executes registered agents and recovers work after a resta
 bun add @effect-agent/platform-node@beta
 ```
 
-For the examples below, also install `effect@4.0.0-rc.112`, `@effect-agent/thread@beta`, and
-`@effect/platform-node@4.0.0-rc.112`.
+For the examples below, also install `effect@4.0.0-rc.112`, `@effect-agent/core@beta`,
+`@effect-agent/thread@beta`, `@effect/ai-openai@4.0.0-rc.112`, and `@effect/platform-node@4.0.0-rc.112`.
 Keep framework packages at one release and use compatible [Effect and provider packages](../guide/getting-started#installation-and-compatibility).
 
-## Configure the host
+## Create an agent
+
+Save this as `node-agent.ts`. The model's client reads `OPENAI_API_KEY` from the environment.
+The version declarations identify the agent, model, and tools used by accepted work.
+
+<<< @/snippets/travel-planner/node-agent.ts{ts twoslash}
+
+## Start the host
 
 Use a persistent database path with one live host per SQLite file. Give each replacement host
 incarnation a distinct `producerId`.
 `workerConcurrency` limits worker loops and defaults to one.
-`NodeDurableHost.layerRegistered` checks storage and runs recovery before accepting work.
+`NodeDurableHost.layer` checks storage, recovers pending work, and starts the worker pool when
+the Layer is acquired. Save this as `node-host.ts`, replacing `producerId` for each process start:
 
-Pass typed agent registrations to `NodeDurableHost.layerRegistered`. Its runtime computes definition
-digests and captures worker services in the Layer's Scope. Node supplies Crypto; provide
-model clients, tool handlers, instruction services, and schema services to the returned Layer.
-Keep the concrete registration tuple inferred so its requirements remain visible.
-Use `NodeDurableHost.layerStack` when you already have `ResolvedBinding` values from
-`compileRegistrations` and own their application Scope yourself.
+<<< @/snippets/travel-planner/node-host.ts{ts twoslash}
 
-Registrations include JSON descriptions and versions for the agent, model, and toolkit.
-Version tool implementations and other behavior JSON cannot represent.
-Submission digests must match the registered definitions. Keep matching bindings available
-until their work settles; an empty registration cannot execute work.
+TypeScript infers the registration's model, tool, instruction, and schema service requirements.
+Provide those services to the Layer, as `OpenAiLive` does here. Node supplies Crypto.
 
-Use `digestDefinitions` to compute submission digests.
-`DurableWorkerBinding.make(agent, digests)` accepts precomputed digests.
+Save this as `node-main.ts` and run it with Node's TypeScript transform support:
 
-## Run the workers
+<<< @/snippets/travel-planner/node-main.ts{ts twoslash}
 
-```ts twoslash
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
-import { type AgentRegistration } from "@effect-agent/thread/AgentRegistration";
-import { Effect } from "effect";
-
-export const workers = <const Entries extends ReadonlyArray<AgentRegistration>>(
-  registrations: Entries,
-) =>
-  Effect.gen(function* () {
-    const host = yield* NodeDurableHost;
-    yield* host.runResolvedWorkers;
-  }).pipe(
-    Effect.provide(
-      NodeDurableHost.layerRegistered(registrations, {
-        filename: "./agents.sqlite",
-        deploymentId: "travel-planner",
-        producerId: "worker-1",
-        workerConcurrency: 4,
-      }),
-    ),
-    Effect.scoped,
-  );
+```sh
+node --experimental-transform-types node-main.ts
 ```
 
-Provide the remaining application services to `workers(registrations)`, then call
-`NodeRuntime.runMain` at the process entry point. Creating the host alone does not start workers.
-If the process also serves requests, share one host Layer between both effects.
-Use `NodeDurableAgentRuntime.layerRegistered` for custom lifecycle composition with executable
-registrations. Its `layerWithBindings` constructor accepts previously compiled bindings; `layer`
-constructs an unregistered runtime for admission, recovery, and the generic single-agent APIs.
+`NodeDurableHost.run` observes the existing pool; calling it again does not start more workers.
+If a worker fails, admission closes and `run` fails with the original typed error or defect.
+`NodeRuntime.runMain` then closes the host. Use `run` rather than `Layer.launch(HostLive)`,
+which does not observe background worker failures. Interrupting only an observer leaves the
+pool running; closing the host's Scope closes admission, stops and joins workers, releases
+ownership, and closes storage and application services.
+
+If the process also serves requests, race the server Effect with `NodeDurableHost.run` using
+`Effect.raceFirst`, and provide the shared `HostLive` to that combined Effect. A worker failure
+then stops the server too. Creating two separate host Layers for the same SQLite file is unsupported.
 
 ## Use an Effect Workflow engine {#workflow}
 
@@ -82,35 +66,28 @@ its Schema-decoded output. A pending Agent suspends the handler through Effect's
 fiber alive in the parent.
 
 ```ts twoslash
-import { Agent } from "@effect-agent/core";
 import { AgentWorkflow } from "@effect-agent/workflow";
 import { Schema } from "effect";
-import { Toolkit } from "effect/unstable/ai";
 import { Workflow } from "effect/unstable/workflow";
 
-const triage = Agent.make("triage", {
-  input: Schema.String,
-  output: Schema.Struct({ severity: Schema.Literals(["low", "high", "critical"]) }),
-  instructions: "Classify the severity of the bug report.",
-  toolkit: Toolkit.empty,
-});
+import { planner } from "./node-agent.ts";
 
-const Review = Workflow.make("Review", {
-  payload: { issueId: Schema.String, report: Schema.String },
-  success: triage.output,
+const PlanTrip = Workflow.make("PlanTrip", {
+  payload: { tripId: Schema.String, request: Schema.String },
+  success: planner.output,
   error: AgentWorkflow.Error,
-  idempotencyKey: ({ issueId }) => issueId,
+  idempotencyKey: ({ tripId }) => tripId,
 });
 
-export const ReviewLive = Review.toLayer(({ report }) =>
-  AgentWorkflow.execute(triage, report, { name: "triage" }),
+export const PlanTripLive = PlanTrip.toLayer(({ request }) =>
+  AgentWorkflow.execute(planner, request, { name: "plan-itinerary" }),
 );
 
-export const review = Review.execute({ issueId: "123", report: "Login is broken" });
+export const trip = PlanTrip.execute({ tripId: "kyoto", request: "Three days in Kyoto." });
 ```
 
-Register `triage` and its model in the durable runtime below. Supply the resulting host Layer
-to `ReviewLive` with `Layer.provideMerge`, then provide that Layer to `review`. Share one
+Register `planner` and its model in the durable runtime below. Supply the resulting host Layer
+to `PlanTripLive` with `Layer.provideMerge`, then provide that Layer to `trip`. Share one
 WorkflowEngine Layer between the parent and host; a mismatched engine fails before admission.
 Multi-step handlers use ordinary `Effect.gen` and bounded `Effect.all`.
 
@@ -154,12 +131,13 @@ import {
   NodeWorkflowRepairTrigger,
   SqlWorkflowDispatchStore,
 } from "@effect-agent/platform-node/NodeWorkflow";
-import { type AgentRegistration } from "@effect-agent/thread/AgentRegistration";
 import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster";
+
+import { definitions, ModelLive, OpenAiLive, planner } from "./node-agent.ts";
 
 const workflowDatabase = SqliteClient.layer({ filename: "./workflow.sqlite" });
 const engine = ClusterWorkflowEngine.layer.pipe(
@@ -169,27 +147,25 @@ const infrastructure = Layer.mergeAll(engine, SqlWorkflowDispatchStore.layer).pi
   Layer.provide(workflowDatabase),
 );
 
-export const workflowHost = <const Entries extends ReadonlyArray<AgentRegistration>>(
-  registrations: Entries,
-) =>
-  WorkflowAgentHost.layer({
-    deploymentId: "travel-planner",
-    principal: "travel-planner-service",
-    executionConcurrency: 4,
-    repairBatchSize: 32,
-    dispatchTimeoutMillis: 10_000,
-  }).pipe(
-    Layer.provide(
-      NodeDurableAgentRuntime.layerRegistered(registrations, {
-        filename: "./agents.sqlite",
-        deploymentId: "travel-planner",
-        producerId: "workflow-worker-1",
-      }),
-    ),
-    Layer.provideMerge(infrastructure),
-    Layer.provide(NodeWorkflowRepairTrigger.layer({ interval: "1 second" })),
-    Layer.provide(NodeCrypto.layer),
-  );
+export const WorkflowLive = WorkflowAgentHost.layer({
+  deploymentId: "travel-planner",
+  principal: "travel-planner-service",
+  executionConcurrency: 4,
+  repairBatchSize: 32,
+  dispatchTimeoutMillis: 10_000,
+}).pipe(
+  Layer.provide(
+    NodeDurableAgentRuntime.layerRegistered([{ agent: planner, model: ModelLive, definitions }], {
+      filename: "./agents.sqlite",
+      deploymentId: "travel-planner",
+      producerId: "workflow-worker-1",
+    }),
+  ),
+  Layer.provideMerge(infrastructure),
+  Layer.provide(NodeWorkflowRepairTrigger.layer({ interval: "1 second" })),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provide(OpenAiLive),
+);
 ```
 
 Provide the remaining model, tool, instruction, and schema services to this Layer, then share it
@@ -260,10 +236,27 @@ Each Attempt owns its resources and releases ownership and permits before native
 Closing the host Scope stops its repair trigger and closes acquired resources. The SQL assembly
 is certified for a single Node process. It makes no multi-runner or Cloudflare Workflow claim.
 
+## Custom runtime composition
+
+Use `NodeDurableAgentRuntime.layerRegistered` when you own execution, as in the Workflow
+assembly above. It captures registrations and acquires storage without starting workers.
+`layerWithBindings` accepts precompiled `ResolvedBinding` values whose application Scope you own;
+`layer` constructs an unregistered runtime for explicit admission and execution.
+
+The service class's existing `NodeDurableHost.layerRegistered`, `layerStack`, and `layer`
+constructors remain available for manually managed hosts. Import the class from
+`@effect-agent/platform-node/NodeDurableHost` when using these APIs; their workers start only
+when you run `host.runResolvedWorkers`. The module-level `NodeDurableHost.layer` shown above
+owns worker startup and is the default for an application.
+
+Registrations carry application version declarations. Update them when behavior changes,
+including tool implementations that JSON cannot represent, and keep matching bindings available
+until their work settles. `digestDefinitions` computes the digests for explicit submissions;
+`DurableWorkerBinding.make(agent, digests)` accepts precomputed digests.
+
 ## Configure runtime services
 
-Pass service layers through `NodeDurableHost.layerRegistered`, `NodeDurableHost.layerStack`,
-or `NodeDurableAgentRuntime.layer`:
+Pass service layers in the options to `NodeDurableHost.layer` or `NodeDurableAgentRuntime.layer`:
 
 | Option              | Service                 | Default                                                     |
 | ------------------- | ----------------------- | ----------------------------------------------------------- |

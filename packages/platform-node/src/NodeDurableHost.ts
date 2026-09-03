@@ -38,7 +38,7 @@ import {
   type ThreadNotMaterialized,
   type ThreadStoreError,
 } from "@effect-agent/thread/ThreadStore";
-import { type Stream, Context, type Crypto, Effect, Layer, Ref, Schema } from "effect";
+import { type Stream, Context, type Crypto, Effect, Fiber, Layer, Ref, Schema } from "effect";
 
 import {
   NodeDurableAgentRuntime,
@@ -56,7 +56,7 @@ export class AdmissionClosed extends Schema.TaggedError<AdmissionClosed>()("Admi
   message: Schema.String,
 }) {}
 
-const makeHost = Effect.gen(function* () {
+const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: boolean) {
   const runtime = yield* DurableAgentRuntime;
   const config = yield* NodeDurableAgentRuntimeConfig;
 
@@ -69,10 +69,6 @@ const makeHost = Effect.gen(function* () {
   const startupRecovery = yield* runtime.runRecovery;
 
   const admission = yield* Ref.make(true);
-
-  // Shutdown step 1 (DEPLOY-005): admission closes before the ownership drain in the runtime
-  // Layer below releases claims and before the stores close in reverse acquisition order.
-  yield* Effect.addFinalizer(() => Ref.set(admission, false));
 
   const requireAdmission: Effect.Effect<void, AdmissionClosed> = Ref.get(admission).pipe(
     Effect.flatMap((open) =>
@@ -107,6 +103,19 @@ const makeHost = Effect.gen(function* () {
   // runs `workerConcurrency: 1` over exactly this loop.
   const runResolvedWorkers = runWorkers(runtime.runResolvedWorker);
 
+  const run = startWorkers
+    ? Fiber.join(
+        yield* runResolvedWorkers.pipe(
+          Effect.onExit(() => Ref.set(admission, false)),
+          Effect.forkScoped,
+        ),
+      )
+    : runResolvedWorkers;
+
+  // Register after the worker fiber: close admission, interrupt/join workers, drain
+  // runtime ownership, then close storage and captured application services.
+  yield* Effect.addFinalizer(() => Ref.set(admission, false));
+
   return NodeDurableHost.of({
     startupRecovery,
     admissionOpen: Ref.get(admission),
@@ -121,12 +130,14 @@ const makeHost = Effect.gen(function* () {
     wake: runtime.wake,
     scanObligations: runtime.scanObligations,
     runWorkers,
-    runResolvedWorkers,
+    run,
+    runResolvedWorkers: run,
   });
 });
 
 /**
- * Operational host lifecycle for the DN runtime (deployment §2/§5/§6).
+ * Operational host service. Prefer the module's `layer` and `run` for managed workers.
+ * The static constructors on this class retain explicit, manual worker ownership.
  *
  * Startup gates run during Layer construction, so the service existing implies readiness:
  * configuration was schema-decoded, the SQLite file passed the exact-version compatibility check,
@@ -150,6 +161,8 @@ export class NodeDurableHost extends Context.Service<
     readonly startupRecovery: ReadonlyArray<RecoveryReport>;
     /** Admission-role readiness (deployment §7): true until shutdown begins. */
     readonly admissionOpen: Effect.Effect<boolean>;
+    /** Observe the managed worker pool, preserving its failure. Manual hosts start their pool here. */
+    readonly run: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
     /** `DurableAgentRuntime.submit` behind the host admission gate. */
     readonly submit: <InputSchema extends Schema.Top>(
       agent: DurableSubmitAgent<InputSchema>,
@@ -197,6 +210,7 @@ export class NodeDurableHost extends Context.Service<
      * Run `workerConcurrency` copies of `DurableAgentRuntime.runResolvedWorker` over the host's
      * registered Bindings (S2): every claimed head resolves its exact stored Binding before any
      * code runs (SUB-023), so one bounded pool serves parent and attached-child lanes.
+     * Hosts built with the module-level `layer` instead join their existing pool.
      */
     readonly runResolvedWorkers: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
   }
@@ -235,7 +249,7 @@ export class NodeDurableHost extends Context.Service<
     NodeDurableHost,
     DurableWorkerFailure,
     DurableAgentRuntime | NodeDurableAgentRuntimeConfig
-  > = Layer.effect(NodeDurableHost)(makeHost);
+  > = Layer.effect(NodeDurableHost)(makeHost(false));
 
   /** The complete DN host: `NodeDurableAgentRuntime.layer(options)` plus the host lifecycle gates. */
   static layerStack<
@@ -265,3 +279,39 @@ export class NodeDurableHost extends Context.Service<
     );
   }
 }
+
+/**
+ * Acquire a complete Node host and start one bounded, scoped worker pool after recovery.
+ * Provide model, tool, instruction, and schema dependencies to this Layer. Reusing the Layer
+ * shares the same pool. A worker failure closes admission; observe it with `run` at the process
+ * boundary so the application exits and releases the host instead of remaining idle.
+ */
+export const layer = <
+  const Entries extends ReadonlyArray<AgentRegistration>,
+  ContextError = never,
+  ContextRequirements = never,
+  AuthorizationError = never,
+  AuthorizationRequirements = never,
+>(
+  registrations: Entries,
+  options: NodeDurableAgentRuntimeOptions<
+    ContextError,
+    ContextRequirements,
+    AuthorizationError,
+    AuthorizationRequirements
+  >,
+) =>
+  Layer.effect(NodeDurableHost)(makeHost(true)).pipe(
+    Layer.provideMerge(NodeDurableAgentRuntime.layerRegistered(registrations, options)),
+  );
+
+/**
+ * Supervise the host's existing workers without starting another pool. Use with
+ * `Effect.provide(HostLive)` and `NodeRuntime.runMain`; race it with a server Effect when
+ * the same process also serves requests. Unlike `Layer.launch`, this observes worker failures.
+ */
+export const run = Effect.gen(function* () {
+  const host = yield* NodeDurableHost;
+
+  return yield* host.run;
+});
