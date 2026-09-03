@@ -123,9 +123,15 @@ complete diffs, and repository guidance. It receives no discovery transcript. On
 source tools and `submit_verification` are available. A supported or refuted decision requires a
 reason and up to eight references to supplied diff lines or source actually delivered to this
 verifier at the exact revisions. Source whose encoded result would exceed the engine's byte bound
-is rejected before becoming verifier evidence; the verifier can request fewer lines. Missing,
-duplicate, unknown, or unsupported decisions prevent completion. This validates evidence access,
-not the truth of a model's conclusion.
+is rejected before becoming verifier evidence; the verifier can request fewer lines. A source
+reference may span contiguous or overlapping delivered reads at the same path and exact revision.
+Every cited line must be covered; gaps, unavailable reads, and truncated ranges do not count.
+The completion Tool validates the candidate set and evidence before accepting a submission.
+Missing, duplicate, unknown, or unsupported decisions return bounded `ReviewVerificationError`
+feedback. The verifier can correct the submission, read missing lines, or declare candidates
+unresolved in the same context with its remaining limits. A successful submission still contains
+exactly one decision for every candidate. This validates evidence access, not the truth of a
+model's conclusion.
 
 Supported candidates publish their original finding unchanged. Refuted candidates remain in
 diagnostics and are omitted from the report. Unresolved candidates remain in the report with
@@ -143,6 +149,9 @@ reserve discovery and verification allowances, but must retain outstanding uncer
 No stage switch resets the ledger. A smaller verifier context may fit after a discovery context
 refusal. If no request fits, candidates remain unresolved. Successful verification never clears
 discovery incompleteness, exhaustion, pending patches, or excluded paths.
+Citation corrections consume the same verifier's turns, Tool Calls, deadline, and cost allowance;
+they never start another verifier or ledger. If correction fails or runs out of time, retained
+candidate diagnostics include available evidence and leave invalid decisions unresolved.
 
 The optional `onDiagnostics` Effect runs once at scoped finalization, including expected failure,
 defect, and interruption. It lets hosts retain available candidate diagnostics without turning

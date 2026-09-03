@@ -145,7 +145,7 @@
       "version": 1,
       "id": "incremental-publication-exposure",
       "kind": "known-defects",
-      "provenance": "A real incremental follow-up exposes the unanchored publication overflow: exact sanitization retains more independent body-distinct findings, which then reach the unchanged HTML renderer. Originally labeled a clean control; live first-pass discovery and source verification established the blocking publication failure. The frozen PRR-008 scope paragraph follows the user's Aug 26 required behavior and is not byte-exact historical source. Complete historical #192 review, GitHub publication, and presentation tests are frozen with this selective regression injection; only the recorded production-source patches are reversed. Fixed-ref test context is identical on both sides from 047ac9a74faa63dbbb05dafbd39a45a801d09d9c; the only base/head production differences are the recorded selective reversions. Independent boundary reproduction during KOM-28 executes the frozen renderer with twelve Schema-valid unanchored findings, 200-character '<' titles and distinct 2000-character '<' bodies. It emits 106725 characters against the frozen 100000-character PublishReviewWire body limit; the base sanitizer retains one finding and head retains twelve. The unchanged selection.ts import is also frozen from 047ac9a for reproducible rendering.",
+      "provenance": "A real incremental follow-up exposes the unanchored publication overflow: exact sanitization retains more independent body-distinct findings, which then reach the unchanged HTML renderer. Originally labeled a clean control; live first-pass discovery and source verification established the blocking publication failure. The frozen PRR-008 scope paragraph follows the user's Aug 26 required behavior and is not byte-exact historical source. Complete historical #192 review, GitHub publication, and presentation tests are frozen with this selective regression injection; only the recorded production-source patches are reversed. Fixed-ref test context is identical on both sides from 047ac9a74faa63dbbb05dafbd39a45a801d09d9c; the only base/head production differences are the recorded selective reversions. Independent boundary reproduction during KOM-28 executes the frozen renderer with twelve Schema-valid unanchored findings, 200-character '<' titles and distinct 2000-character '<' bodies. It emits 106725 characters against the frozen 100000-character PublishReviewWire body limit; the base sanitizer retains one finding and head retains twelve. The unchanged selection.ts import is also frozen from 047ac9a for reproducible rendering. Oracle v2 adds the independently agent-adjudicated missing consolidated-handoff fallback, confirmed by executing the exact frozen base/head renderers with a publishable same-input witness.",
       "sourceUrl": "https://github.com/danieljvdm/effect-agent/commit/047ac9a74faa63dbbb05dafbd39a45a801d09d9c",
       "inputDigest": "da5b99c9c8c24768f4afa603383f279c1fe3f6f540099978b815cce18ccbe2dc",
       "request": {
@@ -279,10 +279,22 @@
               "description": "Every unanchored finding is included in the top-level review body as one details block."
             }
           ]
+        },
+        {
+          "id": "consolidated-handoff-omitted",
+          "severity": "important",
+          "invariant": "A publishable anchored finding retains an agent handoff when the consolidated prompt exceeds its presentation bound.",
+          "evidence": [
+            {
+              "path": "packages/pr-review-action/src/presentation.ts",
+              "line": 96,
+              "description": "Removing the inline handoff leaves no fallback when renderReviewBody omits its consolidated block above 60000 characters. Same-input frozen-renderer proof produces 36792-character bodies on both sides, a 556-character base inline handoff and a 70-character head inline comment without it; all wire bounds still pass."
+            }
+          ]
         }
       ],
-      "oracleVersion": 1,
-      "oracleDigest": "c2920bf47235b57156c42a1c2c16d265b37bbb47ab2d5549c7e4b54230c2ac93",
+      "oracleVersion": 2,
+      "oracleDigest": "30fcd487644153a31ddb878d469c174ecde3ce93bfbcca312801a8ea4bfc37fc",
       "split": "heldout",
       "relatedGroup": "publication-192"
     },

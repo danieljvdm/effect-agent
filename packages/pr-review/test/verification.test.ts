@@ -131,7 +131,231 @@ const scriptedModel = (
 const isVerifier = (tools: ReadonlyArray<Tool.Any>) =>
   tools.some(({ name }) => name === "submit_verification");
 
+const verificationFeedback = (prompt: Prompt.Prompt) =>
+  prompt.content.flatMap((message) =>
+    message.role === "tool"
+      ? message.content.flatMap((part) =>
+          part.type === "tool-result" && part.name === "submit_verification" && part.isFailure
+            ? [
+                Schema.decodeUnknownSync(
+                  Schema.Struct({
+                    _tag: Schema.Literal("ReviewVerificationError"),
+                    message: Schema.String,
+                  }),
+                )(part.result).message,
+              ]
+            : [],
+        )
+      : [],
+  );
+
 layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
+  it.effect.each([
+    "contiguous",
+    "overlapping",
+    "contained",
+    "gap",
+    "wrong-revision",
+    "unavailable",
+    "truncated",
+    "eof",
+  ] as const)("validates cited source coverage across delivered reads: %s", (mode) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const accepted = mode === "contiguous" || mode === "overlapping" || mode === "contained";
+
+      const source = Array.from({ length: mode === "eof" ? 5 : 8 }, (_, index) =>
+        mode === "truncated" && index >= 3 ? "界".repeat(3_600) : `Line ${String(index + 1)}`,
+      ).join("\n");
+
+      const outcome = yield* makeReviewer({
+        strategy: "verified",
+        model: scriptedModel((prompt, tools) => {
+          if (!isVerifier(tools)) return discoveryResponse();
+          calls += 1;
+          if (calls === 1) {
+            const firstEnd =
+              mode === "overlapping" ? 5 : mode === "contained" ? 8 : mode === "contiguous" ? 4 : 3;
+
+            const secondStart = mode === "contiguous" || mode === "gap" ? 5 : 4;
+
+            return Stream.fromIterable<Response.StreamPartEncoded>([
+              {
+                type: "tool-call",
+                id: "later-range",
+                name: "read_file",
+                params: {
+                  path: "src/source.ts",
+                  revision: mode === "wrong-revision" ? "base" : "head",
+                  startLine: secondStart,
+                  lineCount: 9 - secondStart,
+                },
+              },
+              {
+                type: "tool-call",
+                id: "earlier-range",
+                name: "read_file",
+                params: {
+                  path: "src/source.ts",
+                  revision: "head",
+                  startLine: 1,
+                  lineCount: firstEnd,
+                },
+              },
+              { type: "finish", reason: "tool-calls", usage },
+            ]);
+          }
+          if (calls > 2) {
+            expect(accepted).toBe(false);
+            expect(calls).toBe(3);
+            expect(verificationFeedback(prompt).at(-1)).toContain("evidence 1");
+
+            return toolResponse("submit_verification", {
+              decisions: originalCandidates(prompt).map((candidate) =>
+                decision(candidate, "unresolved", []),
+              ),
+            });
+          }
+
+          return toolResponse("submit_verification", {
+            decisions: originalCandidates(prompt).map((candidate) =>
+              decision(candidate, "supported", [
+                {
+                  kind: "source",
+                  revision: request.headRevision,
+                  path: "src/source.ts",
+                  startLine: 2,
+                  endLine: 7,
+                },
+              ]),
+            ),
+          });
+        }),
+      })
+        .review(request)
+        .pipe(
+          Effect.provideService(ReviewRepository, {
+            ...emptyRepository,
+            readFile: (input) =>
+              mode === "unavailable" && input.startLine > 1
+                ? Effect.fail(ReviewContextError.make({ message: "Unavailable" }))
+                : ReviewSource.fromText(input, source),
+          }),
+        );
+
+      expect(calls).toBe(accepted ? 2 : 3);
+      expect(outcome.diagnostics?.candidates[0]?.disposition).toBe(
+        accepted ? "supported" : "unresolved",
+      );
+      expect(outcome.incomplete).toBe(accepted ? undefined : true);
+    }),
+  );
+
+  it.effect("repairs an invalid citation in the same verifier context and cost ledger", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      let verifierCalls = 0;
+      const stages = yield* Ref.make<ReadonlyArray<ReviewStage>>([]);
+      const streamsClosed = yield* Ref.make(0);
+      const modelsClosed = yield* Ref.make(0);
+      const observed = yield* Ref.make<ReadonlyArray<ReviewDiagnostics>>([]);
+
+      const outcome = yield* makeReviewer({
+        strategy: "verified",
+        onDiagnostics: (entry) => Ref.update(observed, (entries) => [...entries, entry]),
+        costControl: {
+          beginStage: (stage) => Ref.update(stages, (current) => [...current, stage]),
+          snapshot: Effect.sync(() =>
+            ReviewCostSnapshot.make({
+              stopped: false,
+              modelCalls: calls,
+              usage: ReviewUsage.make({
+                inputTokens: calls * 10,
+                uncachedInputTokens: calls * 7,
+                cachedInputTokens: calls * 2,
+                cacheWriteInputTokens: calls,
+                outputTokens: calls * 4,
+                estimatedCostMicrousd: calls * 100,
+              }),
+            }),
+          ),
+        },
+        model: scriptedModel(
+          (prompt, tools) => {
+            calls += 1;
+            let response: Stream.Stream<Response.StreamPartEncoded>;
+
+            if (!isVerifier(tools)) response = discoveryResponse();
+            else {
+              verifierCalls += 1;
+              if (verifierCalls === 1)
+                response = Stream.fromIterable<Response.StreamPartEncoded>([
+                  {
+                    type: "tool-call",
+                    id: "before-gap",
+                    name: "read_file",
+                    params: { path: "src/source.ts", revision: "head", startLine: 1, lineCount: 3 },
+                  },
+                  {
+                    type: "tool-call",
+                    id: "after-gap",
+                    name: "read_file",
+                    params: { path: "src/source.ts", revision: "head", startLine: 5, lineCount: 4 },
+                  },
+                  { type: "finish", reason: "tool-calls", usage },
+                ]);
+              else if (verifierCalls === 3) {
+                expect(verificationFeedback(prompt).at(-1)).toContain("evidence 1");
+                response = toolResponse("read_file", {
+                  path: "src/source.ts",
+                  revision: "head",
+                  startLine: 4,
+                  lineCount: 1,
+                });
+              } else {
+                expect([2, 4]).toContain(verifierCalls);
+                response = toolResponse("submit_verification", {
+                  decisions: originalCandidates(prompt).map((candidate) =>
+                    decision(candidate, "supported", [
+                      {
+                        kind: "source",
+                        revision: request.headRevision,
+                        path: "src/source.ts",
+                        startLine: 1,
+                        endLine: 8,
+                      },
+                    ]),
+                  ),
+                });
+              }
+            }
+
+            return response.pipe(Stream.ensuring(Ref.update(streamsClosed, (count) => count + 1)));
+          },
+          Ref.update(modelsClosed, (count) => count + 1),
+        ),
+      })
+        .review(request)
+        .pipe(
+          Effect.provideService(ReviewRepository, {
+            ...emptyRepository,
+            readFile: (input) =>
+              ReviewSource.fromText(input, "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight"),
+          }),
+        );
+
+      expect(outcome.incomplete).toBeUndefined();
+      expect(outcome.diagnostics?.verification).toBe("complete");
+      expect(outcome.diagnostics?.candidates[0]?.disposition).toBe("supported");
+      expect(outcome.turns).toBe(5);
+      expect(outcome.usage.estimatedCostMicrousd).toBe(500);
+      expect(outcome.diagnostics?.stages.at(-1)).toMatchObject({ modelCalls: 4, toolCalls: 5 });
+      expect(yield* Ref.get(stages)).toEqual(["discovery", "verification"]);
+      expect(yield* Ref.get(streamsClosed)).toBe(5);
+      expect(yield* Ref.get(modelsClosed)).toBe(2);
+      expect(yield* Ref.get(observed)).toHaveLength(1);
+    }),
+  );
   it.effect.each(["界", "\u0001"] as const)(
     "does not accept evidence hidden by the engine's encoded byte bound: %s",
     (character) =>
@@ -154,6 +378,16 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
                   lineCount: 200,
                 });
               if (strategy === "baseline") return discoveryResponse([]);
+              if (reads > 2) {
+                expect(reads).toBe(3);
+                expect(verificationFeedback(prompt).at(-1)).toContain("evidence 1");
+
+                return toolResponse("submit_verification", {
+                  decisions: originalCandidates(prompt).map((candidate) =>
+                    decision(candidate, "unresolved", []),
+                  ),
+                });
+              }
 
               return toolResponse("submit_verification", {
                 decisions: originalCandidates(prompt).map((candidate) =>
@@ -385,11 +619,24 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
     "reversed-range",
   ] as const)("leaves malformed or unsupported decisions unresolved: %s", (mode) =>
     Effect.gen(function* () {
+      let submissions = 0;
+
       const outcome = yield* makeReviewer({
         strategy: "verified",
         model: scriptedModel((prompt, tools) => {
           if (!isVerifier(tools)) return discoveryResponse();
+          submissions += 1;
           const candidate = originalCandidates(prompt)[0]!;
+
+          if (submissions > 1) {
+            expect(submissions).toBe(2);
+            expect(verificationFeedback(prompt)).toHaveLength(1);
+            expect(verificationFeedback(prompt)[0]!.length).toBeLessThan(500);
+
+            return toolResponse("submit_verification", {
+              decisions: [decision(candidate, "unresolved", [])],
+            });
+          }
           const valid = decision(candidate);
 
           const decisions =
@@ -430,6 +677,7 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
       expect(outcome.report.findings).toEqual([finding]);
       expect(outcome.incomplete).toBe(true);
       expect(outcome.diagnostics?.verification).toBe("incomplete");
+      expect(submissions).toBe(2);
       expect(outcome.diagnostics?.candidates[0]).toMatchObject({
         disposition: "unresolved",
         publication: "unverified",
@@ -623,7 +871,7 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
   );
 
   it.effect.each(["defect", "interrupt"] as const)(
-    "propagates verifier %s after both stream and model cleanup, exposing final diagnostics",
+    "propagates verifier %s during citation repair after cleanup, retaining available evidence",
     (mode) =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
@@ -631,21 +879,32 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
         const modelsClosed = yield* Ref.make(0);
         const observed = yield* Ref.make<ReviewDiagnostics | undefined>(undefined);
         let calls = 0;
+        let verifierCalls = 0;
 
         const program = makeReviewer({
           strategy: "verified",
           onDiagnostics: (value) => Ref.set(observed, value),
           model: scriptedModel(
-            (_prompt, tools) => {
+            (prompt, tools) => {
               calls += 1;
+              if (isVerifier(tools)) verifierCalls += 1;
 
               return (
                 isVerifier(tools)
-                  ? Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
-                      Stream.flatMap(() =>
-                        mode === "defect" ? Stream.die("private defect") : Stream.never,
-                      ),
-                    )
+                  ? verifierCalls === 1
+                    ? toolResponse("submit_verification", {
+                        decisions: originalCandidates(prompt).map((candidate) =>
+                          decision(candidate, "supported", [
+                            diffEvidence,
+                            { ...diffEvidence, kind: "source" },
+                          ]),
+                        ),
+                      })
+                    : Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+                        Stream.flatMap(() =>
+                          mode === "defect" ? Stream.die("private defect") : Stream.never,
+                        ),
+                      )
                   : discoveryResponse()
               ).pipe(Stream.ensuring(Ref.update(streamsClosed, (count) => count + 1)));
             },
@@ -660,15 +919,58 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
         yield* Deferred.await(started);
         if (mode === "interrupt") yield* Fiber.interrupt(fiber);
         expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
-        expect(calls).toBe(2);
-        expect(yield* Ref.get(streamsClosed)).toBe(2);
+        expect(calls).toBe(3);
+        expect(yield* Ref.get(streamsClosed)).toBe(3);
         expect(yield* Ref.get(modelsClosed)).toBe(2);
         const diagnostics = yield* Ref.get(observed);
 
-        expect(diagnostics?.candidates[0]).toMatchObject({ finding, disposition: "unresolved" });
+        expect(diagnostics?.candidates[0]).toMatchObject({
+          finding,
+          disposition: "unresolved",
+          evidence: [diffEvidence],
+        });
         expect(diagnostics?.verification).toBe("failed");
         expect(JSON.stringify(diagnostics)).not.toContain("private defect");
       }),
+  );
+
+  it.effect("retains available evidence after a failed attempt to repair a submission", () =>
+    Effect.gen(function* () {
+      let verifierCalls = 0;
+
+      const outcome = yield* makeReviewer({
+        strategy: "verified",
+        model: scriptedModel((prompt, tools) => {
+          if (!isVerifier(tools)) return discoveryResponse();
+          verifierCalls += 1;
+          if (verifierCalls === 1)
+            return toolResponse("submit_verification", {
+              decisions: originalCandidates(prompt).map((candidate) =>
+                decision(candidate, "supported", [
+                  diffEvidence,
+                  { ...diffEvidence, kind: "source" },
+                ]),
+              ),
+            });
+          expect(verifierCalls).toBe(2);
+          expect(verificationFeedback(prompt).at(-1)).toContain("evidence 2");
+
+          return toolResponse("submit_verification", { malformed: true });
+        }),
+      })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+      expect(verifierCalls).toBe(2);
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.diagnostics?.verification).toBe("failed");
+      expect(outcome.diagnostics?.candidates[0]).toMatchObject({
+        finding,
+        disposition: "unresolved",
+        evidence: [diffEvidence],
+      });
+      expect(outcome.diagnostics?.stages.at(-1)?.stopReason).toBe("invalid-decisions");
+    }),
   );
 
   it.effect.each(["defect", "interrupt"] as const)(
@@ -861,16 +1163,28 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
     }),
   );
 
-  it.effect("shares the absolute deadline and cleans up a timed-out verifier", () =>
+  it.effect("shares the absolute deadline and cleans up a timed-out citation repair", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       const verifying = yield* Deferred.make<void>();
       const closed = yield* Ref.make(0);
+      let verifierCalls = 0;
 
       const program = makeReviewer({
         strategy: "verified",
-        model: scriptedModel((_prompt, tools) => {
+        model: scriptedModel((prompt, tools) => {
           const verifier = isVerifier(tools);
+
+          if (verifier && ++verifierCalls === 1)
+            return toolResponse("submit_verification", {
+              decisions: originalCandidates(prompt).map((candidate) =>
+                decision(candidate, "supported", [
+                  diffEvidence,
+                  { ...diffEvidence, kind: "source" },
+                ]),
+              ),
+            }).pipe(Stream.ensuring(Ref.update(closed, (count) => count + 1)));
+          if (verifier) expect(verificationFeedback(prompt).at(-1)).toContain("evidence 2");
 
           return Stream.fromEffect(
             Deferred.succeed(verifier ? verifying : started, undefined),
@@ -894,7 +1208,9 @@ layer(NodeCrypto.layer)("mandatory candidate verification", (it) => {
 
       expect(outcome.incomplete).toBe(true);
       expect(outcome.diagnostics?.candidates[0]?.disposition).toBe("unresolved");
-      expect(yield* Ref.get(closed)).toBe(2);
+      expect(outcome.diagnostics?.candidates[0]?.evidence).toEqual([diffEvidence]);
+      expect(verifierCalls).toBe(2);
+      expect(yield* Ref.get(closed)).toBe(3);
     }),
   );
 

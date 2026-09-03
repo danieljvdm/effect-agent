@@ -22,9 +22,9 @@ together in heldout.
 
 The 2026-09-02 comparison at reviewer revision `1feba3b18972374252daba30f379897a144b11b7`
 completed all 48 trials for an estimated $6.051385. The Action stays on baseline: verification
-added an incomplete heldout first trial on `incremental-publication-exposure`. Candidate validity
-has not been independently adjudicated, so blocker recall and false-blocker improvement remain
-unresolved. No automated judge calls or replacement trials were run.
+added an incomplete heldout first trial on `incremental-publication-exposure`. The initial report
+left candidate validity unjudged. No automated judge calls or replacement trials were run within
+that frozen comparison.
 The report separates confirmed discovery misses and trial instability from results awaiting
 candidate judgments.
 
@@ -39,6 +39,32 @@ first-trial results. The local freeze is `data/kom-28/frozen.json`; raw observat
 report, and the independent-review packet are in `results/kom-28/`. These directories remain
 ignored. The packet retains 19 scored original candidates and omits verifier decisions; six
 operational-replay candidates remain available in the raw observations outside the scored packet.
+
+Subsequent source review by three agents, without verifier decisions, adjudicated all 25 original
+candidates. This is agent adjudication, not human judgment. All 19 scored candidates describe
+valid defects. Of the six replay candidates, three are valid, two are invalid, and one allocation
+claim remains unclear without a measured resource failure. The replay remains outside
+clean-control and blocker-recall denominators.
+
+Oracle version 2 adds `consolidated-handoff-omitted`, an important defect reported by two candidates.
+Executing the exact frozen renderers with the same valid input produced 36,792-character review
+bodies on both sides. Both omitted the consolidated prompt, but the base's 556-character inline
+comment retained its handoff while the head's 70-character comment removed it. The correction
+preserves every request and source digest. `results/kom-28/agent-adjudicated.json` binds the agent
+judgments to `oracle-v2.json` and `rescored-v2.jsonl`; each rescored observation links its original
+digest. Original observations and unjudged reports remain intact.
+
+Across the four scored blockers, baseline discovered and published two. Verification discovered
+all four but published only two as blockers: one valid candidate remained unverified after invalid
+evidence references, and discovery labeled another baseline blocker as important. Neither strategy
+produced an independently judged false blocking finding on heldout first trials, so the required
+reduction in false blockers is not established.
+
+The follow-up implementation validates verifier submissions before accepting completion. It lets
+the same verifier correct rejected references within the existing shared limits and accepts
+continuous source coverage across adjacent reads. Separate seeded development probes exercise
+verification directly against known true and false claims. They cannot replace the original
+first trials or establish rollout eligibility.
 
 Every comparison case supplies `oracleVersion`, `split` (`development` or `heldout`),
 `relatedGroup`, and a digest-checked repository snapshot. Keep related revisions and both cleanup

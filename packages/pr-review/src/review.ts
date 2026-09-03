@@ -473,6 +473,8 @@ const verificationCompletion = Toolkit.make(
     description: "Submit exactly one evidence-backed disposition per candidate. Call alone.",
     parameters: VerificationSubmission,
     success: Schema.Null,
+    failure: ReviewVerificationError,
+    failureMode: "return",
   })
     .annotate(Tool.Strict, true)
     .annotate(Tool.Readonly, true),
@@ -579,14 +581,22 @@ const evidenceAvailable = (
   reads: ReadonlyArray<ReviewEvidence>,
 ): boolean => {
   if (evidence.endLine < evidence.startLine) return false;
-  if (evidence.kind === "source")
-    return reads.some(
-      (read) =>
-        read.path === evidence.path &&
-        read.revision === evidence.revision &&
-        read.startLine <= evidence.startLine &&
-        read.endLine >= evidence.endLine,
-    );
+  if (evidence.kind === "source") {
+    const ranges = reads
+      .filter((read) => read.path === evidence.path && read.revision === evidence.revision)
+      .sort((left, right) => left.startLine - right.startLine);
+
+    let nextLine = evidence.startLine;
+
+    for (const range of ranges) {
+      if (range.endLine < nextLine) continue;
+      if (range.startLine > nextLine) return false;
+      nextLine = range.endLine + 1;
+      if (nextLine > evidence.endLine) return true;
+    }
+
+    return false;
+  }
   const change = request.changes.find(({ path }) => path === evidence.path);
 
   if (change === undefined) return false;
@@ -1447,6 +1457,78 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
               followUps: [],
             });
 
+            let invalid = false;
+
+            const verificationLayer = verificationCompletion.toLayer({
+              submit_verification: Effect.fn("Reviewer.submitVerification")(function* ({
+                decisions,
+              }) {
+                const ids = new Set(originalCandidates.map(({ id }) => id));
+                const counts = new Map<string, number>();
+                let feedback: string | undefined;
+
+                for (const { id } of decisions) {
+                  counts.set(id, (counts.get(id) ?? 0) + 1);
+                  if (!ids.has(id))
+                    feedback ??= `Unknown candidate ID ${id}. Use only the supplied IDs.`;
+                }
+                for (const candidate of originalCandidates) {
+                  const count = counts.get(candidate.id) ?? 0;
+                  const decision = decisions.find(({ id }) => id === candidate.id);
+
+                  if (count !== 1 || decision === undefined) {
+                    const reason = `${candidate.id}: ${count === 0 ? "missing decision" : "duplicate decisions"}. Submit exactly one decision for every supplied candidate.`;
+
+                    feedback ??= reason;
+                    dispositions.set(
+                      candidate.id,
+                      ReviewVerificationDecision.make({
+                        id: candidate.id,
+                        disposition: "unresolved",
+                        reason,
+                        evidence: dispositions.get(candidate.id)?.evidence ?? [],
+                      }),
+                    );
+                    continue;
+                  }
+
+                  const evidence = decision.evidence.filter((reference) =>
+                    evidenceAvailable(reference, verificationRequest, verifierReads),
+                  );
+
+                  const invalidReference = decision.evidence.findIndex(
+                    (reference) =>
+                      !evidenceAvailable(reference, verificationRequest, verifierReads),
+                  );
+
+                  const reason =
+                    invalidReference >= 0
+                      ? `${candidate.id}: evidence ${String(invalidReference + 1)} is not fully covered by supplied diff lines or delivered source at that exact path and revision. Read missing lines or correct the reference; otherwise return unresolved with available evidence only.`
+                      : decision.disposition !== "unresolved" && evidence.length === 0
+                        ? `${candidate.id}: ${decision.disposition} requires at least one available evidence reference. Supply evidence or return unresolved.`
+                        : undefined;
+
+                  if (reason !== undefined) feedback ??= reason;
+                  dispositions.set(
+                    candidate.id,
+                    reason === undefined
+                      ? ReviewVerificationDecision.make({ ...decision, evidence })
+                      : ReviewVerificationDecision.make({
+                          id: candidate.id,
+                          disposition: "unresolved",
+                          evidence,
+                          reason,
+                        }),
+                  );
+                }
+                invalid = feedback !== undefined;
+                if (feedback !== undefined)
+                  return yield* ReviewVerificationError.make({ message: feedback });
+
+                return null;
+              }),
+            });
+
             const result = yield* trackedRun(
               "verification",
               0,
@@ -1462,47 +1544,11 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
                   turnAllowance: policy.maxTurns - usedTurns,
                   toolCallAllowance: policy.maxToolCalls - totals.toolCalls,
                 },
-              ).pipe(Effect.provide(sourceLayer("verification", 0)), Effect.scoped),
+              ).pipe(
+                Effect.provide([sourceLayer("verification", 0), verificationLayer]),
+                Effect.scoped,
+              ),
             ).pipe(Effect.result);
-
-            let invalid = false;
-
-            if (Result.isSuccess(result)) {
-              const counts = new Map<string, number>();
-
-              for (const decision of result.success.output.decisions)
-                counts.set(decision.id, (counts.get(decision.id) ?? 0) + 1);
-              const ids = new Set(originalCandidates.map(({ id }) => id));
-
-              invalid =
-                result.success.output.decisions.some(({ id }) => !ids.has(id)) ||
-                originalCandidates.some(({ id }) => counts.get(id) !== 1);
-              for (const decision of result.success.output.decisions) {
-                if (!ids.has(decision.id) || counts.get(decision.id) !== 1) continue;
-
-                const evidence = decision.evidence.filter((reference) =>
-                  evidenceAvailable(reference, verificationRequest, verifierReads),
-                );
-
-                const valid =
-                  decision.disposition === "unresolved" ||
-                  (evidence.length > 0 && evidence.length === decision.evidence.length);
-
-                if (!valid) invalid = true;
-                dispositions.set(
-                  decision.id,
-                  valid
-                    ? ReviewVerificationDecision.make({ ...decision, evidence })
-                    : ReviewVerificationDecision.make({
-                        id: decision.id,
-                        disposition: "unresolved",
-                        evidence,
-                        reason:
-                          "The verifier did not supply valid evidence available at the exact reviewed revisions.",
-                      }),
-                );
-              }
-            }
 
             const cost =
               options.costControl === undefined ? undefined : yield* options.costControl.snapshot;
@@ -1521,8 +1567,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             exhausted ??= verificationExhausted;
             verification = Result.isFailure(result)
               ? "failed"
-              : invalid ||
-                  verificationExhausted !== undefined ||
+              : verificationExhausted !== undefined ||
                   (yield* candidates()).some(({ disposition }) => disposition === "unresolved")
                 ? "incomplete"
                 : "complete";
@@ -1532,10 +1577,10 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
               0,
               verification,
               verificationExhausted ??
-                (Result.isFailure(result)
-                  ? "failure"
-                  : invalid
-                    ? "invalid-decisions"
+                (invalid
+                  ? "invalid-decisions"
+                  : Result.isFailure(result)
+                    ? "failure"
                     : verification === "incomplete"
                       ? "unresolved"
                       : undefined),
@@ -1638,7 +1683,6 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       ThreadHistory.layerTransient,
       RunContextPreparationPassthrough,
       reviewCompletion.toLayer({ submit_review: () => Effect.succeed(null) }),
-      verificationCompletion.toLayer({ submit_verification: () => Effect.succeed(null) }),
     ]),
     Effect.scoped,
   );
