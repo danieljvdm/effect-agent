@@ -1,5 +1,20 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.43
+
+### Minor Changes
+
+- [#287](https://github.com/danieljvdm/effect-agent/pull/287) [`361c643`](https://github.com/danieljvdm/effect-agent/commit/361c643bfd1ac40095bc1d63d4d84c5a0afbf3d0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add private login and card autofill with host-owned credential grants, opaque browser references, and explicit post-use recipient trust. Allow Agent Registrations to supply fresh scoped services for each durable Attempt.
+
+### Patch Changes
+
+- Updated dependencies [[`361c643`](https://github.com/danieljvdm/effect-agent/commit/361c643bfd1ac40095bc1d63d4d84c5a0afbf3d0)]:
+  - @effect-agent/sandbox@0.1.0-beta.43
+  - @effect-agent/thread@0.1.0-beta.43
+  - @effect-agent/storage-cloudflare@0.1.0-beta.43
+  - @effect-agent/core@0.1.0-beta.43
+  - @effect-agent/engine@0.1.0-beta.43
+
 ## 0.1.0-beta.42
 
 ### Patch Changes
