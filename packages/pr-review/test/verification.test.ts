@@ -524,11 +524,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
 
                 return discoveryCalls === 1
                   ? toolResponse("record_finding", submitted(finding))
-                  : discoveryResponse([
-                      refuted,
-                      ReviewFinding.make({ ...finding, line: 1 }),
-                      unresolved,
-                    ]);
+                  : discoveryResponse([refuted, unresolved]);
               }
               verifierCalls += 1;
               expect(prompt.content.filter(({ role }) => role === "assistant")).toHaveLength(

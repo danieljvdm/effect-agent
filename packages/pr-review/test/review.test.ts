@@ -737,43 +737,46 @@ layer(testLayer)("review output boundary", (it) => {
     }),
   );
 
-  it.effect("preserves recorded findings when a later completion fails validation", () =>
-    Effect.gen(function* () {
-      let calls = 0;
+  it.effect.each([false, true])(
+    "preserves recorded findings when completion omits them; invalid=%s",
+    (invalid) =>
+      Effect.gen(function* () {
+        let calls = 0;
 
-      const model = scriptedModel(() => {
-        calls += 1;
+        const model = scriptedModel(() => {
+          calls += 1;
 
-        return calls === 1
-          ? Stream.fromIterable([
-              {
-                type: "tool-call",
-                id: "saved",
-                name: "record_finding",
-                params: submittedFinding(blocker, 1),
-              },
-              { type: "finish", reason: "tool-calls", usage },
-            ])
-          : response({
-              findings: [
-                submittedFinding(
-                  ReviewFinding.make({ ...otherBlocker, path: "src/unchanged.ts" }),
-                  1,
-                ),
-              ],
-            });
-      });
+          return calls === 1
+            ? Stream.fromIterable([
+                {
+                  type: "tool-call",
+                  id: "saved",
+                  name: "record_finding",
+                  params: submittedFinding(blocker, 1),
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ])
+            : response({
+                findings: invalid
+                  ? [
+                      submittedFinding(
+                        ReviewFinding.make({ ...otherBlocker, path: "src/unchanged.ts" }),
+                        1,
+                      ),
+                    ]
+                  : [],
+              });
+        });
 
-      const outcome = yield* makeReviewer({ model })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+        const outcome = yield* makeReviewer({ model })
+          .review(request)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(calls).toBe(2);
-      expect(outcome.incomplete).toBe(true);
-      expect(outcome.exhausted).toBeUndefined();
-      expect(outcome.report.findings).toEqual([blocker]);
-      expect(outcome.report.summary).toContain("remaining change has not been verified");
-    }),
+        expect(calls).toBe(2);
+        expect(outcome.incomplete).toBe(invalid ? true : undefined);
+        expect(outcome.exhausted).toBeUndefined();
+        expect(outcome.report.findings).toEqual([blocker]);
+      }),
   );
 
   it.effect("PRR-002 retains headers, mode metadata, and complete deletion hunks", () =>
