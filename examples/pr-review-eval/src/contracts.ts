@@ -22,7 +22,7 @@ export const EvalRunnerVersion = Schema.String.check(
 
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
-export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.2.0");
+export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.3.0");
 
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
@@ -75,7 +75,7 @@ export class EvalRepositoryFile extends Schema.Class<EvalRepositoryFile>(
 )({
   path: BoundedPath,
   revision: Schema.Literals(["base", "head"]),
-  content: Schema.String.check(Schema.isMaxLength(200_000)),
+  content: Schema.String.check(Schema.isMaxLength(512_000)),
 }) {}
 
 const EvalRepositorySnapshotUnsigned = Schema.Struct({
@@ -241,6 +241,8 @@ export class EvalReviewerFailure extends Schema.TaggedError<EvalReviewerFailure>
     errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
     message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
     estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
+    /** Maximum additional charge for unsettled requests; absence means unavailable. */
+    reservedCostMicrousd: Schema.optionalKey(Schema.Natural),
     diagnostics: Schema.optionalKey(ReviewDiagnostics),
   },
 ) {}
@@ -254,6 +256,8 @@ export class EvalTrialFailed extends Schema.TaggedClass<EvalTrialFailed>()("Fail
   errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
   estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
+  /** Maximum additional charge for unsettled requests; absence means unavailable. */
+  reservedCostMicrousd: Schema.optionalKey(Schema.Natural),
   diagnostics: Schema.optionalKey(ReviewDiagnostics),
 }) {}
 

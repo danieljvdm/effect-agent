@@ -136,11 +136,21 @@ const ResourceSummaryFields = Schema.Struct({
   uncostedSucceededTrials: Schema.Natural,
   uncostedIncompleteTrials: Schema.Natural,
   estimatedCostMicrousd: Schema.Natural,
+  /** Sum of known outstanding reservations, not incurred spend. Absent when none are known. */
+  reservedCostMicrousd: Schema.optionalKey(Schema.Natural),
+  /** Optional only for reading reports produced before reservation accounting. */
+  reservationKnownTrials: Schema.optionalKey(Schema.Natural),
+  reservationUnknownTrials: Schema.optionalKey(Schema.Natural),
   elapsedMillis: Schema.Natural,
 }).check(
   Schema.makeFilter(
     (resources) => {
       const failureTags = resources.failuresByTag.map((failure) => failure.errorTag);
+
+      const hasReservationAccounting =
+        resources.reservationKnownTrials !== undefined ||
+        resources.reservationUnknownTrials !== undefined ||
+        resources.reservedCostMicrousd !== undefined;
 
       return (
         resources.attemptedTrials ===
@@ -156,7 +166,14 @@ const ResourceSummaryFields = Schema.Struct({
           resources.costedSucceededTrials + resources.uncostedSucceededTrials &&
         resources.incompleteTrials ===
           resources.costedIncompleteTrials + resources.uncostedIncompleteTrials &&
-        resources.costedFailedTrials <= resources.failedTrials
+        resources.costedFailedTrials <= resources.failedTrials &&
+        (!hasReservationAccounting ||
+          (resources.reservationKnownTrials !== undefined &&
+            resources.reservationUnknownTrials !== undefined &&
+            resources.reservationKnownTrials + resources.reservationUnknownTrials ===
+              resources.attemptedTrials &&
+            (resources.reservationKnownTrials === 0) ===
+              (resources.reservedCostMicrousd === undefined)))
       );
     },
     { title: "Resource summary counts and token classes are consistent" },
@@ -476,11 +493,23 @@ const resourceSummary = (
   let costedIncompleteTrials = 0;
   let costedFailedTrials = 0;
   let estimatedCostMicrousd = 0;
+  let reservedCostMicrousd = 0;
+  let reservationKnownTrials = 0;
   let elapsedMillis = 0;
   const failureCounts = new Map<string, number>();
 
   for (const observation of observations) {
     elapsedMillis += observation.elapsedMillis;
+
+    const reserved =
+      observation.result._tag === "Failed"
+        ? observation.result.reservedCostMicrousd
+        : observation.result.outcome.usage.reservedCostMicrousd;
+
+    if (reserved !== undefined) {
+      reservationKnownTrials += 1;
+      reservedCostMicrousd += reserved;
+    }
     if (observation.result._tag === "Failed") {
       failedTrials += 1;
       failureCounts.set(
@@ -536,6 +565,9 @@ const resourceSummary = (
     uncostedSucceededTrials: succeededTrials - costedSucceededTrials,
     uncostedIncompleteTrials: incompleteTrials - costedIncompleteTrials,
     estimatedCostMicrousd,
+    ...(reservationKnownTrials === 0 ? {} : { reservedCostMicrousd }),
+    reservationKnownTrials,
+    reservationUnknownTrials: observations.length - reservationKnownTrials,
     elapsedMillis,
   });
 };
@@ -1481,6 +1513,12 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
     .map((variant) => {
       const quality = variant.firstTrialFindings;
       const blockingQuality = variant.firstTrialBlockingFindings;
+      const resources = variant.resources;
+
+      const estimatedTrials =
+        resources.costedSucceededTrials +
+        resources.costedIncompleteTrials +
+        resources.costedFailedTrials;
 
       return [
         `${variant.configuration.id}: blocking-recall ${renderRate(variant.blockerRecall)}`,
@@ -1500,12 +1538,12 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
         `incomplete ${variant.resources.incompleteTrials}/${variant.resources.attemptedTrials}`,
         `failures ${variant.resources.failedTrials}/${variant.resources.attemptedTrials}`,
         `tokens ${variant.resources.inputTokens} in/${variant.resources.outputTokens} out`,
-        variant.resources.costedSucceededTrials +
-          variant.resources.costedIncompleteTrials +
-          variant.resources.costedFailedTrials ===
-        0
-          ? "cost unavailable"
-          : `cost ${variant.resources.estimatedCostMicrousd}µUSD (${variant.resources.costedSucceededTrials} succeeded + ${variant.resources.costedIncompleteTrials} incomplete + ${variant.resources.costedFailedTrials} failed costed)`,
+        estimatedTrials === 0
+          ? "settled estimate unavailable"
+          : `settled estimate ${resources.estimatedCostMicrousd}µUSD (${resources.costedSucceededTrials} succeeded + ${resources.costedIncompleteTrials} incomplete + ${resources.costedFailedTrials} failed; ${resources.attemptedTrials - estimatedTrials} unknown)`,
+        resources.reservedCostMicrousd === undefined
+          ? `outstanding reservations unavailable (${resources.attemptedTrials} trials unknown)`
+          : `outstanding reservations ${resources.reservedCostMicrousd}µUSD (${resources.reservationKnownTrials} trials known; ${resources.reservationUnknownTrials} unknown)`,
         `elapsed ${variant.resources.elapsedMillis}ms`,
       ].join("; ");
     })

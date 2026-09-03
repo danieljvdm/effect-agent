@@ -201,6 +201,9 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
           ...(result.failure.estimatedCostMicrousd === undefined
             ? {}
             : { estimatedCostMicrousd: result.failure.estimatedCostMicrousd }),
+          ...(result.failure.reservedCostMicrousd === undefined
+            ? {}
+            : { reservedCostMicrousd: result.failure.reservedCostMicrousd }),
         }),
   });
 });

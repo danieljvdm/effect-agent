@@ -278,6 +278,8 @@ describe("PR-review model eval", () => {
                 EvalReviewerFailure.make({
                   errorTag: "Unavailable",
                   message: "First trial failed",
+                  estimatedCostMicrousd: 17,
+                  reservedCostMicrousd: 900_000,
                 }),
               );
             }
@@ -306,7 +308,11 @@ describe("PR-review model eval", () => {
         "verified",
         "baseline",
       ]);
-      expect(observations[0]?.result._tag).toBe("Failed");
+      expect(observations[0]?.result).toMatchObject({
+        _tag: "Failed",
+        estimatedCostMicrousd: 17,
+        reservedCostMicrousd: 900_000,
+      });
       expect(
         observations
           .filter((row) => row.caseId === "development" && row.variant.id === "baseline")
@@ -413,7 +419,7 @@ describe("PR-review model eval", () => {
       }).pipe(Stream.runCollect);
 
       expect(observations).toHaveLength(1);
-      expect(observations[0]?.runnerVersion).toBe("0.2.0");
+      expect(observations[0]?.runnerVersion).toBe("0.3.0");
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
         expect(observations[0].result.outcome.report.findings).toEqual([]);
@@ -429,7 +435,7 @@ describe("PR-review model eval", () => {
       expect(decoded).toEqual(observations);
 
       const historical = (yield* fs.readFileString(output)).replace(
-        '"runnerVersion":"0.2.0"',
+        '"runnerVersion":"0.3.0"',
         '"runnerVersion":"0.0.9"',
       );
 
@@ -579,51 +585,78 @@ describe("PR-review model eval", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("records actionable AI error categories without provider payloads or credentials", () =>
-    Effect.gen(function* () {
-      const suite = yield* makeSuite();
+  it.effect.each(["preflight", "paid"] as const)(
+    "retains %s failure accounting without provider payloads or credentials",
+    (phase) =>
+      Effect.gen(function* () {
+        const suite = yield* makeSuite();
 
-      const variant = yield* makeCurrentOpenAiVariant({
-        id: Schema.decodeSync(EvalVariantId)("provider-failure"),
-      });
+        const variant = yield* makeCurrentOpenAiVariant({
+          id: Schema.decodeSync(EvalVariantId)("provider-failure"),
+        });
 
-      const privateText = "private-source-and-provider-payload";
+        const privateText = "private-source-and-provider-payload";
 
-      const client = HttpClient.make((request) =>
-        Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            new Response(
-              JSON.stringify({ error: { type: "invalid_request_error", message: privateText } }),
-              { status: 400, headers: { "content-type": "application/json" } },
+        const client = HttpClient.make((request) => {
+          const counted = phase === "paid" && request.url.endsWith("/responses/input_tokens");
+
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify(
+                  counted
+                    ? { object: "response.input_tokens", input_tokens: 1_000 }
+                    : { error: { type: "invalid_request_error", message: privateText } },
+                ),
+                { status: counted ? 200 : 400, headers: { "content-type": "application/json" } },
+              ),
+            ),
+          );
+        });
+
+        const observations = yield* runEvalSuite(suite, [variant], {
+          trials: 1,
+          concurrency: 1,
+          caseIds: [],
+        }).pipe(
+          Stream.runCollect,
+          Effect.provide(
+            OpenAiClient.layer({ apiKey: Redacted.make("private-api-key") }).pipe(
+              Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
             ),
           ),
-        ),
-      );
+        );
 
-      const observations = yield* runEvalSuite(suite, [variant], {
-        trials: 1,
-        concurrency: 1,
-        caseIds: [],
-      }).pipe(
-        Stream.runCollect,
-        Effect.provide(
-          OpenAiClient.layer({ apiKey: Redacted.make("private-api-key") }).pipe(
-            Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
-          ),
-        ),
-      );
+        expect(observations[0]?.result).toMatchObject(
+          phase === "paid"
+            ? {
+                _tag: "Succeeded",
+                outcome: {
+                  incomplete: true,
+                  usage: { estimatedCostMicrousd: 0, reservedCostMicrousd: 645_000 },
+                },
+              }
+            : {
+                _tag: "Failed",
+                errorTag: "AiError/InvalidRequestError",
+                message: "AI failure; retryable=false",
+                estimatedCostMicrousd: 0,
+                reservedCostMicrousd: 0,
+                diagnostics: { discovery: "failed", candidates: [] },
+              },
+        );
+        const report = yield* makeQualityReport(suite, observations, 1);
 
-      expect(observations[0]?.result).toMatchObject({
-        _tag: "Failed",
-        errorTag: "AiError/InvalidRequestError",
-        message: "AI failure; retryable=false",
-        estimatedCostMicrousd: 0,
-        diagnostics: { discovery: "failed", candidates: [] },
-      });
-      expect(JSON.stringify(observations)).not.toContain(privateText);
-      expect(JSON.stringify(observations)).not.toContain("private-api-key");
-    }).pipe(Effect.provide(NodeServices.layer)),
+        expect(report.variants[0]?.resources).toMatchObject({
+          estimatedCostMicrousd: 0,
+          reservedCostMicrousd: phase === "paid" ? 645_000 : 0,
+          reservationKnownTrials: 1,
+          reservationUnknownTrials: 0,
+        });
+        expect(JSON.stringify(observations)).not.toContain(privateText);
+        expect(JSON.stringify(observations)).not.toContain("private-api-key");
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect(

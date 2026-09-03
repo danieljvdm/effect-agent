@@ -86,6 +86,7 @@ const succeeded = (
   findings: ReadonlyArray<ReviewFinding>,
   cost?: number,
   coverage: Pick<ReviewOutcome, "incomplete" | "exhausted"> = {},
+  reservedCostMicrousd?: number,
 ) =>
   EvalTrialSucceeded.make({
     outcome: ReviewOutcome.make({
@@ -102,6 +103,7 @@ const succeeded = (
         cacheWriteInputTokens: 0,
         outputTokens: 3,
         ...(cost === undefined ? {} : { estimatedCostMicrousd: cost }),
+        ...(reservedCostMicrousd === undefined ? {} : { reservedCostMicrousd }),
       },
     }),
   });
@@ -973,10 +975,16 @@ describe("PR-review eval quality report", () => {
         uncostedSucceededTrials: 2,
         estimatedCostMicrousd: 16,
         costedFailedTrials: 1,
+        reservationKnownTrials: 0,
+        reservationUnknownTrials: 4,
         inputTokens: 30,
         outputTokens: 9,
         elapsedMillis: 600,
       });
+      expect(currentReport.resources.reservedCostMicrousd).toBeUndefined();
+      expect(renderQualityReport(report)).toContain(
+        "outstanding reservations unavailable (4 trials unknown)",
+      );
       expect(currentReport.resources.failuresByTag).toEqual([
         { errorTag: "RateLimitError", count: 1 },
       ]);
@@ -1038,7 +1046,7 @@ describe("PR-review eval quality report", () => {
   );
 
   it.effect(
-    "separates incomplete trials and their costs while retaining adjudicated findings",
+    "separates settled estimates, reservations, and unknown liability across trial outcomes",
     () =>
       Effect.gen(function* () {
         const suite = yield* loadFixture;
@@ -1056,9 +1064,9 @@ describe("PR-review eval quality report", () => {
             known,
             variant,
             1,
-            succeeded([finding("Recorded blocker")], 5, { incomplete: true }),
+            succeeded([finding("Recorded blocker")], 5, { incomplete: true }, 70_000),
           ),
-          observation(known, variant, 2, succeeded([], 3)),
+          observation(known, variant, 2, succeeded([], 3, {}, 0)),
           observation(clean, variant, 1, succeeded([], undefined, { exhausted: "cost" })),
           observation(
             clean,
@@ -1068,6 +1076,7 @@ describe("PR-review eval quality report", () => {
               errorTag: "AiError",
               message: "Unavailable",
               estimatedCostMicrousd: 1,
+              reservedCostMicrousd: 80_000,
             }),
           ),
         ];
@@ -1089,6 +1098,9 @@ describe("PR-review eval quality report", () => {
           uncostedIncompleteTrials: 1,
           costedFailedTrials: 1,
           estimatedCostMicrousd: 9,
+          reservedCostMicrousd: 150_000,
+          reservationKnownTrials: 3,
+          reservationUnknownTrials: 1,
           inputTokens: 30,
           outputTokens: 9,
         });
@@ -1105,13 +1117,19 @@ describe("PR-review eval quality report", () => {
           succeededTrials: 1,
           incompleteTrials: 1,
           failedTrials: 0,
+          reservedCostMicrousd: 70_000,
+          reservationKnownTrials: 2,
+          reservationUnknownTrials: 0,
         });
         expect(result?.cases.find((entry) => entry.caseId === clean.id)?.cleanControlPassed).toBe(
           false,
         );
         expect(renderQualityReport(report)).toContain("incomplete 2/4; failures 1/4");
         expect(renderQualityReport(report)).toContain(
-          "cost 9µUSD (1 succeeded + 1 incomplete + 1 failed costed)",
+          "settled estimate 9µUSD (1 succeeded + 1 incomplete + 1 failed; 1 unknown)",
+        );
+        expect(renderQualityReport(report)).toContain(
+          "outstanding reservations 150000µUSD (3 trials known; 1 unknown)",
         );
         expect(report.version).toBe(5);
         expect(

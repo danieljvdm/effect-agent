@@ -4,6 +4,7 @@ import {
   type ReviewStrategy,
   makeReviewer,
   type ReviewRequest,
+  type ReviewUsage,
   reviewInstructions,
   REVIEW_VERIFICATION_INSTRUCTIONS,
   REVIEW_LIMITS,
@@ -42,7 +43,10 @@ const ReviewerErrorView = Schema.Struct({
   message: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4_096))),
 });
 
-const reviewerFailure = (error: unknown, estimatedCostMicrousd?: number): EvalReviewerFailure => {
+const reviewerFailure = (
+  error: unknown,
+  usage?: Pick<ReviewUsage, "estimatedCostMicrousd" | "reservedCostMicrousd">,
+): EvalReviewerFailure => {
   // Provider messages and Tool parameters may contain source or credentials.
   const diagnostic = AiError.isAiError(error)
     ? {
@@ -59,7 +63,12 @@ const reviewerFailure = (error: unknown, estimatedCostMicrousd?: number): EvalRe
 
   return EvalReviewerFailure.make({
     ...diagnostic,
-    ...(estimatedCostMicrousd === undefined ? {} : { estimatedCostMicrousd }),
+    ...(usage?.estimatedCostMicrousd === undefined
+      ? {}
+      : { estimatedCostMicrousd: usage.estimatedCostMicrousd }),
+    ...(usage?.reservedCostMicrousd === undefined
+      ? {}
+      : { reservedCostMicrousd: usage.reservedCostMicrousd }),
   });
 };
 
@@ -176,9 +185,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
           Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
           Effect.catch((error) =>
             provider.costControl.snapshot.pipe(
-              Effect.flatMap((snapshot) =>
-                Effect.fail(reviewerFailure(error, snapshot.usage.estimatedCostMicrousd)),
-              ),
+              Effect.flatMap((snapshot) => Effect.fail(reviewerFailure(error, snapshot.usage))),
             ),
           ),
         );

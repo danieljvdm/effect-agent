@@ -6,6 +6,8 @@ supports rollout. Public fixtures and deterministic tests do not establish model
 
 Run commands from the repository root. The task resolves file paths from `examples/pr-review-eval`.
 Private cases and observations belong in that example's ignored `data/` and `results/` directories.
+Programmatic development sweeps may set `model` and `reasoningEffort` on `makeCurrentOpenAiVariant`.
+The CLI continues to run frozen baseline/verified policy comparisons.
 
 ```sh
 vp run pr-review-eval -- --cases fixtures/verification-corpus.json validate
@@ -110,6 +112,8 @@ ledger and an isolated cache namespace. Baseline gives discovery the full allowa
 gives discovery 699,999 microdollars and holds 300,000 for verification. Both share the same
 five-minute deadline, 64 turns, 64 tool calls, and 24-candidate capacity. Token usage records actual
 cache reads and writes; trial number never implies cache state. Prices are estimates, not invoices.
+Reports separate settled charge estimates from outstanding reservations, which bound possible
+additional charges for unsettled requests. Missing reservation values count as unknown liability.
 
 The runner appends each returned trial, including typed failures and incomplete outcomes, to a
 new exclusive JSONL file and flushes it before proceeding. Finished rows survive interruption.
