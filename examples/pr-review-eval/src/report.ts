@@ -215,13 +215,17 @@ export class EvalCaseQualityReport extends Schema.Class<EvalCaseQualityReport>(
   firstTrialFindings: EvalFindingQuality,
   allTrialFindings: EvalFindingQuality,
   firstTrialBlockingFindings: EvalBlockingFindingQuality,
+  /** Expected blockers absent after all possible first-trial matches have been adjudicated. */
   discoveryMisses: Schema.Natural,
+  /** Unmatched expected blockers that an unjudged or unclear first-trial candidate may cover. */
+  unresolvedDiscoveryMisses: Schema.Natural,
   validCandidatesRefuted: Schema.Natural,
   validCandidatesWithheld: Schema.Natural,
   validBlockingCandidatesRefuted: Schema.Natural,
   validBlockingCandidatesWithheld: Schema.Natural,
   firstTrialIncomplete: Schema.Boolean,
   repeatedTrialInstability: Schema.Boolean,
+  unresolvedRepeatedTrialInstability: Schema.Boolean,
   firstTrialFailureTag: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
   resources: EvalResourceSummary,
 }) {}
@@ -269,11 +273,13 @@ export class EvalVariantQualityReport extends Schema.Class<EvalVariantQualityRep
   firstTrialBlockingFindings: EvalBlockingFindingQuality,
   firstTrialFailures: Schema.Natural,
   discoveryMisses: Schema.Natural,
+  unresolvedDiscoveryMisses: Schema.Natural,
   validCandidatesRefuted: Schema.Natural,
   validCandidatesWithheld: Schema.Natural,
   validBlockingCandidatesRefuted: Schema.Natural,
   validBlockingCandidatesWithheld: Schema.Natural,
   repeatedTrialInstability: Schema.Natural,
+  unresolvedRepeatedTrialInstability: Schema.Natural,
   resources: EvalResourceSummary,
   cases: Schema.Array(EvalCaseQualityReport),
 }) {}
@@ -305,7 +311,7 @@ export class EvalRolloutDecision extends Schema.Class<EvalRolloutDecision>(
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   "@effect-agent/example-pr-review-eval/EvalQualityReport",
 )({
-  version: Schema.Literal(4),
+  version: Schema.Literal(5),
   observationSetDigest: EvalObservationSetDigest,
   runnerVersion: EvalRunnerVersion,
   trialCount: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -948,18 +954,15 @@ const caseReport = (
   );
 
   const firstUnresolved =
-    firstMatched.size < expectedBlockers.length &&
-    firstObservation.result._tag === "Succeeded" &&
-    unresolvedBlockingFindings.length > 0;
+    firstMatched.size < expectedBlockers.length && unresolvedBlockingFindings.length > 0;
 
   const unresolvedDetectionFindings = firstFindings.filter(
     (finding) => finding.judgment === undefined || finding.judgment.label === "unclear",
   );
 
-  const firstDetectionUnresolved =
-    firstDetected.size < expectedBlockers.length &&
-    firstObservation.result._tag === "Succeeded" &&
-    unresolvedDetectionFindings.length > 0;
+  const unmatchedBlockers = expectedBlockers.length - firstDetected.size;
+
+  const firstDetectionUnresolved = unmatchedBlockers > 0 && unresolvedDetectionFindings.length > 0;
 
   const firstIncomplete =
     firstObservation.result._tag === "Succeeded" &&
@@ -979,9 +982,7 @@ const caseReport = (
   const laterOnlyBlockingDefects: Array<EvalLaterBlocker> = [];
 
   const firstTrialIsResolved =
-    firstObservation.result._tag === "Failed" ||
-    unresolvedBlockingFindings.length === 0 ||
-    firstMatched.size === expectedBlockers.length;
+    unresolvedBlockingFindings.length === 0 || firstMatched.size === expectedBlockers.length;
 
   if (firstTrialIsResolved) {
     for (const defect of expectedBlockers) {
@@ -1007,6 +1008,25 @@ const caseReport = (
     }
   }
 
+  const trialStatus = (observation: EvalObservation) =>
+    observation.result._tag === "Failed"
+      ? "failed"
+      : isIncompleteReview(observation.result.outcome, evalCase)
+        ? "incomplete"
+        : "complete";
+
+  const operationalInstability = new Set(observations.map(trialStatus)).size > 1;
+
+  const unresolvedRepeatedTrialInstability =
+    observations.length > 1 &&
+    !operationalInstability &&
+    indexed.some(
+      (finding) =>
+        finding.judgment === undefined ||
+        finding.judgment.label === "unclear" ||
+        finding.judgment.label === "new-valid",
+    );
+
   return EvalCaseQualityReport.make({
     caseId: evalCase.id,
     caseVersion: evalCase.version,
@@ -1031,7 +1051,8 @@ const caseReport = (
     firstTrialFindings: firstQuality,
     allTrialFindings: findingQuality(indexed),
     firstTrialBlockingFindings: blockingFindingQuality(firstFindings.filter(isPublished), evalCase),
-    discoveryMisses: expectedBlockers.length - firstDetected.size,
+    discoveryMisses: firstDetectionUnresolved ? 0 : unmatchedBlockers,
+    unresolvedDiscoveryMisses: firstDetectionUnresolved ? unmatchedBlockers : 0,
     validCandidatesRefuted: firstFindings.filter(
       (finding) => isValid(finding) && finding.reference.candidate?.disposition === "refuted",
     ).length,
@@ -1047,35 +1068,34 @@ const caseReport = (
       (finding) => judgedSeverity(finding, evalCase) === "blocking" && !isPublished(finding),
     ).length,
     firstTrialIncomplete: firstIncomplete,
+    unresolvedRepeatedTrialInstability,
     repeatedTrialInstability:
-      new Set(
-        observations.map((observation) =>
-          JSON.stringify({
-            status:
-              observation.result._tag === "Failed"
-                ? "failed"
-                : isIncompleteReview(observation.result.outcome, evalCase)
-                  ? "incomplete"
-                  : "complete",
-            blockers: [
-              ...matchedBlockingDefects(
+      operationalInstability ||
+      (!unresolvedRepeatedTrialInstability &&
+        new Set(
+          observations.map((observation) =>
+            JSON.stringify({
+              status: trialStatus(observation),
+              blockers: [
+                ...matchedBlockingDefects(
+                  indexed.filter(
+                    (finding) =>
+                      finding.reference.trial === observation.trial && isPublished(finding),
+                  ),
+                  evalCase,
+                  true,
+                ),
+              ].sort(),
+              falseBlockers: blockingFindingQuality(
                 indexed.filter(
                   (finding) =>
                     finding.reference.trial === observation.trial && isPublished(finding),
                 ),
                 evalCase,
-                true,
-              ),
-            ].sort(),
-            falseBlockers: blockingFindingQuality(
-              indexed.filter(
-                (finding) => finding.reference.trial === observation.trial && isPublished(finding),
-              ),
-              evalCase,
-            ).overstated,
-          }),
-        ),
-      ).size > 1,
+              ).overstated,
+            }),
+          ),
+        ).size > 1),
     ...(firstObservation.result._tag === "Failed"
       ? { firstTrialFailureTag: firstObservation.result.errorTag }
       : {}),
@@ -1221,7 +1241,7 @@ const rolloutDecision = (
     }
   }
   if (verifiedFalseBlockers >= baselineFalseBlockers)
-    reasons.add("Heldout first trials do not show fewer false blocking findings.");
+    reasons.add("Fewer false blocking findings have not been established.");
 
   return EvalRolloutDecision.make({
     decision: reasons.size === 0 ? "eligible" : "experimental",
@@ -1325,6 +1345,10 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
         firstTrialFailures: cases.filter((report) => report.firstTrialFailureTag !== undefined)
           .length,
         discoveryMisses: cases.reduce((sum, report) => sum + report.discoveryMisses, 0),
+        unresolvedDiscoveryMisses: cases.reduce(
+          (sum, report) => sum + report.unresolvedDiscoveryMisses,
+          0,
+        ),
         validCandidatesRefuted: cases.reduce(
           (sum, report) => sum + report.validCandidatesRefuted,
           0,
@@ -1342,6 +1366,9 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
           0,
         ),
         repeatedTrialInstability: cases.filter((report) => report.repeatedTrialInstability).length,
+        unresolvedRepeatedTrialInstability: cases.filter(
+          (report) => report.unresolvedRepeatedTrialInstability,
+        ).length,
         resources: resourceSummary(variantObservations, validated.cases),
         cases,
       }),
@@ -1349,7 +1376,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
   }
 
   return EvalQualityReport.make({
-    version: 4,
+    version: 5,
     observationSetDigest: validated.observationSetDigest,
     runnerVersion: validated.runnerVersion,
     trialCount: validated.trialCount,
@@ -1458,18 +1485,18 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
       return [
         `${variant.configuration.id}: blocking-recall ${renderRate(variant.blockerRecall)}`,
         `detected ${renderRate(variant.blockerDetection)}`,
-        `complete ${variant.blockerCases.complete}/${variant.blockerCases.total}`,
+        `blocker-cases-complete ${variant.blockerCases.complete}/${variant.blockerCases.total}`,
         `precision ${renderRate(quality.precision)}`,
         `blocking-precision ${renderRate(blockingQuality.precision)}`,
-        `overstated-blocking ${blockingQuality.overstated}`,
-        `invalid ${quality.invalid}`,
+        `overstated-blocking ${blockingQuality.overstated} adjudicated`,
+        `invalid ${quality.invalid} adjudicated`,
         `unclear ${quality.unclear}`,
         `unjudged ${quality.unjudged}`,
-        `later-only ${variant.laterOnlyBlockingDefects.length}`,
-        `discovery-misses ${variant.discoveryMisses}`,
-        `valid-refuted ${variant.validCandidatesRefuted}`,
-        `valid-withheld ${variant.validCandidatesWithheld}`,
-        `unstable-cases ${variant.repeatedTrialInstability}`,
+        `later-only ${variant.laterOnlyBlockingDefects.length} confirmed`,
+        `discovery-misses ${variant.discoveryMisses} confirmed; ${variant.unresolvedDiscoveryMisses} awaiting judgment`,
+        `valid-refuted ${variant.validCandidatesRefuted} confirmed`,
+        `valid-withheld ${variant.validCandidatesWithheld} confirmed`,
+        `unstable-cases ${variant.repeatedTrialInstability} confirmed; ${variant.unresolvedRepeatedTrialInstability} awaiting judgment`,
         `incomplete ${variant.resources.incompleteTrials}/${variant.resources.attemptedTrials}`,
         `failures ${variant.resources.failedTrials}/${variant.resources.attemptedTrials}`,
         `tokens ${variant.resources.inputTokens} in/${variant.resources.outputTokens} out`,

@@ -15,10 +15,30 @@ vp run pr-review-eval -- --help
 ## Freeze before paid execution
 
 `fixtures/verification-corpus.json` contains seven adjudicated cases and the immutable #287
-operational replay. The planned comparison is 48 trials with a $47.999952 ceiling. The cleanup
+operational replay. The frozen comparison contains 48 trials with a $47.999952 ceiling. The cleanup
 pair is established by `test/cleanup-oracle.test.ts` against the pinned Effect runtime. Both
 variants and the #287 replay stay together in development. The related publication cases stay
-together in heldout. No paid comparison results have been recorded; rollout remains experimental.
+together in heldout.
+
+The 2026-09-02 comparison at reviewer revision `1feba3b18972374252daba30f379897a144b11b7`
+completed all 48 trials for an estimated $6.051385. The Action stays on baseline: verification
+added an incomplete heldout first trial on `incremental-publication-exposure`. Candidate validity
+has not been independently adjudicated, so blocker recall and false-blocker improvement remain
+unresolved. No automated judge calls or replacement trials were run.
+The report separates confirmed discovery misses and trial instability from results awaiting
+candidate judgments.
+
+| Strategy | Trials | Incomplete | Failed | Estimated cost | Total trial time |
+| -------- | -----: | ---------: | -----: | -------------: | ---------------: |
+| Baseline |     24 |          1 |      0 |      $2.554359 |        716.281 s |
+| Verified |     24 |          3 |      0 |      $3.497026 |       1005.608 s |
+
+These totals include the unadjudicated replay. Among the three heldout first trials, baseline
+had no incomplete results and verification had one. Later trials varied and do not replace those
+first-trial results. The local freeze is `data/kom-28/frozen.json`; raw observations, the unjudged
+report, and the independent-review packet are in `results/kom-28/`. These directories remain
+ignored. The packet retains 19 scored original candidates and omits verifier decisions; six
+operational-replay candidates remain available in the raw observations outside the scored packet.
 
 Every comparison case supplies `oracleVersion`, `split` (`development` or `heldout`),
 `relatedGroup`, and a digest-checked repository snapshot. Keep related revisions and both cleanup

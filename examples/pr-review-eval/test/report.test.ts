@@ -297,6 +297,16 @@ describe("PR-review eval quality report", () => {
 
         const unjudged = yield* makeQualityReport(frozen, observations, 3);
 
+        expect(unjudged.version).toBe(5);
+        expect(
+          unjudged.variants.map((variant) => [
+            variant.discoveryMisses,
+            variant.unresolvedDiscoveryMisses,
+          ]),
+        ).toEqual([
+          [0, 1],
+          [0, 1],
+        ]);
         expect(unjudged.unjudgedFindings).toHaveLength(18);
         expect(
           unjudged.unjudgedFindings.every(
@@ -345,6 +355,7 @@ describe("PR-review eval quality report", () => {
 
         expect(result).toMatchObject({
           discoveryMisses: 0,
+          unresolvedDiscoveryMisses: 0,
           validCandidatesRefuted: 1,
           validCandidatesWithheld: 1,
           validBlockingCandidatesRefuted: 1,
@@ -523,6 +534,242 @@ describe("PR-review eval quality report", () => {
           ).pipe(Effect.result))._tag,
         ).toBe("Failure");
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "keeps failed retained candidates unresolved until judgment while counting empty-trial misses",
+    () =>
+      Effect.gen(function* () {
+        const loaded = yield* loadFixture;
+        const known = loaded.cases.find((evalCase) => evalCase.kind === "known-defects");
+
+        if (known === undefined) return yield* Effect.die("Missing known-defect fixture");
+        const defectId = known.expectedDefects[0]?.id;
+
+        if (defectId === undefined) return yield* Effect.die("Missing expected defect");
+        const empty = EvalCase.make({ ...known, id: Schema.decodeSync(EvalCaseId)("empty-trial") });
+        const suite = EvalSuite.make({ version: 1, cases: [known, empty] });
+        const variant = configuration("retained-failure");
+        const claim = finding("Optional value is dereferenced");
+
+        const candidate = ReviewCandidate.make({
+          id: `${known.inputDigest}:1`,
+          requestDigest: known.inputDigest,
+          baseRevision: known.request.baseRevision,
+          headRevision: known.request.headRevision,
+          batch: 0,
+          finding: claim,
+          disposition: "not-requested",
+          publication: "published",
+          evidence: [],
+        });
+
+        const first = observation(
+          known,
+          variant,
+          1,
+          EvalTrialFailed.make({
+            errorTag: "ProviderUnavailable",
+            message: "Stopped after recording the candidate",
+            diagnostics: ReviewDiagnostics.make({
+              strategy: "baseline",
+              requestDigest: known.inputDigest,
+              discovery: "failed",
+              verification: "not-requested",
+              patchesSupplied: 1,
+              candidates: [candidate],
+              activity: [],
+              droppedActivityCount: 0,
+              droppedCandidateCount: 0,
+              stages: [],
+            }),
+          }),
+        );
+
+        const observations = [
+          first,
+          observation(known, variant, 2, succeeded([claim])),
+          observation(empty, variant, 1, succeeded([])),
+          observation(empty, variant, 2, succeeded([])),
+        ];
+
+        const digest = yield* digestObservationSet(observations);
+        const laterJudgment = judgment(known, variant, 2, 0, "matches-expected", [defectId]);
+
+        const pending = yield* makeQualityReport(
+          suite,
+          observations,
+          2,
+          judgmentSet(digest, [laterJudgment]),
+        );
+
+        const pendingVariant = pending.variants[0];
+
+        expect(pendingVariant).toMatchObject({
+          discoveryMisses: 1,
+          unresolvedDiscoveryMisses: 1,
+          firstTrialFailures: 1,
+          repeatedTrialInstability: 1,
+          unresolvedRepeatedTrialInstability: 0,
+        });
+        expect(
+          pendingVariant?.cases.find((evalCase) => evalCase.caseId === known.id),
+        ).toMatchObject({
+          discoveryMisses: 0,
+          unresolvedDiscoveryMisses: 1,
+          blockerDetection: { status: "unresolved" },
+          blockerRecall: { status: "unresolved" },
+          laterOnlyBlockingDefects: [],
+          firstTrialFailureTag: "ProviderUnavailable",
+          repeatedTrialInstability: true,
+          unresolvedRepeatedTrialInstability: false,
+        });
+        expect(
+          pendingVariant?.cases.find((evalCase) => evalCase.caseId === empty.id),
+        ).toMatchObject({
+          discoveryMisses: 1,
+          unresolvedDiscoveryMisses: 0,
+          blockerDetection: { status: "measured" },
+        });
+        expect(renderQualityReport(pending)).toContain(
+          "discovery-misses 1 confirmed; 1 awaiting judgment",
+        );
+
+        const firstJudgment = EvalFindingJudgment.make({
+          version: 1,
+          caseId: known.id,
+          caseVersion: 1,
+          inputDigest: known.inputDigest,
+          variantId: variant.id,
+          trial: 1,
+          candidateId: candidate.id,
+          observationDigest: yield* digestObservation(first),
+          oracleDigest: yield* digestEvalOracle(known),
+          label: "unclear",
+          matchedDefectIds: [],
+          rationale: "The first candidate still requires independent judgment",
+          adjudicator: "maintainer",
+        });
+
+        const unclear = yield* makeQualityReport(
+          suite,
+          observations,
+          2,
+          judgmentSet(digest, [laterJudgment, firstJudgment]),
+        );
+
+        expect(unclear.variants[0]).toMatchObject({
+          discoveryMisses: 1,
+          unresolvedDiscoveryMisses: 1,
+          laterOnlyBlockingDefects: [],
+        });
+
+        const invalid = yield* makeQualityReport(
+          suite,
+          observations,
+          2,
+          judgmentSet(digest, [
+            laterJudgment,
+            EvalFindingJudgment.make({ ...firstJudgment, label: "invalid" }),
+          ]),
+        );
+
+        expect(invalid.variants[0]).toMatchObject({
+          discoveryMisses: 2,
+          unresolvedDiscoveryMisses: 0,
+          firstTrialFailures: 1,
+          laterOnlyBlockingDefects: [{ caseId: known.id, defectId, firstFoundTrial: 2 }],
+        });
+
+        const matched = yield* makeQualityReport(
+          suite,
+          observations,
+          2,
+          judgmentSet(digest, [
+            laterJudgment,
+            EvalFindingJudgment.make({
+              ...firstJudgment,
+              label: "matches-expected",
+              matchedDefectIds: [defectId],
+            }),
+          ]),
+        );
+
+        expect(matched.variants[0]).toMatchObject({
+          discoveryMisses: 1,
+          unresolvedDiscoveryMisses: 0,
+          firstTrialFailures: 1,
+          laterOnlyBlockingDefects: [],
+        });
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not infer repeated-trial instability from missing judgments", () =>
+    Effect.gen(function* () {
+      const loaded = yield* loadFixture;
+      const known = loaded.cases.find((evalCase) => evalCase.kind === "known-defects");
+
+      if (known === undefined) return yield* Effect.die("Missing known-defect fixture");
+      const defectId = known.expectedDefects[0]?.id;
+
+      if (defectId === undefined) return yield* Effect.die("Missing expected defect");
+      const suite = EvalSuite.make({ version: 1, cases: [known] });
+      const variant = configuration("partial-judgments");
+
+      const observations = [
+        observation(known, variant, 1, succeeded([finding("Optional value is dereferenced")])),
+        observation(known, variant, 2, succeeded([finding("Another claimed regression")])),
+      ];
+
+      const digest = yield* digestObservationSet(observations);
+      const first = judgment(known, variant, 1, 0, "matches-expected", [defectId]);
+
+      const pending = yield* makeQualityReport(
+        suite,
+        observations,
+        2,
+        judgmentSet(digest, [first]),
+      );
+
+      expect(pending.variants[0]).toMatchObject({
+        repeatedTrialInstability: 0,
+        unresolvedRepeatedTrialInstability: 1,
+      });
+      expect(pending.variants[0]?.cases[0]).toMatchObject({
+        repeatedTrialInstability: false,
+        unresolvedRepeatedTrialInstability: true,
+      });
+      expect(renderQualityReport(pending)).toContain(
+        "unstable-cases 0 confirmed; 1 awaiting judgment",
+      );
+
+      const stable = yield* makeQualityReport(
+        suite,
+        observations,
+        2,
+        judgmentSet(digest, [
+          first,
+          judgment(known, variant, 2, 0, "matches-expected", [defectId]),
+        ]),
+      );
+
+      expect(stable.variants[0]).toMatchObject({
+        repeatedTrialInstability: 0,
+        unresolvedRepeatedTrialInstability: 0,
+      });
+
+      const changed = yield* makeQualityReport(
+        suite,
+        observations,
+        2,
+        judgmentSet(digest, [first, judgment(known, variant, 2, 0, "invalid")]),
+      );
+
+      expect(changed.variants[0]).toMatchObject({
+        repeatedTrialInstability: 1,
+        unresolvedRepeatedTrialInstability: 0,
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("never passes clean controls with pending or excluded patches", () =>
@@ -866,7 +1113,7 @@ describe("PR-review eval quality report", () => {
         expect(renderQualityReport(report)).toContain(
           "cost 9µUSD (1 succeeded + 1 incomplete + 1 failed costed)",
         );
-        expect(report.version).toBe(4);
+        expect(report.version).toBe(5);
         expect(
           Schema.decodeSync(EvalQualityReport)(Schema.encodeSync(EvalQualityReport)(report)),
         ).toEqual(report);
