@@ -80,7 +80,7 @@ export class EvalRepositoryFile extends Schema.Class<EvalRepositoryFile>(
 
 const EvalRepositorySnapshotUnsigned = Schema.Struct({
   version: Schema.Literal(1),
-  files: Schema.Array(EvalRepositoryFile).check(Schema.isMaxLength(200)),
+  files: Schema.Array(EvalRepositoryFile).check(Schema.isMaxLength(1_000)),
 });
 
 export class EvalRepositorySnapshot extends Schema.Class<EvalRepositorySnapshot>(

@@ -30,6 +30,8 @@ reviewed change. Historical frozen suites retain their original oracle and need 
 Every frozen case supplies `oracleVersion`, `split` (`development` or `heldout`),
 `relatedGroup`, and a digest-checked repository snapshot. Keep related revisions and both cleanup
 variants in the same split. Establish clean controls independently of earlier empty reviews.
+A snapshot admits up to 1,000 source entries across base and head, with at most 512,000 characters
+per entry. The suite file remains limited to 64 MiB.
 `unadjudicated` cases are operational replays. They have no expected defects and never enter clean
 control or blocker recall denominators. They still consume the trial budget.
 

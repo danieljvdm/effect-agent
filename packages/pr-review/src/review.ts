@@ -28,6 +28,7 @@ import {
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/unstable/ai";
 
 import {
+  MAX_REVIEW_SEARCH_RESULT_BYTES,
   ReviewContextError,
   ReviewFileList,
   ReviewLineMatches,
@@ -1046,37 +1047,101 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             );
           }),
           find_in_file: Effect.fn("Reviewer.findInFile")(function* (input) {
-            let truncated = false;
+            const revision =
+              input.revision === "base" ? request.baseRevision : request.headRevision;
 
             return yield* repository.findInFile(input).pipe(
-              Effect.tap((matches) =>
-                Schema.encodeEffect(ReviewLineMatches)(matches).pipe(
-                  Effect.mapError(() =>
-                    ReviewContextError.make({ message: "Invalid in-file search result." }),
-                  ),
-                  Effect.tap((encoded) =>
-                    Effect.sync(() => {
-                      const json = JSON.stringify(encoded);
+              Effect.flatMap((matches) =>
+                Effect.gen(function* () {
+                  const encoded = yield* Schema.encodeEffect(ReviewLineMatches)(matches).pipe(
+                    Effect.mapError(() =>
+                      ReviewContextError.make({ message: "Invalid in-file search result." }),
+                    ),
+                  );
 
-                      truncated = applyToolResultBounds(json, policy.toolResultBounds) !== json;
-                    }),
-                  ),
-                ),
+                  const fits = (json: string) =>
+                    new TextEncoder().encode(json).byteLength <= MAX_REVIEW_SEARCH_RESULT_BYTES &&
+                    applyToolResultBounds(json, policy.toolResultBounds) === json;
+
+                  const context = matches.context;
+                  const firstMatch = matches.lines[0];
+                  const contentLines = context?.content.split("\n") ?? [];
+                  const endLine = (context?.startLine ?? 1) + contentLines.length - 1;
+
+                  const contextMatches =
+                    context === undefined ||
+                    (firstMatch !== undefined &&
+                      firstMatch >= input.startLine &&
+                      matches.path === input.path &&
+                      matches.revision === input.revision &&
+                      context.path === input.path &&
+                      context.revision === input.revision &&
+                      context.startLine >= Math.max(1, firstMatch - 10) &&
+                      context.startLine <= firstMatch &&
+                      endLine >= firstMatch &&
+                      endLine <= Math.min(context.totalLines, firstMatch + 40) &&
+                      contentLines[firstMatch - context.startLine]?.includes(input.literal) ===
+                        true);
+
+                  if (contextMatches && fits(JSON.stringify(encoded))) return matches;
+
+                  // Preserve validated locations when optional context cannot be delivered safely.
+                  const locations = ReviewLineMatches.make({
+                    path: matches.path,
+                    revision: matches.revision,
+                    lines: matches.lines,
+                    truncated: matches.truncated,
+                  });
+
+                  const locationsEncoded = yield* Schema.encodeEffect(ReviewLineMatches)(
+                    locations,
+                  ).pipe(
+                    Effect.mapError(() =>
+                      ReviewContextError.make({ message: "Invalid in-file search result." }),
+                    ),
+                  );
+
+                  if (!fits(JSON.stringify(locationsEncoded)))
+                    return yield* ReviewContextError.make({
+                      message: "The encoded search locations exceed the tool-result bound.",
+                    });
+
+                  return locations;
+                }),
               ),
-              // Matching locations do not establish that any source text was read.
-              Effect.onExit((exit) =>
-                recordActivity(
+              Effect.onExit((exit) => {
+                const context = Exit.isSuccess(exit) ? exit.value.context : undefined;
+
+                const endLine =
+                  context === undefined
+                    ? undefined
+                    : context.startLine + context.content.split("\n").length - 1;
+
+                if (stage === "verification" && context !== undefined && endLine !== undefined)
+                  verifierReads.push(
+                    ReviewEvidence.make({
+                      kind: "source",
+                      revision,
+                      path: input.path,
+                      startLine: context.startLine,
+                      endLine,
+                    }),
+                  );
+
+                return recordActivity(
                   ReviewActivity.make({
                     stage,
                     batch,
                     operation: "find_in_file",
-                    revision:
-                      input.revision === "base" ? request.baseRevision : request.headRevision,
+                    revision,
                     path: input.path,
                     requestedStartLine: input.startLine,
                     ...(Exit.isSuccess(exit) ? { returnedMatches: exit.value.lines.length } : {}),
+                    ...(context === undefined
+                      ? {}
+                      : { returnedStartLine: context.startLine, returnedEndLine: endLine }),
                     outcome: Exit.isSuccess(exit)
-                      ? exit.value.truncated || truncated
+                      ? exit.value.truncated
                         ? "truncated"
                         : "success"
                       : Cause.hasInterrupts(exit.cause)
@@ -1084,10 +1149,10 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
                         : Cause.hasDies(exit.cause)
                           ? "defect"
                           : "unavailable",
-                    truncated: Exit.isSuccess(exit) && (exit.value.truncated || truncated),
+                    truncated: Exit.isSuccess(exit) && exit.value.truncated,
                   }),
-                ),
-              ),
+                );
+              }),
             );
           }),
         });

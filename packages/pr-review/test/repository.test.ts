@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
 import type { ReviewContextError } from "../src/index.ts";
 import { ReviewLineMatches, ReviewRepository } from "../src/index.ts";
@@ -17,15 +17,19 @@ describe("bounded literal source lookup", () => {
       const source = `${"unrelated\n".repeat(3_152)}const getUsage(value) = value; getUsage(value)\nGETUSAGE(value)\n`;
       const result = yield* ReviewLineMatches.fromText(input, source);
 
-      expect(result).toEqual(
-        ReviewLineMatches.make({
+      expect(result).toMatchObject({
+        path: input.path,
+        revision: "head",
+        lines: [3_153],
+        truncated: false,
+        context: {
           path: input.path,
           revision: "head",
-          lines: [3_153],
-          truncated: false,
-        }),
-      );
-      expect(JSON.stringify(result)).not.toContain("getUsage");
+          startLine: 3_143,
+          totalLines: 3_154,
+          content: `${"unrelated\n".repeat(10)}const getUsage(value) = value; getUsage(value)\nGETUSAGE(value)`,
+        },
+      });
 
       const repeated = "getUsage(x); getUsage(y)\n".repeat(21);
       const first = yield* ReviewLineMatches.fromText(input, repeated);
@@ -43,7 +47,98 @@ describe("bounded literal source lookup", () => {
       expect(rest.truncated).toBe(false);
       expect(absent.lines).toEqual([]);
       expect(absent.truncated).toBe(false);
+      expect(absent.context).toBeUndefined();
       expect((yield* ReviewLineMatches.fromText(input, "")).lines).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "returns complete lines around the first match and preserves locations outside that window",
+    () =>
+      Effect.gen(function* () {
+        const source = Array.from({ length: 90 }, (_, index) =>
+          index === 19 || index === 79
+            ? `getUsage(${String(index + 1)})`
+            : `line ${String(index + 1)}`,
+        );
+
+        const result = yield* ReviewLineMatches.fromText(input, `${source.join("\n")}\n`);
+
+        expect(result.lines).toEqual([20, 80]);
+        expect(result.truncated).toBe(false);
+        expect(result.context).toMatchObject({
+          startLine: 10,
+          totalLines: 90,
+          content: source.slice(9, 60).join("\n"),
+        });
+
+        const first = yield* ReviewLineMatches.fromText(input, "getUsage(1)\n\n");
+
+        expect(first.context).toMatchObject({
+          startLine: 1,
+          totalLines: 2,
+          content: "getUsage(1)\n",
+        });
+
+        const legacy = yield* Schema.decodeUnknownEffect(ReviewLineMatches)({
+          path: input.path,
+          revision: input.revision,
+          lines: [20],
+          truncated: false,
+        });
+
+        expect(legacy.context).toBeUndefined();
+      }),
+  );
+
+  it.effect.each(["界", "\u0001"])(
+    "bounds the encoded response while retaining whole matching lines: %s",
+    (character) =>
+      Effect.gen(function* () {
+        const source = Array.from({ length: 90 }, (_, index) =>
+          index === 19 ? "getUsage(value)" : character.repeat(400),
+        );
+
+        const result = yield* ReviewLineMatches.fromText(input, source.join("\n"));
+        const encoded = yield* Schema.encodeEffect(ReviewLineMatches)(result);
+
+        expect(new TextEncoder().encode(JSON.stringify(encoded)).byteLength).toBeLessThanOrEqual(
+          8_192,
+        );
+        expect(result.lines).toEqual([20]);
+        expect(result.truncated).toBe(false);
+        expect(result.context).toBeDefined();
+        if (result.context !== undefined) {
+          const delivered = result.context.content.split("\n");
+
+          expect(delivered.length).toBeLessThanOrEqual(51);
+          expect(delivered).toContain("getUsage(value)");
+          expect(delivered).toEqual(
+            source.slice(
+              result.context.startLine - 1,
+              result.context.startLine - 1 + delivered.length,
+            ),
+          );
+        }
+      }),
+  );
+
+  it.effect("keeps locations for oversized matches and useful context beside oversized lines", () =>
+    Effect.gen(function* () {
+      const huge = "x".repeat(1_500_000);
+
+      const oversized = yield* ReviewLineMatches.fromText(
+        input,
+        `getUsage(${huge})\ngetUsage(2)\n`,
+      );
+
+      expect(oversized.lines).toEqual([1, 2]);
+      expect(oversized.context).toBeUndefined();
+      expect(oversized.truncated).toBe(false);
+
+      const neighboring = yield* ReviewLineMatches.fromText(input, `${huge}\ngetUsage(2)\nlast\n`);
+
+      expect(neighboring.context).toMatchObject({ startLine: 2, content: "getUsage(2)" });
     }),
   );
 

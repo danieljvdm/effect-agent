@@ -195,7 +195,7 @@ const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop)
 
 layer(testLayer)("review output boundary", (it) => {
   it.effect(
-    "follows a literal match to a late definition without retaining the query or source in activity",
+    "delivers a late definition with its search without another read or retaining source in activity",
     () =>
       Effect.gen(function* () {
         const source = `${"unrelated\n".repeat(3_152)}const privateLookup = () => 1;\n`;
@@ -236,28 +236,15 @@ layer(testLayer)("review output boundary", (it) => {
                     revision: "base",
                     lines: [3_153],
                     truncated: false,
+                    context: {
+                      startLine: 3_143,
+                      totalLines: 3_153,
+                      content: `${"unrelated\n".repeat(10)}const privateLookup = () => 1;`,
+                    },
                   },
                 },
-              ]);
-
-              return Stream.fromIterable<Response.StreamPartEncoded>([
-                {
-                  type: "tool-call",
-                  id: "definition",
-                  name: "read_file",
-                  params: {
-                    path: "src/provider.ts",
-                    revision: "base",
-                    startLine: 3_153,
-                    lineCount: 1,
-                  },
-                },
-                { type: "finish", reason: "tool-calls", usage },
               ]);
             }
-            expect(sourceResults(prompt).at(-1)).toMatchObject({
-              result: { content: "const privateLookup = () => 1;" },
-            });
 
             return response({ findings: [] });
           }),
@@ -267,21 +254,22 @@ layer(testLayer)("review output boundary", (it) => {
             Effect.provideService(ReviewRepository, {
               ...emptyRepository,
               findInFile: (input) => ReviewLineMatches.fromText(input, source),
-              readFile: (input) => ReviewSource.fromText(input, source),
+              readFile: () => Effect.die("The search already delivered the relevant source"),
             }),
           );
 
-        expect(calls).toBe(3);
-        expect(outcome.diagnostics?.stages[0]?.toolCalls).toBe(3);
+        expect(calls).toBe(2);
+        expect(outcome.diagnostics?.stages[0]?.toolCalls).toBe(2);
         expect(outcome.diagnostics?.activity).toMatchObject([
           {
             operation: "find_in_file",
             revision: request.baseRevision,
             path: "src/provider.ts",
             returnedMatches: 1,
+            returnedStartLine: 3_143,
+            returnedEndLine: 3_153,
             outcome: "success",
           },
-          { operation: "read_file", returnedStartLine: 3_153, returnedEndLine: 3_153 },
         ]);
         expect(JSON.stringify(outcome.diagnostics?.activity)).not.toContain("privateLookup");
       }),
