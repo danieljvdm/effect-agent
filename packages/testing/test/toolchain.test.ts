@@ -13,10 +13,12 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { Command } from "effect/unstable/cli";
 import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
 import {
+  command as releaseCommand,
   PublishManifest,
   withTemporaryManifest,
   withPublishManifests,
@@ -620,6 +622,25 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(changesets?.env?.GITHUB_TOKEN).toBe("${{ steps.app-token.outputs.token }}");
       expect(changesets?.with?.publish).toBe("./node_modules/.bin/vp run release:publish");
       expect(release.jobs.release?.permissions?.["id-token"]).toBe("write");
+    }),
+  );
+
+  it.effect("publishes without flags and requires an explicit dry-run opt-in", () =>
+    Effect.gen(function* () {
+      const modes: Array<boolean> = [];
+
+      const run = Command.runWith(
+        Command.withHandler(releaseCommand, ({ dryRun }) =>
+          Effect.sync(() => {
+            modes.push(dryRun);
+          }),
+        ),
+        { version: "1.0.0", renderErrors: false },
+      );
+
+      yield* run([]);
+      yield* run(["--dry-run"]);
+      expect(modes).toEqual([false, true]);
     }),
   );
 
