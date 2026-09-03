@@ -1042,7 +1042,7 @@ describe("Incremental review scope", () => {
       expect(requested.some((request) => request.includes("/compare/"))).toBe(true);
       expect(requested.filter((request) => request.includes("/git/trees/"))).toHaveLength(2);
       expect(published).toHaveLength(1);
-      expect(published[0]).toContain("| **Incremental** | 0 reviewed | ✅ None |");
+      expect(published[0]).toContain("| **Incremental** | 0 patches supplied | ✅ None |");
       expect(published[0]).toContain(
         "No pull-request files changed since the last completed review.",
       );

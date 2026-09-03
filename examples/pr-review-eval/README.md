@@ -1,47 +1,104 @@
 # PR-review eval
 
-Replay saved PRs through the reviewer and score findings against adjudicated defects.
+Replay frozen PR inputs and independently judge every original candidate, including suppressed
+and unresolved feedback. Verification remains experimental until a frozen heldout comparison
+supports rollout. Public fixtures and deterministic tests do not establish model quality.
 
-- Validate offline: `vp run pr-review-eval -- --cases fixtures/smoke-suite.json validate`.
-- Live runs require `EFFECT_AGENT_LIVE=1` and `OPENAI_API_KEY`.
-- The current variant reuses the Action's explicit cache and $0.999999 per-trial spending cap.
-- Run `vp run pr-review-eval -- --help` for commands and options.
-- Public cases live in `fixtures/`; private cases and results belong in ignored `data/` and `results/`.
+Run commands from the repository root. The task resolves file paths from `examples/pr-review-eval`.
+Private cases and observations belong in that example's ignored `data/` and `results/` directories.
 
-## Review variant
+```sh
+vp run pr-review-eval -- --cases fixtures/verification-corpus.json validate
+vp run pr-review-eval -- --help
+```
 
-The current OpenAI variant uses the Action's `makeReviewOpenAi` adapter, with Sol, `xhigh`
-reasoning, explicit prompt caching, and a separate $0.999999 spending ledger for each trial.
-Admission reserves full cache-miss input and the affordable output allowance before every
-request. Unmetered requests keep their reservations. Saved usage is an estimate, not an invoice.
-Only the non-inference input-token count can retry once, after a transient failure; each count
-attempt has a 10-second timeout. Permanent or exhausted preflight failures prevent admission.
-The focused diff-first variant records `diff-review-v5-capped` and `costLimitMicrousd` so it
-can be distinguished from the earlier exhaustive `source-review-v4-capped` profile and uncapped
-eval observations. It reads source to resolve concrete defect questions and can explicitly
-report unfinished coverage. The provider appends its spending balance before token counting.
+## Freeze before paid execution
 
-Use `unadjudicated` for operational replay cases without an established defect oracle.
-These cases have no expected defects and never count as clean controls or completed blocker
-cases. A completed review on such a case does not measure defect-detection quality.
+`fixtures/verification-corpus.json` contains seven adjudicated cases and the immutable #287
+operational replay. The planned comparison is 48 trials with a $47.999952 ceiling. The cleanup
+pair is established by `test/cleanup-oracle.test.ts` against the pinned Effect runtime. Both
+variants and the #287 replay stay together in development. The related publication cases stay
+together in heldout. No paid comparison results have been recorded; rollout remains experimental.
 
-## Scoring and output
+Every comparison case supplies `oracleVersion`, `split` (`development` or `heldout`),
+`relatedGroup`, and a digest-checked repository snapshot. Keep related revisions and both cleanup
+variants in the same split. Establish clean controls independently of earlier empty reviews.
+`unadjudicated` cases are operational replays. They have no expected defects and never enter clean
+control or blocker recall denominators. They still consume the trial budget.
 
-This bench replays saved requests against adjudicated defects.
-Public fixtures are examples and do not support a quality claim. Live trials require
-`EFFECT_AGENT_LIVE=1` and provider credentials.
+The freeze command records request, source, and oracle identities; the exact reviewer Git revision;
+discovery and verification prompt digests; guidance; model settings; stage allocations; limits;
+pricing; and cache policy. Oracle identity includes case kind, expected defects, and their severity.
+It refuses a dirty checkout and makes no model calls.
 
-Score the first trial separately. Detection accepts an expected blocker at any severity, while
-blocking recall requires `blocking`. Later trials measure instability and cannot repair a first
-trial miss. Bind named judgments to the exact observation digest. Add a new corpus defect when the
-model finds a valid issue outside the expected set.
+```sh
+vp run pr-review-eval -- --cases ./data/cases.json freeze --variant kom-28 --output ./data/frozen.json
+vp run pr-review-eval -- --cases ./data/frozen.json run --output ./results/paired.jsonl
+```
 
-Reports distinguish succeeded, incomplete, and failed trials. `incomplete` and `exhausted` results
-still contribute findings, tokens, and cost, but cannot pass a clean control or count as a complete
-case.
+Live execution requires `EFFECT_AGENT_LIVE=1` and `OPENAI_API_KEY`. Supply the same optional
+`--guidance path` at freeze and run time. Any configuration drift refuses execution. `--variant`
+labels the comparison. `--strategy baseline` and `--strategy verified` select implementations;
+paired runs require both, which is the default when the flag is omitted.
 
-Run `vp run pr-review-eval -- --help` from the repository root. Validate the case selection before
-writing output. The runner appends each completed trial to a new exclusive file and keeps finished
-rows after interruption. Reports reject empty files, incomplete grids, malformed trailing lines,
-and mismatched trial or case selections. Keep private cases and raw results in the ignored `data/`
-and `results/` directories.
+Freeze at most 20 adjudicated cases across both splits, two strategies, and three trials each.
+All trials, including operational replays, must fit 120 runs. The maximum authorized comparison
+cost is 119,999,880 microdollars, or $119.999880. This command has no warmups or automatic reruns.
+Do not start another fresh-ledger run to replace a failed first trial. Any additional run requires
+remaining explicitly budgeted capacity or a separately authorized budget.
+
+Execution is serial. Cases are sorted by ID; trial numbers advance together across the corpus.
+The first strategy alternates for each case/trial pair. Each trial allocates a fresh $0.999999
+ledger and an isolated cache namespace. Baseline gives discovery the full allowance. Verified
+gives discovery 699,999 microdollars and holds 300,000 for verification. Both share the same
+five-minute deadline, 64 turns, 64 tool calls, and 24-candidate capacity. Token usage records actual
+cache reads and writes; trial number never implies cache state. Prices are estimates, not invoices.
+
+The runner appends each returned trial, including typed failures and incomplete outcomes, to a
+new exclusive JSONL file and flushes it before proceeding. Finished rows survive interruption.
+Defects and interruption propagate after cleanup. Available host diagnostics are emitted as one
+bounded `eval-trial-finalization` JSON record on stderr, without raw causes or model reasoning.
+This diagnostic does not turn an interrupted trial into a completed observation, and the missing
+grid keeps the comparison ineligible for rollout.
+
+## Independent judgments and rollout
+
+```sh
+vp run pr-review-eval -- --cases ./data/frozen.json report --observations ./results/paired.jsonl --trials 3 --output ./results/unjudged.json
+vp run pr-review-eval -- --cases ./data/frozen.json report --observations ./results/paired.jsonl --judgments ./data/judgments.json --trials 3 --output ./results/judged.json
+```
+
+The unjudged report supplies `candidateId`, `observationDigest`, `oracleDigest`, and the original
+candidate. Bind each named human judgment to those identities and the report's
+`observationSetDigest`. Judge validity independently of verifier outcomes. `matches-expected`
+names defect IDs from the oracle. `new-valid` retains a newly discovered defect and its independently
+judged `severity`; it requires an oracle correction before rollout. Legacy finding-index judgments
+remain readable for historical data, but cannot authorize a frozen comparison.
+
+Reports separate discovery misses, valid candidates wrongly refuted, valid candidates withheld,
+published false blockers, incomplete/failed outcomes, actual usage, estimated cost, and elapsed
+time. Unresolved feedback is withheld from supported blocker counts. Pending patches and excluded
+paths make the trial incomplete even if discovery declared its supplied patches assessed.
+First trials determine recall and rollout. Later trials expose instability and never replace a miss.
+
+The rollout decision uses adjudicated heldout first trials only. Eligibility requires all relevant
+judgments resolved, fewer false blockers, every baseline-detected blocker preserved without
+downgrading baseline blocking findings, no valid blocker wrongly refuted, and no additional
+incomplete or failed first trials. Mixed or inconclusive results stay `experimental`. An `eligible`
+report does not enable the Action automatically. Record the measured decision in the implementation
+PR before changing the shipping strategy. This small comparison cannot establish general quality.
+
+## Correct an oracle without repeating inference
+
+Increment `oracleVersion` for each corrected case and remove its old `oracleDigest`. Keep requests,
+source snapshots, splits, and related groups unchanged. The rescore command requires the complete
+original paired grid. It keeps the frozen original configurations and results, writes a new freeze,
+and records each predecessor observation digest. Original files remain unchanged.
+
+```sh
+vp run pr-review-eval -- --cases ./data/corrected-cases.json rescore --previous-cases ./data/frozen.json --observations ./results/paired.jsonl --correction-id kom-28-oracle-2 --frozen-output ./data/corrected-frozen.json --output ./results/rescored.jsonl
+```
+
+Re-adjudicate against the new observation and oracle digests, then report both strategies together.
+Reports reject stale oracle identities, empty files, incomplete grids, duplicate trials, malformed
+rows, reused cache namespaces, changed configurations, and incorrect execution order.

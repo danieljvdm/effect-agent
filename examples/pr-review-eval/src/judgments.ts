@@ -1,3 +1,4 @@
+import { ReviewCandidate, ReviewSeverity } from "@effect-agent/pr-review";
 import { Schema } from "effect";
 
 import {
@@ -31,7 +32,11 @@ const FindingJudgmentFields = Schema.Struct({
   inputDigest: EvalInputDigest,
   variantId: EvalVariantId,
   trial: Schema.Int.check(Schema.isGreaterThan(0)),
-  findingIndex: Schema.Natural,
+  findingIndex: Schema.optionalKey(Schema.Natural),
+  candidateId: Schema.optionalKey(ReviewCandidate.fields.id),
+  observationDigest: Schema.optionalKey(EvalInputDigest),
+  oracleDigest: Schema.optionalKey(EvalInputDigest),
+  severity: Schema.optionalKey(ReviewSeverity),
   label: EvalAdjudicationLabel,
   matchedDefectIds: Schema.Array(EvalDefectId).check(Schema.isMaxLength(12)),
   rationale: BoundedRationale,
@@ -42,6 +47,7 @@ const FindingJudgmentFields = Schema.Struct({
       const ids = judgment.matchedDefectIds;
 
       return (
+        (judgment.candidateId !== undefined || judgment.findingIndex !== undefined) &&
         new Set(ids).size === ids.length &&
         (judgment.label === "matches-expected" ? ids.length > 0 : ids.length === 0)
       );
@@ -65,7 +71,7 @@ const JudgmentSetFields = Schema.Struct({
     (set) => {
       const keys = set.judgments.map(
         (judgment) =>
-          `${judgment.caseId}\0${judgment.variantId}\0${judgment.trial}\0${judgment.findingIndex}`,
+          `${judgment.caseId}\0${judgment.variantId}\0${judgment.trial}\0${judgment.candidateId ?? judgment.findingIndex}`,
       );
 
       return new Set(keys).size === keys.length;

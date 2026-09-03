@@ -4,6 +4,8 @@ import {
   MAX_REVIEW_PATCH_CHARS,
   ReviewChange,
   ReviewContextError,
+  type ReviewCostSnapshot,
+  type ReviewDiagnostics,
   ReviewFileList,
   ReviewFinding,
   type ReviewOutcome,
@@ -40,6 +42,7 @@ import {
 } from "./github.ts";
 import {
   type ReviewCostEstimate,
+  type ReviewFindingVerification,
   ReviewExclusion,
   ReviewPresentation,
   withReviewMarker,
@@ -148,6 +151,80 @@ export const reviewPublicationFailure = (input: {
 
   return undefined;
 };
+
+/** Publication preserves original finding text; verifier labels cannot create a new blocker. */
+export const prepareReviewPublication = (
+  outcome: Pick<ReviewOutcome, "report" | "diagnostics">,
+) => {
+  const diagnostics = outcome.diagnostics;
+  const verified = diagnostics?.strategy === "verified";
+  const findings: Array<ReviewFinding> = [];
+  const findingVerification: Array<ReviewFindingVerification | undefined> = [];
+
+  for (const finding of outcome.report.findings) {
+    const candidate = diagnostics?.candidates.find(
+      ({ finding: original }) =>
+        original.path === finding.path &&
+        original.line === finding.line &&
+        original.severity === finding.severity &&
+        original.category === finding.category &&
+        original.title === finding.title &&
+        original.body === finding.body,
+    );
+
+    if (verified && candidate?.disposition === "refuted") continue;
+    findings.push(finding);
+    findingVerification.push(
+      !verified
+        ? undefined
+        : candidate?.disposition === "supported" && candidate.publication === "published"
+          ? "supported"
+          : "unresolved",
+    );
+  }
+
+  return {
+    report: ReviewReport.make({ ...outcome.report, findings }),
+    findingVerification,
+    blockingFindings: findings.filter(
+      (finding, index) =>
+        finding.severity === "blocking" && findingVerification[index] !== "unresolved",
+    ).length,
+    verificationIncomplete:
+      verified &&
+      ((diagnostics.verification !== "complete" && diagnostics.verification !== "skipped") ||
+        diagnostics.droppedCandidateCount > 0 ||
+        diagnostics.candidates.some(
+          ({ disposition }) => disposition === "unresolved" || disposition === "not-requested",
+        ) ||
+        findingVerification.includes("unresolved")),
+  };
+};
+
+const logReviewDiagnostics = Effect.fn("logReviewDiagnostics")(function* (
+  diagnostics: ReviewDiagnostics,
+) {
+  yield* Effect.logInfo("Review diagnostics", {
+    strategy: diagnostics.strategy,
+    requestDigest: diagnostics.requestDigest,
+    discovery: diagnostics.discovery,
+    verification: diagnostics.verification,
+    patchesSupplied: diagnostics.patchesSupplied,
+    droppedActivityCount: diagnostics.droppedActivityCount,
+    droppedCandidateCount: diagnostics.droppedCandidateCount,
+  });
+  for (const entry of diagnostics.activity) yield* Effect.logInfo("Review source activity", entry);
+  for (const stage of diagnostics.stages) yield* Effect.logInfo("Review stage", stage);
+  for (const candidate of diagnostics.candidates) {
+    yield* Effect.logInfo("Review candidate disposition", {
+      id: candidate.id,
+      batch: candidate.batch,
+      severity: candidate.finding.severity,
+      disposition: candidate.disposition,
+      publication: candidate.publication,
+    });
+  }
+});
 
 const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
   entries: ReadonlyArray<readonly [string, string | number]>,
@@ -820,6 +897,7 @@ export const reviewActionProgram = Effect.gen(function* () {
 
     if (surface.changes.length === 0) {
       const resolutions: ReadonlyArray<ReviewResolution> = [];
+      const findingVerification: ReadonlyArray<ReviewFindingVerification | undefined> = [];
 
       return {
         resolutions,
@@ -828,6 +906,10 @@ export const reviewActionProgram = Effect.gen(function* () {
         modelTurns: 0,
         exhausted: undefined,
         incomplete: false,
+        diagnostics: undefined,
+        stageCosts: undefined,
+        findingVerification,
+        blockingFindings: 0,
         inputTokens: 0,
         uncachedInputTokens: 0,
         cachedInputTokens: 0,
@@ -860,9 +942,12 @@ export const reviewActionProgram = Effect.gen(function* () {
       client: yield* OpenAiClient.make({ apiKey: yield* Config.redacted("OPENAI_API_KEY") }),
       model: modelName,
       cacheKey: `pr-review-v2:${pull.headRevision}`,
+      strategy: "baseline",
     });
 
     const reviewer = makeReviewer({
+      strategy: "baseline",
+      onDiagnostics: logReviewDiagnostics,
       model: OpenAiLanguageModel.model(modelName, {
         max_output_tokens: 32_000,
         store: false,
@@ -900,6 +985,8 @@ export const reviewActionProgram = Effect.gen(function* () {
                 modelCalls: snapshot.modelCalls,
                 costLimited: snapshot.stopped,
                 inputLimited: snapshot.inputLimitExceeded === true,
+                globalStopped: snapshot.globalStopped,
+                stages: snapshot.stages,
                 ...snapshot.usage,
                 costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
               }),
@@ -907,6 +994,9 @@ export const reviewActionProgram = Effect.gen(function* () {
           ),
         ),
       );
+
+    const publication = prepareReviewPublication(result);
+    const stageCosts: ReviewCostSnapshot["stages"] = (yield* provider.costControl.snapshot).stages;
 
     const pending = new Set(result.pendingPaths ?? []);
 
@@ -924,7 +1014,11 @@ export const reviewActionProgram = Effect.gen(function* () {
       },
       modelTurns: result.turns,
       exhausted: result.exhausted,
-      incomplete: result.incomplete === true,
+      incomplete: result.incomplete === true || publication.verificationIncomplete,
+      diagnostics: result.diagnostics,
+      stageCosts,
+      findingVerification: publication.findingVerification,
+      blockingFindings: publication.blockingFindings,
       inputTokens: result.usage.inputTokens,
       uncachedInputTokens: result.usage.uncachedInputTokens,
       cachedInputTokens: result.usage.cachedInputTokens,
@@ -932,7 +1026,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       outputTokens: result.usage.outputTokens,
       estimatedCostMicrousd: result.usage.estimatedCostMicrousd,
       reservedCostMicrousd: result.usage.reservedCostMicrousd ?? 0,
-      report: reanchorToFullPullRequest(fullFiles, result.report),
+      report: reanchorToFullPullRequest(fullFiles, publication.report),
     };
   }).pipe(Effect.exit);
 
@@ -1011,6 +1105,10 @@ export const reviewActionProgram = Effect.gen(function* () {
     incomplete,
     resolutions,
     followUps,
+    diagnostics,
+    stageCosts,
+    findingVerification,
+    blockingFindings: blocking,
   } = attemptExit.value;
 
   const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
@@ -1025,8 +1123,6 @@ export const reviewActionProgram = Effect.gen(function* () {
           label: pricing.label,
           url: pricing.url,
         };
-
-  const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
 
   // Only positive verification from a complete, nonblocking pass can retire prior feedback.
   // Dismissals retain the inspected commit and evidence even if later publication fails.
@@ -1086,9 +1182,12 @@ export const reviewActionProgram = Effect.gen(function* () {
   const body = withReviewMarker(
     presentation.renderReview({
       report,
+      findingVerification,
+      diagnostics,
+      stageCosts,
       automaticReviewsRemaining: selection.automaticReviewsRemaining,
       scope,
-      reviewedFiles: surface.changes.length,
+      suppliedPatches: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
       exclusions: surface.exclusions,
       ignoredFiles: surface.ignoredPaths.length,
@@ -1115,14 +1214,18 @@ export const reviewActionProgram = Effect.gen(function* () {
       commitId: pull.headRevision,
       event: reviewEventFor(blocking),
       body,
-      comments: report.findings.flatMap((finding) =>
+      comments: report.findings.flatMap((finding, index) =>
         finding.line === undefined
           ? []
           : [
               {
                 path: finding.path,
                 line: finding.line,
-                body: presentation.renderFinding(finding, pull.headRevision),
+                body: presentation.renderFinding(
+                  finding,
+                  pull.headRevision,
+                  findingVerification[index],
+                ),
               },
             ],
       ),

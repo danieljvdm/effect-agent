@@ -5,13 +5,16 @@ import {
   ReviewReport,
   type ReviewRepository,
   ReviewRequest,
+  ReviewDiagnostics,
 } from "@effect-agent/pr-review";
 import { ScriptedModel } from "@effect-agent/testing";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import {
+  type Crypto,
   Deferred,
+  Console,
   Effect,
   Fiber,
   FileSystem,
@@ -42,6 +45,10 @@ import {
   EvalVariantConfiguration,
   EvalVariantId,
   digestText,
+  digestRepositorySnapshot,
+  EvalRepositorySnapshot,
+  EvalRepositoryFile,
+  freezeEvalSuite,
   makeCurrentOpenAiVariant,
   makeQualityReport,
   runEvalSuite,
@@ -123,6 +130,229 @@ const successfulOutcome = ReviewOutcome.make({
 });
 
 describe("PR-review model eval", () => {
+  it.effect("retains bounded final diagnostics while a defect propagates", () =>
+    Effect.gen(function* () {
+      const suite = yield* makeSuite();
+      const evalCase = suite.cases[0];
+
+      if (evalCase === undefined) return yield* Effect.die("Missing fixture");
+      const console = yield* Console.Console;
+      const logged: Array<unknown> = [];
+      let invocations = 0;
+
+      const diagnostics = ReviewDiagnostics.make({
+        strategy: "verified",
+        requestDigest: evalCase.inputDigest,
+        discovery: "complete",
+        verification: "failed",
+        patchesSupplied: 1,
+        candidates: [],
+        activity: [],
+        droppedActivityCount: 0,
+        droppedCandidateCount: 0,
+        stages: [],
+      });
+
+      const variant: EvalVariant<never> = {
+        configuration: configuration("defect"),
+        review: (_request, trial) =>
+          Effect.gen(function* () {
+            invocations += 1;
+            yield* trial?.onDiagnostics(diagnostics) ?? Effect.void;
+
+            return yield* Effect.die("private defect payload");
+          }),
+      };
+
+      const exit = yield* runEvalSuite(suite, [variant], {
+        trials: 3,
+        concurrency: 1,
+        caseIds: [],
+      }).pipe(
+        Stream.runCollect,
+        Effect.provideService(Console.Console, {
+          ...console,
+          error: (...values: ReadonlyArray<unknown>) => {
+            logged.push(...values);
+          },
+        }),
+        Effect.exit,
+      );
+
+      expect(exit._tag).toBe("Failure");
+      expect(invocations).toBe(1);
+      expect(logged).toHaveLength(1);
+      expect(String(logged[0])).toContain('"type":"eval-trial-finalization"');
+      expect(String(logged[0])).toContain('"stop":"defect"');
+      expect(String(logged[0])).not.toContain("private defect payload");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.effect("freezes paired order, isolates caches, and preserves a failed first trial", () =>
+    Effect.gen(function* () {
+      const original = (yield* makeSuite()).cases[0];
+
+      if (original === undefined) return yield* Effect.die("Missing fixture");
+
+      const snapshot = EvalRepositorySnapshot.make({
+        version: 1,
+        digest: original.inputDigest,
+        files: [
+          EvalRepositoryFile.make({
+            path: "src/read.ts",
+            revision: "base",
+            content: "export const read = (value?: string) => value?.length ?? 0;",
+          }),
+          EvalRepositoryFile.make({
+            path: "src/read.ts",
+            revision: "head",
+            content: "export const read = (value?: string) => value.length;",
+          }),
+        ],
+      });
+
+      const repository = EvalRepositorySnapshot.make({
+        ...snapshot,
+        digest: yield* digestRepositorySnapshot(snapshot),
+      });
+
+      const suite = EvalSuite.make({
+        version: 1,
+        cases: [
+          EvalCase.make({
+            ...original,
+            id: Schema.decodeSync(EvalCaseId)("development"),
+            repository,
+            oracleVersion: 1,
+            split: "development",
+            relatedGroup: "development",
+          }),
+          EvalCase.make({
+            ...original,
+            id: Schema.decodeSync(EvalCaseId)("heldout"),
+            repository,
+            oracleVersion: 1,
+            split: "heldout",
+            relatedGroup: "heldout",
+          }),
+        ],
+      });
+
+      const baseline = yield* makeCurrentOpenAiVariant({
+        id: "baseline",
+        strategy: "baseline",
+        reviewerRevision: "a".repeat(40),
+      });
+
+      const verified = yield* makeCurrentOpenAiVariant({
+        id: "verified",
+        strategy: "verified",
+        reviewerRevision: "a".repeat(40),
+      });
+
+      const frozen = yield* freezeEvalSuite(
+        suite,
+        [baseline.configuration, verified.configuration],
+        "paired-test",
+      );
+
+      const invoked: Array<string> = [];
+      let first = true;
+
+      const variants: Array<EvalVariant<never>> = [baseline, verified].map((variant) => ({
+        configuration: variant.configuration,
+        review: () =>
+          Effect.suspend(() => {
+            invoked.push(variant.configuration.id);
+            if (first) {
+              first = false;
+
+              return Effect.fail(
+                EvalReviewerFailure.make({
+                  errorTag: "Unavailable",
+                  message: "First trial failed",
+                }),
+              );
+            }
+
+            return Effect.succeed(successfulOutcome);
+          }),
+      }));
+
+      const observations = yield* runEvalSuite(frozen, variants, {
+        trials: 3,
+        concurrency: 1,
+        caseIds: [],
+      }).pipe(Stream.runCollect);
+
+      expect(invoked).toEqual([
+        "baseline",
+        "verified",
+        "verified",
+        "baseline",
+        "baseline",
+        "verified",
+        "verified",
+        "baseline",
+        "baseline",
+        "verified",
+        "verified",
+        "baseline",
+      ]);
+      expect(observations[0]?.result._tag).toBe("Failed");
+      expect(
+        observations
+          .filter((row) => row.caseId === "development" && row.variant.id === "baseline")
+          .map((row) => [row.trial, row.result._tag]),
+      ).toEqual([
+        [1, "Failed"],
+        [2, "Succeeded"],
+        [3, "Succeeded"],
+      ]);
+      expect(new Set(observations.map((row) => row.cacheNamespace)).size).toBe(12);
+      expect(new Set(observations.map((row) => row.runId)).size).toBe(1);
+      expect(frozen.comparison?.maximumCostMicrousd).toBe(11_999_988);
+
+      const wrongSplit = EvalSuite.make({
+        ...suite,
+        cases: suite.cases.map((evalCase) =>
+          EvalCase.make({ ...evalCase, relatedGroup: "same-revision" }),
+        ),
+      });
+
+      expect(
+        (yield* freezeEvalSuite(
+          wrongSplit,
+          [baseline.configuration, verified.configuration],
+          "bad-split",
+        ).pipe(Effect.result))._tag,
+      ).toBe("Failure");
+
+      const tooLarge = EvalSuite.make({
+        version: 1,
+        cases: Array.from({ length: 21 }, (_, index) =>
+          EvalCase.make({
+            ...suite.cases[index % 2]!,
+            id: Schema.decodeSync(EvalCaseId)(`case-${index}`),
+          }),
+        ),
+      });
+
+      expect(
+        (yield* freezeEvalSuite(
+          tooLarge,
+          [baseline.configuration, verified.configuration],
+          "over-budget",
+        ).pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(
+        (yield* runEvalSuite(frozen, variants, { trials: 3, concurrency: 2, caseIds: [] }).pipe(
+          Stream.runCollect,
+          Effect.result,
+        ))._tag,
+      ).toBe("Failure");
+      expect(invoked).toHaveLength(12);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("replays the real reviewer and round-trips its JSONL observation", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();
@@ -155,7 +385,7 @@ describe("PR-review model eval", () => {
       const model = Model.make("scripted", "eval", Layer.succeedContext(scripted));
       const reviewer = makeReviewer({ model });
 
-      const variant: EvalVariant<ReviewRepository> = {
+      const variant: EvalVariant<ReviewRepository | Crypto.Crypto> = {
         configuration: configuration("scripted"),
         review: (input) =>
           reviewer.review(input).pipe(
@@ -175,7 +405,7 @@ describe("PR-review model eval", () => {
       }).pipe(Stream.runCollect);
 
       expect(observations).toHaveLength(1);
-      expect(observations[0]?.runnerVersion).toBe("0.1.1");
+      expect(observations[0]?.runnerVersion).toBe("0.2.0");
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
         expect(observations[0].result.outcome.report.findings).toEqual([]);
@@ -191,7 +421,7 @@ describe("PR-review model eval", () => {
       expect(decoded).toEqual(observations);
 
       const historical = (yield* fs.readFileString(output)).replace(
-        '"runnerVersion":"0.1.1"',
+        '"runnerVersion":"0.2.0"',
         '"runnerVersion":"0.0.9"',
       );
 
@@ -247,7 +477,7 @@ describe("PR-review model eval", () => {
           estimateCostMicrousd: () => Effect.succeed({ costMicrousd: 12 }),
         });
 
-        const variant: EvalVariant<ReviewRepository> = {
+        const variant: EvalVariant<ReviewRepository | Crypto.Crypto> = {
           configuration: configuration("partial"),
           review: (input) =>
             reviewer.review(input).pipe(
@@ -299,7 +529,7 @@ describe("PR-review model eval", () => {
       type Review = ReturnType<typeof variant.review>;
       expectTypeOf<Effect.Error<Review>>().toEqualTypeOf<EvalReviewerFailure>();
       expectTypeOf<Effect.Services<Review>>().toEqualTypeOf<
-        OpenAiClient.OpenAiClient | ReviewRepository
+        OpenAiClient.OpenAiClient | ReviewRepository | Crypto.Crypto
       >();
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
       expect(variant.configuration.reviewerProfile).toBe("diff-review-v5-capped");
@@ -345,11 +575,12 @@ describe("PR-review model eval", () => {
         ),
       );
 
-      expect(observations[0]?.result).toEqual({
+      expect(observations[0]?.result).toMatchObject({
         _tag: "Failed",
         errorTag: "AiError/InvalidRequestError",
         message: "AI failure; retryable=false",
         estimatedCostMicrousd: 0,
+        diagnostics: { discovery: "failed", candidates: [] },
       });
       expect(JSON.stringify(observations)).not.toContain(privateText);
       expect(JSON.stringify(observations)).not.toContain("private-api-key");
@@ -467,7 +698,7 @@ describe("PR-review model eval", () => {
             store: false,
             service_tier: "default",
             max_output_tokens: 24_999,
-            prompt_cache_key: "pr-review-v2:head",
+            prompt_cache_key: expect.stringMatching(/^[a-f0-9]{64}$/),
             prompt_cache_options: { mode: "explicit", ttl: "30m" },
             tools: expect.arrayContaining([
               expect.objectContaining({ name: "read_file", strict: true }),
@@ -506,7 +737,22 @@ describe("PR-review model eval", () => {
           ),
         });
 
-        const report = yield* makeQualityReport(unadjudicated, observations, 2);
+        expect(
+          (yield* makeQualityReport(unadjudicated, observations, 2).pipe(Effect.result))._tag,
+        ).toBe("Failure");
+
+        const replayObservations = yield* runEvalSuite(
+          unadjudicated,
+          [
+            {
+              configuration: configuration("replay"),
+              review: () => Effect.succeed(successfulOutcome),
+            },
+          ],
+          { trials: 2, concurrency: 1, caseIds: [] },
+        ).pipe(Stream.runCollect);
+
+        const report = yield* makeQualityReport(unadjudicated, replayObservations, 2);
 
         expect(report.variants[0]?.cleanControls).toEqual({ passed: 0, total: 0 });
         expect(report.variants[0]?.blockerCases.total).toBe(0);

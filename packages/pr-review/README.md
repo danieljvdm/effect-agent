@@ -3,8 +3,9 @@
 A small, provider-neutral review agent. Bounded model runs receive admitted patches as
 literal unified diffs, read immutable base or head source when needed, record established
 findings with `record_finding`, and return findings through a required native completion Tool.
-There is no voting, candidate cache, private hypothesis
-handoff, or repository code execution.
+The default `baseline` strategy retains the existing discovery prompts and publication decisions.
+The `verified` strategy is experimental and available for evaluation; the Action uses the baseline.
+There is no voting, persistent candidate cache, or repository code execution.
 
 The native Agent `inputPrompt` projects each complete patch once, with literal newlines. It keeps
 file headers, hunk ranges, additions, deletions, context, and mode or rename metadata. It does not
@@ -94,9 +95,68 @@ propagate, and these records belong to the current run's Scope, not persistent s
 The report retains recorded findings before adding newly submitted findings, removes exact
 duplicates, and marks coverage incomplete if the combined report exceeds 24 findings.
 
+Every outcome includes bounded `diagnostics`. Each discovery stage's optional `declaredAssessment`
+records the native submission's `incomplete` flag; it is absent when no submission completed.
+The aggregate `discovery` and stage `completion` also account for host limits and failures.
+These fields separate discovery's declared assessment from
+candidate verification and count patches supplied, without claiming independent proof that each
+patch was assessed. Source activity records stage, batch, exact revision, path, requested and
+returned line ranges, and outcome. EOF-short reads, unavailable source, oversized range rejection,
+truncated searches, and the engine's encoded tool-result truncation are distinct. Activity retains
+at most 128 records with a dropped count. It contains no source text, search queries, credentials,
+raw causes, or model reasoning. Stage entries report calls, tool calls, usage, and stop reasons;
+zero-call verification entries explain skipped or unavailable work. Host cost snapshots retain
+the reconciled total and optional per-stage accounting.
+
+Both strategies retain up to 24 `ReviewCandidate` values in diagnostics, including original
+findings that verification later suppresses. Candidate IDs contain a SHA-256 digest of the complete
+Schema-encoded request and an ordinal. The digest includes ordered patches, revisions, metadata,
+scope, exclusions, and follow-ups. Hashing requires the platform-neutral `Crypto.Crypto` service;
+hash failures remain typed `ReviewVerificationError` values. `reviewRequestDigest`,
+`reviewInstructions`, `REVIEW_VERIFICATION_INSTRUCTIONS`, and `REVIEW_LIMITS` are exported so hosts
+can record the effective evaluation inputs. IDs identify candidates within a review input;
+independent judgments must also identify the observation because model results may vary.
+
+With `strategy: "verified"`, the host runs one fresh scoped verifier after discovery stops. It
+receives the original validated union of early recordings and completion-only findings, relevant
+complete diffs, and repository guidance. It receives no discovery transcript. Only immutable
+source tools and `submit_verification` are available. A supported or refuted decision requires a
+reason and up to eight references to supplied diff lines or source actually delivered to this
+verifier at the exact revisions. Source whose encoded result would exceed the engine's byte bound
+is rejected before becoming verifier evidence; the verifier can request fewer lines. Missing,
+duplicate, unknown, or unsupported decisions prevent completion. This validates evidence access,
+not the truth of a model's conclusion.
+
+Supported candidates publish their original finding unchanged. Refuted candidates remain in
+diagnostics and are omitted from the report. Unresolved candidates remain in the report with
+`publication: "unverified"` in diagnostics and make the attempt incomplete. Hosts must label that
+feedback and count only supported blocking findings when creating a new change request. Unresolved
+feedback without a supported blocker requires a comment and an incomplete result. Refuting a
+candidate never resolves a prior review. With zero candidates, only candidate verification is
+skipped; explicit prior-blocker resolution evidence remains necessary.
+
+All stages and batches share the deadline, turns, tool calls, and candidate capacity. Without
+host cost admission, verification receives only the remaining cumulative token allowance. With
+cost admission, optional `costControl.beginStage` changes the stage within the same ledger;
+`snapshot.stopped` describes the current stage and `globalStopped` closes every stage. A host may
+reserve discovery and verification allowances, but must retain outstanding uncertain charges.
+No stage switch resets the ledger. A smaller verifier context may fit after a discovery context
+refusal. If no request fits, candidates remain unresolved. Successful verification never clears
+discovery incompleteness, exhaustion, pending patches, or excluded paths.
+
+The optional `onDiagnostics` Effect runs once at scoped finalization, including expected failure,
+defect, and interruption. It lets hosts retain available candidate diagnostics without turning
+cancellation into a successful outcome. Defects and interruption propagate after resource cleanup
+and cannot start verification. These transient records do not survive process termination.
+
 ```ts
 const reviewer = makeReviewer({ model, guidance, estimateCostMicrousd, costControl });
-const program = reviewer.review(request).pipe(Effect.provideService(ReviewRepository, repository));
+const program = reviewer
+  .review(request)
+  .pipe(
+    Effect.provideService(ReviewRepository, repository),
+    Effect.provideService(Crypto.Crypto, crypto),
+  );
 ```
 
 `repository.readFile` and `repository.findFiles` return typed Effects. Hosts must

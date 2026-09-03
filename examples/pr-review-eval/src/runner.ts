@@ -1,11 +1,26 @@
-import { type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review";
-import { Clock, DateTime, Effect, Result, Schema, Stream } from "effect";
+import { ReviewDiagnostics, type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review";
+import {
+  Cause,
+  Clock,
+  Console,
+  Crypto,
+  DateTime,
+  Effect,
+  Exit,
+  Ref,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
 
+import { configurationIdentity, validateFrozenComparison } from "./comparison.ts";
 import {
   CURRENT_RUNNER_VERSION,
   type EvalCase,
   EvalCaseId,
   EvalConfigurationError,
+  EvalDataError,
+  type EvalInputDigest,
   EvalObservation,
   type EvalReviewerFailure,
   type EvalSuite,
@@ -14,6 +29,7 @@ import {
   EvalTrialSucceeded,
   type EvalVariantConfiguration,
 } from "./contracts.ts";
+import { digestEvalOracle, digestText, validateEvalSuite } from "./corpus.ts";
 import { repositoryLayer } from "./repository.ts";
 
 const RunnerOptions = Schema.Struct({
@@ -26,8 +42,26 @@ export interface EvalVariant<Requirements> {
   readonly configuration: EvalVariantConfiguration;
   readonly review: (
     request: ReviewRequest,
+    trial?: EvalTrialContext,
   ) => Effect.Effect<ReviewOutcome, EvalReviewerFailure, Requirements>;
 }
+
+export interface EvalTrialContext {
+  readonly runId: string;
+  readonly cacheNamespace: EvalInputDigest;
+  readonly onDiagnostics: (diagnostics: ReviewDiagnostics) => Effect.Effect<void>;
+}
+
+const FinalizationDiagnostic = Schema.Struct({
+  type: Schema.Literal("eval-trial-finalization"),
+  caseId: EvalCaseId,
+  variantId: Schema.String,
+  trial: Schema.Natural,
+  runId: Schema.String,
+  cacheNamespace: Schema.String,
+  stop: Schema.Literals(["defect", "interrupted"]),
+  diagnostics: ReviewDiagnostics,
+});
 
 export interface EvalRunnerOptions {
   readonly trials: number;
@@ -39,6 +73,9 @@ interface EvalJob<Requirements> {
   readonly evalCase: EvalCase;
   readonly variant: EvalVariant<Requirements>;
   readonly trial: number;
+  readonly sequence: number;
+  readonly runId: string;
+  readonly comparisonDigest?: EvalInputDigest;
 }
 
 const decodeRunnerOptions = Schema.decodeUnknownEffect(RunnerOptions);
@@ -76,11 +113,49 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
   const clock = yield* Clock.Clock;
   const recordedAt = yield* DateTime.now;
   const startedAt = yield* clock.monotonicTimeNanos;
+  const oracleDigest = yield* digestEvalOracle(job.evalCase);
+
+  const cacheNamespace = yield* digestText(
+    `${job.runId}:${job.evalCase.id}:${job.variant.configuration.strategy ?? job.variant.configuration.id}:${job.trial}`,
+  );
+
+  const latestDiagnostics = yield* Ref.make<ReviewDiagnostics | undefined>(undefined);
 
   const result = yield* Effect.result(
     job.variant
-      .review(job.evalCase.request)
-      .pipe(Effect.provide(repositoryLayer(job.evalCase.repository))),
+      .review(job.evalCase.request, {
+        runId: job.runId,
+        cacheNamespace,
+        onDiagnostics: (value) => Ref.set(latestDiagnostics, value),
+      })
+      .pipe(
+        Effect.provide(repositoryLayer(job.evalCase.repository)),
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            if (
+              Exit.isSuccess(exit) ||
+              (!Cause.hasDies(exit.cause) && !Cause.hasInterrupts(exit.cause))
+            )
+              return;
+            const diagnostics = yield* Ref.get(latestDiagnostics);
+
+            if (diagnostics === undefined) return;
+            // Preserve bounded host data on stderr without swallowing a defect or interruption.
+            yield* Console.error(
+              Schema.encodeSync(Schema.fromJsonString(FinalizationDiagnostic))({
+                type: "eval-trial-finalization",
+                caseId: job.evalCase.id,
+                variantId: job.variant.configuration.id,
+                trial: job.trial,
+                runId: job.runId,
+                cacheNamespace,
+                stop: Cause.hasInterrupts(exit.cause) ? "interrupted" : "defect",
+                diagnostics,
+              }),
+            );
+          }),
+        ),
+      ),
   );
 
   const finishedAt = yield* clock.monotonicTimeNanos;
@@ -91,6 +166,12 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
     caseId: job.evalCase.id,
     caseVersion: job.evalCase.version,
     inputDigest: job.evalCase.inputDigest,
+    oracleVersion: job.evalCase.oracleVersion ?? 1,
+    oracleDigest,
+    runId: job.runId,
+    cacheNamespace,
+    sequence: job.sequence,
+    ...(job.comparisonDigest === undefined ? {} : { comparisonDigest: job.comparisonDigest }),
     ...(job.evalCase.repository === undefined
       ? {}
       : { repositoryDigest: job.evalCase.repository.digest }),
@@ -103,6 +184,9 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
       : EvalTrialFailed.make({
           errorTag: result.failure.errorTag,
           message: result.failure.message,
+          ...(result.failure.diagnostics === undefined
+            ? {}
+            : { diagnostics: result.failure.diagnostics }),
           ...(result.failure.estimatedCostMicrousd === undefined
             ? {}
             : { estimatedCostMicrousd: result.failure.estimatedCostMicrousd }),
@@ -134,12 +218,74 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
     return yield* EvalConfigurationError.make({ message: "Eval variant IDs must be unique" });
   }
   const selectedCases = yield* selectEvalCases(suite, decodedOptions.caseIds);
+
+  yield* validateEvalSuite(suite);
+
+  const comparison =
+    suite.comparison === undefined ? undefined : yield* validateFrozenComparison(suite);
+
+  if (
+    comparison !== undefined &&
+    (decodedOptions.trials !== 3 ||
+      decodedOptions.concurrency !== 1 ||
+      selectedCases.length !== suite.cases.length ||
+      variants.length !== 2 ||
+      variants.some(
+        (variant) =>
+          !comparison.configurations.some(
+            (configuration) =>
+              configurationIdentity(configuration) === configurationIdentity(variant.configuration),
+          ),
+      ))
+  ) {
+    return yield* EvalConfigurationError.make({
+      message:
+        "Frozen runs require the complete paired configuration, all cases, three trials, and serial balanced execution",
+    });
+  }
+  const crypto = yield* Crypto.Crypto;
+
+  const runId = yield* crypto.randomUUIDv4.pipe(
+    Effect.mapError((cause) =>
+      EvalDataError.make({
+        operation: "allocate run",
+        message: "Could not allocate an isolated eval run identity",
+        cause,
+      }),
+    ),
+  );
+
   const jobs: Array<EvalJob<Requirements>> = [];
 
-  for (const evalCase of selectedCases) {
-    for (const variant of variants) {
-      for (let trial = 1; trial <= decodedOptions.trials; trial += 1) {
-        jobs.push({ evalCase, variant, trial });
+  if (comparison !== undefined) {
+    const orderedVariants = [...variants].sort((left, right) =>
+      (left.configuration.strategy ?? "").localeCompare(right.configuration.strategy ?? ""),
+    );
+
+    const orderedCases = [...selectedCases].sort((left, right) => left.id.localeCompare(right.id));
+    let pair = 0;
+
+    for (let trial = 1; trial <= 3; trial += 1) {
+      for (const evalCase of orderedCases) {
+        const order = pair++ % 2 === 0 ? orderedVariants : [...orderedVariants].reverse();
+
+        for (const variant of order)
+          jobs.push({
+            evalCase,
+            variant,
+            trial,
+            runId,
+            sequence: jobs.length,
+            comparisonDigest: comparison.digest,
+          });
+      }
+    }
+  } else {
+    for (const evalCase of selectedCases) {
+      for (const variant of variants) {
+        for (let trial = 1; trial <= decodedOptions.trials; trial += 1) {
+          jobs.push({ evalCase, variant, trial, runId, sequence: jobs.length });
+        }
       }
     }
   }

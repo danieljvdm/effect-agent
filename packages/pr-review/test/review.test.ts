@@ -1,5 +1,17 @@
-import { describe, expect, expectTypeOf, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, expectTypeOf, layer } from "@effect/vitest";
+import {
+  type Crypto,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Ref,
+  Result,
+  Stream,
+  Struct,
+} from "effect";
 import { TestClock } from "effect/testing";
 import {
   type AiError,
@@ -176,7 +188,7 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
     )
     .at(0) ?? "";
 
-describe("review output boundary", () => {
+layer(NodeCrypto.layer)("review output boundary", (it) => {
   it.effect.each(["complete", "incomplete", "excluded", "cost", "omitted"] as const)(
     "returns only explicit resolutions after complete coverage: %s",
     (mode) =>
@@ -218,7 +230,9 @@ describe("review output boundary", () => {
           }),
         );
 
-        expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+        expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
+          ReviewRepository | Crypto.Crypto
+        >();
         expectTypeOf<
           Extract<Effect.Error<typeof review>, ReviewVerificationError>
         >().toEqualTypeOf<ReviewVerificationError>();
@@ -305,6 +319,7 @@ describe("review output boundary", () => {
       expect(outcome.incomplete).toBe(true);
       expect(outcome.exhausted).toBeUndefined();
       expect(outcome.report.summary).toContain("remaining change has not been verified");
+      expect(outcome.diagnostics?.stages[0]?.declaredAssessment).toBe("incomplete");
     }),
   );
 
@@ -364,7 +379,9 @@ describe("review output boundary", () => {
         estimateCostMicrousd: () => Effect.succeed(123),
       }).review(request);
 
-      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
+        ReviewRepository | Crypto.Crypto
+      >();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       expectTypeOf<
         Extract<Effect.Error<typeof review>, AiError.AiError | ReviewVerificationError>
@@ -372,6 +389,7 @@ describe("review output boundary", () => {
       const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
       expect(yield* Ref.get(calls)).toBe(1);
+      expect(outcome.diagnostics?.stages[0]?.declaredAssessment).toBe("complete");
       expect(outcome.report.findings).toEqual([
         blocker,
         otherBlocker,
@@ -848,7 +866,9 @@ new mode 100755`;
         costControl: costControl(calls),
       }).review(input);
 
-      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
+        ReviewRepository | Crypto.Crypto
+      >();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
@@ -1053,18 +1073,19 @@ const typedReviews = (model: typeof typedModel) => ({
       ),
     },
   }).review(request),
+  verified: makeReviewer({ model, strategy: "verified" }).review(request),
 });
 
 type TypedReviews = ReturnType<typeof typedReviews>;
 
 const pricingTypeProofs: readonly [
   Assert<Equal<EffectError<TypedReviews["controlled"]>, EffectError<TypedReviews["unpriced"]>>>,
-  Assert<Equal<EffectRequirements<TypedReviews["controlled"]>, ReviewRepository>>,
+  Assert<Equal<EffectRequirements<TypedReviews["controlled"]>, ReviewRepository | Crypto.Crypto>>,
   Assert<Equal<EffectError<TypedReviews["priced"]>, EffectError<TypedReviews["unpriced"]>>>,
   Assert<
     Equal<EffectRequirements<TypedReviews["priced"]>, EffectRequirements<TypedReviews["unpriced"]>>
   >,
-  Assert<Equal<EffectRequirements<TypedReviews["priced"]>, ReviewRepository>>,
+  Assert<Equal<EffectRequirements<TypedReviews["priced"]>, ReviewRepository | Crypto.Crypto>>,
   Assert<Equal<Effect.Success<TypedReviews["priced"]>, ReviewOutcome>>,
   Assert<
     Equal<
@@ -1072,6 +1093,8 @@ const pricingTypeProofs: readonly [
       ReviewVerificationError
     >
   >,
-] = [true, true, true, true, true, true, true];
+  Assert<Equal<EffectError<TypedReviews["verified"]>, EffectError<TypedReviews["unpriced"]>>>,
+  Assert<Equal<EffectRequirements<TypedReviews["verified"]>, ReviewRepository | Crypto.Crypto>>,
+] = [true, true, true, true, true, true, true, true, true];
 
 void pricingTypeProofs;
