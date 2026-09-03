@@ -1,5 +1,8 @@
 import { ThreadId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import {
   TravelPlannerCloudflareProfile,
   expectedTravelPlan,
@@ -38,7 +41,7 @@ const withTemporaryDirectory = <A, E>(
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
-const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
+const runtimeOptions = (filename: string): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: phase4TravelPlannerDeploymentId,
   producerId: phase4TravelPlannerProducerId,
@@ -46,8 +49,8 @@ const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
 });
 
 /** One DN "host process": the full Node/SQLite runtime stack plus the deterministic services. */
-const dnLayer = (options: NodeDurableRuntimeOptions) =>
-  Layer.mergeAll(phase4TravelPlannerWorkerLayer, NodeDurableRuntime.layer(options));
+const dnLayer = (options: NodeDurableAgentRuntimeOptions) =>
+  Layer.mergeAll(phase4TravelPlannerWorkerLayer, NodeDurableAgentRuntime.layer(options));
 
 /**
  * TEST-014, the DN HALF of the P6 DN/DC equivalence gate (plan §6, D-P6-6): the SAME

@@ -13,7 +13,6 @@ import {
   runIdForSubmission,
   toolCallSettledRecordId,
   type DurableRuntimeFailpointLocation,
-  type ResolvedBinding,
 } from "@effect-agent/thread";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
@@ -79,11 +78,11 @@ const submitCoordinator = (thread: string, key: string) =>
   });
 
 /** Drive one Thread lane through the S2 multi-binding worker path (SUB-023). */
-const driveWith = (bindings: ReadonlyArray<ResolvedBinding>) => (thread: string) =>
+const drive = (thread: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
 
-    return yield* runtime.processThreadResolved(decodeThreadId(thread), bindings);
+    return yield* runtime.processThreadResolved(decodeThreadId(thread));
   });
 
 /** Restart-drive bindings: the parent model always answers final (batch resume, P5 precedent). */
@@ -250,7 +249,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 yield* waitOutChildLease;
 
                 const bindings = yield* restartBindings(site);
-                const drive = driveWith(bindings);
 
                 yield* withHost(
                   site.db,
@@ -300,6 +298,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     });
                     yield* assertConvergence(childThread, [started.childSubmissionId]);
                   }),
+                  undefined,
+                  bindings,
                 );
               }),
             );
@@ -443,7 +443,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             );
 
             const bindings = yield* restartBindings(site);
-            const drive = driveWith(bindings);
 
             yield* withHost(
               site.db,
@@ -474,6 +473,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 });
                 yield* assertConvergence(childThread, [ids.child]);
               }),
+              undefined,
+              bindings,
             );
           }),
         ),
@@ -520,7 +521,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(childModelInvocations(site.supplier), row.location).toBe(1);
 
                 const bindings = yield* restartBindings(site);
-                const drive = driveWith(bindings);
 
                 yield* withHost(
                   site.db,
@@ -563,6 +563,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     });
                     yield* assertConvergence(childThread, [started.childSubmissionId]);
                   }),
+                  undefined,
+                  bindings,
                 );
               }),
             );
@@ -591,7 +593,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             expectKilled(result);
 
             const bindings = yield* restartBindings(site);
-            const drive = driveWith(bindings);
 
             yield* withHost(
               site.db,
@@ -683,6 +684,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 });
                 yield* assertConvergence(childThread, [started.childSubmissionId]);
               }),
+              undefined,
+              bindings,
             );
           }),
         ),
@@ -703,8 +706,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               supplierDir: site.supplier,
               parentScript: "delegate-then-final",
             });
-
-            const drive = driveWith(bindings);
 
             // Arrange in-process: established waiting parent + durable parent abort intent,
             // with NO propagation yet (abort of a suspended lane only records the intent).
@@ -728,6 +729,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 return parent.submissionId;
               }),
+              undefined,
+              bindings,
             );
 
             // A recovery pass in a REAL process dies right after the child abort intent
@@ -788,6 +791,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 yield* assertConvergence(thread, [parentId], { site, counts: {} });
                 yield* assertConvergence(childThread, [started.childSubmissionId]);
               }),
+              undefined,
+              bindings,
             );
           }),
         ),
@@ -844,7 +849,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             yield* waitOutChildLease;
 
             const bindings = yield* restartBindings(site);
-            const drive = driveWith(bindings);
 
             yield* withHost(
               site.db,
@@ -895,6 +899,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 });
                 yield* assertConvergence(childThread, [started.childSubmissionId]);
               }),
+              undefined,
+              bindings,
             );
           }),
         ),
@@ -932,7 +938,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // The replacement claims the parent lane at a higher epoch and completes the
                 // join by recomputing the projection from canonical child output (spec §14).
                 const bindings = yield* restartBindings(site);
-                const drive = driveWith(bindings);
 
                 const ids = yield* withHost(
                   site.db,
@@ -950,6 +955,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       child: started.childSubmissionId,
                     };
                   }),
+                  undefined,
+                  bindings,
                 );
 
                 const childThread = childThreadIdFor(ids.parent, DELEGATE_CALL);
@@ -1018,8 +1025,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               parentScript: "delegate-then-final",
             });
 
-            const drive = driveWith(bindings);
-
             // Establish in-process: the parent suspends waitingForChild.
             const parentId = yield* withRuntime(
               site.db,
@@ -1032,6 +1037,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 return parent.submissionId;
               }),
+              undefined,
+              bindings,
             );
 
             const childThread = childThreadIdFor(parentId, DELEGATE_CALL);
@@ -1068,6 +1075,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                     return started.childSubmissionId;
                   }),
+                  undefined,
+                  bindings,
                 );
 
                 expect(childModelInvocations(site.supplier)).toBe(2);
@@ -1122,6 +1131,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     });
                     yield* assertConvergence(childThread, [childId]);
                   }),
+                  undefined,
+                  bindings,
                 );
               }),
             );

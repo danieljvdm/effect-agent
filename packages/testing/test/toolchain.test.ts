@@ -102,6 +102,7 @@ const packageNames = [
   "storage-memory",
   "storage-sqlite",
   "testing",
+  "workflow",
 ] as const;
 
 const privatePackageNames = ["pr-review-action"] as const;
@@ -132,6 +133,7 @@ const effectTestPackageNames = [
   "storage-memory",
   "storage-sqlite",
   "testing",
+  "workflow",
 ] as const;
 
 const productionPackageNames = [
@@ -148,6 +150,7 @@ const productionPackageNames = [
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
+  "workflow",
 ] as const;
 
 // Only these two packages may carry Cloudflare dependencies. The shared
@@ -177,6 +180,7 @@ const inwardPackageNames = [
   "thread",
   "storage-memory",
   "storage-sqlite",
+  "workflow",
 ] as const;
 
 const cloudflareOnlyDependencies = new Set(["@effect/sql-sqlite-do"]);
@@ -223,7 +227,7 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
     "storage-cloudflare",
     "testing",
   ],
-  "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite"],
+  "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite", "workflow"],
   "pr-review": ["effect-agent"],
   sandbox: ["core"],
   "sandbox-local": ["core", "sandbox"],
@@ -231,6 +235,7 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
   "storage-cloudflare": ["core", "thread", "testing"],
   "storage-memory": ["core", "thread"],
   "storage-sqlite": ["core", "thread"],
+  workflow: ["core", "thread", "engine", "storage-memory"],
   testing: [
     "capabilities",
     "core",

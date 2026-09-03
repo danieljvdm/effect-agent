@@ -15,7 +15,7 @@ import {
   type AgentId,
   type SubmissionId,
 } from "@effect-agent/core";
-import { DurableStep, DurableStepError } from "@effect-agent/engine";
+import { DurableStep, DurableStepError, RunToolAuthorization } from "@effect-agent/engine";
 import {
   ApprovalDecisionCommand,
   ThreadExportRequest,
@@ -575,21 +575,23 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
       const resolved = yield* DurableWorkerBinding.make(binding, DIGESTS);
       const threadId = decodeThreadId(`certify-${slug}`);
 
-      const submitOne = (key: string, question: string) =>
-        Effect.gen(function* () {
-          const runtime = yield* DurableAgentRuntime;
+      const submitOne = Effect.fn("Certification.submitOne")(function* (
+        key: string,
+        question: string,
+      ) {
+        const runtime = yield* DurableAgentRuntime;
 
-          return yield* runtime.submit(
-            { definition: { id: plainDefinition.id, input: plainDefinition.input } },
-            { question },
-            {
-              threadId,
-              principal: PRINCIPAL,
-              idempotencyKey: decodeIdempotencyKey(key),
-              definitions: DIGESTS,
-            },
-          );
-        });
+        return yield* runtime.submit(
+          { definition: { id: plainDefinition.id, input: plainDefinition.input } },
+          { question },
+          {
+            threadId,
+            principal: PRINCIPAL,
+            idempotencyKey: decodeIdempotencyKey(key),
+            definitions: DIGESTS,
+          },
+        );
+      });
 
       const cell: CertificationCell = {
         bindings: [resolved],
@@ -747,7 +749,6 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   batchProducers: ReadonlyMap<BatchId, ProducerId>,
   leaseAdvance: Duration.Duration,
 ) {
-  const runtime = yield* DurableAgentRuntime;
   const ledger = yield* SubmissionLedger;
   const control = yield* DurableRuntimeFailpointTestControl;
   const slug = `${scenario}-${location.replaceAll(":", "-")}`;
@@ -763,6 +764,16 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
     });
 
   const cell = yield* makeCell(scenario, slug);
+
+  const runtime = yield* DurableAgentRuntime.pipe(
+    Effect.provide(
+      DurableAgentRuntime.layerWithBindings(cell.bindings).pipe(
+        Layer.provide(RunToolAuthorization.allowAll),
+      ),
+    ),
+  );
+
+  const submit = cell.submit.pipe(Effect.provideService(DurableAgentRuntime, runtime));
 
   // One-shot arm: the fault fires at most once anywhere in the cell (initial drive OR a
   // re-drive round's public unblocking operation), modelling one crash at this boundary.
@@ -782,12 +793,12 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
 
   // Submissions are idempotent (DUR-001): one replay recovers a submit-boundary fault.
   let receipts: ReadonlyArray<Receipt>;
-  const firstSubmit = yield* Effect.exit(cell.submit);
+  const firstSubmit = yield* Effect.exit(submit);
 
   if (Exit.isSuccess(firstSubmit)) {
     receipts = firstSubmit.value;
   } else {
-    const secondSubmit = yield* Effect.exit(cell.submit);
+    const secondSubmit = yield* Effect.exit(submit);
 
     if (Exit.isFailure(secondSubmit)) {
       yield* control.clear;
@@ -801,7 +812,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   }
   const lanes = cell.lanes(receipts);
 
-  const driveLane = (lane: ThreadId) => runtime.processThreadResolved(lane, cell.bindings);
+  const driveLane = (lane: ThreadId) => runtime.processThreadResolved(lane);
 
   const allSettled = Effect.gen(function* () {
     for (const receipt of receipts) {
@@ -1008,7 +1019,9 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
     }),
   ).pipe(Layer.provide(options.threadStore));
 
-  const support = Layer.mergeAll(
+  // RUN-036: certification uses the default-none Tool failure observer. Trusted application
+  // reporting adds no durable transition and is verified separately from adapter certification.
+  const environment = Layer.mergeAll(
     options.submissionLedger,
     capturingStore,
     options.wakeScheduler ?? WakeScheduler.layerNoop,
@@ -1022,10 +1035,6 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
       abortPollInterval: Duration.millis(50),
     }),
   );
-
-  // RUN-036: certification uses the default-none Tool failure observer. Trusted application
-  // reporting adds no durable transition and is verified separately from adapter certification.
-  const environment = DurableAgentRuntime.layer.pipe(Layer.provideMerge(support));
 
   const leaseAdvance = Duration.millis(
     Duration.toMillis(options.ownershipLeaseDuration ?? DEFAULT_OWNERSHIP_LEASE_DURATION) + 1_000,

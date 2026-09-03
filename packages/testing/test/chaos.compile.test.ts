@@ -8,7 +8,10 @@ import type {
   ThreadStore,
   DurableAgentRuntime,
   DurableRuntimeConfig,
+  DurableRuntimeFailpoint,
   SubmissionLedger,
+  ToolReconciler,
+  WakeScheduler,
 } from "@effect-agent/thread";
 import type { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
 import type { Crypto, Effect } from "effect";
@@ -40,8 +43,11 @@ type ExpectedRequirements =
   | Crypto.Crypto
   | DurableAgentRuntime
   | DurableRuntimeConfig
+  | DurableRuntimeFailpoint
   | DurableRuntimeFailpointTestControl
-  | SubmissionLedger;
+  | SubmissionLedger
+  | ToolReconciler
+  | WakeScheduler;
 
 type FailureProof = Assert<Equal<Effect.Error<typeof program>, ChaosConvergenceFailure>>;
 type RequirementsProof = Assert<Equal<Effect.Services<typeof program>, ExpectedRequirements>>;

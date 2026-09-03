@@ -4,7 +4,10 @@ import {
   SubagentExecutionFailure,
 } from "@effect-agent/capabilities";
 import { ThreadId, ToolCallId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -28,7 +31,6 @@ import {
   childThreadIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
-  type ResolvedBinding,
 } from "@effect-agent/thread";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -59,8 +61,8 @@ const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
@@ -94,11 +96,11 @@ const submitMission = (thread: string, key: string) =>
     );
   });
 
-const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
+const drive = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
 
-    return yield* runtime.processThreadResolved(threadId, bindings);
+    return yield* runtime.processThreadResolved(threadId);
   });
 
 const readLog = (threadId: ThreadId) =>
@@ -132,13 +134,13 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             );
 
             // Establish, run each child, and join — the full durable delegation.
-            yield* drive(harness.bindings, receipt.threadId);
+            yield* drive(receipt.threadId);
             for (const childThreadId of childThreads) {
-              const settlements = yield* drive(harness.bindings, childThreadId);
+              const settlements = yield* drive(childThreadId);
 
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
-            const settlements = yield* drive(harness.bindings, receipt.threadId);
+            const settlements = yield* drive(receipt.threadId);
 
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
@@ -199,7 +201,10 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             }
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/redteam-exfiltration.sqlite`)),
+              NodeDurableAgentRuntime.layerWithBindings(
+                harness.bindings,
+                runtimeOptions(`${directory}/redteam-exfiltration.sqlite`),
+              ),
             ),
           );
         }),

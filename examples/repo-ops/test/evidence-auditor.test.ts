@@ -1,7 +1,10 @@
 import * as path from "node:path";
 
 import { Agent, ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local";
 import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
 import {
@@ -54,8 +57,8 @@ const decodeReport = Schema.decodeUnknownEffect(EvidenceAuditReport);
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: repoOpsDeploymentId,
   producerId: repoOpsProducerId,
@@ -347,7 +350,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
           }).pipe(
             Effect.provide(
               Layer.merge(
-                NodeDurableRuntime.layer(runtimeOptions(`${directory}/audit.sqlite`)),
+                NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/audit.sqlite`)),
                 NodeFileSystem.layer,
               ),
             ),
@@ -426,7 +429,9 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
 
             expect(report.documentsAudited).toBe(1);
           }).pipe(
-            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/live.sqlite`))),
+            Effect.provide(
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/live.sqlite`)),
+            ),
           );
         }),
       ),

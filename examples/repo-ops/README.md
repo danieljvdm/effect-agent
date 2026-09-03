@@ -21,7 +21,7 @@ What it exercises, deliberately:
   canonical `ToolApprovalRequested` record until `resolveApproval`; the file
   exists only after the approved decision is canonical.
 - **DN assembly and CLI Tool use.** The deterministic offline profile
-  drives the agent as accepted work on `NodeDurableRuntime` over a SQLite file
+  drives the agent as accepted work on `NodeDurableAgentRuntime` over a SQLite file
   and a fixture repository tree in a temp directory; the opt-in live profile
   (`EFFECT_AGENT_LIVE=1` + `OPENAI_API_KEY`, the shared P7 gate from
   `@effect-agent/testing`) runs a real model over the actual repository.

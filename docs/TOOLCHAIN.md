@@ -47,7 +47,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `packages/*`                        | Framework and private PR-review integration packages  |
 | `examples/demo`                     | Local browser app                                     |
 | `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
-| `examples/providers`                | Provider bindings and persistent-history example      |
+| `examples/providers`                | Provider bindings, persistent history, Workflow host  |
 | `examples/repo-ops`                 | Repository evidence auditor                           |
 | `examples/browser-run-worker-proof` | Opt-in hosted Browser Run verification; owns Wrangler |
 | `examples/pr-review-eval`           | Opt-in live review evaluation                         |
@@ -62,6 +62,7 @@ core <- engine <- capabilities
 core <- sandbox <- sandbox-local
 core <- sandbox <- capabilities
 core <- engine <- thread <- storage adapters
+core + thread <- workflow <- platform-node/workflow
 engine + thread + sandbox + adapters <- platform packages
 core + engine <- testing
 core + engine + capabilities <- effect-agent <- pr-review
@@ -146,7 +147,7 @@ the site's clean routes. Existing messages may retain a cached preview after a d
 
 ## Releasing to npm
 
-All fourteen public packages share one Changesets fixed group and publish to `beta`
+All fifteen public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The project is in prerelease mode. Leaving it requires an explicit release decision and
 `vp run changeset pre exit`.

@@ -33,7 +33,7 @@ import { Effect, Layer, Schema, type Redacted } from "effect";
 
 import {
   NodeDurableHost,
-  type NodeDurableRuntimeOptions,
+  type NodeDurableAgentRuntimeOptions,
   NodeSubscriptions,
 } from "../../src/index.ts";
 
@@ -52,7 +52,7 @@ const sqliteSubscriptionInfrastructure = (filename: string) =>
   );
 
 const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
-  readonly runtime: NodeDurableRuntimeOptions;
+  readonly runtime: NodeDurableAgentRuntimeOptions;
   readonly partition: SourcePartition;
   readonly sources: Layer.Layer<EventSources | SubscriptionInputBindings, E, R>;
   readonly authorizer: SubscriptionAuthorizer["Service"];
@@ -74,7 +74,7 @@ const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
  * host. The caller binds the permitted source catalog and explicit authorization policy.
  */
 export const subscriptionRuntimeLayer = (options: {
-  readonly runtime: NodeDurableRuntimeOptions;
+  readonly runtime: NodeDurableAgentRuntimeOptions;
   readonly partition: SourcePartition;
   readonly sources: ReadonlyArray<EventSource>;
   readonly bindings: ReadonlyArray<SubscriptionInputBinding>;
@@ -107,7 +107,7 @@ export const GitHubWorkflowContinuationInput = Schema.Struct({
  * arrives and no caller is waiting.
  */
 export const githubWorkflowSubscriptionRuntimeLayer = (options: {
-  readonly runtime: NodeDurableRuntimeOptions;
+  readonly runtime: NodeDurableAgentRuntimeOptions;
   readonly partition: SourcePartition;
   readonly repository: GitHubRepository;
   readonly githubToken: Redacted.Redacted<string>;

@@ -60,6 +60,7 @@ import {
   type RuntimeBinding,
   type ToolExecutionClassValue,
 } from "@effect-agent/engine";
+import type { Scope } from "effect";
 import {
   Clock,
   Context,
@@ -97,7 +98,9 @@ import {
 } from "./admin.ts";
 import {
   BindingUnavailable,
+  compileRegistrations,
   definitionDigestsEqual,
+  type AgentRegistration,
   type DurableBindingFailure,
   makeLegacyWorkerBinding,
   type ResolvedBinding,
@@ -285,7 +288,15 @@ import {
   LoadCheckpointRequest,
   type ThreadCheckpoint,
 } from "./store.ts";
+import {
+  PendingSubmission,
+  SettledSubmission,
+  type SubmissionStatus,
+} from "./submission-status.ts";
 import { WakeScheduler } from "./wake.ts";
+
+// Capture the tracing call site once; each application still creates a fresh Attempt span.
+const withThreadHeadSpan = Effect.withSpan("DurableAgentRuntime.processThreadHead");
 
 /**
  * Instruction failure/requirement derivation mirroring the engine's `RuntimeBinding` defaults:
@@ -925,7 +936,10 @@ interface OpenCallReview {
   readonly recovered: number;
 }
 
-const make = Effect.gen(function* () {
+const make = Effect.fn("DurableAgentRuntime.make")(function* (
+  bindings: ReadonlyArray<ResolvedBinding>,
+) {
+  const registeredBindings = [...bindings];
   const ledger = yield* SubmissionLedger;
   const store = yield* ThreadStore;
   const wake = yield* WakeScheduler;
@@ -5895,7 +5909,7 @@ const make = Effect.gen(function* () {
             );
 
             yield* Ref.set(tokenRef, renewal.ownershipToken);
-          }),
+          }).pipe(Effect.uninterruptible),
           { schedule: Schedule.spaced(config.leaseRenewalInterval) },
         ).pipe(Effect.andThen(Effect.never)),
       );
@@ -6043,10 +6057,10 @@ const make = Effect.gen(function* () {
     >,
     threadId: ThreadId,
     claim: Claim,
+    tokenRef: Ref.Ref<OwnershipToken>,
   ) =>
     Effect.gen(function* () {
       const submissionId = claim.submissionId;
-      const tokenRef = yield* Ref.make(claim.ownershipToken);
 
       // The Thread-store fence BEFORE this Attempt advances it identifies the superseded
       // ownership period for the durability §9 interruption audit.
@@ -6350,7 +6364,7 @@ const make = Effect.gen(function* () {
 
         return Option.some(yield* terminalize(ctx, submission, tokenRef, outcome, true));
       }
-    });
+    }).pipe(Effect.scoped);
 
   /**
    * Framework-owned Schema-stable `ChildCompatibilityFailure` Settlement for a parent-linked
@@ -6408,23 +6422,60 @@ const make = Effect.gen(function* () {
    */
   type CapturedWorkerBinding = Effect.Success<ReturnType<typeof makeLegacyWorkerBinding>>;
 
-  const drainThread = (
+  // Register cleanup before any interruptible work can observe a granted claim. The token
+  // reference is shared with renewal, so cleanup never releases with a superseded token.
+  const acquireClaim = Effect.fn("DurableAgentRuntime.acquireClaim")(function* (
+    threadId: ThreadId,
+  ) {
+    const claimed = yield* ledger.claim(
+      ClaimRequest.make({ threadId, producerId: config.producerId }),
+    );
+
+    if (Option.isNone(claimed)) return Option.none();
+    const claim = claimed.value;
+    const tokenRef = yield* Ref.make(claim.ownershipToken);
+
+    yield* Effect.addFinalizer(() =>
+      Ref.get(tokenRef).pipe(
+        Effect.flatMap((ownershipToken) =>
+          ledger.releaseOwnership(
+            ReleaseOwnershipRequest.make({ submissionId: claim.submissionId, ownershipToken }),
+          ),
+        ),
+        Effect.catchTag("OwnershipLost", () => Effect.void),
+        Effect.catchTag("LedgerError", () =>
+          Effect.logWarning(
+            "Attempt ownership release failed; lease recovery remains required",
+          ).pipe(Effect.annotateLogs({ submissionId: claim.submissionId })),
+        ),
+      ),
+    );
+
+    return Option.some({ claim, tokenRef });
+  }, Effect.uninterruptible);
+
+  const processThreadHead = (
     resolve: (
       submission: SubmissionSnapshot,
     ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure>,
     threadId: ThreadId,
-  ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
-    Effect.gen(function* () {
-      const settlements: Array<Settlement> = [];
+  ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const claimed = yield* acquireClaim(threadId);
 
-      while (true) {
-        const claimed = yield* ledger.claim(
-          ClaimRequest.make({ threadId, producerId: config.producerId }),
-        );
+        if (Option.isNone(claimed)) return Option.none();
+        const { claim, tokenRef } = claimed.value;
 
-        if (Option.isNone(claimed)) return settlements;
+        const attributes = {
+          threadId,
+          submissionId: claim.submissionId,
+          attemptId: claim.attemptId,
+        };
+
+        yield* Effect.annotateCurrentSpan(attributes);
+        yield* Effect.annotateLogsScoped(attributes);
         yield* hit("claim:after-claim");
-        const claim = claimed.value;
 
         const found = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: claim.submissionId }),
@@ -6432,7 +6483,7 @@ const make = Effect.gen(function* () {
 
         if (Option.isNone(found)) {
           return yield* LedgerError.make({
-            operation: "drainThread",
+            operation: "processThreadHead",
             message: `Claimed unknown Submission ${claim.submissionId}`,
           });
         }
@@ -6471,7 +6522,7 @@ const make = Effect.gen(function* () {
               yield* wake.notify(parent.value.threadId);
             }
 
-            return settlements;
+            return Option.none();
           }
         }
 
@@ -6486,25 +6537,36 @@ const make = Effect.gen(function* () {
 
         if (resolution._tag === "refused") {
           if (submission.parentLinkage !== undefined) {
-            settlements.push(
+            return Option.some(
               yield* settleChildCompatibility(claim, submission, resolution.failure),
             );
-            continue;
           }
+
           // Root Submission: release the claim and surface the typed refusal — the obligation
           // stays visible and no different code ever runs (spec §11).
-          yield* ledger
-            .releaseOwnership(
-              ReleaseOwnershipRequest.make({
-                submissionId: claim.submissionId,
-                ownershipToken: claim.ownershipToken,
-              }),
-            )
-            .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
-
           return yield* resolution.failure;
         }
-        const settlement = yield* resolution.binding.attempt(runAttempt, threadId, claim);
+
+        return yield* resolution.binding.attempt(
+          (agent, attemptThreadId, attemptClaim) =>
+            runAttempt(agent, attemptThreadId, attemptClaim, tokenRef),
+          threadId,
+          claim,
+        );
+      }),
+    ).pipe(withThreadHeadSpan);
+
+  const drainThread = (
+    resolve: (
+      submission: SubmissionSnapshot,
+    ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure>,
+    threadId: ThreadId,
+  ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
+    Effect.gen(function* () {
+      const settlements: Array<Settlement> = [];
+
+      while (true) {
+        const settlement = yield* processThreadHead(resolve, threadId);
 
         if (Option.isNone(settlement)) {
           // The head is durably blocked (Unknown Outcome, approval suspension, or a
@@ -6569,31 +6631,42 @@ const make = Effect.gen(function* () {
 
   const processThreadResolvedImpl = (
     threadId: ThreadId,
-    bindings: ReadonlyArray<ResolvedBinding>,
   ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     drainThread(
-      (submission) => resolveWorkerBinding(bindings, submission.agentId, submission.agentDigests),
+      (submission) =>
+        resolveWorkerBinding(registeredBindings, submission.agentId, submission.agentDigests),
+      threadId,
+    );
+
+  const processThreadHeadImpl = (
+    threadId: ThreadId,
+  ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
+    processThreadHead(
+      (submission) =>
+        resolveWorkerBinding(registeredBindings, submission.agentId, submission.agentDigests),
       threadId,
     );
 
   const claimFor = Effect.fn("DurableAgentRuntime.claimFor")(function* (
     submission: SubmissionSnapshot,
-  ): Effect.fn.Return<Option.Option<Claim>, LedgerError | OwnershipLost> {
-    const claimed = yield* ledger.claim(
-      ClaimRequest.make({
-        threadId: submission.threadId,
-        producerId: config.producerId,
-      }),
+  ): Effect.fn.Return<Option.Option<Claim>, LedgerError | OwnershipLost, Scope.Scope> {
+    const head = yield* Stream.runHead(
+      ledger.scanNonterminal.pipe(Stream.filter((entry) => entry.threadId === submission.threadId)),
     );
 
+    if (Option.isNone(head) || head.value.submissionId !== submission.submissionId) {
+      return Option.none();
+    }
+    const claimed = yield* acquireClaim(submission.threadId);
+
     if (Option.isNone(claimed)) return Option.none();
-    if (claimed.value.submissionId !== submission.submissionId) {
+    if (claimed.value.claim.submissionId !== submission.submissionId) {
       // FIFO: only the lane head is claimable; this Submission must wait for the head.
       yield* ledger
         .releaseOwnership(
           ReleaseOwnershipRequest.make({
-            submissionId: claimed.value.submissionId,
-            ownershipToken: claimed.value.ownershipToken,
+            submissionId: claimed.value.claim.submissionId,
+            ownershipToken: claimed.value.claim.ownershipToken,
           }),
         )
         .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
@@ -6601,7 +6674,7 @@ const make = Effect.gen(function* () {
       return Option.none();
     }
 
-    return Option.some(claimed.value);
+    return Option.some(claimed.value.claim);
   });
 
   /**
@@ -6652,7 +6725,7 @@ const make = Effect.gen(function* () {
       evidence: RecoveryEvidence,
       records: ReadonlyArray<CanonicalRecordEnvelope>,
       _decision: SettleAbortedDecision,
-    ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure> {
+    ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure, Scope.Scope> {
       const intent = snapshot.abortIntent;
 
       if (intent === undefined) return "deferred";
@@ -6785,7 +6858,7 @@ const make = Effect.gen(function* () {
     evidence: RecoveryEvidence,
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     decision: MarkUnknownDecision,
-  ): Effect.fn.Return<"repaired" | "deferred" | "unknown", DurableWorkerFailure> {
+  ): Effect.fn.Return<"repaired" | "deferred" | "unknown", DurableWorkerFailure, Scope.Scope> {
     const submission = snapshot.submission;
     const claimed = yield* claimFor(submission);
 
@@ -6916,7 +6989,7 @@ const make = Effect.gen(function* () {
     function* (
       snapshot: RecoverySnapshot,
       evidence: RecoveryEvidence,
-    ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure> {
+    ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure, Scope.Scope> {
       const submission = snapshot.submission;
 
       if (submission.state === "suspended") return "deferred";
@@ -6989,7 +7062,11 @@ const make = Effect.gen(function* () {
       evidence: RecoveryEvidence,
       decision: RecoveryDecision,
       records: ReadonlyArray<CanonicalRecordEnvelope>,
-    ): Effect.fn.Return<"repaired" | "deferred" | "none" | "unknown", DurableWorkerFailure> {
+    ): Effect.fn.Return<
+      "repaired" | "deferred" | "none" | "unknown",
+      DurableWorkerFailure,
+      Scope.Scope
+    > {
       const submission = snapshot.submission;
       const runId = runIdForSubmission(submission.submissionId);
       const start = yield* canonicalRunStartFromRecords(records, runId);
@@ -7556,7 +7633,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const recoverSubmission = Effect.fn("DurableAgentRuntime.recoverSubmission")(function* (
+  const recoverSnapshot = Effect.fn("DurableAgentRuntime.recoverSnapshot")(function* (
     submission: SubmissionSnapshot,
     history: RecoveryHistorySnapshot,
   ): Effect.fn.Return<RecoveryReport, DurableWorkerFailure> {
@@ -7573,11 +7650,8 @@ const make = Effect.gen(function* () {
 
     const decision = classifyRecovery(snapshot, evidence);
 
-    const disposition = yield* executeRecoveryDecision(
-      snapshot,
-      evidence,
-      decision,
-      history.records,
+    const disposition = yield* Effect.scoped(
+      executeRecoveryDecision(snapshot, evidence, decision, history.records),
     );
 
     if (disposition === "repaired") {
@@ -7590,6 +7664,21 @@ const make = Effect.gen(function* () {
       decision,
       disposition,
     });
+  });
+
+  const recoverSubmission = Effect.fn("DurableAgentRuntime.recoverSubmission")(function* (
+    submissionId: SubmissionId,
+  ): Effect.fn.Return<RecoveryReport, DurableWorkerFailure> {
+    const found = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
+    if (Option.isNone(found)) {
+      return yield* LedgerError.make({
+        operation: "recoverSubmission",
+        message: `Unknown Submission ${submissionId}`,
+      });
+    }
+
+    return yield* recoverSnapshot(found.value, yield* readRecoveryHistory(found.value.threadId));
   });
 
   const runRecoveryImpl = Effect.fn("DurableAgentRuntime.runRecovery")(
@@ -7615,7 +7704,7 @@ const make = Effect.gen(function* () {
           if (submission === undefined || submission.threadId !== first.threadId) {
             break;
           }
-          reports.push(yield* recoverSubmission(submission, history));
+          reports.push(yield* recoverSnapshot(submission, history));
           index += 1;
         }
       }
@@ -7681,51 +7770,72 @@ const make = Effect.gen(function* () {
     return receipt;
   });
 
-  const awaitSettlement = Effect.fn("DurableAgentRuntime.awaitSettlement")(function* (
-    receipt: Receipt,
-  ): Effect.fn.Return<Settlement, DurableAwaitFailure> {
-    // Authorization lasts for this wait, as it does for one observe subscription.
-    yield* operationAuthorizer.authorize(
+  const authorizeSettlement = (receipt: Receipt) =>
+    operationAuthorizer.authorize(
       OperationAuthorizationRequest.make({
         operation: "awaitSettlement",
         threadId: receipt.threadId,
         submissionId: receipt.submissionId,
       }),
     );
+
+  const readSubmissionStatus = Effect.fn("DurableAgentRuntime.readSubmissionStatus")(function* (
+    receipt: Receipt,
+  ): Effect.fn.Return<SubmissionStatus, DurableAwaitFailure> {
+    const snapshot = yield* ledger.lookup(
+      SubmissionLookupById.make({ submissionId: receipt.submissionId }),
+    );
+
+    if (Option.isNone(snapshot)) {
+      return yield* LedgerError.make({
+        operation: "awaitSettlement",
+        message: `Unknown Submission ${receipt.submissionId}`,
+      });
+    }
+    if (snapshot.value.threadId !== receipt.threadId) {
+      return yield* OperationDenied.make({
+        operation: "awaitSettlement",
+        reason: "Receipt Submission does not belong to the authorized Thread",
+        threadId: receipt.threadId,
+        submissionId: receipt.submissionId,
+      });
+    }
+    if (snapshot.value.state !== "settled") return PendingSubmission.make({});
+
+    // Finalization replay reads the canonical outcome without changing settledAt.
+    const settlement = yield* ledger.finalizeSettlement(
+      SettlementFinalization.make({
+        submissionId: receipt.submissionId,
+        settlementId: submissionSettlementId(receipt.submissionId),
+      }),
+    );
+
+    const recovery = yield* ledger.loadRecoverySnapshot(
+      RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+    );
+
+    return SettledSubmission.make({
+      settlement: materializeSettlement(settlement, recovery.reservation?.record),
+    });
+  });
+
+  const submissionStatus = Effect.fn("DurableAgentRuntime.submissionStatus")(function* (
+    receipt: Receipt,
+  ): Effect.fn.Return<SubmissionStatus, DurableAwaitFailure> {
+    yield* authorizeSettlement(receipt);
+
+    return yield* readSubmissionStatus(receipt);
+  });
+
+  const awaitSettlement = Effect.fn("DurableAgentRuntime.awaitSettlement")(function* (
+    receipt: Receipt,
+  ): Effect.fn.Return<Settlement, DurableAwaitFailure> {
+    // Authorization lasts for this wait, as it does for one observe subscription.
+    yield* authorizeSettlement(receipt);
     while (true) {
-      const snapshot = yield* ledger.lookup(
-        SubmissionLookupById.make({ submissionId: receipt.submissionId }),
-      );
+      const status = yield* readSubmissionStatus(receipt);
 
-      if (Option.isNone(snapshot)) {
-        return yield* LedgerError.make({
-          operation: "awaitSettlement",
-          message: `Unknown Submission ${receipt.submissionId}`,
-        });
-      }
-      if (snapshot.value.threadId !== receipt.threadId) {
-        return yield* OperationDenied.make({
-          operation: "awaitSettlement",
-          reason: "Receipt Submission does not belong to the authorized Thread",
-          threadId: receipt.threadId,
-          submissionId: receipt.submissionId,
-        });
-      }
-      if (snapshot.value.state === "settled") {
-        // The idempotent finalization replay returns the recorded Settlement (settledAt intact).
-        const settlement = yield* ledger.finalizeSettlement(
-          SettlementFinalization.make({
-            submissionId: receipt.submissionId,
-            settlementId: submissionSettlementId(receipt.submissionId),
-          }),
-        );
-
-        const recovery = yield* ledger.loadRecoverySnapshot(
-          RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
-        );
-
-        return materializeSettlement(settlement, recovery.reservation?.record);
-      }
+      if (status._tag === "settled") return status.settlement;
       // Wake delivery is a pure liveness hint; the ledger poll below guarantees progress.
       yield* Effect.raceFirst(
         Stream.runDrain(
@@ -8194,7 +8304,10 @@ const make = Effect.gen(function* () {
         decision: decision._tag,
       }),
     );
-    const disposition = yield* executeRecoveryDecision(snapshot, evidence, decision, read.records);
+
+    const disposition = yield* Effect.scoped(
+      executeRecoveryDecision(snapshot, evidence, decision, read.records),
+    );
 
     if (disposition === "repaired") {
       yield* annotateRepair(submission.threadId, command.submissionId, decision);
@@ -8355,28 +8468,25 @@ const make = Effect.gen(function* () {
       yield* Stream.runForEach(wake.wakes, (threadId) => processThreadImpl(agent, threadId));
     });
 
-  const runResolvedWorkerImpl = (
-    bindings: ReadonlyArray<ResolvedBinding>,
-  ): Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure> =>
-    Effect.gen(function* () {
-      // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
-      // Binding from the explicit registration array, so one worker pool serves parent and child
-      // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
-      const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
-      const seen = new Set<ThreadId>();
+  const runResolvedWorkerImpl = Effect.gen(function* () {
+    // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
+    // Binding from the explicit registration array, so one worker pool serves parent and child
+    // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
+    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const seen = new Set<ThreadId>();
 
-      for (const submission of nonterminal) {
-        if (seen.has(submission.threadId)) continue;
-        seen.add(submission.threadId);
-        yield* processThreadResolvedImpl(submission.threadId, bindings);
-      }
-      yield* Stream.runForEach(wake.wakes, (threadId) =>
-        processThreadResolvedImpl(threadId, bindings),
-      );
-    });
+    for (const submission of nonterminal) {
+      if (seen.has(submission.threadId)) continue;
+      seen.add(submission.threadId);
+      yield* processThreadResolvedImpl(submission.threadId);
+    }
+    yield* Stream.runForEach(wake.wakes, (threadId) => processThreadResolvedImpl(threadId));
+  });
 
   return DurableAgentRuntime.of({
     submit,
+    submissionStatus,
+    inspectSubmissionStatus: readSubmissionStatus,
     awaitSettlement,
     awaitProgress,
     observe,
@@ -8391,9 +8501,11 @@ const make = Effect.gen(function* () {
     scanObligations: scanObligationsImpl,
     processThread: processThreadImpl,
     processThreadResolved: processThreadResolvedImpl,
+    processThreadHead: processThreadHeadImpl,
     runWorker: runWorkerImpl,
     runResolvedWorker: runResolvedWorkerImpl,
     runRecovery: runRecoveryImpl(),
+    recoverSubmission,
   });
 });
 
@@ -8436,8 +8548,8 @@ const make = Effect.gen(function* () {
  *   reimplemented over a singleton identity-exact (digest-transparent) Binding resolution: a
  *   claimed head belonging to a different Agent never runs against this binding (SUB-023); a
  *   parent-linked head refused this way settles with the framework `ChildCompatibilityFailure`.
- * - `processThreadResolved(threadId, bindings)` / `runResolvedWorker(bindings)` — the
- *   S2 multi-binding equivalents over explicit exact registrations (spec §11, D7): every claimed
+ * - `processThreadResolved(threadId)` / `runResolvedWorker` — the
+ *   S2 multi-binding equivalents over registrations owned by the runtime Layer (spec §11, D7): every claimed
  *   head's stored `(agentId, agentDigests)` resolves to the exact registered Binding before any
  *   code runs; an unresolvable parent-linked child settles with the Schema-stable framework
  *   `ChildCompatibilityFailure` (no application code, the child never executes), and an
@@ -8467,6 +8579,17 @@ export class DurableAgentRuntime extends Context.Service<
       options: DurableSubmitOptions,
     ) => Effect.Effect<Receipt, DurableSubmitFailure, InputSchema["EncodingServices"]>;
     readonly awaitSettlement: (receipt: Receipt) => Effect.Effect<Settlement, DurableAwaitFailure>;
+    /** Authorized, nonblocking read. Only the durable Settlement marks work complete. */
+    readonly submissionStatus: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionStatus, DurableAwaitFailure>;
+    /**
+     * Trusted worker inspection under the same runtime authority as processThread/recoverSubmission.
+     * Caller-facing observations must use submissionStatus or awaitSettlement for authorization.
+     */
+    readonly inspectSubmissionStatus: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionStatus, DurableAwaitFailure>;
     /**
      * Wait for an already-committed record or one incarnation-local progress hint after
      * `afterSequence`. Canonical records remain authoritative: callers re-read after return.
@@ -8583,8 +8706,16 @@ export class DurableAgentRuntime extends Context.Service<
     >;
     readonly processThreadResolved: (
       threadId: ThreadId,
-      bindings: ReadonlyArray<ResolvedBinding>,
     ) => Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
+    /**
+     * Advance at most one FIFO-head Attempt, closing its resources before returning. A vacant,
+     * owned, unknown, or suspended head returns None and leaves accepted work pending.
+     * Ready input may join this Run through the existing Turn seams and settle with its head.
+     * Interruption ends only this Attempt; ownership cleanup uses its latest renewed token.
+     */
+    readonly processThreadHead: (
+      threadId: ThreadId,
+    ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
     readonly runWorker: <
       InputSchema extends Schema.Top,
       OutputSchema extends Schema.Top,
@@ -8635,12 +8766,32 @@ export class DurableAgentRuntime extends Context.Service<
         InstructionRequirements
       >
     >;
-    readonly runResolvedWorker: (
-      bindings: ReadonlyArray<ResolvedBinding>,
-    ) => Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
+    readonly runResolvedWorker: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
+    /** Apply one recovery decision for this Submission. */
+    readonly recoverSubmission: (
+      submissionId: SubmissionId,
+    ) => Effect.Effect<RecoveryReport, DurableWorkerFailure>;
   }
 >()("@effect-agent/thread/DurableAgentRuntime") {
+  /**
+   * Resolve typed registrations and capture their services once in the runtime's Layer Scope.
+   * Every claimed head must match an exact registered identity and digest triple. Worker calls
+   * cannot replace these registrations or their captured services. Tool authorization is required.
+   */
+  static layerRegistered<const Entries extends ReadonlyArray<AgentRegistration>>(
+    registrations: Entries,
+  ) {
+    return Layer.effect(DurableAgentRuntime)(
+      Effect.flatMap(compileRegistrations(registrations), make),
+    );
+  }
+
+  /** Construct from precompiled registrations whose captured resources belong to the caller's Scope. */
+  static layerWithBindings(bindings: ReadonlyArray<ResolvedBinding>) {
+    return Layer.effect(DurableAgentRuntime)(make(bindings));
+  }
+
   /** Captures optional context preparation; Tool authorization remains required in `R`. */
   static readonly layerWithServices: Layer.Layer<
     DurableAgentRuntime,
@@ -8653,7 +8804,7 @@ export class DurableAgentRuntime extends Context.Service<
     | ToolReconciler
     | RunToolAuthorization
     | Crypto.Crypto
-  > = Layer.effect(DurableAgentRuntime)(make);
+  > = DurableAgentRuntime.layerWithBindings([]);
 
   /** Compatible defaults: no host prompt transformation and allow-all Tool authorization. */
   static readonly layer: Layer.Layer<

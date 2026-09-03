@@ -517,7 +517,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         },
       ]);
 
-      const runtime = yield* DurableAgentRuntime;
+      const runtime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(DurableAgentRuntime.layerWithBindings(bindings)),
+      );
 
       for (let run = 0; run < 2; run++) {
         const threadId = `attempt-scope-${run}`;
@@ -527,7 +529,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           { question: "probe" },
           { ...submitOptions(threadId, threadId), definitions: bindings[0]!.digests },
         );
-        yield* runtime.processThreadResolved(decodeThreadId(threadId), bindings);
+        yield* runtime.processThreadResolved(decodeThreadId(threadId));
       }
       expect(observed).toHaveLength(4);
       expect(observed[0]).toBe(observed[1]);
@@ -552,13 +554,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* armFailpoint("turn:after-results-append");
 
       const interrupted = yield* runtime
-        .processThreadResolved(decodeThreadId(interruptedThread), bindings)
+        .processThreadResolved(decodeThreadId(interruptedThread))
         .pipe(Effect.exit);
 
       expect(Exit.isFailure(interrupted)).toBe(true);
       expect(lifecycle.at(-1)).toBe(`close:${observed[4]}`);
       yield* clearFailpoint;
-      yield* runtime.processThreadResolved(decodeThreadId(interruptedThread), bindings);
+      yield* runtime.processThreadResolved(decodeThreadId(interruptedThread));
       expect(observed).toHaveLength(6);
       expect(observed[4]).not.toBe(observed[5]);
       expect(lifecycle.slice(-4)).toEqual([

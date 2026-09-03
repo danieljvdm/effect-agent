@@ -32,8 +32,8 @@ import {
 
 import {
   NodeDurableHost,
-  NodeDurableRuntime,
-  type NodeDurableRuntimeOptions,
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
 } from "../../src/index.ts";
 import {
   CRASH_DEPLOYMENT_ID,
@@ -256,8 +256,8 @@ export const waitOutChildLease = Effect.sleep(Duration.millis(LEASE_WAIT_MS));
 
 export const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: CRASH_DEPLOYMENT_ID,
   producerId: HOST_PRODUCER_ID,
@@ -271,7 +271,7 @@ export const runtimeOptions = (
 export const withHost = <A, E, R>(
   db: string,
   effect: Effect.Effect<A, E, R>,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
   bindings: ReadonlyArray<ResolvedBinding> = [],
 ) =>
   Effect.provide(
@@ -283,8 +283,13 @@ export const withHost = <A, E, R>(
 export const withRuntime = <A, E, R>(
   db: string,
   effect: Effect.Effect<A, E, R>,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-) => Effect.provide(effect, NodeDurableRuntime.layer(runtimeOptions(db, overrides)));
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+  bindings: ReadonlyArray<ResolvedBinding> = [],
+) =>
+  Effect.provide(
+    effect,
+    NodeDurableAgentRuntime.layerWithBindings(bindings, runtimeOptions(db, overrides)),
+  );
 
 export interface CrashSite {
   readonly db: string;

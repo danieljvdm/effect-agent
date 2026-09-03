@@ -17,6 +17,7 @@
         "@effect-agent/storage-memory": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-browser": "catalog:",
@@ -182,13 +183,16 @@
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/sandbox": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/testing": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@effect/sql-sqlite-node": "catalog:",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -242,7 +246,7 @@
     },
     "packages/capabilities": {
       "name": "@effect-agent/capabilities",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -261,7 +265,7 @@
     },
     "packages/core": {
       "name": "@effect-agent/core",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -273,7 +277,7 @@
     },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -290,7 +294,7 @@
     },
     "packages/engine": {
       "name": "@effect-agent/engine",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
       },
@@ -306,7 +310,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -344,12 +348,13 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
       },
@@ -366,7 +371,7 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -399,7 +404,7 @@
     },
     "packages/sandbox": {
       "name": "@effect-agent/sandbox",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -411,7 +416,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/sandbox": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -429,7 +434,7 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -452,7 +457,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -470,7 +475,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -489,7 +494,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -514,12 +519,32 @@
     },
     "packages/thread": {
       "name": "@effect-agent/thread",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
       },
       "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.112",
+      },
+    },
+    "packages/workflow": {
+      "name": "@effect-agent/workflow",
+      "version": "0.1.0-beta.44",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/thread": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
+        "@effect-agent/storage-memory": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
@@ -846,6 +871,8 @@
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
 
     "@effect-agent/thread": ["@effect-agent/thread@workspace:packages/thread"],
+
+    "@effect-agent/workflow": ["@effect-agent/workflow@workspace:packages/workflow"],
 
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-2GQKD3IzfCJuS3DgeuBwUjEYk5iyOqgK5etQkYZ3Ho8IuL8BtGR9d8G5AIiRV0xkNy5DD4vGnDGSHxKWsW2TRg=="],
 

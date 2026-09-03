@@ -1,6 +1,9 @@
 import { connectMcp, StructuralRedactorLive } from "@effect-agent/capabilities";
 import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import {
   assertDiscoveryMatchesAuthoredToolkit,
   docsCoordinatorConfidentialMarker,
@@ -37,7 +40,6 @@ import {
   childThreadIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
-  type ResolvedBinding,
 } from "@effect-agent/thread";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -52,8 +54,8 @@ const decodeDigest = Schema.decodeUnknownEffect(ResearchDigest);
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
@@ -88,11 +90,11 @@ const submitMission = (thread: string, key: string) =>
   });
 
 /** Drive one Thread lane through the S2 multi-binding worker entry point. */
-const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
+const drive = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
 
-    return yield* runtime.processThreadResolved(threadId, bindings);
+    return yield* runtime.processThreadResolved(threadId);
   });
 
 const readLog = (threadId: ThreadId) =>
@@ -189,7 +191,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // Phase 1: one coordinator Turn declares BOTH delegation calls; the
             // parent suspends waitingForChild, holds no worker permit, and no
             // child model ran (spec §12 step 10, SUB-030).
-            const first = yield* drive(harness.bindings, receipt.threadId);
+            const first = yield* drive(receipt.threadId);
 
             expect(first).toHaveLength(0);
             expect((yield* submissionState(receipt.submissionId)).state).toBe("suspended");
@@ -212,7 +214,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             // Phase 2: each child lane runs to Settlement under its own Attempt.
             // Every summarizer consulted the MCP content tool exactly once.
             for (const childThreadId of childThreads) {
-              const settlements = yield* drive(harness.bindings, childThreadId);
+              const settlements = yield* drive(childThreadId);
 
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
@@ -231,7 +233,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
 
             // Phase 3: the woken parent joins BOTH verified settlements and
             // settles completed with the digest of bounded findings.
-            const settlements = yield* drive(harness.bindings, receipt.threadId);
+            const settlements = yield* drive(receipt.threadId);
 
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             const log = yield* readLog(receipt.threadId);
@@ -297,7 +299,10 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             expect(yield* harness.parentModelCalls).toBe(2);
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/docs-researcher.sqlite`)),
+              NodeDurableAgentRuntime.layerWithBindings(
+                harness.bindings,
+                runtimeOptions(`${directory}/docs-researcher.sqlite`),
+              ),
             ),
           );
         }),

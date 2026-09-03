@@ -14,7 +14,8 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./workflow": "./src/workflow.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -29,6 +30,7 @@
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/thread": "workspace:*",
+    "@effect-agent/workflow": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:"
   },

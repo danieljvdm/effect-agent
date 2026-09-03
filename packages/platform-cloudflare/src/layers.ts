@@ -70,7 +70,7 @@ import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
 /**
  * Raw (unvalidated) construction options for `ThreadObject.make`, mirroring
- * `NodeDurableRuntimeOptions`. Optional fields default to the documented production values
+ * `NodeDurableAgentRuntimeOptions`. Optional fields default to the documented production values
  * (`CLOUDFLARE_RUNTIME_DEFAULTS`); everything is schema-decoded into
  * `CloudflareDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
  */
@@ -367,7 +367,7 @@ export const layerFromBindings = (
 
       const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
 
-      const runtimeStack = DurableAgentRuntime.layerWithServices.pipe(
+      const runtimeStack = DurableAgentRuntime.layerWithBindings(bindings).pipe(
         Layer.provideMerge(routedPorts),
         Layer.provideMerge(cloudflareWakeSchedulerLayer),
         Layer.provideMerge(base),
@@ -375,7 +375,7 @@ export const layerFromBindings = (
 
       return Layer.mergeAll(
         runtimeStack,
-        ThreadMaintenance.layer(bindings).pipe(Layer.provide(runtimeStack)),
+        ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack)),
         portsEndpointLayer,
       );
     }),

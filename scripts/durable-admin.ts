@@ -1,5 +1,5 @@
 import { ThreadId, SubmissionId } from "@effect-agent/core";
-import { NodeDurableRuntime } from "@effect-agent/platform-node";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node";
 import {
   DurableAgentRuntime,
   ObligationThresholds,
@@ -69,7 +69,7 @@ const json = Flag.boolean("json").pipe(
 
 /** The admin CLI writes with its own producer identity; epoch fencing stays authoritative. */
 const runtimeLayerFor = (filename: string) =>
-  NodeDurableRuntime.layer({
+  NodeDurableAgentRuntime.layer({
     filename,
     deploymentId: "durable-admin",
     producerId: "durable-admin",
