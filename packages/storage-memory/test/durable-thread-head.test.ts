@@ -1,31 +1,32 @@
-import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
-import { RunToolAuthorization } from "@effect-agent/engine";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
 import {
-  AbortCommand,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
-  DurableWorkerBinding,
+  Receipt,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
+import { OperationAuthorizer, OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
+import {
+  AbortCommand,
   IdempotencyKey,
   LedgerError,
-  OperationAuthorizer,
-  OperationDenied,
   OwnershipRenewal,
   OwnershipToken,
   Principal,
-  ProducerId,
-  Receipt,
   RecoverySnapshotRequest,
   ReleaseOwnershipRequest,
-  type ResolvedBinding,
   SubmissionLedger,
-  ToolReconciler,
-  WakeScheduler,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
@@ -41,8 +42,6 @@ import {
   Stream,
 } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-
-import { MemorySubmissionLedgerLive, MemoryThreadStoreLive } from "../src/index.ts";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const digests = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });

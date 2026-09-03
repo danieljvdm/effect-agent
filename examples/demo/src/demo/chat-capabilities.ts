@@ -1,4 +1,4 @@
-import type { TravelPlan } from "@effect-agent/testing/fixtures/travel-planner";
+import { type TravelPlan } from "@effect-agent/testing/TravelPlanner";
 
 import type { DemoOperationalEvent, DemoScenario } from "./operational-contracts";
 

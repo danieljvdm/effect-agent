@@ -1,11 +1,13 @@
-import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities";
-import { Agent, ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
-import type {
-  RunApprovalDecision,
-  RunApprovalHook,
-  RunApprovalRequest,
-} from "@effect-agent/engine";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
+import * as Agent from "@effect-agent/core/Agent";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
+import {
+  type RunApprovalDecision,
+  type RunApprovalHook,
+  type RunApprovalRequest,
+} from "@effect-agent/engine/RunOptions";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
   ActivityCatalogLayer,
   bookFlightIdempotencyKey,
@@ -22,22 +24,23 @@ import {
   TravelPlannerPhase5,
   TravelPlannerPhase5ToolkitLayer,
   TravelSupplierReconcilerLayer,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import {
-  ApprovalDecisionCommand,
-  CanonicalRecordEnvelope,
-  ThreadRead,
-  ThreadStore,
   DurableAgentRuntime,
   DurableApprovalResolver,
   DurableRuntimeConfig,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
+import {
+  ApprovalDecisionCommand,
   IdempotencyKey,
-  runIdForSubmission,
   SubmissionLedger,
   SubmissionLookupById,
-  WakeScheduler,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";

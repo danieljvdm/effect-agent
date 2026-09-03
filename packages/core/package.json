@@ -14,7 +14,24 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./Agent": "./src/Agent.ts",
+    "./AgentError": "./src/AgentError.ts",
+    "./AgentPolicy": "./src/AgentPolicy.ts",
+    "./Identifiers": "./src/Identifiers.ts",
+    "./IdGenerator": "./src/IdGenerator.ts",
+    "./Memory": "./src/Memory.ts",
+    "./MemoryNamespace": "./src/MemoryNamespace.ts",
+    "./MemoryReference": "./src/MemoryReference.ts",
+    "./MemoryRevalidation": "./src/MemoryRevalidation.ts",
+    "./MemoryStore": "./src/MemoryStore.ts",
+    "./RunEvent": "./src/RunEvent.ts",
+    "./RunPolicyUsage": "./src/RunPolicyUsage.ts",
+    "./SemanticMemoryIndex": "./src/SemanticMemoryIndex.ts",
+    "./SemanticMemoryRevalidation": "./src/SemanticMemoryRevalidation.ts",
+    "./SubagentContract": "./src/SubagentContract.ts",
+    "./ToolResult": "./src/ToolResult.ts",
+    "./Usage": "./src/Usage.ts"
   },
   "publishConfig": {
     "access": "public"

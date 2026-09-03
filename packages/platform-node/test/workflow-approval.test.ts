@@ -1,6 +1,9 @@
-import { Agent, AgentPolicy, ToolCallId } from "@effect-agent/core";
-import { ApprovalDecisionCommand, digestDefinitions } from "@effect-agent/thread";
-import { WorkflowAgentHost } from "@effect-agent/workflow";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ToolCallId } from "@effect-agent/core/Identifiers";
+import { digestDefinitions } from "@effect-agent/thread/Digest";
+import { ApprovalDecisionCommand } from "@effect-agent/thread/SubmissionLedger";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";

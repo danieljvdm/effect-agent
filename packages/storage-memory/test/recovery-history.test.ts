@@ -1,39 +1,45 @@
-import { AgentId, ThreadId } from "@effect-agent/core";
-import type { ThreadRead, RecoveryDecision } from "@effect-agent/thread";
+import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { EMPTY_TAIL_DIGEST, digestJson } from "@effect-agent/thread/Digest";
 import {
-  AbortCommand,
-  AdmissionRequest,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
+import {
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
   ThreadCreated,
-  ThreadMaterialization,
-  ThreadNotMaterialized,
-  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
-  EMPTY_TAIL_DIGEST,
-  FencedAppendRequest,
-  IdempotencyKey,
-  MarkReadyRequest,
-  Principal,
   ProducerEpoch,
   ProducerId,
   RepairAnnotated,
+} from "@effect-agent/thread/Records";
+import { type RecoveryDecision } from "@effect-agent/thread/Recovery";
+import {
+  AbortCommand,
+  AdmissionRequest,
+  IdempotencyKey,
+  MarkReadyRequest,
+  Principal,
   SubmissionLedger,
-  ToolReconciler,
-  WakeScheduler,
-  digestJson,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { type ThreadRead } from "@effect-agent/thread/ThreadStore";
+import {
+  ThreadMaterialization,
+  ThreadNotMaterialized,
+  ThreadStore,
+  FencedAppendRequest,
+} from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, DateTime, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "../src/index.ts";
 
 class RecoveryReadProbe extends Context.Service<
   RecoveryReadProbe,

@@ -1,36 +1,55 @@
+import * as Subagent from "@effect-agent/capabilities/Subagent";
 import {
-  isDelegationToolName,
-  SubagentDelegationCaps,
-  Agent,
-  type AgentOutputError,
-  AgentPolicy,
+  delegationAllocationFromPolicy,
+  delegationCapsFromPolicy,
+  type SubagentChildRunFailure,
+  SubagentExecutionFailure,
+  SubagentGrant,
+  SubagentPolicy,
+  SubagentPrestartDenied,
+  SubagentProjectionFailure,
+  SubagentRuntime,
+} from "@effect-agent/capabilities/Subagent";
+import {
+  SubagentBudgetExhausted,
+  SubagentReservations,
+  SubagentReservationsMemoryLive,
+  type SubagentReservationView,
+} from "@effect-agent/capabilities/SubagentReservations";
+import * as Agent from "@effect-agent/core/Agent";
+import { type AgentOutputError } from "@effect-agent/core/AgentError";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import {
   ThreadId,
-  IdGenerator,
   ReceiptId,
-  type RunEvent,
   RunId,
   SubmissionId,
   ToolCallId,
   TurnId,
-} from "@effect-agent/core";
+} from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import { isDelegationToolName, SubagentDelegationCaps } from "@effect-agent/core/SubagentContract";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-  type RunEventSink,
   type SubagentDurability,
   type SubagentDurabilityError,
   type ToolCallWaiting,
   AgentChildPending,
-  AgentRuntime,
   AgentSpawner,
+  type RuntimeBinding,
+} from "@effect-agent/engine/AgentRuntime";
+import { type RunEventSink } from "@effect-agent/engine/RunEventSink";
+import {
+  RunContextPreparationPassthrough,
   type ChildEstablishStatus,
   type RunSubagentChildIdentity,
   type RunSubagentEstablishRequest,
   type RunSubagentHook,
   type RunSubagentJoinRequest,
   type RunTurnResume,
-  type RuntimeBinding,
-} from "@effect-agent/engine";
+} from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { describe, expect, it, layer } from "@effect/vitest";
 import {
   Cause,
@@ -54,23 +73,6 @@ import {
   Tool,
   Toolkit,
 } from "effect/unstable/ai";
-
-import {
-  delegationAllocationFromPolicy,
-  delegationCapsFromPolicy,
-  Subagent,
-  SubagentBudgetExhausted,
-  type SubagentChildRunFailure,
-  SubagentExecutionFailure,
-  SubagentGrant,
-  SubagentPolicy,
-  SubagentPrestartDenied,
-  SubagentProjectionFailure,
-  SubagentReservations,
-  SubagentReservationsMemoryLive,
-  type SubagentReservationView,
-  SubagentRuntime,
-} from "../src/index.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

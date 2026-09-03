@@ -1,5 +1,7 @@
-import { ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ThreadHistory, RunContextPreparationPassthrough } from "@effect-agent/engine";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 
 import {

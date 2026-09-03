@@ -1,29 +1,30 @@
+import { indexMemorySource, SemanticIndexLimits } from "@effect-agent/capabilities/SemanticMemory";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { type MemoryNamespaceError } from "@effect-agent/core/MemoryNamespace";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
 import {
-  MemoryAccess,
   type MemoryDocument,
-  type SemanticMemoryProfile,
   ActiveMemoryDocument,
   applyMemoryWrite,
-  MemoryIndexCandidate,
-  MemoryIndexQuery,
-  MemoryIndexReplacement,
-  MemoryIndexSearch,
-  MemoryIndexSource,
   MemoryKey,
-  MemoryNamespace,
   MemoryScope,
-  type MemoryNamespaceError,
   MemoryReader,
   type MemoryStorageError,
   MemoryWrite,
   type MemoryWriteError,
   MemoryWriter,
+} from "@effect-agent/core/MemoryStore";
+import {
+  type SemanticMemoryProfile,
+  MemoryIndexCandidate,
+  MemoryIndexQuery,
+  MemoryIndexReplacement,
+  MemoryIndexSearch,
+  MemoryIndexSource,
   SemanticMemoryIndex,
-} from "@effect-agent/core";
+} from "@effect-agent/core/SemanticMemoryIndex";
 import { Effect, Schema } from "effect";
 import { expect, it } from "vite-plus/test";
-
-import { indexMemorySource, SemanticIndexLimits } from "../src/index.ts";
 
 const TenantId = Schema.NonEmptyString.pipe(Schema.brand("app/TenantId"));
 const UserId = Schema.NonEmptyString.pipe(Schema.brand("app/UserId"));

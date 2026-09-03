@@ -1,3 +1,4 @@
+import { InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
 import {
   BrowserCredentialAccess,
   CardCredential,
@@ -6,7 +7,6 @@ import {
   CredentialOffer,
   CredentialOfferMetadata,
   CredentialUseResult,
-  InteractiveBrowserPolicy,
   ListCredentialOffers,
   LoginCredential,
   ProtectedBrowserError,
@@ -14,7 +14,7 @@ import {
   ProtectedBrowserObservation,
   ProtectedBrowserSession,
   UseCredential,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/ProtectedBrowser";
 import { Crypto, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 

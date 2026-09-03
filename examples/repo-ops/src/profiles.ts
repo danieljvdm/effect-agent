@@ -1,13 +1,8 @@
-import { Agent, type ThreadId } from "@effect-agent/core";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  Principal,
-  ProducerId,
-  type DurableSubmitOptions,
-  type IdempotencyKey,
-} from "@effect-agent/thread";
+import * as Agent from "@effect-agent/core/Agent";
+import { type ThreadId } from "@effect-agent/core/Identifiers";
+import { type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
+import { Principal, type IdempotencyKey } from "@effect-agent/thread/SubmissionLedger";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";

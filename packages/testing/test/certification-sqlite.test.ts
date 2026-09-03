@@ -1,21 +1,21 @@
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { submissionLedgerLayer } from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
 import {
-  SqliteStorageFailpoint,
   threadStoreLayer,
   storageConfigLayer,
-  submissionLedgerLayer,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/storage-sqlite/SqliteThreadStore";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   tier2NeverFiredLocations,
-} from "@effect-agent/testing/certification";
+} from "@effect-agent/testing/Certification";
 import {
   CertificationCaseResult,
   CertificationReport,
-  threadStoreConformanceCases,
-  submissionLedgerConformanceCases,
-} from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/testing/Certification";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
+import { threadStoreConformanceCases } from "@effect-agent/thread/testing/ThreadStoreConformance";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";

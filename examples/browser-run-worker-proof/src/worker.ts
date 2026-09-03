@@ -1,9 +1,10 @@
-import { WebCapture, WebCaptureScrapeSuccess, WebCaptureSuccess } from "@effect-agent/capabilities";
+import * as WebCapture from "@effect-agent/capabilities/WebCapture";
+import { WebCaptureScrapeSuccess, WebCaptureSuccess } from "@effect-agent/capabilities/WebCapture";
 import {
   BrowserQuickActionBrowserBinding,
   CloudflareBrowser,
   browserQuickActionScreenshotLayer,
-} from "@effect-agent/platform-cloudflare/browser-quick-action";
+} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
 import {
   BrowserRunHandoffRequest,
   BrowserRunCleanupError,
@@ -11,11 +12,11 @@ import {
   BrowserRunInteractiveHost,
   BrowserRunLiveViewRequest,
   BrowserRunSessionLifecycle,
-} from "@effect-agent/platform-cloudflare/interactive-browser";
+} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
 import {
   browserRunProtectedLayer,
   browserRunProtectedBindingLayer,
-} from "@effect-agent/platform-cloudflare/protected-browser";
+} from "@effect-agent/platform-cloudflare/ProtectedBrowser";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
@@ -23,11 +24,13 @@ import {
   BrowserScrollRequest,
   InteractiveBrowserPolicy,
   InteractiveBrowserActionError,
+} from "@effect-agent/sandbox/InteractiveBrowser";
+import { PageUrlTarget } from "@effect-agent/sandbox/PageCapture";
+import {
   PageScreenshot,
   PageScreenshotLimits,
   PageScreenshotRequest,
-  PageUrlTarget,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/PageScreenshot";
 import { BrowserCrypto } from "@effect/platform-browser";
 import {
   Config,

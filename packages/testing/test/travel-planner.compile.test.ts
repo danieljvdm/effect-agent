@@ -1,3 +1,4 @@
+import * as Agent from "@effect-agent/core/Agent";
 import {
   type AgentApprovalDenied,
   type AgentApprovalPending,
@@ -6,41 +7,38 @@ import {
   type AgentPolicyError,
   type ContextBudgetError,
   type ContextOverflowError,
-  type MemoryRecallError,
-  IdGenerator,
-  type RunEvent,
   type ModelProtocolError,
-  Agent,
-  AgentPolicy,
   type AgentToolAuthorizationDenied,
-} from "@effect-agent/core";
+} from "@effect-agent/core/AgentError";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
   type AgentChildPending,
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-  type ThreadHistoryError,
-  type CompactionError,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
   type AgentResult,
   type DetachedRun,
-  type RunOptions,
-} from "@effect-agent/engine";
-import { ScriptedModel } from "@effect-agent/testing";
-import type {
-  ActivityCatalog,
-  ActivityUnavailable,
-  FlightCatalog,
-  FlightUnavailable,
-  GuidanceFailure,
-  LodgingCatalog,
-  LodgingUnavailable,
-  TravelGuidance,
-  TravelPlannerToolkit,
-} from "@effect-agent/testing/fixtures/travel-planner";
-import { phase1Trip, TravelPlanner } from "@effect-agent/testing/fixtures/travel-planner";
-import type { DurableWorkerRequirements } from "@effect-agent/thread";
+} from "@effect-agent/engine/AgentRuntime";
+import { type CompactionError } from "@effect-agent/engine/ContextCompactor";
+import { RunContextPreparationPassthrough, type RunOptions } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory, type ThreadHistoryError } from "@effect-agent/engine/ThreadHistory";
+import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
+import {
+  type ActivityCatalog,
+  type ActivityUnavailable,
+  type FlightCatalog,
+  type FlightUnavailable,
+  type GuidanceFailure,
+  type LodgingCatalog,
+  type LodgingUnavailable,
+  type TravelGuidance,
+  type TravelPlannerToolkit,
+} from "@effect-agent/testing/TravelPlanner";
+import { phase1Trip, TravelPlanner } from "@effect-agent/testing/TravelPlanner";
+import { type DurableWorkerRequirements } from "@effect-agent/thread/DurableAgentRuntime";
 import { Context, Effect, Layer, Schema, SchemaGetter, Scope, type Stream } from "effect";
 import { type AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";

@@ -1,25 +1,27 @@
 import {
+  threadNamespaceLayer,
+  type ThreadObjectRpc,
+} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import {
+  CloudflareThreadClient,
+  decodeAwaitProgressRequest,
+  decodeCancelProgressRequest,
+  type ClientObserveFailure,
+  type ThreadClientError,
+  type HostFailure,
+} from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { CanonicalSequence } from "@effect-agent/thread/Records";
+import {
   AbortCommand,
   ApprovalDecisionCommand,
-  CanonicalSequence,
-  Receipt,
   UnknownResolutionCommand,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "effect";
 import { TestClock } from "effect/testing";
 
-import {
-  CloudflareThreadClient,
-  threadNamespaceLayer,
-  decodeAwaitProgressRequest,
-  decodeCancelProgressRequest,
-  type ClientObserveFailure,
-  type ThreadClientError,
-  type ThreadObjectRpc,
-  type HostFailure,
-} from "../src/index.ts";
 import { decodeThreadId, plannerDefinition, submitOptions } from "./fixtures.ts";
 
 const binding = "TASK_ORCHESTRATORS";

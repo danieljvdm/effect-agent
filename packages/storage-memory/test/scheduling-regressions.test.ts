@@ -1,33 +1,32 @@
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core/Identifiers";
+import { MemoryScheduleStoreLive } from "@effect-agent/storage-memory/MemoryScheduleStore";
+import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
 import {
   defaultSchedulingLimits,
-  DefinitionDigests,
-  Digest,
-  Principal,
-  QueueSequence,
-  Receipt,
   ScheduleAuthorizationError,
   ScheduleAuthorizer,
   ScheduleId,
-  type ScheduleCreateOptions,
   type ScheduledEnvelope,
   ScheduledInputAdmission,
   ScheduledInputRefused,
   ScheduledInputRetryable,
-  Scheduling,
-  ScheduleDriver,
   SchedulingLimits,
   ScheduleStore,
   ScheduleStorageError,
   type ScheduleTimingRequest,
+} from "@effect-agent/thread/Schedule";
+import {
+  type ScheduleCreateOptions,
+  Scheduling,
+  ScheduleDriver,
   ScheduleWakeNoop,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/Scheduling";
+import { Principal, QueueSequence } from "@effect-agent/thread/SubmissionLedger";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Tracer } from "effect";
 import * as TestClock from "effect/testing/TestClock";
-
-import { MemoryScheduleStoreLive } from "../src/index.ts";
 
 const Input = Schema.Struct({ text: Schema.String });
 const agent = { definition: { id: Schema.decodeSync(AgentId)("schedule-test"), input: Input } };

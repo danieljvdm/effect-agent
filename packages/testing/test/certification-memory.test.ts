@@ -1,17 +1,18 @@
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   resolveTierThree,
   tier2NeverFiredLocations,
-} from "@effect-agent/testing/certification";
+} from "@effect-agent/testing/Certification";
 import {
   CertificationCaseResult,
   CertificationReport,
-  threadStoreConformanceCases,
-  submissionLedgerConformanceCases,
-} from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/testing/Certification";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
+import { threadStoreConformanceCases } from "@effect-agent/thread/testing/ThreadStoreConformance";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";

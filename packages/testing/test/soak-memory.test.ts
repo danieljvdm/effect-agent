@@ -1,24 +1,22 @@
 import * as v8 from "node:v8";
 import * as vm from "node:vm";
 
-import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { ObligationThresholds } from "@effect-agent/thread/Admin";
 import {
-  DeploymentId,
-  Digest,
-  DefinitionDigests,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
-  IdempotencyKey,
-  ObligationThresholds,
-  Principal,
-  ProducerId,
-  SubmissionLedger,
-  ToolReconciler,
-  WakeScheduler,
   type DurableSubmitOptions,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
+import { DeploymentId, Digest, DefinitionDigests, ProducerId } from "@effect-agent/thread/Records";
+import { IdempotencyKey, Principal, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";

@@ -1,17 +1,33 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
-  Agent,
   AgentId,
-  AgentPolicy,
   ThreadId,
   DelegationId,
-  IdGenerator,
   ReceiptId,
   RunId,
   SubmissionId,
   ToolCallId,
   TurnId,
-  type RunEvent,
-} from "@effect-agent/core";
+} from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import {
+  AgentChildPending,
+  AgentSpawner,
+  SubagentDurability,
+  SubagentDurabilityError,
+  ToolCallWaiting,
+} from "@effect-agent/engine/AgentRuntime";
+import {
+  type ChildEstablishStatus,
+  type RunSubagentChildIdentity,
+  type RunSubagentEstablishRequest,
+  type RunSubagentHook,
+  type RunSubagentJoinRequest,
+  type RunTurnResume,
+} from "@effect-agent/engine/RunOptions";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -35,22 +51,8 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
-import {
-  AgentChildPending,
-  AgentRuntime,
-  AgentSpawner,
-  SubagentDurability,
-  SubagentDurabilityError,
-  ToolCallWaiting,
-  type ChildEstablishStatus,
-  type RunSubagentChildIdentity,
-  type RunSubagentEstablishRequest,
-  type RunSubagentHook,
-  type RunSubagentJoinRequest,
-  type RunTurnResume,
-} from "../src/index.ts";
-import { RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 class DelegationFailed extends Schema.TaggedError<DelegationFailed>()("DelegationFailed", {
   message: Schema.String,

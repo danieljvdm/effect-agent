@@ -3,7 +3,7 @@
 See the [browser guide](../../docs/guide/browser.md) for adapter selection and application setup.
 
 This example declares `@cloudflare/puppeteer` directly because it imports
-`@effect-agent/platform-cloudflare/interactive-browser`. Durable-host and REST-only consumers
+`@effect-agent/platform-cloudflare/InteractiveBrowser`. Durable-host and REST-only consumers
 do not need that optional peer dependency.
 
 This private class E example proves the shipped Cloudflare Browser Run binding path against one

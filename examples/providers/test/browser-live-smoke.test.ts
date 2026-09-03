@@ -1,20 +1,21 @@
-import { WebCapture, WebCaptureSuccess } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
-import {
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
+import * as WebCapture from "@effect-agent/capabilities/WebCapture";
+import { WebCaptureSuccess } from "@effect-agent/capabilities/WebCapture";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import {
   BrowserQuickActionBrowserBinding,
   BrowserQuickActionRpcError,
   browserQuickActionCaptureLayer,
   type BrowserQuickActionClient,
-} from "@effect-agent/platform-cloudflare/browser-quick-action";
+} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
 import {
   PHASE7_LIVE_CREDENTIAL_ENV,
   phase7LiveProfileEnabled,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Console, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { Toolkit } from "effect/unstable/ai";

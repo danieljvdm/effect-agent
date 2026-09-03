@@ -1,10 +1,9 @@
-import { SubagentReservationsMemoryLive, SubagentRuntime } from "@effect-agent/capabilities";
-import { IdGenerator } from "@effect-agent/core";
-import {
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
+import { SubagentRuntime } from "@effect-agent/capabilities/Subagent";
+import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";

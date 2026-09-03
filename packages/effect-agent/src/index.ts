@@ -1,14 +1,39 @@
-/**
- * Agent authoring, execution, and capabilities through one package.
- * Each export belongs to one constituent package; those packages must not
- * forward each other's names. Effect itself uses module namespaces at its
- * root; this umbrella retains the framework's flat named imports.
- *
- * Platform adapters stay scoped where their dependencies live:
- * `@effect-agent/platform-node`, the storage adapters,
- * `@effect-agent/sandbox-local`, `@effect-agent/platform-cloudflare`, and the
- * `@effect-agent/testing` dev kit.
- */
-export * from "@effect-agent/capabilities";
-export * from "@effect-agent/core";
-export * from "@effect-agent/engine";
+export * as Agent from "./Agent.ts";
+export * as AgentError from "./AgentError.ts";
+export * as AgentPolicy from "./AgentPolicy.ts";
+export * as AgentRuntime from "./AgentRuntime.ts";
+export * as Approval from "./Approval.ts";
+export * as Budget from "./Budget.ts";
+export * as CodeMode from "./CodeMode.ts";
+export * as Commands from "./Commands.ts";
+export * as Compaction from "./Compaction.ts";
+export * as ContextCompactor from "./ContextCompactor.ts";
+export * as DurableStep from "./DurableStep.ts";
+export * as EphemeralThreads from "./EphemeralThreads.ts";
+export * as Identifiers from "./Identifiers.ts";
+export * as IdGenerator from "./IdGenerator.ts";
+export * as Mcp from "./Mcp.ts";
+export * as McpClient from "./McpClient.ts";
+export * as Memory from "./Memory.ts";
+export * as MemoryNamespace from "./MemoryNamespace.ts";
+export * as MemoryReference from "./MemoryReference.ts";
+export * as MemoryRevalidation from "./MemoryRevalidation.ts";
+export * as MemoryStore from "./MemoryStore.ts";
+export * as ModelContext from "./ModelContext.ts";
+export * as Redaction from "./Redaction.ts";
+export * as RunEvent from "./RunEvent.ts";
+export * as RunEventSink from "./RunEventSink.ts";
+export * as RunHooks from "./RunHooks.ts";
+export * as RunOptions from "./RunOptions.ts";
+export * as RunPolicyUsage from "./RunPolicyUsage.ts";
+export * as SemanticMemory from "./SemanticMemory.ts";
+export * as SemanticMemoryIndex from "./SemanticMemoryIndex.ts";
+export * as SemanticMemoryRevalidation from "./SemanticMemoryRevalidation.ts";
+export * as Subagent from "./Subagent.ts";
+export * as SubagentContract from "./SubagentContract.ts";
+export * as SubagentReservations from "./SubagentReservations.ts";
+export * as ThreadHistory from "./ThreadHistory.ts";
+export * as ToolBroker from "./ToolBroker.ts";
+export * as ToolResult from "./ToolResult.ts";
+export * as Usage from "./Usage.ts";
+export * as WebCapture from "./WebCapture.ts";

@@ -1,14 +1,14 @@
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { CloudflareThreadClient } from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
   approvalDefinition,

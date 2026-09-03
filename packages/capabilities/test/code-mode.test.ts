@@ -1,23 +1,23 @@
-import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import {
-  ToolExecutionClass,
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
+import { type CodeModeFailure, type CodeModeSuccess } from "@effect-agent/capabilities/CodeMode";
+import * as CodeMode from "@effect-agent/capabilities/CodeMode";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import {
   CodeExecutionHost,
   CodeExecutionResult,
   CodeExecutor,
   CodeProgramFailedError,
-  SandboxImplementation,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/CodeExecutor";
+import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-
-import type { CodeModeFailure, CodeModeSuccess } from "../src/index.ts";
-import { CodeMode } from "../src/index.ts";
 
 const Query = Tool.make("query_warehouse", {
   description: "Run one read-only SQL query",

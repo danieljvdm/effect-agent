@@ -136,28 +136,41 @@ export default defineConfig({
         files: ["packages/*/src/**/*.ts"],
         rules: {
           "exports/no-internal-barrel": "error",
-          "exports/no-self-barrel-import": "error",
+          "exports/no-wildcard-reexports": "error",
+          "exports/require-direct-module-import": "error",
+          "exports/no-package-reexports": "error",
         },
       },
       {
-        files: ["packages/{core,engine,capabilities}/src/**/*.ts"],
-        rules: { "exports/no-package-reexports": "error" },
+        files: ["packages/effect-agent/src/*.ts"],
+        rules: {
+          "exports/no-package-reexports": "off",
+          "exports/no-internal-barrel": "off",
+          "exports/no-wildcard-reexports": "off",
+          "exports/canonical-umbrella-module": "error",
+        },
       },
       {
         // Only published aggregation entries may be pure forwarding modules.
         // Keep this list aligned with package.json exports when adding one.
         files: [
           "packages/*/src/index.ts",
-          "packages/{thread,storage-memory,storage-sqlite,storage-cloudflare}/src/testing.ts",
-          "packages/thread/src/{history,durability}.ts",
-          "packages/testing/src/{certification,chaos,code-executor,docs-researcher,travel-planner}.ts",
-          "packages/platform-cloudflare/src/protected-browser.ts",
+          "packages/engine/src/{AgentRuntime,Compaction}.ts",
+          "packages/thread/src/AgentRegistration.ts",
+          "packages/storage-sqlite/src/SqliteStorageVersion.ts",
+          "packages/storage-cloudflare/src/DoStorageVersion.ts",
+          "packages/pr-review/src/ReviewRepository.ts",
+          "packages/testing/src/{DocsResearcher,TravelPlanner}.ts",
+          "packages/platform-cloudflare/src/{CloudflareBrowser,ProtectedBrowser}.ts",
         ],
         rules: { "exports/no-internal-barrel": "off" },
       },
       {
         files: ["packages/*/src/index.ts"],
-        rules: { "exports/no-entrypoint-implementation": "error" },
+        rules: {
+          "exports/namespace-only-entrypoint": "error",
+          "exports/canonical-umbrella-module": "off",
+        },
       },
     ],
   },

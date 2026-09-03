@@ -246,32 +246,37 @@ defaults, so declare `dts` and `sourcemap` there when needed.
 
 ## Exports and entry points
 
-The pinned Effect package uses module namespace barrels, such as `export * as Schema`,
-and supports direct module imports while excluding internal paths. Effect Agent currently
-uses flat named imports. Keep each shared symbol owned by one package so the umbrella can
-combine core, engine, and capabilities without resolving duplicate declarations.
+Like the pinned Effect package, package roots contain module namespace exports such as
+`export * as Agent from "./Agent.ts"`. Each public module has an explicit PascalCase subpath,
+so `import { Agent } from "effect-agent"` and `import * as Agent from "effect-agent/Agent"`
+select the same module. Keep each shared API owned by one package.
 
-- Keep interpreter implementations in named modules and select their public exports in
-  `src/index.ts`. An exported helper needed by a sibling file is not automatically public API.
+- Keep implementations in named modules. A public module exposes every declaration it exports;
+  move sibling-only helpers into private files. A small, explicit public selector may expose
+  supported declarations from a private implementation without exposing its helpers.
 - Import sibling implementation modules directly. Do not route internal imports through the
   package root or add a file whose only purpose is to forward another barrel.
-- Keep specialized entry points when they isolate dependencies or select a supported concern,
-  such as `/testing`, `/history`, and browser adapters. Storage facades may expose a shared
-  implementation from an inward package; capabilities should not alias core or engine APIs.
-- Keep `package.json` exports explicit. Export targets must be flat `./src/<name>.ts` files
+- Import other framework packages through their direct public modules, with a declared dependency.
+  Do not re-export another package's APIs. The umbrella alone forwards core, engine, and
+  capabilities modules through same-name public files required by package export resolution.
+- Keep test-only modules under `/testing/Module`; exclude them from production roots.
+  Optional browser adapters and fixture modules may be direct-only imports. Do not add
+  `/history`, `/durability`, or other duplicate aggregation paths.
+- Keep `package.json` exports explicit. Export targets must be flat `./src/Module.ts` files
   with matching pack entries, as required by the release publisher. Source files outside those
   entries remain private even when their declarations use `export` for sibling imports.
 
 See the [package map](reference/packages.md#public-imports) for API ownership and import changes.
 
-Oxlint enforces these structural boundaries through `oxlint/plugin-exports.ts` during `vp lint`,
-`vp check`, and the pre-commit hook. Package source cannot consist only of re-exports outside the
-public barrel allowlist in `vite.config.ts`, import its own package or a relative `index` barrel,
-or forward another framework package's bindings from core, engine, or capabilities.
-Package-root `index.ts` files must remain export lists, with implementations in named modules.
-When adding a public aggregation entry, update that allowlist alongside the package exports and
-pack entries. Choosing which implementation helpers belong in the public API remains a review
-decision; these rules do not determine API intent.
+Oxlint enforces namespace-only roots, direct implementation imports, package ownership, canonical
+umbrella forwarding, and the prohibition on flat wildcard exports and internal barrels during
+`vp lint`, `vp check`, and the pre-commit hook. Public selectors have an explicit file allowlist
+in `vite.config.ts`; adding a file does not make it an allowed barrel.
+
+The export check in `vp run check` verifies manifest paths, exact filename casing, namespace
+targets, pack entries, and declared workspace dependencies. The purity check verifies that no
+production entry reaches test-only code. Choosing which helpers are supported public API still
+requires review; the checks enforce the declared boundary.
 
 ## CI and hooks
 

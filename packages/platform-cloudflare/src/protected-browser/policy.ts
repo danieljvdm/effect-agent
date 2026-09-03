@@ -1,3 +1,4 @@
+import { InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
 /// <reference types="@cloudflare/workers-types" />
 import {
   BrowserCredentialAccess,
@@ -8,7 +9,6 @@ import {
   CredentialOrigin,
   type CredentialTarget,
   CredentialUseResult,
-  InteractiveBrowserPolicy,
   ListCredentialOffers,
   LoginCredential,
   ProtectedBrowser,
@@ -24,7 +24,7 @@ import {
   type ProtectedBrowserHandle,
   type ProtectedCleanup,
   type ProtectedObservationState,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/ProtectedBrowser";
 import {
   Clock,
   Context,

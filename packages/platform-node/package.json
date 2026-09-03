@@ -15,7 +15,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./workflow": "./src/workflow.ts"
+    "./NodeDurableAgentRuntime": "./src/NodeDurableAgentRuntime.ts",
+    "./NodeDurableHost": "./src/NodeDurableHost.ts",
+    "./NodeScheduling": "./src/NodeScheduling.ts",
+    "./NodeSubscriptions": "./src/NodeSubscriptions.ts",
+    "./NodeWakeScheduler": "./src/NodeWakeScheduler.ts",
+    "./NodeWorkflow": "./src/NodeWorkflow.ts"
   },
   "publishConfig": {
     "access": "public"

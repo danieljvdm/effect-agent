@@ -1,21 +1,19 @@
 import {
-  PageHtmlTarget,
-  PageScreenshot,
-  PageScreenshotLimits,
-  PageScreenshotRequest,
-  PageUrlTarget,
-  type PageScreenshotError,
-  type PageScreenshotResult,
-} from "@effect-agent/sandbox";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Logger } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
-import {
   BrowserQuickActionBrowserBinding,
   BrowserQuickActionRpcError,
   browserQuickActionScreenshotLayer,
   type BrowserQuickActionClient,
-} from "../src/browser-quick-action.ts";
+} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
+import { PageHtmlTarget, PageUrlTarget } from "@effect-agent/sandbox/PageCapture";
+import {
+  PageScreenshot,
+  PageScreenshotLimits,
+  PageScreenshotRequest,
+  type PageScreenshotError,
+  type PageScreenshotResult,
+} from "@effect-agent/sandbox/PageScreenshot";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Logger } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 type LayerRequirements<Value> =
   Value extends Layer.Layer<infer _Output, infer _Error, infer Requirements> ? Requirements : never;

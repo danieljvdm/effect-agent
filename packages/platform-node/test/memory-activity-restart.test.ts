@@ -1,36 +1,27 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as Memory from "@effect-agent/core/Memory";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
+import { revalidateMemoryLookup } from "@effect-agent/core/MemoryRevalidation";
 import {
-  Memory,
-  revalidateMemoryLookup,
-  MemoryNamespace,
   MemoryScope,
-  Agent,
-  AgentPolicy,
-  IdGenerator,
   MemoryReader,
-  MemoryRecallLimits,
   MemoryWrite,
   MemoryWriter,
-  ThreadId,
-} from "@effect-agent/core";
-import type { ActiveMemoryDocument } from "@effect-agent/core";
-import {
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import {
-  activityProcessorStoreLayer,
-  layer as sqliteThreadStoreLayer,
-  memoryReaderLayer,
-  memoryStoreLayer,
-} from "@effect-agent/storage-sqlite";
-import {
-  ActivityProcessorStore,
-  PersistentHistory,
-  ThreadExportRequest,
-  ThreadStore,
-  type PreparedActivity,
-} from "@effect-agent/thread";
+} from "@effect-agent/core/MemoryStore";
+import { type ActiveMemoryDocument } from "@effect-agent/core/MemoryStore";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/SqliteActivityStore";
+import { layer as sqliteThreadStoreLayer } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { ActivityProcessorStore, type PreparedActivity } from "@effect-agent/thread/ActivityStore";
+import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
+import { memoryReaderLayer, memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
+import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";

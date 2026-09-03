@@ -1,26 +1,21 @@
+import { SubagentPrestartDenied } from "@effect-agent/capabilities/Subagent";
 import {
   SubagentBudgetExhausted,
   type SubagentParentBudgetView,
-  SubagentPrestartDenied,
   SubagentReservations,
   SubagentReservationsMemoryLive,
   type SubagentReservationView,
-} from "@effect-agent/capabilities";
-import {
-  Agent,
-  AgentPolicy,
-  IdGenerator,
-  type RunEvent,
-  RunId,
-  ToolCallId,
-} from "@effect-agent/core";
-import {
-  AgentRuntime,
-  AgentSpawner,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
+} from "@effect-agent/capabilities/SubagentReservations";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { RunId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { AgentSpawner } from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
 import {
   AirportCode,
   CatalogLifecycle,
@@ -48,7 +43,7 @@ import {
   researcherHappyPathTurns,
   researchMission,
   TravelCoordinator,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { Model, Tool, Toolkit } from "effect/unstable/ai";

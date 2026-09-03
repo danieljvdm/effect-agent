@@ -1,13 +1,10 @@
-import {
-  Redactor,
-  StructuralRedactorLive,
-  SubagentExecutionFailure,
-} from "@effect-agent/capabilities";
-import { ThreadId, ToolCallId } from "@effect-agent/core";
+import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
+import { SubagentExecutionFailure } from "@effect-agent/capabilities/Subagent";
+import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node";
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -22,16 +19,12 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "@effect-agent/testing/fixtures/docs-researcher";
-import {
-  ThreadRead,
-  ThreadStore,
-  DurableAgentRuntime,
-  IdempotencyKey,
-  childThreadIdFor,
-  runIdForSubmission,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
+} from "@effect-agent/testing/DocsResearcher";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
+import { IdempotencyKey } from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";

@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
+import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
 const sessionId = "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99";
 const accountId = "1234567890abcdef1234567890abcdef";

@@ -228,12 +228,12 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
     "testing",
   ],
   "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite", "workflow"],
-  "pr-review": ["effect-agent"],
+  "pr-review": ["core", "engine", "effect-agent"],
   sandbox: ["core"],
   "sandbox-local": ["core", "sandbox"],
   thread: ["core", "engine"],
   "storage-cloudflare": ["core", "thread", "testing"],
-  "storage-memory": ["core", "thread"],
+  "storage-memory": ["core", "thread", "engine"],
   "storage-sqlite": ["core", "thread"],
   workflow: ["core", "thread", "engine", "storage-memory"],
   testing: [
@@ -697,14 +697,20 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           const directory = root + "/packages/" + name;
 
           yield* fs.makeDirectory(directory + "/dist", { recursive: true });
-          yield* fs.writeFileString(directory + "/dist/index.mjs", "export {};\n");
-          yield* fs.writeFileString(directory + "/dist/index.d.mts", "export {};\n");
+          for (const entry of ["index", "Agent", "Failpoint"]) {
+            yield* fs.writeFileString(`${directory}/dist/${entry}.mjs`, "export {};\n");
+            yield* fs.writeFileString(`${directory}/dist/${entry}.d.mts`, "export {};\n");
+          }
 
           const original =
             JSON.stringify({
               name: "@fixture/" + name,
               version: "1.0.0-beta.17",
-              exports: { ".": "./src/index.ts" },
+              exports: {
+                ".": "./src/index.ts",
+                "./Agent": "./src/Agent.ts",
+                "./testing/Failpoint": "./src/Failpoint.ts",
+              },
               files: ["dist"],
               dependencies: name === "consumer" ? { "@fixture/core": "workspace:*" } : {},
               peerDependencies: { effect: "catalog:" },
@@ -747,7 +753,14 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               dependencies: { "@fixture/core": "1.0.0-beta.17" },
               peerDependencies: { effect: "4.0.0-rc.111" },
               devDependencies: { effect: "4.0.0-rc.111" },
-              exports: { ".": { types: "./dist/index.d.mts", default: "./dist/index.mjs" } },
+              exports: {
+                ".": { types: "./dist/index.d.mts", default: "./dist/index.mjs" },
+                "./Agent": { types: "./dist/Agent.d.mts", default: "./dist/Agent.mjs" },
+                "./testing/Failpoint": {
+                  types: "./dist/Failpoint.d.mts",
+                  default: "./dist/Failpoint.mjs",
+                },
+              },
             });
           }),
         );
@@ -812,7 +825,7 @@ esac
           yield* assertRestored;
         }
 
-        yield* fs.remove(root + "/packages/core/dist/index.mjs");
+        yield* fs.remove(root + "/packages/core/dist/Failpoint.mjs");
         let published = false;
 
         const failure = yield* Effect.flip(
@@ -825,7 +838,7 @@ esac
 
         expect(failure).toMatchObject({
           _tag: "ReleaseError",
-          reason: expect.stringContaining("Missing built artifact"),
+          reason: "Missing built artifact: ./dist/Failpoint.mjs",
         });
         expect(published).toBe(false);
         yield* assertRestored;
@@ -962,6 +975,9 @@ esac
               edges,
               `${packageName} may consume @effect-agent/testing only as a devDependency`,
             ).not.toContain("testing");
+            if (packageName === "storage-memory") {
+              expect(edges, "storage-memory uses engine only in its tests").not.toContain("engine");
+            }
           }
         }
       }
@@ -1027,6 +1043,8 @@ esac
       expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
       expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
+      expect(prReviewAction.devDependencies?.["@effect-agent/engine"]).toBe("workspace:*");
+      expect(prReviewAction.dependencies?.["@effect-agent/engine"]).toBeUndefined();
       expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
       expect(prReviewAction.dependencies?.effect).toBe("catalog:");
       expect(prReviewDependencies).not.toContain("wrangler");

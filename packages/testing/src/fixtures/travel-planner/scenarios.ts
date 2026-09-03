@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import type { ScriptedTurnInput } from "../../scripted-model.ts";
+import type { ScriptedTurnInput } from "../../ScriptedModel.ts";
 import { TravelPlan, TripRequest, type TravelPlan as TravelPlanValue } from "./definition.ts";
 
 const usage = { inputTokens: { total: 128 }, outputTokens: { total: 96 } };

@@ -1,17 +1,17 @@
-import { digestDefinitions } from "@effect-agent/thread";
+import {
+  ThreadObjectIdentity,
+  ThreadObjectNamespace,
+  DurableObjectContext,
+} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import { digestDefinitions } from "@effect-agent/thread/Digest";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Cause, Context, Crypto, Effect, Exit, Layer, Schema } from "effect";
 import { DurableObjectState, WorkerEnvironment } from "effect-cf";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import {
-  CloudflareThreadClient,
-  ThreadObject,
-  ThreadObjectIdentity,
-  ThreadObjectNamespace,
-  DurableObjectContext,
-} from "../src/index.ts";
 import {
   PRODUCER_PREFIX,
   plannerDefinition,

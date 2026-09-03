@@ -1,48 +1,47 @@
-import { contextCompactorRunContextLayer } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ThreadId, ToolCallId } from "@effect-agent/core";
+import { contextCompactorRunContextLayer } from "@effect-agent/capabilities/RunHooks";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { estimatePromptTokens } from "@effect-agent/engine/Compaction";
+import { CompactionError, ContextCompactor } from "@effect-agent/engine/ContextCompactor";
 import {
-  CompactionError,
-  estimatePromptTokens,
-  ContextCompactor,
   DurableStep,
   DurableStepError,
-  RunToolAuthorization,
   ToolExecutionClass,
-} from "@effect-agent/engine";
-import { layerFromBindings } from "@effect-agent/platform-cloudflare";
+} from "@effect-agent/engine/DurableStep";
+import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import {
-  type DoStorageFailpointHandler,
-  type DoStorageFailpointLocation,
-} from "@effect-agent/storage-cloudflare";
-import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing";
+  type ThreadMaintenanceFailpointHandler,
+  type ThreadMaintenanceFailpointLocation,
+} from "@effect-agent/platform-cloudflare/Alarm";
+import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/DoStorageError";
+import { type DoStorageFailpointHandler } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
+import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting";
+import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+import { type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
 import {
-  DefinitionDigestInput,
-  DefinitionDigests,
-  Digest,
   DurableRuntimeFailpointError,
-  DurableWorkerBinding,
-  IdempotencyKey,
-  Principal,
-  ReconciliationSafeToRetry,
-  ReconciliationUncertain,
+  type DurableRuntimeFailpointHandler,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
+import { DefinitionDigestInput, DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+import {
   ScheduleFailpointError,
   type ScheduleOwner,
   ScheduleRecord,
   ScheduleStorageError,
-  scheduleOwnerKey,
+} from "@effect-agent/thread/Schedule";
+import { scheduleOwnerKey } from "@effect-agent/thread/ScheduleTransition";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
+import {
+  ReconciliationSafeToRetry,
+  ReconciliationUncertain,
   ToolReconciler,
-  type DurableRuntimeFailpointHandler,
-  type DurableRuntimeFailpointLocation,
-  type DurableSubmitOptions,
-  type ResolvedBinding,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/ToolReconciler";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
-import type {
-  ThreadMaintenanceFailpointHandler,
-  ThreadMaintenanceFailpointLocation,
-} from "../src/index.ts";
+import { layerFromBindings } from "../src/internal/layers.ts";
 
 /**
  * Workerd-safe eviction-harness fixtures (plan §3, §4 WP3). The vitest pool runs test files

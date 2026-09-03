@@ -1,4 +1,29 @@
-import { ThreadId } from "@effect-agent/core";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { type PreparedActivity } from "@effect-agent/thread/ActivityStore";
+import {
+  ActivityClaim,
+  ActivityMutationFailure,
+  ActivityProcessorKey,
+  ActivityProcessorStore,
+} from "@effect-agent/thread/ActivityStore";
+import {
+  ActivityPassLimits,
+  ActivityProcessingError,
+  processCommittedActivity,
+} from "@effect-agent/thread/CommittedActivity";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import {
+  BatchId,
+  CanonicalRecordEnvelope,
+  CanonicalSequence,
+  DeploymentId,
+  ObservationOffset,
+  ProducerEpoch,
+  RecordEnvelope,
+  RecordId,
+  UserInputRecorded,
+} from "@effect-agent/thread/Records";
+import { ThreadStore, ThreadTail } from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -14,29 +39,6 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-
-import type { PreparedActivity } from "../src/index.ts";
-import {
-  ActivityClaim,
-  ActivityMutationFailure,
-  ActivityPassLimits,
-  ActivityProcessingError,
-  ActivityProcessorKey,
-  ActivityProcessorStore,
-  BatchId,
-  CanonicalRecordEnvelope,
-  CanonicalSequence,
-  DeploymentId,
-  EMPTY_TAIL_DIGEST,
-  ObservationOffset,
-  ProducerEpoch,
-  RecordEnvelope,
-  RecordId,
-  ThreadStore,
-  ThreadTail,
-  UserInputRecorded,
-  processCommittedActivity,
-} from "../src/index.ts";
 
 const threadId = Schema.decodeSync(ThreadId)("dan-chad");
 const sequence = Schema.decodeSync(CanonicalSequence);

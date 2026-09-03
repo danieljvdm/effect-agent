@@ -14,7 +14,14 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./CodeExecutor": "./src/CodeExecutor.ts",
+    "./InteractiveBrowser": "./src/InteractiveBrowser.ts",
+    "./PageCapture": "./src/PageCapture.ts",
+    "./PageCrawl": "./src/PageCrawl.ts",
+    "./PageScreenshot": "./src/PageScreenshot.ts",
+    "./ProtectedBrowser": "./src/ProtectedBrowser.ts",
+    "./Sandbox": "./src/Sandbox.ts"
   },
   "publishConfig": {
     "access": "public"

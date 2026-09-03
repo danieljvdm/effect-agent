@@ -1,14 +1,4 @@
 import {
-  RunId,
-  ToolCallId,
-  SubagentDelegationCaps,
-  SubagentReservationAmounts,
-} from "@effect-agent/core";
-import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Schema } from "effect";
-import { FastCheck } from "effect/testing";
-
-import {
   makeBudgetReservationId,
   SubagentBudgetExhausted,
   SubagentObservedUsage,
@@ -22,7 +12,15 @@ import {
   SubagentReservationsMemoryLive,
   SubagentReservationUnknown,
   SubagentReservationView,
-} from "../src/index.ts";
+} from "@effect-agent/capabilities/SubagentReservations";
+import { RunId, ToolCallId } from "@effect-agent/core/Identifiers";
+import {
+  SubagentDelegationCaps,
+  SubagentReservationAmounts,
+} from "@effect-agent/core/SubagentContract";
+import { describe, expect, it } from "@effect/vitest";
+import { Deferred, Effect, Fiber, Schema } from "effect";
+import { FastCheck } from "effect/testing";
 
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);

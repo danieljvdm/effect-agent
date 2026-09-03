@@ -3,49 +3,49 @@ import {
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-} from "@effect-agent/capabilities";
+} from "@effect-agent/capabilities/SemanticMemory";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import * as Memory from "@effect-agent/core/Memory";
+import { MemoryRecallLimits, type MemoryLookup } from "@effect-agent/core/MemoryReference";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
 import {
-  Memory,
-  MemoryAccess,
   MemoryKey,
   MemoryReader,
-  MemoryRecallLimits,
-  ThreadId,
   MemoryWrite,
   MemoryWriter,
-  SemanticMemoryProfile,
   type ActiveMemoryDocument,
   type MemoryDocument,
-  type MemoryLookup,
-} from "@effect-agent/core";
+} from "@effect-agent/core/MemoryStore";
+import { SemanticMemoryProfile } from "@effect-agent/core/SemanticMemoryIndex";
 import {
   InMemorySemanticIndexCapacity,
   inMemorySemanticIndexLayer,
-} from "@effect-agent/storage-memory";
-import {
-  activityProcessorStoreLayer,
-  layer as sqliteThreadStoreLayer,
-  memoryStoreLayer,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/storage-memory/MemorySemanticIndex";
+import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/SqliteActivityStore";
+import { layer as sqliteThreadStoreLayer } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { ActivityProcessorKey, type PreparedActivity } from "@effect-agent/thread/ActivityStore";
 import {
   ActivityPassLimits,
-  ActivityProcessorKey,
+  processCommittedActivity,
+} from "@effect-agent/thread/CommittedActivity";
+import {
   BatchId,
   CanonicalBatch,
   DeploymentId,
-  FencedAppendRequest,
   ProducerEpoch,
   ProducerId,
   RecordEnvelope,
   RecordId,
+  UserInputRecorded,
+  type CanonicalRecordEnvelope,
+} from "@effect-agent/thread/Records";
+import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
+import {
+  FencedAppendRequest,
   ThreadMaterialization,
   ThreadStore,
   ThreadTailRequest,
-  UserInputRecorded,
-  processCommittedActivity,
-  type CanonicalRecordEnvelope,
-  type PreparedActivity,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import {

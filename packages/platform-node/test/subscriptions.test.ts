@@ -1,30 +1,20 @@
-import { Agent, AgentId, AgentPolicy, ThreadId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { NodeSubscriptions } from "@effect-agent/platform-node/NodeSubscriptions";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-  SqliteStorageFailpoint,
-  subscriptionStoreLayer,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import {
-  DefinitionDigests,
-  Digest,
-  DurableAgentRuntime,
   DurableRuntimeFailpointError,
-  EventSources,
-  SubscriptionInputBindings,
-  makeSubscriptionInputBinding,
-  IdempotencyKey,
-  Principal,
-  SourcePartition,
-  SubscriptionAuthorizer,
-  type SubscriptionDeliverySnapshot,
-  SubscriptionStore,
-  Subscriptions,
-  SubmissionLedger,
-  SubmissionLookupByKey,
-  defaultSubscriptionLimits,
   type DurableRuntimeFailpointHandler,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/DurableFailpoint";
+import { EventSources } from "@effect-agent/thread/EventSource";
 import {
   GitHubRepository,
   GitHubWorkflowRunSourceVersion,
@@ -32,7 +22,26 @@ import {
   GitHubWorkflowRunCompletion,
   GitHubWorkflowRunWatch,
   makeGitHubWorkflowRunSource,
-} from "@effect-agent/thread/github";
+} from "@effect-agent/thread/GitHubWorkflowSource";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+import {
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupByKey,
+} from "@effect-agent/thread/SubmissionLedger";
+import {
+  SourcePartition,
+  SubscriptionAuthorizer,
+  type SubscriptionDeliverySnapshot,
+  SubscriptionStore,
+  defaultSubscriptionLimits,
+} from "@effect-agent/thread/Subscription";
+import {
+  SubscriptionInputBindings,
+  makeSubscriptionInputBinding,
+} from "@effect-agent/thread/SubscriptionInput";
+import { Subscriptions } from "@effect-agent/thread/Subscriptions";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
@@ -52,8 +61,6 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
-
-import { NodeDurableHost, NodeSubscriptions } from "../src/index.ts";
 
 const partition = SourcePartition.make({
   tenantId: "node-subscription-tenant",

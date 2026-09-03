@@ -14,7 +14,9 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./WorkflowAgentHost": "./src/WorkflowAgentHost.ts",
+    "./WorkflowDispatch": "./src/WorkflowDispatch.ts"
   },
   "publishConfig": {
     "access": "public"

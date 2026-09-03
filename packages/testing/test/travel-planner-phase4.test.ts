@@ -1,9 +1,10 @@
-import { ThreadId, type SubmissionId } from "@effect-agent/core";
+import { ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
   expectedTravelPlan,
   makePhase4TravelPlannerAgent,
@@ -16,26 +17,28 @@ import {
   phase4TravelPlannerWorkerLayer,
   travelPlanFromDurableSettlement,
   TravelPlannerDurabilityProfile,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  DurableRuntimeFailpoint,
+  DurableRuntimeFailpointError,
+} from "@effect-agent/thread/DurableFailpoint";
+import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import {
   AbortCommand,
   ClaimRequest,
-  ThreadRead,
-  ThreadStore,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
-  DurableRuntimeFailpointError,
   IdempotencyKey,
-  ProducerId,
   RecoverySnapshotRequest,
   ReleaseOwnershipRequest,
   SubmissionLedger,
   SubmissionLookupById,
-  ToolReconciler,
-  WakeScheduler,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";

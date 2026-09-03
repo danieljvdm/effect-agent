@@ -1,16 +1,15 @@
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities";
-import { Agent } from "@effect-agent/core";
+import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
+import * as Agent from "@effect-agent/core/Agent";
+import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+import { type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
 import {
   DefinitionDigests,
   DeploymentId,
   Digest,
-  DurableWorkerBinding,
   ProducerId,
   type CanonicalRecordEnvelope,
-  type Receipt,
-  type ResolvedBinding,
-  type ToolReconciler,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/Records";
+import { type ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 

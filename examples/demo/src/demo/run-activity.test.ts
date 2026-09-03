@@ -1,4 +1,4 @@
-import { RunEvent } from "@effect-agent/core";
+import { RunEvent } from "@effect-agent/core/RunEvent";
 import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

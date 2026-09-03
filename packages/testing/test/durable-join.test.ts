@@ -1,29 +1,37 @@
-import { Agent, AgentPolicy, ThreadId, type SubmissionId } from "@effect-agent/core";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
-  AbortCommand,
-  ThreadRead,
-  ThreadStore,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
+import {
   DefinitionDigests,
   DeploymentId,
   Digest,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
+  ProducerId,
+  type CanonicalRecordEnvelope,
+} from "@effect-agent/thread/Records";
+import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
+import {
+  AbortCommand,
   IdempotencyKey,
   JoinedToHost,
   Principal,
-  ProducerId,
   SubmissionLedger,
   SubmissionLookupById,
-  ToolReconciler,
-  WakeScheduler,
-  runIdForSubmission,
-  type DurableRuntimeFailpointLocation,
-  type DurableSubmitOptions,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";

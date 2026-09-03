@@ -1,75 +1,71 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { type IdGenerator } from "@effect-agent/core/IdGenerator";
+import { COMPACTION_SUMMARY_PREFIX, estimatePromptTokens } from "@effect-agent/engine/Compaction";
+import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { RunContextPreparation, RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { ToolBroker } from "@effect-agent/engine/ToolBroker";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
-  Agent,
-  AgentPolicy,
-  CompactionPolicy,
-  ThreadId,
-  ReceiptId,
-  SubmissionId,
-  ToolCallId,
-  type IdGenerator,
-} from "@effect-agent/core";
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  Receipt,
+  recoveryRepairRecordId,
+  type DurableSubmitOptions,
+} from "@effect-agent/thread/DurableAgentRuntime";
 import {
-  COMPACTION_SUMMARY_PREFIX,
-  ContextCompactor,
-  RunContextPreparation,
-  RunToolAuthorization,
-  estimatePromptTokens,
-  ToolExecutionClass,
-  ToolBroker,
-} from "@effect-agent/engine";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
 import {
-  AbortCommand,
-  ApprovalDecisionCommand,
   BatchId,
   CanonicalRecordEnvelope,
   CanonicalSequence,
-  ThreadRead,
-  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
-  IdempotencyKey,
   ModelResponseRecorded,
   ObservationOffset,
   PersistedJson,
-  Principal,
   ProducerId,
-  QueueSequence,
-  Receipt,
   RecordEnvelope,
-  RecoverySnapshotRequest,
   RunCompleted,
+} from "@effect-agent/thread/Records";
+import {
+  modelResponseRecordId,
+  projectRunJournal,
+  promptFromCanonicalRecords,
+  runCompletedRecordId,
+  runIdForSubmission,
+  runStartedRecordId,
+  toolCallSettledRecordId,
+  turnCanonicalBatch,
+  turnIdForRun,
+} from "@effect-agent/thread/RunJournal";
+import {
+  AbortCommand,
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  QueueSequence,
+  RecoverySnapshotRequest,
   Settlement,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-  ToolReconciler,
-  WakeScheduler,
-  makeWakeSubscriptionHub,
-  modelResponseRecordId,
-  projectRunJournal,
-  promptFromCanonicalRecords,
-  replayThread,
-  recoveryRepairRecordId,
-  runCompletedRecordId,
-  runIdForSubmission,
-  runStartedRecordId,
   submissionInputRecordId,
   submissionSettlementRecordId,
-  toolCallSettledRecordId,
-  turnCanonicalBatch,
-  turnIdForRun,
-  type DurableRuntimeFailpointLocation,
-  type DurableSubmitOptions,
   type AdmissionConflict,
-  type FenceRejected,
   type SettlementConflict,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { replayThread } from "@effect-agent/thread/ThreadProjection";
+import { ThreadRead, ThreadStore, type FenceRejected } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler, makeWakeSubscriptionHub } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, layer } from "@effect/vitest";
 import {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { inspectForeignDiagnostic, safeUnknownString } from "../src/foreign-diagnostic.ts";
+import { inspectForeignDiagnostic, safeUnknownString } from "../src/internal/foreign-diagnostic.ts";
 
 describe("foreign failure diagnostics", () => {
   it("reads only Schema-validated diagnostic fields", () => {

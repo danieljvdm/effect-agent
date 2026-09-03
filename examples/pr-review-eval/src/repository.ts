@@ -3,7 +3,7 @@ import {
   ReviewFileList,
   ReviewRepository,
   ReviewSource,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/ReviewRepository";
 import { Effect, Layer } from "effect";
 
 import { type EvalRepositorySnapshot } from "./contracts.ts";

@@ -1,27 +1,29 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { RecalledMemory } from "@effect-agent/core/Memory";
+import { MemoryLookup } from "@effect-agent/core/MemoryReference";
+import { MemoryWrite, MemoryDocument } from "@effect-agent/core/MemoryStore";
 import {
-  Agent,
-  MemoryWrite,
-  MemoryLookup,
-  MemoryDocument,
-  RecalledMemory,
-} from "@effect-agent/core";
-import { OperationDenied, ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread";
+  ThreadObjectNamespace,
+  ThreadObjectIdentity,
+  type ThreadObjectRpc,
+} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import {
+  MemoryObject,
+  CloudflareMemoryClient,
+} from "@effect-agent/platform-cloudflare/CloudflareMemory";
+import {
+  makeScheduleOwnerObjectClass,
+  ScheduleOwnerIdentity,
+} from "@effect-agent/platform-cloudflare/CloudflareScheduling";
+import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import { OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
+import { ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread/Schedule";
 import { Context, Crypto, Effect, Layer, Schema } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
-import {
-  ThreadObject,
-  MemoryObject,
-  CloudflareMemoryClient,
-  makeScheduleOwnerObjectClass,
-  makeSubscriptionPartitionObjectClass,
-  ThreadObjectNamespace,
-  ThreadObjectIdentity,
-  ScheduleOwnerIdentity,
-  type ThreadObjectRpc,
-} from "../src/index.ts";
-import { layerFromBindings } from "../src/layers.ts";
+import { layerFromBindings } from "../src/internal/layers.ts";
 import {
   THREADS_BINDING,
   DEPLOYMENT_ID,

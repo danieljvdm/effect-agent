@@ -1,20 +1,20 @@
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
   ChaosPlan,
   DEFAULT_CHAOS_SEED,
   chaosSeedFromEnv,
   generateChaosPlans,
   runChaosPlan,
-} from "@effect-agent/testing/chaos";
+} from "@effect-agent/testing/Chaos";
 import {
-  DeploymentId,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  ProducerId,
-  ToolReconciler,
-  WakeScheduler,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DeploymentId, ProducerId } from "@effect-agent/thread/Records";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";

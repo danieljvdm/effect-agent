@@ -1,4 +1,5 @@
-import { Agent, AgentPolicy } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 

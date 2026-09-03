@@ -1,4 +1,17 @@
-import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { type RunOptions } from "@effect-agent/engine/RunOptions";
+import {
+  ToolBroker,
+  ToolBrokerConfigurationError,
+  type ProgrammaticCallOutcome,
+  type ToolBrokerPass,
+  type ToolBrokerPassOptions,
+} from "@effect-agent/engine/ToolBroker";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -18,18 +31,8 @@ import {
 } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
-import {
-  AgentRuntime,
-  ToolBroker,
-  ToolBrokerConfigurationError,
-  ToolExecutionClass,
-  type ProgrammaticCallOutcome,
-  type ToolBrokerPass,
-  type ToolBrokerPassOptions,
-  type RunOptions,
-} from "../src/index.ts";
-import { RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 class QueryFailure extends Schema.TaggedError<QueryFailure>()("QueryFailure", {
   message: Schema.String,

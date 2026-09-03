@@ -20,7 +20,8 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "action:build": "bun scripts/build-action.ts",
-    "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && bun scripts/verify-package-purity.ts",
+    "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && vp run check:exports && bun scripts/verify-package-purity.ts",
+    "check:exports": "bun scripts/verify-package-exports.ts",
     "test": "vp run -r --parallel --concurrency-limit 4 test",
     "build": "vp run -r build && vp run docs:build && vp run action:build",
     "ready": "vp run check && vp run test && vp run build"
@@ -53,6 +54,7 @@
     "@types/node": "catalog:",
     "alchemy": "2.0.0-beta.72",
     "effect": "catalog:",
+    "effect-agent": "workspace:*",
     "effect-cf": "catalog:",
     "esbuild": "catalog:",
     "oxfmt": "0.64.0",

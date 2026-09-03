@@ -1,11 +1,8 @@
+import { ledgerLayer } from "@effect-agent/storage-cloudflare/DoSubmissionLedger";
+import { layer as doThreadStoreLayer } from "@effect-agent/storage-cloudflare/DoThreadStore";
+import { handleEncodedPortRequest } from "@effect-agent/storage-cloudflare/PortRouting";
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
-
-import {
-  handleEncodedPortRequest,
-  layer as doThreadStoreLayer,
-  ledgerLayer,
-} from "../src/index.ts";
 
 export { ProbeDurableObject } from "./probe-worker.ts";
 

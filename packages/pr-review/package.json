@@ -15,7 +15,9 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./Review": "./src/Review.ts",
+    "./ReviewRepository": "./src/ReviewRepository.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -26,6 +28,8 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
     "effect-agent": "workspace:*"
   },
   "devDependencies": {

@@ -1,16 +1,19 @@
-import { Agent, AgentPolicy, type ModelServices } from "@effect-agent/core";
-import { DefinitionDigestInput, type DigestError, DurableAgentRuntime } from "@effect-agent/thread";
+import * as Agent from "@effect-agent/core/Agent";
+import { type ModelServices } from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { type DigestError } from "@effect-agent/thread/Digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { DefinitionDigestInput } from "@effect-agent/thread/Records";
+import { type WorkflowHostConfigError } from "@effect-agent/workflow/WorkflowAgentHost";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+import {
+  type WorkflowDispatchStore,
+  type WorkflowRepairTrigger,
+} from "@effect-agent/workflow/WorkflowDispatch";
 import { expect, it } from "@effect/vitest";
 import { Context, type Crypto, Effect, Layer, Schema, SchemaGetter } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { WorkflowEngine } from "effect/unstable/workflow";
-
-import type {
-  WorkflowDispatchStore,
-  WorkflowHostConfigError,
-  WorkflowRepairTrigger,
-} from "../src/index.ts";
-import { WorkflowAgentHost } from "../src/index.ts";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;

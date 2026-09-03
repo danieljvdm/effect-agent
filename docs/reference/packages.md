@@ -15,26 +15,65 @@ Before 1.0, APIs and stored data may change without a migration path.
 
 ## Public imports
 
-`effect-agent` provides flat named imports for core, engine, and capabilities.
-The constituent packages export the APIs they own. Import shared memory and delegation
-contracts from `@effect-agent/core`, and runtime contracts from `@effect-agent/engine`.
+Every public package root exports module namespaces, following Effect's module layout.
+Each module also has an explicit, case-sensitive import path. The umbrella exposes the same
+core, engine, and capabilities modules:
 
-| API                                                                                                    | Owning package         |
-| ------------------------------------------------------------------------------------------------------ | ---------------------- |
-| `Memory`, `MemoryRecallSource`, `MemorySourceOutcome`, `RecalledMemory`                                | `@effect-agent/core`   |
-| `MemoryAccess`, `revalidateMemoryLookup`, `SemanticMemoryError`                                        | `@effect-agent/core`   |
-| `SubagentDelegationCaps`, `SubagentReservationAmounts`, `delegationToolPrefix`, `isDelegationToolName` | `@effect-agent/core`   |
-| `ContextCompactor`, `CommandDrainPolicy`, `RunSchedulingOverride`                                      | `@effect-agent/engine` |
+```ts twoslash
+import { Agent, AgentRuntime } from "effect-agent";
 
-These names remain available from `effect-agent`; they are no longer forwarded through
-`@effect-agent/capabilities`. `CommandDrainPolicy` and `RunSchedulingOverride` each expose a
-Schema and its inferred type from the engine. Use `MemoryThreadStoreLive` from
-`@effect-agent/storage-memory` in place of the removed `MemoryStorageLive` alias.
+Agent.make;
+AgentRuntime.run;
+```
+
+The corresponding direct imports are:
+
+```ts
+import * as Agent from "effect-agent/Agent";
+import * as AgentRuntime from "effect-agent/AgentRuntime";
+```
+
+`Agent.make` and `AgentRuntime.run` have the same call shape through either import form.
+Individual declarations belong to their module, including services and Schema values:
+
+```ts
+import { IdGenerator } from "effect-agent/IdGenerator";
+import { CommandDrainPolicy, RunSchedulingOverride } from "effect-agent/RunOptions";
+```
+
+Applications installing constituent packages directly use the owning package instead:
+
+| Module or declarations                       | Owning module                               |
+| -------------------------------------------- | ------------------------------------------- |
+| Agent constructors and inferred types        | `@effect-agent/core/Agent`                  |
+| Recall composition, sources, and outcomes    | `@effect-agent/core/Memory`                 |
+| Memory passages and recall limits            | `@effect-agent/core/MemoryReference`        |
+| Memory reader/writer contracts               | `@effect-agent/core/MemoryStore`            |
+| `MemoryAccess`, `revalidateMemoryLookup`     | `@effect-agent/core/MemoryRevalidation`     |
+| Semantic index contracts and errors          | `@effect-agent/core/SemanticMemoryIndex`    |
+| Delegation contracts and reservation amounts | `@effect-agent/core/SubagentContract`       |
+| Runtime operations and inferred failures     | `@effect-agent/engine/AgentRuntime`         |
+| Compactor service                            | `@effect-agent/engine/ContextCompactor`     |
+| Command-drain, scheduling, and run options   | `@effect-agent/engine/RunOptions`           |
+| Subagent authoring and handlers              | `@effect-agent/capabilities/Subagent`       |
+| Semantic indexing/query implementation       | `@effect-agent/capabilities/SemanticMemory` |
+
+Flat root imports of individual declarations are removed. Import those declarations from the
+modules above, or use the root module namespace. `CommandDrainPolicy` and
+`RunSchedulingOverride` each expose a Schema and its inferred type from `RunOptions`.
+Use `MemoryThreadStoreLive` from `@effect-agent/storage-memory/MemoryThreadStore` in place
+of the removed `MemoryStorageLive` alias. SQLite memory readers and writers come directly from
+`@effect-agent/thread/SqlMemoryStore`.
+
+The old `/history`, `/durability`, and `/testing` aggregation paths are removed. Use the
+canonical modules below, including `/testing/Module` for test controls and conformance suites.
+Browser adapters, fixtures, and other specialized paths use the PascalCase names shown below.
+Unlisted source files and implementation directories are private.
 
 The engine and umbrella no longer export `initialCompactionState`, `buildCompactedView`,
 `COMPACTION_INSTRUCTION`, `isContextOverflowMessage`, `formatRunStatus`, or `RunStatusView`.
 These are interpreter details.
-Use `ContextCompactor` to customize compaction and `AgentPolicy.runStatus` to configure status
+Use the `ContextCompactor` service to customize compaction and `AgentPolicy.runStatus` to configure status
 messages. Token estimators and the `ContextCompactionState` type remain public for compactor
 implementations.
 
@@ -92,10 +131,13 @@ Start with `Agent`, `AgentPolicy`, and `IdGenerator`.
 ### `@effect-agent/engine`
 
 Runs the agent loop, schedules tool calls, enforces policy, and emits events.
-Exports `AgentRuntime`, `DetachedRun`, `RunOptions`, and `ThreadHistory`.
+Exports module namespaces including `AgentRuntime`, `RunOptions`, and `ThreadHistory`.
+The `DetachedRun` type belongs to `AgentRuntime`.
 
-Every entry point needs a history policy. Use `ThreadHistory.layerTransient` to retain
-nothing or `PersistentHistory.layer` from `@effect-agent/thread` to retain successful runs.
+Every entry point needs a history policy. Import the `ThreadHistory` service from
+`@effect-agent/engine/ThreadHistory` and use `ThreadHistory.layerTransient` to retain nothing.
+Import `PersistentHistory` from `@effect-agent/thread/PersistentHistory` and use
+`PersistentHistory.layer` to retain successful runs.
 Provide `RunContextPreparation` only when you need host context loading. Context service failures
 retain their concrete tagged errors.
 Use [`toolFailureObserverLayer`](../guide/run-agents#observe-recovered-tool-failures) to observe
@@ -143,12 +185,18 @@ submission's recovery decision with `recoverSubmission`. `submissionStatus` is t
 nonblocking read; `inspectSubmissionStatus` is reserved for trusted workers. Pending status and
 an empty processing result do not imply completion.
 
-| Import                            | Use                                                    |
-| --------------------------------- | ------------------------------------------------------ |
-| `@effect-agent/thread/history`    | `PersistentHistory` and history contracts              |
-| `@effect-agent/thread/durability` | Durable runtime and accepted-work contracts            |
-| `@effect-agent/thread/github`     | GitHub event source                                    |
-| `@effect-agent/thread/testing`    | Certification, conformance runners, failpoint controls |
+| Import                                                     | Use                               |
+| ---------------------------------------------------------- | --------------------------------- |
+| `@effect-agent/thread/PersistentHistory`                   | Persistent history implementation |
+| `@effect-agent/thread/ThreadStore`                         | History storage contracts         |
+| `@effect-agent/engine/ThreadHistory`                       | Interpreter history service       |
+| `@effect-agent/thread/DurableAgentRuntime`                 | Durable runtime                   |
+| `@effect-agent/thread/SubmissionLedger`                    | Accepted-work storage contracts   |
+| `@effect-agent/thread/GitHubWorkflowSource`                | GitHub event source               |
+| `@effect-agent/thread/testing/Certification`               | Adapter certification             |
+| `@effect-agent/thread/testing/ThreadStoreConformance`      | History conformance               |
+| `@effect-agent/thread/testing/SubmissionLedgerConformance` | Accepted-work conformance         |
+| `@effect-agent/thread/testing/DurableFailpointTestControl` | Runtime failpoint controls        |
 
 ### `@effect-agent/workflow`
 
@@ -174,9 +222,9 @@ It is disposable and must be rebuilt from authoritative sources after its Scope 
 Stores thread history and pending work in one Node SQLite database.
 Rejects incompatible stored versions; no migration path is promised.
 `CurrentSqliteStorageVersion` identifies the supported version.
-Test failpoints are in `@effect-agent/storage-sqlite/testing`.
+Test failpoints are in `@effect-agent/storage-sqlite/testing/SqliteStorageFailpointTesting`.
 
-The independent `memoryStoreLayer` supplies optional `MemoryReader` and `MemoryWriter` ports
+The independent `memoryStoreLayer` from `@effect-agent/thread/SqlMemoryStore` supplies optional `MemoryReader` and `MemoryWriter` ports
 for conditional document updates and terminal withdrawal. It initializes only memory tables.
 Use `memoryReaderLayer` when the application needs no writer. See
 [memory lifecycle](../guide/context-management#memory-lifecycle).
@@ -193,7 +241,7 @@ before closing storage. See the [Node.js guide](../platforms/node).
 
 `NodeDurableAgentRuntimeOptions.toolFailureObserver` installs a local tool-failure observer.
 
-The optional `@effect-agent/platform-node/workflow` import supplies `SqlWorkflowDispatchStore`
+The optional `@effect-agent/platform-node/NodeWorkflow` import supplies `SqlWorkflowDispatchStore`
 over an injected `SqlClient` and `NodeWorkflowRepairTrigger` with scoped startup and polling.
 Pair them with `NodeDurableAgentRuntime.layerRegistered` and `WorkflowAgentHost.layer`; this assembly does not start
 the ordinary Node worker loop.
@@ -203,7 +251,7 @@ the ordinary Node worker loop.
 Stores history and pending work in each Durable Object's SQLite database.
 Accepts injected Object handles without importing `cloudflare:workers`.
 Rejects incompatible stored versions; `CurrentDoStorageVersion` identifies the supported version.
-Failpoints and eviction helpers are in `@effect-agent/storage-cloudflare/testing`.
+Failpoints and eviction helpers are in `@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting`.
 
 `doMemoryStoreLayer` supplies optional memory ports using storage-backed SQLite transactions.
 The separate memory protocol defines bounded batch requests, responses, and typed errors.
@@ -221,12 +269,13 @@ Threads, with one authoritative batch RPC per recall. See [shared memory](../pla
 
 Browser adapters use separate imports:
 
-| Subpath                 | Adapter and requirements                                                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `/browser-quick-action` | Page capture through a browser binding; structured extraction also needs explicit Workers AI authorization and accounting |
-| `/browser-rest-capture` | Node-safe page capture with account credentials and `HttpClient`                                                          |
-| `/browser-rest-crawl`   | Node-safe same-host Markdown crawl with bounded polling and scoped job cleanup                                            |
-| `/interactive-browser`  | Interactive browser and host controls; requires `@cloudflare/puppeteer@^1.1.0`                                            |
+| Subpath               | Adapter and requirements                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `/CloudflareBrowser`  | Page capture through a browser binding; structured extraction also needs explicit Workers AI authorization and accounting |
+| `/BrowserRestCapture` | Node-safe page capture with account credentials and `HttpClient`                                                          |
+| `/BrowserRestCrawl`   | Node-safe same-host Markdown crawl with bounded polling and scoped job cleanup                                            |
+| `/InteractiveBrowser` | Interactive browser and host controls; requires `@cloudflare/puppeteer@^1.1.0`                                            |
+| `/ProtectedBrowser`   | Binding and target-policy Layers for protected browser requests                                                           |
 
 Durable hosts and the other browser adapters do not need Puppeteer.
 

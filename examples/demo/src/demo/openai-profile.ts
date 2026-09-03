@@ -1,11 +1,12 @@
-import { Agent, AgentPolicy } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
   HoldItinerary,
   TravelGuidance,
   TravelPlan,
   TravelPlannerPhase2Toolkit,
   TripRequest,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";

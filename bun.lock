@@ -32,6 +32,7 @@
         "@types/node": "catalog:",
         "alchemy": "2.0.0-beta.72",
         "effect": "catalog:",
+        "effect-agent": "workspace:*",
         "effect-cf": "catalog:",
         "esbuild": "catalog:",
         "oxfmt": "0.64.0",
@@ -373,6 +374,8 @@
       "name": "@effect-agent/pr-review",
       "version": "0.1.0-beta.44",
       "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
         "effect-agent": "workspace:*",
       },
       "devDependencies": {
@@ -396,6 +399,7 @@
         "effect": "catalog:",
       },
       "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
         "@effect/vitest": "catalog:",
         "@types/node": "catalog:",
         "typescript": "catalog:",
@@ -463,6 +467,7 @@
         "@effect-agent/thread": "workspace:*",
       },
       "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",

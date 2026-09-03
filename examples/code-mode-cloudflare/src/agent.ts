@@ -1,6 +1,7 @@
-import { CodeMode } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy } from "@effect-agent/core";
-import { ToolExecutionClass } from "@effect-agent/engine";
+import * as CodeMode from "@effect-agent/capabilities/CodeMode";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import type { Layer } from "effect";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";

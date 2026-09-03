@@ -1,8 +1,8 @@
-import { ThreadId } from "@effect-agent/core";
+import { ThreadId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node";
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import {
   TravelPlannerCloudflareProfile,
   expectedTravelPlan,
@@ -16,8 +16,10 @@ import {
   phase6TravelPlannerGoldenEvidence,
   phase6TravelPlannerProfile,
   travelPlanFromDurableSettlement,
-} from "@effect-agent/testing/fixtures/travel-planner";
-import { ThreadRead, ThreadStore, DurableAgentRuntime, IdempotencyKey } from "@effect-agent/thread";
+} from "@effect-agent/testing/TravelPlanner";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { IdempotencyKey } from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";

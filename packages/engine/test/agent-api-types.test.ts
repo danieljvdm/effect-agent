@@ -1,16 +1,17 @@
-import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
-import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
-import { expectTypeOf, it } from "vite-plus/test";
-
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { AgentRuntime } from "@effect-agent/engine";
 import {
-  AgentRuntime,
   type AgentResult,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
-  type ThreadHistory,
-} from "../src/index.ts";
+} from "@effect-agent/engine/AgentRuntime";
+import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { expectTypeOf, it } from "vite-plus/test";
 
 class Instructions extends Context.Service<Instructions, string>()("api-types/Instructions") {}
 class ProviderClient extends Context.Service<ProviderClient, string>()(

@@ -15,10 +15,11 @@ Provide `PersistentHistory.layer` with a memory or SQLite `ThreadStore` layer. T
 can serve many thread IDs.
 
 ```ts
-import { AgentRuntime, ThreadHistory } from "@effect-agent/engine";
-import { PersistentHistory } from "@effect-agent/thread/history";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory";
-import { layer as sqliteStore } from "@effect-agent/storage-sqlite";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { layer as sqliteStore } from "@effect-agent/storage-sqlite/SqliteThreadStore";
 import { Effect, Layer } from "effect";
 
 const MemoryHistoryLive = PersistentHistory.layer.pipe(Layer.provide(MemoryThreadStoreLive));

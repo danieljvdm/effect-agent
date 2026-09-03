@@ -1,16 +1,27 @@
+import * as Agent from "@effect-agent/core/Agent";
 import {
-  Agent,
-  AgentPolicy,
-  CompactionPolicy,
   ContextBudgetError,
   ContextOverflowError,
-  ThreadId,
-  IdGenerator,
   ModelProtocolError,
-  RunId,
-  TurnId,
-  type RunEvent,
-} from "@effect-agent/core";
+} from "@effect-agent/core/AgentError";
+import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import {
+  CompactionError,
+  ContextCompactor,
+  type CompactionDecision,
+  type CompactionRequest,
+} from "@effect-agent/engine/ContextCompactor";
+import {
+  type RunUsageDelta,
+  type RunCompactionCommit,
+  type RunDurabilityHook,
+  type RunTransientContextHook,
+  type RunTurnUsage,
+} from "@effect-agent/engine/RunOptions";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -46,21 +57,9 @@ import {
   isContextOverflowMessage,
   renderForSummary,
   SUMMARY_INPUT_BUDGET,
-} from "../src/compaction.ts";
-import {
-  AgentRuntime,
-  CompactionError,
-  ContextCompactor,
-  type CompactionDecision,
-  type CompactionRequest,
-  type RunUsageDelta,
-  type RunCompactionCommit,
-  type RunDurabilityHook,
-  type RunTransientContextHook,
-  type RunTurnUsage,
-} from "../src/index.ts";
-import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+} from "../src/internal/compaction.ts";
+import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
   nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),

@@ -1,10 +1,9 @@
-import { CodeMode } from "@effect-agent/capabilities";
-import { ToolExecutionClass } from "@effect-agent/engine";
+import * as CodeMode from "@effect-agent/capabilities/CodeMode";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/CloudflareCodeMode";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-
-import { CloudflareCodeMode } from "../src/index.ts";
 
 class Database extends Context.Service<Database, { readonly count: number }>()("test/Database") {}
 class SetupError extends Schema.TaggedError<SetupError>()("SetupError", {}) {}

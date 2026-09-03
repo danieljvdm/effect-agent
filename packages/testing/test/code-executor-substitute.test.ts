@@ -3,13 +3,13 @@ import {
   CodeExecutionLimits,
   CodeExecutionRequest,
   CodeExecutor,
-  NetworkDisabled,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/CodeExecutor";
+import { NetworkDisabled } from "@effect-agent/sandbox/Sandbox";
+import { codeExecutorConformanceCases } from "@effect-agent/testing/CodeExecutorConformance";
 import {
-  codeExecutorConformanceCases,
   inProcessCodeExecutorImplementation,
   inProcessCodeExecutorLayer,
-} from "@effect-agent/testing/code-executor";
+} from "@effect-agent/testing/CodeExecutorSubstitute";
 import { expect, layer } from "@effect/vitest";
 import { Duration, Effect } from "effect";
 

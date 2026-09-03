@@ -1,5 +1,5 @@
-export * from "./host.ts";
-export * from "./layers.ts";
-export * from "./scheduling.ts";
-export * from "./subscriptions.ts";
-export * from "./wake-scheduler.ts";
+export * as NodeDurableAgentRuntime from "./NodeDurableAgentRuntime.ts";
+export * as NodeDurableHost from "./NodeDurableHost.ts";
+export * as NodeScheduling from "./NodeScheduling.ts";
+export * as NodeSubscriptions from "./NodeSubscriptions.ts";
+export * as NodeWakeScheduler from "./NodeWakeScheduler.ts";
