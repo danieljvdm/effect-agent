@@ -246,37 +246,42 @@ defaults, so declare `dts` and `sourcemap` there when needed.
 
 ## Exports and entry points
 
-Like the pinned Effect package, package roots contain module namespace exports such as
-`export * as Agent from "./Agent.ts"`. Each public module has an explicit PascalCase subpath,
-so `import { Agent } from "effect-agent"` and `import * as Agent from "effect-agent/Agent"`
-select the same module. Keep each shared API owned by one package.
+Follow the pinned Effect package's module layout. Package roots and public groups use namespace
+exports such as `export * as Agent from "./Agent.ts"`; explicit named conveniences are also
+allowed, as Effect does for `pipe` and `flow`. Public modules use PascalCase names and direct
+subpaths. `import { Agent } from "effect-agent"` and
+`import * as Agent from "effect-agent/Agent"` select the same module.
 
 - Keep implementations in named modules. A public module exposes every declaration it exports;
   move sibling-only helpers into private files. A small, explicit public selector may expose
   supported declarations from a private implementation without exposing its helpers.
-- Import sibling implementation modules directly. Do not route internal imports through the
-  package root or add a file whose only purpose is to forward another barrel.
-- Import other framework packages through their direct public modules, with a declared dependency.
-  Do not re-export another package's APIs. The umbrella alone forwards core, engine, and
-  capabilities modules through same-name public files required by package export resolution.
-- Keep test-only modules under `/testing/Module`; exclude them from production roots.
-  Optional browser adapters and fixture modules may be direct-only imports. Do not add
-  `/history`, `/durability`, or other duplicate aggregation paths.
-- Keep `package.json` exports explicit. Export targets must be flat `./src/Module.ts` files
-  with matching pack entries, as required by the release publisher. Source files outside those
-  entries remain private even when their declarations use `export` for sibling imports.
+- Import sibling implementations relatively and directly. Do not route them through the package's
+  own public entry points or index barrels. Re-export-only files under `internal/` add no public
+  boundary and should be removed.
+- Import other framework packages through their declared public entry points. Direct modules,
+  roots, and namespace groups are allowed; declare the dependency and respect package direction.
+- Keep one implementation owner for each API. Deliberate public modules may forward another
+  package's bindings, including with `export *`, as Effect's platform packages do. A namespace
+  group such as `/testing` is also a valid public boundary. Review additions for consumer value;
+  avoid accumulating overlapping aliases without a reason.
+- Keep test-only groups and modules under `/testing` or `/testing/Module`, excluded from production
+  entry points. Optional browser adapters and fixtures may remain direct-only imports.
+- Keep `package.json` exports explicit, with matching pack entries. The current release publisher
+  requires flat source targets: a group may map `./testing` to `./src/Testing.ts`. Nested physical
+  targets and wildcard export maps would require publisher support first. These are repository
+  tooling constraints, not Effect conventions. Do not publish `internal` or `index` subpaths.
 
 See the [package map](reference/packages.md#public-imports) for API ownership and import changes.
 
-Oxlint enforces namespace-only roots, direct implementation imports, package ownership, canonical
-umbrella forwarding, and the prohibition on flat wildcard exports and internal barrels during
-`vp lint`, `vp check`, and the pre-commit hook. Public selectors have an explicit file allowlist
-in `vite.config.ts`; adding a file does not make it an allowed barrel.
+Oxlint enforces export-only root and group indexes, prevents self-barrel imports, and rejects
+re-export-only internal files during `vp lint`, `vp check`, and the pre-commit hook. Indexes may
+contain namespace and explicit named re-exports, but not bare wildcard exports or implementation
+code. Public forwarding modules need no umbrella-specific exception or file allowlist.
 
 The export check in `vp run check` verifies manifest paths, exact filename casing, namespace
-targets, pack entries, and declared workspace dependencies. The purity check verifies that no
-production entry reaches test-only code. Choosing which helpers are supported public API still
-requires review; the checks enforce the declared boundary.
+targets, pack entries, and declared workspace dependencies. The purity check uses declared testing
+targets as well as known test-module paths to prevent production entry points from reaching
+test-only code. Choosing supported APIs and useful public groups still requires review.
 
 ## CI and hooks
 

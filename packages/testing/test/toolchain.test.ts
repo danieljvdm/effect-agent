@@ -23,6 +23,8 @@ import {
   withTemporaryManifest,
   withPublishManifests,
 } from "../../../scripts/release-publish.ts";
+import { verifyPackageExports } from "../../../scripts/verify-package-exports.ts";
+import { verifyPackagePurity } from "../../../scripts/verify-package-purity.ts";
 
 const Dependencies = Schema.Record(Schema.String, Schema.String);
 
@@ -650,7 +652,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
   );
 
   it.effect(
-    "packs built exports and resolved dependencies and restores all source manifests",
+    "validates and packs public groups and forwarding modules and restores source manifests",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -696,11 +698,30 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         for (const name of ["core", "consumer"]) {
           const directory = root + "/packages/" + name;
 
+          const sources = {
+            index: 'export * as Agent from "./Agent.ts"; export { make } from "./Agent.ts";\n',
+            Agent:
+              name === "core"
+                ? "export const make = () => 1;\n"
+                : 'export * from "@fixture/core/Agent";\n',
+            Support: 'export * as Failpoint from "./Failpoint.ts";\n',
+            Failpoint: "export const armed = false;\n",
+          };
+
           yield* fs.makeDirectory(directory + "/dist", { recursive: true });
-          for (const entry of ["index", "Agent", "Failpoint"]) {
+          yield* fs.makeDirectory(directory + "/src");
+          for (const [entry, source] of Object.entries(sources)) {
+            yield* fs.writeFileString(`${directory}/src/${entry}.ts`, source);
             yield* fs.writeFileString(`${directory}/dist/${entry}.mjs`, "export {};\n");
             yield* fs.writeFileString(`${directory}/dist/${entry}.d.mts`, "export {};\n");
           }
+          yield* fs.writeFileString(
+            directory + "/vite.config.ts",
+            "export default " +
+              JSON.stringify({
+                pack: { entry: Object.keys(sources).map((entry) => `src/${entry}.ts`) },
+              }),
+          );
 
           const original =
             JSON.stringify({
@@ -709,6 +730,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               exports: {
                 ".": "./src/index.ts",
                 "./Agent": "./src/Agent.ts",
+                "./testing": "./src/Support.ts",
                 "./testing/Failpoint": "./src/Failpoint.ts",
               },
               files: ["dist"],
@@ -720,6 +742,34 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           originals.set(directory + "/package.json", original);
           yield* fs.writeFileString(directory + "/package.json", original);
         }
+
+        yield* verifyPackageExports(root);
+        yield* verifyPackagePurity(root);
+
+        const forwardedModule = root + "/packages/consumer/src/Agent.ts";
+        const originalForwarder = yield* fs.readFileString(forwardedModule);
+
+        yield* fs.writeFileString(
+          forwardedModule,
+          'export * from "@fixture/core/internal/Secret";\n',
+        );
+        const privateForwarding = yield* Effect.flip(verifyPackageExports(root));
+
+        expect(privateForwarding.message).toContain("is not a public export of @fixture/core");
+        yield* fs.writeFileString(forwardedModule, originalForwarder);
+
+        // The testing export key defines this boundary even though Support.ts has no test-like name.
+        const productionRoot = root + "/packages/core/src/index.ts";
+        const originalRoot = yield* fs.readFileString(productionRoot);
+
+        yield* fs.writeFileString(
+          productionRoot,
+          originalRoot + 'export * as Support from "./Support.ts";\n',
+        );
+        const testingLeak = yield* Effect.flip(verifyPackagePurity(root));
+
+        expect(testingLeak.message).toContain("bundles a declared testing entry point");
+        yield* fs.writeFileString(productionRoot, originalRoot);
 
         const assertRestored = Effect.gen(function* () {
           for (const [path, original] of originals) {
@@ -756,6 +806,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               exports: {
                 ".": { types: "./dist/index.d.mts", default: "./dist/index.mjs" },
                 "./Agent": { types: "./dist/Agent.d.mts", default: "./dist/Agent.mjs" },
+                "./testing": { types: "./dist/Support.d.mts", default: "./dist/Support.mjs" },
                 "./testing/Failpoint": {
                   types: "./dist/Failpoint.d.mts",
                   default: "./dist/Failpoint.mjs",

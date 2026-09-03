@@ -135,41 +135,17 @@ export default defineConfig({
       {
         files: ["packages/*/src/**/*.ts"],
         rules: {
-          "exports/no-internal-barrel": "error",
-          "exports/no-wildcard-reexports": "error",
-          "exports/require-direct-module-import": "error",
-          "exports/no-package-reexports": "error",
+          "exports/no-self-barrel-import": "error",
         },
       },
       {
-        files: ["packages/effect-agent/src/*.ts"],
-        rules: {
-          "exports/no-package-reexports": "off",
-          "exports/no-internal-barrel": "off",
-          "exports/no-wildcard-reexports": "off",
-          "exports/canonical-umbrella-module": "error",
-        },
+        files: ["packages/*/src/internal/**/*.ts"],
+        rules: { "exports/no-internal-barrel": "error" },
       },
       {
-        // Only published aggregation entries may be pure forwarding modules.
-        // Keep this list aligned with package.json exports when adding one.
-        files: [
-          "packages/*/src/index.ts",
-          "packages/engine/src/{AgentRuntime,Compaction}.ts",
-          "packages/thread/src/AgentRegistration.ts",
-          "packages/storage-sqlite/src/SqliteStorageVersion.ts",
-          "packages/storage-cloudflare/src/DoStorageVersion.ts",
-          "packages/pr-review/src/ReviewRepository.ts",
-          "packages/testing/src/{DocsResearcher,TravelPlanner}.ts",
-          "packages/platform-cloudflare/src/{CloudflareBrowser,ProtectedBrowser}.ts",
-        ],
-        rules: { "exports/no-internal-barrel": "off" },
-      },
-      {
-        files: ["packages/*/src/index.ts"],
+        files: ["packages/*/src/**/index.ts"],
         rules: {
-          "exports/namespace-only-entrypoint": "error",
-          "exports/canonical-umbrella-module": "off",
+          "exports/public-entrypoint": "error",
         },
       },
     ],

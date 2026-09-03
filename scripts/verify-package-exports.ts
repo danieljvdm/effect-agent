@@ -122,14 +122,22 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
           report(pkg.file, "Export targets must be unique");
         for (const [key, target] of Object.entries(manifest.exports)) {
           entries++;
-          const name = /^\.\/(?:testing\/)?([A-Z][A-Za-z0-9]*)$/.exec(key)?.[1];
-
-          if (key !== "." && (name === undefined || target !== `./src/${name}.ts`)) {
+          if (
+            key !== "." &&
+            (!/^\.\/[A-Za-z][A-Za-z0-9-]*(?:\/[A-Za-z][A-Za-z0-9-]*)*$/.test(key) ||
+              key.split("/").some((part) => part === "internal" || part === "index"))
+          ) {
             report(
               pkg.file,
-              `${key} must be ./PascalCase or ./testing/PascalCase targeting ./src/PascalCase.ts`,
+              `${key} must be an explicit public module or group path, excluding internal and index paths`,
             );
           }
+          // The release publisher currently maps flat source entries to flat dist artifacts.
+          if (!/^\.\/src\/[A-Za-z][A-Za-z0-9_-]*\.ts$/.test(target))
+            report(
+              pkg.file,
+              `${target} must be a flat ./src/Module.ts entry supported by the publisher`,
+            );
           if (!filenames.has(target.slice("./src/".length)))
             report(pkg.file, `${target} is missing or has different filesystem casing`);
         }
@@ -137,18 +145,28 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
         const namespaces = new Set<string>();
 
         for (const statement of index.statements) {
+          if (ts.isEmptyStatement(statement)) continue;
           if (
             !ts.isExportDeclaration(statement) ||
-            statement.isTypeOnly ||
             !statement.exportClause ||
-            !ts.isNamespaceExport(statement.exportClause) ||
             !statement.moduleSpecifier ||
             !ts.isStringLiteral(statement.moduleSpecifier)
           ) {
             report(
               index.fileName,
-              "Root must contain only export * as Name from './Name.ts' declarations",
+              "Root must contain only namespace or explicit named re-export declarations",
             );
+            continue;
+          }
+          if (ts.isNamedExports(statement.exportClause)) {
+            if (
+              statement.exportClause.elements.length === 0 ||
+              statement.exportClause.elements.some((element) => element.name.text === "default")
+            )
+              report(
+                index.fileName,
+                "Root named re-exports must be nonempty and cannot export a default",
+              );
             continue;
           }
           const name = statement.exportClause.name.text;
@@ -156,8 +174,9 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
           if (namespaces.has(name)) report(index.fileName, `Duplicate namespace ${name}`);
           namespaces.add(name);
           if (
+            !/^[A-Z][A-Za-z0-9]*$/.test(name) ||
             statement.moduleSpecifier.text !== `./${name}.ts` ||
-            manifest.exports[`./${name}`] !== `./src/${name}.ts`
+            !targets.includes(`./src/${name}.ts`)
           ) {
             report(
               index.fileName,
@@ -219,7 +238,8 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
             /(?:^|\/)(?:test|tests|__tests__|fixtures)(?:\/|$)|\.(?:test|spec)\./.test(file) ||
             Object.entries(manifest.exports).some(
               ([key, target]) =>
-                key.startsWith("./testing/") && target === `./${relative}/${filename}`,
+                (key === "./testing" || key.startsWith("./testing/")) &&
+                target === `./${relative}/${filename}`,
             );
 
           const dependencies = {
@@ -316,41 +336,6 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
               report(
                 file,
                 `${specifier} needs a declared ${testOnly || typeOnly ? "development or runtime" : "runtime"} dependency`,
-              );
-          }
-          if (
-            manifest.name === "effect-agent" &&
-            Object.values(manifest.exports).includes(`./${relative}/${filename}`) &&
-            filename !== "index.ts"
-          ) {
-            const statement = source.statements[0];
-            const name = filename.slice(0, -3);
-
-            const specifier =
-              statement &&
-              ts.isExportDeclaration(statement) &&
-              !statement.exportClause &&
-              !statement.isTypeOnly &&
-              statement.moduleSpecifier &&
-              ts.isStringLiteral(statement.moduleSpecifier)
-                ? statement.moduleSpecifier.text
-                : undefined;
-
-            const owner =
-              specifier === undefined
-                ? undefined
-                : byName.get(specifier.slice(0, -(name.length + 1)));
-
-            if (
-              source.statements.length !== 1 ||
-              !owner ||
-              owner === pkg ||
-              specifier !== `${owner.manifest.name}/${name}` ||
-              owner.manifest.exports[`./${name}`] !== `./src/${name}.ts`
-            )
-              report(
-                file,
-                `Umbrella bridge must export * from the owning package's /${name} module`,
               );
           }
         }
