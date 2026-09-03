@@ -482,6 +482,57 @@ describe("PR-review eval quality report", () => {
 
         expect(eligible.rollout.decision).toBe("eligible");
 
+        const supportedDigest = yield* digestObservationSet(supported);
+        const supportedJudgments = yield* adjudicate(supported);
+
+        for (const severity of ["important", "nit", "blocking", undefined] as const) {
+          const independentlyJudged = supportedJudgments.map((entry) =>
+            entry.caseId === known.id && entry.trial === 1
+              ? EvalFindingJudgment.make({
+                  ...entry,
+                  label: "new-valid",
+                  ...(severity === undefined ? {} : { severity }),
+                  matchedDefectIds: [],
+                })
+              : entry,
+          );
+
+          const calibrated = yield* makeQualityReport(
+            frozen,
+            supported,
+            3,
+            judgmentSet(supportedDigest, independentlyJudged),
+          );
+
+          const overstated = severity === "important" || severity === "nit" ? 1 : 0;
+
+          for (const variant of calibrated.variants) {
+            const knownCase = variant.cases.find((entry) => entry.caseId === known.id);
+
+            expect(knownCase?.firstTrialBlockingFindings).toEqual({
+              aligned: severity === "blocking" ? 1 : 0,
+              overstated,
+              unresolved: severity === undefined ? 1 : 0,
+              precision: {
+                numerator: severity === "blocking" ? 1 : 0,
+                denominator: severity === undefined ? 0 : 1,
+                status: severity === undefined ? "unresolved" : "measured",
+              },
+            });
+            expect(knownCase?.blockerRecall.numerator).toBe(0);
+            expect(knownCase?.unresolvedRepeatedTrialInstability).toBe(true);
+          }
+          expect(calibrated.unmappedValidFindings).toHaveLength(2);
+          expect(calibrated.rollout).toMatchObject({
+            decision: "experimental",
+            baselineFalseBlockers: 1 + overstated,
+            verifiedFalseBlockers: overstated,
+          });
+          expect(calibrated.rollout.reasons).toContain(
+            "New valid defects require a versioned oracle correction and rescoring both strategies.",
+          );
+        }
+
         const unresolved = supported.map((row) => {
           if (
             row.caseId !== known.id ||

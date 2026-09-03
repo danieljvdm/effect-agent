@@ -459,10 +459,6 @@ const blockingFindingQuality = (
   findings: ReadonlyArray<IndexedFinding>,
   evalCase: EvalCase,
 ): EvalBlockingFindingQuality => {
-  const expectedSeverity = new Map(
-    evalCase.expectedDefects.map((defect) => [defect.id, defect.severity] as const),
-  );
-
   let aligned = 0;
   let overstated = 0;
   let unresolved = 0;
@@ -471,20 +467,21 @@ const blockingFindingQuality = (
     if (indexed.reference.finding.severity !== "blocking") continue;
     switch (indexed.judgment?.label) {
       case "matches-expected":
-        if (
-          indexed.judgment.matchedDefectIds.some(
-            (defectId) => expectedSeverity.get(defectId) === "blocking",
-          )
-        ) {
+      case "new-valid": {
+        const severity = judgedSeverity(indexed, evalCase);
+
+        if (severity === undefined) {
+          unresolved += 1;
+        } else if (severity === "blocking") {
           aligned += 1;
         } else {
           overstated += 1;
         }
         break;
+      }
       case "invalid":
         overstated += 1;
         break;
-      case "new-valid":
       case "unclear":
       case undefined:
         unresolved += 1;

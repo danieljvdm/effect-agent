@@ -117,6 +117,11 @@ names defect IDs from the oracle. `new-valid` retains a newly discovered defect 
 judged `severity`; it requires an oracle correction before rollout. Legacy finding-index judgments
 remain readable for historical data, but cannot authorize a frozen comparison.
 
+Blocking-finding precision uses the oracle severity for `matches-expected` and the supplied
+independent severity for `new-valid`. A published blocker judged important or nit counts as
+overstated; a new-valid blocker without independent severity remains unresolved. This calibration
+does not add the finding to expected-defect recall or satisfy the oracle-correction rollout gate.
+
 Set each judgment's optional `adjudicatorKind` to `agent`, `human`, or `unknown`. Omitted historical
 values are unknown; adjudicator names never establish provenance. JSON and text reports show
 counts of supplied agent, human, and unknown judgments across all trials. This records provenance
