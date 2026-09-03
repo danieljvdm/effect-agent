@@ -9,6 +9,7 @@ export {
   compileRegistrations,
   definitionDigestsEqual,
   type AgentRegistration,
+  type AgentAttemptContext,
   type ExecutableAgentBinding,
   type DurableBindingFailure,
   type ResolvedBinding,

@@ -339,9 +339,15 @@ const makeMemoryObject = <E>(
     }),
   );
 
-  return EffectCfDurableObject.make(runtime, {
-    rpc: { memory: (encoded: string) => handleMemoryOwnerRequest(encoded, options.rpcLimits) },
-  });
+  const rpc = { memory: (encoded: string) => handleMemoryOwnerRequest(encoded, options.rpcLimits) };
+
+  return EffectCfDurableObject.make<
+    OwnerServices,
+    E | MemoryOwnerFailure,
+    never,
+    never,
+    typeof rpc
+  >(runtime, { rpc });
 };
 
 export const MemoryObject = {

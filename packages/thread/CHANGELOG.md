@@ -1,5 +1,29 @@
 # @effect-agent/session
 
+## 0.1.0-beta.44
+
+### Patch Changes
+
+- [#307](https://github.com/danieljvdm/effect-agent/pull/307) [`f8365ee`](https://github.com/danieljvdm/effect-agent/commit/f8365eee4048076ced0a79b9149efc29297b7c41) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Upgrade to Effect rc.112 and `effect-cf` 0.40.0 while preserving MCP transports and Cloudflare host behavior.
+
+  BEHAVIOR CHANGE: Upgrade Effect and its provider/platform/SQL packages to rc.112 or a compatible version. In Cloudflare hosts, provide `effect-cf@^0.40.0` and enable `nodejs_compat` for its async context support.
+
+- Updated dependencies [[`f8365ee`](https://github.com/danieljvdm/effect-agent/commit/f8365eee4048076ced0a79b9149efc29297b7c41)]:
+  - @effect-agent/core@0.1.0-beta.44
+  - @effect-agent/engine@0.1.0-beta.44
+
+## 0.1.0-beta.43
+
+### Minor Changes
+
+- [#287](https://github.com/danieljvdm/effect-agent/pull/287) [`361c643`](https://github.com/danieljvdm/effect-agent/commit/361c643bfd1ac40095bc1d63d4d84c5a0afbf3d0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add private login and card autofill with host-owned credential grants, opaque browser references, and explicit post-use recipient trust. Allow Agent Registrations to supply fresh scoped services for each durable Attempt.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.43
+  - @effect-agent/engine@0.1.0-beta.43
+
 ## 0.1.0-beta.42
 
 ### Patch Changes

@@ -29,6 +29,12 @@ import {
   type InteractiveBrowser,
   type InteractiveBrowserError as BrowserError,
   type PageScreenshotResult,
+  type ProtectedBrowser,
+  type ProtectedBrowserHandle,
+  type ProtectedBrowserError,
+  type BrowserCredentialAccess,
+  CredentialOrigin,
+  CardCredential,
 } from "../src/index.ts";
 
 type Equal<A, B> =
@@ -38,6 +44,41 @@ type OpenResult =
   ReturnType<Open> extends Effect.Effect<infer A, infer E, infer R> ? [A, E, R] : never;
 
 describe("InteractiveBrowser schemas", () => {
+  it("keeps protected material and authority outside the model contract", () => {
+    const open: Equal<
+      ReturnType<ProtectedBrowser["Service"]["open"]>,
+      Effect.Effect<
+        ProtectedBrowserHandle,
+        ProtectedBrowserError,
+        Scope.Scope | BrowserCredentialAccess
+      >
+    > = true;
+
+    const channels: Equal<
+      Extract<
+        keyof ProtectedBrowserHandle,
+        "fill" | "screenshot" | "sessionId" | "getLiveView" | "handoff"
+      >,
+      never
+    > = true;
+
+    expect(open && channels).toBe(true);
+    for (const origin of [
+      "https://example.com/",
+      "https://example.com:443",
+      "http://example.com",
+      "https://EXAMPLE.com",
+      "https://u:p@example.com",
+    ]) {
+      expect(Schema.decodeUnknownExit(CredentialOrigin)(origin)._tag).toBe("Failure");
+    }
+    expect(
+      Schema.decodeUnknownExit(CardCredential)({
+        _tag: "CardCredential",
+        number: "4111111111111111",
+      })._tag,
+    ).toBe("Failure");
+  });
   it("round-trips policy, requests, results, and typed errors", () => {
     const implementation = SandboxImplementation.make({
       isolation: "isolated",

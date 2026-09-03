@@ -17,6 +17,7 @@ export const BrowserRunProofStage = Schema.Literals([
   "handoff-state",
   "close",
   "closed-handle",
+  "protected-browser",
 ]);
 
 export class BrowserRunWorkerProofFailure extends Schema.Class<BrowserRunWorkerProofFailure>(
@@ -69,4 +70,11 @@ export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerPr
   scrape: ScrapeProof,
   screenshot: ScreenshotProof,
   interactive: BrowserRunInteractiveProof,
+  protectedBrowser: Schema.Struct({
+    loginLayouts: Schema.Literal(2),
+    authenticatedContinuation: Schema.Literal(true),
+    revokedOfferRefused: Schema.Literal(true),
+    cardFilled: Schema.Literal(true),
+    closed: Schema.Literal(true),
+  }),
 }) {}

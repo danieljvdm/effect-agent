@@ -16,8 +16,8 @@ Start with the [getting-started guide](docs/guide/getting-started.md) or browse 
 npm install --save-exact effect-agent@beta
 ```
 
-You also need `effect@^4.0.0-rc.111` and an Effect AI provider, such as
-`@effect/ai-openai@4.0.0-rc.111`. Your application supplies the provider Layer, credentials, and
+You also need `effect@^4.0.0-rc.112` and an Effect AI provider, such as
+`@effect/ai-openai@4.0.0-rc.112`. Your application supplies the provider Layer, credentials, and
 tool handlers.
 
 The `effect-agent` package includes core, engine, and capabilities. Persistent history, durable

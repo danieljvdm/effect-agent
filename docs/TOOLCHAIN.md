@@ -13,19 +13,20 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 | ------------------------------------------------------- | -------------------- |
 | Bun                                                     | `1.4.0`              |
 | Vite+                                                   | `0.3.0`              |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.111`       |
-| `effect-cf`                                             | `0.37.0`             |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.112`       |
+| `effect-cf`                                             | `0.40.0`             |
 | TypeScript                                              | `7.0.2`              |
 | `@effect/tsgo`                                          | `0.33.0`             |
 | Node.js                                                 | `22.18+` or `24.11+` |
 
-Public packages require `effect@^4.0.0-rc.111` as a peer. The exact catalog pin supplies the
+Public packages require `effect@^4.0.0-rc.112` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
 Private examples declare Effect as a regular dependency. Adapters depend on the platform and
 SQL implementations they use.
 
-`platform-cloudflare` requires `effect-cf@^0.37.0` as a host peer and uses the exact catalog
-version for development. Its D1 peer is aligned with Effect. Consumers provide the shared runtime.
+`platform-cloudflare` requires `effect-cf@^0.40.0` and `effect@^4.0.0-rc.112` as host peers
+and uses the exact catalog versions for development. Supply Effect SQL packages compatible with
+rc.112 for `effect-cf`. Consumers provide the shared runtime.
 
 Root overrides keep Effect, its Node platform, and Vitest on one version.
 The docs deployment runs Alchemy under Bun, so the root also installs Alchemy's
@@ -155,38 +156,25 @@ Use `vp run changeset` to describe a consumer-visible change.
 On pushes to `main`, `.github/workflows/release.yml` maintains the version PR.
 After that PR merges, the workflow publishes through npm trusted publishing with provenance.
 
-The release workflow verifies the full generated tree against Changesets output from the trusted
-base. A push without changesets is eligible only if it is that exact generated release tree.
-Generated-file path filters reduce duplicate CI; exact-tree verification authorizes the release.
-Unexpected paths, changed lineage, or incomplete verification fail closed.
+The release PR runs the same static checks, tests, and builds as every other PR. The workflow
+uses the existing Effect Agent GitHub App to create and update it, so those pushes trigger
+ordinary CI. Keep the App's contents and pull-request write permissions enabled and configure
+the `EFFECT_AGENT_APP_ID` and `EFFECT_AGENT_APP_PRIVATE_KEY` repository secrets.
+The checkout disables persisted credentials so Changesets uses the App token.
 
-Keep strict up-to-date enforcement for the required `ready` check. The reporting job rechecks
-the PR head, source, base, and rules before posting success to the verified commit.
-Commit SHAs come from Git branch refs because PR SHA fields can lag after a force-push.
-Checks attach only to the resolved verification commit, never a newer unverified head.
-If setup fails before resolving that commit, the job fails without posting a check.
-A later generated-only edit has no verified check; a change to another path runs ordinary PR CI.
-The verifier runs in a fresh read-only job with script-suppressed installs. Cleanup failures fail verification.
+After merge, Changesets handles registry version checks, publishing, package tags, and GitHub
+releases. The publish command builds the workspace and temporarily prepares npm-ready manifests:
+source exports point at built files, `workspace:*` dependencies use the current workspace
+versions, and `catalog:` dependencies use the root catalog. All source manifests are restored
+on success, failure, or interruption. npm publishes through OIDC with provenance; each package
+must list `release.yml` in `danieljvdm/effect-agent` as its trusted publisher.
 
-Release permissions are separated:
+Changesets defaults packages with no stable release to `latest`. The adapter temporarily marks
+the prerelease state as exiting while running `changeset publish --tag beta`, then restores it.
+It never runs versioning in that state, so versions and the ongoing beta release train stay intact.
 
-1. Pinned external actions and the version job have no Checks or npm OIDC authority.
-2. An action-free reporting job owns `checks: write`.
-3. An unprivileged preparation job builds and packs the verified tree into a checksummed artifact.
-   It publishes the staging directory only after every tarball and manifest is complete.
-   Failure or interruption removes partial staging and restores temporary package manifests.
-4. An action-free publisher owns `id-token: write`. It verifies the package set, shared version,
-   `beta` tag, artifact digests, and pinned npm CLI before publishing. It runs no repository code.
-5. A separate tag job creates package tags at the triggering `main` commit. Existing tags must
-   resolve to that commit.
-
-The publisher waits for every package job before reporting failure.
-A same-version retry skips a package only if registry integrity matches and `beta` already
-selects that version.
-
-Each npm package must list `release.yml` in `danieljvdm/effect-agent` as its trusted publisher.
-Bun packs tarballs to resolve `workspace:` and `catalog:` ranges.
-The isolated npm CLI exchanges OIDC credentials and publishes them.
+The release workflow does not require strict up-to-date branch rules or post a separate
+`ready` check. Changesets refreshes the version PR as changes land on `main`.
 
 For an authenticated manual release:
 
@@ -195,11 +183,11 @@ For an authenticated manual release:
 3. Run `vp run ready`.
 4. Run `vp run release:publish --dry-run`, then `vp run release:publish`.
    Add `--otp <code>` if npm requests it.
-5. Run `vp run changeset tag`, then `git push --follow-tags`.
+5. Run `git push --follow-tags` to push the tags created by Changesets.
 
-Use `release:publish` rather than Changesets' publish command.
-It packs resolved dependencies, temporarily installs built export maps, and restores source
-manifests afterward. All public packages use the MIT license.
+Use `release:publish` so npm receives built exports and resolved dependencies.
+Its dry run builds and inspects packages without publishing or creating tags.
+All public packages use the MIT license.
 
 ## Script runners
 
@@ -262,7 +250,7 @@ PR CI runs static checks, tests, and builds, then reports the required `ready` r
 Cloudflare storage, Cloudflare platform, Node platform, and testing have dedicated test runners.
 The remaining-workspace job includes every other package and runs one package task at a time.
 
-The verified generated Changesets PR uses the release flow above.
+The generated Changesets PR runs ordinary CI like other PRs.
 Explicit `@effect-agent review` comments still request review.
 
 PR Review uses `pull_request_target` and runs only trusted default-branch code.

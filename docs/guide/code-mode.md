@@ -32,8 +32,8 @@ In your application, install Code Mode and the Cloudflare executor:
 bun add @effect-agent/capabilities@beta @effect-agent/platform-cloudflare@beta
 ```
 
-Requires `effect@^4.0.0-rc.111` and `effect-cf@^0.37.0`. For the example below, also install
-`@effect-agent/core@beta`, `@effect-agent/engine@beta`, and `@effect/ai-openai@4.0.0-rc.111`.
+Requires `effect@^4.0.0-rc.112` and `effect-cf@^0.40.0`. For the example below, also install
+`@effect-agent/core@beta`, `@effect-agent/engine@beta`, and `@effect/ai-openai@4.0.0-rc.112`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 
 This smaller example uses fixed invoice rows so the complete Tool and handler are visible.

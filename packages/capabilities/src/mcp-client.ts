@@ -491,7 +491,12 @@ const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
         }
       };
 
-      return { send, supportsAck: false, supportsTransferables: false };
+      return {
+        send,
+        supportsAck: false,
+        supportsTransferables: false,
+        codecFor: serialization.codecFor,
+      };
     }),
   );
 });
@@ -648,7 +653,12 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
         }
       };
 
-      return { send, supportsAck: false, supportsTransferables: false };
+      return {
+        send,
+        supportsAck: false,
+        supportsTransferables: false,
+        codecFor: serialization.codecFor,
+      };
     }),
   );
 });

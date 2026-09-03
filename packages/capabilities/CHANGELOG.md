@@ -1,5 +1,31 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.44
+
+### Patch Changes
+
+- [#307](https://github.com/danieljvdm/effect-agent/pull/307) [`f8365ee`](https://github.com/danieljvdm/effect-agent/commit/f8365eee4048076ced0a79b9149efc29297b7c41) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Upgrade to Effect rc.112 and `effect-cf` 0.40.0 while preserving MCP transports and Cloudflare host behavior.
+
+  BEHAVIOR CHANGE: Upgrade Effect and its provider/platform/SQL packages to rc.112 or a compatible version. In Cloudflare hosts, provide `effect-cf@^0.40.0` and enable `nodejs_compat` for its async context support.
+
+- Updated dependencies [[`f8365ee`](https://github.com/danieljvdm/effect-agent/commit/f8365eee4048076ced0a79b9149efc29297b7c41)]:
+  - @effect-agent/core@0.1.0-beta.44
+  - @effect-agent/engine@0.1.0-beta.44
+  - @effect-agent/sandbox@0.1.0-beta.44
+
+## 0.1.0-beta.43
+
+### Minor Changes
+
+- [#293](https://github.com/danieljvdm/effect-agent/pull/293) [`4532f8d`](https://github.com/danieljvdm/effect-agent/commit/4532f8d5c65b0d41532e9ebe0212c64a0a63f678) Thanks [@rankincodes](https://github.com/rankincodes)! - Connect agents to MCP servers over Streamable HTTP or stdio with `McpClient.layer`, `McpHttpTransport.make`, and `McpStdioTransport.make`. `connectMcp` now returns dynamic tools with a handler Layer that forwards `tools/call`, and `McpConnectionRequest.expectedToolkitSchemaDigest` rejects servers whose tools drifted.
+
+### Patch Changes
+
+- Updated dependencies [[`361c643`](https://github.com/danieljvdm/effect-agent/commit/361c643bfd1ac40095bc1d63d4d84c5a0afbf3d0)]:
+  - @effect-agent/sandbox@0.1.0-beta.43
+  - @effect-agent/core@0.1.0-beta.43
+  - @effect-agent/engine@0.1.0-beta.43
+
 ## 0.1.0-beta.42
 
 ### Patch Changes

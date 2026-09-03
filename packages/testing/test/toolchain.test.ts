@@ -2,22 +2,27 @@ import { fileURLToPath } from "node:url";
 
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, FileSystem, Path, PlatformError, Schema, Stream } from "effect";
+import {
+  Cause,
+  Config,
+  Effect,
+  Exit,
+  FileSystem,
+  Path,
+  PlatformError,
+  Schema,
+  Stream,
+} from "effect";
+import { Command } from "effect/unstable/cli";
 import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
-import { prepareReleaseArtifactDirectory } from "../../../scripts/release-artifact-directory.ts";
 import {
-  PreparedReleaseManifest,
+  command as releaseCommand,
   PublishManifest,
   withTemporaryManifest,
+  withPublishManifests,
 } from "../../../scripts/release-publish.ts";
-import {
-  classifyChangesetsRelease,
-  InvalidCommitSha,
-  ReleaseTreeMismatch,
-  verifyChangesetsRelease,
-} from "../../../scripts/verify-changesets-release.ts";
 
 const Dependencies = Schema.Record(Schema.String, Schema.String);
 
@@ -326,441 +331,6 @@ const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function*
   return output.trim();
 });
 
-const runReleaseWorkflowStep = Effect.fn("toolchainTest.runReleaseWorkflowStep")(function* (
-  script: string,
-  options: {
-    readonly baseRef: string | undefined;
-    readonly currentBaseSha: string;
-    readonly currentHeadSha: string;
-    readonly expectedBaseSha: string;
-    readonly headRef: string | undefined;
-    readonly headRepository: string | undefined;
-    readonly prState?: string;
-    readonly fetchedSha?: string;
-    readonly failingEndpoint?: string;
-    readonly strictReady: string | undefined;
-    readonly verifiedHeadSha: string;
-    readonly verifyOutcome: string;
-  },
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-
-  const temporaryRoot = yield* fs.makeTempDirectoryScoped({
-    prefix: "effect-agent-release-check-test-",
-  });
-
-  const binDirectory = path.join(temporaryRoot, "bin");
-  const capturePath = path.join(temporaryRoot, "check-run-arguments");
-  const outputPath = path.join(temporaryRoot, "step-output");
-  const fetchPath = path.join(temporaryRoot, "fetch-arguments");
-  const ghPath = path.join(binDirectory, "gh");
-  const gitPath = path.join(binDirectory, "git");
-
-  yield* fs.makeDirectory(binDirectory, { recursive: true });
-  yield* fs.writeFileString(
-    ghPath,
-    `#!/usr/bin/env bash
-set -euo pipefail
-
-test "\${1:-}" = "api"
-shift
-if [ "\${1:-}" = "--method" ]; then
-  test "\${2:-}" = "POST"
-  test "\${3:-}" = "repos/$GITHUB_REPOSITORY/check-runs"
-  printf '%s\\n' "$@" > "$GH_STUB_CAPTURE"
-  exit 0
-fi
-
-ENDPOINT="\${1:-}"
-if [ "$ENDPOINT" = "$GH_STUB_FAILING_ENDPOINT" ]; then
-  echo "GitHub API unavailable" >&2
-  exit 1
-fi
-
-QUERY=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--jq" ]; then
-    shift
-    QUERY="\${1:-}"
-    break
-  fi
-  shift
-done
-
-case "$ENDPOINT" in
-  "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
-    printf '%s\\n' "$GH_STUB_PR" | jq -r "$QUERY"
-    ;;
-  "repos/$GITHUB_REPOSITORY/git/ref/heads/changeset-release/main")
-    test "$QUERY" = ".object.sha"
-    printf '%s\\n' "$GH_STUB_HEAD_SHA"
-    ;;
-  "repos/$GITHUB_REPOSITORY/git/ref/heads/main")
-    test "$QUERY" = ".object.sha"
-    printf '%s\\n' "$GH_STUB_BASE_SHA"
-    ;;
-  "repos/$GITHUB_REPOSITORY/rules/branches/main")
-    printf '%s\\n' "$GH_STUB_RULES" | jq -r "$QUERY"
-    ;;
-  *) echo "Unexpected gh endpoint: $ENDPOINT" >&2; exit 64 ;;
-esac
-`,
-  );
-  yield* fs.chmod(ghPath, 0o755);
-  yield* fs.writeFileString(
-    gitPath,
-    `#!/usr/bin/env bash
-set -euo pipefail
-case "$*" in
-  "fetch --no-tags origin $GH_STUB_HEAD_SHA")
-    printf '%s\\n' "$@" > "$GIT_STUB_CAPTURE"
-    ;;
-  "rev-parse FETCH_HEAD") printf '%s\\n' "$GIT_STUB_FETCHED_SHA" ;;
-  *) echo "Unexpected git arguments: $*" >&2; exit 64 ;;
-esac
-`,
-  );
-  yield* fs.chmod(gitPath, 0o755);
-
-  const child = yield* ChildProcess.make("bash", ["-euo", "pipefail", "-c", script], {
-    cwd: temporaryRoot,
-    env: {
-      EXPECTED_BASE_SHA: options.expectedBaseSha,
-      GH_STUB_BASE_SHA: options.currentBaseSha,
-      GH_STUB_CAPTURE: capturePath,
-      GH_STUB_FAILING_ENDPOINT: options.failingEndpoint ?? "",
-      GH_STUB_PR: JSON.stringify({
-        // GitHub's PR projection can still describe the previous generation.
-        base: { ref: options.baseRef ?? "main", sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
-        head: {
-          ref: options.headRef ?? "changeset-release/main",
-          repo: { full_name: options.headRepository ?? "effect-agent/release-check-fixture" },
-          sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        },
-        state: options.prState ?? "open",
-      }),
-      GH_STUB_HEAD_SHA: options.currentHeadSha,
-      GH_STUB_RULES: JSON.stringify([
-        {
-          type: "required_status_checks",
-          parameters: {
-            strict_required_status_checks_policy: (options.strictReady ?? "true") === "true",
-            required_status_checks: [{ context: "ready" }],
-          },
-        },
-      ]),
-      GH_TOKEN: "test-token",
-      GIT_STUB_CAPTURE: fetchPath,
-      GIT_STUB_FETCHED_SHA: options.fetchedSha ?? options.currentHeadSha,
-      GITHUB_OUTPUT: outputPath,
-      GITHUB_REPOSITORY: "effect-agent/release-check-fixture",
-      GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_RUN_ID: "1234",
-      GITHUB_SERVER_URL: "https://github.example.invalid",
-      GITHUB_SHA: options.expectedBaseSha,
-      PATH: `${binDirectory}:${globalThis.process.env["PATH"] ?? ""}`,
-      PR_NUMBER: "22",
-      VERIFIED_HEAD_SHA: options.verifiedHeadSha,
-      VERIFY_OUTCOME: options.verifyOutcome,
-    },
-    extendEnv: true,
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-
-  const [output, exitCode] = yield* Effect.all([
-    Stream.mkString(Stream.decodeText(child.all)),
-    child.exitCode,
-  ]);
-
-  const invocation = (yield* fs.exists(capturePath)) ? yield* fs.readFileString(capturePath) : "";
-  const stepOutput = (yield* fs.exists(outputPath)) ? yield* fs.readFileString(outputPath) : "";
-  const fetchInvocation = (yield* fs.exists(fetchPath)) ? yield* fs.readFileString(fetchPath) : "";
-
-  return { exitCode, fetchInvocation, invocation, output, stepOutput } as const;
-});
-
-const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(function* (
-  script: string,
-  options: {
-    readonly checksumFailure?: "artifact" | "npm";
-    readonly npmFailTarball?: string;
-    readonly packageMetadata: string;
-    readonly publishablePackages?: ReadonlyArray<string>;
-    readonly registryStatus: "200" | "404";
-    readonly tarball?: string;
-    readonly versionMetadata: string;
-  },
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-
-  const temporaryRoot = yield* fs.makeTempDirectoryScoped({
-    prefix: "effect-agent-release-publisher-test-",
-  });
-
-  const artifactDirectory = path.join(temporaryRoot, "artifact-source");
-  const binDirectory = path.join(temporaryRoot, "bin");
-  const expectedSumsPath = path.join(temporaryRoot, "expected-SHA256SUMS");
-  const publishCaptureDirectory = path.join(temporaryRoot, "npm-publish-invocations");
-  const tarballManifestDirectory = path.join(temporaryRoot, "tarball-manifests");
-  const trustedManifestDirectory = path.join(temporaryRoot, "trusted-manifests");
-  const version = "0.0.1-beta.7";
-  const publishablePackages = options.publishablePackages ?? ["capabilities"];
-
-  yield* fs.makeDirectory(path.join(artifactDirectory, "packages"), { recursive: true });
-  yield* fs.makeDirectory(binDirectory, { recursive: true });
-  yield* fs.makeDirectory(tarballManifestDirectory, { recursive: true });
-  yield* fs.makeDirectory(trustedManifestDirectory, { recursive: true });
-
-  const releases: Array<{
-    readonly distTag: "beta";
-    readonly name: string;
-    readonly tarball: string | null;
-    readonly version: string;
-  }> = [];
-
-  for (const directory of packageNames) {
-    const manifest = yield* readManifest(`${repositoryRoot}/packages/${directory}/package.json`);
-
-    if (manifest.name === undefined) {
-      return yield* Effect.die(new Error(`Release package ${directory} must have a name.`));
-    }
-    yield* fs.writeFileString(
-      path.join(trustedManifestDirectory, `${directory}.json`),
-      `${JSON.stringify({ name: manifest.name, version })}\n`,
-    );
-    const publishable = publishablePackages.includes(directory);
-
-    const tarball = publishable
-      ? directory === "capabilities"
-        ? (options.tarball ?? "packages/capabilities.tgz")
-        : `packages/${directory}.tgz`
-      : null;
-
-    if (publishable) {
-      yield* fs.writeFileString(
-        path.join(tarballManifestDirectory, `${directory}.tgz.json`),
-        `${JSON.stringify({ name: manifest.name, version })}\n`,
-      );
-      yield* fs.writeFileString(
-        path.join(artifactDirectory, "packages", `${directory}.tgz`),
-        "fixture\n",
-      );
-    }
-    releases.push({
-      distTag: "beta",
-      name: manifest.name,
-      tarball,
-      version,
-    });
-  }
-  yield* fs.writeFileString(
-    path.join(artifactDirectory, "release-manifest.json"),
-    `${JSON.stringify({ version: 1, packages: releases })}\n`,
-  );
-
-  const expectedSums = [
-    "fixture-sha  npm-12.0.2.tgz",
-    ...publishablePackages.map((directory) => `fixture-sha  packages/${directory}.tgz`),
-    "fixture-sha  release-manifest.json",
-    "",
-  ].join("\n");
-
-  yield* fs.writeFileString(path.join(artifactDirectory, "SHA256SUMS"), expectedSums);
-  yield* fs.writeFileString(expectedSumsPath, expectedSums);
-  yield* fs.writeFileString(path.join(artifactDirectory, "npm-12.0.2.tgz"), "fixture\n");
-
-  const writeExecutable = (name: string, contents: string) =>
-    Effect.gen(function* () {
-      const file = path.join(binDirectory, name);
-
-      yield* fs.writeFileString(file, contents);
-      yield* fs.chmod(file, 0o755);
-    });
-
-  yield* Effect.all([
-    writeExecutable(
-      "gh",
-      `#!/usr/bin/env bash
-set -euo pipefail
-REQUEST="$*"
-if [[ "$REQUEST" == "api repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts --jq "* ]]; then
-  printf '731\n'
-elif [ "$REQUEST" = "api repos/$GITHUB_REPOSITORY/actions/artifacts/731/zip" ]; then
-  printf 'fixture archive\n'
-elif [[ "$REQUEST" =~ /contents/packages/([^/]+)/package.json ]]; then
-  EXPECTED_CONTENT="repos/$GITHUB_REPOSITORY/contents/packages/\${BASH_REMATCH[1]}/package.json?ref=$GITHUB_SHA"
-  [[ " $REQUEST " == *" $EXPECTED_CONTENT"* ]]
-  cat "$PUBLISH_TRUSTED_MANIFESTS/\${BASH_REMATCH[1]}.json"
-else
-  echo "Unexpected gh invocation: $REQUEST" >&2
-  exit 64
-fi
-`,
-    ),
-    writeExecutable(
-      "unzip",
-      `#!/usr/bin/env bash
-set -euo pipefail
-DESTINATION=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-d" ]; then
-    shift
-    DESTINATION="\${1:-}"
-  fi
-  shift
-done
-test -n "$DESTINATION"
-mkdir -p "$DESTINATION"
-cp -R "$PUBLISH_ARTIFACT_SOURCE"/. "$DESTINATION"/
-`,
-    ),
-    writeExecutable(
-      "sha256sum",
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [ "$#" = "3" ] && [ "$1" = "--check" ] && [ "$2" = "--strict" ] && [ "$3" = "SHA256SUMS" ]; then
-  cmp SHA256SUMS "$PUBLISH_EXPECTED_SUMS"
-  test "$PUBLISH_CHECKSUM_FAILURE" != "artifact"
-  exit 0
-fi
-if [ "$#" = "2" ] && [ "$1" = "--check" ] && [ "$2" = "--strict" ]; then
-  IFS= read -r EXPECTED_LINE
-  test "$EXPECTED_LINE" = "$NPM_CLI_SHA256  npm-$NPM_CLI_VERSION.tgz"
-  test "$PUBLISH_CHECKSUM_FAILURE" != "npm"
-  exit 0
-fi
-echo "Unexpected sha256sum invocation: $*" >&2
-exit 64
-`,
-    ),
-    writeExecutable(
-      "node",
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [ "\${1:-}" = "--eval" ]; then
-  exit 0
-fi
-if [ "\${2:-}" = "publish" ]; then
-  mkdir -p "$PUBLISH_CAPTURE"
-  TARBALL_BASENAME="$(basename "\${3:-}")"
-  printf '%s\n' "$@" > "$PUBLISH_CAPTURE/$TARBALL_BASENAME"
-  test "$TARBALL_BASENAME" != "$PUBLISH_NPM_FAIL_TARBALL"
-  exit 0
-fi
-echo "Unexpected node invocation: $*" >&2
-exit 64
-`,
-    ),
-    writeExecutable(
-      "tar",
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [ "\${1:-}" = "-xzf" ]; then
-  while [ "$#" -gt 0 ]; do
-    if [ "$1" = "-C" ]; then
-      shift
-      mkdir -p "$1/package/bin"
-      printf 'fixture\n' > "$1/package/bin/npm-cli.js"
-      exit 0
-    fi
-    shift
-  done
-fi
-if [ "\${1:-}" = "-xOf" ]; then
-  cat "$PUBLISH_TARBALL_MANIFESTS/$(basename "\${2:-}").json"
-  exit 0
-fi
-exit 64
-`,
-    ),
-    writeExecutable(
-      "stat",
-      `#!/usr/bin/env bash
-printf '128\n'
-`,
-    ),
-    writeExecutable(
-      "curl",
-      `#!/usr/bin/env bash
-set -euo pipefail
-URL="\${!#}"
-if [[ "$*" == *"--write-out"* ]]; then
-  printf '%s' "$PUBLISH_REGISTRY_STATUS"
-elif [[ "$URL" == */0.0.1-beta.7 ]]; then
-  printf '%s' "$PUBLISH_VERSION_METADATA"
-else
-  printf '%s' "$PUBLISH_PACKAGE_METADATA"
-fi
-`,
-    ),
-    writeExecutable(
-      "openssl",
-      `#!/usr/bin/env bash
-printf 'fixture bytes'
-`,
-    ),
-    writeExecutable(
-      "base64",
-      `#!/usr/bin/env bash
-cat > /dev/null
-printf 'fixture-integrity'
-`,
-    ),
-  ]);
-
-  const child = yield* ChildProcess.make("bash", ["-euo", "pipefail", "-c", script], {
-    cwd: temporaryRoot,
-    env: {
-      GH_TOKEN: "test-token",
-      GITHUB_REPOSITORY: "effect-agent/release-publisher-fixture",
-      GITHUB_RUN_ID: "1234",
-      GITHUB_SHA: "1111111111111111111111111111111111111111",
-      NPM_CLI_SHA256: "fixture-checksum",
-      NPM_CLI_VERSION: "12.0.2",
-      PATH: `${binDirectory}:${globalThis.process.env["PATH"] ?? ""}`,
-      PUBLISH_ARTIFACT_SOURCE: artifactDirectory,
-      PUBLISH_CAPTURE: publishCaptureDirectory,
-      PUBLISH_CHECKSUM_FAILURE: options.checksumFailure ?? "none",
-      PUBLISH_EXPECTED_SUMS: expectedSumsPath,
-      PUBLISH_NPM_FAIL_TARBALL: options.npmFailTarball ?? "none",
-      PUBLISH_PACKAGE_METADATA: options.packageMetadata,
-      PUBLISH_REGISTRY_STATUS: options.registryStatus,
-      PUBLISH_TARBALL_MANIFESTS: tarballManifestDirectory,
-      PUBLISH_TRUSTED_MANIFESTS: trustedManifestDirectory,
-      PUBLISH_VERSION_METADATA: options.versionMetadata,
-      RUNNER_TEMP: path.join(temporaryRoot, "runner"),
-    },
-    extendEnv: true,
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-
-  const [output, exitCode] = yield* Effect.all([
-    Stream.mkString(Stream.decodeText(child.all)),
-    child.exitCode,
-  ]);
-
-  const publishInvocations = (yield* fs.exists(publishCaptureDirectory))
-    ? yield* Effect.forEach(
-        [...(yield* fs.readDirectory(publishCaptureDirectory))].sort(),
-        (entry) =>
-          Effect.map(fs.readFileString(path.join(publishCaptureDirectory, entry)), (capture) =>
-            capture.trim().split("\n"),
-          ),
-      )
-    : [];
-
-  return {
-    exitCode,
-    output,
-    publishInvocations,
-    publishInvoked: publishInvocations.length > 0,
-  } as const;
-});
-
 const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
@@ -811,37 +381,24 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
-  it.effect(
-    "validates mutable package fields and transferred tarball paths at Schema boundaries",
-    () =>
-      Effect.gen(function* () {
-        const decoded = yield* Schema.decodeUnknownEffect(PublishManifest)({
-          name: "@effect-agent/fixture",
-          version: "0.0.1-beta.7",
-          description: "preserved package metadata",
-          dependencies: { "@effect-agent/core": "workspace:*" },
-        });
+  it.effect("validates package manifest fields before publishing", () =>
+    Effect.gen(function* () {
+      const decoded = yield* Schema.decodeUnknownEffect(PublishManifest)({
+        name: "@effect-agent/fixture",
+        version: "0.0.1-beta.7",
+        description: "preserved package metadata",
+        dependencies: { "@effect-agent/core": "workspace:*" },
+      });
 
-        expect(decoded.description).toBe("preserved package metadata");
-        expect(decoded.dependencies).toEqual({ "@effect-agent/core": "workspace:*" });
+      expect(decoded.description).toBe("preserved package metadata");
+      expect(decoded.dependencies).toEqual({ "@effect-agent/core": "workspace:*" });
 
-        yield* Schema.decodeUnknownEffect(PublishManifest)({
-          name: "@effect-agent/fixture",
-          version: "0.0.1-beta.7",
-          dependencies: { "@effect-agent/core": 7 },
-        }).pipe(Effect.flip);
-        yield* Schema.decodeUnknownEffect(PreparedReleaseManifest)({
-          version: 1,
-          packages: [
-            {
-              name: "@effect-agent/fixture",
-              version: "0.0.1-beta.7",
-              distTag: "beta",
-              tarball: "../outside.tgz",
-            },
-          ],
-        }).pipe(Effect.flip);
-      }),
+      yield* Schema.decodeUnknownEffect(PublishManifest)({
+        name: "@effect-agent/fixture",
+        version: "0.0.1-beta.7",
+        dependencies: { "@effect-agent/core": 7 },
+      }).pipe(Effect.flip);
+    }),
   );
 
   it.effect("restores the source manifest after a partial temporary-install failure", () =>
@@ -1051,1035 +608,229 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     { timeout: 30_000 },
   );
 
-  it.effect("keeps generated release PRs behind a trusted integrity gate", () =>
+  it.effect("runs ordinary CI on release PRs and uses App-authored Changesets updates", () =>
     Effect.gen(function* () {
-      const [ciWorkflow, reviewWorkflow, releaseWorkflow, rootManifest] = yield* Effect.all([
-        readWorkflow(".github/workflows/ci.yml"),
-        readWorkflow(".github/workflows/pr-review.yml"),
-        readWorkflow(".github/workflows/release.yml"),
-        readManifest(`${repositoryRoot}/package.json`),
-      ]);
+      const ci = yield* readWorkflow(".github/workflows/ci.yml");
+      const release = yield* readWorkflow(".github/workflows/release.yml");
 
-      const generatedPaths = [
-        ".changeset/**",
-        "bun.lock",
-        "packages/*/CHANGELOG.md",
-        "packages/*/package.json",
-      ];
+      expect(ci.on).toHaveProperty("pull_request");
+      expect(ci.on.pull_request).toBeNull();
+      const checkout = workflowStep(release, "release", "Check out repository");
 
-      expect(ciWorkflow.on).toEqual({
-        push: { branches: ["main"] },
-        pull_request: { "paths-ignore": generatedPaths },
-      });
-      expect(ciWorkflow.jobs.checks?.if).toBeUndefined();
-      expect(ciWorkflow.jobs.test?.if).toBeUndefined();
-      expect(ciWorkflow.jobs.build?.if).toBeUndefined();
-      expect(ciWorkflow.jobs["release-integrity"]).toBeUndefined();
+      expect(checkout?.with?.["persist-credentials"]).toBe(false);
+      const token = workflowStep(release, "release", "Mint the release token");
 
-      const readyJob = ciWorkflow.jobs.ready;
+      expect(token?.with?.["permission-contents"]).toBe("write");
+      expect(token?.with?.["permission-pull-requests"]).toBe("write");
+      const changesets = workflowStep(release, "release", "Create release pull request or publish");
 
-      expect(readyJob?.needs).toEqual(["checks", "test", "build"]);
-      expect(readyJob?.if).toBe("${{ always() && github.event_name == 'pull_request' }}");
-      const readyStep = workflowStep(ciWorkflow, "ready", "Verify all ordinary gates passed");
-
-      expect(readyStep?.env).toEqual({
-        BUILD_RESULT: "${{ needs.build.result }}",
-        CHECKS_RESULT: "${{ needs.checks.result }}",
-        TEST_RESULT: "${{ needs.test.result }}",
-      });
-      expect(readyStep?.run).toContain('test "$CHECKS_RESULT" = "success"');
-      expect(readyStep?.run).toContain('test "$TEST_RESULT" = "success"');
-      expect(readyStep?.run).toContain('test "$BUILD_RESULT" = "success"');
-
-      expect(reviewWorkflow.on).toEqual({
-        pull_request_target: {
-          types: ["opened", "reopened", "ready_for_review", "synchronize"],
-          "paths-ignore": generatedPaths,
-        },
-        issue_comment: { types: ["created"] },
-      });
-      expect(reviewWorkflow.jobs.review?.if).toContain("!github.event.pull_request.draft");
-      expect(reviewWorkflow.jobs.review?.if).toContain(
-        "startsWith(github.event.comment.body, '@effect-agent review')",
-      );
-      expect(reviewWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
-      const reviewStep = workflowStep(reviewWorkflow, "review", "Review the pull request");
-
-      expect(reviewStep?.uses).toBe("danieljvdm/effect-agent/action@action-v1");
-      expect(reviewStep?.with?.mode).toContain("'auto'");
-      expect(reviewStep?.with?.mode).toContain("'incremental'");
-      expect(reviewStep?.with?.command).toContain("github.event.comment.body");
-
-      expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
-      expect(releaseWorkflow.permissions).toEqual({});
-      const versionJob = releaseWorkflow.jobs["version-release"];
-
-      expect(versionJob?.permissions).toEqual({
-        contents: "write",
-        "pull-requests": "write",
-      });
-      expect(versionJob?.permissions?.checks).toBeUndefined();
-      expect(versionJob?.permissions?.["id-token"]).toBeUndefined();
-
-      const externalActionReferences = Object.values(releaseWorkflow.jobs).flatMap((job) => [
-        ...(job.uses === undefined ? [] : [job.uses]),
-        ...(job.steps ?? []).flatMap((step) => (step.uses === undefined ? [] : [step.uses])),
-      ]);
-
-      expect(externalActionReferences).not.toHaveLength(0);
-      expect(externalActionReferences.every((uses) => /^[^@]+@[0-9a-f]{40}$/.test(uses))).toBe(
-        true,
-      );
-      for (const job of Object.values(releaseWorkflow.jobs)) {
-        for (const step of job.steps ?? []) {
-          if (step.run === undefined) continue;
-          yield* runFixtureCommand(repositoryRoot, "bash", [
-            "-n",
-            "-c",
-            step.run.replace(/\$\{\{[^}]+\}\}/g, "github-expression"),
-          ]);
-        }
-      }
-
-      const changesetsStep = workflowStep(
-        releaseWorkflow,
-        "version-release",
-        "Create or update the version PR",
-      );
-
-      expect(changesetsStep?.id).toBe("changesets");
-      expect(changesetsStep?.uses).toBe(
-        "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
-      );
-      expect(changesetsStep?.with).toMatchObject({
-        publish: "true",
-        version: "./node_modules/.bin/vp run ci:version",
-      });
-      expect(versionJob?.outputs?.["is-release-commit"]).toBe(
-        "${{ steps.classify-release.outputs.is-release-commit }}",
-      );
-
-      const classifyReleaseStep = workflowStep(
-        releaseWorkflow,
-        "version-release",
-        "Classify exact generated release commit",
-      );
-
-      expect(classifyReleaseStep?.id).toBe("classify-release");
-      expect(classifyReleaseStep?.if).toBe(
-        "${{ steps.changesets.outputs.hasChangesets == 'false' }}",
-      );
-      expect(classifyReleaseStep?.env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
-      expect(classifyReleaseStep?.run).toContain('git rev-parse "${GITHUB_SHA}^"');
-      expect(classifyReleaseStep?.run).toContain("vp run --no-cache verify:changesets-release");
-      expect(classifyReleaseStep?.run).toContain('--classification-output "$GITHUB_OUTPUT"');
-
-      const verifyJob = releaseWorkflow.jobs["verify-release"];
-
-      expect(verifyJob?.needs).toBe("version-release");
-      expect(verifyJob?.permissions).toEqual({
-        contents: "read",
-        "pull-requests": "read",
-      });
-
-      const trustedCheckout = workflowStep(
-        releaseWorkflow,
-        "verify-release",
-        "Check out trusted base",
-      );
-
-      expect(trustedCheckout?.with).toMatchObject({ ref: "${{ github.sha }}" });
-
-      const verifyStep = workflowStep(
-        releaseWorkflow,
-        "verify-release",
-        "Regenerate and verify the release tree",
-      );
-
-      expect(verifyStep?.id).toBe("verify-release");
-      expect(verifyStep?.env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
-      expect(verifyStep?.run).toContain("vp run verify:changesets-release");
-
-      const reportStep = workflowStep(
-        releaseWorkflow,
-        "report-release-check",
-        "Report the generated release check",
-      );
-
-      const reportJob = releaseWorkflow.jobs["report-release-check"];
-
-      expect(reportJob?.needs).toEqual(["version-release", "verify-release"]);
-      expect(reportJob?.if).toBe(
-        "${{ always() && needs.version-release.outputs.release-pr-number != '' }}",
-      );
-      expect(reportJob?.permissions).toEqual({
-        checks: "write",
-        contents: "read",
-        "pull-requests": "read",
-      });
-      expect(reportJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
-      expect(reportStep?.run).toBeDefined();
-
-      const prepareJob = releaseWorkflow.jobs["prepare-publish"];
-
-      expect(prepareJob?.needs).toBe("version-release");
-      expect(prepareJob?.if).toBe(
-        "${{ needs.version-release.outputs.is-release-commit == 'true' }}",
-      );
-      expect(prepareJob?.permissions).toEqual({ contents: "read" });
-
-      const prepareStep = workflowStep(
-        releaseWorkflow,
-        "prepare-publish",
-        "Prepare package and npm CLI artifacts",
-      );
-
-      expect(prepareStep?.run).toContain("vp run release:prepare");
-      expect(prepareStep?.run).toContain("sha256sum --check --strict");
-
-      const publishJob = releaseWorkflow.jobs["publish-packages"];
-
-      expect(publishJob?.if).toBe(
-        "${{ needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.outputs.publish-count != '0' }}",
-      );
-      expect(publishJob?.permissions).toEqual({
-        actions: "read",
-        contents: "read",
-        "id-token": "write",
-      });
-      expect(publishJob?.steps).toHaveLength(1);
-      expect(publishJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
-
-      const publishStep = workflowStep(
-        releaseWorkflow,
-        "publish-packages",
-        "Verify and publish prepared tarballs",
-      );
-
-      expect(publishStep?.run).toContain("sha256sum --check --strict SHA256SUMS");
-      expect(publishStep?.run).toContain("([.packages[].name] | unique | length) == 15");
-      expect(publishStep?.run).toContain("([.packages[].version] | unique) == [$expectedVersion]");
-      expect(publishStep?.run).toContain(
-        "repos/${GITHUB_REPOSITORY}/contents/packages/${PACKAGE_DIRECTORY}/package.json?ref=${GITHUB_SHA}",
-      );
-      expect(publishStep?.run).toContain('.distTag == "beta"');
-      expect(publishStep?.run).toContain('tar -xOf "$TARBALL" package/package.json');
-      expect(publishStep?.run).toContain('REMOTE_INTEGRITY="$(jq');
-      expect(publishStep?.run).toContain('REMOTE_BETA_VERSION="$(jq');
-      expect(publishStep?.run).toContain('if [ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]');
-      expect(publishStep?.run).toContain('if [ "$REMOTE_BETA_VERSION" != "$VERSION" ]');
-      expect(publishStep?.run).toContain('node "$NPM_CLI" publish "./$TARBALL"');
-      expect(publishStep?.run).toContain(
-        'publish_package "$PACKAGE" "$VERSION" "$TARBALL" "$DIST_TAG" > "$PUBLISH_LOG" 2>&1 &',
-      );
-      expect(publishStep?.run).toContain('if ! wait "${PUBLISH_PIDS[$PUBLISH_INDEX]}"');
-      expect(publishStep?.run).toContain("refusing to tag");
-      expect(publishStep?.run).toContain("--ignore-scripts");
-      expect(publishStep?.run).toContain("--registry https://registry.npmjs.org");
-      expect(publishStep?.run).not.toContain("node_modules");
-      expect(publishStep?.run).not.toContain("vp run");
-
-      const tagJob = releaseWorkflow.jobs["tag-release"];
-
-      expect(tagJob?.if).toBe(
-        "${{ always() && needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.result == 'success' && (needs.publish-packages.result == 'success' || needs.publish-packages.result == 'skipped') }}",
-      );
-      expect(tagJob?.permissions).toEqual({ actions: "read", contents: "write" });
-      expect(tagJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
-
-      const tagStep = workflowStep(
-        releaseWorkflow,
-        "tag-release",
-        "Verify manifest and create package tags",
-      );
-
-      expect(tagStep?.run).toContain("([.packages[].name] | unique | length) == 15");
-      expect(tagStep?.run).toContain("([.packages[].version] | unique) == [$expectedVersion]");
-      expect(tagStep?.run).toContain('.distTag == "beta"');
-      expect(tagStep?.run).toContain(
-        "repos/${GITHUB_REPOSITORY}/contents/packages/${PACKAGE_DIRECTORY}/package.json?ref=${GITHUB_SHA}",
-      );
-      expect(tagStep?.env).toEqual({
-        GH_TOKEN: "${{ github.token }}",
-        PUBLISH_RESULT: "${{ needs.publish-packages.result }}",
-      });
-      expect(tagStep?.run).toContain(
-        'if [ "$PUBLISH_RESULT" = "skipped" ] && [ "$TARBALL_COUNT" != "0" ]',
-      );
-      expect(tagStep?.run).toContain('-f "ref=refs/tags/${TAG}"');
-      expect(tagStep?.run).toContain('-f "sha=${GITHUB_SHA}"');
-      expect(tagStep?.run).toContain('REF_TYPE="$(jq --raw-output');
-      expect(tagStep?.run).toContain('if [ "$REF_TYPE" != "commit" ]');
-      expect(tagStep?.run).toContain('[ "$REF_SHA" != "$GITHUB_SHA" ]');
-      for (const packageDirectory of packageNames) {
-        const manifest = yield* readManifest(
-          `${repositoryRoot}/packages/${packageDirectory}/package.json`,
-        );
-
-        expect(manifest.name).toBeDefined();
-        const trustedPolicyEntry = `${packageDirectory}\t${manifest.name}`;
-
-        expect(publishStep?.run).toContain(trustedPolicyEntry);
-        expect(tagStep?.run).toContain(trustedPolicyEntry);
-      }
-
-      expect(
-        Object.entries(releaseWorkflow.jobs)
-          .filter(([, job]) => job.permissions?.["id-token"] === "write")
-          .map(([jobName]) => jobName),
-      ).toEqual(["publish-packages"]);
-      expect(
-        Object.entries(releaseWorkflow.jobs)
-          .filter(([, job]) => job.permissions?.checks === "write")
-          .map(([jobName]) => jobName),
-      ).toEqual(["report-release-check"]);
-
-      expect(rootManifest.scripts?.["verify:changesets-release"]).toBe(
-        "bun scripts/verify-changesets-release.ts",
-      );
-      expect(rootManifest.scripts?.["release:prepare"]).toBe("bun scripts/release-publish.ts");
-      expect(rootManifest.scripts?.["ci:publish"]).toBeUndefined();
+      expect(changesets?.env?.GITHUB_TOKEN).toBe("${{ steps.app-token.outputs.token }}");
+      expect(changesets?.with?.publish).toBe("./node_modules/.bin/vp run release:publish");
+      expect(release.jobs.release?.permissions?.["id-token"]).toBe("write");
     }),
   );
 
-  it.effect(
-    "resolves release commits from Git refs despite stale PR metadata and rejects unsafe inputs",
-    () =>
-      Effect.gen(function* () {
-        const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
-
-        const resolveScript = workflowStep(
-          releaseWorkflow,
-          "verify-release",
-          "Resolve the generated release head",
-        )?.run;
-
-        if (resolveScript === undefined) {
-          return yield* Effect.die(new Error("Release resolver must have an executable body."));
-        }
-
-        const baseSha = "1111111111111111111111111111111111111111";
-        const headSha = "2222222222222222222222222222222222222222";
-
-        const defaults = {
-          baseRef: "main",
-          currentBaseSha: baseSha,
-          currentHeadSha: headSha,
-          expectedBaseSha: baseSha,
-          headRef: "changeset-release/main",
-          headRepository: "effect-agent/release-check-fixture",
-          strictReady: "true",
-          verifiedHeadSha: "",
-          verifyOutcome: "skipped",
-        };
-
-        const success = yield* runReleaseWorkflowStep(resolveScript, defaults);
-
-        expect({ exitCode: success.exitCode, output: success.output }).toMatchObject({
-          exitCode: 0,
-        });
-        expect(success.stepOutput).toBe(`head-sha=${headSha}\n`);
-        expect(success.fetchInvocation).toBe(`fetch\n--no-tags\norigin\n${headSha}\n`);
-
-        for (const overrides of [
-          { currentBaseSha: "3333333333333333333333333333333333333333" },
-          { currentHeadSha: "not-a-commit" },
-          { headRepository: "someone-else/effect-agent" },
-          { headRef: "untrusted-release" },
-          { baseRef: "release-target" },
-          { prState: "closed" },
-          { fetchedSha: "3333333333333333333333333333333333333333" },
-          {
-            failingEndpoint:
-              "repos/effect-agent/release-check-fixture/git/ref/heads/changeset-release/main",
-          },
-        ]) {
-          const failure = yield* runReleaseWorkflowStep(resolveScript, {
-            ...defaults,
-            ...overrides,
-          });
-
-          expect({ fixture: overrides, exitCode: failure.exitCode }).not.toMatchObject({
-            exitCode: 0,
-          });
-          expect(failure.stepOutput).toBe("");
-          expect(failure.invocation).toBe("");
-          expect(failure.output).not.toBe("");
-        }
-      }),
-    15_000,
-  );
-
-  it.effect(
-    "executes the generated release check reporter fail-closed",
-    () =>
-      Effect.gen(function* () {
-        const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
-
-        const reportScript = workflowStep(
-          releaseWorkflow,
-          "report-release-check",
-          "Report the generated release check",
-        )?.run;
-
-        if (reportScript === undefined) {
-          return yield* Effect.die(
-            new Error("Release check reporter must have an executable body."),
-          );
-        }
-
-        const expectedBaseSha = "1111111111111111111111111111111111111111";
-        const verifiedHeadSha = "2222222222222222222222222222222222222222";
-        const changedHeadSha = "3333333333333333333333333333333333333333";
-        const changedBaseSha = "4444444444444444444444444444444444444444";
-
-        const run = (overrides: {
-          readonly baseRef?: string;
-          readonly currentBaseSha?: string;
-          readonly currentHeadSha?: string;
-          readonly headRef?: string;
-          readonly headRepository?: string;
-          readonly strictReady?: string;
-          readonly prState?: string;
-          readonly verifiedHeadSha?: string;
-          readonly verifyOutcome?: string;
-          readonly failingEndpoint?: string;
-        }) =>
-          runReleaseWorkflowStep(reportScript, {
-            baseRef: overrides.baseRef,
-            currentBaseSha: overrides.currentBaseSha ?? expectedBaseSha,
-            currentHeadSha: overrides.currentHeadSha ?? verifiedHeadSha,
-            expectedBaseSha,
-            headRef: overrides.headRef,
-            headRepository: overrides.headRepository,
-            prState: overrides.prState,
-            strictReady: overrides.strictReady,
-            verifiedHeadSha: overrides.verifiedHeadSha ?? verifiedHeadSha,
-            verifyOutcome: overrides.verifyOutcome ?? "success",
-            failingEndpoint: overrides.failingEndpoint,
-          });
-
-        const success = yield* run({});
-
-        expect({ exitCode: success.exitCode, output: success.output }).toMatchObject({
-          exitCode: 0,
-        });
-        expect(success.invocation).toContain("--method\nPOST\n");
-        expect(success.invocation).toContain(
-          "repos/effect-agent/release-check-fixture/check-runs\n",
-        );
-        expect(success.invocation).toContain("conclusion=success\n");
-        expect(success.invocation).toContain(`head_sha=${verifiedHeadSha}\n`);
-        expect(success.invocation).toContain("output[title]=Generated release tree verified\n");
-
-        const verificationFailure = yield* run({ verifyOutcome: "failure" });
-
-        expect({
-          exitCode: verificationFailure.exitCode,
-          output: verificationFailure.output,
-        }).toMatchObject({ exitCode: 0 });
-        expect(verificationFailure.invocation).toContain("conclusion=failure\n");
-        expect(verificationFailure.invocation).toContain(
-          "output[title]=Generated release tree did not verify\n",
-        );
-
-        const changedHead = yield* run({ currentHeadSha: changedHeadSha });
-
-        expect({ exitCode: changedHead.exitCode, output: changedHead.output }).toMatchObject({
-          exitCode: 0,
-        });
-        expect(changedHead.invocation).toContain("conclusion=failure\n");
-        expect(changedHead.invocation).toContain(`head_sha=${verifiedHeadSha}\n`);
-        expect(changedHead.invocation).toContain(
-          "output[title]=Generated release head changed during verification\n",
-        );
-
-        const changedBase = yield* run({ currentBaseSha: changedBaseSha });
-
-        expect({ exitCode: changedBase.exitCode, output: changedBase.output }).toMatchObject({
-          exitCode: 0,
-        });
-        expect(changedBase.invocation).toContain("conclusion=failure\n");
-        expect(changedBase.invocation).toContain(
-          "output[title]=Generated release base changed during verification\n",
-        );
-
-        const nonStrictRule = yield* run({ strictReady: "false" });
-
-        expect(nonStrictRule.invocation).toContain("conclusion=failure\n");
-        expect(nonStrictRule.invocation).toContain(
-          "output[title]=Strict required-check policy is missing\n",
-        );
-
-        const forkHead = yield* run({ headRepository: "someone-else/effect-agent" });
-
-        expect(forkHead.invocation).toContain("conclusion=failure\n");
-        expect(forkHead.invocation).toContain(
-          "output[title]=Generated release source changed during verification\n",
-        );
-
-        const wrongHeadRef = yield* run({ headRef: "untrusted-release" });
-
-        expect(wrongHeadRef.invocation).toContain("conclusion=failure\n");
-        expect(wrongHeadRef.invocation).toContain(
-          "output[title]=Generated release source changed during verification\n",
-        );
-
-        const wrongBaseRef = yield* run({ baseRef: "release-target" });
-
-        expect(wrongBaseRef.invocation).toContain("conclusion=failure\n");
-        expect(wrongBaseRef.invocation).toContain(
-          "output[title]=Generated release target changed during verification\n",
-        );
-
-        const closedPr = yield* run({ prState: "closed" });
-
-        expect(closedPr.invocation).toContain("conclusion=failure\n");
-
-        const skippedVerification = yield* run({ verifyOutcome: "skipped" });
-
-        expect(skippedVerification.invocation).toContain("conclusion=failure\n");
-        expect(skippedVerification.invocation).toContain(
-          "output[summary]=Exact-tree verification did not complete successfully.",
-        );
-
-        for (const unresolvedSha of ["", "not-a-commit"]) {
-          const unresolvedHead = yield* run({
-            verifiedHeadSha: unresolvedSha,
-            verifyOutcome: "skipped",
-          });
-
-          expect(unresolvedHead.exitCode).not.toBe(0);
-          expect(unresolvedHead.invocation).toBe("");
-          expect(unresolvedHead.output).toContain("no ready check can be attached safely");
-        }
-
-        const apiFailure = yield* run({
-          failingEndpoint: "repos/effect-agent/release-check-fixture/git/ref/heads/main",
-        });
-
-        expect(apiFailure.exitCode).not.toBe(0);
-        expect(apiFailure.invocation).toBe("");
-      }),
-    15_000,
-  );
-
-  it.effect(
-    "executes the isolated publisher fail-closed before npm publish",
-    () =>
-      Effect.gen(function* () {
-        const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
-
-        const publishScript = workflowStep(
-          releaseWorkflow,
-          "publish-packages",
-          "Verify and publish prepared tarballs",
-        )?.run;
-
-        if (publishScript === undefined) {
-          return yield* Effect.die(new Error("Release publisher must have an executable body."));
-        }
-
-        const validVersionMetadata = JSON.stringify({
-          dist: { integrity: "sha512-fixture-integrity" },
-        });
-
-        const validPackageMetadata = JSON.stringify({
-          "dist-tags": { beta: "0.0.1-beta.7" },
-        });
-
-        const existingVersion = yield* runReleasePublisher(publishScript, {
-          packageMetadata: validPackageMetadata,
-          registryStatus: "200",
-          versionMetadata: validVersionMetadata,
-        });
-
-        expect(existingVersion).toMatchObject({ exitCode: 0, publishInvoked: false });
-
-        const invalidMetadata = [
-          {
-            packageMetadata: validPackageMetadata,
-            versionMetadata: "not-json",
-          },
-          {
-            packageMetadata: validPackageMetadata,
-            versionMetadata: JSON.stringify({ dist: {} }),
-          },
-          {
-            packageMetadata: validPackageMetadata,
-            versionMetadata: JSON.stringify({ dist: { integrity: "sha512-other" } }),
-          },
-          {
-            packageMetadata: JSON.stringify({ "dist-tags": { beta: "0.0.1-beta.6" } }),
-            versionMetadata: validVersionMetadata,
-          },
-        ];
-
-        for (const fixture of invalidMetadata) {
-          const result = yield* runReleasePublisher(publishScript, {
-            packageMetadata: fixture.packageMetadata,
-            registryStatus: "200",
-            versionMetadata: fixture.versionMetadata,
-          });
-
-          expect(result.exitCode).not.toBe(0);
-          expect(result.publishInvoked).toBe(false);
-        }
-
-        const unpublishedVersion = yield* runReleasePublisher(publishScript, {
-          packageMetadata: validPackageMetadata,
-          registryStatus: "404",
-          versionMetadata: validVersionMetadata,
-        });
-
-        expect(unpublishedVersion).toMatchObject({ exitCode: 0, publishInvoked: true });
-        expect(unpublishedVersion.publishInvocations).toHaveLength(1);
-        expect(unpublishedVersion.publishInvocations[0]?.[0]).toMatch(
-          /[/]release-artifact[/][.]npm-cli[/]package[/]bin[/]npm-cli[.]js$/,
-        );
-        expect(unpublishedVersion.publishInvocations[0]?.slice(1)).toEqual([
-          "publish",
-          // The ./ prefix is load-bearing: npm 12 parses a bare
-          // "packages/….tgz" as a hosted-git shorthand and refuses it.
-          "./packages/capabilities.tgz",
-          "--access",
-          "public",
-          "--ignore-scripts",
-          "--registry",
-          "https://registry.npmjs.org",
-          "--tag",
-          "beta",
-          "--provenance",
-        ]);
-
-        for (const checksumFailure of ["artifact", "npm"] as const) {
-          const checksumResult = yield* runReleasePublisher(publishScript, {
-            checksumFailure,
-            packageMetadata: validPackageMetadata,
-            registryStatus: "404",
-            versionMetadata: validVersionMetadata,
-          });
-
-          expect(checksumResult.exitCode).not.toBe(0);
-          expect(checksumResult.publishInvoked).toBe(false);
-        }
-
-        const unsafeTarball = yield* runReleasePublisher(publishScript, {
-          packageMetadata: validPackageMetadata,
-          registryStatus: "404",
-          tarball: "../outside.tgz",
-          versionMetadata: validVersionMetadata,
-        });
-
-        expect(unsafeTarball.exitCode).not.toBe(0);
-        expect(unsafeTarball.publishInvoked).toBe(false);
-      }),
-    90_000,
-  );
-
-  it.effect(
-    "fans out package publishes and aggregates background failures",
-    () =>
-      Effect.gen(function* () {
-        const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
-
-        const publishScript = workflowStep(
-          releaseWorkflow,
-          "publish-packages",
-          "Verify and publish prepared tarballs",
-        )?.run;
-
-        if (publishScript === undefined) {
-          return yield* Effect.die(new Error("Release publisher must have an executable body."));
-        }
-
-        const validVersionMetadata = JSON.stringify({
-          dist: { integrity: "sha512-fixture-integrity" },
-        });
-
-        const validPackageMetadata = JSON.stringify({
-          "dist-tags": { beta: "0.0.1-beta.7" },
-        });
-
-        const bothPublished = yield* runReleasePublisher(publishScript, {
-          packageMetadata: validPackageMetadata,
-          publishablePackages: ["capabilities", "sandbox"],
-          registryStatus: "404",
-          versionMetadata: validVersionMetadata,
-        });
-
-        expect(bothPublished).toMatchObject({ exitCode: 0, publishInvoked: true });
-        expect(bothPublished.publishInvocations.map((invocation) => invocation[2])).toEqual([
-          "./packages/capabilities.tgz",
-          "./packages/sandbox.tgz",
-        ]);
-
-        // One npm publish failing must not interrupt its sibling, and the
-        // step must still fail after the full sweep.
-        const isolatedFailure = yield* runReleasePublisher(publishScript, {
-          npmFailTarball: "capabilities.tgz",
-          packageMetadata: validPackageMetadata,
-          publishablePackages: ["capabilities", "sandbox"],
-          registryStatus: "404",
-          versionMetadata: validVersionMetadata,
-        });
-
-        expect(isolatedFailure.exitCode).not.toBe(0);
-        expect(isolatedFailure.publishInvocations.map((invocation) => invocation[2])).toContain(
-          "./packages/sandbox.tgz",
-        );
-        expect(isolatedFailure.output).toContain(
-          "Publishing @effect-agent/capabilities@0.0.1-beta.7 failed.",
-        );
-        expect(isolatedFailure.output).toContain("refusing to tag");
-      }),
-    60_000,
-  );
-
-  it.effect("publishes prepared release directories atomically and cleans failed staging", () =>
+  it.effect("publishes without flags and requires an explicit dry-run opt-in", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
+      const modes: Array<boolean> = [];
 
-      const temporaryRoot = yield* fs.makeTempDirectoryScoped({
-        prefix: "effect-agent-release-artifact-test-",
-      });
-
-      const destination = path.join(temporaryRoot, "release-artifacts");
-      let failedStaging = "";
-
-      const failure = yield* Effect.flip(
-        prepareReleaseArtifactDirectory(destination, (staging) =>
-          Effect.gen(function* () {
-            failedStaging = staging;
-            yield* fs.writeFileString(path.join(failedStaging, "partial"), "incomplete\n");
-
-            return yield* Effect.fail("fixture-failure" as const);
+      const run = Command.runWith(
+        Command.withHandler(releaseCommand, ({ dryRun }) =>
+          Effect.sync(() => {
+            modes.push(dryRun);
           }),
         ),
+        { version: "1.0.0", renderErrors: false },
       );
 
-      expect(failure).toBe("fixture-failure");
-      expect(yield* fs.exists(failedStaging)).toBe(false);
-      expect(yield* fs.exists(destination)).toBe(false);
-
-      yield* prepareReleaseArtifactDirectory(destination, (staging) =>
-        Effect.gen(function* () {
-          expect(path.dirname(staging)).toBe(path.dirname(destination));
-          yield* fs.writeFileString(path.join(staging, "release-manifest.json"), "{}\n");
-        }),
-      );
-      expect(yield* fs.readFileString(path.join(destination, "release-manifest.json"))).toBe(
-        "{}\n",
-      );
-      expect(
-        (yield* fs.readDirectory(temporaryRoot)).filter((entry) =>
-          entry.startsWith(".effect-agent-release-staging-"),
-        ),
-      ).toEqual([]);
-
-      const commitCause = PlatformError.systemError({
-        _tag: "PermissionDenied",
-        module: "FileSystem",
-        method: "rename",
-        pathOrDescriptor: destination,
-      });
-
-      const cleanupCause = PlatformError.systemError({
-        _tag: "Busy",
-        module: "FileSystem",
-        method: "remove",
-        pathOrDescriptor: failedStaging,
-      });
-
-      const failingFileSystem = FileSystem.FileSystem.of({
-        ...fs,
-        remove: () => Effect.fail(cleanupCause),
-        rename: () => Effect.fail(commitCause),
-      });
-
-      const cleanupExit = yield* prepareReleaseArtifactDirectory(
-        path.join(temporaryRoot, "cleanup-failure"),
-        () => Effect.void,
-      ).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.exit);
-
-      expect(Exit.isFailure(cleanupExit)).toBe(true);
-      if (Exit.isFailure(cleanupExit)) {
-        expect(Cause.hasDies(cleanupExit.cause)).toBe(false);
-        const diagnostics = Cause.pretty(cleanupExit.cause);
-
-        expect(diagnostics).toContain("Could not commit release artifacts");
-        expect(diagnostics).toContain("PermissionDenied: FileSystem.rename");
-        expect(diagnostics).toContain("Could not cleanup release artifacts");
-        expect(diagnostics).toContain("Busy: FileSystem.remove");
-      }
+      yield* run([]);
+      yield* run(["--dry-run"]);
+      expect(modes).toEqual([false, true]);
     }),
   );
 
   it.effect(
-    "verifies generated release trees and cleans temporary worktrees",
+    "packs built exports and resolved dependencies and restores all source manifests",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-
-        const temporaryRoot = yield* fs.makeTempDirectoryScoped({
-          prefix: "effect-agent-release-verifier-test-",
-        });
-
-        const fixtureRoot = path.join(temporaryRoot, "repository");
-        const packageDirectory = path.join(fixtureRoot, "packages", "fixture");
-        const changesetDirectory = path.join(fixtureRoot, ".changeset");
-        const changesetBinary = path.resolve(repositoryRoot, "node_modules", ".bin", "changeset");
-        const commandCapture = path.join(temporaryRoot, "trusted-command-capture");
-        const bunStub = path.join(temporaryRoot, "bun-stub");
-        const changesetStub = path.join(temporaryRoot, "changeset-stub");
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "release-manifest-test-" });
 
         yield* fs.writeFileString(
-          changesetStub,
-          `#!/usr/bin/env bash
-set -euo pipefail
-printf 'changeset\\t%s\\t%s\\n' "$PWD" "$*" >> ${JSON.stringify(commandCapture)}
-exec ${JSON.stringify(changesetBinary)} "$@"
+          root + "/package.json",
+          JSON.stringify({
+            name: "release-fixture",
+            private: true,
+            workspaces: ["packages/*"],
+            packageManager: "bun@1.4.0",
+            catalog: { effect: "4.0.0-rc.111" },
+          }),
+        );
+        const originals = new Map<string, string>();
+
+        yield* fs.makeDirectory(root + "/.changeset");
+
+        const pre = JSON.stringify({
+          mode: "pre",
+          tag: "beta",
+          initialVersions: {},
+          changesets: [],
+        });
+
+        yield* fs.writeFileString(root + "/.changeset/pre.json", pre);
+        originals.set(root + "/.changeset/pre.json", pre);
+        yield* fs.writeFileString(
+          root + "/.changeset/config.json",
+          JSON.stringify({
+            changelog: false,
+            commit: false,
+            fixed: [],
+            linked: [],
+            access: "public",
+            baseBranch: "main",
+            updateInternalDependencies: "patch",
+            ignore: [],
+          }),
+        );
+
+        for (const name of ["core", "consumer"]) {
+          const directory = root + "/packages/" + name;
+
+          yield* fs.makeDirectory(directory + "/dist", { recursive: true });
+          yield* fs.writeFileString(directory + "/dist/index.mjs", "export {};\n");
+          yield* fs.writeFileString(directory + "/dist/index.d.mts", "export {};\n");
+
+          const original =
+            JSON.stringify({
+              name: "@fixture/" + name,
+              version: "1.0.0-beta.17",
+              exports: { ".": "./src/index.ts" },
+              files: ["dist"],
+              dependencies: name === "consumer" ? { "@fixture/core": "workspace:*" } : {},
+              peerDependencies: { effect: "catalog:" },
+              devDependencies: { effect: "catalog:" },
+            }) + "\n";
+
+          originals.set(directory + "/package.json", original);
+          yield* fs.writeFileString(directory + "/package.json", original);
+        }
+
+        const assertRestored = Effect.gen(function* () {
+          for (const [path, original] of originals) {
+            expect(yield* fs.readFileString(path)).toBe(original);
+          }
+        });
+
+        yield* withPublishManifests(root, () =>
+          Effect.gen(function* () {
+            const directory = root + "/packages/consumer";
+
+            yield* runFixtureCommand(directory, "npm", [
+              "pack",
+              "--ignore-scripts",
+              "--pack-destination",
+              root,
+              "--cache",
+              root + "/.npm",
+            ]);
+
+            const packed = yield* runFixtureCommand(root, "tar", [
+              "-xOf",
+              "fixture-consumer-1.0.0-beta.17.tgz",
+              "package/package.json",
+            ]);
+
+            expect(
+              yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(packed),
+            ).toMatchObject({
+              version: "1.0.0-beta.17",
+              dependencies: { "@fixture/core": "1.0.0-beta.17" },
+              peerDependencies: { effect: "4.0.0-rc.111" },
+              devDependencies: { effect: "4.0.0-rc.111" },
+              exports: { ".": { types: "./dist/index.d.mts", default: "./dist/index.mjs" } },
+            });
+          }),
+        );
+        yield* assertRestored;
+
+        // Exercise Changesets itself without registry writes. This catches its
+        // pre-mode --tag rejection and its latest default for beta-only packages.
+        const bin = root + "/bin";
+
+        yield* fs.makeDirectory(bin);
+        yield* fs.writeFileString(
+          bin + "/npm",
+          `#!/bin/sh
+case "$1" in
+  info) printf '%s\\n' '{"versions":["1.0.0-beta.1"],"dist-tags":{"latest":"1.0.0-beta.1"}}' ;;
+  publish) printf '%s\\n' "$*" >> "$PUBLISH_CAPTURE" ;;
+  *) echo "Unexpected npm command: $*" >&2; exit 1 ;;
+esac
 `,
         );
-        yield* fs.chmod(changesetStub, 0o755);
-        yield* fs.writeFileString(
-          bunStub,
-          `#!/usr/bin/env bash
-set -euo pipefail
-printf 'bun\\t%s\\t%s\\n' "$PWD" "$*" >> ${JSON.stringify(commandCapture)}
-bun "$@"
-mkdir -p node_modules/.bin
-ln -sf ${JSON.stringify(changesetStub)} node_modules/.bin/changeset
-`,
-        );
-        yield* fs.chmod(bunStub, 0o755);
+        yield* fs.chmod(bin + "/npm", 0o755);
+        yield* runFixtureCommand(root, "git", ["init", "--initial-branch=main"]);
+        yield* runFixtureCommand(root, "git", ["config", "user.name", "Release test"]);
+        yield* runFixtureCommand(root, "git", ["config", "user.email", "release@example.invalid"]);
+        yield* runFixtureCommand(root, "git", ["config", "commit.gpgsign", "false"]);
+        yield* runFixtureCommand(root, "git", ["config", "tag.gpgsign", "false"]);
+        yield* runFixtureCommand(root, "git", ["add", "package.json", "packages", ".changeset"]);
+        yield* runFixtureCommand(root, "git", ["commit", "-m", "Version packages"]);
+        const executablePath = yield* Config.string("PATH");
 
-        yield* fs.makeDirectory(packageDirectory, { recursive: true });
-        yield* fs.makeDirectory(changesetDirectory, { recursive: true });
-        yield* fs.writeFileString(path.join(fixtureRoot, ".gitignore"), "node_modules\n");
-        yield* fs.writeFileString(
-          path.join(fixtureRoot, "package.json"),
-          `{
-  "name": "release-verifier-fixture",
-  "private": true,
-  "workspaces": ["packages/*"]
-}\n`,
+        yield* withPublishManifests(root, () =>
+          runFixtureCommand(root, "env", [
+            "PATH=" + bin + ":" + executablePath,
+            "PUBLISH_CAPTURE=" + root + "/publishes",
+            repositoryRoot + "/node_modules/.bin/changeset",
+            "publish",
+            "--tag",
+            "beta",
+          ]),
         );
-        yield* fs.writeFileString(
-          path.join(packageDirectory, "package.json"),
-          `{
-  "name": "release-verifier-package",
-  "version": "1.0.0"
-}\n`,
-        );
-        yield* fs.writeFileString(
-          path.join(changesetDirectory, "config.json"),
-          `{
-  "changelog": false,
-  "commit": false,
-  "fixed": [],
-  "linked": [],
-  "access": "restricted",
-  "baseBranch": "main",
-  "updateInternalDependencies": "patch",
-  "ignore": []
-}\n`,
-        );
-        yield* fs.writeFileString(
-          path.join(changesetDirectory, "fixture.md"),
-          `---
-"release-verifier-package": patch
----
+        const publishes = (yield* fs.readFileString(root + "/publishes")).trim().split("\n");
 
-Exercise the generated release verifier.
-`,
-        );
-
-        yield* runFixtureCommand(fixtureRoot, "bun", ["install", "--ignore-scripts"]);
-
-        yield* runFixtureCommand(temporaryRoot, "git", [
-          "init",
-          "--initial-branch=main",
-          fixtureRoot,
+        expect(publishes).toHaveLength(2);
+        for (const invocation of publishes) {
+          expect(invocation).toContain("--tag beta");
+          expect(invocation).not.toContain("--tag latest");
+        }
+        expect((yield* runFixtureCommand(root, "git", ["tag", "--list"])).split("\n")).toEqual([
+          "@fixture/consumer@1.0.0-beta.17",
+          "@fixture/core@1.0.0-beta.17",
         ]);
-        yield* runFixtureCommand(fixtureRoot, "git", ["config", "user.name", "Verifier Test"]);
-        yield* runFixtureCommand(fixtureRoot, "git", [
-          "config",
-          "user.email",
-          "verifier@example.invalid",
-        ]);
-        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
-        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "fixture base"]);
-        const baseSha = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+        yield* assertRestored;
 
-        yield* runFixtureCommand(fixtureRoot, changesetBinary, ["version"]);
-        yield* runFixtureCommand(fixtureRoot, "bun", ["install", "--ignore-scripts"]);
-        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
-        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "generated release"]);
-        const generatedHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+        for (const failure of [
+          Effect.fail("publish failed"),
+          Effect.die("publisher defect"),
+          Effect.interrupt,
+        ]) {
+          const exit = yield* Effect.exit(withPublishManifests(root, () => failure));
 
-        yield* verifyChangesetsRelease({
-          baseSha,
-          changesetBinary,
-          headSha: generatedHead,
-          repositoryRoot: fixtureRoot,
+          expect(Exit.isFailure(exit)).toBe(true);
+          yield* assertRestored;
+        }
+
+        yield* fs.remove(root + "/packages/core/dist/index.mjs");
+        let published = false;
+
+        const failure = yield* Effect.flip(
+          withPublishManifests(root, () =>
+            Effect.sync(() => {
+              published = true;
+            }),
+          ),
+        );
+
+        expect(failure).toMatchObject({
+          _tag: "ReleaseError",
+          reason: expect.stringContaining("Missing built artifact"),
         });
-        expect(
-          yield* classifyChangesetsRelease({
-            baseSha,
-            changesetBinary,
-            headSha: generatedHead,
-            repositoryRoot: fixtureRoot,
-          }),
-        ).toBe(true);
-
-        const worktreesAfterSuccess = yield* runFixtureCommand(fixtureRoot, "git", [
-          "worktree",
-          "list",
-          "--porcelain",
-        ]);
-
-        expect(worktreesAfterSuccess.match(/^worktree /gm)).toHaveLength(1);
-
-        yield* fs.writeFileString(commandCapture, "");
-        yield* verifyChangesetsRelease({
-          baseSha,
-          bunBinary: bunStub,
-          headSha: generatedHead,
-          repositoryRoot: fixtureRoot,
-        });
-
-        const trustedCommands = (yield* fs.readFileString(commandCapture))
-          .trim()
-          .split("\n")
-          .map((line) => line.split("\t"));
-
-        expect(trustedCommands.map(([tool, , args]) => [tool, args])).toEqual([
-          ["bun", "install --frozen-lockfile --ignore-scripts"],
-          ["changeset", "version"],
-          ["bun", "install --ignore-scripts"],
-        ]);
-        const trustedWorkingDirectories = new Set(trustedCommands.map(([, cwd]) => cwd));
-
-        expect(trustedWorkingDirectories.size).toBe(1);
-        const trustedWorkingDirectory = trustedCommands[0]?.[1];
-
-        expect(trustedWorkingDirectory).toMatch(/effect-agent-changesets-release-.+[/]expected$/);
-        expect(trustedWorkingDirectory).not.toBe(fixtureRoot);
-
-        let failedCleanupPath = "";
-
-        const cleanupCause = PlatformError.systemError({
-          _tag: "Busy",
-          module: "FileSystem",
-          method: "remove",
-        });
-
-        const cleanupFailingFileSystem = FileSystem.FileSystem.of({
-          ...fs,
-          remove: (target, options) => {
-            if (String(target).includes("effect-agent-changesets-release-")) {
-              failedCleanupPath = String(target);
-
-              return Effect.fail(cleanupCause);
-            }
-
-            return fs.remove(target, options);
-          },
-        });
-
-        const cleanupFailure = yield* Effect.flip(
-          verifyChangesetsRelease({
-            baseSha,
-            changesetBinary,
-            headSha: generatedHead,
-            repositoryRoot: fixtureRoot,
-          }).pipe(Effect.provideService(FileSystem.FileSystem, cleanupFailingFileSystem)),
-        );
-
-        expect(cleanupFailure).toMatchObject({
-          _tag: "VerificationCleanupError",
-          operation: "temporary directory removal",
-          message: expect.stringContaining("Busy: FileSystem.remove"),
-        });
-        expect(failedCleanupPath).not.toBe("");
-        yield* fs.remove(failedCleanupPath, { force: true, recursive: true });
-
-        yield* fs.writeFileString(
-          path.join(packageDirectory, "package.json"),
-          `{
-  "name": "release-verifier-package",
-  "version": "9.9.9"
-}\n`,
-        );
-        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
-        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "alter generated output"]);
-        const alteredHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
-
-        const alteredFailure = yield* Effect.flip(
-          classifyChangesetsRelease({
-            baseSha,
-            changesetBinary,
-            headSha: alteredHead,
-            repositoryRoot: fixtureRoot,
-          }),
-        );
-
-        expect(
-          Schema.decodeUnknownSync(ReleaseTreeMismatch)(alteredFailure).changedPaths,
-        ).toContain("packages/fixture/package.json");
-
-        yield* runFixtureCommand(fixtureRoot, "git", ["checkout", "--detach", generatedHead]);
-        yield* fs.writeFileString(path.join(fixtureRoot, "unexpected.txt"), "unexpected\n");
-        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
-        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "add unexpected file"]);
-        const unexpectedHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
-
-        const unexpectedFailure = yield* Effect.flip(
-          verifyChangesetsRelease({
-            baseSha,
-            changesetBinary,
-            headSha: unexpectedHead,
-            repositoryRoot: fixtureRoot,
-          }),
-        );
-
-        expect(
-          Schema.decodeUnknownSync(ReleaseTreeMismatch)(unexpectedFailure).changedPaths,
-        ).toContain("unexpected.txt");
-        expect(
-          yield* classifyChangesetsRelease({
-            baseSha,
-            changesetBinary: path.join(temporaryRoot, "must-not-run"),
-            headSha: unexpectedHead,
-            repositoryRoot: fixtureRoot,
-          }),
-        ).toBe(false);
-
-        const invalidShaFailure = yield* Effect.flip(
-          verifyChangesetsRelease({
-            baseSha: "not-a-commit",
-            changesetBinary,
-            headSha: generatedHead,
-            repositoryRoot: fixtureRoot,
-          }),
-        );
-
-        expect(Schema.decodeUnknownSync(InvalidCommitSha)(invalidShaFailure).label).toBe(
-          "--base-sha",
-        );
-
-        const worktreesAfterFailures = yield* runFixtureCommand(fixtureRoot, "git", [
-          "worktree",
-          "list",
-          "--porcelain",
-        ]);
-
-        expect(worktreesAfterFailures.match(/^worktree /gm)).toHaveLength(1);
+        expect(published).toBe(false);
+        yield* assertRestored;
       }),
-    60_000,
+    15_000,
   );
 
   it.effect("keeps browser and deployment scaffolds out of framework manifests", () =>
@@ -2372,7 +1123,7 @@ Exercise the generated release verifier.
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
 
-          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.111");
+          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.112");
           expect(manifest.devDependencies?.effect).toBe("catalog:");
           expect(manifest.dependencies?.effect).toBeUndefined();
           expect(manifest.optionalDependencies?.effect).toBeUndefined();

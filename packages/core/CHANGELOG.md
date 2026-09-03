@@ -1,5 +1,15 @@
 # @effect-agent/core
 
+## 0.1.0-beta.44
+
+### Patch Changes
+
+- [#307](https://github.com/danieljvdm/effect-agent/pull/307) [`f8365ee`](https://github.com/danieljvdm/effect-agent/commit/f8365eee4048076ced0a79b9149efc29297b7c41) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Upgrade to Effect rc.112 and `effect-cf` 0.40.0 while preserving MCP transports and Cloudflare host behavior.
+
+  BEHAVIOR CHANGE: Upgrade Effect and its provider/platform/SQL packages to rc.112 or a compatible version. In Cloudflare hosts, provide `effect-cf@^0.40.0` and enable `nodejs_compat` for its async context support.
+
+## 0.1.0-beta.43
+
 ## 0.1.0-beta.42
 
 ## 0.1.0-beta.41
