@@ -19,6 +19,7 @@ const open = (script: string, path: string) =>
             modules: true,
             script,
             compatibilityDate: "2026-08-01",
+            compatibilityFlags: ["nodejs_compat"],
             resourcePersistencePath: path,
             bindings: { BENCH_TOKEN: "test-only" },
             durableObjects: {
@@ -58,7 +59,7 @@ it(
               format: "esm",
               platform: "browser",
               target: "es2022",
-              external: ["cloudflare:*"],
+              external: ["cloudflare:*", "node:*"],
             }),
           catch: () => ProbeFailure.make({ operation: "bundle" }),
         });

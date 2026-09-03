@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/sandbox",
-  "version": "0.1.0-beta.42",
+  "version": "0.1.0-beta.43",
   "description": "Platform-neutral sandbox contracts for Effect Agent: schema-first requests, events, errors, and the streaming Sandbox service.",
   "license": "MIT",
   "repository": {
@@ -30,6 +30,6 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.111"
+    "effect": "^4.0.0-rc.112"
   }
 }

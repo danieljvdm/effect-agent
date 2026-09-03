@@ -12,13 +12,14 @@ your application supplies Cloudflare bindings or credentials.
 Start with a stateless capture for one page. Choose a crawl only when the task needs a bounded set
 of same-host pages. Use an interactive pass only when navigation or page actions are essential.
 
-| Need                                                                  | Choose                                | Where it runs                     | What the application provides                   |
-| --------------------------------------------------------------------- | ------------------------------------- | --------------------------------- | ----------------------------------------------- |
-| Render one URL as Markdown, scrape selectors, or take a PNG           | **Quick Actions**                     | A Cloudflare Worker               | A Browser Run binding                           |
-| Render Markdown, links, selector groups, or structured data from Node | **REST capture**                      | Any host with Effect `HttpClient` | Cloudflare account ID and API token             |
-| Crawl a site into bounded rendered Markdown records                   | **REST crawl**                        | Any host with Effect `HttpClient` | Account ID, API token, and a Scope              |
-| Navigate, read, click, fill, scroll, or capture one active page       | **Interactive Browser**               | A Cloudflare Worker               | Browser binding, lifecycle token, and Puppeteer |
-| Let an operator inspect or take over an active pass                   | **Interactive Browser host controls** | A trusted Cloudflare Worker host  | A Browser Run API token, kept private           |
+| Need                                                                  | Choose                                | Where it runs                     | What the application provides                          |
+| --------------------------------------------------------------------- | ------------------------------------- | --------------------------------- | ------------------------------------------------------ |
+| Render one URL as Markdown, scrape selectors, or take a PNG           | **Quick Actions**                     | A Cloudflare Worker               | A Browser Run binding                                  |
+| Render Markdown, links, selector groups, or structured data from Node | **REST capture**                      | Any host with Effect `HttpClient` | Cloudflare account ID and API token                    |
+| Crawl a site into bounded rendered Markdown records                   | **REST crawl**                        | Any host with Effect `HttpClient` | Account ID, API token, and a Scope                     |
+| Navigate, read, click, fill, scroll, or capture one active page       | **Interactive Browser**               | A Cloudflare Worker               | Browser binding, lifecycle token, and Puppeteer        |
+| Let an operator inspect or take over an active pass                   | **Interactive Browser host controls** | A trusted Cloudflare Worker host  | A Browser Run API token, kept private                  |
+| Fill host-owned login or card credentials and continue browsing       | **Protected Browser**                 | A trusted Cloudflare Worker host  | Private vault/grants, browser binding, lifecycle token |
 
 Browser output is untrusted input. Validate model-selected URLs against your host policy and keep
 credentials, handles, Live View URLs, and handoff identities out of model Tools and durable records.
@@ -29,7 +30,7 @@ In your application, install the browser adapters:
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Requires `effect@^4.0.0-rc.111`. For the examples below, also install `@effect-agent/sandbox@beta`.
+Requires `effect@^4.0.0-rc.112`. For the examples below, also install `@effect-agent/sandbox@beta`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 The REST examples need no Puppeteer dependency.
 
@@ -93,7 +94,7 @@ need to inspect an active page, follow a known flow, or perform host-approved UI
 a general browsing session and cannot become an agent Tool.
 
 Install `@cloudflare/puppeteer@^1.1.0` alongside
-`@effect-agent/platform-cloudflare@beta` and `effect-cf@^0.37.0`. Then provide
+`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.112`, and `effect-cf@^0.40.0`. Then provide
 `CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
 `FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
 trusted host controls for Live View and handoff. Both variants assemble the browser binding and
@@ -376,6 +377,107 @@ An interactive session is ephemeral. The framework neither stores a session nor 
 a restart, eviction, ownership loss, or durable recovery. A live browser action is uncertain at
 that boundary, so do not automatically replay it.
 
+## Protected login and card filling
+
+`ProtectedBrowser` is a separate private pass, not an upgrade of an interactive session. Import
+`browserRunProtectedLayer` and `browserRunProtectedBindingLayer` from
+`@effect-agent/platform-cloudflare/protected-browser`. Provide the binding Layer, the same
+`BrowserRunSessionLifecycle` used above, and an invocation-specific `BrowserCredentialAccess`.
+Use `ExactHosts` for a fixed network allowlist. `Unrestricted` is an explicit host choice;
+`PublicWeb` is unsupported. Credential grants never expand network policy.
+
+The host access service owns caller authentication, vault lookup, current grants, and recipient
+trust. Derive caller identity from the authorized invocation, never model arguments or possession
+of an offer. `list` authorizes only bounded display metadata, such as a label, brand, and last four
+digits, not vault keys or credentials. `authorize` checks current ownership, purpose, field roles,
+submission permission, and exact canonical HTTPS top-level, frame, and form-recipient origins,
+including non-default ports. Card grants must match both merchant and processor/frame. `resolve`
+returns Schema-validated `Redacted` material after those checks; authorization repeats before each
+field write and submission. Host services must never put material in logs, defects, or traces.
+
+The runtime protocol needs no site-specific selectors:
+
+1. `navigate` to a host-authorized HTTPS URL, then `observe` bounded text and native controls.
+2. Select discovered field references and request `listCredentialOffers({ kind, target })`.
+3. Propose `useCredential({ offer, fields, submit? })` with only opaque refs and field roles.
+4. Continue with `observe`, `navigate`, or `click` under the post-exposure observation grant.
+
+References bind actual nodes, documents, frames, forms, and roles. Node replacement, changed
+form/action/role, frame navigation, rediscovery, or 60 seconds of elapsed time invalidates them.
+Offers expire after 60 seconds, are single-use, and bind caller, kind, and target. Listing reclaims
+expired offers from the 64-offer session capacity; failed lists retain no new offers. A private lock
+spans checks, resolution, mutation, and post-use checks; competing operations return `busy`.
+The adapter uses an isolated browser world and native setters, not model-provided JavaScript.
+
+Supported controls are native username/email/password inputs, native login form submission, and
+standard `cc-*` card fields, including native selects. Credential fields must have an associated
+native form, either by containment or an explicit `form` attribute. Standalone fields are unsupported.
+Inspection rejects action URLs or fingerprint attributes longer than 2,048 characters inside the
+browser before serialization; fingerprints remain in the browser. HTTPS frames may be same- or cross-origin
+when every involved origin is allowed. Opaque frames, popups, shadow/custom controls, CAPTCHA,
+OTP, passkeys, wallets, and 3DS have no automation fallback. Invalid native form requirements
+produce `needs-attention`. Card filling never submits a purchase. Filling can itself execute page
+handlers and cause side effects, which the host must authorize.
+
+### Protection and recipient trust
+
+Secrets enter only the private browser transport, not Tool arguments/results, normal errors,
+traces, checkpoints, or journals. The handle exposes no raw fill, JavaScript, screenshot, Live
+View, DevTools, handoff, or provider identity. A fresh session is acquired with `recording=false`
+explicitly on the wire. This relies on Cloudflare's opt-in recording behavior; no independent
+recording-enabled attestation endpoint exists.
+
+Cloudflare account administrators and Browser Rendering token holders are trusted operators.
+They must not attach viewers, DevTools, recordings, or other observers to private sessions.
+Protection does not extend to those operators or a compromised provider. Expiring a viewer URL
+does not make a previously exposed session private; always open a fresh pass.
+
+After any possibly dispatched secret write, every observation and non-secret action requires
+`observation` to return `trust-recipient-no-credential-echo` for current origins and prior exposures.
+This explicitly trusts the recipient not to echo raw, encoded, transformed, or delayed credentials.
+It is not universal secrecy against hostile pages. Discovery omits input values, but DOM scrubbing
+and substring redaction cannot make arbitrary pages safe. Denial blocks observation before reading
+page text. The same private context retains authenticated state; no cookie export or general-browser
+handoff occurs. Request interception does not contain every worker, socket, or page network path.
+Only use recipients the host is willing to trust with the material.
+
+### Lifetime, evidence, and recovery
+
+`browserRunProtectedLayer()` requires the transport and `Crypto.Crypto`;
+`browserRunProtectedBindingLayer({ browser })` requires `BrowserRunSessionLifecycle` and
+`Crypto.Crypto`. Supply `BrowserCrypto.layer` from `@effect/platform-browser` at the Worker
+composition root. Time comes from Effect's `Clock`, including native field-reference expiry.
+The native adapter acquires its browser/page and cleanup authority from one scoped private
+`ProtectedNativeSession`. Its typed Effect transport decodes SDK output before returning it to
+the policy, and each credential write requires the policy's `ProtectedBrowserDispatch` service.
+
+Build `ProtectedBrowserSession.layer(policy)` once around an execution and provide it to native
+Effect AI Toolkit handlers. Its lazy `get` shares one handle across successive Tool calls. Do not
+scope each Tool separately or put caller/vault/session state in a process or Durable Object singleton.
+The [compiled consumer example](https://github.com/danieljvdm/effect-agent/blob/main/examples/browser-run-worker-proof/src/protected-browser.ts)
+shows handlers and dummy grants.
+
+For durable execution, put the handlers and session Layer in `AgentRegistration.attemptLayer`.
+Its factory receives trusted `threadId`, `submissionId`, and `attemptId`; use these to resolve the
+authorized invocation. The Layer spans all Tool/model turns of one fenced Attempt and finalizes on
+completion, suspension, failure, or interruption. A replacement Attempt builds fresh services.
+Keep fallible browser acquisition in `session.get`, not Layer construction. No additional browser
+Durable Object or persisted browser-session record is needed.
+
+Credential Tools are ordinary effectful Tools. Do not mark them readonly/idempotent or expose them
+through the read-only Code Mode bridge. The existing prepared/settled journal governs recovery:
+an unresolved mutation is never automatically replayed after ownership loss. Old refs fail in a
+replacement Attempt; the application/operator must reconcile an uncertain external outcome.
+
+`CredentialUseResult` and `ProtectedBrowserError` report independent `dispatch`, `milestone`,
+`observation`, and `cleanup` fields. `filled` proves acknowledged writes, not authentication;
+`submission-dispatched` proves dispatch, not login success. `authentication` is always `unverified`.
+Check an approved authenticated page separately. `possibly-dispatched` can coexist with
+`partial-fill` and confirmed cleanup: closure does not undo effects. Provider defects are sanitized;
+failures after dispatch and cancellation invalidate and close the pass. Close waits for exact-session
+termination/absence and reports `unconfirmed` when it cannot prove cleanup. Logs contain only a
+fixed cleanup warning, never provider diagnostics or secret-bearing page data.
+
 ## Limits, cleanup, and network boundaries
 
 Browser APIs use finite requests and typed expected failures:
@@ -416,7 +518,9 @@ describe action timing and lifecycle details.
 
 The repository includes an [opt-in temporary deployment proof](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-run-worker-proof).
 It exercises the hosted Browser Run binding with Markdown capture, selector scrape, PNG screenshot,
-an interactive pass, a short Live View, and a short handoff, then deletes the temporary Worker.
+an interactive pass, a short Live View, and a short handoff. After closing that session it opens a
+fresh protected pass, exercises two dummy login layouts and a card frame, checks revocation and
+authenticated continuation, confirms cleanup, then deletes the temporary Worker.
 It needs Cloudflare credentials and is not a turnkey application or a durable browser-session
 solution. Its README documents the environment variables and the explicit command.
 

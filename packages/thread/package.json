@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/thread",
-  "version": "0.1.0-beta.42",
+  "version": "0.1.0-beta.43",
   "description": "Canonical Thread records, reducers, store ports, recovery classifier, and the durable agent runtime coordinator for Effect Agent.",
   "license": "MIT",
   "repository": {
@@ -41,6 +41,6 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.111"
+    "effect": "^4.0.0-rc.112"
   }
 }

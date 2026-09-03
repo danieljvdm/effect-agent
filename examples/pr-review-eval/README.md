@@ -66,6 +66,17 @@ continuous source coverage across adjacent reads. Separate seeded development pr
 verification directly against known true and false claims. They cannot replace the original
 first trials or establish rollout eligibility.
 
+At revision `7e9f08855bb8ef2921ac3d57ed3c4c68dcc49c58`, all nine seeded verifier probes produced
+the expected disposition and completed verification: three false original-effect leak claims
+were refuted, three real cached-wrapper leaks were supported, and three real publication
+overflows were supported. Total estimated cost was $0.802109 against a separate $8.999991 ceiling.
+The manifest, executable probe, and observations are retained under `results/kom-28/` as
+`seeded-probe-manifest.json`, `seeded-probe.mts`, and `seeded-probe.jsonl`.
+These probes inject discovery findings without paid discovery. Consequently, the host retains
+pending patch coverage in the aggregate review outcome; completion here means the verifier
+stage's `diagnostics.verification`, not whole-review completion. Expected dispositions remain
+assessment metadata and are never sent to the model.
+
 Every comparison case supplies `oracleVersion`, `split` (`development` or `heldout`),
 `relatedGroup`, and a digest-checked repository snapshot. Keep related revisions and both cleanup
 variants in the same split. Establish clean controls independently of earlier empty reviews.

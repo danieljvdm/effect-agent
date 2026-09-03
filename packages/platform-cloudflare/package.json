@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/platform-cloudflare",
-  "version": "0.1.0-beta.42",
+  "version": "0.1.0-beta.43",
   "description": "Cloudflare Layer assembly for Effect Agent: Durable Objects and Browser Run adapters.",
   "license": "MIT",
   "repository": {
@@ -17,6 +17,7 @@
     ".": "./src/index.ts",
     "./browser-quick-action": "./src/browser-quick-action.ts",
     "./interactive-browser": "./src/interactive-browser.ts",
+    "./protected-browser": "./src/protected-browser.ts",
     "./browser-rest-capture": "./src/browser-rest-capture.ts",
     "./browser-rest-crawl": "./src/browser-rest-crawl.ts"
   },
@@ -55,8 +56,8 @@
   },
   "peerDependencies": {
     "@cloudflare/puppeteer": "^1.1.0",
-    "effect": "^4.0.0-rc.111",
-    "effect-cf": "^0.37.0"
+    "effect": "^4.0.0-rc.112",
+    "effect-cf": "^0.40.0"
   },
   "peerDependenciesMeta": {
     "@cloudflare/puppeteer": {
