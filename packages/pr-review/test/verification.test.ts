@@ -254,15 +254,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
               mode === "unavailable" && input.startLine > 1
                 ? Effect.fail(ReviewContextError.make({ message: "Unavailable" }))
                 : ReviewSource.fromText(input, source),
-            findInFile: (input) =>
-              Effect.succeed(
-                ReviewLineMatches.make({
-                  path: input.path,
-                  revision: input.revision,
-                  lines: [1],
-                  truncated: false,
-                }),
-              ),
+            findInFile: (input) => ReviewLineMatches.fromText(input, source),
           }),
         );
 
@@ -271,141 +263,6 @@ layer(testLayer)("mandatory candidate verification", (it) => {
         accepted ? "supported" : "unresolved",
       );
       expect(outcome.incomplete).toBe(accepted ? undefined : true);
-    }),
-  );
-
-  it.effect.each([
-    "delivered",
-    "locations-only",
-    "outside-window",
-    "wrong-path",
-    "wrong-revision",
-    "missing-match",
-    "oversized-utf8",
-    "oversized-json",
-    "malformed",
-  ] as const)("authorizes only intact matching search context: %s", (mode) =>
-    Effect.gen(function* () {
-      let calls = 0;
-
-      const source = Array.from({ length: 90 }, (_, index) =>
-        index === 29 || index === 79 ? "needle = privateSource" : `line ${String(index + 1)}`,
-      ).join("\n");
-
-      const accepted = mode === "delivered";
-
-      const outcome = yield* makeReviewer({
-        strategy: "verified",
-        model: scriptedModel((prompt, tools) => {
-          if (!isVerifier(tools)) return discoveryResponse();
-          calls += 1;
-          if (calls === 1)
-            return toolResponse("find_in_file", {
-              path: "src/source.ts",
-              revision: "head",
-              literal: "needle",
-              startLine: 1,
-            });
-          if (calls === 2) {
-            const search = prompt.content
-              .flatMap((message) =>
-                message.role === "tool"
-                  ? message.content.filter(
-                      (part) => part.type === "tool-result" && part.name === "find_in_file",
-                    )
-                  : [],
-              )
-              .at(-1);
-
-            expect(search).toMatchObject({ isFailure: mode === "malformed" });
-            expect(JSON.stringify(search)).not.toContain("truncatedToolResult");
-            if (mode === "malformed")
-              expect(JSON.stringify(search)).toContain("Invalid in-file search result.");
-            else {
-              expect(search).toMatchObject({ result: { lines: [30, 80], truncated: false } });
-              if (mode === "delivered" || mode === "outside-window")
-                expect(search).toMatchObject({
-                  result: { context: { startLine: 20, totalLines: 90 } },
-                });
-              else expect(JSON.stringify(search)).not.toContain("privateSource");
-            }
-            const line = mode === "outside-window" ? 80 : 30;
-
-            return toolResponse("submit_verification", {
-              decisions: originalCandidates(prompt).map((candidate) =>
-                decision(candidate, "supported", [
-                  {
-                    kind: "source",
-                    revision: request.headRevision,
-                    path: "src/source.ts",
-                    startLine: line,
-                    endLine: line,
-                  },
-                ]),
-              ),
-            });
-          }
-          expect(accepted).toBe(false);
-          expect(calls).toBe(3);
-          expect(verificationFeedback(prompt).at(-1)).toContain("evidence 1");
-
-          return toolResponse("submit_verification", {
-            decisions: originalCandidates(prompt).map((candidate) =>
-              decision(candidate, "unresolved", []),
-            ),
-          });
-        }),
-      })
-        .review(request)
-        .pipe(
-          Effect.provideService(ReviewRepository, {
-            ...emptyRepository,
-            readFile: () => Effect.die("Search context must stand on its own"),
-            findInFile: (input) =>
-              Effect.gen(function* () {
-                const matches = yield* ReviewLineMatches.fromText(input, source);
-                const context = matches.context;
-
-                if (context === undefined)
-                  return yield* Effect.die("Expected context for the fixture's short source");
-                if (mode === "locations-only")
-                  return ReviewLineMatches.make({
-                    path: input.path,
-                    revision: input.revision,
-                    lines: matches.lines,
-                    truncated: matches.truncated,
-                  });
-                if (mode === "malformed")
-                  return { ...matches, context: { ...context, totalLines: -1 } };
-
-                return ReviewLineMatches.make({
-                  ...matches,
-                  context: ReviewSource.make({
-                    ...context,
-                    path: mode === "wrong-path" ? "src/other.ts" : context.path,
-                    revision: mode === "wrong-revision" ? "base" : context.revision,
-                    content:
-                      mode === "missing-match"
-                        ? context.content.replaceAll("needle", "other")
-                        : mode === "oversized-utf8" || mode === "oversized-json"
-                          ? Array.from({ length: 51 }, (_, index) =>
-                              index === 10
-                                ? "needle = privateSource"
-                                : (mode === "oversized-utf8" ? "界" : "\u0001").repeat(300),
-                            ).join("\n")
-                          : context.content,
-                  }),
-                });
-              }),
-          }),
-        );
-
-      expect(calls).toBe(accepted ? 2 : 3);
-      expect(outcome.diagnostics?.candidates[0]?.disposition).toBe(
-        accepted ? "supported" : "unresolved",
-      );
-      expect(outcome.incomplete).toBe(accepted ? undefined : true);
-      expect(JSON.stringify(outcome.diagnostics?.activity)).not.toContain("privateSource");
     }),
   );
 
@@ -1307,7 +1164,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
       Effect.gen(function* () {
         const perBatch = patchSize === 90_000 ? 2 : 1;
 
-        const changes = Array.from({ length: 8 }, (_, index) =>
+        const changes = Array.from({ length: 3 * perBatch }, (_, index) =>
           ReviewChange.make({
             path: `src/${String(index)}.ts`,
             patch: "@@ -0,0 +1 @@\n+".padEnd(patchSize, "x"),
@@ -1359,7 +1216,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
 
                   return discoveryResponse(
                     [ReviewFinding.make({ ...finding, path, line: 1 })],
-                    discovered === 3,
+                    discovered === 1,
                   );
                 }),
               ),
@@ -1372,8 +1229,10 @@ layer(testLayer)("mandatory candidate verification", (it) => {
         expect(outcome.diagnostics?.candidates.map(({ batch }) => batch)).toEqual([0, 1, 2]);
         expect(outcome.diagnostics?.patchesSupplied).toBe(3 * perBatch);
         expect(outcome.diagnostics?.verification).toBe(perBatch === 2 ? "complete" : "failed");
-        expect(outcome.pendingPaths).toEqual(changes.slice(3 * perBatch).map(({ path }) => path));
+        expect(outcome.pendingPaths).toBeUndefined();
         expect(outcome.incomplete).toBe(true);
+        expect(outcome.diagnostics?.discovery).toBe("incomplete");
+        expect(outcome.resolutions).toBeUndefined();
         expect(outcome.turns).toBe(perBatch === 2 ? 4 : 3);
         if (perBatch === 1) expect(outcome.exhausted).toBe("tokens");
         expect(

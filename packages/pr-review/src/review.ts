@@ -28,7 +28,6 @@ import {
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/unstable/ai";
 
 import {
-  MAX_REVIEW_SEARCH_RESULT_BYTES,
   ReviewContextError,
   ReviewFileList,
   ReviewLineMatches,
@@ -1047,101 +1046,37 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             );
           }),
           find_in_file: Effect.fn("Reviewer.findInFile")(function* (input) {
-            const revision =
-              input.revision === "base" ? request.baseRevision : request.headRevision;
+            let truncated = false;
 
             return yield* repository.findInFile(input).pipe(
-              Effect.flatMap((matches) =>
-                Effect.gen(function* () {
-                  const encoded = yield* Schema.encodeEffect(ReviewLineMatches)(matches).pipe(
-                    Effect.mapError(() =>
-                      ReviewContextError.make({ message: "Invalid in-file search result." }),
-                    ),
-                  );
+              Effect.tap((matches) =>
+                Schema.encodeEffect(ReviewLineMatches)(matches).pipe(
+                  Effect.mapError(() =>
+                    ReviewContextError.make({ message: "Invalid in-file search result." }),
+                  ),
+                  Effect.tap((encoded) =>
+                    Effect.sync(() => {
+                      const json = JSON.stringify(encoded);
 
-                  const fits = (json: string) =>
-                    new TextEncoder().encode(json).byteLength <= MAX_REVIEW_SEARCH_RESULT_BYTES &&
-                    applyToolResultBounds(json, policy.toolResultBounds) === json;
-
-                  const context = matches.context;
-                  const firstMatch = matches.lines[0];
-                  const contentLines = context?.content.split("\n") ?? [];
-                  const endLine = (context?.startLine ?? 1) + contentLines.length - 1;
-
-                  const contextMatches =
-                    context === undefined ||
-                    (firstMatch !== undefined &&
-                      firstMatch >= input.startLine &&
-                      matches.path === input.path &&
-                      matches.revision === input.revision &&
-                      context.path === input.path &&
-                      context.revision === input.revision &&
-                      context.startLine >= Math.max(1, firstMatch - 10) &&
-                      context.startLine <= firstMatch &&
-                      endLine >= firstMatch &&
-                      endLine <= Math.min(context.totalLines, firstMatch + 40) &&
-                      contentLines[firstMatch - context.startLine]?.includes(input.literal) ===
-                        true);
-
-                  if (contextMatches && fits(JSON.stringify(encoded))) return matches;
-
-                  // Preserve validated locations when optional context cannot be delivered safely.
-                  const locations = ReviewLineMatches.make({
-                    path: matches.path,
-                    revision: matches.revision,
-                    lines: matches.lines,
-                    truncated: matches.truncated,
-                  });
-
-                  const locationsEncoded = yield* Schema.encodeEffect(ReviewLineMatches)(
-                    locations,
-                  ).pipe(
-                    Effect.mapError(() =>
-                      ReviewContextError.make({ message: "Invalid in-file search result." }),
-                    ),
-                  );
-
-                  if (!fits(JSON.stringify(locationsEncoded)))
-                    return yield* ReviewContextError.make({
-                      message: "The encoded search locations exceed the tool-result bound.",
-                    });
-
-                  return locations;
-                }),
-              ),
-              Effect.onExit((exit) => {
-                const context = Exit.isSuccess(exit) ? exit.value.context : undefined;
-
-                const endLine =
-                  context === undefined
-                    ? undefined
-                    : context.startLine + context.content.split("\n").length - 1;
-
-                if (stage === "verification" && context !== undefined && endLine !== undefined)
-                  verifierReads.push(
-                    ReviewEvidence.make({
-                      kind: "source",
-                      revision,
-                      path: input.path,
-                      startLine: context.startLine,
-                      endLine,
+                      truncated = applyToolResultBounds(json, policy.toolResultBounds) !== json;
                     }),
-                  );
-
-                return recordActivity(
+                  ),
+                ),
+              ),
+              // Matching locations do not establish that any source text was read.
+              Effect.onExit((exit) =>
+                recordActivity(
                   ReviewActivity.make({
                     stage,
                     batch,
                     operation: "find_in_file",
-                    revision,
+                    revision:
+                      input.revision === "base" ? request.baseRevision : request.headRevision,
                     path: input.path,
                     requestedStartLine: input.startLine,
                     ...(Exit.isSuccess(exit) ? { returnedMatches: exit.value.lines.length } : {}),
-                    ...(context === undefined
-                      ? {}
-                      : { returnedStartLine: context.startLine, returnedEndLine: endLine }),
                     outcome: Exit.isSuccess(exit)
-                      ? exit.value.truncated
+                      ? exit.value.truncated || truncated
                         ? "truncated"
                         : "success"
                       : Cause.hasInterrupts(exit.cause)
@@ -1149,10 +1084,10 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
                         : Cause.hasDies(exit.cause)
                           ? "defect"
                           : "unavailable",
-                    truncated: Exit.isSuccess(exit) && exit.value.truncated,
+                    truncated: Exit.isSuccess(exit) && (exit.value.truncated || truncated),
                   }),
-                );
-              }),
+                ),
+              ),
             );
           }),
         });
@@ -1416,11 +1351,12 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         if (combined.length > 24)
           yield* Ref.update(droppedCandidateCount, (count) => count + combined.length - 24);
 
+        const droppedCount = yield* Ref.get(droppedCandidateCount);
+
+        const hostIncomplete = Result.isFailure(result) || invalidSubmission || droppedCount > 0;
+
         const incomplete =
-          Result.isFailure(result) ||
-          invalidSubmission ||
-          (yield* Ref.get(droppedCandidateCount)) > 0 ||
-          result.success.output.incomplete === true;
+          hostIncomplete || (Result.isSuccess(result) && result.success.output.incomplete === true);
 
         const exhausted: ReviewOutcome["exhausted"] = inputLimitExceeded
           ? "tokens"
@@ -1444,7 +1380,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
               ? "failure"
               : invalidSubmission
                 ? "invalid-submission"
-                : (yield* Ref.get(droppedCandidateCount)) > 0
+                : droppedCount > 0
                   ? "candidate-capacity"
                   : incomplete
                     ? "declared-incomplete"
@@ -1459,6 +1395,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         return {
           incomplete,
           exhausted,
+          stopDiscovery: hostIncomplete || exhausted !== undefined,
           resolutions:
             Result.isSuccess(result) && !incomplete && exhausted === undefined
               ? (result.success.output.resolutions ?? [])
@@ -1490,12 +1427,17 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           break;
         }
 
+        if ((yield* Ref.get(recorded)).length >= 24) {
+          incomplete = true;
+          break;
+        }
+
         // Verify prior blockers once, in the final batch under the same spending limit.
-        const batch = yield* runBatch(
+        const batch: Effect.Success<ReturnType<typeof runBatch>> = yield* runBatch(
           ReviewRequest.make({
             ...request,
             changes,
-            followUps: index === batches.length - 1 ? (request.followUps ?? []) : [],
+            followUps: !incomplete && index === batches.length - 1 ? (request.followUps ?? []) : [],
           }),
           index,
         );
@@ -1504,7 +1446,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         exhausted = batch.exhausted;
         protocolError = batch.protocolError;
         resolutions = batch.resolutions;
-        if (incomplete || exhausted !== undefined) break;
+        if (batch.stopDiscovery) break;
       }
       discovery = (yield* Ref.get(stages)).some(({ completion }) => completion === "failed")
         ? "failed"

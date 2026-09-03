@@ -14,7 +14,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import {
-  type AiError,
+  AiError,
   LanguageModel,
   Model,
   type Prompt,
@@ -195,7 +195,7 @@ const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop)
 
 layer(testLayer)("review output boundary", (it) => {
   it.effect(
-    "delivers a late definition with its search without another read or retaining source in activity",
+    "follows a literal match to a late definition without retaining the query or source in activity",
     () =>
       Effect.gen(function* () {
         const source = `${"unrelated\n".repeat(3_152)}const privateLookup = () => 1;\n`;
@@ -236,15 +236,28 @@ layer(testLayer)("review output boundary", (it) => {
                     revision: "base",
                     lines: [3_153],
                     truncated: false,
-                    context: {
-                      startLine: 3_143,
-                      totalLines: 3_153,
-                      content: `${"unrelated\n".repeat(10)}const privateLookup = () => 1;`,
-                    },
                   },
                 },
               ]);
+
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                {
+                  type: "tool-call",
+                  id: "definition",
+                  name: "read_file",
+                  params: {
+                    path: "src/provider.ts",
+                    revision: "base",
+                    startLine: 3_153,
+                    lineCount: 1,
+                  },
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ]);
             }
+            expect(sourceResults(prompt).at(-1)).toMatchObject({
+              result: { content: "const privateLookup = () => 1;" },
+            });
 
             return response({ findings: [] });
           }),
@@ -254,22 +267,21 @@ layer(testLayer)("review output boundary", (it) => {
             Effect.provideService(ReviewRepository, {
               ...emptyRepository,
               findInFile: (input) => ReviewLineMatches.fromText(input, source),
-              readFile: () => Effect.die("The search already delivered the relevant source"),
+              readFile: (input) => ReviewSource.fromText(input, source),
             }),
           );
 
-        expect(calls).toBe(2);
-        expect(outcome.diagnostics?.stages[0]?.toolCalls).toBe(2);
+        expect(calls).toBe(3);
+        expect(outcome.diagnostics?.stages[0]?.toolCalls).toBe(3);
         expect(outcome.diagnostics?.activity).toMatchObject([
           {
             operation: "find_in_file",
             revision: request.baseRevision,
             path: "src/provider.ts",
             returnedMatches: 1,
-            returnedStartLine: 3_143,
-            returnedEndLine: 3_153,
             outcome: "success",
           },
+          { operation: "read_file", returnedStartLine: 3_153, returnedEndLine: 3_153 },
         ]);
         expect(JSON.stringify(outcome.diagnostics?.activity)).not.toContain("privateLookup");
       }),
@@ -415,6 +427,160 @@ layer(testLayer)("review output boundary", (it) => {
       expect(outcome.report.summary).toContain("remaining change has not been verified");
       expect(outcome.diagnostics?.stages[0]?.declaredAssessment).toBe("incomplete");
     }),
+  );
+
+  it.effect(
+    "continues later batches without clearing incomplete coverage or closing blockers",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const input = ReviewRequest.make({ ...largeRequest(3, 256_000), followUps: [followUp] });
+
+        const findings = input.changes.map(({ path }) =>
+          ReviewFinding.make({ ...blocker, path, line: 1 }),
+        );
+
+        const outcome = yield* makeReviewer({
+          costControl: costControl(calls),
+          model: scriptedModel((prompt) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+                const current = findings[call - 1]!;
+
+                expect(reviewInput(prompt)).toContain(current.path);
+                expect(reviewInput(prompt)).not.toContain(followUp.description);
+
+                return response({
+                  findings: [submittedFinding(current, 1)],
+                  incomplete: call === 1,
+                });
+              }),
+            ),
+          ),
+        })
+          .review(input)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(yield* Ref.get(calls)).toBe(3);
+        expect(outcome.report.findings).toEqual(findings);
+        expect(outcome.incomplete).toBe(true);
+        expect(outcome.resolutions).toBeUndefined();
+        expect(outcome.pendingPaths).toBeUndefined();
+        expect(outcome.exhausted).toBeUndefined();
+        expect(outcome.diagnostics?.candidates.map(({ batch }) => batch)).toEqual([0, 1, 2]);
+        expect(outcome.diagnostics?.stages.map(({ completion }) => completion)).toEqual([
+          "incomplete",
+          "complete",
+          "complete",
+        ]);
+        expect(outcome.diagnostics?.stages[0]?.stopReason).toBe("declared-incomplete");
+      }),
+  );
+
+  it.effect.each([1, 2])(
+    "admits no later batch after exactly 24 accepted findings: %s batches",
+    (batchCount) =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const input = largeRequest(batchCount, 256_000);
+
+        const findings = Array.from({ length: 24 }, (_, index) =>
+          ReviewFinding.make({
+            ...blocker,
+            path: "src/part-0.ts",
+            line: 1,
+            title: `Independent cause ${String(index)}`,
+          }),
+        );
+
+        const outcome = yield* makeReviewer({
+          costControl: costControl(calls),
+          model: scriptedModel(() =>
+            Stream.unwrap(
+              Ref.update(calls, (count) => count + 1).pipe(
+                Effect.as(
+                  response({ findings: findings.map((entry) => submittedFinding(entry, 1)) }),
+                ),
+              ),
+            ),
+          ),
+        })
+          .review(input)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(yield* Ref.get(calls)).toBe(1);
+        expect(outcome.report.findings).toEqual(findings);
+        expect(outcome.incomplete).toBe(batchCount === 1 ? undefined : true);
+        expect(outcome.pendingPaths).toEqual(batchCount === 1 ? undefined : ["src/part-1.ts"]);
+        expect(outcome.diagnostics?.droppedCandidateCount).toBe(0);
+        expect(outcome.diagnostics?.stages).toMatchObject([
+          { completion: "complete", declaredAssessment: "complete" },
+        ]);
+      }),
+  );
+
+  it.effect.each(["provider", "native", "finding", "resolution", "cost"] as const)(
+    "stops later batches after %s failure despite an earlier incomplete assessment",
+    (failure) =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const control = costControl(calls);
+        const first = ReviewFinding.make({ ...blocker, path: "src/part-0.ts", line: 1 });
+
+        const outcome = yield* makeReviewer({
+          costControl: {
+            snapshot: control.snapshot.pipe(
+              Effect.map((snapshot) =>
+                ReviewCostSnapshot.make({
+                  ...snapshot,
+                  stopped: failure === "cost" && snapshot.modelCalls >= 2,
+                }),
+              ),
+            ),
+          },
+          model: scriptedModel(() =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+
+                if (call === 1)
+                  return response({ findings: [submittedFinding(first, 1)], incomplete: true });
+                if (failure === "provider")
+                  return Stream.fail(
+                    AiError.make({
+                      module: "scripted",
+                      method: "streamText",
+                      reason: new AiError.RateLimitError({}),
+                    }),
+                  );
+                if (failure === "native") return response({ malformed: true });
+
+                return response({
+                  findings: failure === "finding" ? [submittedFinding(blocker, 1)] : [],
+                  ...(failure === "resolution" ? { resolutions: [resolution] } : {}),
+                });
+              }),
+            ),
+          ),
+        })
+          .review(largeRequest(3, 256_000))
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(yield* Ref.get(calls)).toBe(2);
+        expect(outcome.report.findings).toEqual([first]);
+        expect(outcome.incomplete).toBe(true);
+        expect(outcome.resolutions).toBeUndefined();
+        expect(outcome.pendingPaths).toEqual(["src/part-2.ts"]);
+        expect(outcome.exhausted).toBe(failure === "cost" ? "cost" : undefined);
+        expect(outcome.diagnostics?.stages.at(-1)?.stopReason).toBe(
+          failure === "cost"
+            ? "cost"
+            : failure === "provider" || failure === "native"
+              ? "failure"
+              : "invalid-submission",
+        );
+      }),
   );
 
   it.effect("PRR-002 completes one native review and keeps independent same-line blockers", () =>
@@ -1015,7 +1181,8 @@ new mode 100755`;
             Effect.gen(function* () {
               const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
 
-              if (call === 2 || typeof choice === "object") return response({ findings: [] });
+              if (call === 2 || typeof choice === "object")
+                return response({ findings: [], incomplete: call === 2 });
 
               return Stream.fromIterable<Response.StreamPartEncoded>([
                 ...Array.from({ length: 32 }, (_, index): Response.StreamPartEncoded => ({
@@ -1071,7 +1238,7 @@ new mode 100755`;
             yield* Deferred.succeed(call === 1 ? firstStarted : secondStarted, undefined);
 
             return Stream.fromEffect(Effect.sleep("4 minutes")).pipe(
-              Stream.flatMap(() => response({ findings: [] })),
+              Stream.flatMap(() => response({ findings: [], incomplete: call === 1 })),
               Stream.ensuring(Ref.update(finalized, (count) => count + 1)),
             );
           }),
@@ -1110,7 +1277,7 @@ new mode 100755`;
 
               const stream =
                 call === 1
-                  ? response({ findings: [] })
+                  ? response({ findings: [], incomplete: true })
                   : Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
                       Stream.flatMap(() =>
                         failure === "interrupt" ? Stream.never : Stream.die("batch defect"),

@@ -12,14 +12,7 @@ one authorized file. Use `ReviewLineMatches.fromText` for the shared search boun
 and 1,000,000 lines, and results contain at most 20 distinct line numbers. Resume after the last
 line when `truncated` is true. An empty result means no match from `startLine`; unavailable or
 oversized source fails with `ReviewContextError`. Search locations contain no source text and
-do not satisfy a source-evidence citation. An optional `context: ReviewSource` returns complete
-source lines around the first match: up to 10 preceding and 40 following lines, shortened to keep
-the entire encoded result within 8 KiB. Context may be omitted, including when the matching line
-alone is too large. It may not cover other matches, complete definitions, or relevant guards;
-use `readFile` for missing source. `truncated` still refers only to additional matching locations.
-Existing hosts may continue to return locations without context. The reviewer discards context
-that does not match the request or fit its output bounds; verifier citations may use only source
-ranges delivered intact during that verifier run.
+do not satisfy a source-evidence citation; follow relevant matches with `readFile`.
 
 ```ts
 const reviewer = makeReviewer({ model, guidance, estimateCostMicrousd, costControl });
@@ -38,6 +31,11 @@ The host owns credentials, source read limits, spending admission through `costC
 publication. Incomplete or exhausted results, excluded paths, and pending patches mean unfinished
 coverage. Recorded findings survive expected failures; defects and interruption propagate after
 cleanup. Only explicit resolutions from a complete review can close prior blockers.
+
+With `costControl`, a model-declared incomplete batch does not prevent later patch batches from
+running within the same limits. The review stays incomplete and withholds all resolutions.
+Discovery stops on failures, invalid submissions, exhausted budgets, or 24 accepted findings
+before another batch. Unstarted patches remain pending; incomplete batches are not retried.
 
 Final submissions retain findings that pass host validation, up to the existing 24-finding limit.
 Rejected findings or an invalid resolution array make the review incomplete and withhold all
