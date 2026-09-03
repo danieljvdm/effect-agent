@@ -753,7 +753,11 @@ const validatedFindings = Effect.fn("validatedFindings")(function* (
   });
 });
 
-/** A bounded review, with sequential patch batches when a shared spending ledger is supplied. */
+/**
+ * A bounded review, with sequential patch batches when a shared spending ledger is supplied.
+ * Final submissions retain host-validated findings; rejected entries or resolutions make the outcome
+ * incomplete and withhold every resolution, including when all submitted findings are rejected.
+ */
 export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
   options: ReviewerOptions<Provider, ModelProvides, ModelRequires>,
 ) => {
@@ -1311,52 +1315,25 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         }
 
         let invalidSubmission = false;
+        let submitted: ReadonlyArray<ReviewFinding> = [];
 
-        const submitted = Result.isSuccess(result)
-          ? yield* Effect.gen(function* () {
-              const report =
-                strategy === "baseline"
-                  ? yield* validatedFindings(batch, result.success.output.findings)
-                  : yield* Effect.gen(function* () {
-                      const entries = yield* Effect.forEach(
-                        result.success.output.findings,
-                        (finding) => validatedFindings(batch, [finding]).pipe(Effect.result),
-                      );
+        if (Result.isSuccess(result)) {
+          const entries = yield* Effect.forEach(result.success.output.findings, (finding) =>
+            validatedFindings(batch, [finding]).pipe(Effect.result),
+          );
 
-                      invalidSubmission = entries.some(Result.isFailure);
+          const resolutions = yield* validatedResolutions(
+            batch,
+            result.success.output.resolutions ?? [],
+          ).pipe(Effect.result);
 
-                      return ReviewReport.make({
-                        summary: "Validated candidate findings.",
-                        findings: entries.flatMap((entry) =>
-                          Result.isSuccess(entry) ? entry.success.findings : [],
-                        ),
-                      });
-                    });
+          invalidSubmission = entries.some(Result.isFailure) || Result.isFailure(resolutions);
+          submitted = entries.flatMap((entry) =>
+            Result.isSuccess(entry) ? entry.success.findings : [],
+          );
+        }
 
-              if (strategy === "baseline")
-                yield* validatedResolutions(batch, result.success.output.resolutions ?? []);
-              else if (
-                Result.isFailure(
-                  yield* validatedResolutions(batch, result.success.output.resolutions ?? []).pipe(
-                    Effect.result,
-                  ),
-                )
-              )
-                invalidSubmission = true;
-
-              return report;
-            }).pipe(Effect.result)
-          : Result.succeed(
-              ReviewReport.make({ summary: "Research stopped before completion.", findings: [] }),
-            );
-
-        if (Result.isFailure(submitted) && !preserveAttempt) return yield* submitted.failure;
-
-        const failure = Result.isFailure(result)
-          ? result.failure
-          : Result.isFailure(submitted)
-            ? submitted.failure
-            : undefined;
+        const failure = Result.isFailure(result) ? result.failure : undefined;
 
         if (failure !== undefined)
           yield* Effect.logWarning("Review stopped before completion", {
@@ -1364,12 +1341,10 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           });
         const combined = [...saved];
 
-        if (Result.isSuccess(submitted)) {
-          for (const finding of submitted.success.findings) {
-            if (!combined.some((prior) => findingKey(prior) === findingKey(finding))) {
-              combined.push(finding);
-              candidateBatches.set(findingKey(finding), batchIndex);
-            }
+        for (const finding of submitted) {
+          if (!combined.some((prior) => findingKey(prior) === findingKey(finding))) {
+            combined.push(finding);
+            candidateBatches.set(findingKey(finding), batchIndex);
           }
         }
 
@@ -1378,7 +1353,6 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
 
         const incomplete =
           Result.isFailure(result) ||
-          Result.isFailure(submitted) ||
           invalidSubmission ||
           (yield* Ref.get(droppedCandidateCount)) > 0 ||
           result.success.output.incomplete === true;
@@ -1403,11 +1377,13 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           exhausted ??
             (failure !== undefined
               ? "failure"
-              : (yield* Ref.get(droppedCandidateCount)) > 0
-                ? "candidate-capacity"
-                : incomplete
-                  ? "declared-incomplete"
-                  : undefined),
+              : invalidSubmission
+                ? "invalid-submission"
+                : (yield* Ref.get(droppedCandidateCount)) > 0
+                  ? "candidate-capacity"
+                  : incomplete
+                    ? "declared-incomplete"
+                    : undefined),
           Result.isSuccess(result)
             ? result.success.output.incomplete === true
               ? "incomplete"

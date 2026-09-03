@@ -344,7 +344,7 @@ layer(testLayer)("review output boundary", (it) => {
   );
 
   it.effect.each(["unknown", "duplicate", "out-of-scope"] as const)(
-    "rejects invalid resolutions without widening new-finding scope: %s",
+    "retains valid new findings and withholds resolutions after host rejection: %s",
     (mode) =>
       Effect.gen(function* () {
         const outcome = yield* makeReviewer({
@@ -353,15 +353,16 @@ layer(testLayer)("review output boundary", (it) => {
               findings:
                 mode === "out-of-scope"
                   ? [
+                      submittedFinding(blocker, 1),
                       submittedFinding(
                         ReviewFinding.make({ ...blocker, path: "src/unchanged.ts" }),
                         1,
                       ),
                     ]
-                  : [],
+                  : [submittedFinding(blocker, 1)],
               resolutions:
                 mode === "unknown"
-                  ? [{ ...resolution, id: "forged" }]
+                  ? [resolution, { ...resolution, id: "forged" }]
                   : mode === "duplicate"
                     ? [resolution, resolution]
                     : [resolution],
@@ -369,9 +370,16 @@ layer(testLayer)("review output boundary", (it) => {
           ),
         })
           .review(ReviewRequest.make({ ...request, followUps: [followUp] }))
-          .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.flip);
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-        expect(outcome._tag).toBe("ReviewVerificationError");
+        expect(outcome.report.findings).toEqual([blocker]);
+        expect(outcome.incomplete).toBe(true);
+        expect(outcome.resolutions).toBeUndefined();
+        expect(outcome.diagnostics?.stages[0]).toMatchObject({
+          completion: "incomplete",
+          stopReason: "invalid-submission",
+          declaredAssessment: "complete",
+        });
       }),
   );
 
@@ -756,7 +764,7 @@ layer(testLayer)("review output boundary", (it) => {
       }),
   );
 
-  it.effect("PRR-002 rejects a finding that does not name a causative changed path", () =>
+  it.effect("PRR-002 returns empty incomplete coverage for an invalid-only final submission", () =>
     Effect.gen(function* () {
       const model = scriptedModel(() =>
         response({
@@ -766,11 +774,18 @@ layer(testLayer)("review output boundary", (it) => {
         }),
       );
 
-      const result = yield* makeReviewer({ model })
+      const outcome = yield* makeReviewer({ model })
         .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewVerificationError");
+      expect(outcome.report.findings).toEqual([]);
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.resolutions).toBeUndefined();
+      expect(outcome.diagnostics?.stages[0]).toMatchObject({
+        completion: "incomplete",
+        stopReason: "invalid-submission",
+        declaredAssessment: "complete",
+      });
     }),
   );
 

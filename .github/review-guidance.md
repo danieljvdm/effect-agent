@@ -6,6 +6,7 @@ Review this Effect v4 framework for concrete defects, not style.
 - The dependency direction is `core <- engine <- capabilities`, `core <- sandbox <- sandbox-local`, `core <- engine <- thread <- storage`, with platform and consumer packages outermost.
 - Use Effect AI primitives directly. Provider values are never canonical durable records.
 - The canonical log is append-only; projections are disposable. Never claim exactly-once external effects or automatically replay an unresolved ordinary tool call.
+- This repository is in private development. Persisted data may be reset across incompatible changes; migrations and backward-compatible decoding are not required. Check that current writers produce decodable records and incompatible data fails clearly.
 - Bound concurrency and use structured Effect concurrency. Security decisions fail closed; model output is untrusted.
 - Flag a new abstraction only when deleting it would remove real ownership, policy, or behavior.
 - Tests must cover a concrete regression. Do not request speculative cleanup or unrelated hardening.

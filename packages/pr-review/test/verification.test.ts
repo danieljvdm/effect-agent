@@ -795,28 +795,46 @@ layer(testLayer)("mandatory candidate verification", (it) => {
       }),
   );
 
-  it.effect(
-    "keeps valid completion-only candidates when another finding names an unknown path",
-    () =>
+  it.effect.each([
+    { strategy: "baseline", invalidPosition: "first" },
+    { strategy: "baseline", invalidPosition: "last" },
+    { strategy: "verified", invalidPosition: "first" },
+    { strategy: "verified", invalidPosition: "last" },
+  ] as const)(
+    "keeps valid final candidates with $strategy and an invalid finding $invalidPosition",
+    ({ strategy, invalidPosition }) =>
       Effect.gen(function* () {
+        const invalid = ReviewFinding.make({ ...finding, path: "unknown.ts" });
+        let calls = 0;
+
         const outcome = yield* makeReviewer({
-          strategy: "verified",
-          model: scriptedModel((prompt, tools) =>
-            !isVerifier(tools)
-              ? discoveryResponse([ReviewFinding.make({ ...finding, path: "unknown.ts" }), finding])
+          strategy,
+          model: scriptedModel((prompt, tools) => {
+            calls += 1;
+
+            return !isVerifier(tools)
+              ? discoveryResponse(
+                  invalidPosition === "first" ? [invalid, finding] : [finding, invalid],
+                )
               : toolResponse("submit_verification", {
                   decisions: originalCandidates(prompt).map((candidate) => decision(candidate)),
-                }),
-          ),
+                });
+          }),
         })
           .review(request)
           .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
         expect(outcome.report.findings).toEqual([finding]);
         expect(outcome.incomplete).toBe(true);
+        expect(calls).toBe(strategy === "verified" ? 2 : 1);
         expect(outcome.diagnostics).toMatchObject({
           discovery: "incomplete",
-          verification: "complete",
+          verification: strategy === "verified" ? "complete" : "not-requested",
+        });
+        expect(outcome.diagnostics?.stages[0]).toMatchObject({
+          completion: "incomplete",
+          stopReason: "invalid-submission",
+          declaredAssessment: "complete",
         });
       }),
   );

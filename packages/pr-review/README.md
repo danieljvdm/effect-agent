@@ -32,6 +32,12 @@ publication. Incomplete or exhausted results, excluded paths, and pending patche
 coverage. Recorded findings survive expected failures; defects and interruption propagate after
 cleanup. Only explicit resolutions from a complete review can close prior blockers.
 
+Final submissions retain findings that pass host validation, up to the existing 24-finding limit.
+Rejected findings or an invalid resolution array make the review incomplete and withhold all
+resolutions. With no recorded findings, a structurally valid submission containing only rejected
+findings returns an empty incomplete outcome, including with an uncapped baseline; malformed native
+output is still rejected without retrying.
+
 `baseline` is the default. Experimental `strategy: "verified"` adds a fresh verifier within the
 same budget and limits. Supported findings publish unchanged; refuted findings stay in diagnostics;
 unresolved findings remain visibly unverified and make the review incomplete. Only supported
