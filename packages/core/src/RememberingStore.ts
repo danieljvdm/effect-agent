@@ -263,6 +263,8 @@ export class MutationFailpoint extends Context.Service<
 }
 
 /** Host-owned durable admission/checkpoint port. It is not a scheduler or profile store.
+ * The explicit port binds an existing host job transaction; its Effects retain their E and R.
+ * Hosts may acquire it from their own Context service. The protocol never provides its requirements.
  *
  * admit atomically binds the complete intent, receipt, source authority, and ready obligation.
  * Identical retries return duplicate; reusing an id with different intent fails conflict.

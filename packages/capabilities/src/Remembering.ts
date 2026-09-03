@@ -235,6 +235,8 @@ export const invalidate = Effect.fn("Remembering.invalidate")(function* <E, R>(
 /** Define one application learner. Extraction may call native Effect AI LanguageModel directly;
  * callback/model/schema requirements and errors remain in the returned Effect. No model owns
  * authority, source loading, fact acceptance, profile representation or sharing policy.
+ * These are Effect-composition callbacks: they can yield application Context services, and advance
+ * retains every callback's E/R. The framework neither acquires nor provides application policy.
  *
  * advance is finite: it extracts, prepares, dispatches, or rebases at most once. The host calls it
  * again when ready. A proposal is persisted before any target read; a complete command is saved

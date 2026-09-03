@@ -146,6 +146,8 @@ export const learner = Remembering.make({
     const id = JSON.stringify([intent.source.key.namespace.address, intent.source.key.id]);
     const previous = existing.entries.find((entry) => entry.id === id);
 
+    // A full profile rejects a new contribution without evicting unrelated entries.
+    if (previous === undefined && existing.entries.length >= 32) return { _tag: "Reject" } as const;
     if (previous?.provenance._tag === "Human") return { _tag: "NoChange" } as const;
     if (previous?.provenance._tag === "Source") {
       const position = RememberingStore.comparePosition(
