@@ -47,9 +47,9 @@ import {
   Stream,
 } from "effect";
 
-import { MemoryStorageLive } from "../src/index.ts";
+import { MemoryThreadStoreLive } from "../src/index.ts";
 
-const testLayer = MemoryStorageLive.pipe(Layer.provide(NodeCrypto.layer));
+const testLayer = MemoryThreadStoreLive.pipe(Layer.provide(NodeCrypto.layer));
 
 const threadId = Schema.decodeSync(ThreadId)("thread-memory-1");
 const runId = Schema.decodeSync(RunId)("run-memory-1");

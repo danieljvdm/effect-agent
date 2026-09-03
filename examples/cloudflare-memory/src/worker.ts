@@ -1,5 +1,4 @@
-import { Memory } from "@effect-agent/capabilities";
-import { MemoryAccess } from "@effect-agent/core";
+import { Memory, MemoryAccess } from "@effect-agent/core";
 import {
   MemoryObject,
   CloudflareMemoryClient,

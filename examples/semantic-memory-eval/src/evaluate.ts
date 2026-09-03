@@ -1,12 +1,12 @@
 import {
-  MemoryAccess,
   SemanticIndexLimits,
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  Memory,
 } from "@effect-agent/capabilities";
 import {
+  Memory,
+  MemoryAccess,
   MemoryKey,
   MemoryReader,
   MemoryRecallLimits,

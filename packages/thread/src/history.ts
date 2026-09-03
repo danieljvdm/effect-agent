@@ -1,5 +1,5 @@
 /** Persistent history without durable admission or recovery coordination. */
-export { ThreadHistory, ThreadHistoryError } from "@effect-agent/engine";
+export { ThreadHistory, ThreadHistoryError, type ThreadHistoryRun } from "@effect-agent/engine";
 export { PersistentHistory } from "./persistent-history.ts";
 
 export {

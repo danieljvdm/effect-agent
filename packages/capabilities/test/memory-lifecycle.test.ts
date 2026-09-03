@@ -1,4 +1,7 @@
 import {
+  MemoryAccess,
+  Memory,
+  revalidateMemoryLookup,
   MemoryNamespace,
   MemoryScope,
   ActiveMemoryDocument,
@@ -24,8 +27,6 @@ import {
   Ref,
 } from "effect";
 import { TestClock } from "effect/testing";
-
-import { MemoryAccess, Memory, revalidateMemoryLookup } from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

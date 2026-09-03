@@ -104,8 +104,8 @@ unknown.
 This source reads a known Markdown note without a store or adapter:
 
 ```ts twoslash
-import { Memory } from "@effect-agent/capabilities";
 import {
+  Memory,
   MemoryAttribution,
   MemoryContent,
   type MemoryLookup,
@@ -230,8 +230,12 @@ Keep authorization, credentials, and query policy inside an application service.
 one read method; it does not create a durable copy, write to the corpus, or create embeddings:
 
 ```ts twoslash
-import { Memory } from "@effect-agent/capabilities";
-import { type MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "@effect-agent/core";
+import {
+  Memory,
+  type MemoryLookup,
+  MemoryRecallError,
+  MemoryRecallLimits,
+} from "@effect-agent/core";
 import { RunContextPreparation, type RunTransientContextHook } from "@effect-agent/engine";
 import { Context, Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
@@ -307,8 +311,7 @@ and identity type. Definitions with the same identity fields but different names
 not interchangeable.
 
 ```ts twoslash
-import { MemoryKey, MemoryNamespace, MemoryScope } from "@effect-agent/core";
-import { MemoryAccess } from "@effect-agent/capabilities";
+import { MemoryAccess, MemoryKey, MemoryNamespace, MemoryScope } from "@effect-agent/core";
 import { Schema } from "effect";
 
 const TenantId = Schema.NonEmptyString.pipe(Schema.brand("app/TenantId"));
@@ -689,14 +692,14 @@ passage retrieval instead of this index.
 
 ```ts twoslash
 import {
-  MemoryAccess,
   SemanticIndexLimits,
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  Memory,
 } from "@effect-agent/capabilities";
 import {
+  Memory,
+  MemoryAccess,
   MemoryKey,
   MemoryNamespace,
   MemoryRecallLimits,

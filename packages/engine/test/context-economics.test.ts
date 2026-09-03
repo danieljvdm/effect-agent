@@ -25,9 +25,9 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
+import { formatRunStatus } from "../src/agent-runtime.ts";
 import {
   AgentRuntime,
-  formatRunStatus,
   type RunDurabilityHook,
   type RunTurnResume,
   type RunUsageDelta,

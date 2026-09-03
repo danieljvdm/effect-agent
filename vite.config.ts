@@ -114,7 +114,10 @@ export default defineConfig({
       typeAware: true,
       typeCheck: true,
     },
-    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+    jsPlugins: [
+      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
+      { name: "exports", specifier: "./oxlint/plugin-exports.ts" },
+    ],
     rules: {
       "import/no-duplicates": "warn",
       "react-hooks/exhaustive-deps": "warn",
@@ -128,6 +131,35 @@ export default defineConfig({
       "vitest/valid-title": "warn",
       "vite-plus/prefer-vite-plus-imports": "error",
     },
+    overrides: [
+      {
+        files: ["packages/*/src/**/*.ts"],
+        rules: {
+          "exports/no-internal-barrel": "error",
+          "exports/no-self-barrel-import": "error",
+        },
+      },
+      {
+        files: ["packages/{core,engine,capabilities}/src/**/*.ts"],
+        rules: { "exports/no-package-reexports": "error" },
+      },
+      {
+        // Only published aggregation entries may be pure forwarding modules.
+        // Keep this list aligned with package.json exports when adding one.
+        files: [
+          "packages/*/src/index.ts",
+          "packages/{thread,storage-memory,storage-sqlite,storage-cloudflare}/src/testing.ts",
+          "packages/thread/src/{history,durability}.ts",
+          "packages/testing/src/{certification,chaos,code-executor,docs-researcher,travel-planner}.ts",
+          "packages/platform-cloudflare/src/protected-browser.ts",
+        ],
+        rules: { "exports/no-internal-barrel": "off" },
+      },
+      {
+        files: ["packages/*/src/index.ts"],
+        rules: { "exports/no-entrypoint-implementation": "error" },
+      },
+    ],
   },
   pack: {
     dts: true,

@@ -122,9 +122,6 @@ export interface ContextTransform {
   ) => Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError>;
 }
 
-/** The shared interpreter compaction contract; artifacts below remain explicit data utilities. */
-export { ContextCompactor } from "@effect-agent/engine";
-
 const messageText = (message: Prompt.Message): string => {
   if (message.role === "system") return message.content;
 

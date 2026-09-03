@@ -244,6 +244,35 @@ Get owner agreement before adding a new framework concern.
 `vp run build` dispatches `vp pack`. A package-level Vite config overrides zero-config pack
 defaults, so declare `dts` and `sourcemap` there when needed.
 
+## Exports and entry points
+
+The pinned Effect package uses module namespace barrels, such as `export * as Schema`,
+and supports direct module imports while excluding internal paths. Effect Agent currently
+uses flat named imports. Keep each shared symbol owned by one package so the umbrella can
+combine core, engine, and capabilities without resolving duplicate declarations.
+
+- Keep interpreter implementations in named modules and select their public exports in
+  `src/index.ts`. An exported helper needed by a sibling file is not automatically public API.
+- Import sibling implementation modules directly. Do not route internal imports through the
+  package root or add a file whose only purpose is to forward another barrel.
+- Keep specialized entry points when they isolate dependencies or select a supported concern,
+  such as `/testing`, `/history`, and browser adapters. Storage facades may expose a shared
+  implementation from an inward package; capabilities should not alias core or engine APIs.
+- Keep `package.json` exports explicit. Export targets must be flat `./src/<name>.ts` files
+  with matching pack entries, as required by the release publisher. Source files outside those
+  entries remain private even when their declarations use `export` for sibling imports.
+
+See the [package map](reference/packages.md#public-imports) for API ownership and import changes.
+
+Oxlint enforces these structural boundaries through `oxlint/plugin-exports.ts` during `vp lint`,
+`vp check`, and the pre-commit hook. Package source cannot consist only of re-exports outside the
+public barrel allowlist in `vite.config.ts`, import its own package or a relative `index` barrel,
+or forward another framework package's bindings from core, engine, or capabilities.
+Package-root `index.ts` files must remain export lists, with implementations in named modules.
+When adding a public aggregation entry, update that allowlist alongside the package exports and
+pack entries. Choosing which implementation helpers belong in the public API remains a review
+decision; these rules do not determine API intent.
+
 ## CI and hooks
 
 PR CI runs static checks, tests, and builds, then reports the required `ready` result.

@@ -1,4 +1,7 @@
 import {
+  MemoryAccess,
+  Memory,
+  type SemanticMemoryError,
   MemoryNamespace,
   MemoryScope,
   ActiveMemoryDocument,
@@ -31,13 +34,10 @@ import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
 
 import {
-  MemoryAccess,
   SemanticIndexLimits,
-  type SemanticMemoryError,
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  Memory,
 } from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({

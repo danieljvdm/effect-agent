@@ -13,6 +13,31 @@ this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.112
 The Cloudflare platform requires `effect@^4.0.0-rc.112` and `effect-cf@^0.40.0`.
 Before 1.0, APIs and stored data may change without a migration path.
 
+## Public imports
+
+`effect-agent` provides flat named imports for core, engine, and capabilities.
+The constituent packages export the APIs they own. Import shared memory and delegation
+contracts from `@effect-agent/core`, and runtime contracts from `@effect-agent/engine`.
+
+| API                                                                                                    | Owning package         |
+| ------------------------------------------------------------------------------------------------------ | ---------------------- |
+| `Memory`, `MemoryRecallSource`, `MemorySourceOutcome`, `RecalledMemory`                                | `@effect-agent/core`   |
+| `MemoryAccess`, `revalidateMemoryLookup`, `SemanticMemoryError`                                        | `@effect-agent/core`   |
+| `SubagentDelegationCaps`, `SubagentReservationAmounts`, `delegationToolPrefix`, `isDelegationToolName` | `@effect-agent/core`   |
+| `ContextCompactor`, `CommandDrainPolicy`, `RunSchedulingOverride`                                      | `@effect-agent/engine` |
+
+These names remain available from `effect-agent`; they are no longer forwarded through
+`@effect-agent/capabilities`. `CommandDrainPolicy` and `RunSchedulingOverride` each expose a
+Schema and its inferred type from the engine. Use `MemoryThreadStoreLive` from
+`@effect-agent/storage-memory` in place of the removed `MemoryStorageLive` alias.
+
+The engine and umbrella no longer export `initialCompactionState`, `buildCompactedView`,
+`COMPACTION_INSTRUCTION`, `isContextOverflowMessage`, `formatRunStatus`, or `RunStatusView`.
+These are interpreter details.
+Use `ContextCompactor` to customize compaction and `AgentPolicy.runStatus` to configure status
+messages. Token estimators and the `ContextCompactionState` type remain public for compactor
+implementations.
+
 ## Find a capability {#capability-inventory}
 
 | Need                                    | Guide                                                           | Your application supplies                          |
@@ -78,10 +103,9 @@ recovered tool failures locally. Observations are not stored or exported automat
 
 ### `@effect-agent/capabilities`
 
-Adds thread queues, approval, audit, budgets, context utilities, scheduling
-overrides, MCP, redaction, and subagents to the engine. Re-exports core's `Memory.recall`, which reads ranked
-`MemoryPassage` values from host-selected sources and returns a transient `RecalledMemory` view;
-it supplies no store. Optional `indexMemorySource` and `querySemanticMemory` use upstream
+Adds thread queues, approval, audit, budgets, context utilities,
+MCP, redaction, and subagents to the engine.
+Optional `indexMemorySource` and `querySemanticMemory` use upstream
 Effect AI `EmbeddingModel` with an application-selected index and authoritative reader. See
 [semantic retrieval](../guide/context-management#semantic-memory). [`CodeMode.make`](../guide/code-mode) exposes generated
 JavaScript execution over an explicit read-only Tool allowlist. `WebCapture.make`,

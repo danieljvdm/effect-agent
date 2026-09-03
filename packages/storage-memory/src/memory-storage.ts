@@ -623,10 +623,8 @@ const makeThreadStore = Effect.gen(function* () {
   });
 });
 
-export const MemoryThreadStoreLive = Layer.effect(ThreadStore, makeThreadStore);
-
 /**
  * In-memory canonical Thread persistence. Durable accepted work is served by the separate
  * SubmissionLedger port; this Layer deliberately provides only the ThreadStore.
  */
-export const MemoryStorageLive = MemoryThreadStoreLive;
+export const MemoryThreadStoreLive = Layer.effect(ThreadStore, makeThreadStore);

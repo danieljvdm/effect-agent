@@ -1,4 +1,5 @@
 import { ThreadId, RunId } from "@effect-agent/core";
+import type { CommandDrainPolicy } from "@effect-agent/engine";
 import { Effect, Option, Queue, Schema } from "effect";
 
 import { ThreadText } from "./thread.ts";
@@ -27,10 +28,6 @@ export class FollowUpCommand extends Schema.TaggedClass<FollowUpCommand>()("Foll
 
 export const RunCommand = Schema.Union([SteeringCommand, FollowUpCommand]);
 export type RunCommand = typeof RunCommand.Type;
-
-/** The default drains one command; `all` is explicit so batching is never accidental. */
-export const CommandDrainPolicy = Schema.Literals(["one", "all"]);
-export type CommandDrainPolicy = typeof CommandDrainPolicy.Type;
 
 /** Queue capacity is finite and uses Queue's suspending backpressure strategy. */
 export class RunCommandQueueConfig extends Schema.Class<RunCommandQueueConfig>(

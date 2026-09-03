@@ -1,5 +1,6 @@
-import { Memory, revalidateMemoryLookup } from "@effect-agent/capabilities";
 import {
+  Memory,
+  revalidateMemoryLookup,
   MemoryNamespace,
   MemoryScope,
   Agent,

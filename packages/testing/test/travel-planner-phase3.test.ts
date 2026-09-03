@@ -1,4 +1,4 @@
-import { MemoryStorageLive } from "@effect-agent/storage-memory";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory";
 import { layer as sqliteStorageLayer } from "@effect-agent/storage-sqlite";
 import {
   expectedTravelPlan,
@@ -153,7 +153,7 @@ const inspectPersistentTravelPlanner = Effect.gen(function* () {
   };
 });
 
-const memoryLayer = MemoryStorageLive.pipe(Layer.provide(NodeCrypto.layer));
+const memoryLayer = MemoryThreadStoreLive.pipe(Layer.provide(NodeCrypto.layer));
 
 const withTemporaryDatabase = <A, E>(use: (filename: string) => Effect.Effect<A, E>) =>
   Effect.scoped(

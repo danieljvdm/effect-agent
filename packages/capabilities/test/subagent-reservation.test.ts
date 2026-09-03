@@ -1,4 +1,9 @@
-import { RunId, ToolCallId } from "@effect-agent/core";
+import {
+  RunId,
+  ToolCallId,
+  SubagentDelegationCaps,
+  SubagentReservationAmounts,
+} from "@effect-agent/core";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Schema } from "effect";
 import { FastCheck } from "effect/testing";
@@ -6,13 +11,11 @@ import { FastCheck } from "effect/testing";
 import {
   makeBudgetReservationId,
   SubagentBudgetExhausted,
-  SubagentDelegationCaps,
   SubagentObservedUsage,
   SubagentParentBudgetActive,
   SubagentParentBudgetConflict,
   SubagentParentBudgetView,
   SubagentParentBudgetUnknown,
-  SubagentReservationAmounts,
   SubagentReservationConflict,
   SubagentReservationRequest,
   SubagentReservations,

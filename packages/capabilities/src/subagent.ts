@@ -12,6 +12,8 @@ import {
   isDelegationToolName,
   RunId,
   SubmissionId,
+  SubagentDelegationCaps,
+  SubagentReservationAmounts,
   ToolCallId,
 } from "@effect-agent/core";
 import {
@@ -43,9 +45,7 @@ import {
   type BudgetReservationId,
   makeBudgetReservationId,
   SubagentBudgetExhausted,
-  SubagentDelegationCaps,
   SubagentObservedUsage,
-  SubagentReservationAmounts,
   SubagentReservationRequest,
   SubagentReservations,
 } from "./subagent-reservation.ts";
@@ -201,12 +201,6 @@ export class SubagentExecutionFailure extends Schema.TaggedError<SubagentExecuti
     message: BoundedFailureText,
   },
 ) {}
-
-/**
- * Core-owned authoring conventions, re-exported for existing consumers.
- * Replay authority comes from DelegationTool and canonical preparation, never the name.
- */
-export { delegationToolPrefix, isDelegationToolName } from "@effect-agent/core";
 
 const DelegationToolName = Schema.String.pipe(
   Schema.refine(

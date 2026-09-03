@@ -4,7 +4,6 @@ import {
   SubagentDelegationCaps,
   SubagentReservationAmounts,
 } from "@effect-agent/core";
-export { SubagentDelegationCaps, SubagentReservationAmounts } from "@effect-agent/core";
 import { Context, Effect, Layer, Ref, Schema, type Scope, Semaphore } from "effect";
 
 const Natural = Schema.Natural;

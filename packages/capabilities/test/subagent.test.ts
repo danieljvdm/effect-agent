@@ -1,4 +1,6 @@
 import {
+  isDelegationToolName,
+  SubagentDelegationCaps,
   Agent,
   type AgentOutputError,
   AgentPolicy,
@@ -56,11 +58,9 @@ import {
 import {
   delegationAllocationFromPolicy,
   delegationCapsFromPolicy,
-  isDelegationToolName,
   Subagent,
   SubagentBudgetExhausted,
   type SubagentChildRunFailure,
-  SubagentDelegationCaps,
   SubagentExecutionFailure,
   SubagentGrant,
   SubagentPolicy,

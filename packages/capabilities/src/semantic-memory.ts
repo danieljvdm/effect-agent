@@ -1,5 +1,6 @@
 import {
   type MemoryNamespace,
+  MemoryAccess,
   MemoryDocument,
   MemoryIndexError,
   MemoryIndexQuery,
@@ -19,12 +20,8 @@ import {
 import { Clock, Crypto, Effect, Encoding, Schema } from "effect";
 import { EmbeddingModel } from "effect/unstable/ai";
 
-import { MemoryAccess } from "./memory-lifecycle.ts";
-
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const InputTokens = Schema.NullOr(Schema.Natural);
-
-export { SemanticMemoryError } from "@effect-agent/core";
 
 export class SemanticIndexLimits extends Schema.Class<SemanticIndexLimits>(
   "@effect-agent/capabilities/SemanticIndexLimits",

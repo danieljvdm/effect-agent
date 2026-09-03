@@ -1,8 +1,9 @@
-import { ContextCompactor, contextCompactorRunContextLayer } from "@effect-agent/capabilities";
+import { contextCompactorRunContextLayer } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, ThreadId, ToolCallId } from "@effect-agent/core";
 import {
   CompactionError,
   estimatePromptTokens,
+  ContextCompactor,
   DurableStep,
   DurableStepError,
   RunToolAuthorization,

@@ -1,10 +1,7 @@
+import { indexMemorySource, querySemanticMemory } from "@effect-agent/capabilities";
 import {
-  MemoryAccess,
-  indexMemorySource,
-  querySemanticMemory,
   Memory,
-} from "@effect-agent/capabilities";
-import {
+  MemoryAccess,
   MemoryNamespace,
   MemoryScope,
   MemoryKey,

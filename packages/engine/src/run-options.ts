@@ -124,7 +124,8 @@ export const toolFailureObserverLayer = (observer: RunToolFailureObserver): Laye
   Layer.succeed(CurrentToolFailureObserver)(observer);
 
 /** Number of queued inputs consumed at one documented Turn seam. */
-export type CommandDrainPolicy = "one" | "all";
+export const CommandDrainPolicy = Schema.Literals(["one", "all"]);
+export type CommandDrainPolicy = typeof CommandDrainPolicy.Type;
 
 /** Engine-normalized input command. Capability packages may adapt richer audit records to it. */
 export interface RunInputCommand {
@@ -712,14 +713,15 @@ export interface RunTurnResume {
 }
 
 /** Run-level scheduler override; it may only make the Agent's finite bound stricter. */
-export type RunSchedulingOverride =
-  | {
-      readonly mode: "bounded";
-      readonly concurrency: number;
-    }
-  | {
-      readonly mode: "sequential";
-    };
+export const RunSchedulingOverride = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal("bounded"),
+    concurrency: Schema.Int.check(Schema.isGreaterThan(0)),
+  }),
+  Schema.Struct({ mode: Schema.Literal("sequential") }),
+]);
+
+export type RunSchedulingOverride = typeof RunSchedulingOverride.Type;
 
 /** Dependency-neutral scheduling policy surrounding native Effect AI Tool handlers. */
 export interface RunSchedulingHook {

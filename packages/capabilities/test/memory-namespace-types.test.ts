@@ -1,4 +1,5 @@
 import {
+  MemoryAccess,
   type MemoryDocument,
   type SemanticMemoryProfile,
   ActiveMemoryDocument,
@@ -22,7 +23,7 @@ import {
 import { Effect, Schema } from "effect";
 import { expect, it } from "vite-plus/test";
 
-import { MemoryAccess, indexMemorySource, SemanticIndexLimits } from "../src/index.ts";
+import { indexMemorySource, SemanticIndexLimits } from "../src/index.ts";
 
 const TenantId = Schema.NonEmptyString.pipe(Schema.brand("app/TenantId"));
 const UserId = Schema.NonEmptyString.pipe(Schema.brand("app/UserId"));
