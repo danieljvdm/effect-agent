@@ -1,9 +1,11 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { digestDefinitions } from "@effect-agent/thread/Digest";
+import { AgentWorkflow } from "@effect-agent/workflow";
 import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
 import { WorkflowDispatchFailpoint } from "@effect-agent/workflow/WorkflowDispatch";
 import { Config, Console, Effect, FileSystem, Layer, Schema, Stream } from "effect";
 import { Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { Workflow } from "effect/unstable/workflow";
 
 import {
   definitionsFor,
@@ -22,6 +24,8 @@ export const WorkflowCrashBoundary = Schema.Literals([
   "terminalize:after-canonical-append",
   "cleanup:before",
   "cleanup:after",
+  "completion:before-notify",
+  "completion:after-notify",
   "ordinary:external-effect",
 ]);
 
@@ -29,6 +33,13 @@ export type WorkflowCrashBoundary = typeof WorkflowCrashBoundary.Type;
 
 export const WorkflowCrashMarker = Schema.TaggedStruct("WorkflowCrashMarker", {
   boundary: WorkflowCrashBoundary,
+});
+
+export const WorkflowCrashParent = Workflow.make("WorkflowCrash/Parent", {
+  payload: { id: Schema.String },
+  success: planner.output,
+  error: AgentWorkflow.Error,
+  idempotencyKey: ({ id }) => id,
 });
 
 const Book = Tool.make("book", {
@@ -119,11 +130,27 @@ export const workflowCrashWorker = Effect.gen(function* () {
     true,
   );
 
-  const stack = hostLayer(directory, [{ agent: fixture.agent, definitions: fixture.definitions }], {
+  const host = hostLayer(directory, [{ agent: fixture.agent, definitions: fixture.definitions }], {
     runtimeFailpoint: (point) => (point === boundary ? block : Effect.void),
   }).pipe(Layer.provide(fixture.handlers));
 
+  const composed =
+    boundary === "completion:before-notify" || boundary === "completion:after-notify";
+
+  const stack = WorkflowCrashParent.toLayer(() =>
+    AgentWorkflow.execute(
+      fixture.agent.definition,
+      { question: "survive SIGKILL" },
+      { name: "triage" },
+    ),
+  ).pipe(Layer.provideMerge(host));
+
   return yield* Effect.gen(function* () {
+    if (composed) {
+      yield* WorkflowCrashParent.execute({ id: "crash" }, { discard: true });
+
+      return yield* Effect.never;
+    }
     const host = yield* WorkflowAgentHost;
 
     yield* host.submit(

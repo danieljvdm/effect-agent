@@ -7778,6 +7778,36 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }),
     );
 
+  const submitRegistered = Effect.fn("DurableAgentRuntime.submitRegistered")(function* <
+    InputSchema extends Schema.Top,
+  >(
+    agent: DurableSubmitAgent<InputSchema>,
+    input: InputSchema["Type"],
+    options: Omit<DurableSubmitOptions, "definitions">,
+  ) {
+    const candidates = registeredBindings.filter(
+      (binding) => binding.agentId === agent.definition.id,
+    );
+
+    const binding = candidates[0];
+
+    if (candidates.length !== 1 || binding === undefined) {
+      return yield* BindingUnavailable.make({
+        agentId: agent.definition.id,
+        message: "Registered admission requires exactly one binding for the Agent identity",
+      });
+    }
+
+    if (!Object.is(binding.definition, agent.definition)) {
+      return yield* BindingUnavailable.make({
+        agentId: agent.definition.id,
+        message: "Registered admission requires the exact Agent Definition used in registration",
+      });
+    }
+
+    return yield* submit(agent, input, { ...options, definitions: binding.digests });
+  });
+
   const readSubmissionStatus = Effect.fn("DurableAgentRuntime.readSubmissionStatus")(function* (
     receipt: Receipt,
   ): Effect.fn.Return<SubmissionStatus, DurableAwaitFailure> {
@@ -7824,6 +7854,49 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     yield* authorizeSettlement(receipt);
 
     return yield* readSubmissionStatus(receipt);
+  });
+
+  const settlementRecord = Effect.fn("DurableAgentRuntime.settlementRecord")(function* (
+    receipt: Receipt,
+  ) {
+    yield* authorizeSettlement(receipt);
+    const status = yield* readSubmissionStatus(receipt);
+
+    if (status._tag !== "settled") {
+      return yield* LedgerError.make({
+        operation: "settlementRecord",
+        message: "Submission has not settled",
+      });
+    }
+
+    const snapshot = yield* ledger.loadRecoverySnapshot(
+      RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+    );
+
+    if (snapshot.reservation === undefined) {
+      return yield* LedgerError.make({
+        operation: "settlementRecord",
+        message: "Settlement has no canonical reservation",
+      });
+    }
+
+    const record = yield* settlementPayloadFromRecord(
+      snapshot.reservation.record,
+      receipt.submissionId,
+    );
+
+    if (
+      record.receiptId !== receipt.receiptId ||
+      record.settlementId !== status.settlement.settlementId ||
+      record.outcome !== status.settlement.outcome
+    ) {
+      return yield* LedgerError.make({
+        operation: "settlementRecord",
+        message: "Canonical Settlement disagrees with the receipt or finalized outcome",
+      });
+    }
+
+    return record;
   });
 
   const awaitSettlement = Effect.fn("DurableAgentRuntime.awaitSettlement")(function* (
@@ -8483,6 +8556,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   });
 
   return DurableAgentRuntime.of({
+    submitRegistered,
+    settlementRecord,
     submit,
     submissionStatus,
     inspectSubmissionStatus: readSubmissionStatus,
@@ -8572,6 +8647,20 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 export class DurableAgentRuntime extends Context.Service<
   DurableAgentRuntime,
   {
+    /** Admit the exact registered Definition instance; reject missing, ambiguous, or different definitions. */
+    readonly submitRegistered: <InputSchema extends Schema.Top>(
+      agent: DurableSubmitAgent<InputSchema>,
+      input: InputSchema["Type"],
+      options: Omit<DurableSubmitOptions, "definitions">,
+    ) => Effect.Effect<
+      Receipt,
+      DurableSubmitFailure | BindingUnavailable,
+      InputSchema["EncodingServices"]
+    >;
+    /** Authorized exact canonical terminal record, including the encoded output. Reject pending work. */
+    readonly settlementRecord: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionSettledRecord, DurableAwaitFailure>;
     readonly submit: <InputSchema extends Schema.Top>(
       agent: DurableSubmitAgent<InputSchema>,
       input: InputSchema["Type"],

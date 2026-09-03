@@ -13,7 +13,9 @@ import {
 import { expect, it } from "@effect/vitest";
 import { Context, type Crypto, Effect, Layer, Schema, SchemaGetter } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
-import { WorkflowEngine } from "effect/unstable/workflow";
+import { Workflow, WorkflowEngine } from "effect/unstable/workflow";
+
+import * as AgentWorkflow from "../src/AgentWorkflow.ts";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -74,6 +76,40 @@ const definition = Agent.make("workflow-types", {
 
 const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });
 
+const invocation = AgentWorkflow.execute(definition, "input", { name: "lookup" });
+
+const invocationRequirements: Assert<
+  Equal<
+    Effect.Services<typeof invocation>,
+    | WorkflowAgentHost
+    | WorkflowEngine.WorkflowEngine
+    | WorkflowEngine.WorkflowInstance
+    | Encoder
+    | Decoder
+  >
+> = true;
+
+const invocationErrors: Assert<Equal<Effect.Error<typeof invocation>, AgentWorkflow.Error>> = true;
+const invocationOutput: Assert<Equal<Effect.Success<typeof invocation>, string>> = true;
+
+const Parent = Workflow.make("workflow-types/Parent", {
+  payload: { input: Schema.String },
+  success: Schema.String,
+  error: AgentWorkflow.Error,
+  idempotencyKey: ({ input }) => input,
+});
+
+const ParentLive = Parent.toLayer(({ input }) =>
+  AgentWorkflow.execute(definition, input, { name: "lookup" }),
+);
+
+const parentRequirements: Assert<
+  Equal<
+    Layer.Services<typeof ParentLive>,
+    WorkflowAgentHost | WorkflowEngine.WorkflowEngine | Encoder | Decoder
+  >
+> = true;
+
 type RuntimeServices = Layer.Services<typeof DurableAgentRuntime.layerWithServices>;
 
 const proveComposition = (
@@ -93,6 +129,7 @@ const proveComposition = (
 
   const live = WorkflowAgentHost.layer({
     deploymentId: "types",
+    principal: "workflow-caller",
   }).pipe(Layer.provide(registered));
 
   type AgentServices =
@@ -167,9 +204,10 @@ const proveComposition = (
     >
   > = true;
 
-  const empty = WorkflowAgentHost.layer({ deploymentId: "types" }).pipe(
-    Layer.provide(DurableAgentRuntime.layerRegistered([])),
-  );
+  const empty = WorkflowAgentHost.layer({
+    deploymentId: "types",
+    principal: "workflow-caller",
+  }).pipe(Layer.provide(DurableAgentRuntime.layerRegistered([])));
 
   const emptyRequirements: Assert<Equal<Layer.Services<typeof empty>, HostServices>> = true;
 
@@ -189,4 +227,10 @@ const proveComposition = (
 
 it("preserves exact registration and supplied Layer errors and requirements", () => {
   expect(proveComposition).toBeTypeOf("function");
+  expect([invocationRequirements, invocationErrors, invocationOutput, parentRequirements]).toEqual([
+    true,
+    true,
+    true,
+    true,
+  ]);
 });

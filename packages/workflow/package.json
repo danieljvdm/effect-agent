@@ -16,8 +16,10 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
+    "./AgentWorkflow": "./src/AgentWorkflow.ts",
     "./WorkflowAgentHost": "./src/WorkflowAgentHost.ts",
-    "./WorkflowDispatch": "./src/WorkflowDispatch.ts"
+    "./WorkflowDispatch": "./src/WorkflowDispatch.ts",
+    "./WorkflowExecution": "./src/WorkflowExecution.ts"
   },
   "publishConfig": {
     "access": "public"

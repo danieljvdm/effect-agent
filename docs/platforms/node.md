@@ -75,7 +75,70 @@ constructs an unregistered runtime for admission, recovery, and the generic sing
 
 ## Use an Effect Workflow engine {#workflow}
 
-Install `@effect-agent/workflow@beta` and `@effect/sql-sqlite-node@4.0.0-rc.111` to drive
+Author workflows with Effect's `Workflow.make`, `toLayer`, and `execute`.
+`AgentWorkflow.execute` runs a registered Agent as an Effect inside the handler and returns
+its Schema-decoded output. A pending Agent suspends the handler through Effect's
+`DurableDeferred`; approval resolution and settlement resume it without keeping a polling
+fiber alive in the parent.
+
+```ts twoslash
+import { Agent } from "@effect-agent/core";
+import { AgentWorkflow } from "@effect-agent/workflow";
+import { Schema } from "effect";
+import { Toolkit } from "effect/unstable/ai";
+import { Workflow } from "effect/unstable/workflow";
+
+const triage = Agent.make("triage", {
+  input: Schema.String,
+  output: Schema.Struct({ severity: Schema.Literals(["low", "high", "critical"]) }),
+  instructions: "Classify the severity of the bug report.",
+  toolkit: Toolkit.empty,
+});
+
+const Review = Workflow.make("Review", {
+  payload: { issueId: Schema.String, report: Schema.String },
+  success: triage.output,
+  error: AgentWorkflow.Error,
+  idempotencyKey: ({ issueId }) => issueId,
+});
+
+export const ReviewLive = Review.toLayer(({ report }) =>
+  AgentWorkflow.execute(triage, report, { name: "triage" }),
+);
+
+export const review = Review.execute({ issueId: "123", report: "Login is broken" });
+```
+
+Register `triage` and its model in the durable runtime below. Supply the resulting host Layer
+to `ReviewLive` with `Layer.provideMerge`, then provide that Layer to `review`. Share one
+WorkflowEngine Layer between the parent and host; a mismatched engine fails before admission.
+Multi-step handlers use ordinary `Effect.gen` and bounded `Effect.all`.
+
+The step `name` must be nonempty, stable across replays, and unique within a parent execution.
+Use stable item IDs for repeated calls in a loop. The parent workflow identity, step name,
+deployment, and configured principal determine a private Thread and submission key. Reusing a
+step with changed input, Agent identity, or registered version declarations fails with an admission
+conflict rather than silently starting new work. Registered admission requires exactly one
+version for that Agent identity and the exact Agent Definition instance passed to registration.
+A same-ID copy or replacement fails with `BindingUnavailable` before input encoding or admission,
+including on replay. Import the same definition into registration and the workflow handler;
+there is no object identity persisted across restarts. Explicit `host.submit` remains available
+for versioned routing.
+
+`AgentWorkflow.Error` is the Schema for the exact typed failure channel. Failed or aborted
+Agent settlements become `WorkflowExecutionFailure`; invalid output becomes `AgentOutputError`.
+Admission, authorization, and dispatch failures retain their original tags. Infrastructure
+failure can occur after admission; retries with the same step identity reconnect to the accepted
+work. Choose retry behavior with ordinary Effect combinators. Defects in the underlying durable
+driver retain its existing suspension and repair behavior.
+
+Parent interruption, timeout, or shutdown detaches the parent; it does not abort accepted Agent
+work. Use the host's authorized `abort` command to cancel the Agent. Native compensation does
+not undo external tool effects. Ordinary uncertain tools still require explicit resolution.
+
+### Assemble the host
+
+Install `@effect-agent/workflow@beta` and `@effect/sql-sqlite-node@4.0.0-rc.112` to drive
 the durable runtime through upstream Effect Workflow. Supply a `WorkflowEngine` Layer,
 durable dispatch storage, and a host-owned repair trigger. The Agent definitions, registrations,
 and durable recovery rules stay the same when you replace the engine Layer.
@@ -111,6 +174,7 @@ export const workflowHost = <const Entries extends ReadonlyArray<AgentRegistrati
 ) =>
   WorkflowAgentHost.layer({
     deploymentId: "travel-planner",
+    principal: "travel-planner-service",
     executionConcurrency: 4,
     repairBatchSize: 32,
     dispatchTimeoutMillis: 10_000,
@@ -122,7 +186,7 @@ export const workflowHost = <const Entries extends ReadonlyArray<AgentRegistrati
         producerId: "workflow-worker-1",
       }),
     ),
-    Layer.provide(infrastructure),
+    Layer.provideMerge(infrastructure),
     Layer.provide(NodeWorkflowRepairTrigger.layer({ interval: "1 second" })),
     Layer.provide(NodeCrypto.layer),
   );
@@ -142,6 +206,11 @@ Keep `deploymentId` identical in both runtime and Workflow host options. The opt
 The native name appends `/deployment/<length>:<deploymentId>`. Keep one host registration per
 deployment, name, and engine. Changing that identity leaves the old dispatch obligations for
 their original host to repair.
+
+The required `principal` is application-owned authority for `AgentWorkflow.execute`, never
+model-supplied input. Model and tool services remain captured by runtime registration; handler
+services cannot replace them. Input encoding and output decoding requirements remain visible in
+the execution Effect. Each result read rechecks authorization, including on workflow replay.
 
 ### Follow and control submissions
 
@@ -172,6 +241,11 @@ Each repair pass selects at most `repairBatchSize` accepted submissions and that
 intents. Each scan and each item has the `dispatchTimeoutMillis` bound. Failed items leave their
 obligations intact while other items can advance. Dispatch intents remain until native success
 references the matching canonical Settlement, even if the submission ledger already settled.
+For `AgentWorkflow.execute`, the intent also retains the parent's durable completion token.
+Repair delivers the canonical reference through `DurableDeferred` before removing the intent.
+Custom stores must atomically attach one token, preserve it on subsequent `put` calls, return
+the retained intent, and compare the entire intent before removal. A stale cleanup must fail
+instead of erasing a newly attached notification obligation.
 Admission, dispatch persistence, and native Workflow persistence are separate commits. Never
 enclose agent execution in a SQL transaction.
 

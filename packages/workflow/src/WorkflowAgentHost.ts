@@ -1,4 +1,7 @@
-import { type ThreadId } from "@effect-agent/core/Identifiers";
+import { AgentOutputError } from "@effect-agent/core/AgentError";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { type BindingUnavailable } from "@effect-agent/thread/AgentRegistration";
+import { digestJson } from "@effect-agent/thread/Digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
@@ -9,10 +12,16 @@ import {
   type DurableSubmitOptions,
 } from "@effect-agent/thread/DurableAgentRuntime";
 import { DeploymentId } from "@effect-agent/thread/Records";
-import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/SubmissionLedger";
+import {
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupById,
+} from "@effect-agent/thread/SubmissionLedger";
 import {
   Cause,
   Context,
+  Crypto,
   Effect,
   Exit,
   Layer,
@@ -24,8 +33,9 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { Workflow, WorkflowEngine } from "effect/unstable/workflow";
+import { DurableDeferred, Workflow, WorkflowEngine } from "effect/unstable/workflow";
 
+import { workflowCompletion } from "./internal/completion.ts";
 import {
   WorkflowDispatchError,
   WorkflowDispatchFailpoint,
@@ -37,9 +47,15 @@ import {
   WorkflowSettlementReference,
   WorkflowSubmission,
 } from "./WorkflowDispatch.ts";
+import {
+  WorkflowExecutionFailure,
+  type WorkflowAgent,
+  type WorkflowExecuteOptions,
+} from "./WorkflowExecution.ts";
 
 const WorkflowHostConfig = Schema.Struct({
   deploymentId: DeploymentId,
+  principal: Principal,
   workflowName: Schema.NonEmptyString,
   executionConcurrency: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 })),
   repairBatchSize: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 })),
@@ -58,6 +74,8 @@ export class WorkflowAdmissionClosed extends Schema.TaggedError<WorkflowAdmissio
 
 export interface WorkflowAgentHostOptions {
   readonly deploymentId: string;
+  /** Application-owned identity for submissions from AgentWorkflow.execute. */
+  readonly principal: string;
   /** Stable versioned name prefix. The native name also includes deploymentId. */
   readonly workflowName?: string;
   /** Concurrent Attempts within this host Layer instance, not a fleet-wide limit. Default 1. */
@@ -86,6 +104,7 @@ const nativeOperation = <A, E, R>(operation: string, effect: Effect.Effect<A, E,
 const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: WorkflowAgentHostOptions) {
   const config = yield* Schema.decodeUnknownEffect(WorkflowHostConfig)({
     deploymentId: options.deploymentId,
+    principal: options.principal,
     workflowName: options.workflowName ?? "effect-agent/Submission/v1",
     executionConcurrency: options.executionConcurrency ?? 1,
     repairBatchSize: options.repairBatchSize ?? 32,
@@ -93,6 +112,7 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
   }).pipe(Effect.mapError((error) => new WorkflowHostConfigError({ message: error.message })));
 
   const runtime = yield* DurableAgentRuntime;
+  const crypto = yield* Crypto.Crypto;
   const runtimeConfig = yield* DurableRuntimeConfig;
   const ledger = yield* SubmissionLedger;
   const engine = yield* WorkflowEngine.WorkflowEngine;
@@ -237,7 +257,10 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
   });
 
   const dispatchIntent = Effect.fn("WorkflowAgentHost.dispatch")(
-    function* (intent: WorkflowDispatchIntent): Effect.fn.Return<boolean, WorkflowRepairFailure> {
+    function* (
+      requested: WorkflowDispatchIntent,
+    ): Effect.fn.Return<boolean, WorkflowRepairFailure> {
+      let intent = requested;
       const expected = yield* intentFor(intent.receipt);
 
       if (
@@ -252,16 +275,24 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
       }
       yield* validateReceipt(intent.receipt);
       yield* failpoint.hit("intent:before-persist", intent);
-      yield* dispatch.put(intent);
+      intent = yield* dispatch.put(intent);
       yield* failpoint.hit("intent:after-persist", intent);
       yield* failpoint.hit("launch:before", intent);
+      // Submission lifetime belongs to the durable host. Strip the optional parent
+      // instance so upstream child interruption cannot cancel this recovery workflow.
       yield* nativeOperation(
         "execute",
-        engine.execute(workflow, {
-          executionId: intent.executionId,
-          payload: new WorkflowSubmission(intent),
-          discard: true,
-        }),
+        engine
+          .execute(workflow, {
+            executionId: intent.executionId,
+            payload: new WorkflowSubmission(intent),
+            discard: true,
+          })
+          .pipe(
+            Effect.updateContext((context: Context.Context<never>) =>
+              Context.omit(WorkflowEngine.WorkflowInstance)(context),
+            ),
+          ),
       );
       yield* failpoint.hit("launch:after", intent);
       // Resume before suspension may be a no-op. Keep the intent and retry on a later trigger.
@@ -292,6 +323,17 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
           operation: "completion",
           message: "Native completion disagrees with canonical Settlement; intent retained",
         });
+      }
+      if (intent.completionToken !== undefined) {
+        yield* failpoint.hit("completion:before-notify", intent);
+        yield* nativeOperation(
+          "notify",
+          DurableDeferred.succeed(workflowCompletion("settlement"), {
+            token: intent.completionToken,
+            value: reference,
+          }).pipe(Effect.provideService(WorkflowEngine.WorkflowEngine, engine)),
+        );
+        yield* failpoint.hit("completion:after-notify", intent);
       }
       yield* failpoint.hit("cleanup:before", intent);
       yield* dispatch.remove(intent);
@@ -401,7 +443,110 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
     return receipt;
   });
 
+  const execute = Effect.fn("AgentWorkflow.execute")(function* <
+    Input extends Schema.Top,
+    Output extends Schema.Top,
+  >(agent: WorkflowAgent<Input, Output>, input: Input["Type"], options: WorkflowExecuteOptions) {
+    const parentEngine = yield* WorkflowEngine.WorkflowEngine;
+
+    if (parentEngine !== engine) {
+      return yield* new WorkflowExecutionFailure({
+        reason: "engine-mismatch",
+        message: "Agent host and parent workflow must share one WorkflowEngine Layer",
+      });
+    }
+
+    const name = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(options.name).pipe(
+      Effect.mapError(
+        () =>
+          new WorkflowExecutionFailure({
+            reason: "invalid-name",
+            message: "Workflow agent steps need a nonempty stable name",
+          }),
+      ),
+    );
+
+    const completion = workflowCompletion(`effect-agent/${name}`);
+    const completionToken = yield* DurableDeferred.token(completion);
+
+    // Agent identity and input deliberately do not participate: changing either on replay
+    // must conflict with the original admission rather than launch new external work.
+    const identity = yield* digestJson([
+      config.deploymentId,
+      config.principal,
+      completionToken,
+    ]).pipe(Effect.provideService(Crypto.Crypto, crypto));
+
+    if (!(yield* Ref.get(admission))) {
+      return yield* new WorkflowAdmissionClosed({ message: "The Workflow host is shutting down" });
+    }
+
+    const receipt = yield* runtime.submitRegistered({ definition: agent }, input, {
+      threadId: ThreadId.make(`workflow/${identity}`),
+      idempotencyKey: IdempotencyKey.make(identity),
+      principal: config.principal,
+    });
+
+    yield* Effect.annotateCurrentSpan({
+      "agent.submission.id": receipt.submissionId,
+      "agent.workflow.step": name,
+    });
+    yield* runtime.submissionStatus(receipt);
+    yield* dispatchIntent(
+      new WorkflowDispatchIntent({ ...(yield* intentFor(receipt)), completionToken }),
+    );
+
+    // The deferred stores only a reference. Always reauthorize and read canonical data,
+    // including on replay after the workflow engine has cached the notification.
+    const reference = yield* DurableDeferred.await(completion);
+
+    const record = yield* runtime.settlementRecord(receipt);
+
+    if (
+      reference.submissionId !== receipt.submissionId ||
+      reference.threadId !== receipt.threadId ||
+      reference.settlementId !== record.settlementId
+    ) {
+      return yield* new WorkflowDispatchError({
+        operation: "result",
+        message: "Workflow completion disagrees with canonical Settlement",
+      });
+    }
+    if (record.outcome === "failed") {
+      return yield* new WorkflowExecutionFailure({
+        reason: "failed",
+        message: "Agent submission failed",
+        receipt,
+        failure: record.result,
+      });
+    }
+    if (record.outcome === "aborted") {
+      return yield* new WorkflowExecutionFailure({
+        reason: "aborted",
+        message: "Agent submission was aborted",
+        receipt,
+      });
+    }
+    if (record.result === undefined) {
+      return yield* new WorkflowExecutionFailure({
+        reason: "missing-output",
+        message: "Completed submission has no independent output",
+        receipt,
+      });
+    }
+
+    return yield* Schema.decodeUnknownEffect(agent.output)(record.result).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentOutputError({
+            message: `Cannot decode canonical agent output: ${cause.message}`,
+          }),
+      ),
+    );
+  });
+
   return WorkflowAgentHost.of({
+    execute,
     submit,
     awaitSettlement: runtime.awaitSettlement,
     observe: runtime.observe,
@@ -425,6 +570,24 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
 export class WorkflowAgentHost extends Context.Service<
   WorkflowAgentHost,
   {
+    readonly execute: <Input extends Schema.Top, Output extends Schema.Top>(
+      agent: WorkflowAgent<Input, Output>,
+      input: Input["Type"],
+      options: WorkflowExecuteOptions,
+    ) => Effect.Effect<
+      Output["Type"],
+      | DurableSubmitFailure
+      | BindingUnavailable
+      | DurableAwaitFailure
+      | WorkflowDispatchError
+      | WorkflowAdmissionClosed
+      | WorkflowExecutionFailure
+      | AgentOutputError,
+      | Input["EncodingServices"]
+      | Output["DecodingServices"]
+      | WorkflowEngine.WorkflowInstance
+      | WorkflowEngine.WorkflowEngine
+    >;
     readonly submit: <InputSchema extends Schema.Top>(
       agent: DurableSubmitAgent<InputSchema>,
       input: InputSchema["Type"],

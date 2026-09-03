@@ -142,6 +142,7 @@ export const hostLayer = <const Entries extends ReadonlyArray<AgentRegistration>
 ) =>
   WorkflowAgentHost.layer({
     deploymentId,
+    principal,
     workflowName: workflowPrefix,
     executionConcurrency: 1,
     repairBatchSize,
