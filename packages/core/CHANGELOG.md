@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.47
+
+### Minor Changes
+
+- [#316](https://github.com/danieljvdm/effect-agent/pull/316) [`e6ff3bc`](https://github.com/danieljvdm/effect-agent/commit/e6ff3bcd1b5ce0f2348de668853482ba9d5e126b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Admit remembering durably and process it in a separate host-owned worker with saved proposals, exact command retries, conflict rebase, and source invalidation. Bind the portable checkpoint contract to existing host jobs and retain source references for later cleanup.
+
 ## 0.1.0-beta.46
 
 ### Minor Changes
