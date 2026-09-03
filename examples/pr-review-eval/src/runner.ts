@@ -19,7 +19,11 @@ import {
   Stream,
 } from "effect";
 
-import { configurationIdentity, validateFrozenComparison } from "./comparison.ts";
+import {
+  configurationIdentity,
+  validateFrozenComparison,
+  validateFrozenRun,
+} from "./comparison.ts";
 import {
   CURRENT_RUNNER_VERSION,
   type EvalCase,
@@ -81,6 +85,7 @@ interface EvalJob<Requirements> {
   readonly sequence: number;
   readonly runId: string;
   readonly comparisonDigest?: EvalInputDigest;
+  readonly frozenRunDigest?: EvalInputDigest;
 }
 
 const decodeRunnerOptions = Schema.decodeUnknownEffect(RunnerOptions);
@@ -185,6 +190,7 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
     cacheNamespace,
     sequence: job.sequence,
     ...(job.comparisonDigest === undefined ? {} : { comparisonDigest: job.comparisonDigest }),
+    ...(job.frozenRunDigest === undefined ? {} : { frozenRunDigest: job.frozenRunDigest }),
     ...(job.evalCase.repository === undefined
       ? {}
       : { repositoryDigest: job.evalCase.repository.digest }),
@@ -231,12 +237,43 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
   if (new Set(variantIds).size !== variantIds.length) {
     return yield* EvalConfigurationError.make({ message: "Eval variant IDs must be unique" });
   }
+
+  const cacheSelectors = variants.map(
+    ({ configuration }) => configuration.strategy ?? configuration.id,
+  );
+
+  if (new Set(cacheSelectors).size !== cacheSelectors.length) {
+    return yield* EvalConfigurationError.make({
+      message:
+        "Eval variants share a cache namespace selector; run these configurations separately",
+    });
+  }
   const selectedCases = yield* selectEvalCases(suite, decodedOptions.caseIds);
 
   yield* validateEvalSuite(suite);
 
   const comparison =
     suite.comparison === undefined ? undefined : yield* validateFrozenComparison(suite);
+
+  const frozenRun = suite.frozenRun === undefined ? undefined : yield* validateFrozenRun(suite);
+
+  if (
+    frozenRun !== undefined &&
+    (decodedOptions.trials !== frozenRun.trials ||
+      decodedOptions.concurrency !== 1 ||
+      selectedCases.length !== suite.cases.length ||
+      variants.length !== 1 ||
+      variants.some(
+        (variant) =>
+          configurationIdentity(variant.configuration) !==
+          configurationIdentity(frozenRun.configuration),
+      ))
+  ) {
+    return yield* EvalConfigurationError.make({
+      message:
+        "Frozen baseline runs require the exact configuration, all cases and trials, and serial execution",
+    });
+  }
 
   if (
     comparison !== undefined &&
@@ -298,7 +335,14 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
     for (const evalCase of selectedCases) {
       for (const variant of variants) {
         for (let trial = 1; trial <= decodedOptions.trials; trial += 1) {
-          jobs.push({ evalCase, variant, trial, runId, sequence: jobs.length });
+          jobs.push({
+            evalCase,
+            variant,
+            trial,
+            runId,
+            sequence: jobs.length,
+            ...(frozenRun === undefined ? {} : { frozenRunDigest: frozenRun.digest }),
+          });
         }
       }
     }

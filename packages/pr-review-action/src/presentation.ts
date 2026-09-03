@@ -254,7 +254,11 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
         : `${diagnostics.verification} · ${diagnostics.candidates.filter(({ disposition }) => disposition === "supported").length} supported · ${diagnostics.candidates.filter(({ disposition }) => disposition === "refuted").length} refuted · ${diagnostics.candidates.filter(({ disposition }) => disposition === "unresolved").length} unresolved`;
 
     const reads = diagnostics.activity.filter(({ operation }) => operation === "read_file");
-    const searches = diagnostics.activity.filter(({ operation }) => operation === "find_files");
+
+    const searches = diagnostics.activity.filter(
+      ({ operation }) => operation === "find_files" || operation === "find_in_file",
+    );
+
     const discoveryStages = diagnostics.stages.filter(({ stage }) => stage === "discovery");
 
     const declared = discoveryStages.some(

@@ -6,6 +6,8 @@ import {
   EvalComparisonPayload,
   EvalConfigurationError,
   EvalFrozenCaseIdentity,
+  EvalFrozenRun,
+  EvalFrozenRunPayload,
   EvalSuite,
   EvalVariantConfiguration,
 } from "./contracts.ts";
@@ -14,6 +16,109 @@ import { digestEvalOracle, digestText, validateEvalSuite } from "./corpus.ts";
 export const configurationIdentity = (configuration: EvalVariantConfiguration): string =>
   JSON.stringify(Schema.encodeSync(EvalVariantConfiguration)(configuration));
 
+const digestCases = (cases: ReadonlyArray<EvalCase>) =>
+  digestText(Schema.encodeSync(Schema.fromJsonString(Schema.Array(EvalCase)))(cases));
+
+/** Freeze one descriptive baseline run; paired comparison and rescore rules remain separate. */
+export const freezeEvalRun = Effect.fn("PrReviewEval.freezeEvalRun")(function* (
+  suite: EvalSuite,
+  configuration: EvalVariantConfiguration,
+  id: string,
+  trials: number,
+) {
+  yield* validateEvalSuite(suite);
+  if (
+    suite.comparison !== undefined ||
+    configuration.strategy !== "baseline" ||
+    configuration.effective?.reviewerRevision === undefined ||
+    configuration.guidanceDigest === undefined ||
+    configuration.costLimitMicrousd !== 999_999 ||
+    configuration.effective.discoveryLimitMicrousd !== 999_999 ||
+    configuration.effective.verificationReserveMicrousd !== 0
+  ) {
+    return yield* EvalConfigurationError.make({
+      message:
+        "A baseline freeze requires one exact baseline configuration and no paired comparison",
+    });
+  }
+  const groups = new Map<string, string>();
+  const cases: Array<EvalCase> = [];
+
+  for (const evalCase of suite.cases) {
+    if (
+      evalCase.repository === undefined ||
+      evalCase.oracleVersion === undefined ||
+      evalCase.split === undefined ||
+      evalCase.relatedGroup === undefined
+    ) {
+      return yield* EvalConfigurationError.make({
+        message: `Case ${evalCase.id} requires a frozen repository, oracleVersion, split, and relatedGroup`,
+      });
+    }
+    if (groups.has(evalCase.relatedGroup) && groups.get(evalCase.relatedGroup) !== evalCase.split) {
+      return yield* EvalConfigurationError.make({
+        message: `Related group ${evalCase.relatedGroup} crosses development and heldout splits`,
+      });
+    }
+    groups.set(evalCase.relatedGroup, evalCase.split);
+    cases.push(EvalCase.make({ ...evalCase, oracleDigest: yield* digestEvalOracle(evalCase) }));
+  }
+  const casesDigest = yield* digestCases(cases);
+
+  const payload = yield* Schema.decodeUnknownEffect(EvalFrozenRunPayload)({
+    version: 1,
+    id,
+    configuration,
+    casesDigest,
+    trials,
+    plannedRuns: cases.length * trials,
+    maximumCostMicrousd: cases.length * trials * 999_999,
+    order: "case-then-trial-v1",
+  }).pipe(
+    Effect.mapError(() =>
+      EvalConfigurationError.make({
+        message:
+          "A baseline freeze requires 1-20 trials, at most 120 runs, and bounded total liability",
+      }),
+    ),
+  );
+
+  const digest = yield* digestText(
+    Schema.encodeSync(Schema.fromJsonString(EvalFrozenRunPayload))(payload),
+  );
+
+  return EvalSuite.make({
+    version: 1,
+    cases,
+    frozenRun: EvalFrozenRun.make({ ...payload, digest }),
+  });
+});
+
+export const validateFrozenRun = Effect.fn("PrReviewEval.validateFrozenRun")(function* (
+  suite: EvalSuite,
+) {
+  if (suite.frozenRun === undefined) {
+    return yield* EvalConfigurationError.make({
+      message: "Freeze the baseline run before execution",
+    });
+  }
+  const frozen = suite.frozenRun;
+  const rebuilt = yield* freezeEvalRun(suite, frozen.configuration, frozen.id, frozen.trials);
+
+  if (
+    (yield* digestCases(suite.cases)) !== frozen.casesDigest ||
+    rebuilt.frozenRun === undefined ||
+    Schema.encodeSync(Schema.fromJsonString(EvalFrozenRun))(rebuilt.frozenRun) !==
+      Schema.encodeSync(Schema.fromJsonString(EvalFrozenRun))(frozen)
+  ) {
+    return yield* EvalConfigurationError.make({
+      message: "Frozen baseline identity changed; create an explicit new freeze",
+    });
+  }
+
+  return frozen;
+});
+
 /** No inference. The returned suite is the complete, bounded comparison manifest. */
 export const freezeEvalSuite = Effect.fn("PrReviewEval.freezeEvalSuite")(function* (
   suite: EvalSuite,
@@ -21,6 +126,10 @@ export const freezeEvalSuite = Effect.fn("PrReviewEval.freezeEvalSuite")(functio
   id: string,
 ) {
   yield* validateEvalSuite(suite);
+  if (suite.frozenRun !== undefined)
+    return yield* EvalConfigurationError.make({
+      message: "A baseline frozen run cannot be used as a paired comparison",
+    });
   const strategies = configurations.map((configuration) => configuration.strategy).sort();
 
   if (

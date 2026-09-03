@@ -8,6 +8,7 @@ import {
   type ReviewDiagnostics,
   ReviewDiagnosticsSink,
   ReviewFileList,
+  ReviewLineMatches,
   ReviewFinding,
   type ReviewOutcome,
   ReviewReport,
@@ -597,6 +598,7 @@ const reviewContextFailure = (message: string): ReviewContextError =>
 
 type ReviewReadFileInput = Parameters<ReviewRepository["Service"]["readFile"]>[0];
 type ReviewFindFilesInput = Parameters<ReviewRepository["Service"]["findFiles"]>[0];
+type ReviewFindInFileInput = Parameters<ReviewRepository["Service"]["findInFile"]>[0];
 
 /** Bind model context reads to the exact verified base and head trees. */
 export const makeReviewRepository = (input: {
@@ -615,22 +617,25 @@ export const makeReviewRepository = (input: {
   const isReadableEntry = (entry: ReturnType<RepositorySnapshot["entry"]>) =>
     entry?.type === "blob" && entry.mode !== "120000";
 
-  const readFile = Effect.fn("ReviewRepository.readFile")(function* (request: ReviewReadFileInput) {
-    if (outsideScope(request.path)) {
+  const readText = Effect.fn("ReviewRepository.readText")(function* (
+    path: string,
+    revision: "base" | "head",
+  ) {
+    if (outsideScope(path)) {
       return yield* reviewContextFailure(
         "The requested path is outside this review's source scope.",
       );
     }
-    const selected = snapshot(request.revision);
+    const selected = snapshot(revision);
 
-    if (!isReadableEntry(selected.entry(request.path))) {
+    if (!isReadableEntry(selected.entry(path))) {
       return yield* reviewContextFailure(
         "Text source is unavailable for the requested path and revision.",
       );
     }
 
-    const content = yield* selected
-      .readTextFile(request.path)
+    return yield* selected
+      .readTextFile(path)
       .pipe(
         Effect.mapError(() =>
           reviewContextFailure(
@@ -638,8 +643,19 @@ export const makeReviewRepository = (input: {
           ),
         ),
       );
+  });
 
-    return yield* ReviewSource.fromText(request, content);
+  const readFile = Effect.fn("ReviewRepository.readFile")(function* (request: ReviewReadFileInput) {
+    return yield* ReviewSource.fromText(request, yield* readText(request.path, request.revision));
+  });
+
+  const findInFile = Effect.fn("ReviewRepository.findInFile")(function* (
+    request: ReviewFindInFileInput,
+  ) {
+    return yield* ReviewLineMatches.fromText(
+      request,
+      yield* readText(request.path, request.revision),
+    );
   });
 
   const findFiles = (request: ReviewFindFilesInput) => {
@@ -660,7 +676,7 @@ export const makeReviewRepository = (input: {
     );
   };
 
-  return ReviewRepository.of({ readFile, findFiles });
+  return ReviewRepository.of({ readFile, findFiles, findInFile });
 };
 
 export const reviewEventFor = (blockingFindings: number): "COMMENT" | "REQUEST_CHANGES" =>

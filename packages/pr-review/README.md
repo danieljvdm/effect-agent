@@ -5,6 +5,15 @@ findings, usage, and diagnostics.
 
 Supply a model, authorized source through `ReviewRepository`, and `Crypto.Crypto` for candidate IDs.
 
+`ReviewRepository` hosts provide `readFile`, `findFiles`, and `findInFile` at the request's exact
+base and head. `findFiles` searches path names; `findInFile` locates a case-sensitive literal in
+one authorized file. Use `ReviewLineMatches.fromText` for the shared search bounds: literals are
+1 to 200 characters without carriage returns or newlines, source is at most 2,000,000 UTF-8 bytes
+and 1,000,000 lines, and results contain at most 20 distinct line numbers. Resume after the last
+line when `truncated` is true. An empty result means no match from `startLine`; unavailable or
+oversized source fails with `ReviewContextError`. Search locations contain no source text and
+do not satisfy a source-evidence citation; follow relevant matches with `readFile`.
+
 ```ts
 const reviewer = makeReviewer({ model, guidance, estimateCostMicrousd, costControl });
 const program = reviewer

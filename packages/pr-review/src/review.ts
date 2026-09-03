@@ -30,6 +30,7 @@ import { type LanguageModel, type Model, Tool, Toolkit } from "effect/unstable/a
 import {
   ReviewContextError,
   ReviewFileList,
+  ReviewLineMatches,
   ReviewRepository,
   ReviewSource,
   reviewToolkit,
@@ -198,7 +199,7 @@ export class ReviewActivity extends Schema.Class<ReviewActivity>(
 )({
   stage: ReviewStage,
   batch: Schema.Natural.check(Schema.isLessThanOrEqualTo(100)),
-  operation: Schema.Literals(["read_file", "find_files"]),
+  operation: Schema.Literals(["read_file", "find_files", "find_in_file"]),
   revision: Revision,
   path: Schema.optionalKey(ReviewPath),
   requestedStartLine: Schema.optionalKey(Schema.Natural),
@@ -206,6 +207,7 @@ export class ReviewActivity extends Schema.Class<ReviewActivity>(
   returnedStartLine: Schema.optionalKey(Schema.Natural),
   returnedEndLine: Schema.optionalKey(Schema.Natural),
   returnedPaths: Schema.optionalKey(Schema.Natural.check(Schema.isLessThanOrEqualTo(100))),
+  returnedMatches: Schema.optionalKey(Schema.Natural.check(Schema.isLessThanOrEqualTo(20))),
   outcome: Schema.Literals([
     "success",
     "eof",
@@ -1024,6 +1026,51 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
                     revision:
                       input.revision === "base" ? request.baseRevision : request.headRevision,
                     ...(Exit.isSuccess(exit) ? { returnedPaths: exit.value.paths.length } : {}),
+                    outcome: Exit.isSuccess(exit)
+                      ? exit.value.truncated || truncated
+                        ? "truncated"
+                        : "success"
+                      : Cause.hasInterrupts(exit.cause)
+                        ? "interrupted"
+                        : Cause.hasDies(exit.cause)
+                          ? "defect"
+                          : "unavailable",
+                    truncated: Exit.isSuccess(exit) && (exit.value.truncated || truncated),
+                  }),
+                ),
+              ),
+            );
+          }),
+          find_in_file: Effect.fn("Reviewer.findInFile")(function* (input) {
+            let truncated = false;
+
+            return yield* repository.findInFile(input).pipe(
+              Effect.tap((matches) =>
+                Schema.encodeEffect(ReviewLineMatches)(matches).pipe(
+                  Effect.mapError(() =>
+                    ReviewContextError.make({ message: "Invalid in-file search result." }),
+                  ),
+                  Effect.tap((encoded) =>
+                    Effect.sync(() => {
+                      const json = JSON.stringify(encoded);
+
+                      truncated = applyToolResultBounds(json, policy.toolResultBounds) !== json;
+                    }),
+                  ),
+                ),
+              ),
+              // Matching locations do not establish that any source text was read.
+              Effect.onExit((exit) =>
+                recordActivity(
+                  ReviewActivity.make({
+                    stage,
+                    batch,
+                    operation: "find_in_file",
+                    revision:
+                      input.revision === "base" ? request.baseRevision : request.headRevision,
+                    path: input.path,
+                    requestedStartLine: input.startLine,
+                    ...(Exit.isSuccess(exit) ? { returnedMatches: exit.value.lines.length } : {}),
                     outcome: Exit.isSuccess(exit)
                       ? exit.value.truncated || truncated
                         ? "truncated"

@@ -25,6 +25,9 @@ export const EvalAdjudicationLabel = Schema.Literals([
 
 export type EvalAdjudicationLabel = typeof EvalAdjudicationLabel.Type;
 
+export const EvalAdjudicatorKind = Schema.Literals(["agent", "human", "unknown"]);
+export type EvalAdjudicatorKind = typeof EvalAdjudicatorKind.Type;
+
 const FindingJudgmentFields = Schema.Struct({
   version: Schema.Literal(1),
   caseId: EvalCaseId,
@@ -41,6 +44,8 @@ const FindingJudgmentFields = Schema.Struct({
   matchedDefectIds: Schema.Array(EvalDefectId).check(Schema.isMaxLength(12)),
   rationale: BoundedRationale,
   adjudicator: Adjudicator,
+  /** Absent historical provenance is unknown; never infer it from the adjudicator's name. */
+  adjudicatorKind: Schema.optionalKey(EvalAdjudicatorKind),
 }).check(
   Schema.makeFilter(
     (judgment) => {

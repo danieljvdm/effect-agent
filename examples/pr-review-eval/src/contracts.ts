@@ -220,15 +220,35 @@ export class EvalComparison extends Schema.Class<EvalComparison>(
   "@effect-agent/example-pr-review-eval/EvalComparison",
 )({ ...EvalComparisonPayload.fields, digest: EvalInputDigest }) {}
 
+export const EvalFrozenRunPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  id: BoundedIdentifier,
+  configuration: EvalVariantConfiguration,
+  /** SHA-256 of the schema-encoded full cases, in their execution order. */
+  casesDigest: EvalInputDigest,
+  trials: EvalTrialCount,
+  plannedRuns: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120 })),
+  maximumCostMicrousd: Schema.Natural.check(Schema.isLessThanOrEqualTo(119_999_880)),
+  order: Schema.Literal("case-then-trial-v1"),
+});
+
+export class EvalFrozenRun extends Schema.Class<EvalFrozenRun>(
+  "@effect-agent/example-pr-review-eval/EvalFrozenRun",
+)({ ...EvalFrozenRunPayload.fields, digest: EvalInputDigest }) {}
+
 const EvalSuiteFields = Schema.Struct({
   version: Schema.Literal(1),
   cases: Schema.Array(EvalCase).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
   comparison: Schema.optionalKey(EvalComparison),
+  frozenRun: Schema.optionalKey(EvalFrozenRun),
 }).check(
   Schema.makeFilter(
     (suite) => new Set(suite.cases.map((evalCase) => evalCase.id)).size === suite.cases.length,
     { title: "Eval case IDs are unique" },
   ),
+  Schema.makeFilter((suite) => suite.comparison === undefined || suite.frozenRun === undefined, {
+    title: "A suite cannot contain both a paired comparison and a baseline frozen run",
+  }),
 );
 
 export class EvalSuite extends Schema.Class<EvalSuite>(
@@ -276,6 +296,7 @@ export class EvalObservation extends Schema.Class<EvalObservation>(
   oracleVersion: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   oracleDigest: Schema.optionalKey(EvalInputDigest),
   comparisonDigest: Schema.optionalKey(EvalInputDigest),
+  frozenRunDigest: Schema.optionalKey(EvalInputDigest),
   previousObservationDigest: Schema.optionalKey(EvalInputDigest),
   runId: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
   cacheNamespace: Schema.optionalKey(EvalInputDigest),

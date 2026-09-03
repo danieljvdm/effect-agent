@@ -3,11 +3,18 @@ import { Config, Console, Effect, FileSystem, Option, Schema, Stream } from "eff
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { configurationIdentity, freezeEvalSuite, validateFrozenComparison } from "./comparison.ts";
+import {
+  configurationIdentity,
+  freezeEvalRun,
+  freezeEvalSuite,
+  validateFrozenComparison,
+  validateFrozenRun,
+} from "./comparison.ts";
 import {
   EvalCaseId,
   EvalConfigurationError,
   EvalDataError,
+  EvalReasoningEffort,
   EvalSuite,
   EvalTrialCount,
   EvalVariantId,
@@ -58,6 +65,7 @@ const validateCommand = Command.make(
     const cases = yield* selectEvalCases(suite, selected);
 
     if (suite.comparison !== undefined) yield* validateFrozenComparison(suite);
+    if (suite.frozenRun !== undefined) yield* validateFrozenRun(suite);
 
     yield* Console.log(`Validated ${cases.length} eval case(s).`);
   }),
@@ -70,15 +78,14 @@ const output = Flag.file("output").pipe(
 );
 
 const trials = Flag.integer("trials").pipe(
-  Flag.withDefault(3),
   Flag.withSchema(EvalTrialCount),
-  Flag.withDescription("Trials per strategy; frozen comparisons require three."),
+  Flag.withDescription("Trials per case; execution must match the frozen manifest."),
 );
 
 const concurrency = Flag.integer("concurrency").pipe(
   Flag.withDefault(1),
   Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 }))),
-  Flag.withDescription("Frozen comparisons require serial execution, concurrency 1."),
+  Flag.withDescription("Frozen runs require serial execution, concurrency 1."),
 );
 
 const guidance = Flag.file("guidance").pipe(
@@ -95,7 +102,7 @@ const variantId = Flag.string("variant").pipe(
 const strategies = Flag.choice("strategy", ["baseline", "verified"]).pipe(
   Flag.atMost(2),
   Flag.withDescription(
-    "Select the actual implementation. Frozen paired runs require both; omit to select both.",
+    "Select the frozen implementation(s); omit to use the complete manifest configuration.",
   ),
 );
 
@@ -155,7 +162,7 @@ const reviewerRevision = Effect.fn("PrReviewEval.reviewerRevision")(function* ()
 
   if (dirty.trim() !== "")
     return yield* EvalConfigurationError.make({
-      message: "Commit or remove checkout changes before freezing or running a comparison",
+      message: "Commit or remove checkout changes before freezing or running an evaluation",
     });
   const revision = (yield* git(["rev-parse", "HEAD"], repository)).trim();
 
@@ -168,6 +175,44 @@ const reviewerRevision = Effect.fn("PrReviewEval.reviewerRevision")(function* ()
   );
 });
 
+const model = Flag.string("model").pipe(
+  Flag.withDefault("gpt-5.6-sol"),
+  Flag.withDescription("Frozen reviewer model; requires known pricing."),
+);
+
+const reasoningEffort = Flag.choice("reasoning-effort", EvalReasoningEffort.literals).pipe(
+  Flag.withDefault("xhigh"),
+  Flag.withDescription("Frozen reviewer reasoning effort."),
+);
+
+const writeFrozenSuite = Effect.fn("PrReviewEval.writeFrozenSuite")(function* (
+  frozen: EvalSuite,
+  outputPath: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(EvalSuite))(frozen).pipe(
+    Effect.mapError((cause) =>
+      EvalDataError.make({
+        operation: "encode freeze",
+        message: "Could not encode the freeze",
+        cause,
+      }),
+    ),
+  );
+
+  yield* fs.writeFileString(outputPath, `${encoded}\n`, { flag: "wx", mode: 0o600 }).pipe(
+    Effect.mapError((cause) =>
+      EvalDataError.make({
+        operation: "write freeze",
+        path: outputPath,
+        message: "Could not create a new frozen manifest",
+        cause,
+      }),
+    ),
+  );
+});
+
 const freezeCommand = Command.make(
   "freeze",
   {
@@ -176,6 +221,8 @@ const freezeCommand = Command.make(
       Flag.withDescription("New JSON file to receive the frozen comparison manifest."),
     ),
     variantId,
+    model,
+    reasoningEffort,
   },
   Effect.fn("PrReviewEval.freezeCommand")(function* (options) {
     const shared = yield* root;
@@ -188,6 +235,8 @@ const freezeCommand = Command.make(
         id: `${options.variantId}-${strategy}`,
         strategy,
         reviewerRevision: revision,
+        model: options.model,
+        reasoningEffort: options.reasoningEffort,
         ...(text === undefined ? {} : { guidance: text }),
       }),
     );
@@ -198,28 +247,7 @@ const freezeCommand = Command.make(
       options.variantId,
     );
 
-    const fs = yield* FileSystem.FileSystem;
-
-    const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(EvalSuite))(frozen).pipe(
-      Effect.mapError((cause) =>
-        EvalDataError.make({
-          operation: "encode freeze",
-          message: "Could not encode the comparison",
-          cause,
-        }),
-      ),
-    );
-
-    yield* fs.writeFileString(options.output, `${encoded}\n`, { flag: "wx", mode: 0o600 }).pipe(
-      Effect.mapError((cause) =>
-        EvalDataError.make({
-          operation: "write freeze",
-          path: options.output,
-          message: "Could not create a new comparison manifest",
-          cause,
-        }),
-      ),
-    );
+    yield* writeFrozenSuite(frozen, options.output);
     yield* Console.log(
       `Froze ${frozen.comparison?.plannedRuns} trials at a maximum ${frozen.comparison?.maximumCostMicrousd} microdollars. No model calls made.`,
     );
@@ -230,9 +258,58 @@ const freezeCommand = Command.make(
   ),
 );
 
+const freezeRunCommand = Command.make(
+  "freeze-run",
+  {
+    guidance,
+    output: output.pipe(
+      Flag.withDescription("New JSON file to receive the baseline run manifest."),
+    ),
+    variantId: Flag.string("variant").pipe(
+      Flag.withDefault("baseline-run"),
+      Flag.withSchema(EvalVariantId),
+      Flag.withDescription("Label for the frozen baseline run."),
+    ),
+    model,
+    reasoningEffort,
+    trials: trials.pipe(Flag.withDefault(3)),
+  },
+  Effect.fn("PrReviewEval.freezeRunCommand")(function* (options) {
+    const shared = yield* root;
+    const suite = yield* loadEvalSuite(shared.casesFile);
+    const text = yield* readGuidance(options.guidance);
+    const revision = yield* reviewerRevision();
+
+    const variant = yield* makeCurrentOpenAiVariant({
+      id: options.variantId,
+      strategy: "baseline",
+      reviewerRevision: revision,
+      model: options.model,
+      reasoningEffort: options.reasoningEffort,
+      ...(text === undefined ? {} : { guidance: text }),
+    });
+
+    const frozen = yield* freezeEvalRun(
+      suite,
+      variant.configuration,
+      options.variantId,
+      options.trials,
+    );
+
+    yield* writeFrozenSuite(frozen, options.output);
+    yield* Console.log(
+      `Froze ${frozen.frozenRun?.plannedRuns} baseline trials at a maximum ${frozen.frozenRun?.maximumCostMicrousd} microdollars. No model calls made.`,
+    );
+  }),
+).pipe(
+  Command.withDescription(
+    "Freeze one baseline configuration and the complete ordered case suite without model calls.",
+  ),
+);
+
 const runCommand = Command.make(
   "run",
-  { concurrency, guidance, output, selectedCases, trials, strategies },
+  { concurrency, guidance, output, selectedCases, trials: trials.pipe(Flag.optional), strategies },
   Effect.fn("PrReviewEval.runCommand")(function* (options) {
     const liveGate = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault(""));
 
@@ -243,23 +320,47 @@ const runCommand = Command.make(
     }
     const shared = yield* root;
     const suite = yield* loadEvalSuite(shared.casesFile);
-    const comparison = yield* validateFrozenComparison(suite);
+
+    const frozen =
+      suite.frozenRun === undefined
+        ? yield* validateFrozenComparison(suite)
+        : yield* validateFrozenRun(suite);
+
+    const configurations =
+      frozen.order === "case-then-trial-v1" ? [frozen.configuration] : frozen.configurations;
+
+    const trialCount = Option.getOrElse(options.trials, () => frozen.trials);
     const caseIds = yield* decodeSelectedCases(options.selectedCases);
 
-    yield* selectEvalCases(suite, caseIds);
+    const cases = yield* selectEvalCases(suite, caseIds);
+
     if (
-      options.strategies.length > 0 &&
-      [...options.strategies].sort().join(",") !== "baseline,verified"
+      cases.length !== suite.cases.length ||
+      trialCount !== frozen.trials ||
+      options.concurrency !== 1
     )
       return yield* EvalConfigurationError.make({
-        message: "Frozen paired runs require both baseline and verified strategies",
+        message: "Frozen runs require all manifest cases and trials, and serial execution",
+      });
+    if (
+      options.strategies.length > 0 &&
+      [...options.strategies].sort().join(",") !==
+        configurations
+          .map((configuration) => configuration.strategy)
+          .sort()
+          .join(",")
+    )
+      return yield* EvalConfigurationError.make({
+        message: "Run strategies must match the complete frozen configuration",
       });
     const guidanceText = yield* readGuidance(options.guidance);
     const revision = yield* reviewerRevision();
 
-    const variants = yield* Effect.forEach(comparison.configurations, (configuration) =>
+    const variants = yield* Effect.forEach(configurations, (configuration) =>
       makeCurrentOpenAiVariant({
         id: configuration.id,
+        model: configuration.model,
+        reasoningEffort: configuration.reasoningEffort,
         strategy: configuration.strategy ?? "baseline",
         reviewerRevision: revision,
         ...(guidanceText === undefined ? {} : { guidance: guidanceText }),
@@ -269,7 +370,7 @@ const runCommand = Command.make(
     if (
       variants.some(
         (variant) =>
-          !comparison.configurations.some(
+          !configurations.some(
             (configuration) =>
               configurationIdentity(variant.configuration) === configurationIdentity(configuration),
           ),
@@ -277,13 +378,15 @@ const runCommand = Command.make(
     )
       return yield* EvalConfigurationError.make({
         message:
-          "Effective reviewer configuration differs from the freeze; create a new comparison",
+          suite.frozenRun === undefined
+            ? "Effective reviewer configuration differs from the freeze; create a new comparison"
+            : "Effective reviewer configuration differs from the freeze; create a new baseline run",
       });
 
     const count = yield* writeObservations(
       options.output,
       runEvalSuite(suite, variants, {
-        trials: options.trials,
+        trials: trialCount,
         concurrency: options.concurrency,
         caseIds,
       }),
@@ -293,7 +396,7 @@ const runCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Run a frozen paired comparison in balanced order and retain every completed trial.",
+    "Run a complete frozen baseline or paired comparison and retain every completed trial.",
   ),
   Command.withExamples([
     {
@@ -385,7 +488,10 @@ const reportOutput = Flag.file("output").pipe(
 
 const reportTrials = Flag.integer("trials").pipe(
   Flag.withSchema(EvalTrialCount),
-  Flag.withDescription("Expected trials per case and variant; must match the original run."),
+  Flag.optional,
+  Flag.withDescription(
+    "Expected trials per case; defaults to the manifest count, or three for legacy suites.",
+  ),
 );
 
 const reportCommand = Command.make(
@@ -411,7 +517,10 @@ const reportCommand = Command.make(
     const report = yield* makeQualityReport(
       selectedSuite,
       observations,
-      options.reportTrials,
+      Option.getOrElse(
+        options.reportTrials,
+        () => suite.frozenRun?.trials ?? suite.comparison?.trials ?? 3,
+      ),
       judgments,
     );
 
@@ -424,13 +533,14 @@ const reportCommand = Command.make(
     }
   }),
 ).pipe(
-  Command.withDescription("Reduce saved observations and human judgments without model calls."),
+  Command.withDescription("Reduce saved observations and named judgments without model calls."),
 );
 
 export const command = root.pipe(
   Command.withSubcommands([
     validateCommand,
     freezeCommand,
+    freezeRunCommand,
     runCommand,
     rescoreCommand,
     reportCommand,

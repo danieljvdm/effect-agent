@@ -32,6 +32,7 @@ import {
   ReviewDiagnosticsSink,
   ReviewFileList,
   ReviewFinding,
+  ReviewLineMatches,
   ReviewFollowUp,
   ReviewResolution,
   type ReviewOutcome,
@@ -105,6 +106,7 @@ const scriptedModel = (
 const emptyRepository = ReviewRepository.of({
   readFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
   findFiles: () => Effect.succeed(ReviewFileList.make({ paths: [], truncated: false })),
+  findInFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
 });
 
 const largeRequest = (count: number, patchCharacters = 70_014) =>
@@ -192,6 +194,99 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
 const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop);
 
 layer(testLayer)("review output boundary", (it) => {
+  it.effect(
+    "follows a literal match to a late definition without retaining the query or source in activity",
+    () =>
+      Effect.gen(function* () {
+        const source = `${"unrelated\n".repeat(3_152)}const privateLookup = () => 1;\n`;
+        let calls = 0;
+
+        const outcome = yield* makeReviewer({
+          model: scriptedModel((prompt) => {
+            calls += 1;
+            if (calls === 1)
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                {
+                  type: "tool-call",
+                  id: "locate",
+                  name: "find_in_file",
+                  params: {
+                    path: "src/provider.ts",
+                    revision: "base",
+                    literal: "privateLookup",
+                    startLine: 1,
+                  },
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ]);
+            if (calls === 2) {
+              const searches = prompt.content.flatMap((message) =>
+                message.role === "tool"
+                  ? message.content.filter(
+                      (part) => part.type === "tool-result" && part.name === "find_in_file",
+                    )
+                  : [],
+              );
+
+              expect(searches).toMatchObject([
+                {
+                  isFailure: false,
+                  result: {
+                    path: "src/provider.ts",
+                    revision: "base",
+                    lines: [3_153],
+                    truncated: false,
+                  },
+                },
+              ]);
+
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                {
+                  type: "tool-call",
+                  id: "definition",
+                  name: "read_file",
+                  params: {
+                    path: "src/provider.ts",
+                    revision: "base",
+                    startLine: 3_153,
+                    lineCount: 1,
+                  },
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ]);
+            }
+            expect(sourceResults(prompt).at(-1)).toMatchObject({
+              result: { content: "const privateLookup = () => 1;" },
+            });
+
+            return response({ findings: [] });
+          }),
+        })
+          .review(request)
+          .pipe(
+            Effect.provideService(ReviewRepository, {
+              ...emptyRepository,
+              findInFile: (input) => ReviewLineMatches.fromText(input, source),
+              readFile: (input) => ReviewSource.fromText(input, source),
+            }),
+          );
+
+        expect(calls).toBe(3);
+        expect(outcome.diagnostics?.stages[0]?.toolCalls).toBe(3);
+        expect(outcome.diagnostics?.activity).toMatchObject([
+          {
+            operation: "find_in_file",
+            revision: request.baseRevision,
+            path: "src/provider.ts",
+            returnedMatches: 1,
+            outcome: "success",
+          },
+          { operation: "read_file", returnedStartLine: 3_153, returnedEndLine: 3_153 },
+        ]);
+        expect(JSON.stringify(outcome.diagnostics?.activity)).not.toContain("privateLookup");
+      }),
+  );
+
   it.effect.each(["complete", "incomplete", "excluded", "cost", "omitted"] as const)(
     "returns only explicit resolutions after complete coverage: %s",
     (mode) =>
@@ -335,6 +430,7 @@ layer(testLayer)("review output boundary", (it) => {
         expect(tools.map((tool) => tool.name)).toEqual([
           "read_file",
           "find_files",
+          "find_in_file",
           "record_finding",
           "submit_review",
         ]);
@@ -358,6 +454,20 @@ layer(testLayer)("review output boundary", (it) => {
           expect(schema).toContain('"priority"');
           expect(schema).not.toContain('"severity"');
           expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
+        }
+        const lookup = tools.find((tool) => tool.name === "find_in_file");
+
+        expect(lookup).toBeDefined();
+        if (lookup !== undefined) {
+          const schema = Tool.getJsonSchema(lookup, { transformer: toCodecOpenAI });
+
+          expect(schema).toMatchObject({
+            required: ["path", "revision", "literal", "startLine"],
+            properties: {
+              literal: { type: "string" },
+              startLine: { type: "integer", minimum: 1, maximum: 1_000_000 },
+            },
+          });
         }
 
         return Stream.unwrap(
@@ -889,48 +999,57 @@ new mode 100755`;
     }),
   );
 
-  it.effect("does not renew the tool allowance when the next patch batch starts", () =>
-    Effect.gen(function* () {
-      const calls = yield* Ref.make(0);
-      const reads = yield* Ref.make(0);
-      const input = largeRequest(9);
+  it.effect.each(["find_files", "find_in_file"] as const)(
+    "does not renew the %s allowance when the next patch batch starts",
+    (operation) =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const reads = yield* Ref.make(0);
+        const input = largeRequest(9);
 
-      const model = scriptedModel((_prompt, _tools, choice) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+        const model = scriptedModel((_prompt, _tools, choice) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
 
-            if (call === 2 || typeof choice === "object") return response({ findings: [] });
+              if (call === 2 || typeof choice === "object") return response({ findings: [] });
 
-            return Stream.fromIterable<Response.StreamPartEncoded>([
-              ...Array.from({ length: 32 }, (_, index): Response.StreamPartEncoded => ({
-                type: "tool-call",
-                id: `read-${String(call)}-${String(index)}`,
-                name: "find_files",
-                params: { revision: "head", query: "part" },
-              })),
-              { type: "finish", reason: "tool-calls", usage },
-            ]);
-          }),
-        ),
-      );
-
-      const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
-        .review(input)
-        .pipe(
-          Effect.provideService(ReviewRepository, {
-            ...emptyRepository,
-            findFiles: () =>
-              Ref.update(reads, (count) => count + 1).pipe(
-                Effect.as(ReviewFileList.make({ paths: [], truncated: false })),
-              ),
-          }),
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                ...Array.from({ length: 32 }, (_, index): Response.StreamPartEncoded => ({
+                  type: "tool-call",
+                  id: `read-${String(call)}-${String(index)}`,
+                  name: operation,
+                  params:
+                    operation === "find_files"
+                      ? { revision: "head", query: "part" }
+                      : { revision: "head", path: "src/part.ts", literal: "part", startLine: 1 },
+                })),
+                { type: "finish", reason: "tool-calls", usage },
+              ]);
+            }),
+          ),
         );
 
-      expect(yield* Ref.get(reads)).toBe(32);
-      expect(outcome.exhausted).toBe("tool-calls");
-      expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
-    }),
+        const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
+          .review(input)
+          .pipe(
+            Effect.provideService(ReviewRepository, {
+              ...emptyRepository,
+              findFiles: () =>
+                Ref.update(reads, (count) => count + 1).pipe(
+                  Effect.as(ReviewFileList.make({ paths: [], truncated: false })),
+                ),
+              findInFile: (input) =>
+                Ref.update(reads, (count) => count + 1).pipe(
+                  Effect.andThen(ReviewLineMatches.fromText(input, "")),
+                ),
+            }),
+          );
+
+        expect(yield* Ref.get(reads)).toBe(32);
+        expect(outcome.exhausted).toBe("tool-calls");
+        expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
+      }),
   );
 
   it.effect("keeps one deadline across batches and closes each model stream", () =>

@@ -113,6 +113,7 @@ const observation = (
   variant: EvalVariantConfiguration,
   trial: number,
   result: EvalTrialSucceeded | EvalTrialFailed,
+  elapsedMillis = trial * 100,
 ) =>
   EvalObservation.make({
     version: 1,
@@ -123,7 +124,7 @@ const observation = (
     variant,
     trial,
     recordedAt: at(trial * 1_000),
-    elapsedMillis: trial * 100,
+    elapsedMillis,
     result,
   });
 
@@ -160,6 +161,71 @@ const judgmentSet = (
   });
 
 describe("PR-review eval quality report", () => {
+  it.effect("preserves explicit agent provenance and treats historical names as unknown", () =>
+    Effect.gen(function* () {
+      const original = (yield* loadFixture).cases[0];
+
+      if (original === undefined) return yield* Effect.die("Missing fixture");
+      const suite = EvalSuite.make({ version: 1, cases: [original] });
+      const variant = configuration("provenance");
+
+      const observations = [
+        observation(
+          original,
+          variant,
+          1,
+          succeeded([
+            finding("Legacy judgment"),
+            finding("Agent judgment"),
+            finding("Human judgment"),
+            finding("Unknown judgment"),
+          ]),
+        ),
+      ];
+
+      const supplied = judgmentSet(yield* digestObservationSet(observations), [
+        EvalFindingJudgment.make({
+          ...judgment(original, variant, 1, 0, "invalid"),
+          adjudicator: "human-reviewer",
+        }),
+        EvalFindingJudgment.make({
+          ...judgment(original, variant, 1, 1, "invalid"),
+          adjudicator: "maintainer",
+          adjudicatorKind: "agent",
+        }),
+        EvalFindingJudgment.make({
+          ...judgment(original, variant, 1, 2, "invalid"),
+          adjudicator: "agent-looking-name",
+          adjudicatorKind: "human",
+        }),
+        EvalFindingJudgment.make({
+          ...judgment(original, variant, 1, 3, "invalid"),
+          adjudicatorKind: "unknown",
+        }),
+      ]);
+
+      const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvalJudgmentSet))(
+        Schema.encodeSync(Schema.fromJsonString(EvalJudgmentSet))(supplied),
+      );
+
+      expect(decoded.judgments[0]?.adjudicatorKind).toBeUndefined();
+      expect(decoded.judgments[1]?.adjudicatorKind).toBe("agent");
+      const report = yield* makeQualityReport(suite, observations, 1, decoded);
+
+      expect(report.judgmentProvenance).toEqual({ agent: 1, human: 1, unknown: 2 });
+      expect(renderQualityReport(report)).toContain(
+        "Judgment provenance: 1 agent, 1 human, 2 unknown (all trials).",
+      );
+
+      const { judgmentProvenance: _provenance, ...historical } =
+        Schema.encodeSync(EvalQualityReport)(report);
+
+      expect(
+        renderQualityReport(yield* Schema.decodeUnknownEffect(EvalQualityReport)(historical)),
+      ).toContain("Judgment provenance: unknown (not recorded).");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect(
     "separates verification losses, rejects stale oracles, and rescores both strategies",
     () =>
@@ -1046,7 +1112,7 @@ describe("PR-review eval quality report", () => {
   );
 
   it.effect(
-    "separates settled estimates, reservations, and unknown liability across trial outcomes",
+    "separates settled estimates, reservations, and elapsed time across all returned trial outcomes",
     () =>
       Effect.gen(function* () {
         const suite = yield* loadFixture;
@@ -1065,8 +1131,9 @@ describe("PR-review eval quality report", () => {
             variant,
             1,
             succeeded([finding("Recorded blocker")], 5, { incomplete: true }, 70_000),
+            201,
           ),
-          observation(known, variant, 2, succeeded([], 3, {}, 0)),
+          observation(known, variant, 2, succeeded([], 3, {}, 0), 1_000),
           observation(clean, variant, 1, succeeded([], undefined, { exhausted: "cost" })),
           observation(
             clean,
@@ -1078,6 +1145,7 @@ describe("PR-review eval quality report", () => {
               estimatedCostMicrousd: 1,
               reservedCostMicrousd: 80_000,
             }),
+            1,
           ),
         ];
 
@@ -1103,6 +1171,8 @@ describe("PR-review eval quality report", () => {
           reservationUnknownTrials: 1,
           inputTokens: 30,
           outputTokens: 9,
+          elapsedMillis: 1_302,
+          medianElapsedMillis: 150.5,
         });
         expect(result?.blockerRecall).toMatchObject({
           numerator: 1,
@@ -1120,6 +1190,12 @@ describe("PR-review eval quality report", () => {
           reservedCostMicrousd: 70_000,
           reservationKnownTrials: 2,
           reservationUnknownTrials: 0,
+          elapsedMillis: 1_201,
+          medianElapsedMillis: 600.5,
+        });
+        expect(result?.cases.find((entry) => entry.caseId === clean.id)?.resources).toMatchObject({
+          elapsedMillis: 101,
+          medianElapsedMillis: 50.5,
         });
         expect(result?.cases.find((entry) => entry.caseId === clean.id)?.cleanControlPassed).toBe(
           false,
@@ -1131,10 +1207,27 @@ describe("PR-review eval quality report", () => {
         expect(renderQualityReport(report)).toContain(
           "outstanding reservations 150000µUSD (3 trials known; 1 unknown)",
         );
+        expect(renderQualityReport(report)).toContain(
+          "local trial elapsed: total 1302ms, median 150.5ms (all returned trials)",
+        );
         expect(report.version).toBe(5);
         expect(
           Schema.decodeSync(EvalQualityReport)(Schema.encodeSync(EvalQualityReport)(report)),
         ).toEqual(report);
+        const encoded = Schema.encodeSync(EvalQualityReport)(report);
+
+        const historical = yield* Schema.decodeUnknownEffect(EvalQualityReport)({
+          ...encoded,
+          variants: encoded.variants.map((variant) => {
+            const { medianElapsedMillis: _median, ...resources } = variant.resources;
+
+            return { ...variant, resources };
+          }),
+        });
+
+        expect(renderQualityReport(historical)).toContain(
+          "local trial elapsed: total 1302ms, median unknown (all returned trials)",
+        );
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 

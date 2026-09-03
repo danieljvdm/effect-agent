@@ -53,11 +53,16 @@ RIGHT-side anchors and publishes against the inspected head. A stopped run prese
 recorded before research ended. Preparation failures publish a failure marker. Blocking findings
 request changes and fail the Action after publication; other outcomes remain comments.
 
+Source tools can locate paths, search a case-sensitive literal within one authorized file,
+and read surrounding lines. In-file search returns at most 20 matching line numbers, with
+pagination when more remain. It uses the same immutable revisions, access rules, and tool budget
+as source reads; a match alone does not supply source evidence.
+
 The review displays discovery's declared status separately from candidate verification, excluded
-paths, ignored paths, and pending batches. Its compact activity summary counts reads, file searches,
+paths, ignored paths, and pending batches. Its compact activity summary counts reads, source searches,
 EOF-short reads, oversized rejections, unavailable source, truncated results, and dropped records.
 Action logs retain at most 128 source-activity records, with stage, batch, immutable revision, path,
-requested and returned line spans, outcome, and truncation. They exclude source contents, search
+requested and returned read spans, search match counts, outcome, and truncation. They exclude source contents, search
 queries, credentials, raw causes, verifier reasons, and model reasoning. Calls, usage, reservations,
 and stop reasons have stage attribution alongside one reconciled attempt total. Diagnostics are
 finalized after expected failure, defect, or interruption while the process remains alive.

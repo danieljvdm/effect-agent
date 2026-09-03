@@ -3,6 +3,7 @@ import {
   ReviewChange,
   ReviewDiagnosticsSink,
   ReviewFileList,
+  ReviewLineMatches,
   ReviewRepository,
   ReviewRequest,
   ReviewSource,
@@ -110,6 +111,7 @@ const repository = ReviewRepository.of({
     ),
   findFiles: () =>
     Effect.succeed(ReviewFileList.make({ paths: ["src/value.ts"], truncated: false })),
+  findInFile: (input) => ReviewLineMatches.fromText(input, "private-source-fixture"),
 });
 
 const rawUsage = (input: number, output: number, read = 0, write = input - read) => ({

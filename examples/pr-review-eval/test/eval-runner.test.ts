@@ -146,6 +146,56 @@ const failedVerificationDiagnostics = (inputDigest: EvalInputDigest) =>
   });
 
 describe("PR-review model eval", () => {
+  it.effect.each([
+    { name: "two baseline strategies", legacy: false },
+    { name: "a baseline strategy and legacy baseline ID", legacy: true },
+  ])("rejects colliding cache selectors for $name before review", ({ legacy }) =>
+    Effect.gen(function* () {
+      const suite = yield* makeSuite();
+      let calls = 0;
+
+      const review = () =>
+        Effect.sync(() => {
+          calls += 1;
+
+          return successfulOutcome;
+        });
+
+      const variants: ReadonlyArray<EvalVariant<never>> = [
+        {
+          configuration: EvalVariantConfiguration.make({
+            ...configuration("candidate-one"),
+            strategy: "baseline",
+          }),
+          review,
+        },
+        {
+          configuration: legacy
+            ? configuration("baseline")
+            : EvalVariantConfiguration.make({
+                ...configuration("candidate-two"),
+                strategy: "baseline",
+                reasoningEffort: "high",
+              }),
+          review,
+        },
+      ];
+
+      const failure = yield* runEvalSuite(suite, variants, {
+        trials: 1,
+        concurrency: 1,
+        caseIds: [],
+      }).pipe(Stream.runCollect, Effect.flip);
+
+      expect(failure).toMatchObject({
+        _tag: "EvalConfigurationError",
+        message:
+          "Eval variants share a cache namespace selector; run these configurations separately",
+      });
+      expect(calls).toBe(0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("retains bounded final diagnostics while a defect propagates", () =>
     Effect.gen(function* () {
       const suite = yield* makeSuite();

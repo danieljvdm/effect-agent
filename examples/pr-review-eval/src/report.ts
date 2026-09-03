@@ -6,7 +6,12 @@ import {
 } from "@effect-agent/pr-review";
 import { Effect, Schema } from "effect";
 
-import { configurationIdentity, freezeEvalSuite, validateFrozenComparison } from "./comparison.ts";
+import {
+  configurationIdentity,
+  freezeEvalSuite,
+  validateFrozenComparison,
+  validateFrozenRun,
+} from "./comparison.ts";
 import {
   type EvalCase,
   EvalCaseId,
@@ -141,7 +146,10 @@ const ResourceSummaryFields = Schema.Struct({
   /** Optional only for reading reports produced before reservation accounting. */
   reservationKnownTrials: Schema.optionalKey(Schema.Natural),
   reservationUnknownTrials: Schema.optionalKey(Schema.Natural),
+  /** Total local elapsed time across every returned trial, including failed and incomplete trials. */
   elapsedMillis: Schema.Natural,
+  /** Same population as the total; absent for empty populations and historical reports. */
+  medianElapsedMillis: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
 }).check(
   Schema.makeFilter(
     (resources) => {
@@ -167,6 +175,7 @@ const ResourceSummaryFields = Schema.Struct({
         resources.incompleteTrials ===
           resources.costedIncompleteTrials + resources.uncostedIncompleteTrials &&
         resources.costedFailedTrials <= resources.failedTrials &&
+        (resources.medianElapsedMillis === undefined || resources.attemptedTrials > 0) &&
         (!hasReservationAccounting ||
           (resources.reservationKnownTrials !== undefined &&
             resources.reservationUnknownTrials !== undefined &&
@@ -314,15 +323,33 @@ export class EvalCaseIdentity extends Schema.Class<EvalCaseIdentity>(
 
 export class EvalRolloutDecision extends Schema.Class<EvalRolloutDecision>(
   "@effect-agent/example-pr-review-eval/EvalRolloutDecision",
-)({
-  decision: Schema.Literals(["eligible", "experimental"]),
-  basis: Schema.Literal("frozen-heldout-first-trials"),
-  heldoutCases: Schema.Natural,
-  baselineFalseBlockers: Schema.Natural,
-  verifiedFalseBlockers: Schema.Natural,
-  reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
-    Schema.isMaxLength(20),
+)(
+  Schema.Struct({
+    decision: Schema.Literals(["eligible", "experimental", "not-applicable"]),
+    basis: Schema.Literals(["frozen-heldout-first-trials", "frozen-baseline-run"]),
+    heldoutCases: Schema.Natural,
+    baselineFalseBlockers: Schema.Natural,
+    verifiedFalseBlockers: Schema.optionalKey(Schema.Natural),
+    reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+      Schema.isMaxLength(20),
+    ),
+  }).check(
+    Schema.makeFilter(
+      (decision) =>
+        decision.basis === "frozen-baseline-run"
+          ? decision.decision === "not-applicable" && decision.verifiedFalseBlockers === undefined
+          : decision.decision !== "not-applicable" && decision.verifiedFalseBlockers !== undefined,
+      { title: "Baseline runs cannot make paired rollout decisions" },
+    ),
   ),
+) {}
+
+export class EvalJudgmentProvenance extends Schema.Class<EvalJudgmentProvenance>(
+  "@effect-agent/example-pr-review-eval/EvalJudgmentProvenance",
+)({
+  agent: Schema.Natural,
+  human: Schema.Natural,
+  unknown: Schema.Natural,
 }) {}
 
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
@@ -330,6 +357,7 @@ export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
 )({
   version: Schema.Literal(5),
   observationSetDigest: EvalObservationSetDigest,
+  frozenRunDigest: Schema.optionalKey(EvalInputDigest),
   runnerVersion: EvalRunnerVersion,
   trialCount: Schema.Int.check(Schema.isGreaterThan(0)),
   caseSet: Schema.Array(EvalCaseIdentity).check(Schema.isMinLength(1)),
@@ -337,6 +365,8 @@ export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   unjudgedFindings: Schema.Array(EvalFindingReference),
   unmappedValidFindings: Schema.Array(EvalFindingReference),
   rollout: EvalRolloutDecision,
+  /** Counts supplied judgment records across all trials; absent historical reports are unknown. */
+  judgmentProvenance: Schema.optionalKey(EvalJudgmentProvenance),
 }) {}
 
 const encodeObservationArray = Schema.encodeEffect(
@@ -545,6 +575,18 @@ const resourceSummary = (
     }
   }
 
+  const trialElapsedMillis = observations
+    .map((observation) => observation.elapsedMillis)
+    .sort((left, right) => left - right);
+
+  const lowerMiddle = trialElapsedMillis[Math.floor((trialElapsedMillis.length - 1) / 2)];
+  const upperMiddle = trialElapsedMillis[Math.floor(trialElapsedMillis.length / 2)];
+
+  const medianElapsedMillis =
+    lowerMiddle === undefined || upperMiddle === undefined
+      ? undefined
+      : (lowerMiddle + upperMiddle) / 2;
+
   return EvalResourceSummary.make({
     attemptedTrials: observations.length,
     succeededTrials,
@@ -569,6 +611,7 @@ const resourceSummary = (
     reservationKnownTrials,
     reservationUnknownTrials: observations.length - reservationKnownTrials,
     elapsedMillis,
+    ...(medianElapsedMillis === undefined ? {} : { medianElapsedMillis }),
   });
 };
 
@@ -635,6 +678,8 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   const comparison =
     suite.comparison === undefined ? undefined : yield* validateFrozenComparison(suite);
 
+  const frozenRun = suite.frozenRun === undefined ? undefined : yield* validateFrozenRun(suite);
+
   if (observations.length === 0) {
     return yield* EvalReportError.make({ message: "At least one eval observation is required" });
   }
@@ -651,6 +696,11 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     oracleDigests.set(evalCase.id, yield* digestEvalOracle(evalCase));
 
   for (const observation of observations) {
+    if (observation.frozenRunDigest !== undefined && frozenRun === undefined) {
+      return yield* EvalReportError.make({
+        message: "Tagged baseline observations require their original frozen run manifest",
+      });
+    }
     const evalCase = cases.get(observation.caseId);
 
     if (
@@ -661,6 +711,25 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     ) {
       return yield* EvalReportError.make({
         message: `Observation case identity is incompatible for ${observation.caseId}`,
+      });
+    }
+    if (
+      frozenRun !== undefined &&
+      (observation.frozenRunDigest !== frozenRun.digest ||
+        observation.comparisonDigest !== undefined ||
+        observation.previousObservationDigest !== undefined ||
+        observation.oracleDigest === undefined ||
+        observation.runId === undefined ||
+        observation.sequence === undefined ||
+        observation.cacheNamespace !==
+          (yield* digestText(
+            `${observation.runId}:${evalCase.id}:baseline:${observation.trial}`,
+          )) ||
+        configurationIdentity(observation.variant) !==
+          configurationIdentity(frozenRun.configuration))
+    ) {
+      return yield* EvalReportError.make({
+        message: `Observation does not match the original frozen baseline run for ${observation.caseId}`,
       });
     }
     if (
@@ -706,13 +775,34 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
       });
     }
     if (
-      comparison !== undefined &&
+      (comparison !== undefined || frozenRun !== undefined) &&
       observation.result._tag === "Succeeded" &&
       diagnostics === undefined
     ) {
       return yield* EvalReportError.make({
         message:
           "Frozen observations must retain every original candidate and its publication disposition",
+      });
+    }
+    if (
+      frozenRun !== undefined &&
+      diagnostics !== undefined &&
+      (diagnostics.verification !== "not-requested" ||
+        diagnostics.candidates.some(
+          (candidate) =>
+            candidate.disposition !== "not-requested" || candidate.publication !== "published",
+        ) ||
+        (observation.result._tag === "Succeeded" &&
+          Schema.encodeSync(Schema.fromJsonString(Schema.Array(ReviewFinding)))(
+            diagnostics.candidates.map((candidate) => candidate.finding),
+          ) !==
+            Schema.encodeSync(Schema.fromJsonString(Schema.Array(ReviewFinding)))(
+              observation.result.outcome.report.findings,
+            )))
+    ) {
+      return yield* EvalReportError.make({
+        message:
+          "Baseline observations must retain the original unverified candidates and published findings",
       });
     }
 
@@ -736,6 +826,31 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     }
     encodedConfigurations.set(observation.variant.id, encoded);
     configurations.set(observation.variant.id, observation.variant);
+  }
+
+  if (frozenRun !== undefined) {
+    const expected = suite.cases.flatMap((evalCase) =>
+      Array.from({ length: frozenRun.trials }, (_, index) =>
+        trialKey(evalCase.id, frozenRun.configuration.id, index + 1),
+      ),
+    );
+
+    if (
+      observations.length !== frozenRun.plannedRuns ||
+      trialCount !== frozenRun.trials ||
+      new Set(observations.map((observation) => observation.runId)).size !== 1 ||
+      new Set(observations.map((observation) => observation.cacheNamespace)).size !==
+        observations.length ||
+      observations.some(
+        (observation, index) =>
+          observation.sequence !== index || observationKey(observation) !== expected[index],
+      )
+    ) {
+      return yield* EvalReportError.make({
+        message:
+          "Frozen baseline reports require the complete case-then-trial grid, one run identity, and isolated caches",
+      });
+    }
   }
 
   if (comparison !== undefined) {
@@ -1191,6 +1306,34 @@ const rolloutDecision = (
   const baseline = variants.find((variant) => variant.configuration.strategy === "baseline");
   const verified = variants.find((variant) => variant.configuration.strategy === "verified");
 
+  if (suite.frozenRun !== undefined) {
+    const baselineId = suite.frozenRun.configuration.id;
+
+    const baselineFalseBlockers = heldout.reduce((total, evalCase) => {
+      const observation = validated.observations.get(trialKey(evalCase.id, baselineId, 1));
+
+      return (
+        total +
+        (observation === undefined
+          ? 0
+          : blockingFindingQuality(
+              indexFindings(observation, validated.judgments).filter(isPublished),
+              evalCase,
+            ).overstated)
+      );
+    }, 0);
+
+    return EvalRolloutDecision.make({
+      decision: "not-applicable",
+      basis: "frozen-baseline-run",
+      heldoutCases: heldout.length,
+      baselineFalseBlockers,
+      reasons: [
+        "Descriptive baseline run; no paired rollout decision is made. Verified false blockers are unassessed.",
+      ],
+    });
+  }
+
   if (suite.comparison === undefined) reasons.add("No frozen paired comparison is available.");
   if (baseline === undefined || verified === undefined)
     reasons.add("Both baseline and verified observations are required.");
@@ -1407,9 +1550,16 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
     );
   }
 
+  const judgmentProvenance = { agent: 0, human: 0, unknown: 0 };
+
+  for (const judgment of validated.judgments.values()) {
+    judgmentProvenance[judgment.adjudicatorKind ?? "unknown"] += 1;
+  }
+
   return EvalQualityReport.make({
     version: 5,
     observationSetDigest: validated.observationSetDigest,
+    ...(suite.frozenRun === undefined ? {} : { frozenRunDigest: suite.frozenRun.digest }),
     runnerVersion: validated.runnerVersion,
     trialCount: validated.trialCount,
     caseSet: validated.cases.map((evalCase) =>
@@ -1428,6 +1578,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
     unjudgedFindings,
     unmappedValidFindings,
     rollout: rolloutDecision(suite, validated, variants),
+    judgmentProvenance: EvalJudgmentProvenance.make(judgmentProvenance),
   });
 });
 
@@ -1509,6 +1660,9 @@ const renderRate = (rate: EvalRate): string =>
     : `${rate.numerator}/${rate.denominator} (${rate.status})`;
 
 export const renderQualityReport = (report: EvalQualityReport): string =>
+  (report.judgmentProvenance === undefined
+    ? "Judgment provenance: unknown (not recorded).\n"
+    : `Judgment provenance: ${report.judgmentProvenance.agent} agent, ${report.judgmentProvenance.human} human, ${report.judgmentProvenance.unknown} unknown (all trials).\n`) +
   report.variants
     .map((variant) => {
       const quality = variant.firstTrialFindings;
@@ -1544,7 +1698,8 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
         resources.reservedCostMicrousd === undefined
           ? `outstanding reservations unavailable (${resources.attemptedTrials} trials unknown)`
           : `outstanding reservations ${resources.reservedCostMicrousd}µUSD (${resources.reservationKnownTrials} trials known; ${resources.reservationUnknownTrials} unknown)`,
-        `elapsed ${variant.resources.elapsedMillis}ms`,
+        `local trial elapsed: total ${variant.resources.elapsedMillis}ms, median ${variant.resources.medianElapsedMillis === undefined ? "unknown" : `${variant.resources.medianElapsedMillis}ms`} (all returned trials)`,
       ].join("; ");
     })
-    .join("\n") + `\nRollout: ${report.rollout.decision}. ${report.rollout.reasons.join(" ")}`;
+    .join("\n") +
+  `\nRollout: ${report.rollout.decision}. ${report.rollout.reasons.join(" ")}`;

@@ -14,6 +14,7 @@ import {
   ReviewDiagnosticsSink,
   ReviewFileList,
   ReviewFinding,
+  ReviewLineMatches,
   ReviewFollowUp,
   ReviewRepository,
   ReviewRequest,
@@ -104,6 +105,7 @@ const decision = (
 const emptyRepository = ReviewRepository.of({
   readFile: () => Effect.fail(ReviewContextError.make({ message: "Unavailable" })),
   findFiles: () => Effect.succeed(ReviewFileList.make({ paths: [], truncated: false })),
+  findInFile: () => Effect.fail(ReviewContextError.make({ message: "Unavailable" })),
 });
 
 const scriptedModel = (
@@ -162,6 +164,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
     "unavailable",
     "truncated",
     "eof",
+    "search-only",
   ] as const)("validates cited source coverage across delivered reads: %s", (mode) =>
     Effect.gen(function* () {
       let calls = 0;
@@ -177,6 +180,14 @@ layer(testLayer)("mandatory candidate verification", (it) => {
           if (!isVerifier(tools)) return discoveryResponse();
           calls += 1;
           if (calls === 1) {
+            if (mode === "search-only")
+              return toolResponse("find_in_file", {
+                path: "src/source.ts",
+                revision: "head",
+                literal: "Line",
+                startLine: 1,
+              });
+
             const firstEnd =
               mode === "overlapping" ? 5 : mode === "contained" ? 8 : mode === "contiguous" ? 4 : 3;
 
@@ -243,6 +254,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
               mode === "unavailable" && input.startLine > 1
                 ? Effect.fail(ReviewContextError.make({ message: "Unavailable" }))
                 : ReviewSource.fromText(input, source),
+            findInFile: (input) => ReviewLineMatches.fromText(input, source),
           }),
         );
 
@@ -453,6 +465,17 @@ layer(testLayer)("mandatory candidate verification", (it) => {
                 name: "find_files",
                 params: { query: "private search term", revision: "head" },
               },
+              {
+                type: "tool-call",
+                id: "literal-search",
+                name: "find_in_file",
+                params: {
+                  path: "short.ts",
+                  literal: "private literal",
+                  revision: "base",
+                  startLine: 1,
+                },
+              },
               { type: "finish", reason: "tool-calls", usage },
             ]);
           }),
@@ -471,6 +494,8 @@ layer(testLayer)("mandatory candidate verification", (it) => {
                     ),
               findFiles: () =>
                 Effect.succeed(ReviewFileList.make({ paths: ["one.ts"], truncated: true })),
+              findInFile: (input) =>
+                ReviewLineMatches.fromText(input, "private literal and private source"),
             }),
           );
 
@@ -496,6 +521,15 @@ layer(testLayer)("mandatory candidate verification", (it) => {
               outcome: "truncated",
               truncated: true,
               returnedPaths: 1,
+            }),
+            expect.objectContaining({
+              operation: "find_in_file",
+              revision: request.baseRevision,
+              path: "short.ts",
+              requestedStartLine: 1,
+              returnedMatches: 1,
+              outcome: "success",
+              truncated: false,
             }),
           ]),
         );
@@ -533,6 +567,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
               expect(tools.map(({ name }) => name)).toEqual([
                 "read_file",
                 "find_files",
+                "find_in_file",
                 "submit_verification",
               ]);
               const candidates = originalCandidates(prompt);

@@ -1,4 +1,5 @@
 import {
+  ReviewActivity,
   ReviewCandidate,
   ReviewDiagnostics,
   ReviewFinding,
@@ -70,7 +71,19 @@ describe("review presentation", () => {
             evidence: [],
           }),
         ),
-        activity: [],
+        activity: [
+          ReviewActivity.make({
+            stage: "discovery",
+            batch: 0,
+            operation: "find_in_file",
+            revision: headRevision,
+            path: "src/projection.ts",
+            requestedStartLine: 1,
+            returnedMatches: 2,
+            outcome: "success",
+            truncated: false,
+          }),
+        ],
         droppedActivityCount: 7,
         droppedCandidateCount: 0,
         stages: [],
@@ -123,6 +136,7 @@ describe("review presentation", () => {
       expect(body).toContain("Discovery completion: **incomplete**");
       expect(body).toContain("Discovery declared assessment: **not declared**");
       expect(body).toContain("7 records dropped");
+      expect(body).toContain("0 reads · 1 file search");
       expect(body).toContain("completed=false");
       if (disposition === "refuted") expect(body).not.toContain(anchoredFinding.title);
       for (const [index, finding] of publication.report.findings.entries()) {
