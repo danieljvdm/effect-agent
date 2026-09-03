@@ -69,6 +69,7 @@
     "durable-progress-wait",
     "durable-run-duration",
     "effect-agent-umbrella",
+    "effect-cf-040-upgrade",
     "effect-rc110-upgrade",
     "effect-rc111-upgrade",
     "engine-preserve-run-policy-compaction",
