@@ -296,6 +296,8 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
           });
         }
         rows.set(intent.executionId, intent);
+
+        return intent;
       }),
     scan: (request) =>
       Effect.gen(function* () {
@@ -360,6 +362,7 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
   const hostContext = yield* Layer.build(
     WorkflowAgentHost.layer({
       deploymentId,
+      principal: "test-caller",
       dispatchTimeoutMillis: 100,
       repairBatchSize: 16,
       executionConcurrency: 2,

@@ -1,6 +1,7 @@
 import { SettlementId } from "@effect-agent/core";
 import { DeploymentId, Receipt } from "@effect-agent/thread";
 import { Context, Effect, Schema, type Scope } from "effect";
+import { DurableDeferred } from "effect/unstable/workflow";
 
 /** Only identities cross the Workflow boundary; the agent journal owns the outcome. */
 export class WorkflowSubmission extends Schema.Class<WorkflowSubmission>(
@@ -27,7 +28,13 @@ export class WorkflowDispatchIntent extends Schema.Class<WorkflowDispatchIntent>
   ...WorkflowSubmission.fields,
   workflowName: Schema.NonEmptyString,
   executionId: Schema.NonEmptyString,
+  /** One workflow step owns this submission. Repair must notify it before removing the intent. */
+  completionToken: Schema.optionalKey(DurableDeferred.Token),
 }) {}
+
+/** Native deferred results contain only canonical identities, never a second agent result. */
+export const workflowCompletion = (name: string) =>
+  DurableDeferred.make(name, { success: WorkflowSettlementReference });
 
 export class WorkflowDispatchError extends Schema.TaggedError<WorkflowDispatchError>()(
   "WorkflowDispatchError",
@@ -48,15 +55,19 @@ export class WorkflowDispatchScan extends Schema.Class<WorkflowDispatchScan>(
 }) {}
 
 /**
- * Adapter-private outbox. `put` is idempotent only for an identical intent and must fail
- * on identity conflicts. `scan` returns at most limit rows in executionId order, after
+ * Adapter-private outbox. `put` returns the stored intent, preserving an existing completion
+ * token when omitted and allowing its one-time attachment. Different identities or tokens
+ * conflict. `remove` must compare the entire intent, so a concurrent token attachment cannot
+ * be lost. `scan` returns at most limit rows in executionId order, after
  * the exclusive cursor, filtered by deployment and workflow. All writes are durable
  * before returning. No transcript, outcome, or native engine storage belongs here.
  */
 export class WorkflowDispatchStore extends Context.Service<
   WorkflowDispatchStore,
   {
-    readonly put: (intent: WorkflowDispatchIntent) => Effect.Effect<void, WorkflowDispatchError>;
+    readonly put: (
+      intent: WorkflowDispatchIntent,
+    ) => Effect.Effect<WorkflowDispatchIntent, WorkflowDispatchError>;
     readonly scan: (
       request: WorkflowDispatchScan,
     ) => Effect.Effect<ReadonlyArray<WorkflowDispatchIntent>, WorkflowDispatchError>;
@@ -84,6 +95,8 @@ export const WorkflowDispatchFailpointLocation = Schema.Literals([
   "launch:after",
   "completion:before-observe",
   "completion:after-observe",
+  "completion:before-notify",
+  "completion:after-notify",
   "cleanup:before",
   "cleanup:after",
 ]);

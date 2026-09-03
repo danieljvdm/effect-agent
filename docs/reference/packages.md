@@ -128,9 +128,15 @@ an empty processing result do not imply completion.
 
 ### `@effect-agent/workflow`
 
+`AgentWorkflow.execute(agent, input, { name })` composes registered Agents inside native
+`Workflow.toLayer` handlers. Stable step names deduplicate admission across replays; Effect's
+`DurableDeferred` suspends and resumes the parent. Results are decoded from canonical
+settlements, and `AgentWorkflow.Error` supplies the workflow's typed error Schema.
+
 Optional `WorkflowAgentHost` over an injected upstream Effect `WorkflowEngine`. It reuses the
 durable runtime's admission, journal recovery, authorization, and settlement protocol.
 `WorkflowAgentHost.layer(options)` consumes a runtime whose Layer owns agent registration.
+Its required `principal` supplies the identity for workflow-originated submissions.
 `WorkflowDispatchStore` retains dispatch intents; `WorkflowRepairTrigger` requires the host to
 schedule startup and repeated repair. The shared package starts no polling loop and imports no
 Node or Cloudflare implementation.

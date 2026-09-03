@@ -96,12 +96,51 @@ export class SqlWorkflowDispatchStore {
 
           const existing = yield* decodeRow(rows[0]);
 
-          if ((yield* encodeIntent(existing)) !== encoded) {
+          const merged = new WorkflowDispatchIntent({
+            ...intent,
+            ...(existing.completionToken === undefined
+              ? {}
+              : { completionToken: existing.completionToken }),
+          });
+
+          if (
+            (yield* encodeIntent(
+              new WorkflowDispatchIntent({
+                ...existing,
+                ...(merged.completionToken === undefined
+                  ? {}
+                  : { completionToken: merged.completionToken }),
+              }),
+            )) !== (yield* encodeIntent(merged)) ||
+            (intent.completionToken !== undefined &&
+              existing.completionToken !== undefined &&
+              intent.completionToken !== existing.completionToken)
+          ) {
             return yield* new WorkflowDispatchError({
               operation: "put",
               message: "Workflow dispatch identity already belongs to a different immutable intent",
             });
           }
+          const retained = yield* encodeIntent(merged);
+          const previous = yield* encodeIntent(existing);
+
+          if (retained !== previous) {
+            const updated = yield* sql`
+              UPDATE effect_agent_workflow_dispatch SET intent_json = ${retained}
+              WHERE workflow_name = ${intent.workflowName} AND execution_id = ${intent.executionId}
+                AND intent_json = ${previous}
+              RETURNING execution_id
+            `;
+
+            if (updated.length !== 1) {
+              return yield* new WorkflowDispatchError({
+                operation: "put",
+                message: "Dispatch intent changed while attaching its completion token",
+              });
+            }
+          }
+
+          return merged;
         },
         sql.withTransaction,
         Effect.mapError(dispatchError("put")),
@@ -145,10 +184,20 @@ export class SqlWorkflowDispatchStore {
               message: "Cannot remove a different immutable Workflow dispatch intent",
             });
           }
-          yield* sql`
+
+          const removed = yield* sql`
             DELETE FROM effect_agent_workflow_dispatch
             WHERE workflow_name = ${intent.workflowName} AND execution_id = ${intent.executionId}
+              AND intent_json = ${yield* encodeIntent(intent)}
+            RETURNING execution_id
           `;
+
+          if (removed.length !== 1) {
+            return yield* new WorkflowDispatchError({
+              operation: "remove",
+              message: "Dispatch intent changed before cleanup",
+            });
+          }
         },
         sql.withTransaction,
         Effect.mapError(dispatchError("remove")),

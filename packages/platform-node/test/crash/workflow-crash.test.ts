@@ -4,7 +4,7 @@ import {
   ResolutionCompletedWithResult,
   UnknownResolutionCommand,
 } from "@effect-agent/thread";
-import { WorkflowAgentHost } from "@effect-agent/workflow";
+import { AgentWorkflow, WorkflowAgentHost } from "@effect-agent/workflow";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
@@ -18,7 +18,12 @@ import {
   temporaryDirectory,
   until,
 } from "../workflow-fixtures.ts";
-import { makeCrashFixture, WorkflowCrashBoundary, WorkflowCrashMarker } from "./workflow-worker.ts";
+import {
+  makeCrashFixture,
+  WorkflowCrashBoundary,
+  WorkflowCrashMarker,
+  WorkflowCrashParent,
+} from "./workflow-worker.ts";
 
 it.live.each(WorkflowCrashBoundary.literals)(
   "recovers Workflow boundary %s after SIGKILL without inventing or replaying external effects",
@@ -76,6 +81,26 @@ it.live.each(WorkflowCrashBoundary.literals)(
       yield* Fiber.join(stderr);
       const ordinary = boundary === "ordinary:external-effect";
       const fixture = yield* makeCrashFixture(directory, ordinary);
+
+      if (boundary === "completion:before-notify" || boundary === "completion:after-notify") {
+        const stack = WorkflowCrashParent.toLayer(() =>
+          AgentWorkflow.execute(
+            fixture.agent.definition,
+            { question: "survive SIGKILL" },
+            { name: "triage" },
+          ),
+        ).pipe(
+          Layer.provideMerge(hostLayer(directory, [fixture]).pipe(Layer.provide(fixture.handlers))),
+        );
+
+        yield* Effect.gen(function* () {
+          expect(yield* WorkflowCrashParent.execute({ id: "crash" })).toEqual({ answer: "done" });
+          yield* until(pendingIntents, (rows) => rows.length === 0);
+          expect(yield* fs.readFileString(`${directory}/model-calls`)).toBe("called\n");
+        }).pipe(Effect.provide(stack));
+
+        return;
+      }
 
       yield* Effect.gen(function* () {
         const host = yield* WorkflowAgentHost;

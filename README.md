@@ -60,6 +60,8 @@ Saving thread history does not make a run durable. Durable execution is availabl
 On Node, the optional [`@effect-agent/workflow` host](docs/platforms/node.md#workflow) can
 drive the same durable runtime through an injected Effect `WorkflowEngine`. Its SQL-backed
 single-process setup preserves the same agent definitions and canonical settlement contract.
+Use `AgentWorkflow.execute(agent, input, { name })` inside a native `Workflow.toLayer` handler
+to suspend for pending work and return the Agent's typed output when it settles.
 
 Both hosts save work before acknowledging it, record one terminal settlement per accepted
 submission, and reject commits from workers that have lost ownership. They support approval

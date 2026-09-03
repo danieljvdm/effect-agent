@@ -69,6 +69,13 @@ Pending work, approvals, unknown outcomes, and native suspension remain unfinish
 canonical log contains a Settlement. Infrastructure failures suspend the Workflow for repair.
 Ordinary tools remain ordinary tools; the driver does not wrap them in replayable Activities.
 
+Inside an application Workflow, `AgentWorkflow.execute` assigns each named step a stable
+submission identity and awaits an upstream `DurableDeferred`. The dispatch intent retains its
+completion token until repair delivers a reference to the canonical Settlement. Notification
+and cleanup are separate recoverable commits. A resumed handler rechecks admission identity and
+authorization and decodes the canonical result; the deferred does not store a second copy of
+the Agent output. Parent interruption detaches the caller without cancelling accepted work.
+
 Admission, dispatch intent storage, and native Workflow storage commit independently. A required
 host-owned repair trigger discovers accepted work and retries retained dispatch intents after
 lost hints or process loss. An intent remains until native success identifies the matching
