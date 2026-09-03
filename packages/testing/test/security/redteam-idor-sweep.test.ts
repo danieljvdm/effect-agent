@@ -1,29 +1,32 @@
-import { Agent, AgentPolicy, ThreadId, ToolCallId } from "@effect-agent/core";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { ObligationThresholds, RetryCommand } from "@effect-agent/thread/Admin";
 import {
-  ApprovalDecisionCommand,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  IdempotencyKey,
-  ObligationThresholds,
+  type DurableSubmitOptions,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import {
   OperationAuthorizer,
   OperationDenied,
-  Principal,
-  ProducerId,
-  ResolutionNeverHappened,
-  RetryCommand,
-  ToolReconciler,
-  UnknownResolutionCommand,
-  WakeScheduler,
   type AuthorizedOperation,
-  type DurableSubmitOptions,
   type OperationAuthorizationRequest,
   type OperationAuthorizerService,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/OperationAuthorizer";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  ResolutionNeverHappened,
+  UnknownResolutionCommand,
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";

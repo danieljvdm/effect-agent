@@ -1,0 +1,76 @@
+name: Bundle size comment
+
+on:
+  workflow_run:
+    workflows: [Bundle size]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bundle-stats
+          path: bundle-stats
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # This trusted publisher deliberately uses the Actions runtime, not repo
+      # scripts: no checkout, dependency install, or execution of artifact code.
+      - name: Update bundle comparison comment
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const file = 'bundle-stats/report.md';
+            const stat = fs.lstatSync(file);
+            if (!stat.isFile() || stat.size > 12000) throw new Error('Invalid bundle report');
+            const table = fs.readFileSync(file, 'utf8').trim();
+            const lines = table.split('\n');
+            const row = /^\| (agent|runtime|lazy)-(root|module) \| (initial|deferred|total) \| (n\/a|\d+\.\d{2} kB) \| \d+\.\d{2} kB \| (new export|[+-]?\d+\.\d{2} kB(?: \/ [+-]?\d+\.\d{2}%)?) \| \d+\.\d{2} kB \|$/;
+            if (lines.length < 8 || lines.length > 20 ||
+                lines[0] !== '| Fixture | Part | Base gzip | PR gzip | Change | PR minified |' ||
+                lines[1] !== '| --- | --- | ---: | ---: | ---: | ---: |' ||
+                !lines.slice(2).every(line => row.test(line))) {
+              throw new Error('Invalid bundle report table');
+            }
+            const run = context.payload.workflow_run;
+            const readData = (file, limit) => {
+              const stat = fs.lstatSync(file);
+              if (!stat.isFile() || stat.size > limit) throw new Error('Invalid bundle metadata');
+              return fs.readFileSync(file, 'utf8');
+            };
+            const number = readData('bundle-stats/pr-number.txt', 20).trim();
+            const report = JSON.parse(readData('bundle-stats/report.json', 12000));
+            if (!/^[1-9][0-9]{0,9}$/.test(number) || !/^[a-f0-9]{40}$/.test(report.base?.revision)) {
+              throw new Error('Invalid bundle revision or PR number');
+            }
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(number) });
+            if (pr.state !== 'open' || pr.head.sha !== run.head_sha ||
+                pr.head.repo?.id !== run.head_repository.id ||
+                pr.base.sha !== report.base.revision ||
+                pr.base.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) return;
+            const marker = '<!-- effect-agent:bundle-size -->';
+            const body = `${marker}\n### Bundle size\n\n${table}\n\n` +
+              'Minified ESM for es2022, browser target, including Effect and other dependencies. ' +
+              'Gzip is measured per chunk. Initial includes statically imported shared chunks; ' +
+              'deferred is the remaining output. New exports have no prior baseline.\n\n' +
+              `[Chunks, module analysis, and exact bytes](${run.html_url}) for \`${run.head_sha.slice(0, 12)}\`.`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo, issue_number: pr.number, per_page: 100,
+            });
+            const previous = comments.find(comment =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number, body });
+            }

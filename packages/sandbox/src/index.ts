@@ -1,7 +1,7 @@
-export * from "./code-executor.ts";
-export * from "./interactive-browser.ts";
-export * from "./protected-browser.ts";
-export * from "./page-capture.ts";
-export * from "./page-crawl.ts";
-export * from "./page-screenshot.ts";
-export * from "./sandbox.ts";
+export * as CodeExecutor from "./CodeExecutor.ts";
+export * as InteractiveBrowser from "./InteractiveBrowser.ts";
+export * as PageCapture from "./PageCapture.ts";
+export * as PageCrawl from "./PageCrawl.ts";
+export * as PageScreenshot from "./PageScreenshot.ts";
+export * as ProtectedBrowser from "./ProtectedBrowser.ts";
+export * as Sandbox from "./Sandbox.ts";

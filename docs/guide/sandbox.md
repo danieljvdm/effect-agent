@@ -55,8 +55,8 @@ environment, then copies only those names. The `layer` export supplies the Node 
 ```ts twoslash
 // @types: node
 import { NodeRuntime } from "@effect/platform-node";
-import { NetworkDisabled, Sandbox, SandboxRequest } from "@effect-agent/sandbox";
-import { layer as LocalSandboxLive } from "@effect-agent/sandbox-local";
+import { NetworkDisabled, Sandbox, SandboxRequest } from "@effect-agent/sandbox/Sandbox";
+import { layer as LocalSandboxLive } from "@effect-agent/sandbox-local/LocalSandbox";
 import { Console, Duration, Effect, Stream } from "effect";
 
 const request = SandboxRequest.make({

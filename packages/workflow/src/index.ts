@@ -1,4 +1,4 @@
-export * from "./dispatch.ts";
-export * from "./host.ts";
-export * from "./execution.ts";
-export * as AgentWorkflow from "./agent-workflow.ts";
+export * as AgentWorkflow from "./AgentWorkflow.ts";
+export * as WorkflowAgentHost from "./WorkflowAgentHost.ts";
+export * as WorkflowDispatch from "./WorkflowDispatch.ts";
+export * as WorkflowExecution from "./WorkflowExecution.ts";

@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-memory",
-  "version": "0.1.0-beta.44",
+  "version": "0.1.0-beta.45",
   "description": "In-memory Thread store and submission ledger reference adapters for Effect Agent tests and conformance suites.",
   "license": "MIT",
   "repository": {
@@ -13,9 +13,14 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./MemoryScheduleStore": "./src/MemoryScheduleStore.ts",
+    "./MemorySemanticIndex": "./src/MemorySemanticIndex.ts",
+    "./MemorySubmissionLedger": "./src/MemorySubmissionLedger.ts",
+    "./MemorySubscriptionStore": "./src/MemorySubscriptionStore.ts",
+    "./MemoryThreadStore": "./src/MemoryThreadStore.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -30,6 +35,7 @@
     "@effect-agent/thread": "workspace:*"
   },
   "devDependencies": {
+    "@effect-agent/engine": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",

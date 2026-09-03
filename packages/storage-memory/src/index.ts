@@ -1,5 +1,5 @@
-export * from "./memory-ledger.ts";
-export * from "./memory-schedule-store.ts";
-export * from "./memory-subscription-store.ts";
-export * from "./memory-storage.ts";
-export * from "./semantic-memory-index.ts";
+export * as MemoryScheduleStore from "./MemoryScheduleStore.ts";
+export * as MemorySemanticIndex from "./MemorySemanticIndex.ts";
+export * as MemorySubmissionLedger from "./MemorySubmissionLedger.ts";
+export * as MemorySubscriptionStore from "./MemorySubscriptionStore.ts";
+export * as MemoryThreadStore from "./MemoryThreadStore.ts";

@@ -1,10 +1,8 @@
-import { Agent } from "@effect-agent/core";
-import { digestDefinitions } from "@effect-agent/thread";
-import {
-  AgentWorkflow,
-  WorkflowDispatchFailpoint,
-  WorkflowAgentHost,
-} from "@effect-agent/workflow";
+import * as Agent from "@effect-agent/core/Agent";
+import { digestDefinitions } from "@effect-agent/thread/Digest";
+import { AgentWorkflow } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+import { WorkflowDispatchFailpoint } from "@effect-agent/workflow/WorkflowDispatch";
 import { Config, Console, Effect, FileSystem, Layer, Schema, Stream } from "effect";
 import { Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { Workflow } from "effect/unstable/workflow";

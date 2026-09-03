@@ -1,18 +1,14 @@
-import { Agent } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
 import {
-  AbortCommand,
-  ClaimRequest,
   DurableAgentRuntime,
-  ProducerId,
-  RecoverySnapshotRequest,
-  ReleaseOwnershipRequest,
-  SubmissionLedger,
+  recoveryRepairRecordId,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import {
   modelResponseInterruptedRecordId,
   modelResponseRecordId,
-  recoveryRepairRecordId,
   runIdForSubmission,
-  submissionInputRecordId,
-  submissionSettlementRecordId,
   toolApprovalDecisionRecordId,
   toolApprovalRequestRecordId,
   toolCallPreparedRecordId,
@@ -20,14 +16,21 @@ import {
   toolCallSettledRecordId,
   toolCallUnknownRecordId,
   toolStepSettledRecordId,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/RunJournal";
+import {
+  AbortCommand,
+  ClaimRequest,
+  RecoverySnapshotRequest,
+  ReleaseOwnershipRequest,
+  SubmissionLedger,
+  submissionInputRecordId,
+  submissionSettlementRecordId,
+} from "@effect-agent/thread/SubmissionLedger";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Schema, Stream } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
-import { NodeDurableHost } from "../../src/index.ts";
 import {
   BOOK_CALL_ID,
   BOOK_REF,

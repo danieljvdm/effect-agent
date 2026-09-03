@@ -1,43 +1,52 @@
-import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
-import type { SubmissionId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { type SubmissionId } from "@effect-agent/core/Identifiers";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import {
   RunContextPreparation,
   RunToolAuthorization,
-  ToolExecutionClass,
   toolFailureObserverLayer,
   type ToolFailureObservation,
-} from "@effect-agent/engine";
+} from "@effect-agent/engine/RunOptions";
 import {
-  CurrentSqliteStorageVersion,
-  SqliteStorageCompatibilityError,
-  type SqliteStorageInitializationError,
-} from "@effect-agent/storage-sqlite";
+  NodeDurableAgentRuntime,
+  NodeDurableAgentRuntimeConfig,
+  type NodeDurableAgentRuntimeInitializationError,
+  type NodeDurableAgentRuntimeOptions,
+  type NodeDurableAgentRuntimeServices,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { SqliteStorageCompatibilityError } from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { CurrentSqliteStorageVersion } from "@effect-agent/storage-sqlite/SqliteStorageVersion";
+import { type SqliteStorageInitializationError } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { type DigestError, digestDefinitions, digestJson } from "@effect-agent/thread/Digest";
 import {
-  AdmissionRequest,
-  ClaimRequest,
-  ThreadRead,
-  ThreadStore,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+  type DurableWorkerFailure,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
+import {
   DefinitionDigests,
   DefinitionDigestInput,
   Digest,
-  type DigestError,
-  digestDefinitions,
-  digestJson,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
+  ProducerId,
+  type PersistedJson,
+} from "@effect-agent/thread/Records";
+import {
+  AdmissionRequest,
+  ClaimRequest,
   IdempotencyKey,
   MarkReadyRequest,
   Principal,
-  ProducerId,
   SubmissionLedger,
   SubmissionLookupById,
-  WakeScheduler,
-  type DurableSubmitOptions,
-  type DurableWorkerFailure,
-  type PersistedJson,
   type SubmissionState,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -62,15 +71,6 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
-
-import {
-  NodeDurableHost,
-  NodeDurableAgentRuntime,
-  NodeDurableAgentRuntimeConfig,
-  type NodeDurableAgentRuntimeInitializationError,
-  type NodeDurableAgentRuntimeOptions,
-  type NodeDurableAgentRuntimeServices,
-} from "../src/index.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

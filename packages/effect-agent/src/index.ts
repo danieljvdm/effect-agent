@@ -1,23 +1,39 @@
-/**
- * The Effect Agent umbrella: the framework's complete pure surface — schema-
- * first Agent authoring (`@effect-agent/core`), the bounded ephemeral
- * interpreter (`@effect-agent/engine`), and operational capabilities
- * (`@effect-agent/capabilities`) — as one dependency-clean package, mirroring
- * how `effect` fronts the `@effect/*` satellites.
- *
- * Platform adapters stay scoped where their dependencies live:
- * `@effect-agent/platform-node`, the storage adapters,
- * `@effect-agent/sandbox-local`, `@effect-agent/platform-cloudflare`, and the
- * `@effect-agent/testing` dev kit.
- */
-export * from "@effect-agent/capabilities";
-export * from "@effect-agent/core";
-export * from "@effect-agent/engine";
-
-// Explicit re-exports resolve the star-export ambiguities so these names
-// stay present on the umbrella: `capabilities` re-exports the two core-owned
-// delegation-naming helpers, and both `engine` (type only) and `capabilities`
-// (Schema value + type) declare CommandDrainPolicy and RunSchedulingOverride;
-// the Schema forms win.
-export { delegationToolPrefix, isDelegationToolName } from "@effect-agent/core";
-export { CommandDrainPolicy, RunSchedulingOverride } from "@effect-agent/capabilities";
+export * as Agent from "./Agent.ts";
+export * as AgentError from "./AgentError.ts";
+export * as AgentPolicy from "./AgentPolicy.ts";
+export * as AgentRuntime from "./AgentRuntime.ts";
+export * as Approval from "./Approval.ts";
+export * as Budget from "./Budget.ts";
+export * as CodeMode from "./CodeMode.ts";
+export * as Commands from "./Commands.ts";
+export * as Compaction from "./Compaction.ts";
+export * as ContextCompactor from "./ContextCompactor.ts";
+export * as DurableStep from "./DurableStep.ts";
+export * as EphemeralThreads from "./EphemeralThreads.ts";
+export * as Identifiers from "./Identifiers.ts";
+export * as IdGenerator from "./IdGenerator.ts";
+export * as Mcp from "./Mcp.ts";
+export * as McpClient from "./McpClient.ts";
+export * as Memory from "./Memory.ts";
+export * as MemoryNamespace from "./MemoryNamespace.ts";
+export * as MemoryReference from "./MemoryReference.ts";
+export * as MemoryRevalidation from "./MemoryRevalidation.ts";
+export * as MemoryStore from "./MemoryStore.ts";
+export * as ModelContext from "./ModelContext.ts";
+export * as Redaction from "./Redaction.ts";
+export * as RunEvent from "./RunEvent.ts";
+export * as RunEventSink from "./RunEventSink.ts";
+export * as RunHooks from "./RunHooks.ts";
+export * as RunOptions from "./RunOptions.ts";
+export * as RunPolicyUsage from "./RunPolicyUsage.ts";
+export * as SemanticMemory from "./SemanticMemory.ts";
+export * as SemanticMemoryIndex from "./SemanticMemoryIndex.ts";
+export * as SemanticMemoryRevalidation from "./SemanticMemoryRevalidation.ts";
+export * as Subagent from "./Subagent.ts";
+export * as SubagentContract from "./SubagentContract.ts";
+export * as SubagentReservations from "./SubagentReservations.ts";
+export * as ThreadHistory from "./ThreadHistory.ts";
+export * as ToolBroker from "./ToolBroker.ts";
+export * as ToolResult from "./ToolResult.ts";
+export * as Usage from "./Usage.ts";
+export * as WebCapture from "./WebCapture.ts";

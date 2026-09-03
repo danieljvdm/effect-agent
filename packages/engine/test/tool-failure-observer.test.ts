@@ -1,15 +1,32 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
-  Agent,
-  AgentPolicy,
   ThreadId,
-  IdGenerator,
   RunId,
   ReceiptId,
   SubmissionId,
   ToolCallId,
   TurnId,
-  type RunEvent,
-} from "@effect-agent/core";
+} from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ToolCallWaiting } from "@effect-agent/engine/AgentRuntime";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import {
+  CurrentToolFailureObserver,
+  toolFailureObserverLayer,
+  type RunOptions,
+  type RunToolFailureObserver,
+  type ToolFailureObservation,
+} from "@effect-agent/engine/RunOptions";
+import {
+  ToolBroker,
+  type ProgrammaticCallOutcome,
+  type ToolBrokerPass,
+  type ToolBrokerPassOptions,
+  type ToolBrokerService,
+} from "@effect-agent/engine/ToolBroker";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -31,24 +48,9 @@ import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
-import {
-  AgentRuntime,
-  CurrentToolFailureObserver,
-  ToolBroker,
-  ToolCallWaiting,
-  ToolExecutionClass,
-  toolFailureObserverLayer,
-  type ProgrammaticCallOutcome,
-  type RunOptions,
-  type RunToolFailureObserver,
-  type ToolBrokerPass,
-  type ToolBrokerPassOptions,
-  type ToolBrokerService,
-  type ToolFailureObservation,
-} from "../src/index.ts";
-import { RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
-import { deliverToolFailure } from "../src/tool-derivative-internal.ts";
+import { deliverToolFailure } from "../src/internal/tool-derivative.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 class QueryFailure extends Schema.TaggedError<QueryFailure>()("QueryFailure", {
   message: Schema.String,

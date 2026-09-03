@@ -1,16 +1,11 @@
-import { Agent, ToolCallId } from "@effect-agent/core";
-import type { Receipt } from "@effect-agent/thread";
-import {
-  AbortCommand,
-  ApprovalDecisionCommand,
-  OperationAuthorizer,
-  OperationDenied,
-} from "@effect-agent/thread";
-import {
-  AgentWorkflow,
-  WorkflowAgentHost,
-  WorkflowDispatchFailpoint,
-} from "@effect-agent/workflow";
+import { Agent } from "@effect-agent/core";
+import { ToolCallId } from "@effect-agent/core/Identifiers";
+import type { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { OperationAuthorizer, OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
+import { AbortCommand, ApprovalDecisionCommand } from "@effect-agent/thread/SubmissionLedger";
+import { AgentWorkflow } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+import { WorkflowDispatchFailpoint } from "@effect-agent/workflow/WorkflowDispatch";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";

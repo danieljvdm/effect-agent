@@ -1,5 +1,6 @@
 import "@tanstack/react-start/server-only";
-import { AgentRuntime, withTerminalDefectEvent } from "@effect-agent/engine";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { withTerminalDefectEvent } from "@effect-agent/engine/AgentRuntime";
 import { OpenAiClient } from "@effect/ai-openai";
 import { Config, Effect, Layer, Stream } from "effect";
 import { Prompt } from "effect/unstable/ai";

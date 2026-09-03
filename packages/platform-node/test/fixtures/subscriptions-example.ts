@@ -1,20 +1,13 @@
+import { type NodeDurableAgentRuntimeOptions } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { NodeSubscriptions } from "@effect-agent/platform-node/NodeSubscriptions";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-  SqliteStorageFailpoint,
-  subscriptionStoreLayer,
-} from "@effect-agent/storage-sqlite";
-import {
-  EventSources,
-  SubscriptionInputBindings,
-  makeSubscriptionInputBinding,
-  type SubscriptionInputBinding,
-  type SourcePartition,
-  SubscriptionAuthorizer,
-  SubscriptionIntake,
-  Subscriptions,
-  type EventSource,
-} from "@effect-agent/thread";
+} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
+import { EventSources, type EventSource } from "@effect-agent/thread/EventSource";
 import {
   acceptVerifiedGitHubWorkflowRunWebhook,
   githubWorkflowRunsHttpLayer,
@@ -26,16 +19,17 @@ import {
   makeGitHubWorkflowRunSource,
   type VerifiedGitHubWorkflowRunWebhookRequest,
   webCryptoGitHubWebhookSignatureVerifierLayer,
-} from "@effect-agent/thread/github";
+} from "@effect-agent/thread/GitHubWorkflowSource";
+import { type SourcePartition, SubscriptionAuthorizer } from "@effect-agent/thread/Subscription";
+import {
+  SubscriptionInputBindings,
+  makeSubscriptionInputBinding,
+  type SubscriptionInputBinding,
+} from "@effect-agent/thread/SubscriptionInput";
+import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
 import { NodeHttpClient } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Effect, Layer, Schema, type Redacted } from "effect";
-
-import {
-  NodeDurableHost,
-  type NodeDurableAgentRuntimeOptions,
-  NodeSubscriptions,
-} from "../../src/index.ts";
 
 const sqliteSubscriptionInfrastructure = (filename: string) =>
   Layer.mergeAll(

@@ -1,0 +1,235 @@
+import { type ThreadId, type RunId } from "@effect-agent/core/Identifiers";
+import { type RunCompleted as RunCompletedEvent } from "@effect-agent/core/RunEvent";
+import {
+  ThreadHistory,
+  ThreadHistoryError,
+  type ThreadHistoryRun,
+} from "@effect-agent/engine/ThreadHistory";
+import { DateTime, Effect, Layer, Schema } from "effect";
+import { Prompt } from "effect/unstable/ai";
+
+import {
+  BatchId,
+  CanonicalBatch,
+  DeploymentId,
+  ModelCompleted,
+  PersistedJson,
+  ProducerEpoch,
+  ProducerId,
+  RecordEnvelope,
+  RecordId,
+  RunCompleted,
+  UserInputRecorded,
+} from "./Records.ts";
+import { promptFromCanonicalRecords } from "./RunJournal.ts";
+import {
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadStore,
+  FencedAppendRequest,
+  MAX_THREAD_EXPORT_RECORDS,
+  type ThreadStoreFailure,
+} from "./ThreadStore.ts";
+
+const HISTORY_EPOCH = Schema.decodeSync(ProducerEpoch)(0);
+const HISTORY_DEPLOYMENT = Schema.decodeSync(DeploymentId)("persistent-history");
+const batchId = Schema.decodeSync(BatchId);
+const producer = Schema.decodeSync(ProducerId);
+const recordId = Schema.decodeSync(RecordId);
+
+const historyError = (
+  threadId: ThreadId,
+  reason: ThreadHistoryError["reason"],
+  message: string,
+  cause?: unknown,
+) =>
+  ThreadHistoryError.make({
+    threadId,
+    reason,
+    message,
+    ...(cause === undefined ? {} : { cause }),
+  });
+
+const storageError = (threadId: ThreadId, cause: ThreadStoreFailure) =>
+  historyError(
+    threadId,
+    cause._tag === "AppendConflict"
+      ? "conflict"
+      : cause._tag === "FenceRejected"
+        ? "fenced"
+        : cause._tag === "ThreadNotMaterialized"
+          ? "not-found"
+          : "storage",
+    cause._tag === "ThreadStoreError" ? cause.message : cause._tag,
+    cause,
+  );
+
+/**
+ * Provide retained history to the normal AgentRuntime entry points. Each successful Run appends
+ * one three-record batch. Staging is private to that Run; interruption discards it. Epoch zero
+ * and the loaded tail fence stale writers without replaying external execution. A storage failure
+ * after append may leave the whole Run recorded. Adapter failpoints cover both durable mutations.
+ */
+const layer = Layer.effect(
+  ThreadHistory,
+  Effect.gen(function* () {
+    const store = yield* ThreadStore;
+
+    const load = Effect.fn("PersistentHistory.load")(function* (threadId: ThreadId) {
+      const exported = yield* store
+        .export(ThreadExportRequest.make({ threadId }))
+        .pipe(Effect.mapError((cause) => storageError(threadId, cause)));
+
+      return yield* promptFromCanonicalRecords(exported.records).pipe(
+        Effect.mapError((cause) => historyError(threadId, "encoding", cause.message, cause)),
+      );
+    });
+
+    const open = Effect.fn("PersistentHistory.open")(function* ({
+      threadId,
+      runId,
+    }: {
+      readonly threadId: ThreadId;
+      readonly runId: RunId;
+    }): Effect.fn.Return<ThreadHistoryRun, ThreadHistoryError> {
+      const error = (reason: ThreadHistoryError["reason"], message: string, cause?: unknown) =>
+        historyError(threadId, reason, message, cause);
+
+      const persisted = (value: unknown) =>
+        Schema.decodeUnknownEffect(PersistedJson)(value).pipe(
+          Effect.mapError((cause) =>
+            error("limit", "Run data exceeds canonical persistence bounds", cause),
+          ),
+        );
+
+      yield* store
+        .materialize(ThreadMaterialization.make({ threadId, producerEpoch: HISTORY_EPOCH }))
+        .pipe(Effect.mapError((cause) => storageError(threadId, cause)));
+
+      const base = yield* store
+        .export(ThreadExportRequest.make({ threadId }))
+        .pipe(Effect.mapError((cause) => storageError(threadId, cause)));
+
+      if (base.records.length + 3 > MAX_THREAD_EXPORT_RECORDS) {
+        return yield* error(
+          "limit",
+          `This Run would exceed the history limit of ${MAX_THREAD_EXPORT_RECORDS} records; use a new Thread`,
+        );
+      }
+      if (
+        base.records.some(
+          ({ record }) =>
+            (record.payload._tag === "UserInputRecorded" &&
+              record.payload.submissionId !== undefined) ||
+            record.payload._tag === "SubmissionSettled" ||
+            record.payload._tag === "AbortRequested",
+        )
+      ) {
+        return yield* error(
+          "incompatible",
+          "This Thread belongs to durable accepted work; use a separate history Thread",
+        );
+      }
+
+      const prompt = yield* promptFromCanonicalRecords(base.records).pipe(
+        Effect.mapError((cause) => error("encoding", cause.message, cause)),
+      );
+
+      const createdAt = yield* DateTime.now;
+
+      const record = (id: string, payload: RecordEnvelope["payload"], timestamp = createdAt) =>
+        RecordEnvelope.make({
+          recordId: recordId(id),
+          family: "thread",
+          schemaVersion: 1,
+          deploymentId: HISTORY_DEPLOYMENT,
+          createdAt: timestamp,
+          payload,
+        });
+
+      let input: RecordEnvelope | undefined;
+      let messages: PersistedJson | undefined;
+
+      return {
+        prompt,
+        stageInput: Effect.fn("PersistentHistory.stageInput")(function* (encodedInput: unknown) {
+          input = record(
+            `history-input:${runId}`,
+            UserInputRecorded.make({
+              kind: "user",
+              runId,
+              input: yield* persisted(encodedInput),
+            }),
+          );
+        }),
+        stageHistory: Effect.fn("PersistentHistory.stageHistory")(function* (next: Prompt.Prompt) {
+          messages = yield* Schema.encodeEffect(Prompt.Prompt)(
+            Prompt.fromMessages(next.content.slice(prompt.content.length)),
+          ).pipe(
+            Effect.mapError((cause) =>
+              error("encoding", "Run history could not be encoded", cause),
+            ),
+            Effect.flatMap(persisted),
+          );
+        }),
+        commit: Effect.fn("PersistentHistory.commit")(function* (completion: RunCompletedEvent) {
+          if (input === undefined || messages === undefined) {
+            return yield* error("encoding", "Run completed without its encoded input and history");
+          }
+          const output = yield* persisted(completion.output);
+
+          const runDisposition =
+            completion.runDisposition === undefined
+              ? undefined
+              : yield* persisted(completion.runDisposition);
+
+          const completedAt = yield* DateTime.now;
+
+          const modelCompleted = yield* ModelCompleted.makeEffect({ runId, output, messages }).pipe(
+            Effect.mapError((cause) =>
+              error("encoding", "Run history is not a canonical Prompt", cause),
+            ),
+          );
+
+          yield* store
+            .append(
+              FencedAppendRequest.make({
+                threadId,
+                producerEpoch: HISTORY_EPOCH,
+                expectedTailSequence: base.tailSequence,
+                expectedTailDigest: base.tailDigest,
+                batch: CanonicalBatch.make({
+                  batchId: batchId(`history:${runId}`),
+                  producerId: producer(`history:${runId}`),
+                  records: [
+                    input,
+                    record(`history-output:${runId}`, modelCompleted, completedAt),
+                    record(
+                      `run-completed:${runId}`,
+                      RunCompleted.make({
+                        runId,
+                        output,
+                        ...(runDisposition === undefined ? {} : { runDisposition }),
+                        ...(completion.finishReason === "budget-exhausted"
+                          ? {
+                              finishReason: completion.finishReason,
+                              exhausted: completion.exhausted,
+                            }
+                          : {}),
+                      }),
+                      completedAt,
+                    ),
+                  ],
+                }),
+              }),
+            )
+            .pipe(Effect.mapError((cause) => storageError(threadId, cause)));
+        }),
+      };
+    });
+
+    return ThreadHistory.of({ load, open });
+  }),
+);
+
+export const PersistentHistory = { layer };

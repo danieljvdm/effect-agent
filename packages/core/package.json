@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/core",
-  "version": "0.1.0-beta.44",
+  "version": "0.1.0-beta.45",
   "description": "Schema-first Agent authoring for Effect Agent: immutable definitions, explicit model bindings, policies, and core domain values.",
   "license": "MIT",
   "repository": {
@@ -13,8 +13,26 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./Agent": "./src/Agent.ts",
+    "./AgentError": "./src/AgentError.ts",
+    "./AgentPolicy": "./src/AgentPolicy.ts",
+    "./Identifiers": "./src/Identifiers.ts",
+    "./IdGenerator": "./src/IdGenerator.ts",
+    "./Memory": "./src/Memory.ts",
+    "./MemoryNamespace": "./src/MemoryNamespace.ts",
+    "./MemoryReference": "./src/MemoryReference.ts",
+    "./MemoryRevalidation": "./src/MemoryRevalidation.ts",
+    "./MemoryStore": "./src/MemoryStore.ts",
+    "./RunEvent": "./src/RunEvent.ts",
+    "./RunPolicyUsage": "./src/RunPolicyUsage.ts",
+    "./SemanticMemoryIndex": "./src/SemanticMemoryIndex.ts",
+    "./SemanticMemoryRevalidation": "./src/SemanticMemoryRevalidation.ts",
+    "./SubagentContract": "./src/SubagentContract.ts",
+    "./ToolResult": "./src/ToolResult.ts",
+    "./Usage": "./src/Usage.ts"
   },
   "publishConfig": {
     "access": "public"

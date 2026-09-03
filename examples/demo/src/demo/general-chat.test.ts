@@ -1,25 +1,24 @@
-import type {
-  AgentApprovalDenied,
-  AgentApprovalPending,
-  AgentInputError,
-  AgentOutputError,
-  AgentPolicyError,
-  AgentToolAuthorizationDenied,
-  ContextBudgetError,
-  ContextOverflowError,
-  MemoryRecallError,
-  IdGenerator,
-  ModelProtocolError,
-} from "@effect-agent/core";
 import {
-  AgentRuntime,
-  type ThreadHistory,
-  type ThreadHistoryError,
-  type CompactionError,
+  type AgentApprovalDenied,
+  type AgentApprovalPending,
+  type AgentInputError,
+  type AgentOutputError,
+  type AgentPolicyError,
+  type AgentToolAuthorizationDenied,
+  type ContextBudgetError,
+  type ContextOverflowError,
+  type ModelProtocolError,
+} from "@effect-agent/core/AgentError";
+import { type IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import {
   type AgentChildPending,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
-} from "@effect-agent/engine";
+} from "@effect-agent/engine/AgentRuntime";
+import { type CompactionError } from "@effect-agent/engine/ContextCompactor";
+import { type ThreadHistory, type ThreadHistoryError } from "@effect-agent/engine/ThreadHistory";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
 import { type AiError, type Tool, type Toolkit } from "effect/unstable/ai";

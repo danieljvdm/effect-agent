@@ -1,5 +1,5 @@
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import {
-  MemoryNamespace,
   MemoryScope,
   MemoryConflict,
   MemoryKey,
@@ -11,8 +11,13 @@ import {
   MemoryWithdrawn,
   MemoryWrite,
   MemoryWriter,
-} from "@effect-agent/core";
-import { SqlMemoryLimits } from "@effect-agent/thread/sql-memory";
+} from "@effect-agent/core/MemoryStore";
+import {
+  SqlMemoryLimits,
+  memoryReaderLayer,
+  memoryStoreLayer,
+  memoryStoreLayerWithFailpoints,
+} from "@effect-agent/thread/SqlMemoryStore";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -31,12 +36,6 @@ import {
 import type { PlatformError } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
-
-import {
-  memoryReaderLayer,
-  memoryStoreLayer,
-  memoryStoreLayerWithFailpoints,
-} from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

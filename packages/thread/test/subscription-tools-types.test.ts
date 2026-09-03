@@ -1,4 +1,4 @@
-import { AgentId } from "@effect-agent/core";
+import { AgentId } from "@effect-agent/core/Identifiers";
 import {
   GitHubWorkflowRunCompletion,
   GitHubWorkflowRunWatch,
@@ -6,23 +6,23 @@ import {
   type GitHubWorkflowRuns,
   GitHubRepository,
   makeGitHubWorkflowRunSource,
-} from "@effect-agent/thread/github";
+} from "@effect-agent/thread/GitHubWorkflowSource";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+import {
+  type SubscriptionError,
+  type SubscriptionSourceError,
+} from "@effect-agent/thread/Subscription";
+import { makeSubscriptionInputBinding } from "@effect-agent/thread/SubscriptionInput";
+import { type Subscriptions } from "@effect-agent/thread/Subscriptions";
+import {
+  type SubscribeToEvent,
+  type SubscriptionToolsOptions,
+  subscriptionToolsLayer,
+} from "@effect-agent/thread/SubscriptionTools";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
 import type { Layer, Crypto } from "effect";
 import type { Tool } from "effect/unstable/ai";
-
-import {
-  type SubscribeToEvent,
-  type Subscriptions,
-  type SubscriptionError,
-  type SubscriptionSourceError,
-  type SubscriptionToolsOptions,
-  subscriptionToolsLayer,
-  makeSubscriptionInputBinding,
-  DefinitionDigests,
-  Digest,
-} from "../src/index.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

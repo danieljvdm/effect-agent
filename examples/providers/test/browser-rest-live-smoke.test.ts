@@ -1,12 +1,12 @@
-import { browserRestCaptureLayer } from "@effect-agent/platform-cloudflare/browser-rest-capture";
+import { browserRestCaptureLayer } from "@effect-agent/platform-cloudflare/BrowserRestCapture";
 import {
   CapturePageMarkdown,
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
   PageUrlTarget,
-} from "@effect-agent/sandbox";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/sandbox/PageCapture";
+import { phase7LiveProfileEnabled } from "@effect-agent/testing/TravelPlanner";
 import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vite-plus/test";

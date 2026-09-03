@@ -1,3 +1,12 @@
+import { browserRestWorkersAiCaptureLayer } from "@effect-agent/platform-cloudflare/BrowserRestCapture";
+import {
+  BrowserQuickActionBrowserBinding,
+  BrowserQuickActionRpcError,
+  BrowserQuickActionWorkersAi,
+  BrowserQuickActionWorkersAiPolicyError,
+  browserQuickActionWorkersAiCaptureLayer,
+  type BrowserQuickActionClient,
+} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
 import {
   CapturePageMarkdown,
   CapturePageScrape,
@@ -6,20 +15,10 @@ import {
   PageCaptureLimits,
   PageCaptureRequest,
   PageUrlTarget,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/PageCapture";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-
-import {
-  BrowserQuickActionBrowserBinding,
-  BrowserQuickActionRpcError,
-  BrowserQuickActionWorkersAi,
-  BrowserQuickActionWorkersAiPolicyError,
-  browserQuickActionWorkersAiCaptureLayer,
-  type BrowserQuickActionClient,
-} from "../src/browser-quick-action.ts";
-import { browserRestWorkersAiCaptureLayer } from "../src/browser-rest-capture.ts";
 
 const markdownRequest = (limit = 1_024) =>
   PageCaptureRequest.make({

@@ -2,12 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { layer as localSandboxLayer, sandboxLayer } from "@effect-agent/sandbox-local/LocalSandbox";
 import {
   SANDBOX_DIAGNOSTIC_MAX_LENGTH,
   Sandbox,
   type SandboxEvent,
   type SandboxRequest,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/Sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
 import {
   Cause,
@@ -27,8 +28,6 @@ import {
 } from "effect";
 import { PlatformError, SystemError } from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
-
-import { layer as localSandboxLayer, sandboxLayer } from "../src/index.ts";
 
 const AllowedEnvironmentResult = Schema.Struct({
   allowed: Schema.String,

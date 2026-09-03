@@ -1,21 +1,4 @@
 import {
-  AgentId,
-  ThreadId,
-  RunId,
-  RunStarted,
-  TextDelta,
-  ToolCallId,
-  TurnId,
-} from "@effect-agent/core";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
-import { TestClock } from "effect/testing";
-import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
-import * as McpSchema from "effect/unstable/ai/McpSchema";
-
-import {
-  applyCompaction,
   ApprovalAudit,
   ApprovalAuditMemoryLive,
   ApprovalApproved,
@@ -24,41 +7,61 @@ import {
   ApprovalRequestDraft,
   ApprovalResolver,
   ApprovalResolverError,
+  makeApprovalRequest,
+  requestApproval,
+} from "@effect-agent/capabilities/Approval";
+import {
   BudgetExceeded,
   BudgetNodeConflict,
-  CompactionArtifact,
+  makeUsageBudgetRoot,
+  UsageBudgetLimits,
+  UsageBudgetNodeConfig,
+  UsageDelta,
+} from "@effect-agent/capabilities/Budget";
+import {
+  FollowUpCommand,
+  makeRunCommandQueue,
+  RunCommandQueueConfig,
+  SteeringCommand,
+} from "@effect-agent/capabilities/Commands";
+import {
   ThreadAppend,
   ThreadExport,
   ThreadHistoryDiverged,
   ThreadLimitExceeded,
-  digestCompactionSource,
   EphemeralThreads,
   EphemeralThreadsLive,
-  FollowUpCommand,
-  makeApprovalRequest,
-  makeRunCommandQueue,
-  makeUsageBudgetRoot,
+  threadPrompt,
+} from "@effect-agent/capabilities/EphemeralThreads";
+import {
   connectMcp,
   McpConnectionRequest,
   McpConnector,
   McpServerIdentity,
+  validateMcpDiscovery,
+} from "@effect-agent/capabilities/Mcp";
+import {
+  applyCompaction,
+  CompactionArtifact,
+  digestCompactionSource,
   ModelContextMessage,
   prepareModelContext,
-  requestApproval,
-  redactedTranscript,
   RetainedFact,
-  RunCommandQueueConfig,
-  SteeringCommand,
-  StructuralRedactorLive,
-  UsageBudgetLimits,
-  UsageBudgetNodeConfig,
-  UsageDelta,
-  validateMcpDiscovery,
-  threadPrompt,
+} from "@effect-agent/capabilities/ModelContext";
+import { redactedTranscript, StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
+import {
   toRunBudgetHook,
   toRunThreadOptions,
   toRunApprovalHook,
-} from "../src/index.ts";
+} from "@effect-agent/capabilities/RunHooks";
+import { AgentId, ThreadId, RunId, ToolCallId, TurnId } from "@effect-agent/core/Identifiers";
+import { RunStarted, TextDelta } from "@effect-agent/core/RunEvent";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
+import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
+import * as McpSchema from "effect/unstable/ai/McpSchema";
 
 const threadId = Schema.decodeSync(ThreadId)("trip-1");
 const runId = Schema.decodeSync(RunId)("run-1");

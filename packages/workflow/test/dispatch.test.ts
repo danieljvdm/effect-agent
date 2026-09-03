@@ -1,28 +1,38 @@
-import { Agent, AgentPolicy, ReceiptId, SettlementId, ThreadId } from "@effect-agent/core";
-import { RunToolAuthorization } from "@effect-agent/engine";
-import { MemorySubmissionLedgerLive, MemoryThreadStoreLive } from "@effect-agent/storage-memory";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ReceiptId, SettlementId, ThreadId } from "@effect-agent/core/Identifiers";
+import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { digestDefinitions, digestJson } from "@effect-agent/thread/Digest";
 import {
-  AdmissionRequest,
-  DefinitionDigestInput,
-  DeploymentId,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
+  Receipt,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
+import { DefinitionDigestInput, DeploymentId, ProducerId } from "@effect-agent/thread/Records";
+import {
+  AdmissionRequest,
   IdempotencyKey,
   LedgerError,
   Principal,
-  ProducerId,
   QueueSequence,
-  Receipt,
   RecoverySnapshotRequest,
   SubmissionLedger,
-  ThreadRead,
-  ThreadStore,
-  ToolReconciler,
-  WakeScheduler,
-  digestDefinitions,
-  digestJson,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+import {
+  WorkflowDispatchError,
+  WorkflowDispatchIntent,
+  WorkflowDispatchStore,
+  WorkflowRepairTrigger,
+  WorkflowSettlementReference,
+  WorkflowSubmission,
+} from "@effect-agent/workflow/WorkflowDispatch";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
@@ -41,16 +51,6 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { Workflow, WorkflowEngine } from "effect/unstable/workflow";
-
-import {
-  WorkflowDispatchError,
-  WorkflowDispatchIntent,
-  WorkflowDispatchStore,
-  WorkflowAgentHost,
-  WorkflowRepairTrigger,
-  WorkflowSettlementReference,
-  WorkflowSubmission,
-} from "../src/index.ts";
 
 const deploymentId = Schema.decodeSync(DeploymentId)("dispatch-tests");
 const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });

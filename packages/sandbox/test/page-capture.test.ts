@@ -1,6 +1,3 @@
-import { Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
 import {
   CapturePageScrape,
   CapturePageStructured,
@@ -13,13 +10,17 @@ import {
   PageCaptureRequest,
   PageCaptureResult,
   PageScrapeCaptured,
+  PageUrlTarget,
+} from "@effect-agent/sandbox/PageCapture";
+import {
   PageScreenshotError,
   PageScreenshotLimits,
   PageScreenshotRequest,
   PageScreenshotResult,
-  PageUrlTarget,
-  SandboxImplementation,
-} from "../src/index.ts";
+} from "@effect-agent/sandbox/PageScreenshot";
+import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
+import { Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 const implementation = SandboxImplementation.make({
   isolation: "isolated",

@@ -1,19 +1,30 @@
 import {
-  MemoryNamespace,
+  SemanticIndexLimits,
+  SemanticQueryLimits,
+  indexMemorySource,
+  querySemanticMemory,
+} from "@effect-agent/capabilities/SemanticMemory";
+import * as Memory from "@effect-agent/core/Memory";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import {
   MemoryScope,
   ActiveMemoryDocument,
   type MemoryDocument,
-  MemoryIndexCandidate,
-  MemoryIndexError,
   MemoryKey,
   MemoryReader,
-  MemoryRecallLimits,
   type MemoryStorageError,
+  WithdrawnMemoryDocument,
+} from "@effect-agent/core/MemoryStore";
+import {
+  MemoryIndexCandidate,
+  MemoryIndexError,
   type SemanticMemoryChunk,
   SemanticMemoryIndex,
   SemanticMemoryProfile,
-  WithdrawnMemoryDocument,
-} from "@effect-agent/core";
+} from "@effect-agent/core/SemanticMemoryIndex";
+import { type SemanticMemoryError } from "@effect-agent/core/SemanticMemoryRevalidation";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -29,16 +40,6 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
-
-import {
-  MemoryAccess,
-  SemanticIndexLimits,
-  type SemanticMemoryError,
-  SemanticQueryLimits,
-  indexMemorySource,
-  querySemanticMemory,
-  Memory,
-} from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/pr-review",
-  "version": "0.1.0-beta.44",
+  "version": "0.1.0-beta.45",
   "description": "A provider-neutral, source-backed pull-request reviewer.",
   "license": "MIT",
   "repository": {
@@ -14,8 +14,11 @@
     "NOTICE"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./Review": "./src/Review.ts",
+    "./ReviewRepository": "./src/ReviewRepository.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -26,6 +29,8 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
     "effect-agent": "workspace:*"
   },
   "devDependencies": {

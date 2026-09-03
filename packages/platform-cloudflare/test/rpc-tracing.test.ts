@@ -1,8 +1,8 @@
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
 import { describe, expect, it } from "@effect/vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Option, Tracer } from "effect";
 
-import { CloudflareThreadClient } from "../src/index.ts";
 import { decodeThreadId } from "./fixtures.ts";
 import { telemetryProbe } from "./observability-fixture.ts";
 

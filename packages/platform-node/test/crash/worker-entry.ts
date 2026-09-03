@@ -1,33 +1,33 @@
 import * as fs from "node:fs";
 
-import { Agent, type ThreadId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { type ThreadId } from "@effect-agent/core/Identifiers";
 import {
-  SqliteStorageFailpointLocation,
-  type SqliteStorageFailpointHandler,
-} from "@effect-agent/storage-sqlite";
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { type SqliteStorageFailpointHandler } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  DurableRuntimeFailpointLocation,
+  type DurableRuntimeFailpointHandler,
+} from "@effect-agent/thread/DurableFailpoint";
+import { childThreadIdFor } from "@effect-agent/thread/RunJournal";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
-  DurableAgentRuntime,
-  DurableRuntimeFailpointLocation,
   ResolutionNeverHappened,
   SubmissionLedger,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
-  childThreadIdFor,
-  type DurableRuntimeFailpointHandler,
-  type Receipt,
   type Settlement,
   type SubmissionSnapshot,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
 import { Cause, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import type { Response } from "effect/unstable/ai";
 
-import {
-  NodeDurableHost,
-  NodeDurableAgentRuntime,
-  type NodeDurableAgentRuntimeOptions,
-} from "../../src/index.ts";
 import {
   CHILD_ANSWER,
   CHILD_PRODUCER_ID,

@@ -1,21 +1,4 @@
 import {
-  BrowserClickRequest,
-  BrowserFillRequest,
-  BrowserNavigateRequest,
-  BrowserReadTextRequest,
-  BrowserScreenshotRequest,
-  BrowserScrollRequest,
-  InteractiveBrowser,
-  InteractiveBrowserError,
-  InteractiveBrowserPolicy,
-  type BrowserHandle,
-  type InteractiveBrowserNetworkPolicy,
-} from "@effect-agent/sandbox";
-import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Fiber, Layer, Logger, Redacted, Schema, type Scope } from "effect";
-import { TestClock } from "effect/testing";
-
-import {
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveHost,
   BrowserRunLiveViewRequest,
@@ -31,7 +14,23 @@ import {
   type BrowserRunInteractiveRequest,
   type BrowserRunInteractiveRequestListener,
   type BrowserRunInteractiveSession,
-} from "../src/interactive-browser.ts";
+} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+import {
+  BrowserClickRequest,
+  BrowserFillRequest,
+  BrowserNavigateRequest,
+  BrowserReadTextRequest,
+  BrowserScreenshotRequest,
+  BrowserScrollRequest,
+  InteractiveBrowser,
+  InteractiveBrowserError,
+  InteractiveBrowserPolicy,
+  type BrowserHandle,
+  type InteractiveBrowserNetworkPolicy,
+} from "@effect-agent/sandbox/InteractiveBrowser";
+import { describe, expect, it } from "@effect/vitest";
+import { Duration, Effect, Exit, Fiber, Layer, Logger, Redacted, Schema, type Scope } from "effect";
+import { TestClock } from "effect/testing";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

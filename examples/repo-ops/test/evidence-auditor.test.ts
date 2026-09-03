@@ -1,25 +1,23 @@
 import * as path from "node:path";
 
-import { Agent, ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node";
-import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local/LocalSandbox";
+import { phase7LiveProfileEnabled } from "@effect-agent/testing/TravelPlanner";
+import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { runIdForSubmission, toolStepSettledRecordId } from "@effect-agent/thread/RunJournal";
 import {
   ApprovalDecisionCommand,
-  ThreadRead,
-  ThreadStore,
-  DurableAgentRuntime,
   IdempotencyKey,
   SubmissionLedger,
   SubmissionLookupById,
-  runIdForSubmission,
-  toolStepSettledRecordId,
-  type CanonicalRecordEnvelope,
-  type Receipt,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";

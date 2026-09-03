@@ -1,10 +1,11 @@
-import { SubagentDurableAccounting, SubagentReservationAmounts } from "@effect-agent/capabilities";
-import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
+import { SubagentDurableAccounting } from "@effect-agent/capabilities/Subagent";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
+import { SubagentReservationAmounts } from "@effect-agent/core/SubagentContract";
 import {
-  NodeDurableHost,
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node";
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
 import {
   DestinationShortlist,
   TravelPlannerSubagentDurabilityProfile,
@@ -24,33 +25,34 @@ import {
   s2TravelPlannerProducerId,
   s2TravelPlannerProfile,
   s2TravelPlannerSubmitOptions,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
+import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointHandler,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
+import {
+  PersistedJson,
+  ProducerId,
+  type CanonicalRecordEnvelope,
+} from "@effect-agent/thread/Records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
 import {
   AbortCommand,
   AdmissionRequest,
   ClaimRequest,
-  ThreadRead,
-  ThreadStore,
-  DurableAgentRuntime,
-  DurableRuntimeFailpointError,
   IdempotencyKey,
   ParentLinkage,
-  PersistedJson,
   Principal,
-  ProducerId,
   RecoverySnapshotRequest,
   ResolutionCompletedWithResult,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
-  childThreadIdFor,
-  runIdForSubmission,
-  type CanonicalRecordEnvelope,
-  type DurableRuntimeFailpointHandler,
-  type DurableRuntimeFailpointLocation,
-  type Receipt,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";

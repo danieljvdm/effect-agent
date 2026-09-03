@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-cloudflare",
-  "version": "0.1.0-beta.44",
+  "version": "0.1.0-beta.45",
   "description": "Durable Object SQLite storage adapters and the routed port protocol for Effect Agent on Cloudflare.",
   "license": "MIT",
   "repository": {
@@ -13,9 +13,22 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./DoMemoryStore": "./src/DoMemoryStore.ts",
+    "./DoScheduleStore": "./src/DoScheduleStore.ts",
+    "./DoStorageConfig": "./src/DoStorageConfig.ts",
+    "./DoStorageError": "./src/DoStorageError.ts",
+    "./DoStorageFailpoint": "./src/DoStorageFailpoint.ts",
+    "./DoStorageVersion": "./src/DoStorageVersion.ts",
+    "./DoSubmissionLedger": "./src/DoSubmissionLedger.ts",
+    "./DoSubscriptionStore": "./src/DoSubscriptionStore.ts",
+    "./DoThreadStore": "./src/DoThreadStore.ts",
+    "./MemoryProtocol": "./src/MemoryProtocol.ts",
+    "./PortProtocol": "./src/PortProtocol.ts",
+    "./PortRouting": "./src/PortRouting.ts",
+    "./testing/DoStorageFailpointTesting": "./src/DoStorageFailpointTesting.ts"
   },
   "publishConfig": {
     "access": "public"

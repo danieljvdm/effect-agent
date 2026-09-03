@@ -43,8 +43,8 @@ Use `digestDefinitions` to compute submission digests.
 ## Run the workers
 
 ```ts twoslash
-import { NodeDurableHost } from "@effect-agent/platform-node";
-import type { AgentRegistration } from "@effect-agent/thread";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { type AgentRegistration } from "@effect-agent/thread/AgentRegistration";
 import { Effect } from "effect";
 
 export const workers = <const Entries extends ReadonlyArray<AgentRegistration>>(
@@ -145,13 +145,13 @@ persist in SQL. The dispatch store shares that SQL connection. Canonical agent h
 submission ledger use a separate SQLite file.
 
 ```ts twoslash
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import {
   NodeWorkflowRepairTrigger,
   SqlWorkflowDispatchStore,
-} from "@effect-agent/platform-node/workflow";
-import type { AgentRegistration } from "@effect-agent/thread";
-import { WorkflowAgentHost } from "@effect-agent/workflow";
+} from "@effect-agent/platform-node/NodeWorkflow";
+import { type AgentRegistration } from "@effect-agent/thread/AgentRegistration";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";

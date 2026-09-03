@@ -1,10 +1,11 @@
+import { browserRunProtectedBindingLayer } from "@effect-agent/platform-cloudflare/ProtectedBrowser";
+import { InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
 import {
   BrowserCredentialAccess,
   CardCredential,
   CredentialAccessError,
   CredentialOfferMetadata,
   CredentialTarget,
-  InteractiveBrowserPolicy,
   ListCredentialOffers,
   LoginCredential,
   ProtectedBrowser,
@@ -14,14 +15,13 @@ import {
   ProtectedBrowserSession,
   UseCredential,
   type CredentialFieldRole,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/ProtectedBrowser";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, expectTypeOf, it } from "@effect/vitest";
 import { type Crypto, Deferred, Effect, Fiber, Layer, Redacted, Schema, type Scope } from "effect";
 import { TestClock } from "effect/testing";
 
-import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
-import { browserRunProtectedBindingLayer } from "../src/protected-browser.ts";
+import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 import type {
   makeProtectedNativeTransport,
   ProtectedNativeSession,

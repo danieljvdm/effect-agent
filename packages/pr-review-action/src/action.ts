@@ -3,16 +3,18 @@ import {
   makeReviewer,
   MAX_REVIEW_PATCH_CHARS,
   ReviewChange,
-  ReviewContextError,
-  ReviewFileList,
   ReviewFinding,
   type ReviewOutcome,
   ReviewReport,
   type ReviewResolution,
-  ReviewRepository,
   ReviewRequest,
+} from "@effect-agent/pr-review/Review";
+import {
+  ReviewContextError,
+  ReviewFileList,
+  ReviewRepository,
   ReviewSource,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/ReviewRepository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
   Cause,

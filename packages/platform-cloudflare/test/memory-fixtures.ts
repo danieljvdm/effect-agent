@@ -1,21 +1,23 @@
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import {
   type MemoryLookup,
-  MemoryAccess,
+  MemoryPassage,
+  MemoryRecallLimits,
+} from "@effect-agent/core/MemoryReference";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import {
   MemoryScope,
   MemoryMutationFailpoint,
   MemoryMutationFailure,
-  MemoryNamespace,
-  MemoryPassage,
-  MemoryRecallLimits,
   MemoryWrite,
   type MemoryMutationPoint,
-} from "@effect-agent/core";
+} from "@effect-agent/core/MemoryStore";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
-} from "@effect-agent/storage-cloudflare";
-import { Principal } from "@effect-agent/thread";
+} from "@effect-agent/storage-cloudflare/MemoryProtocol";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Clock, Deferred, Effect, Layer, Schema } from "effect";
 import { DurableObjectState } from "effect-cf";
 

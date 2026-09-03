@@ -1,4 +1,4 @@
-import { RunEvent } from "@effect-agent/core";
+import { RunEvent } from "@effect-agent/core/RunEvent";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 

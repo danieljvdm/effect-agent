@@ -1,4 +1,4 @@
-import { type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review";
+import { type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review/Review";
 import { Clock, DateTime, Effect, Result, Schema, Stream } from "effect";
 
 import {

@@ -1,16 +1,11 @@
-import { AgentId } from "@effect-agent/core";
-import {
-  DefinitionDigests,
-  Digest,
-  Principal,
-  ScheduleAuthorizer,
-  ScheduleFailpoint,
-  ScheduleId,
-  Scheduling,
-} from "@effect-agent/thread";
+import { AgentId } from "@effect-agent/core/Identifiers";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { NodeScheduling } from "@effect-agent/platform-node/NodeScheduling";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+import { ScheduleAuthorizer, ScheduleFailpoint, ScheduleId } from "@effect-agent/thread/Schedule";
+import { Scheduling } from "@effect-agent/thread/Scheduling";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Config, Console, Effect, Layer, Ref, Schema } from "effect";
-
-import { NodeDurableHost, NodeScheduling } from "../../src/index.ts";
 
 export const SchedulingCrashBoundary = Schema.Literals([
   "schedule:insert:before",

@@ -1,30 +1,30 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
-  Agent,
   AgentId,
-  AgentPolicy,
   ThreadId,
   DelegationId,
-  IdGenerator,
   RunId,
-  type RunEvent,
-  type SubagentParentLink,
   ToolCallId,
   TurnId,
-} from "@effect-agent/core";
-import { expect, layer } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
-
+} from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import { type SubagentParentLink } from "@effect-agent/core/SubagentContract";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { AgentSpawner } from "@effect-agent/engine/AgentRuntime";
 import {
-  AgentRuntime,
-  AgentSpawner,
   RunEventSink,
   RunEventSinkClosedError,
   type RunEventSinkService,
   type SubagentEventBasePayload,
-} from "../src/index.ts";
-import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+} from "@effect-agent/engine/RunEventSink";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
+
+import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const usage = {
   inputTokens: {},

@@ -4,7 +4,7 @@ import {
   type ReviewOutcome,
   type ReviewReport,
   type ReviewSeverity,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import { Context, Schema } from "effect";
 
 import { reviewMarker, reviewPauseMarker } from "./selection.ts";

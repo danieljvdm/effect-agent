@@ -1,10 +1,11 @@
-import { ToolCallId } from "@effect-agent/core";
+import { ToolCallId } from "@effect-agent/core/Identifiers";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import {
-  DurableAgentRuntime,
   ResolutionCompletedWithResult,
   UnknownResolutionCommand,
-} from "@effect-agent/thread";
-import { AgentWorkflow, WorkflowAgentHost } from "@effect-agent/workflow";
+} from "@effect-agent/thread/SubmissionLedger";
+import { AgentWorkflow } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";

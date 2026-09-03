@@ -1,9 +1,8 @@
+import { DurableObjectContext } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import type { Option } from "effect";
 import { Effect, Layer, Tracer } from "effect";
 import type { DurableObject } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
-
-import { DurableObjectContext } from "../src/index.ts";
 
 const flushes = new Map<string, number>();
 const failingFlushes = new Set<string>();

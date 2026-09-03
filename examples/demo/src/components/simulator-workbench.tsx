@@ -1,6 +1,6 @@
 "use client";
 
-import type { RunEvent } from "@effect-agent/core";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Schema } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";

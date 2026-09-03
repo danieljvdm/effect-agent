@@ -17,12 +17,15 @@ import { Command } from "effect/unstable/cli";
 import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
+import { compareBundles } from "../../../scripts/bundle-size.ts";
 import {
   command as releaseCommand,
   PublishManifest,
   withTemporaryManifest,
   withPublishManifests,
 } from "../../../scripts/release-publish.ts";
+import { verifyPackageExports } from "../../../scripts/verify-package-exports.ts";
+import { verifyPackagePurity } from "../../../scripts/verify-package-purity.ts";
 
 const Dependencies = Schema.Record(Schema.String, Schema.String);
 
@@ -228,12 +231,12 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
     "testing",
   ],
   "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite", "workflow"],
-  "pr-review": ["effect-agent"],
+  "pr-review": ["core", "engine", "effect-agent"],
   sandbox: ["core"],
   "sandbox-local": ["core", "sandbox"],
   thread: ["core", "engine"],
   "storage-cloudflare": ["core", "thread", "testing"],
-  "storage-memory": ["core", "thread"],
+  "storage-memory": ["core", "thread", "engine"],
   "storage-sqlite": ["core", "thread"],
   workflow: ["core", "thread", "engine", "storage-memory"],
   testing: [
@@ -335,6 +338,155 @@ const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> 
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
 layer(NodeServices.layer)("workspace toolchain", (it) => {
+  it.effect(
+    "compares built checkouts independently and counts shared and deferred chunks once",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "bundle-comparison-test-" });
+
+        for (const side of ["base", "head"]) {
+          const root = path.join(scratch, side);
+          const pkg = path.join(root, "packages", "effect-agent");
+
+          yield* fs.makeDirectory(path.join(pkg, "dist"), { recursive: true });
+          yield* fs.makeDirectory(path.join(root, "node_modules", "effect"), { recursive: true });
+          yield* fs.writeFileString(path.join(root, "package.json"), '{"catalog":{}}');
+          yield* fs.writeFileString(
+            path.join(root, "node_modules", "effect", "package.json"),
+            '{"version":"test"}',
+          );
+          yield* fs.writeFileString(
+            path.join(pkg, "package.json"),
+            JSON.stringify({
+              name: "effect-agent",
+              version: "1.0.0",
+              type: "module",
+              exports: {
+                ".": "./src/index.ts",
+                "./Agent": "./src/Agent.ts",
+                "./AgentRuntime": "./src/AgentRuntime.ts",
+              },
+            }),
+          );
+
+          // No src directory: accidentally measuring source instead of published
+          // artifacts must fail. The two checkouts also contain different values.
+          const modules = {
+            index: 'export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs";',
+            Agent: 'export { shared as agent } from "./shared.mjs";',
+            AgentRuntime: `import { shared } from "./shared.mjs"; export const run = [shared, ${JSON.stringify(side.repeat(side === "head" ? 20000 : 10000))}];`,
+            shared: `export const shared = ${JSON.stringify("shared".repeat(200))};`,
+          };
+
+          for (const [name, source] of Object.entries(modules)) {
+            yield* fs.writeFileString(path.join(pkg, "dist", `${name}.mjs`), source);
+            yield* fs.writeFileString(path.join(pkg, "dist", `${name}.d.mts`), "export {};");
+          }
+        }
+        const head = path.join(scratch, "head");
+        const fixtures = path.join(head, "scripts", "bundle");
+
+        yield* fs.makeDirectory(fixtures, { recursive: true });
+        for (const kind of ["root", "module"]) {
+          yield* fs.writeFileString(
+            path.join(fixtures, `agent-${kind}.ts`),
+            `export { agent } from "effect-agent${kind === "module" ? "/Agent" : ""}";`,
+          );
+          yield* fs.writeFileString(
+            path.join(fixtures, `runtime-${kind}.ts`),
+            `export { run } from "effect-agent${kind === "module" ? "/AgentRuntime" : ""}";`,
+          );
+          yield* fs.writeFileString(
+            path.join(fixtures, `lazy-${kind}.ts`),
+            `export { agent } from "./agent-${kind}.ts"; export const loadRuntime = () => import("./runtime-${kind}.ts");`,
+          );
+        }
+        const smoke = path.join(fixtures, "runtime-smoke.ts");
+
+        yield* fs.writeFileString(
+          smoke,
+          'import { agent } from "effect-agent/Agent"; if (!agent.startsWith("shared")) throw new Error("wrong bundled value");',
+        );
+        // Exercise canonicalization even on hosts without macOS's /var symlink.
+        const alias = path.join(scratch, "head-link");
+
+        yield* fs.symlink(head, alias);
+
+        const report = yield* compareBundles({
+          root: alias,
+          base: path.join(scratch, "base"),
+          output: path.join(scratch, "report"),
+        });
+
+        const lazy = report.fixtures.find((fixture) => fixture.name === "lazy-module");
+
+        expect(lazy).toBeDefined();
+        expect(lazy!.head.initial.raw).toBeLessThan(2000);
+        expect(lazy!.head.deferred.raw).toBeGreaterThan(80000);
+        expect(lazy!.base!.deferred.raw).toBeLessThan(41000);
+        expect(lazy!.head.chunks.filter((chunk) => chunk.initial)).toHaveLength(2);
+        expect(lazy!.head.total.raw).toBe(lazy!.head.initial.raw + lazy!.head.deferred.raw);
+        expect(lazy!.head.total.gzip).toBe(lazy!.head.initial.gzip + lazy!.head.deferred.gzip);
+        expect(report.fixtures.every((fixture) => fixture.head.initial.raw > 0)).toBe(true);
+
+        // A newly introduced direct entry gets no fake zero/unchanged baseline.
+        const baseManifest = path.join(scratch, "base", "packages", "effect-agent", "package.json");
+
+        yield* fs.writeFileString(
+          baseManifest,
+          JSON.stringify({
+            name: "effect-agent",
+            version: "1.0.0",
+            type: "module",
+            exports: { ".": "./src/index.ts" },
+          }),
+        );
+
+        const second = yield* compareBundles({
+          root: alias,
+          base: path.join(scratch, "base"),
+          output: path.join(scratch, "report"),
+        });
+
+        expect(second.fixtures.find((fixture) => fixture.name === "agent-module")?.base).toBeNull();
+        expect(yield* fs.exists(path.join(scratch, "report", "base", "agent-module"))).toBe(false);
+        expect(
+          second.fixtures.find((fixture) => fixture.name === "agent-root")?.base,
+        ).not.toBeNull();
+        // A smaller but broken bundle must fail, not publish a successful report.
+        yield* fs.writeFileString(smoke, 'throw new Error("broken bundled runtime");');
+
+        const brokenRuntime = yield* Effect.flip(
+          compareBundles({
+            root: alias,
+            base: path.join(scratch, "base"),
+            output: path.join(scratch, "report"),
+          }),
+        );
+
+        expect(brokenRuntime.message).toContain("broken bundled runtime");
+        expect(yield* fs.exists(path.join(scratch, "report", "report.json"))).toBe(false);
+        // A missing head export is a failed measurement, never a zero-size success.
+        yield* fs.copyFile(
+          baseManifest,
+          path.join(head, "packages", "effect-agent", "package.json"),
+        );
+
+        const failure = yield* Effect.flip(
+          compareBundles({
+            root: alias,
+            base: path.join(scratch, "base"),
+            output: path.join(scratch, "report"),
+          }),
+        );
+
+        expect(failure._tag).toBe("BundleSizeError");
+        expect(yield* fs.exists(path.join(scratch, "report", "report.json"))).toBe(false);
+      }),
+  );
+
   it.effect("executes an Effect program through the Vite+ test runner", () =>
     Effect.sync(() => {
       expect("ready").toBe("ready");
@@ -650,7 +802,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
   );
 
   it.effect(
-    "packs built exports and resolved dependencies and restores all source manifests",
+    "validates and packs public groups and forwarding modules and restores source manifests",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -696,15 +848,41 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         for (const name of ["core", "consumer"]) {
           const directory = root + "/packages/" + name;
 
+          const sources = {
+            index: 'export * as Agent from "./Agent.ts"; export { make } from "./Agent.ts";\n',
+            Agent:
+              name === "core"
+                ? "export const make = () => 1;\n"
+                : 'export * from "@fixture/core/Agent";\n',
+            Support: 'export * as Failpoint from "./Failpoint.ts";\n',
+            Failpoint: "export const armed = false;\n",
+          };
+
           yield* fs.makeDirectory(directory + "/dist", { recursive: true });
-          yield* fs.writeFileString(directory + "/dist/index.mjs", "export {};\n");
-          yield* fs.writeFileString(directory + "/dist/index.d.mts", "export {};\n");
+          yield* fs.makeDirectory(directory + "/src");
+          for (const [entry, source] of Object.entries(sources)) {
+            yield* fs.writeFileString(`${directory}/src/${entry}.ts`, source);
+            yield* fs.writeFileString(`${directory}/dist/${entry}.mjs`, "export {};\n");
+            yield* fs.writeFileString(`${directory}/dist/${entry}.d.mts`, "export {};\n");
+          }
+          yield* fs.writeFileString(
+            directory + "/vite.config.ts",
+            "export default " +
+              JSON.stringify({
+                pack: { entry: Object.keys(sources).map((entry) => `src/${entry}.ts`) },
+              }),
+          );
 
           const original =
             JSON.stringify({
               name: "@fixture/" + name,
               version: "1.0.0-beta.17",
-              exports: { ".": "./src/index.ts" },
+              exports: {
+                ".": "./src/index.ts",
+                "./Agent": "./src/Agent.ts",
+                "./testing": "./src/Support.ts",
+                "./testing/Failpoint": "./src/Failpoint.ts",
+              },
               files: ["dist"],
               dependencies: name === "consumer" ? { "@fixture/core": "workspace:*" } : {},
               peerDependencies: { effect: "catalog:" },
@@ -714,6 +892,34 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           originals.set(directory + "/package.json", original);
           yield* fs.writeFileString(directory + "/package.json", original);
         }
+
+        yield* verifyPackageExports(root);
+        yield* verifyPackagePurity(root);
+
+        const forwardedModule = root + "/packages/consumer/src/Agent.ts";
+        const originalForwarder = yield* fs.readFileString(forwardedModule);
+
+        yield* fs.writeFileString(
+          forwardedModule,
+          'export * from "@fixture/core/internal/Secret";\n',
+        );
+        const privateForwarding = yield* Effect.flip(verifyPackageExports(root));
+
+        expect(privateForwarding.message).toContain("is not a public export of @fixture/core");
+        yield* fs.writeFileString(forwardedModule, originalForwarder);
+
+        // The testing export key defines this boundary even though Support.ts has no test-like name.
+        const productionRoot = root + "/packages/core/src/index.ts";
+        const originalRoot = yield* fs.readFileString(productionRoot);
+
+        yield* fs.writeFileString(
+          productionRoot,
+          originalRoot + 'export * as Support from "./Support.ts";\n',
+        );
+        const testingLeak = yield* Effect.flip(verifyPackagePurity(root));
+
+        expect(testingLeak.message).toContain("bundles a declared testing entry point");
+        yield* fs.writeFileString(productionRoot, originalRoot);
 
         const assertRestored = Effect.gen(function* () {
           for (const [path, original] of originals) {
@@ -747,7 +953,15 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               dependencies: { "@fixture/core": "1.0.0-beta.17" },
               peerDependencies: { effect: "4.0.0-rc.111" },
               devDependencies: { effect: "4.0.0-rc.111" },
-              exports: { ".": { types: "./dist/index.d.mts", default: "./dist/index.mjs" } },
+              exports: {
+                ".": { types: "./dist/index.d.mts", default: "./dist/index.mjs" },
+                "./Agent": { types: "./dist/Agent.d.mts", default: "./dist/Agent.mjs" },
+                "./testing": { types: "./dist/Support.d.mts", default: "./dist/Support.mjs" },
+                "./testing/Failpoint": {
+                  types: "./dist/Failpoint.d.mts",
+                  default: "./dist/Failpoint.mjs",
+                },
+              },
             });
           }),
         );
@@ -812,7 +1026,7 @@ esac
           yield* assertRestored;
         }
 
-        yield* fs.remove(root + "/packages/core/dist/index.mjs");
+        yield* fs.remove(root + "/packages/core/dist/Failpoint.mjs");
         let published = false;
 
         const failure = yield* Effect.flip(
@@ -825,7 +1039,7 @@ esac
 
         expect(failure).toMatchObject({
           _tag: "ReleaseError",
-          reason: expect.stringContaining("Missing built artifact"),
+          reason: "Missing built artifact: ./dist/Failpoint.mjs",
         });
         expect(published).toBe(false);
         yield* assertRestored;
@@ -962,6 +1176,9 @@ esac
               edges,
               `${packageName} may consume @effect-agent/testing only as a devDependency`,
             ).not.toContain("testing");
+            if (packageName === "storage-memory") {
+              expect(edges, "storage-memory uses engine only in its tests").not.toContain("engine");
+            }
           }
         }
       }
@@ -1027,6 +1244,8 @@ esac
       expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
       expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
+      expect(prReviewAction.devDependencies?.["@effect-agent/engine"]).toBe("workspace:*");
+      expect(prReviewAction.dependencies?.["@effect-agent/engine"]).toBeUndefined();
       expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
       expect(prReviewAction.dependencies?.effect).toBe("catalog:");
       expect(prReviewDependencies).not.toContain("wrangler");

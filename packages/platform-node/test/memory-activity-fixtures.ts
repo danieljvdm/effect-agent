@@ -1,5 +1,9 @@
-import { MemoryContent, MemoryKey, MemoryNamespace, MemoryScope } from "@effect-agent/core";
-import { ActivityPassResult, ActivityProcessorKey, Digest } from "@effect-agent/thread";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryContent } from "@effect-agent/core/MemoryReference";
+import { MemoryKey, MemoryScope } from "@effect-agent/core/MemoryStore";
+import { ActivityProcessorKey } from "@effect-agent/thread/ActivityStore";
+import { ActivityPassResult } from "@effect-agent/thread/CommittedActivity";
+import { Digest } from "@effect-agent/thread/Records";
 import { Schema } from "effect";
 
 export const MEMORY_NAMESPACE = MemoryNamespace.define({

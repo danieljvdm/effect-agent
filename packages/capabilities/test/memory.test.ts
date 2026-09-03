@@ -1,17 +1,17 @@
-import type { MemoryLookup } from "@effect-agent/core";
+import * as Memory from "@effect-agent/core/Memory";
+import { type MemoryRecallSource } from "@effect-agent/core/Memory";
 import {
+  type MemoryLookup,
   MemoryAttribution,
   MemoryContent,
   MemoryPassage,
   MemoryRecallError,
   MemoryRecallLimits,
   MemorySourceReference,
-} from "@effect-agent/core";
+} from "@effect-agent/core/MemoryReference";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
-
-import { Memory, type MemoryRecallSource } from "../src/index.ts";
 
 const limits = MemoryRecallLimits.make({
   maxSources: 8,

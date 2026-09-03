@@ -1,22 +1,20 @@
-import {
-  type EventSources,
-  type SubscriptionInputBindings,
-  type SourcePartition,
-  type SubscriptionAuthorizer,
-  SubscriptionIntake,
-  Subscriptions,
-} from "@effect-agent/thread";
-import { Effect, Layer } from "effect";
-import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
-
+import { type ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import {
   CloudflareSubscriptionsClient,
-  type ThreadObjectNamespace,
   makeSubscriptionPartitionObjectClass,
   type SubscriptionPartitionIdentity,
   SubscriptionPartitionNamespace,
   type SubscriptionPartitionObjectRpc,
-} from "../src/index.ts";
+} from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
+import { type EventSources } from "@effect-agent/thread/EventSource";
+import {
+  type SourcePartition,
+  type SubscriptionAuthorizer,
+} from "@effect-agent/thread/Subscription";
+import { type SubscriptionInputBindings } from "@effect-agent/thread/SubscriptionInput";
+import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
+import { Effect, Layer } from "effect";
+import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
 
 /**
  * Export the returned class under a SQLite Durable Object binding. The cached host Layer binds

@@ -1,15 +1,14 @@
-import { ThreadId, SubmissionId } from "@effect-agent/core";
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node";
+import { ThreadId, SubmissionId } from "@effect-agent/core/Identifiers";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import {
-  DurableAgentRuntime,
   ObligationThresholds,
   RecoveryExplanation,
   RetryCommand,
   renderRecoveryExplanation,
   type IntegrityReport,
   type ObligationReport,
-  type RecoveryReport,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/Admin";
+import { DurableAgentRuntime, type RecoveryReport } from "@effect-agent/thread/DurableAgentRuntime";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";

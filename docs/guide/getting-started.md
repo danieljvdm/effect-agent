@@ -26,7 +26,10 @@ Save as `agent.ts`:
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Console, Effect, Schema } from "effect";
-import { Agent, AgentPolicy, AgentRuntime, ThreadHistory, IdGenerator } from "effect-agent";
+import { Agent, AgentRuntime } from "effect-agent";
+import { AgentPolicy } from "effect-agent/AgentPolicy";
+import { ThreadHistory } from "effect-agent/ThreadHistory";
+import { IdGenerator } from "effect-agent/IdGenerator";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 

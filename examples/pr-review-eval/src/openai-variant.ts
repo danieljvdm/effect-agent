@@ -1,9 +1,10 @@
-import { type ReviewRepository, makeReviewer, type ReviewRequest } from "@effect-agent/pr-review";
 import {
   makeReviewOpenAi,
   REVIEW_COST_LIMIT_MICROUSD,
   reviewCostEstimator,
 } from "@effect-agent/pr-review-action/review-openai";
+import { makeReviewer, type ReviewRequest } from "@effect-agent/pr-review/Review";
+import { type ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Option, Schema } from "effect";
 import { AiError } from "effect/unstable/ai";

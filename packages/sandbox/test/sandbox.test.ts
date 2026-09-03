@@ -1,6 +1,3 @@
-import { Duration, Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
 import {
   NetworkDisabled,
   SANDBOX_DIAGNOSTIC_MAX_LENGTH,
@@ -12,7 +9,9 @@ import {
   SandboxRequest,
   SandboxResourceUse,
   SandboxSpawnError,
-} from "../src/index.ts";
+} from "@effect-agent/sandbox/Sandbox";
+import { Duration, Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 describe("Sandbox schemas", () => {
   it("round-trips a complete request without embedding raw secret values", () => {

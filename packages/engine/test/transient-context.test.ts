@@ -1,16 +1,16 @@
+import * as Agent from "@effect-agent/core/Agent";
 import {
-  Agent,
   AgentInputError,
-  AgentPolicy,
   AgentPolicyError,
-  CompactionPolicy,
   ContextBudgetError,
-  IdGenerator,
-  MemoryRecallError,
-  RunId,
-  ThreadId,
-  TurnId,
-} from "@effect-agent/core";
+} from "@effect-agent/core/AgentError";
+import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
+import { RunId, ThreadId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { MemoryRecallError } from "@effect-agent/core/MemoryReference";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { CompactionError, ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import { RunContextPreparation } from "@effect-agent/engine/RunOptions";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -36,14 +36,8 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
-import { CLEARED_TOOL_RESULT } from "../src/compaction.ts";
-import {
-  AgentRuntime,
-  CompactionError,
-  ContextCompactor,
-  RunContextPreparation,
-} from "../src/index.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+import { CLEARED_TOOL_RESULT } from "../src/internal/compaction.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
   nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("transient-thread")),

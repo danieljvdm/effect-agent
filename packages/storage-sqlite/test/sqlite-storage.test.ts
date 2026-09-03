@@ -1,8 +1,38 @@
-import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing";
+import {
+  SqliteStorageConfig,
+  SqliteStorageConfigValue,
+} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+import {
+  SqliteStorageFailpointError,
+  type SqliteStorageFailpointLocation,
+  SqliteStorageCompatibilityError,
+  SqliteStorageCorruptionError,
+  SqliteStorageError,
+  SqliteWriteContention,
+} from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { type SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import {
+  threadStoreLayer,
+  layer,
+  type SqliteStorageInitializationError,
+} from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing/SqliteStorageFailpointTesting";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
+  ObservationOffset,
+  ProducerEpoch,
+  RunCompleted,
+  UserInputRecorded,
+  type CanonicalRecordPayload,
+} from "@effect-agent/thread/Records";
+import {
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "@effect-agent/thread/testing/ThreadStoreConformance";
+import {
   ThreadCheckpoint,
   ThreadExportRequest,
   ThreadMaterialization,
@@ -10,21 +40,11 @@ import {
   ThreadRead,
   ThreadStore,
   ThreadStoreError,
-  EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   LoadCheckpointRequest,
-  ObservationOffset,
-  ProducerEpoch,
-  RunCompleted,
   SaveCheckpointRequest,
-  UserInputRecorded,
   type AppendResult,
-  type CanonicalRecordPayload,
-} from "@effect-agent/thread";
-import {
-  threadStoreConformanceCases,
-  threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, describe, it } from "@effect/vitest";
@@ -45,22 +65,6 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
-
-import {
-  type SqliteStorageFailpoint,
-  threadStoreLayer,
-  layer,
-  observationOffsetAt,
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-  SqliteStorageFailpointError,
-  type SqliteStorageFailpointLocation,
-  SqliteStorageCompatibilityError,
-  SqliteStorageCorruptionError,
-  type SqliteStorageInitializationError,
-  SqliteStorageError,
-  SqliteWriteContention,
-} from "../src/index.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -460,24 +464,6 @@ describe("SqliteThreadStore", () => {
           expect(Exit.isFailure(malformedExit)).toBe(true);
         }),
       ),
-    ),
-  );
-
-  it.effect("rejects invalid canonical sequences when constructing observation offsets", () =>
-    Effect.forEach([-1, 1.5, Number.NaN], (sequence) =>
-      Effect.gen(function* () {
-        const exit = yield* observationOffsetAt(threadId, sequence).pipe(Effect.exit);
-
-        expect(Exit.isFailure(exit)).toBe(true);
-        if (Exit.isFailure(exit)) {
-          const error = Cause.squash(exit.cause);
-
-          expect(error).toBeInstanceOf(ThreadStoreError);
-          if (isThreadStoreError(error)) {
-            expect(error.operation).toBe("encode observation offset");
-          }
-        }
-      }),
     ),
   );
 
@@ -1046,4 +1032,4 @@ describe("SqliteThreadStore", () => {
     ),
   );
 });
-import { SubmissionId } from "@effect-agent/core";
+import { SubmissionId } from "@effect-agent/core/Identifiers";

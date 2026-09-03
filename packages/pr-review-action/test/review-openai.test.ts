@@ -1,11 +1,9 @@
+import { makeReviewer, ReviewChange, ReviewRequest } from "@effect-agent/pr-review/Review";
 import {
-  makeReviewer,
-  ReviewChange,
   ReviewFileList,
   ReviewRepository,
-  ReviewRequest,
   ReviewSource,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/ReviewRepository";
 import type { OpenAiSchema } from "@effect/ai-openai";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";

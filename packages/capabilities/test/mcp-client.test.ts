@@ -1,10 +1,26 @@
-import { Agent, AgentPolicy, IdGenerator, RunId, ThreadId, TurnId } from "@effect-agent/core";
 import {
-  AgentRuntime,
-  RunContextPreparationPassthrough,
-  ThreadHistory,
-  ToolExecutionClass,
-} from "@effect-agent/engine";
+  connectMcp,
+  McpConnectionRequest,
+  McpConnector,
+  McpServerIdentity,
+  validateMcpDiscovery,
+} from "@effect-agent/capabilities/Mcp";
+import * as McpClient from "@effect-agent/capabilities/McpClient";
+import {
+  McpHttpTransport,
+  McpStdioTransport,
+  McpToolCallFailed,
+  McpToolResult,
+  type McpServerTransport,
+} from "@effect-agent/capabilities/McpClient";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { RunId, ThreadId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -26,20 +42,6 @@ import {
   HttpRouter,
 } from "effect/unstable/http";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-
-import {
-  connectMcp,
-  McpClient,
-  McpConnectionRequest,
-  McpConnector,
-  McpHttpTransport,
-  McpStdioTransport,
-  McpToolCallFailed,
-  McpServerIdentity,
-  McpToolResult,
-  type McpServerTransport,
-  validateMcpDiscovery,
-} from "../src/index.ts";
 
 // ---------------------------------------------------------------------------
 // The HTTP suite runs Effect AI's native `McpServer` in-process behind an

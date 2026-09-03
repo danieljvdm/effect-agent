@@ -2,23 +2,23 @@ import { createServer } from "node:http";
 
 import nativePuppeteer from "@cloudflare/puppeteer/internal/puppeteer-core.js";
 import {
+  BrowserRunInteractiveBinding,
+  browserRunInteractiveLayer,
+  isBrowserRunUndispatchedActionError,
+} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+import {
   BrowserClickRequest,
   BrowserFillRequest,
   BrowserNavigateRequest,
   BrowserReadTextRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/InteractiveBrowser";
 import { expect, it } from "@effect/vitest";
 import { Config, Effect, Layer, Logger, Option, Schema } from "effect";
 import { vi } from "vite-plus/test";
 
-import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
-import {
-  BrowserRunInteractiveBinding,
-  browserRunInteractiveLayer,
-  isBrowserRunUndispatchedActionError,
-} from "../src/interactive-browser.ts";
+import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
 const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
 

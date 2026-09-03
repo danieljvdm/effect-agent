@@ -1,6 +1,10 @@
-import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import { ThreadHistory, RunContextPreparationPassthrough } from "@effect-agent/engine";
-import { ScriptedModel } from "@effect-agent/testing";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
 import { Context, Effect, Layer, Ref, Schema } from "effect";
 import { Model, Tool, Toolkit } from "effect/unstable/ai";
 

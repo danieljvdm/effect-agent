@@ -1,9 +1,10 @@
-import { connectMcp, StructuralRedactorLive } from "@effect-agent/capabilities";
-import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
+import { connectMcp } from "@effect-agent/capabilities/Mcp";
+import { StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node";
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import {
   assertDiscoveryMatchesAuthoredToolkit,
   docsCoordinatorConfidentialMarker,
@@ -27,20 +28,17 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "@effect-agent/testing/fixtures/docs-researcher";
+} from "@effect-agent/testing/DocsResearcher";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
 import {
   ClaimRequest,
-  ThreadRead,
-  ThreadStore,
-  DurableAgentRuntime,
   IdempotencyKey,
-  ProducerId,
   SubmissionLedger,
   SubmissionLookupById,
-  childThreadIdFor,
-  runIdForSubmission,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";

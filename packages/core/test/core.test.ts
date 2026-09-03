@@ -1,6 +1,28 @@
-import { Duration, Effect, Encoding, Random, Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
+import {
+  AgentApprovalDenied,
+  AgentToolAuthorizationDenied,
+  AgentApprovalPending,
+  AgentError,
+  AgentInputError,
+  AgentInterrupted,
+  AgentOutputError,
+  AgentRunDispositionError,
+  AgentPolicyError,
+  ContextOverflowError,
+  ModelProtocolError,
+} from "@effect-agent/core/AgentError";
+import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
+import {
+  AgentId,
+  ThreadId,
+  DelegationId,
+  ReceiptId,
+  RunId,
+  SettlementId,
+  ToolCallId,
+  TurnId,
+} from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import {
   type BudgetWarning,
   type CompactionPerformed,
@@ -12,44 +34,28 @@ import {
   type SubagentRequested,
   type SubagentStarted,
   type ToolCallFailed,
-  AgentId,
-  AgentApprovalDenied,
-  AgentToolAuthorizationDenied,
-  AgentApprovalPending,
-  AgentError,
-  AgentInputError,
-  AgentInterrupted,
-  AgentOutputError,
-  AgentRunDispositionError,
-  AgentPolicy,
-  AgentPolicyError,
-  applyToolResultBounds,
-  unserializableToolResult,
-  CompactionPolicy,
-  ContextOverflowError,
-  ThreadId,
-  DelegationId,
-  IdGenerator,
-  InputTokenUsage,
-  ModelCallUsage,
-  ModelProtocolError,
-  OutputTokenUsage,
-  ReceiptId,
   RunCompleted,
   RunEvent,
-  RunUsageSummary,
-  RunId,
   RunStarted,
-  SettlementId,
-  SubagentParentLink,
-  summarizeModelUsage,
   ToolCallDeclared,
-  ToolCallId,
+} from "@effect-agent/core/RunEvent";
+import { SubagentParentLink } from "@effect-agent/core/SubagentContract";
+import {
+  applyToolResultBounds,
+  unserializableToolResult,
   ToolResultBounds,
   TruncatedToolResult,
-  TurnId,
+} from "@effect-agent/core/ToolResult";
+import {
+  InputTokenUsage,
+  ModelCallUsage,
+  OutputTokenUsage,
+  RunUsageSummary,
+  summarizeModelUsage,
   UsageAggregationError,
-} from "../src/index.ts";
+} from "@effect-agent/core/Usage";
+import { Duration, Effect, Encoding, Random, Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 // Core is platform-neutral: no TextEncoder in its lib; hex length halves to UTF-8 bytes.
 const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 2;

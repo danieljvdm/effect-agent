@@ -1,34 +1,31 @@
+import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Subagent";
+import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { compileRegistrations, DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
+import { digestDefinitions } from "@effect-agent/thread/Digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import {
-  Subagent,
-  SubagentPolicy,
-  SubagentReservationsMemoryLive,
-  SubagentRuntime,
-} from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ThreadId, IdGenerator, ToolCallId } from "@effect-agent/core";
-import { ToolExecutionClass } from "@effect-agent/engine";
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
+import { DefinitionDigests, DefinitionDigestInput, Digest } from "@effect-agent/thread/Records";
+import { childThreadIdFor } from "@effect-agent/thread/RunJournal";
 import {
   ApprovalDecisionCommand,
-  ThreadRead,
-  ThreadStore,
-  DefinitionDigests,
-  DefinitionDigestInput,
-  Digest,
-  digestDefinitions,
-  compileRegistrations,
-  DurableAgentRuntime,
-  DurableRuntimeFailpointError,
-  DurableWorkerBinding,
   IdempotencyKey,
   Principal,
-  childThreadIdFor,
-  type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-
-import { NodeDurableAgentRuntime } from "../src/index.ts";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const digests = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
