@@ -291,6 +291,26 @@ The [opt-in deployed benchmark](https://github.com/danieljvdm/effect-agent/tree/
 16 sources plus duplicate-heavy candidates, with separate validation-RPC and full-recall durations.
 Local SQLite and workerd runs do not establish deployed latency.
 
+### Background remembering
+
+Bind the [remembering checkpoint contract](../guide/context-management#background-remembering)
+to the application's existing owner-local jobs. Source commit and outbox admission must be durable;
+the owner then runs finite remembering passes in a separate Scope. Keep its model permits separate
+from foreground runs. A blocked extraction or profile write must not hold a producer lock or a
+database transaction.
+
+The [persistent host fixture](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/test/restart/remembering-worker.ts)
+uses the existing memory reader/writer and SQLite-backed source, outbox, job, and retained checkpoint
+tables. It demonstrates host-owned wake repair and current-source recall. It is an application
+binding example, not an additional scheduler or a Cloudflare `ActivityProcessorStore` requirement.
+The actual application's job discovery, retry schedule, quotas, authorization, and alarm composition
+remain host responsibilities.
+
+Retain source-to-target checkpoints after pruning active jobs. Invalidation reactivates them for
+conditional cleanup and preserves uncertain prepared commands. Cleanup of an aggregate profile's
+last contribution should leave an empty writable profile; a `Withdraw` memory command permanently
+withdraws the entire target. Do not discard receipts or suppression to admit more work.
+
 ## Recovery and limits
 
 Alarms recover pending work after eviction without another user request.

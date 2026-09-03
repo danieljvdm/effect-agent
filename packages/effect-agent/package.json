@@ -39,6 +39,8 @@
     "./MemoryStore": "./src/MemoryStore.ts",
     "./ModelContext": "./src/ModelContext.ts",
     "./Redaction": "./src/Redaction.ts",
+    "./Remembering": "./src/Remembering.ts",
+    "./RememberingStore": "./src/RememberingStore.ts",
     "./RunEvent": "./src/RunEvent.ts",
     "./RunEventSink": "./src/RunEventSink.ts",
     "./RunHooks": "./src/RunHooks.ts",

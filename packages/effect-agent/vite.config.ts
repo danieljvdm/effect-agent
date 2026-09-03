@@ -27,6 +27,8 @@ export default defineConfig({
       "src/MemoryStore.ts",
       "src/ModelContext.ts",
       "src/Redaction.ts",
+      "src/Remembering.ts",
+      "src/RememberingStore.ts",
       "src/RunEvent.ts",
       "src/RunEventSink.ts",
       "src/RunHooks.ts",

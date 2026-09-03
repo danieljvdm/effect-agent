@@ -43,6 +43,8 @@ Effect Agent uses Effect AI's tools, models, and provider integrations directly.
 - [Transient recall](docs/guide/context-management.md) from application-owned readable sources.
 - [Revision-aware memory stores](docs/guide/context-management.md) with conditional corrections and
   withdrawal.
+- [Background remembering](docs/guide/context-management.md#background-remembering) with durable
+  admission, saved proposals and commands, and source invalidation.
 - [Resumable processing of committed Thread activity](docs/guide/context-management.md).
 - [Attached subagents](docs/guide/subagents.md) with explicit permissions and budgets.
 - [Scheduled input](docs/guide/operations.md#scheduled-input) and
@@ -78,7 +80,7 @@ live-model/provider suites are opt-in.
 ## Limits and safety
 
 There is no hosted service, bundled chat UI, visual builder, or marketplace. Runtime Skills,
-framework-owned memory extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn
+framework-owned fact extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn
 Plans are not implemented. Subagents cannot nest, hand off, or detach. See the
 [capability inventory](docs/reference/packages.md#capability-inventory) for the full list.
 

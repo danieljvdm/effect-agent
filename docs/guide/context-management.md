@@ -512,6 +512,83 @@ the host decides which diagnostics to retain and who can inspect them.
 
 <a id="tool-results-are-bounded-at-the-source"></a>
 
+### Remember without delaying a response {#background-remembering}
+
+Remembering separates durable admission from extraction and memory updates. The foreground
+submits an identity-bound intent and receives a queued acknowledgement after persistence succeeds.
+Queued means accepted for processing. It does not mean that a fact was accepted, saved, or made
+available to another Thread. Admission adds bounded persistence work and can fail with a typed error.
+
+Use `Remembering.admit(store, intent)` from `effect-agent/Remembering` for admission and
+`Remembering.make({ proposal, loadSource, extract, merge, cleanup }).advance(...)` for a finite
+worker pass. The `RememberingStore` module defines the portable Schemas and injectable port.
+The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/remembering.ts)
+shows native Effect AI extraction and source-aware profile callbacks. Provide
+`RememberingStore.MutationFailpoint.layer` in production and replace it for fault tests.
+
+Automatic remembering follows the host's committed source activity and outbox. It needs no memory
+Tool or extra model turn. The outbox retains activity when admission is unavailable or full;
+that backlog does not turn a completed chat response into a failure. Explicit remember actions
+report admission failure instead of claiming success.
+
+The host runs a finite processing pass in a separate Scope with its own concurrency and model
+budgets. It owns discovery, source order, job quotas, retry deadlines, parking, and wake repair.
+Do not await processing after `AgentRuntime.run`: an awaited callback still delays the response.
+Do not hold a producer lock, database transaction, or all foreground provider permits while
+extracting, checking evidence, reading profiles, writing, retrying conflicts, or cleaning up.
+
+The protocol saves two different values:
+
+1. An extracted proposal, encoded with the application's Schema and bound to the admitted source.
+2. The exact prepared `MemoryWrite`, including its operation ID, expected revision, scopes,
+   content, and content timestamps, before dispatch to `MemoryWriter`.
+
+Unknown write outcomes retry that saved command unchanged. Only a definite `MemoryConflict`
+allows a new operation ID and rebase against the latest target. Rebase retains the saved proposal
+and does not repeat extraction. The application supplies source-aware merging so concurrent source
+contributions and human corrections survive. An operation-ID/content mismatch remains
+`MemoryOperationConflict`; it is not permission to create another command.
+
+`loadSource` checks the current authorized source after extraction and before saving a new command.
+It can return an authoritative invalidation event, which the worker durably admits. A saved command
+is already an uncertain write and must reconcile even if the source is now unavailable. Source
+changes after preparation therefore rely on durable suppression and current-source recall checks.
+Extraction may return `null` when there is no accepted fact; that finishes without reading a target.
+
+The application also supplies canonical source loading, fact acceptance, authorization, and
+conditional cleanup. Evidence must identify a known source revision and a literal quote or range
+from that source. The model cannot select a tenant, target, or authority. A valid quote proves
+provenance, not the truth of an extracted claim.
+
+Source edits, deletion, revocation, and Forget require durable suppression and cleanup admission
+before acknowledging the source event. Suppression does not discard an uncertain command:
+reconciliation must still establish its outcome and remove obsolete source-owned contributions.
+Current-source recall checks exclude invalid evidence while cleanup is pending. Human corrections
+have independent provenance and survive source cleanup. Disable new extraction separately from
+required reconciliation and cleanup.
+
+Active job removal must retain bounded source-to-target references, so later invalidation finds
+completed contributions without a prior read. Retain those references, suppression, and admission
+and write receipts throughout the host's supported replay, backfill, and restore window. Reject
+new work at capacity without evicting existing obligations. Hosts define source-position authority.
+Sequence numbers are ordered only within the same opaque authority generation. Different generations
+are incomparable, and revision strings are never ordered. The host fences old workers and performs
+any restore or authority cutover explicitly.
+An old database snapshot cannot prove that no later Forget or revocation occurred. Verify its
+lineage against the current source authority outside that restored snapshot and reject incompatible
+state before processing or recall. The protocol supplies no migration or automatic authority cutover.
+
+Recall remains the existing transient read path. Load current permitted memory and run the
+application's grouped canonical-source checks without draining jobs, waiting for readiness, or
+refreshing an index. Track first token, completed response, admission duration, and
+source-to-authorized-recall delay separately. Healthy background progress and cross-Thread
+freshness depend on the host's scheduling and source availability.
+
+Callbacks retain their typed errors and Effect service requirements. Defects and interruption
+remain distinct from expected failure; a processing deadline interrupts cooperative work and runs
+its finalizers. The helpers use named Effect spans without attaching source text, proposals,
+profiles, or private namespace identities. Hosts choose retry policy and operational metrics.
+
 ### Process committed Thread activity {#committed-memory}
 
 `processCommittedActivity` is an optional, finite pass over one application-selected Thread.
