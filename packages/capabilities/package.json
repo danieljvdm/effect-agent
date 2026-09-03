@@ -29,7 +29,8 @@
     "./SemanticMemory": "./src/SemanticMemory.ts",
     "./Subagent": "./src/Subagent.ts",
     "./SubagentReservations": "./src/SubagentReservations.ts",
-    "./WebCapture": "./src/WebCapture.ts"
+    "./WebCapture": "./src/WebCapture.ts",
+    "./Remembering": "./src/Remembering.ts"
   },
   "publishConfig": {
     "access": "public"

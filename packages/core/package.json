@@ -32,7 +32,8 @@
     "./SemanticMemoryRevalidation": "./src/SemanticMemoryRevalidation.ts",
     "./SubagentContract": "./src/SubagentContract.ts",
     "./ToolResult": "./src/ToolResult.ts",
-    "./Usage": "./src/Usage.ts"
+    "./Usage": "./src/Usage.ts",
+    "./RememberingStore": "./src/RememberingStore.ts"
   },
   "publishConfig": {
     "access": "public"

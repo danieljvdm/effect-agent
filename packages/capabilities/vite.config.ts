@@ -4,6 +4,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/Remembering.ts",
       "src/Approval.ts",
       "src/Budget.ts",
       "src/CodeMode.ts",

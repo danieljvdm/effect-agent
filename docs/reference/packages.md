@@ -43,20 +43,22 @@ import { CommandDrainPolicy, RunSchedulingOverride } from "effect-agent/RunOptio
 
 Applications installing constituent packages directly use the owning package instead:
 
-| Module or declarations                       | Owning module                               |
-| -------------------------------------------- | ------------------------------------------- |
-| Agent constructors and inferred types        | `@effect-agent/core/Agent`                  |
-| Recall composition, sources, and outcomes    | `@effect-agent/core/Memory`                 |
-| Memory passages and recall limits            | `@effect-agent/core/MemoryReference`        |
-| Memory reader/writer contracts               | `@effect-agent/core/MemoryStore`            |
-| `MemoryAccess`, `revalidateMemoryLookup`     | `@effect-agent/core/MemoryRevalidation`     |
-| Semantic index contracts and errors          | `@effect-agent/core/SemanticMemoryIndex`    |
-| Delegation contracts and reservation amounts | `@effect-agent/core/SubagentContract`       |
-| Runtime operations and inferred failures     | `@effect-agent/engine/AgentRuntime`         |
-| Compactor service                            | `@effect-agent/engine/ContextCompactor`     |
-| Command-drain, scheduling, and run options   | `@effect-agent/engine/RunOptions`           |
-| Subagent authoring and handlers              | `@effect-agent/capabilities/Subagent`       |
-| Semantic indexing/query implementation       | `@effect-agent/capabilities/SemanticMemory` |
+| Module or declarations                           | Owning module                               |
+| ------------------------------------------------ | ------------------------------------------- |
+| Agent constructors and inferred types            | `@effect-agent/core/Agent`                  |
+| Recall composition, sources, and outcomes        | `@effect-agent/core/Memory`                 |
+| Memory passages and recall limits                | `@effect-agent/core/MemoryReference`        |
+| Memory reader/writer contracts                   | `@effect-agent/core/MemoryStore`            |
+| Remembering checkpoints and persistence contract | `@effect-agent/core/RememberingStore`       |
+| Durable admission and finite remembering passes  | `@effect-agent/capabilities/Remembering`    |
+| `MemoryAccess`, `revalidateMemoryLookup`         | `@effect-agent/core/MemoryRevalidation`     |
+| Semantic index contracts and errors              | `@effect-agent/core/SemanticMemoryIndex`    |
+| Delegation contracts and reservation amounts     | `@effect-agent/core/SubagentContract`       |
+| Runtime operations and inferred failures         | `@effect-agent/engine/AgentRuntime`         |
+| Compactor service                                | `@effect-agent/engine/ContextCompactor`     |
+| Command-drain, scheduling, and run options       | `@effect-agent/engine/RunOptions`           |
+| Subagent authoring and handlers                  | `@effect-agent/capabilities/Subagent`       |
+| Semantic indexing/query implementation           | `@effect-agent/capabilities/SemanticMemory` |
 
 Flat root imports of individual declarations are removed. Import those declarations from the
 modules above, or use the root module namespace. `CommandDrainPolicy` and
@@ -79,22 +81,23 @@ implementations.
 
 ## Find a capability {#capability-inventory}
 
-| Need                                    | Guide                                                           | Your application supplies                          |
-| --------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
-| Run or stream an agent                  | [Execution](../guide/run-agents)                                | Model, tool handlers, history policy               |
-| Retain completed threads                | [History](../guide/threads#retain-completed-runs)               | Store and thread IDs                               |
-| Recover work after a crash              | [Durability](../concepts/durability)                            | Registered agents, workers, storage, authorization |
-| Drive durable work with Effect Workflow | [Workflow host](../platforms/node#workflow)                     | Workflow engine, dispatch store, repair trigger    |
-| Prune or summarize context              | [Context management](../guide/context-management)               | Context limits and compaction policy               |
-| Recall application-owned sources        | [Context management](../guide/context-management#recall-memory) | Readable passages, provenance, query policy        |
-| Require approval or limit spending      | [Run hooks](../guide/run-agents#operational-hooks)              | Approval policy, budget hooks, cost estimates      |
-| Delegate to another agent               | [Subagents](../guide/subagents)                                 | Targets, bindings, permissions, budgets            |
-| Schedule new input                      | [Scheduling](../guide/operations#scheduled-input)               | Owner policy, registered inputs, driver            |
-| React to external events                | [Subscriptions](../guide/operations#event-subscriptions)        | Authenticated source, preparation, authorization   |
-| Run generated JavaScript                | [Code Mode](../guide/code-mode)                                 | Read-only tools and an isolated executor           |
-| Run trusted local commands              | [Sandbox execution](../guide/sandbox)                           | Executable, environment, output and time limits    |
-| Capture, crawl, or interact with pages  | [Browser tools](../guide/browser)                               | Browser binding or credentials, target policy      |
-| Call tools on an MCP server             | [MCP servers](../guide/tools#mcp)                               | Transport, `HttpClient` or process spawner, bounds |
+| Need                                    | Guide                                                             | Your application supplies                                    |
+| --------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
+| Run or stream an agent                  | [Execution](../guide/run-agents)                                  | Model, tool handlers, history policy                         |
+| Retain completed threads                | [History](../guide/threads#retain-completed-runs)                 | Store and thread IDs                                         |
+| Recover work after a crash              | [Durability](../concepts/durability)                              | Registered agents, workers, storage, authorization           |
+| Drive durable work with Effect Workflow | [Workflow host](../platforms/node#workflow)                       | Workflow engine, dispatch store, repair trigger              |
+| Prune or summarize context              | [Context management](../guide/context-management)                 | Context limits and compaction policy                         |
+| Recall application-owned sources        | [Context management](../guide/context-management#recall-memory)   | Readable passages, provenance, query policy                  |
+| Remember in the background              | [Remembering](../guide/context-management#background-remembering) | Durable jobs, source policy, extraction, merging and cleanup |
+| Require approval or limit spending      | [Run hooks](../guide/run-agents#operational-hooks)                | Approval policy, budget hooks, cost estimates                |
+| Delegate to another agent               | [Subagents](../guide/subagents)                                   | Targets, bindings, permissions, budgets                      |
+| Schedule new input                      | [Scheduling](../guide/operations#scheduled-input)                 | Owner policy, registered inputs, driver                      |
+| React to external events                | [Subscriptions](../guide/operations#event-subscriptions)          | Authenticated source, preparation, authorization             |
+| Run generated JavaScript                | [Code Mode](../guide/code-mode)                                   | Read-only tools and an isolated executor                     |
+| Run trusted local commands              | [Sandbox execution](../guide/sandbox)                             | Executable, environment, output and time limits              |
+| Capture, crawl, or interact with pages  | [Browser tools](../guide/browser)                                 | Browser binding or credentials, target policy                |
+| Call tools on an MCP server             | [MCP servers](../guide/tools#mcp)                                 | Transport, `HttpClient` or process spawner, bounds           |
 
 ### Limits and unsupported features {#compaction-and-unsupported-capabilities}
 

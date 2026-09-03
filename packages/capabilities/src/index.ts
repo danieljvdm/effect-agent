@@ -12,3 +12,4 @@ export * as SemanticMemory from "./SemanticMemory.ts";
 export * as Subagent from "./Subagent.ts";
 export * as SubagentReservations from "./SubagentReservations.ts";
 export * as WebCapture from "./WebCapture.ts";
+export * as Remembering from "./Remembering.ts";

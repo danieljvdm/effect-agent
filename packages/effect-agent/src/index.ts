@@ -21,6 +21,8 @@ export * as MemoryRevalidation from "./MemoryRevalidation.ts";
 export * as MemoryStore from "./MemoryStore.ts";
 export * as ModelContext from "./ModelContext.ts";
 export * as Redaction from "./Redaction.ts";
+export * as Remembering from "./Remembering.ts";
+export * as RememberingStore from "./RememberingStore.ts";
 export * as RunEvent from "./RunEvent.ts";
 export * as RunEventSink from "./RunEventSink.ts";
 export * as RunHooks from "./RunHooks.ts";

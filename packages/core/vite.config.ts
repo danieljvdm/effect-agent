@@ -4,6 +4,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/RememberingStore.ts",
       "src/Agent.ts",
       "src/AgentError.ts",
       "src/AgentPolicy.ts",
