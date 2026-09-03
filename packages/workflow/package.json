@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/workflow",
-  "version": "0.1.0-beta.46",
+  "version": "0.1.0-beta.47",
   "description": "Effect Workflow execution for the existing durable Agent runtime.",
   "license": "MIT",
   "repository": {
