@@ -13,8 +13,23 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./Approval": "./src/Approval.ts",
+    "./Budget": "./src/Budget.ts",
+    "./CodeMode": "./src/CodeMode.ts",
+    "./Commands": "./src/Commands.ts",
+    "./EphemeralThreads": "./src/EphemeralThreads.ts",
+    "./Mcp": "./src/Mcp.ts",
+    "./McpClient": "./src/McpClient.ts",
+    "./ModelContext": "./src/ModelContext.ts",
+    "./Redaction": "./src/Redaction.ts",
+    "./RunHooks": "./src/RunHooks.ts",
+    "./SemanticMemory": "./src/SemanticMemory.ts",
+    "./Subagent": "./src/Subagent.ts",
+    "./SubagentReservations": "./src/SubagentReservations.ts",
+    "./WebCapture": "./src/WebCapture.ts"
   },
   "publishConfig": {
     "access": "public"

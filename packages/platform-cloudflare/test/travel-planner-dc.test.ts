@@ -1,4 +1,5 @@
-import { ToolCallId } from "@effect-agent/core";
+import { ToolCallId } from "@effect-agent/core/Identifiers";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
 import {
   DestinationShortlist,
   TravelPlannerPhase4,
@@ -33,23 +34,24 @@ import {
   s2TravelPlannerSubmitOptions,
   travelPlanFromDurableSettlement,
   TripRequest,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import {
-  ApprovalDecisionCommand,
-  CanonicalRecordEnvelope,
-  ResolutionNeverHappened,
-  UnknownResolutionCommand,
   type DurableSubmitAgent,
   type DurableSubmitOptions,
   type Receipt,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import {
+  ApprovalDecisionCommand,
+  ResolutionNeverHappened,
+  UnknownResolutionCommand,
+} from "@effect-agent/thread/SubmissionLedger";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareThreadClient } from "../src/index.ts";
 import {
   armRuntimeEviction,
   armedEvictionsRemaining,

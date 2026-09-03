@@ -29,7 +29,7 @@ conformance suite.
 
 ```ts
 import { Effect } from "effect";
-import { certifyDurableAdapters } from "@effect-agent/testing/certification";
+import { certifyDurableAdapters } from "@effect-agent/testing/Certification";
 
 const certificate = Effect.gen(function* () {
   return yield* certifyDurableAdapters({
@@ -101,14 +101,16 @@ checker as the administrative `verify` operation.
 
 <a id="shipped-adapter-tests"></a>
 
-Import `CertificationReport`, `certifyPorts`, and the shared conformance case arrays from
-`@effect-agent/thread/testing`. Production schemas, ports, replay, verification, and runtime APIs
-remain in `@effect-agent/thread`.
+Import `CertificationReport` and `certifyPorts` from
+`@effect-agent/thread/testing/Certification`. The shared conformance cases live in
+`@effect-agent/thread/testing/ThreadStoreConformance` and
+`@effect-agent/thread/testing/SubmissionLedgerConformance`. Production schemas, ports,
+replay, verification, and runtime APIs have their own public thread modules.
 
 ## Certify subscription stores {#subscription-stores}
 
 An adapter that implements `SubscriptionStore` must also run
-`subscriptionStoreConformanceCases` from `@effect-agent/thread/testing`. Give each case a fresh
+`subscriptionStoreConformanceCases` from `@effect-agent/thread/testing/SubscriptionStoreConformance`. Give each case a fresh
 partition. The cases cover intake cutoffs, deduplication, once selection, capacity, cancellation,
 prepared recovery, catch-up, scan cursors, and replay after limits tighten.
 

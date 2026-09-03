@@ -1,14 +1,13 @@
+import { SqlWorkflowDispatchStore } from "@effect-agent/platform-node/NodeWorkflow";
 import {
   WorkflowDispatchIntent,
   WorkflowDispatchScan,
   WorkflowDispatchStore,
-} from "@effect-agent/workflow";
+} from "@effect-agent/workflow/WorkflowDispatch";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema, String } from "effect";
 import { SqlClient } from "effect/unstable/sql";
-
-import { SqlWorkflowDispatchStore } from "../src/workflow.ts";
 
 const intent = Schema.decodeSync(WorkflowDispatchIntent)({
   version: 1,

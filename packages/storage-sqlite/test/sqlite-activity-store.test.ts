@@ -1,4 +1,8 @@
 import {
+  activityProcessorStoreLayer,
+  activityProcessorStoreLayerWithFailpoints,
+} from "@effect-agent/storage-sqlite/SqliteActivityStore";
+import {
   ActivityBusy,
   ActivityClaimRequest,
   ActivityMutationFailpoint,
@@ -10,8 +14,8 @@ import {
   ActivityStoreError,
   ActivityWorkConflict,
   PreparedActivity,
-  RecordId,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/ActivityStore";
+import { RecordId } from "@effect-agent/thread/Records";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -19,11 +23,6 @@ import type { PlatformError } from "effect";
 import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
-
-import {
-  activityProcessorStoreLayer,
-  activityProcessorStoreLayerWithFailpoints,
-} from "../src/index.ts";
 
 const key = Schema.decodeSync(ActivityProcessorKey)({
   processorId: "profile",

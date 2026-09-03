@@ -1,8 +1,6 @@
 import "@tanstack/react-start/server-only";
 import {
-  type ApprovalAdapterError,
   type ApprovalAudit,
-  type Redactor,
   ApprovalApproved,
   type ApprovalAuditLimitExceeded,
   type ApprovalDecision,
@@ -11,35 +9,53 @@ import {
   ApprovalResolver,
   type ApprovalResolverError,
   ApprovalAuditMemoryLive,
-  type BudgetAdapterError,
+} from "@effect-agent/capabilities/Approval";
+import {
   BudgetExceeded,
-  type ThreadAdapterError,
-  connectMcp,
-  EphemeralThreads,
-  EphemeralThreadsLive,
+  makeUsageBudget,
+  UsageBudgetLimits,
+} from "@effect-agent/capabilities/Budget";
+import {
   FollowUpCommand,
   makeRunCommandQueue,
-  makeUsageBudget,
+  RunCommandQueueConfig,
+  SteeringCommand,
+} from "@effect-agent/capabilities/Commands";
+import {
+  EphemeralThreads,
+  EphemeralThreadsLive,
+} from "@effect-agent/capabilities/EphemeralThreads";
+import {
+  connectMcp,
   McpConnectionRequest,
   McpConnector,
   McpServerIdentity,
-  RunCommandQueueConfig,
+} from "@effect-agent/capabilities/Mcp";
+import {
+  type Redactor,
   type RedactionError,
-  SteeringCommand,
   StructuralRedactorLive,
+} from "@effect-agent/capabilities/Redaction";
+import {
+  type ApprovalAdapterError,
+  type BudgetAdapterError,
+  type ThreadAdapterError,
   toRunApprovalHook,
   toRunBudgetHook,
   toRunThreadOptions,
-  UsageBudgetLimits,
-} from "@effect-agent/capabilities";
-import { Agent, ThreadId, IdGenerator, RunId, TurnId, type RunEvent } from "@effect-agent/core";
+} from "@effect-agent/capabilities/RunHooks";
+import * as Agent from "@effect-agent/core/Agent";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
-  AgentRuntime,
-  ThreadHistory,
   RunContextPreparationPassthrough,
   type RunInputHook,
   type RunOptions,
-} from "@effect-agent/engine";
+} from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local/LocalSandbox";
 import {
   NetworkDisabled,
   Sandbox,
@@ -47,9 +63,8 @@ import {
   SandboxLimits,
   SandboxRequest,
   SandboxRuntime,
-} from "@effect-agent/sandbox";
-import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
+} from "@effect-agent/sandbox/Sandbox";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
 import {
   ActivityCatalog,
   ActivitySearchResult,
@@ -68,7 +83,7 @@ import {
   TripRequest,
   phase1HappyPathTurns,
   phase1Trip,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeCrypto } from "@effect/platform-node";
 import {
@@ -409,7 +424,7 @@ interface ActiveRun {
   readonly handle: DemoRunHandle;
   readonly runId: RunId;
   readonly threadId: ThreadId;
-  readonly commandQueue: import("@effect-agent/capabilities").RunCommandQueue;
+  readonly commandQueue: import("@effect-agent/capabilities/Commands").RunCommandQueue;
   readonly output: Queue.Queue<DemoOperationalEvent, DemoRunFailure | Cause.Done>;
   readonly pendingApprovals: Ref.Ref<ReadonlyMap<string, PendingApproval>>;
   readonly commandCounter: Ref.Ref<number>;

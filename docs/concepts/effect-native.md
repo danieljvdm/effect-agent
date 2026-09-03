@@ -18,7 +18,7 @@ Public asynchronous operations return `Effect` or `Stream`. This includes tool h
 instructions, approval decisions, stores, and platform capabilities.
 
 ```ts twoslash
-import { AgentRuntime } from "@effect-agent/engine";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { Effect, Stream } from "effect";
 import { TravelPlanner } from "./planner";
 const input = { city: "Lisbon", days: 2 };
@@ -65,7 +65,7 @@ Definitions describe behavior and requirements. Layers provide models, toolkits,
 sandboxes, clocks, identifiers, authorization, and platform services.
 
 ```ts twoslash
-import { AgentRuntime } from "@effect-agent/engine";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { Effect, Layer } from "effect";
 import { TravelPlanner } from "./planner";
@@ -93,7 +93,7 @@ fails, or is interrupted. `start` requires a caller Scope because execution and 
 Requirements from application code remain visible, including any real `Scope` requirement.
 
 ```ts twoslash
-import { AgentRuntime } from "@effect-agent/engine";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { Effect } from "effect";
 import { TravelPlanner } from "./planner";
 const input = { city: "Lisbon", days: 2 };

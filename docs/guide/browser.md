@@ -122,14 +122,14 @@ application owns the Cloudflare credentials and provides the `HttpClient`; the r
 typed Effect channel.
 
 ```ts twoslash
-import { browserRestCaptureLayer } from "@effect-agent/platform-cloudflare/browser-rest-capture";
+import { browserRestCaptureLayer } from "@effect-agent/platform-cloudflare/BrowserRestCapture";
 import {
   CapturePageMarkdown,
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
   PageUrlTarget,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/PageCapture";
 import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -162,11 +162,11 @@ hosts, actions, and output size in the definition. In a Worker, the Cloudflare p
 the capture adapter, binding, and handlers in one Layer:
 
 ```ts twoslash
-import { WebCapture } from "@effect-agent/capabilities";
+import * as WebCapture from "@effect-agent/capabilities/WebCapture";
 import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
-} from "@effect-agent/platform-cloudflare/browser-quick-action";
+} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
 import { Toolkit } from "effect/unstable/ai";
 
 declare const env: { BROWSER: CloudflareBrowserOptions["browser"] };
@@ -185,7 +185,7 @@ export const ReadPageLive = CloudflareBrowser.layer(ReadPage, {
 ```
 
 Use `BrowserTools` as the agent's toolkit and provide `ReadPageLive` when running it.
-`CloudflareBrowser` is also exported from `@effect-agent/platform-cloudflare`. It accepts
+`CloudflareBrowser.layer` also accepts
 `WebCapture.makeScrape` and `WebCapture.makeExtract` definitions. Extraction requires an explicit
 `workersAi` option with an `authorizeAndAccount` Effect, using the same policy as
 `BrowserQuickActionWorkersAi.layer`. Without it, extraction fails before making a browser request.
@@ -195,11 +195,11 @@ It preserves the definition's host policy, output bounds, typed failures, and re
 For REST capture, use the Node-safe REST subpath and supply an HTTP client:
 
 ```ts twoslash
-import { WebCapture } from "@effect-agent/capabilities";
+import * as WebCapture from "@effect-agent/capabilities/WebCapture";
 import {
   CloudflareBrowserRest,
   type CloudflareBrowserRestOptions,
-} from "@effect-agent/platform-cloudflare/browser-rest-capture";
+} from "@effect-agent/platform-cloudflare/BrowserRestCapture";
 import { Layer } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -234,8 +234,8 @@ For a custom capture adapter, provide its Layer directly to `readPage.handlers`.
 cancels the provider job when the adapter has a job identity to clean up.
 
 ```ts twoslash
-import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/browser-rest-crawl";
-import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "@effect-agent/sandbox";
+import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/BrowserRestCrawl";
+import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "@effect-agent/sandbox/PageCrawl";
 import { Config, Effect, Layer, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -301,13 +301,13 @@ an undispatched provider action can be identified without treating them as a suc
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareInteractiveBrowser } from "@effect-agent/platform-cloudflare/interactive-browser";
+import { CloudflareInteractiveBrowser } from "@effect-agent/platform-cloudflare/InteractiveBrowser";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/InteractiveBrowser";
 import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { WorkerEnvironment } from "effect-cf";
@@ -381,7 +381,7 @@ that boundary, so do not automatically replay it.
 
 `ProtectedBrowser` is a separate private pass, not an upgrade of an interactive session. Import
 `browserRunProtectedLayer` and `browserRunProtectedBindingLayer` from
-`@effect-agent/platform-cloudflare/protected-browser`. Provide the binding Layer, the same
+`@effect-agent/platform-cloudflare/ProtectedBrowser`. Provide the binding Layer, the same
 `BrowserRunSessionLifecycle` used above, and an invocation-specific `BrowserCredentialAccess`.
 Use `ExactHosts` for a fixed network allowlist. `Unrestricted` is an explicit host choice;
 `PublicWeb` is unsupported. Credential grants never expand network policy.
@@ -511,7 +511,7 @@ remains subject to the pass deadline and lock. Authorize viewport changes in you
 Session closure waits up to ten seconds to confirm whole-browser termination or exact-session
 absence. A pending close or transport/authentication failure is not proof of cleanup.
 `BrowserRunCleanupError` reports a sanitized reason. Correct authorization or configuration
-failures before retrying. The [interactive browser API comments](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/src/interactive-browser.ts)
+failures before retrying. The [interactive browser API comments](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/src/InteractiveBrowser.ts)
 describe action timing and lifecycle details.
 
 ## Hosted binding proof

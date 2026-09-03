@@ -1,8 +1,9 @@
-import { AbortCommand } from "@effect-agent/thread";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import { AbortCommand } from "@effect-agent/thread/SubmissionLedger";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareThreadClient, ThreadObject } from "../src/index.ts";
 import { plannerDefinition, submitOptions } from "./fixtures.ts";
 import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 

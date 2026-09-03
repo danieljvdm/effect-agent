@@ -4,7 +4,7 @@ import {
   McpServerIdentity,
   McpToolkitMismatch,
   type McpConnection,
-} from "@effect-agent/capabilities";
+} from "@effect-agent/capabilities/Mcp";
 import type { JsonSchema } from "effect";
 import { Effect, JsonPointer, Layer, Schema } from "effect";
 import { Tool } from "effect/unstable/ai";

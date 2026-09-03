@@ -1,60 +1,61 @@
+import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Subagent";
+import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
-  Subagent,
-  SubagentPolicy,
-  SubagentReservationsMemoryLive,
-  SubagentRuntime,
-} from "@effect-agent/capabilities";
-import {
-  Agent,
-  AgentPolicy,
   ThreadId,
-  IdGenerator,
   RunId,
   ToolCallId,
   TurnId,
   type SubmissionId,
-} from "@effect-agent/core";
-import { RunToolAuthorization, ToolExecutionClass } from "@effect-agent/engine";
+} from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import {
-  MemoryThreadStoreLive,
   MemorySubmissionLedgerLive,
   memorySubmissionLedgerLayer,
-} from "@effect-agent/storage-memory";
+} from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
 import {
-  AbortCommand,
-  ClaimRequest,
-  ThreadRead,
-  ThreadStore,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
+import {
   DefinitionDigests,
   DeploymentId,
   Digest,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
-  DurableWorkerBinding,
+  ProducerId,
+  RecordEnvelope,
+  ToolCallPrepared,
+  type CanonicalRecordEnvelope,
+} from "@effect-agent/thread/Records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
+import {
+  AbortCommand,
+  ClaimRequest,
   IdempotencyKey,
   Principal,
-  ProducerId,
   RecoverySnapshotRequest,
-  RecordEnvelope,
   ReleaseOwnershipRequest,
   SettlementFinalization,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-  ToolReconciler,
-  ToolCallPrepared,
   UnknownResolutionCommand,
-  WakeScheduler,
-  childThreadIdFor,
-  runIdForSubmission,
   submissionSettlementId,
-  type DurableRuntimeFailpointLocation,
-  type DurableSubmitOptions,
-  type ResolvedBinding,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";

@@ -13,8 +13,10 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./LocalSandbox": "./src/LocalSandbox.ts"
   },
   "publishConfig": {
     "access": "public"

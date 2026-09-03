@@ -3,17 +3,13 @@ import {
   MemoryWrite,
   MemoryWriter,
   type MemoryMutationPoint,
-} from "@effect-agent/core";
-import {
-  activityProcessorStoreLayer,
-  memoryStoreLayerWithFailpoints,
-  layer as sqliteThreadStoreLayer,
-} from "@effect-agent/storage-sqlite";
-import {
-  processCommittedActivity,
-  type CanonicalRecordEnvelope,
-  type PreparedActivity,
-} from "@effect-agent/thread";
+} from "@effect-agent/core/MemoryStore";
+import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/SqliteActivityStore";
+import { layer as sqliteThreadStoreLayer } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { type PreparedActivity } from "@effect-agent/thread/ActivityStore";
+import { processCommittedActivity } from "@effect-agent/thread/CommittedActivity";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { memoryStoreLayerWithFailpoints } from "@effect-agent/thread/SqlMemoryStore";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Config, Console, Effect, Layer, Ref, Schema } from "effect";

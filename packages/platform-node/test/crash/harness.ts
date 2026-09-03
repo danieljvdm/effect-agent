@@ -2,21 +2,25 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { SubmissionId } from "@effect-agent/core";
-import type { SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite";
+import { type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
-  ThreadRead,
-  ThreadStore,
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { type SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+import { type DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import {
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
   submissionInputRecordId,
   submissionSettlementRecordId,
-  type CanonicalRecordEnvelope,
-  type DurableRuntimeFailpointLocation,
-  type ResolvedBinding,
   type SubmissionSnapshot,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { expect } from "@effect/vitest";
 import {
   Cause,
@@ -30,11 +34,6 @@ import {
   type Scope,
 } from "effect";
 
-import {
-  NodeDurableHost,
-  NodeDurableAgentRuntime,
-  type NodeDurableAgentRuntimeOptions,
-} from "../../src/index.ts";
 import {
   CRASH_DEPLOYMENT_ID,
   CrashEnv,

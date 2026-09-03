@@ -114,7 +114,10 @@ export default defineConfig({
       typeAware: true,
       typeCheck: true,
     },
-    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+    jsPlugins: [
+      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
+      { name: "exports", specifier: "./oxlint/plugin-exports.ts" },
+    ],
     rules: {
       "import/no-duplicates": "warn",
       "react-hooks/exhaustive-deps": "warn",
@@ -128,6 +131,24 @@ export default defineConfig({
       "vitest/valid-title": "warn",
       "vite-plus/prefer-vite-plus-imports": "error",
     },
+    overrides: [
+      {
+        files: ["packages/*/src/**/*.ts"],
+        rules: {
+          "exports/no-self-barrel-import": "error",
+        },
+      },
+      {
+        files: ["packages/*/src/internal/**/*.ts"],
+        rules: { "exports/no-internal-barrel": "error" },
+      },
+      {
+        files: ["packages/*/src/**/index.ts"],
+        rules: {
+          "exports/public-entrypoint": "error",
+        },
+      },
+    ],
   },
   pack: {
     dts: true,
@@ -145,6 +166,10 @@ export default defineConfig({
       scripts: true,
     },
     tasks: {
+      "bundle:compare": {
+        cache: false,
+        command: "bun scripts/bundle-size.ts",
+      },
       "release:publish": {
         cache: false,
         command: "bun scripts/release-publish.ts",

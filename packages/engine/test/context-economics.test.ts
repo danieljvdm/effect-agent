@@ -1,18 +1,20 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicyError, ModelProtocolError } from "@effect-agent/core/AgentError";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunCompleted, type RunEvent } from "@effect-agent/core/RunEvent";
 import {
-  Agent,
-  AgentPolicy,
-  AgentPolicyError,
-  ThreadId,
-  ModelProtocolError,
-  IdGenerator,
-  RunId,
   ToolResultBounds,
   TruncatedToolResult,
-  TurnId,
   UnserializableToolResult,
-  type RunCompleted,
-  type RunEvent,
-} from "@effect-agent/core";
+} from "@effect-agent/core/ToolResult";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import {
+  type RunDurabilityHook,
+  type RunTurnResume,
+  type RunUsageDelta,
+} from "@effect-agent/engine/RunOptions";
 import { expect, layer } from "@effect/vitest";
 import { Cause, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -25,15 +27,9 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
-import {
-  AgentRuntime,
-  formatRunStatus,
-  type RunDurabilityHook,
-  type RunTurnResume,
-  type RunUsageDelta,
-} from "../src/index.ts";
-import { RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+import { formatRunStatus } from "../src/internal/agent-runtime.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
   nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),

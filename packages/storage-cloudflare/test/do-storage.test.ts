@@ -1,17 +1,29 @@
+import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/DoStorageConfig";
 import {
-  CanonicalBatch,
-  CanonicalRecord,
-  ThreadMaterialization,
-  ThreadStore,
-  ThreadStoreError,
-  EMPTY_TAIL_DIGEST,
-  FencedAppendRequest,
-  UserInputRecorded,
-} from "@effect-agent/thread";
+  DoStorageCompatibilityError,
+  DoStorageError,
+  DoValueBoundExceeded,
+} from "@effect-agent/storage-cloudflare/DoStorageError";
+import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
+import { CurrentDoStorageVersion } from "@effect-agent/storage-cloudflare/DoStorageVersion";
+import {
+  threadStoreLayer,
+  layer,
+  storageConfigLayer,
+  type DoStorageInitializationError,
+} from "@effect-agent/storage-cloudflare/DoThreadStore";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@effect-agent/thread/Records";
 import {
   threadStoreConformanceCases,
   threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/testing/ThreadStoreConformance";
+import {
+  ThreadMaterialization,
+  ThreadStore,
+  ThreadStoreError,
+  FencedAppendRequest,
+} from "@effect-agent/thread/ThreadStore";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
@@ -19,18 +31,6 @@ import { Cause, Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  CurrentDoStorageVersion,
-  type DoStorageConfig,
-  threadStoreLayer,
-  DoStorageCompatibilityError,
-  DoStorageError,
-  DoStorageFailpoint,
-  DoValueBoundExceeded,
-  layer,
-  storageConfigLayer,
-  type DoStorageInitializationError,
-} from "../src/index.ts";
 import {
   thread,
   epoch,
@@ -302,4 +302,4 @@ describe("DoThreadStore", () => {
       ),
     ));
 });
-import { SubmissionId } from "@effect-agent/core";
+import { SubmissionId } from "@effect-agent/core/Identifiers";

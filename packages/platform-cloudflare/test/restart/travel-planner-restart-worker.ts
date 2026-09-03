@@ -1,4 +1,10 @@
-import { DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare";
+import {
+  ThreadObjectNamespace,
+  type ThreadObjectRpc,
+} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import { DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/DoStorageError";
 import {
   TravelPlannerPhase4,
   makePhase6TravelPlannerBindings,
@@ -7,22 +13,14 @@ import {
   phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
-} from "@effect-agent/testing/fixtures/travel-planner";
-import {
-  DurableRuntimeFailpointLocation,
-  Receipt,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
+} from "@effect-agent/testing/TravelPlanner";
+import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Effect, Layer, Schema } from "effect";
 
-import {
-  CloudflareThreadClient,
-  ThreadObjectNamespace,
-  ThreadObject,
-  type ThreadObjectRpc,
-} from "../../src/index.ts";
-import { layerFromBindings } from "../../src/layers.ts";
+import { layerFromBindings } from "../../src/internal/layers.ts";
 import {
   armRuntimeEviction,
   armStorageEviction,

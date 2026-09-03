@@ -26,9 +26,10 @@ Compose agent registrations and application services as a layer, then pass it to
 Object namespace in the generated `Cloudflare.Env`.
 
 ```ts
-import { Agent, AgentPolicy } from "@effect-agent/core";
-import { ThreadObject } from "@effect-agent/platform-cloudflare";
-import { DefinitionDigestInput } from "@effect-agent/thread";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import { DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -135,7 +136,8 @@ for Workers using the older `migrations` array.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareThreadClient, type ThreadObjectRpc } from "@effect-agent/platform-cloudflare";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { type ThreadObjectRpc } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 
 export const threadClientLayer = (env: { THREADS: DurableObjectNamespace<ThreadObjectRpc> }) =>
   CloudflareThreadClient.layerFromBinding({ namespace: env.THREADS });
@@ -182,15 +184,15 @@ Bind the namespace and principal in authenticated host code. Never accept them f
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import { MemoryLookup, MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
+import { MemoryScope } from "@effect-agent/core/MemoryStore";
 import {
-  MemoryAccess,
-  MemoryLookup,
-  MemoryNamespace,
-  MemoryRecallLimits,
-  MemoryScope,
-} from "@effect-agent/core";
-import { CloudflareMemoryClient, type MemoryObjectRpc } from "@effect-agent/platform-cloudflare";
-import { Principal } from "@effect-agent/thread";
+  CloudflareMemoryClient,
+  type MemoryObjectRpc,
+} from "@effect-agent/platform-cloudflare/CloudflareMemory";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Effect, Schema } from "effect";
 
 const Projects = MemoryNamespace.define({

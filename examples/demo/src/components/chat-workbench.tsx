@@ -1,6 +1,6 @@
 "use client";
 
-import { RunEvent } from "@effect-agent/core";
+import { RunEvent } from "@effect-agent/core/RunEvent";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import type { ChatStatus as AiChatStatus } from "ai";
 import { Schema } from "effect";

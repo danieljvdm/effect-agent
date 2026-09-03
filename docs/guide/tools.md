@@ -77,7 +77,7 @@ Use `RunToolAuthorization` to decide whether a model-declared application tool c
 This policy permits only the `search` tool:
 
 ```ts twoslash
-import { RunToolAuthorization } from "@effect-agent/engine";
+import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import { Effect, Layer } from "effect";
 
 export const searchOnly = RunToolAuthorization.of({
@@ -130,12 +130,9 @@ needs `ChildProcessSpawner`, which `NodeServices.layer` supplies on Node.js. Bot
 stay in the Layer's `R`.
 
 ```ts
-import {
-  connectMcp,
-  McpClient,
-  McpConnectionRequest,
-  McpHttpTransport,
-} from "@effect-agent/capabilities";
+import * as McpClient from "@effect-agent/capabilities/McpClient";
+import { connectMcp, McpConnectionRequest } from "@effect-agent/capabilities/Mcp";
+import { McpHttpTransport } from "@effect-agent/capabilities/McpClient";
 import { FetchHttpClient } from "effect/unstable/http";
 import { Effect, Layer } from "effect";
 

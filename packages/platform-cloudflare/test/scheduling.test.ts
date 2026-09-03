@@ -1,20 +1,20 @@
-import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare";
+import { type ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import {
+  type ScheduleOwnerIdentity,
+  type makeScheduleOwnerObjectClass,
+} from "@effect-agent/platform-cloudflare/CloudflareScheduling";
+import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare/DoScheduleStore";
 import {
   ScheduleId,
   type ScheduleAuthorizer,
   type ScheduleOwner,
-  Scheduling,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/Schedule";
+import { Scheduling } from "@effect-agent/thread/Scheduling";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, type Layer, Schema } from "effect";
 import { DurableObject, type DurableObjectState, type WorkerEnvironment } from "effect-cf";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  type ThreadObjectNamespace,
-  type ScheduleOwnerIdentity,
-  type makeScheduleOwnerObjectClass,
-} from "../src/index.ts";
 import {
   TEST_DIGESTS,
   TEST_PRINCIPAL,

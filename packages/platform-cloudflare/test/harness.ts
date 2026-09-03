@@ -1,24 +1,26 @@
-import { SubmissionId } from "@effect-agent/core";
+import { SubmissionId } from "@effect-agent/core/Identifiers";
 import {
-  scheduleOwnerKey,
+  ThreadObjectNamespace,
+  type ThreadObjectRpc,
+} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import {
+  CloudflareSchedulingClient,
+  ScheduleOwnerNamespace,
+} from "@effect-agent/platform-cloudflare/CloudflareScheduling";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { scheduleOwnerKey } from "@effect-agent/thread/ScheduleTransition";
+import { type Scheduling } from "@effect-agent/thread/Scheduling";
+import {
   submissionInputRecordId,
   submissionSettlementRecordId,
-  type CanonicalRecordEnvelope,
-  type Scheduling,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Crypto, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
-import {
-  CloudflareThreadClient,
-  CloudflareSchedulingClient,
-  ThreadObjectNamespace,
-  ScheduleOwnerNamespace,
-  type ThreadObjectRpc,
-} from "../src/index.ts";
 import { decodeThreadId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
 import type {
   ContextCompactorThreadObject,

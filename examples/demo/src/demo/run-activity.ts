@@ -1,4 +1,4 @@
-import type { RunEvent } from "@effect-agent/core";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
 
 import type { DemoMode } from "./contracts";
 

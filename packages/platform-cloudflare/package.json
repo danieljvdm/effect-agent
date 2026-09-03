@@ -15,11 +15,21 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./browser-quick-action": "./src/browser-quick-action.ts",
-    "./interactive-browser": "./src/interactive-browser.ts",
-    "./protected-browser": "./src/protected-browser.ts",
-    "./browser-rest-capture": "./src/browser-rest-capture.ts",
-    "./browser-rest-crawl": "./src/browser-rest-crawl.ts"
+    "./Alarm": "./src/Alarm.ts",
+    "./BrowserRestCapture": "./src/BrowserRestCapture.ts",
+    "./BrowserRestCrawl": "./src/BrowserRestCrawl.ts",
+    "./CloudflareBindings": "./src/CloudflareBindings.ts",
+    "./CloudflareBrowser": "./src/CloudflareBrowser.ts",
+    "./CloudflareCodeMode": "./src/CloudflareCodeMode.ts",
+    "./CloudflareConfig": "./src/CloudflareConfig.ts",
+    "./CloudflareMemory": "./src/CloudflareMemory.ts",
+    "./CloudflareScheduling": "./src/CloudflareScheduling.ts",
+    "./CloudflareSubscriptions": "./src/CloudflareSubscriptions.ts",
+    "./CloudflareThreadClient": "./src/CloudflareThreadClient.ts",
+    "./InteractiveBrowser": "./src/InteractiveBrowser.ts",
+    "./ProtectedBrowser": "./src/ProtectedBrowser.ts",
+    "./ThreadObject": "./src/ThreadObject.ts",
+    "./WakeScheduler": "./src/WakeScheduler.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -1,10 +1,11 @@
-import { IdGenerator } from "@effect-agent/core";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import {
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import { CloudflareCodeMode, dynamicWorkerImplementation } from "@effect-agent/platform-cloudflare";
+  CloudflareCodeMode,
+  dynamicWorkerImplementation,
+} from "@effect-agent/platform-cloudflare/CloudflareCodeMode";
 import { Effect, Layer, Stream } from "effect";
 
 import { codeMode, warehouseHandlersLayer } from "./agent.ts";

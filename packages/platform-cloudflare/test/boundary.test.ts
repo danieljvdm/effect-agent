@@ -4,7 +4,7 @@ import {
   cloudflareFailureSignals,
   safeCauseDiagnostic,
   safeCauseMessage,
-} from "../src/boundary.ts";
+} from "../src/internal/boundary.ts";
 
 describe("Cloudflare foreign failure boundaries", () => {
   it("keeps hostile diagnostics and signal probes total", () => {

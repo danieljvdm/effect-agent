@@ -1,4 +1,4 @@
-import { ReviewFollowUp } from "@effect-agent/pr-review";
+import { ReviewFollowUp } from "@effect-agent/pr-review/Review";
 import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
 import { Effect, Encoding, Schema } from "effect";

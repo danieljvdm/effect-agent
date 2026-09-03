@@ -1,8 +1,2 @@
-export * from "./review.ts";
-
-export {
-  ReviewContextError,
-  ReviewFileList,
-  ReviewRepository,
-  ReviewSource,
-} from "./repository.ts";
+export * as Review from "./Review.ts";
+export * as ReviewRepository from "./ReviewRepository.ts";

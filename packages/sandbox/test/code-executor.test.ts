@@ -1,6 +1,3 @@
-import { Duration, Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
 import {
   CodeExecutionError,
   CodeExecutionLimits,
@@ -9,9 +6,10 @@ import {
   CodeHostCall,
   CodeHostCallResult,
   JsIdentifier,
-  NetworkDisabled,
-  SandboxImplementation,
-} from "../src/index.ts";
+} from "@effect-agent/sandbox/CodeExecutor";
+import { NetworkDisabled, SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
+import { Duration, Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 const implementation = SandboxImplementation.make({
   isolation: "isolated",

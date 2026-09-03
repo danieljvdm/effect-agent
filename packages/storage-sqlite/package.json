@@ -13,9 +13,19 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./SqliteActivityStore": "./src/SqliteActivityStore.ts",
+    "./SqliteScheduleStore": "./src/SqliteScheduleStore.ts",
+    "./SqliteStorageConfig": "./src/SqliteStorageConfig.ts",
+    "./SqliteStorageError": "./src/SqliteStorageError.ts",
+    "./SqliteStorageFailpoint": "./src/SqliteStorageFailpoint.ts",
+    "./SqliteStorageVersion": "./src/SqliteStorageVersion.ts",
+    "./SqliteSubmissionLedger": "./src/SqliteSubmissionLedger.ts",
+    "./SqliteSubscriptionStore": "./src/SqliteSubscriptionStore.ts",
+    "./SqliteThreadStore": "./src/SqliteThreadStore.ts",
+    "./testing/SqliteStorageFailpointTesting": "./src/SqliteStorageFailpointTesting.ts"
   },
   "publishConfig": {
     "access": "public"

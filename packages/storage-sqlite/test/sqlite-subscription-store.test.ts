@@ -1,19 +1,18 @@
 import {
+  SqliteStorageConfig,
+  SqliteStorageConfigValue,
+} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
+import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/testing/SubscriptionStoreConformance";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Effect, FileSystem, Layer } from "effect";
-
-import {
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-  SqliteStorageFailpoint,
-  subscriptionStoreLayer,
-} from "../src/index.ts";
 
 const testLayer = (filename: string) =>
   subscriptionStoreLayer(subscriptionConformancePartition).pipe(

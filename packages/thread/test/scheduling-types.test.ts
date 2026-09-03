@@ -1,24 +1,25 @@
-import { describe, expect, it } from "@effect/vitest";
-import { Context } from "effect";
-import type { Crypto, Effect, Layer, Schema } from "effect";
-
+import { type DurableSubmitAgent } from "@effect-agent/thread/DurableAgentRuntime";
 import {
-  type DurableSubmitAgent,
-  type ScheduleCreateOptions,
   type ScheduleAuthorizer,
-  type ScheduleListOptions,
-  type ScheduleManagementFailure,
-  type ScheduleProcessFailure,
   type ScheduleScope,
   type ScheduleId,
   type ScheduledInputAdmission,
-  Scheduling,
-  ScheduleDriver,
   type ScheduleStorageError,
   type ScheduleStore,
   type ScheduleValidationError,
   type ScheduleWake,
-} from "../src/index.ts";
+} from "@effect-agent/thread/Schedule";
+import {
+  type ScheduleCreateOptions,
+  type ScheduleListOptions,
+  type ScheduleManagementFailure,
+  type ScheduleProcessFailure,
+  Scheduling,
+  ScheduleDriver,
+} from "@effect-agent/thread/Scheduling";
+import { describe, expect, it } from "@effect/vitest";
+import { Context } from "effect";
+import type { Crypto, Effect, Layer, Schema } from "effect";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

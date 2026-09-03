@@ -1,1 +1,1 @@
-export * from "./local-sandbox.ts";
+export * as LocalSandbox from "./LocalSandbox.ts";

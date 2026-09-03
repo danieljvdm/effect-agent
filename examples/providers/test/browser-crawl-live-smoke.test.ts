@@ -1,6 +1,6 @@
-import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/browser-rest-crawl";
-import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "@effect-agent/sandbox";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
+import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/BrowserRestCrawl";
+import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "@effect-agent/sandbox/PageCrawl";
+import { phase7LiveProfileEnabled } from "@effect-agent/testing/TravelPlanner";
 import { Config, Console, Effect, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vite-plus/test";

@@ -1,6 +1,3 @@
-import { Schema, type Effect, type Scope } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
 import {
   BrowserActionResult,
   BrowserClickRequest,
@@ -24,18 +21,22 @@ import {
   InteractiveBrowserProtocolError,
   InteractiveBrowserTargetUrl,
   InteractiveBrowserUnsupportedError,
-  SandboxImplementation,
   type BrowserHandle,
   type InteractiveBrowser,
   type InteractiveBrowserError as BrowserError,
-  type PageScreenshotResult,
+} from "@effect-agent/sandbox/InteractiveBrowser";
+import { type PageScreenshotResult } from "@effect-agent/sandbox/PageScreenshot";
+import {
   type ProtectedBrowser,
   type ProtectedBrowserHandle,
   type ProtectedBrowserError,
   type BrowserCredentialAccess,
   CredentialOrigin,
   CardCredential,
-} from "../src/index.ts";
+} from "@effect-agent/sandbox/ProtectedBrowser";
+import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
+import { Schema, type Effect, type Scope } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;

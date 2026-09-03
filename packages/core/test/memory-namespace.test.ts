@@ -1,7 +1,8 @@
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryNamespaceAddress } from "@effect-agent/core/MemoryNamespace";
+import { MemoryKey } from "@effect-agent/core/MemoryStore";
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-
-import { MemoryKey, MemoryNamespace, MemoryNamespaceAddress } from "../src/index.ts";
 
 const definition = MemoryNamespace.define({
   name: "app/user-conversations",

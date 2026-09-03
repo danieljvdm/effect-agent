@@ -1,25 +1,18 @@
+import { makeUsageBudget } from "@effect-agent/capabilities/Budget";
 import {
   FollowUpCommand,
   makeRunCommandQueue,
-  makeUsageBudget,
   RunCommandQueueConfig,
   SteeringCommand,
-  toRunBudgetHook,
-  toRunInputHook,
-} from "@effect-agent/capabilities";
-import {
-  Agent,
-  AgentApprovalDenied,
-  AgentApprovalPending,
-  ThreadId,
-  RunId,
-} from "@effect-agent/core";
-import {
-  ThreadHistory,
-  AgentRuntime,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
+} from "@effect-agent/capabilities/Commands";
+import { toRunBudgetHook, toRunInputHook } from "@effect-agent/capabilities/RunHooks";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentApprovalDenied, AgentApprovalPending } from "@effect-agent/core/AgentError";
+import { ThreadId, RunId } from "@effect-agent/core/Identifiers";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
 import {
   ActivityCatalogLayer,
   CatalogLifecycle,
@@ -38,7 +31,7 @@ import {
   TravelPlannerPhase2,
   TravelPlannerPhase2ToolkitLayer,
   TravelPlannerRuntimeLayer,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema, type Exit } from "effect";
 import { Model, Prompt } from "effect/unstable/ai";

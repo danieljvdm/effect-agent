@@ -6,7 +6,7 @@ import {
   scheduleDueOccurrence,
   scheduleInitialCursor,
   scheduleNextAfter,
-} from "../src/index.ts";
+} from "../src/internal/schedule-time.ts";
 
 const success = Result.getOrThrow;
 

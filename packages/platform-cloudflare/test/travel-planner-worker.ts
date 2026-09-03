@@ -1,13 +1,13 @@
+import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
 import {
   makePhase6TravelPlannerBindings,
   phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { Effect, Layer } from "effect";
 
-import { ThreadObject } from "../src/index.ts";
-import { layerFromBindings } from "../src/layers.ts";
+import { layerFromBindings } from "../src/internal/layers.ts";
 import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.ts";
 
 /**

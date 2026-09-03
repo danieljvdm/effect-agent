@@ -1,4 +1,4 @@
-import { expectedTravelPlan } from "@effect-agent/testing/fixtures/travel-planner";
+import { expectedTravelPlan } from "@effect-agent/testing/TravelPlanner";
 import { describe, expect, it } from "@effect/vitest";
 
 import {

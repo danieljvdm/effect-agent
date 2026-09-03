@@ -13,13 +13,16 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./certification": "./src/certification.ts",
-    "./chaos": "./src/chaos.ts",
-    "./code-executor": "./src/code-executor.ts",
-    "./fixtures/docs-researcher": "./src/docs-researcher.ts",
-    "./fixtures/travel-planner": "./src/travel-planner.ts"
+    "./Certification": "./src/Certification.ts",
+    "./Chaos": "./src/Chaos.ts",
+    "./CodeExecutorConformance": "./src/CodeExecutorConformance.ts",
+    "./CodeExecutorSubstitute": "./src/CodeExecutorSubstitute.ts",
+    "./DocsResearcher": "./src/DocsResearcher.ts",
+    "./ScriptedModel": "./src/ScriptedModel.ts",
+    "./TravelPlanner": "./src/TravelPlanner.ts"
   },
   "publishConfig": {
     "access": "public"

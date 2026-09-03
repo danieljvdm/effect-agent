@@ -1,16 +1,15 @@
-import type { ThreadId } from "@effect-agent/core";
+import { type ThreadId } from "@effect-agent/core/Identifiers";
+import { type DurableBindingFailure } from "@effect-agent/thread/AgentRegistration";
+import {
+  type DurableAgentRuntime,
+  type DurableAwaitFailure,
+  type DurableWorkerFailure,
+  type RecoveryReport,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { type Settlement } from "@effect-agent/thread/SubmissionLedger";
+import { type SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
 import { expectTypeOf, it } from "@effect/vitest";
 import type { Effect, Option } from "effect";
-
-import type {
-  DurableAgentRuntime,
-  DurableAwaitFailure,
-  DurableBindingFailure,
-  DurableWorkerFailure,
-  RecoveryReport,
-  Settlement,
-  SubmissionStatus,
-} from "../src/index.ts";
 
 type Runtime = DurableAgentRuntime["Service"];
 type Head = ReturnType<Runtime["processThreadHead"]>;

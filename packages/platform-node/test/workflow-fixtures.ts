@@ -1,29 +1,34 @@
-import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import {
+  NodeWorkflowRepairTrigger,
+  SqlWorkflowDispatchStore,
+} from "@effect-agent/platform-node/NodeWorkflow";
+import { type AgentRegistration } from "@effect-agent/thread/AgentRegistration";
+import { digestDefinitions } from "@effect-agent/thread/Digest";
 import {
   DefinitionDigestInput,
   DeploymentId,
-  digestDefinitions,
-  IdempotencyKey,
-  Principal,
-  ThreadRead,
-  ThreadStore,
-  type AgentRegistration,
   type DefinitionDigests,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/Records";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
 import {
   WorkflowDispatchScan,
   WorkflowDispatchStore,
-  WorkflowAgentHost,
-} from "@effect-agent/workflow";
+} from "@effect-agent/workflow/WorkflowDispatch";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Effect, FileSystem, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/unstable/ai";
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster";
 import { WorkflowEngine } from "effect/unstable/workflow";
-
-import { NodeDurableAgentRuntime, type NodeDurableAgentRuntimeOptions } from "../src/index.ts";
-import { NodeWorkflowRepairTrigger, SqlWorkflowDispatchStore } from "../src/workflow.ts";
 
 export const deploymentId = Schema.decodeSync(DeploymentId)("workflow-certification");
 export const workflowPrefix = "effect-agent/certification/v1";

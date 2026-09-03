@@ -1,36 +1,44 @@
-import type { MemoryRecallError, RecalledMemory } from "@effect-agent/core";
+import { type RecalledMemory } from "@effect-agent/core/Memory";
+import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
 import {
   MemoryWrite,
   MemoryScope,
   MemoryMutationPoint,
+  MemoryReader,
+  MemoryWriter,
+} from "@effect-agent/core/MemoryStore";
+import {
   MemoryIndexCandidate,
   MemoryIndexSearch,
   SemanticMemoryProfile,
-  SemanticCandidateLimits,
-  MemoryReader,
-  MemoryWriter,
-} from "@effect-agent/core";
+} from "@effect-agent/core/SemanticMemoryIndex";
+import { SemanticCandidateLimits } from "@effect-agent/core/SemanticMemoryRevalidation";
+import { type cloudflareMemoryWriterLayer } from "@effect-agent/platform-cloudflare/CloudflareMemory";
+import {
+  CloudflareMemoryClient,
+  MemoryObjectNamespace,
+} from "@effect-agent/platform-cloudflare/CloudflareMemory";
+import {
+  DoMemoryStorageLimits,
+  doMemoryStoreLayer,
+} from "@effect-agent/storage-cloudflare/DoMemoryStore";
 import {
   decodeMemoryWire,
   encodeMemoryWire,
   MemoryOwnerRequest,
   MemoryOwnerResponse,
   defaultMemoryRpcLimits,
-  DoMemoryStorageLimits,
-  doMemoryStoreLayer,
   handleMemoryOwnerRequest,
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   type MemoryOwnerFailure,
-} from "@effect-agent/storage-cloudflare";
-import { Principal } from "@effect-agent/thread";
+} from "@effect-agent/storage-cloudflare/MemoryProtocol";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import type { cloudflareMemoryWriterLayer } from "../src/index.ts";
-import { CloudflareMemoryClient, MemoryObjectNamespace } from "../src/index.ts";
 import {
   memoryAccess,
   memoryPrincipal,

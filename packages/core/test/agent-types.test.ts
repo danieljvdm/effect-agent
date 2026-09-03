@@ -1,17 +1,15 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect";
-import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
-import { describe, expect, it } from "vite-plus/test";
-
+import { Agent } from "@effect-agent/core";
 import {
-  Agent,
   type AgentError,
   type AgentInputError,
   type AgentOutputError,
   type AgentRunDispositionError,
-  AgentPolicy,
-  type CompactionPolicy,
   type ContextOverflowError,
-} from "../src/index.ts";
+} from "@effect-agent/core/AgentError";
+import { AgentPolicy, type CompactionPolicy } from "@effect-agent/core/AgentPolicy";
+import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { describe, expect, it } from "vite-plus/test";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

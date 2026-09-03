@@ -1,12 +1,16 @@
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import {
-  MemoryNamespace,
   MemoryIndexQuery,
   MemoryIndexSource,
   SemanticMemoryChunk,
   SemanticMemoryIndex,
   SemanticMemoryProfile,
-} from "@effect-agent/core";
-import type { MemoryIndexError } from "@effect-agent/core";
+} from "@effect-agent/core/SemanticMemoryIndex";
+import { type MemoryIndexError } from "@effect-agent/core/SemanticMemoryIndex";
+import {
+  InMemorySemanticIndexCapacity,
+  inMemorySemanticIndexLayer,
+} from "@effect-agent/storage-memory/MemorySemanticIndex";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Schema as NamespaceSchema,
@@ -19,8 +23,6 @@ import {
   Schema,
 } from "effect";
 import { TestClock } from "effect/testing";
-
-import { InMemorySemanticIndexCapacity, inMemorySemanticIndexLayer } from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

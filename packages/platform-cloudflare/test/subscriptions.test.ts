@@ -1,14 +1,15 @@
-import { defaultSubscriptionLimits, SubscriptionIntake, Subscriptions } from "@effect-agent/thread";
-import { env, runDurableObjectAlarm } from "cloudflare:test";
-import { Effect, Layer } from "effect";
-import { expect, it } from "vite-plus/test";
-
 import {
   CloudflareSubscriptionsClient,
   sourcePartitionName,
   SubscriptionPartitionNamespace,
   validateCloudflareSubscriptionLimits,
-} from "../src/index.ts";
+} from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
+import { defaultSubscriptionLimits } from "@effect-agent/thread/Subscription";
+import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
+import { env, runDurableObjectAlarm } from "cloudflare:test";
+import { Effect, Layer } from "effect";
+import { expect, it } from "vite-plus/test";
+
 import { laneRows } from "./harness.ts";
 import {
   armSubscriptionEviction,

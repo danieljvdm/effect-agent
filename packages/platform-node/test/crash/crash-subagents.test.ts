@@ -1,24 +1,25 @@
-import type { SubmissionId } from "@effect-agent/core";
+import { type SubmissionId } from "@effect-agent/core/Identifiers";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { type DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
 import {
-  AbortCommand,
-  ThreadStore,
-  ThreadTailRequest,
-  DurableAgentRuntime,
-  RecoverySnapshotRequest,
-  SubmissionLedger,
-  SubmissionLookupById,
-  SubmissionLookupByKey,
   childThreadIdFor,
   childIdempotencyKeyFor,
   runIdForSubmission,
   toolCallSettledRecordId,
-  type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/RunJournal";
+import {
+  AbortCommand,
+  RecoverySnapshotRequest,
+  SubmissionLedger,
+  SubmissionLookupById,
+  SubmissionLookupByKey,
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadStore, ThreadTailRequest } from "@effect-agent/thread/ThreadStore";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option } from "effect";
 
-import { NodeDurableHost } from "../../src/index.ts";
 import {
   CHILD_MODEL_OP,
   CRASH_PRINCIPAL,

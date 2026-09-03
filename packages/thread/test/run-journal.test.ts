@@ -1,19 +1,17 @@
-import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it, layer } from "@effect/vitest";
-import { DateTime, Effect, Schema } from "effect";
-import { Prompt } from "effect/unstable/ai";
-
+import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
 import {
   BatchId,
   CanonicalRecordEnvelope,
   CanonicalSequence,
-  childThreadIdFor,
-  childIdempotencyKeyFor,
   DeploymentId,
   ObservationOffset,
   ProducerId,
   RecordEnvelope,
+  type CanonicalBatch,
+} from "@effect-agent/thread/Records";
+import {
+  childThreadIdFor,
+  childIdempotencyKeyFor,
   RunJournalError,
   modelResponseRecordId,
   promptFromCanonicalRecords,
@@ -36,8 +34,11 @@ import {
   turnResponseBatchId,
   turnResultsBatch,
   turnResultsBatchId,
-  type CanonicalBatch,
-} from "../src/index.ts";
+} from "@effect-agent/thread/RunJournal";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
+import { DateTime, Effect, Schema } from "effect";
+import { Prompt } from "effect/unstable/ai";
 
 const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
 const RUN_ID = runIdForSubmission(SUBMISSION_ID);

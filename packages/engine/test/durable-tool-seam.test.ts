@@ -1,17 +1,32 @@
+import * as Agent from "@effect-agent/core/Agent";
 import {
-  Agent,
   AgentApprovalDenied,
-  AgentPolicy,
   AgentPolicyError,
-  ThreadId,
-  DelegationTool,
-  IdGenerator,
-  MemoryRecallError,
   ModelProtocolError,
-  RunId,
-  TurnId,
-  type RunEvent,
-} from "@effect-agent/core";
+} from "@effect-agent/core/AgentError";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { MemoryRecallError } from "@effect-agent/core/MemoryReference";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import { DelegationTool } from "@effect-agent/core/SubagentContract";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import {
+  DurableStep,
+  DurableStepError,
+  ToolExecutionClass,
+  type RunStepHook,
+} from "@effect-agent/engine/DurableStep";
+import {
+  RunContextPreparation,
+  type RunContextPreparationError,
+  RunContextPreparationPassthrough,
+  RunToolAuthorization,
+  type RunDurabilityHook,
+  type RunToolAuthorizationRequest,
+  type RunTurnResponseCommit,
+  type RunTurnResume,
+} from "@effect-agent/engine/RunOptions";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -32,22 +47,7 @@ import {
 import { TestClock } from "effect/testing";
 import { Prompt, LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import {
-  AgentRuntime,
-  RunContextPreparation,
-  type RunContextPreparationError,
-  RunContextPreparationPassthrough,
-  RunToolAuthorization,
-  DurableStep,
-  DurableStepError,
-  ToolExecutionClass,
-  type RunDurabilityHook,
-  type RunStepHook,
-  type RunToolAuthorizationRequest,
-  type RunTurnResponseCommit,
-  type RunTurnResume,
-} from "../src/index.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 class HookFailure extends Schema.TaggedError<HookFailure>()("HookFailure", {
   message: Schema.String,

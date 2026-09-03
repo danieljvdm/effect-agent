@@ -1,2 +1,2 @@
-export * from "./dispatch.ts";
-export * from "./host.ts";
+export * as WorkflowAgentHost from "./WorkflowAgentHost.ts";
+export * as WorkflowDispatch from "./WorkflowDispatch.ts";

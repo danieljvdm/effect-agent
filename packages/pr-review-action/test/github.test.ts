@@ -1,4 +1,4 @@
-import { ReviewFinding, ReviewFollowUp, ReviewReport } from "@effect-agent/pr-review";
+import { ReviewFinding, ReviewFollowUp, ReviewReport } from "@effect-agent/pr-review/Review";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Encoding, Exit, Fiber, Redacted, Ref, Schema } from "effect";
 import { TestClock } from "effect/testing";

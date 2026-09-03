@@ -1,10 +1,10 @@
 import type { Browser, Page } from "@cloudflare/puppeteer";
 import nativePuppeteer from "@cloudflare/puppeteer/internal/puppeteer-core.js";
+import { InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
 import {
   BrowserCredentialAccess,
   CredentialAccessError,
   CredentialOfferMetadata,
-  InteractiveBrowserPolicy,
   ListCredentialOffers,
   LoginCredential,
   CardCredential,
@@ -12,7 +12,7 @@ import {
   ProtectedBrowserNavigate,
   ProtectedBrowserClick,
   UseCredential,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/ProtectedBrowser";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, it } from "@effect/vitest";
 import { Clock, Config, Effect, Layer, Option, Redacted, Schema } from "effect";

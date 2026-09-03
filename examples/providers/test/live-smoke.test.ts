@@ -1,6 +1,6 @@
-import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities";
-import { RunEvent } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
+import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
+import { RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
   PHASE7_LIVE_CREDENTIAL_ENV,
   PHASE7_LIVE_GATE_ENV,
@@ -10,7 +10,7 @@ import {
   TravelPlan,
   TravelPlannerPhase7Profile,
   TravelPlannerRuntimeLayer,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { OpenAiClient } from "@effect/ai-openai";
 import { Config, Effect, Layer, Schema, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";

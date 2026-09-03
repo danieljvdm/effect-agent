@@ -1,30 +1,35 @@
-import { Agent, AgentPolicy, ThreadId, IdGenerator, type RunEvent } from "@effect-agent/core";
-import {
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory";
-import { layer as sqliteStore, SqliteStorageFailpointError } from "@effect-agent/storage-sqlite";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { SqliteStorageFailpointError } from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { layer as sqliteStore } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
 import {
   BatchId,
   CanonicalBatch,
   CanonicalSequence,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadStore,
   DeploymentId,
-  EMPTY_TAIL_DIGEST,
-  FencedAppendRequest,
   ProducerEpoch,
   ProducerId,
   RecordEnvelope,
   RecordId,
   RepairAnnotated,
-  replayThread,
-} from "@effect-agent/thread";
-import { PersistentHistory } from "@effect-agent/thread/history";
+} from "@effect-agent/thread/Records";
+import { replayThread } from "@effect-agent/thread/ThreadProjection";
+import {
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadStore,
+  FencedAppendRequest,
+} from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {

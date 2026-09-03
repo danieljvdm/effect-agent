@@ -1,0 +1,89 @@
+name: Bundle size
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundle-size-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  VP_GIT_HOOKS: "0"
+
+jobs:
+  compare:
+    name: Compare consumer bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .bundle-base
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      # Bootstrap the repository-owned vp, as in CI. Each checkout installs its
+      # own lockfile so workspace links and dependency changes are measured too.
+      - name: Install PR dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Install base dependencies
+        working-directory: .bundle-base
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Build PR packages
+        run: |
+          ./node_modules/.bin/vp run patch:tsgo
+          ./node_modules/.bin/vp run -F './packages/*' build
+
+      - name: Build base packages
+        working-directory: .bundle-base
+        run: |
+          ./node_modules/.bin/vp run patch:tsgo
+          ./node_modules/.bin/vp run -F './packages/*' build
+
+      - name: Compare bundles
+        run: ./node_modules/.bin/vp run bundle:compare -- --base-dir .bundle-base
+
+      - name: Show comparison
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "$PR_NUMBER" > .bundle-report/pr-number.txt
+          echo 'Minified ESM, es2022, browser target, all dependencies included. Gzip level 9 per chunk.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Initial includes static shared chunks; deferred is the remaining output. New exports have no baseline.' >> "$GITHUB_STEP_SUMMARY"
+          cat .bundle-report/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload size report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bundle-stats
+          path: |
+            .bundle-report/report.md
+            .bundle-report/report.json
+            .bundle-report/pr-number.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload emitted chunks and module analysis
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bundle-analysis
+          path: |
+            .bundle-report/base
+            .bundle-report/head
+          if-no-files-found: error
+          retention-days: 7

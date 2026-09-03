@@ -1,4 +1,4 @@
-import { ReviewFinding, ReviewReport } from "@effect-agent/pr-review";
+import { ReviewFinding, ReviewReport } from "@effect-agent/pr-review/Review";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
