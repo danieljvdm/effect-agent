@@ -308,6 +308,7 @@ export const command = CliCommand.make(
   {
     dryRun: Flag.boolean("dry-run").pipe(
       Flag.withDescription("Build and inspect npm packages without publishing or creating tags."),
+      Flag.withDefault(false),
     ),
     otp: Flag.string("otp").pipe(
       Flag.optional,
