@@ -25,8 +25,8 @@ incarnation a distinct `producerId`.
 `workerConcurrency` limits worker loops and defaults to one.
 `NodeDurableHost.layerRegistered` checks storage and runs recovery before accepting work.
 
-Pass typed agent registrations to `NodeDurableHost.layerRegistered`. It computes definition
-digests and captures worker services in the host Layer's Scope. Node supplies Crypto; provide
+Pass typed agent registrations to `NodeDurableHost.layerRegistered`. Its runtime computes definition
+digests and captures worker services in the Layer's Scope. Node supplies Crypto; provide
 model clients, tool handlers, instruction services, and schema services to the returned Layer.
 Keep the concrete registration tuple inferred so its requirements remain visible.
 Use `NodeDurableHost.layerStack` when you already have `ResolvedBinding` values from
@@ -69,7 +69,9 @@ export const workers = <const Entries extends ReadonlyArray<AgentRegistration>>(
 Provide the remaining application services to `workers(registrations)`, then call
 `NodeRuntime.runMain` at the process entry point. Creating the host alone does not start workers.
 If the process also serves requests, share one host Layer between both effects.
-Use `NodeDurableAgentRuntime.layer` for custom lifecycle composition.
+Use `NodeDurableAgentRuntime.layerRegistered` for custom lifecycle composition with executable
+registrations. Its `layerWithBindings` constructor accepts previously compiled bindings; `layer`
+constructs an unregistered runtime for admission, recovery, and the generic single-agent APIs.
 
 ## Use an Effect Workflow engine {#workflow}
 
@@ -107,14 +109,14 @@ const infrastructure = Layer.mergeAll(engine, SqlWorkflowDispatchStore.layer).pi
 export const workflowHost = <const Entries extends ReadonlyArray<AgentRegistration>>(
   registrations: Entries,
 ) =>
-  WorkflowAgentHost.layerRegistered(registrations, {
+  WorkflowAgentHost.layer({
     deploymentId: "travel-planner",
     executionConcurrency: 4,
     repairBatchSize: 32,
     dispatchTimeoutMillis: 10_000,
   }).pipe(
     Layer.provide(
-      NodeDurableAgentRuntime.layer({
+      NodeDurableAgentRuntime.layerRegistered(registrations, {
         filename: "./agents.sqlite",
         deploymentId: "travel-planner",
         producerId: "workflow-worker-1",
@@ -130,6 +132,8 @@ Provide the remaining model, tool, instruction, and schema services to this Laye
 with the application effects that use `WorkflowAgentHost`. Its inferred types retain
 construction errors and application requirements. Acquiring it registers native execution and
 starts repair. Do not also start the ordinary `NodeDurableHost` worker loop for this deployment.
+The runtime owns executable registrations. The Workflow handler passes only a Thread ID to
+`processThreadHead`; it cannot replace captured model or tool services on an execution.
 The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/workflow.ts)
 accepts the engine as a Layer parameter and retains that engine's errors and requirements.
 

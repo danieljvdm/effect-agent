@@ -60,7 +60,7 @@ export class SqlWorkflowDispatchStore {
     SqlClient.SqlClient
   > = Layer.effect(WorkflowDispatchStore)(
     Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
+      const sql = (yield* SqlClient.SqlClient).withoutTransforms();
 
       yield* sql`
         CREATE TABLE IF NOT EXISTS effect_agent_workflow_dispatch (

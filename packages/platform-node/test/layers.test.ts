@@ -86,7 +86,7 @@ const runtimeLayerProbe = NodeDurableAgentRuntime.layer({
   producerId: "producer-proof",
 });
 
-const hostLayerProbe = NodeDurableHost.layer();
+const hostLayerProbe = NodeDurableHost.layer;
 
 class ContextSetupError extends Schema.TaggedError<ContextSetupError>()("ContextSetupError", {}) {}
 class AuthorizationSetupError extends Schema.TaggedError<AuthorizationSetupError>()(
@@ -342,6 +342,26 @@ describe("NodeDurableAgentRuntime", () => {
             }),
           );
 
+          const registered = NodeDurableAgentRuntime.layerRegistered(
+            [{ agent, definitions }],
+            runtimeOptions(filename),
+          );
+
+          const registeredOutput: Assert<
+            Equal<Layer.Success<typeof registered>, NodeDurableAgentRuntimeServices>
+          > = true;
+
+          const registeredRequirements: Assert<
+            Equal<Layer.Services<typeof registered>, Instructions>
+          > = true;
+
+          const registeredErrors: Assert<
+            Equal<
+              Layer.Error<typeof registered>,
+              DigestError | NodeDurableAgentRuntimeInitializationError
+            >
+          > = true;
+
           const requirements: Assert<Equal<Layer.Services<typeof live>, Instructions>> = true;
 
           const errors: Assert<
@@ -351,7 +371,13 @@ describe("NodeDurableAgentRuntime", () => {
             >
           > = true;
 
-          expect(requirements && errors).toBe(true);
+          expect(
+            requirements &&
+              errors &&
+              registeredOutput &&
+              registeredRequirements &&
+              registeredErrors,
+          ).toBe(true);
 
           const digests = yield* digestDefinitions(definitions).pipe(
             Effect.provide(NodeCrypto.layer),
@@ -731,114 +757,131 @@ describe("NodeDurableAgentRuntime", () => {
     ),
   );
 
-  it.effect("captures independent preparation and authorization Layers in each Node host", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        const marks: Array<string> = [];
+  it.effect(
+    "captures independent preparation and authorization Layers in each registered Node host",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const marks: Array<string> = [];
 
-        const tools = Toolkit.make(
-          Tool.make("book", {
-            parameters: Schema.Struct({}),
-            success: Schema.String,
-          }).annotate(ToolExecutionClass, "readonly"),
-        );
+          const tools = Toolkit.make(
+            Tool.make("book", {
+              parameters: Schema.Struct({}),
+              success: Schema.String,
+            }).annotate(ToolExecutionClass, "readonly"),
+          );
 
-        const model = yield* makeScriptedModel((call) => [
-          {
-            type: "tool-call",
-            id: `book-${call}`,
-            name: "book",
-            params: {},
-            providerExecuted: false,
-          },
-          { type: "finish", reason: "tool-calls", usage },
-        ]);
+          const model = yield* makeScriptedModel((call) => [
+            {
+              type: "tool-call",
+              id: `book-${call}`,
+              name: "book",
+              params: {},
+              providerExecuted: false,
+            },
+            { type: "finish", reason: "tool-calls", usage },
+          ]);
 
-        const agent = Agent.withModel(
-          Agent.make("node-run-services", {
-            input: Schema.String,
-            output: Schema.String,
-            instructions: "Book it.",
-            toolkit: tools,
-            policy: plannerDefinition.policy,
-          }),
-          model,
-        );
-
-        const handlers = tools.toLayer({
-          book: () =>
-            Effect.sync(() => {
-              marks.push("handler");
-
-              return "booked";
+          const agent = Agent.withModel(
+            Agent.make("node-run-services", {
+              input: Schema.String,
+              output: Schema.String,
+              instructions: "Book it.",
+              toolkit: tools,
+              policy: plannerDefinition.policy,
             }),
-        });
+            model,
+          );
 
-        const threadId = decodeThreadId("node-run-services");
-
-        for (const incarnation of [1, 2]) {
-          const runContext = Layer.effect(
-            RunContextPreparation,
-            Effect.acquireRelease(
+          const handlers = tools.toLayer({
+            book: () =>
               Effect.sync(() => {
-                marks.push(`acquire-context:${incarnation}`);
+                marks.push("handler");
 
-                return RunContextPreparation.of({
-                  hook: {
-                    prepare: ({ source }) =>
-                      Effect.sync(() => {
-                        marks.push(`prepare:${incarnation}`);
-                        if (incarnation === 2) expect(JSON.stringify(source)).toContain("booked");
-
-                        return { prompt: source };
-                      }),
-                  },
-                });
+                return "booked";
               }),
-              () =>
-                Effect.sync(() => {
-                  marks.push(`release-context:${incarnation}`);
-                }),
-            ),
+          });
+
+          const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });
+
+          const definitionsDigest = yield* digestDefinitions(definitions).pipe(
+            Effect.provide(NodeCrypto.layer),
           );
 
-          const toolAuthorization = Layer.effect(
-            RunToolAuthorization,
-            Effect.acquireRelease(
-              Effect.sync(() =>
-                RunToolAuthorization.of({
-                  authorize: () =>
-                    Effect.sync(() => {
-                      marks.push(`authorize:${incarnation}`);
+          const threadId = decodeThreadId("node-run-services");
 
-                      return incarnation === 1
-                        ? { _tag: "allowed" as const }
-                        : { _tag: "denied" as const, reason: "revoked" };
-                    }),
+          for (const incarnation of [1, 2]) {
+            const runContext = Layer.effect(
+              RunContextPreparation,
+              Effect.acquireRelease(
+                Effect.sync(() => {
+                  marks.push(`acquire-context:${incarnation}`);
+
+                  return RunContextPreparation.of({
+                    hook: {
+                      prepare: ({ source }) =>
+                        Effect.sync(() => {
+                          marks.push(`prepare:${incarnation}`);
+                          if (incarnation === 2) expect(JSON.stringify(source)).toContain("booked");
+
+                          return { prompt: source };
+                        }),
+                    },
+                  });
                 }),
+                () =>
+                  Effect.sync(() => {
+                    marks.push(`release-context:${incarnation}`);
+                  }),
               ),
-              () =>
-                Effect.sync(() => {
-                  marks.push(`release-authorization:${incarnation}`);
-                }),
-            ),
-          );
+            );
 
-          yield* withHost(
-            runtimeOptions(filename, {
-              runContext,
-              toolAuthorization,
-              runtimeFailpoint: (location) =>
-                incarnation === 1 && location === "turn:after-results-append"
-                  ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
-                  : Effect.void,
-            }),
-            Effect.gen(function* () {
+            const toolAuthorization = Layer.effect(
+              RunToolAuthorization,
+              Effect.acquireRelease(
+                Effect.sync(() =>
+                  RunToolAuthorization.of({
+                    authorize: () =>
+                      Effect.sync(() => {
+                        marks.push(`authorize:${incarnation}`);
+
+                        return incarnation === 1
+                          ? { _tag: "allowed" as const }
+                          : { _tag: "denied" as const, reason: "revoked" };
+                      }),
+                  }),
+                ),
+                () =>
+                  Effect.sync(() => {
+                    marks.push(`release-authorization:${incarnation}`);
+                  }),
+              ),
+            );
+
+            const live = NodeDurableHost.layerRegistered(
+              [{ agent, definitions }],
+              runtimeOptions(filename, {
+                runContext,
+                toolAuthorization,
+                runtimeFailpoint: (location) =>
+                  incarnation === 1 && location === "turn:after-results-append"
+                    ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+                    : Effect.void,
+              }),
+            ).pipe(Layer.provide(handlers));
+
+            yield* Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
 
               if (incarnation === 1) {
-                yield* runtime.submit(agent, "book", submitOptions(threadId, "book"));
-                const interrupted = yield* runtime.processThread(agent, threadId).pipe(Effect.exit);
+                yield* runtime.submit(agent, "book", {
+                  ...submitOptions(threadId, "book"),
+                  definitions: definitionsDigest,
+                });
+
+                const interrupted = yield* runtime
+                  .processThreadResolved(threadId)
+                  .pipe(Effect.exit);
 
                 expect(failureOf(interrupted)).toHaveProperty(
                   "_tag",
@@ -846,7 +889,7 @@ describe("NodeDurableAgentRuntime", () => {
                 );
               } else {
                 const settlements = yield* runtime
-                  .processThread(agent, threadId)
+                  .processThreadResolved(threadId)
                   .pipe(Effect.provide(RunToolAuthorization.allowAll));
 
                 expect(settlements[0]).toMatchObject({
@@ -854,24 +897,23 @@ describe("NodeDurableAgentRuntime", () => {
                   failure: { errorTag: "AgentToolAuthorizationDenied" },
                 });
               }
-            }).pipe(Effect.provide(handlers)),
-          );
-          expect(marks).toContain(`release-context:${incarnation}`);
-          expect(marks).toContain(`release-authorization:${incarnation}`);
-        }
-        expect(marks.filter((mark) => /^(authorize|handler)/.test(mark))).toEqual([
-          "authorize:1",
-          "handler",
-          "authorize:2",
-        ]);
-        for (const incarnation of [1, 2]) {
-          expect(marks).toContain(`prepare:${incarnation}`);
-          expect(marks.indexOf(`prepare:${incarnation}`)).toBeLessThan(
-            marks.indexOf(`authorize:${incarnation}`),
-          );
-        }
-      }),
-    ),
+            }).pipe(Effect.provide(live));
+            expect(marks).toContain(`release-context:${incarnation}`);
+            expect(marks).toContain(`release-authorization:${incarnation}`);
+          }
+          expect(marks.filter((mark) => /^(authorize|handler)/.test(mark))).toEqual([
+            "authorize:1",
+            "handler",
+            "authorize:2",
+          ]);
+          for (const incarnation of [1, 2]) {
+            expect(marks).toContain(`prepare:${incarnation}`);
+            expect(marks.indexOf(`prepare:${incarnation}`)).toBeLessThan(
+              marks.indexOf(`authorize:${incarnation}`),
+            );
+          }
+        }),
+      ),
   );
 
   it.effect("keeps projected root and joined inputs private across Node host recovery", () =>

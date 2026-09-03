@@ -14,7 +14,7 @@ import {
   TurnId,
   type SubmissionId,
 } from "@effect-agent/core";
-import { ToolExecutionClass } from "@effect-agent/engine";
+import { RunToolAuthorization, ToolExecutionClass } from "@effect-agent/engine";
 import {
   MemoryThreadStoreLive,
   MemorySubmissionLedgerLive,
@@ -392,6 +392,13 @@ const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionD
 
     return {
       bindings: [parentResolved, childResolved],
+      runtime: yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithBindings([parentResolved, childResolved]).pipe(
+            Layer.provide(RunToolAuthorization.allowAll),
+          ),
+        ),
+      ),
       childInvocations: childScripted.calls,
       parentPrompts: parentScripted.prompts,
       submitParent: submitParentWith(coordinatorDefinition),
@@ -455,6 +462,13 @@ const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true)
 
     return {
       bindings: [parentResolved, childResolved],
+      runtime: yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithBindings([parentResolved, childResolved]).pipe(
+            Layer.provide(RunToolAuthorization.allowAll),
+          ),
+        ),
+      ),
       childInvocations: childScripted.calls,
       parentPrompts: parentScripted.prompts,
       submitParent: submitParentWith(mixedCoordinatorDefinition),
@@ -468,12 +482,8 @@ const makeSiblingHarness = makeSiblingHarnessWith();
 const DELEGATE_CALL = decodeToolCallId("delegate-1");
 
 const drive =
-  (harness: { readonly bindings: ReadonlyArray<ResolvedBinding> }) => (threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-
-      return yield* runtime.processThreadResolved(threadId, harness.bindings);
-    });
+  (harness: { readonly runtime: DurableAgentRuntime["Service"] }) => (threadId: ThreadId) =>
+    harness.runtime.processThreadResolved(threadId);
 
 const readLog = (threadId: ThreadId) =>
   Effect.gen(function* () {
@@ -608,27 +618,38 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         });
 
         expect(
-          failureTag(yield* Effect.exit(runtime.processThreadResolved(receipt.threadId, []))),
+          failureTag(yield* Effect.exit(runtime.processThreadResolved(receipt.threadId))),
         ).toBe("BindingUnavailable");
         expect(yield* exactScripted.calls).toBe(0);
         expect(yield* wrongScripted.calls).toBe(0);
         expect(yield* Ref.get(toolInvocations)).toBe(0);
         yield* assertClaimReleased;
 
-        expect(
-          failureTag(
-            yield* Effect.exit(runtime.processThreadResolved(receipt.threadId, [wrongBinding])),
+        const mismatchedRuntime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(
+            DurableAgentRuntime.layerWithBindings([wrongBinding]).pipe(
+              Layer.provide(RunToolAuthorization.allowAll),
+            ),
           ),
+        );
+
+        expect(
+          failureTag(yield* Effect.exit(mismatchedRuntime.processThreadResolved(receipt.threadId))),
         ).toBe("BindingDigestMismatch");
         expect(yield* exactScripted.calls).toBe(0);
         expect(yield* wrongScripted.calls).toBe(0);
         expect(yield* Ref.get(toolInvocations)).toBe(0);
         yield* assertClaimReleased;
 
-        const settlements = yield* runtime.processThreadResolved(receipt.threadId, [
-          wrongBinding,
-          exactBinding,
-        ]);
+        const registeredRuntime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(
+            DurableAgentRuntime.layerWithBindings([wrongBinding, exactBinding]).pipe(
+              Layer.provide(RunToolAuthorization.allowAll),
+            ),
+          ),
+        );
+
+        const settlements = yield* registeredRuntime.processThreadResolved(receipt.threadId);
 
         expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
         expect((yield* parentState(receipt.submissionId)).state).toBe("settled");
@@ -1279,12 +1300,16 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             ),
         });
 
-        const rejected = yield* Effect.exit(
-          run(parent.threadId).pipe(
-            Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
-            Effect.provideService(ThreadStore, faulty),
+        const hostileRuntime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(
+            DurableAgentRuntime.layerWithBindings(harness.bindings).pipe(
+              Layer.provide(RunToolAuthorization.allowAll),
+            ),
           ),
+          Effect.provideService(ThreadStore, faulty),
         );
+
+        const rejected = yield* Effect.exit(hostileRuntime.processThreadResolved(parent.threadId));
 
         expect(failureTag(rejected)).toBe(
           corrupt === "missing" ? "RunJournalError" : "LedgerError",
@@ -1371,12 +1396,16 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
               ),
           });
 
-          const result = yield* Effect.exit(
-            drive(harness)(parent.threadId).pipe(
-              Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
-              Effect.provideService(ThreadStore, corruptStore),
+          const hostileRuntime = yield* DurableAgentRuntime.pipe(
+            Effect.provide(
+              DurableAgentRuntime.layerWithBindings(harness.bindings).pipe(
+                Layer.provide(RunToolAuthorization.allowAll),
+              ),
             ),
+            Effect.provideService(ThreadStore, corruptStore),
           );
+
+          const result = yield* Effect.exit(hostileRuntime.processThreadResolved(parent.threadId));
 
           if (classification === "conflicting") expect(failureTag(result)).toBe("RunJournalError");
           else {
@@ -1582,6 +1611,13 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
           const harness = {
             bindings: [parentResolved, childResolved],
+            runtime: yield* DurableAgentRuntime.pipe(
+              Effect.provide(
+                DurableAgentRuntime.layerWithBindings([parentResolved, childResolved]).pipe(
+                  Layer.provide(RunToolAuthorization.allowAll),
+                ),
+              ),
+            ),
             childInvocations: childScripted.calls,
             parentPrompts: parentScripted.prompts,
             submitParent: submitParentWith(containedCoordinatorDefinition),

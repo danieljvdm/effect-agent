@@ -106,12 +106,14 @@ Follow the [local process walkthrough](../guide/sandbox#run-a-trusted-local-proc
 ### `@effect-agent/thread`
 
 Thread records, storage contracts, recovery, durable execution, scheduling, and subscriptions.
-`compileRegistrations` hashes version declarations and captures agent services for workers.
+`DurableAgentRuntime.layerRegistered` hashes version declarations and captures agent services
+once at construction. `layerWithBindings` accepts previously compiled registrations owned by
+the application's Scope. Worker operations use those registrations without accepting services.
 Optional `processCommittedActivity` runs bounded, resumable passes with separate processor
 progress. The host owns record eligibility, extraction, and durable output application. See
 [committed memory processing](../guide/context-management#committed-memory).
 
-Custom drivers can advance one FIFO-head Attempt with `processThreadHeadResolved` and apply one
+Custom drivers can advance one FIFO-head Attempt with `processThreadHead(threadId)` and apply one
 submission's recovery decision with `recoverSubmission`. `submissionStatus` is the authorized
 nonblocking read; `inspectSubmissionStatus` is reserved for trusted workers. Pending status and
 an empty processing result do not imply completion.
@@ -127,6 +129,7 @@ an empty processing result do not imply completion.
 
 Optional `WorkflowAgentHost` over an injected upstream Effect `WorkflowEngine`. It reuses the
 durable runtime's admission, journal recovery, authorization, and settlement protocol.
+`WorkflowAgentHost.layer(options)` consumes a runtime whose Layer owns agent registration.
 `WorkflowDispatchStore` retains dispatch intents; `WorkflowRepairTrigger` requires the host to
 schedule startup and repeated repair. The shared package starts no polling loop and imports no
 Node or Cloudflare implementation.
@@ -167,7 +170,7 @@ before closing storage. See the [Node.js guide](../platforms/node).
 
 The optional `@effect-agent/platform-node/workflow` import supplies `SqlWorkflowDispatchStore`
 over an injected `SqlClient` and `NodeWorkflowRepairTrigger` with scoped startup and polling.
-Pair them with `NodeDurableAgentRuntime.layer` and `WorkflowAgentHost`; this assembly does not start
+Pair them with `NodeDurableAgentRuntime.layerRegistered` and `WorkflowAgentHost.layer`; this assembly does not start
 the ordinary Node worker loop.
 
 ### `@effect-agent/storage-cloudflare`

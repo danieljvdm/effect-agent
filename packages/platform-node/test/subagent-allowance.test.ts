@@ -142,7 +142,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
       const parentId = Schema.decodeSync(ThreadId)("shared-budget-parent");
 
       const runtimeLayer = () =>
-        NodeDurableAgentRuntime.layer({
+        NodeDurableAgentRuntime.layerWithBindings(bindings, {
           filename: `${directory}/shared.sqlite`,
           deploymentId: "shared-budget",
           producerId: "shared-budget",
@@ -158,10 +158,9 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
           definitions: sharedDigests,
         });
 
-        expect(yield* runtime.processThreadResolved(parentId, bindings)).toEqual([]);
+        expect(yield* runtime.processThreadResolved(parentId)).toEqual([]);
         yield* runtime.processThreadResolved(
           childThreadIdFor(receipt.submissionId, Schema.decodeSync(ToolCallId)("shared-0")),
-          bindings,
         );
 
         return receipt;
@@ -169,9 +168,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
       yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
 
-        expect((yield* runtime.processThreadResolved(parentId, bindings))[0]?.outcome).toBe(
-          "completed",
-        );
+        expect((yield* runtime.processThreadResolved(parentId))[0]?.outcome).toBe("completed");
         const log = yield* readLog(parentId);
 
         expect(
@@ -242,7 +239,7 @@ it.effect(
           ) =>
             effect.pipe(
               Effect.provide(
-                NodeDurableAgentRuntime.layer({
+                NodeDurableAgentRuntime.layerWithBindings(bindings, {
                   filename,
                   deploymentId: "allowance-test",
                   producerId: `producer-${incarnation++}`,
@@ -389,7 +386,7 @@ it.effect(
                 definitions: digests,
               });
 
-              const exit = yield* Effect.exit(runtime.processThreadResolved(parentId, bindings));
+              const exit = yield* Effect.exit(runtime.processThreadResolved(parentId));
 
               expect(
                 Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none(),
@@ -410,8 +407,8 @@ it.effect(
 
               // Complete admission from the request record, without a delegation handler.
               yield* runtime.runRecovery;
-              yield* runtime.processThreadResolved(parentId, bindings);
-              expect(yield* runtime.processThreadResolved(childId, bindings)).toEqual([]);
+              yield* runtime.processThreadResolved(parentId);
+              expect(yield* runtime.processThreadResolved(childId)).toEqual([]);
               expect(starts).toEqual([]);
               const explanations = yield* runtime.explainThread(childId);
 
@@ -437,7 +434,7 @@ it.effect(
                   reason: "first probe approved",
                 }),
               );
-              const exit = yield* Effect.exit(runtime.processThreadResolved(childId, bindings));
+              const exit = yield* Effect.exit(runtime.processThreadResolved(childId));
 
               expect(
                 Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none(),
@@ -455,13 +452,13 @@ it.effect(
               const runtime = yield* DurableAgentRuntime;
 
               yield* runtime.runRecovery;
-              const settlements = yield* runtime.processThreadResolved(childId, bindings);
+              const settlements = yield* runtime.processThreadResolved(childId);
 
               expect(settlements[0]?.outcome).toBe("completed");
               expect(starts).toEqual(
                 Array.from({ length: row.effective }, (_, index) => index + 1),
               );
-              expect((yield* runtime.processThreadResolved(parentId, bindings))[0]?.outcome).toBe(
+              expect((yield* runtime.processThreadResolved(parentId))[0]?.outcome).toBe(
                 "completed",
               );
               const parentLog = yield* readLog(parentId);

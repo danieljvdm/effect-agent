@@ -1,4 +1,5 @@
 import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
+import { RunToolAuthorization } from "@effect-agent/engine";
 import {
   AbortCommand,
   DefinitionDigests,
@@ -19,6 +20,7 @@ import {
   Receipt,
   RecoverySnapshotRequest,
   ReleaseOwnershipRequest,
+  type ResolvedBinding,
   SubmissionLedger,
   ToolReconciler,
   WakeScheduler,
@@ -108,7 +110,14 @@ const baseLayer = Layer.mergeAll(
   }),
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
-const makeRuntime = DurableAgentRuntime.pipe(Effect.provide(DurableAgentRuntime.layer));
+const makeRuntime = (bindings: ReadonlyArray<ResolvedBinding> = []) =>
+  DurableAgentRuntime.pipe(
+    Effect.provide(
+      DurableAgentRuntime.layerWithBindings(bindings).pipe(
+        Layer.provide(RunToolAuthorization.allowAll),
+      ),
+    ),
+  );
 
 const snapshot = Effect.fn(function* (receipt: Receipt) {
   const ledger = yield* SubmissionLedger;
@@ -121,7 +130,6 @@ const snapshot = Effect.fn(function* (receipt: Receipt) {
 layer(baseLayer)("bounded durable Thread processing", (it) => {
   it.effect("settles only the FIFO head and closes its provider before returning", () =>
     Effect.gen(function* () {
-      const runtime = yield* makeRuntime;
       const closed = yield* Ref.make(0);
 
       const model = makeModel(
@@ -131,6 +139,10 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
       const agent = Agent.withModel(definition, model);
       const binding = yield* DurableWorkerBinding.make(agent, digests);
+      const bindings = [binding];
+      const runtime = yield* makeRuntime(bindings);
+
+      bindings.length = 0;
       const first = yield* runtime.submit(agent, "first", options("bounded", "first"));
       const reserved = yield* Deferred.make<void>();
       const finish = yield* Deferred.make<void>();
@@ -144,9 +156,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
       expect((yield* runtime.submissionStatus(first))._tag).toBe("pending");
 
-      const worker = yield* runtime
-        .processThreadHeadResolved(first.threadId, [binding])
-        .pipe(Effect.forkChild);
+      const worker = yield* runtime.processThreadHead(first.threadId).pipe(Effect.forkChild);
 
       yield* Deferred.await(reserved);
       // Admission after the final Turn cannot join that Run and must remain FIFO work.
@@ -164,7 +174,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       expect((yield* snapshot(second)).submission.state).toBe("ready");
       expect(yield* Ref.get(closed)).toBe(1);
 
-      const remainder = yield* runtime.processThreadResolved(first.threadId, [binding]);
+      const remainder = yield* runtime.processThreadResolved(first.threadId);
 
       expect(remainder.map((settlement) => settlement.submissionId)).toEqual([second.submissionId]);
       expect(yield* Ref.get(closed)).toBe(2);
@@ -178,7 +188,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         const ledger = yield* SubmissionLedger;
         const armed = yield* Ref.make(false);
 
-        const runtime = yield* makeRuntime.pipe(
+        const runtime = yield* makeRuntime().pipe(
           Effect.provideService(SubmissionLedger, {
             ...ledger,
             lookup: (request) =>
@@ -210,7 +220,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
               : Effect.void,
           );
         }
-        const result = yield* Effect.exit(runtime.processThreadHeadResolved(receipt.threadId, []));
+        const result = yield* Effect.exit(runtime.processThreadHead(receipt.threadId));
 
         expect(Exit.isFailure(result)).toBe(true);
         expect((yield* snapshot(receipt)).ownership).toBeUndefined();
@@ -226,7 +236,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       const acquired = yield* Deferred.make<void>();
       const handoff = yield* Deferred.make<void>();
 
-      const runtime = yield* makeRuntime.pipe(
+      const runtime = yield* makeRuntime().pipe(
         Effect.provideService(SubmissionLedger, {
           ...ledger,
           claim: (request) =>
@@ -239,9 +249,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
       const receipt = yield* runtime.submit({ definition }, "first", options("handoff", "first"));
 
-      const worker = yield* runtime
-        .processThreadHeadResolved(receipt.threadId, [])
-        .pipe(Effect.forkChild);
+      const worker = yield* runtime.processThreadHead(receipt.threadId).pipe(Effect.forkChild);
 
       yield* Deferred.await(acquired);
       const interrupt = yield* Fiber.interrupt(worker).pipe(Effect.forkChild);
@@ -267,7 +275,20 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         const releasedTokens = yield* Ref.make<ReadonlyArray<OwnershipToken>>([]);
         const closed = yield* Ref.make(false);
 
-        const runtime = yield* makeRuntime.pipe(
+        const agent = Agent.withModel(
+          definition,
+          makeModel(
+            Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+              Stream.drain,
+              Stream.concat(Stream.never),
+            ),
+            Ref.set(closed, true),
+          ),
+        );
+
+        const binding = yield* DurableWorkerBinding.make(agent, digests);
+
+        const runtime = yield* makeRuntime([binding]).pipe(
           Effect.provideService(SubmissionLedger, {
             ...ledger,
             renewOwnership: (request) =>
@@ -300,23 +321,9 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
           }),
         );
 
-        const agent = Agent.withModel(
-          definition,
-          makeModel(
-            Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
-              Stream.drain,
-              Stream.concat(Stream.never),
-            ),
-            Ref.set(closed, true),
-          ),
-        );
-
-        const binding = yield* DurableWorkerBinding.make(agent, digests);
         const receipt = yield* runtime.submit(agent, "first", options("renewed", "first"));
 
-        const worker = yield* runtime
-          .processThreadHeadResolved(receipt.threadId, [binding])
-          .pipe(Effect.forkChild);
+        const worker = yield* runtime.processThreadHead(receipt.threadId).pipe(Effect.forkChild);
 
         yield* Deferred.await(started);
         yield* Deferred.await(renewalReturned);
@@ -339,8 +346,6 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
   it.effect("keeps approval suspension pending without touching a queued follower", () =>
     Effect.gen(function* () {
-      const runtime = yield* makeRuntime;
-
       const approvalTools = Toolkit.make(
         Tool.make("approve", {
           parameters: Schema.Struct({}),
@@ -375,17 +380,15 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         Effect.provide(approvalTools.toLayer({ approve: () => Effect.die("unapproved handler") })),
       );
 
+      const runtime = yield* makeRuntime([binding]);
+
       const first = yield* runtime.submit(agent, "first", options("suspended", "first"));
       const second = yield* runtime.submit(agent, "second", options("suspended", "second"));
 
-      expect(
-        Option.isNone(yield* runtime.processThreadHeadResolved(first.threadId, [binding])),
-      ).toBe(true);
+      expect(Option.isNone(yield* runtime.processThreadHead(first.threadId))).toBe(true);
       expect((yield* snapshot(first)).submission.state).toBe("suspended");
       expect((yield* runtime.submissionStatus(first))._tag).toBe("pending");
-      expect(
-        Option.isNone(yield* runtime.processThreadHeadResolved(first.threadId, [binding])),
-      ).toBe(true);
+      expect(Option.isNone(yield* runtime.processThreadHead(first.threadId))).toBe(true);
       expect((yield* snapshot(second)).ownership).toBeUndefined();
       expect((yield* runtime.submissionStatus(second))._tag).toBe("pending");
     }),
@@ -396,7 +399,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       const ledger = yield* SubmissionLedger;
       const claims = yield* Ref.make(0);
 
-      const runtime = yield* makeRuntime.pipe(
+      const runtime = yield* makeRuntime().pipe(
         Effect.provideService(SubmissionLedger, {
           ...ledger,
           claim: (request) =>
@@ -437,7 +440,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
     "releases recovery ownership when settlement reservation fails before its canonical append",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* makeRuntime;
+        const runtime = yield* makeRuntime();
         const control = yield* DurableRuntimeFailpointTestControl;
 
         const receipt = yield* runtime.submit(
@@ -472,7 +475,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
   it.effect("authorizes status before ledger reads and rejects a mismatched receipt Thread", () =>
     Effect.gen(function* () {
-      const runtime = yield* makeRuntime;
+      const runtime = yield* makeRuntime();
 
       const receipt = yield* runtime.submit(
         { definition },
@@ -483,7 +486,10 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       const ledger = yield* SubmissionLedger;
       const reads = yield* Ref.make(0);
 
-      const denied = yield* makeRuntime.pipe(
+      const agent = Agent.withModel(definition, makeModel(Stream.fromIterable(finalParts)));
+      const binding = yield* DurableWorkerBinding.make(agent, digests);
+
+      const denied = yield* makeRuntime([binding]).pipe(
         Effect.provideService(OperationAuthorizer, {
           authorize: (request) =>
             Effect.fail(OperationDenied.make({ operation: request.operation, reason: "denied" })),
@@ -500,12 +506,8 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       );
       expect(yield* Ref.get(reads)).toBe(0);
       expect((yield* denied.inspectSubmissionStatus(receipt))._tag).toBe("pending");
-      const agent = Agent.withModel(definition, makeModel(Stream.fromIterable(finalParts)));
-      const binding = yield* DurableWorkerBinding.make(agent, digests);
 
-      expect(
-        Option.isSome(yield* denied.processThreadHeadResolved(receipt.threadId, [binding])),
-      ).toBe(true);
+      expect(Option.isSome(yield* denied.processThreadHead(receipt.threadId))).toBe(true);
       expect((yield* denied.inspectSubmissionStatus(receipt))._tag).toBe("settled");
 
       const mismatched = Receipt.make({

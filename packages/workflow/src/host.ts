@@ -1,18 +1,15 @@
 import type { ThreadId } from "@effect-agent/core";
 import {
-  compileRegistrations,
   DeploymentId,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   Receipt,
   SubmissionLedger,
   SubmissionLookupById,
-  type AgentRegistration,
   type DurableAwaitFailure,
   type DurableSubmitAgent,
   type DurableSubmitFailure,
   type DurableSubmitOptions,
-  type ResolvedBinding,
 } from "@effect-agent/thread";
 import {
   Cause,
@@ -87,10 +84,7 @@ const nativeOperation = <A, E, R>(operation: string, effect: Effect.Effect<A, E,
     ),
   );
 
-const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (
-  bindings: ReadonlyArray<ResolvedBinding>,
-  options: WorkflowAgentHostOptions,
-) {
+const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: WorkflowAgentHostOptions) {
   const config = yield* Schema.decodeUnknownEffect(WorkflowHostConfig)({
     deploymentId: options.deploymentId,
     workflowName: options.workflowName ?? "effect-agent/Submission/v1",
@@ -201,7 +195,7 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (
                   const recovered = yield* runtime.inspectSubmissionStatus(payload.receipt);
 
                   if (recovered._tag === "settled") return recovered;
-                  yield* runtime.processThreadHeadResolved(payload.receipt.threadId, bindings);
+                  yield* runtime.processThreadHead(payload.receipt.threadId);
 
                   return yield* runtime.inspectSubmissionStatus(payload.receipt);
                 }),
@@ -451,16 +445,8 @@ export class WorkflowAgentHost extends Context.Service<
     readonly executionId: (receipt: Receipt) => Effect.Effect<string>;
   }
 >()("@effect-agent/workflow/WorkflowAgentHost") {
-  static layerRegistered<const Entries extends ReadonlyArray<AgentRegistration>>(
-    registrations: Entries,
-    options: WorkflowAgentHostOptions,
-  ) {
-    return Layer.effect(WorkflowAgentHost)(
-      Effect.gen(function* () {
-        const bindings = yield* compileRegistrations(registrations);
-
-        return yield* makeHost(bindings, options);
-      }),
-    );
+  /** Drive the injected runtime, whose Layer owns executable registrations and their services. */
+  static layer(options: WorkflowAgentHostOptions) {
+    return Layer.effect(WorkflowAgentHost)(makeHost(options));
   }
 }

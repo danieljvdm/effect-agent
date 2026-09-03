@@ -1,11 +1,5 @@
 import { Agent, AgentPolicy, type ModelServices } from "@effect-agent/core";
-import {
-  DefinitionDigestInput,
-  type DigestError,
-  type DurableAgentRuntime,
-  type DurableRuntimeConfig,
-  type SubmissionLedger,
-} from "@effect-agent/thread";
+import { DefinitionDigestInput, type DigestError, DurableAgentRuntime } from "@effect-agent/thread";
 import { expect, it } from "@effect/vitest";
 import { Context, type Crypto, Effect, Layer, Schema, SchemaGetter } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -77,20 +71,26 @@ const definition = Agent.make("workflow-types", {
 
 const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });
 
+type RuntimeServices = Layer.Services<typeof DurableAgentRuntime.layerWithServices>;
+
 const proveComposition = (
   model: Layer.Layer<ModelServices, never, Provider>,
   engine: Layer.Layer<WorkflowEngine.WorkflowEngine, EngineError, EngineConfig>,
   runtime: Layer.Layer<
-    DurableAgentRuntime | DurableRuntimeConfig | SubmissionLedger,
+    RuntimeServices,
     StorageError | AuthorizationError,
     StorageConfig | AuthorizationConfig
   >,
   dispatch: Layer.Layer<WorkflowDispatchStore, DispatchError, DispatchConfig>,
   trigger: Layer.Layer<WorkflowRepairTrigger, TriggerError, TriggerConfig>,
 ) => {
-  const live = WorkflowAgentHost.layerRegistered([{ agent: definition, model, definitions }], {
+  const registered = DurableAgentRuntime.layerRegistered([
+    { agent: definition, model, definitions },
+  ]);
+
+  const live = WorkflowAgentHost.layer({
     deploymentId: "types",
-  });
+  }).pipe(Layer.provide(registered));
 
   type AgentServices =
     | Provider
@@ -100,15 +100,22 @@ const proveComposition = (
     | ToolDependency
     | Tool.Handler<"lookup">;
   type HostServices =
-    | DurableAgentRuntime
-    | DurableRuntimeConfig
-    | SubmissionLedger
+    | RuntimeServices
     | WorkflowEngine.WorkflowEngine
     | WorkflowDispatchStore
     | WorkflowRepairTrigger
     | Crypto.Crypto;
 
   const requirements: Assert<Equal<Layer.Services<typeof live>, AgentServices | HostServices>> =
+    true;
+
+  const registrationRequirements: Assert<
+    Equal<Layer.Services<typeof registered>, AgentServices | RuntimeServices>
+  > = true;
+
+  const registrationErrors: Assert<Equal<Layer.Error<typeof registered>, DigestError>> = true;
+
+  const registrationOutput: Assert<Equal<Layer.Success<typeof registered>, DurableAgentRuntime>> =
     true;
 
   const errors: Assert<Equal<Layer.Error<typeof live>, DigestError | WorkflowHostConfigError>> =
@@ -127,7 +134,6 @@ const proveComposition = (
     Equal<
       Layer.Services<typeof supplied>,
       | AgentServices
-      | Crypto.Crypto
       | EngineConfig
       | StorageConfig
       | AuthorizationConfig
@@ -158,11 +164,17 @@ const proveComposition = (
     >
   > = true;
 
-  const empty = WorkflowAgentHost.layerRegistered([], { deploymentId: "types" });
+  const empty = WorkflowAgentHost.layer({ deploymentId: "types" }).pipe(
+    Layer.provide(DurableAgentRuntime.layerRegistered([])),
+  );
+
   const emptyRequirements: Assert<Equal<Layer.Services<typeof empty>, HostServices>> = true;
 
   return [
     requirements,
+    registrationRequirements,
+    registrationErrors,
+    registrationOutput,
     errors,
     output,
     suppliedRequirements,

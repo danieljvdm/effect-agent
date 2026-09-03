@@ -37,14 +37,14 @@ export const workflowHost = <
     Layer.provide(workflowDatabase),
   );
 
-  return WorkflowAgentHost.layerRegistered(registrations, {
+  return WorkflowAgentHost.layer({
     deploymentId: options.deploymentId,
     executionConcurrency: 4,
     repairBatchSize: 32,
     dispatchTimeoutMillis: 10_000,
   }).pipe(
     Layer.provide(
-      NodeDurableAgentRuntime.layer({
+      NodeDurableAgentRuntime.layerRegistered(registrations, {
         filename: options.agentDatabase,
         deploymentId: options.deploymentId,
         producerId: options.producerId,

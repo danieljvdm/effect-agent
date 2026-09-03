@@ -98,7 +98,9 @@ import {
 } from "./admin.ts";
 import {
   BindingUnavailable,
+  compileRegistrations,
   definitionDigestsEqual,
+  type AgentRegistration,
   type DurableBindingFailure,
   makeLegacyWorkerBinding,
   type ResolvedBinding,
@@ -934,7 +936,10 @@ interface OpenCallReview {
   readonly recovered: number;
 }
 
-const make = Effect.gen(function* () {
+const make = Effect.fn("DurableAgentRuntime.make")(function* (
+  bindings: ReadonlyArray<ResolvedBinding>,
+) {
+  const registeredBindings = [...bindings];
   const ledger = yield* SubmissionLedger;
   const store = yield* ThreadStore;
   const wake = yield* WakeScheduler;
@@ -6626,19 +6631,19 @@ const make = Effect.gen(function* () {
 
   const processThreadResolvedImpl = (
     threadId: ThreadId,
-    bindings: ReadonlyArray<ResolvedBinding>,
   ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     drainThread(
-      (submission) => resolveWorkerBinding(bindings, submission.agentId, submission.agentDigests),
+      (submission) =>
+        resolveWorkerBinding(registeredBindings, submission.agentId, submission.agentDigests),
       threadId,
     );
 
-  const processThreadHeadResolvedImpl = (
+  const processThreadHeadImpl = (
     threadId: ThreadId,
-    bindings: ReadonlyArray<ResolvedBinding>,
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     processThreadHead(
-      (submission) => resolveWorkerBinding(bindings, submission.agentId, submission.agentDigests),
+      (submission) =>
+        resolveWorkerBinding(registeredBindings, submission.agentId, submission.agentDigests),
       threadId,
     );
 
@@ -8463,25 +8468,20 @@ const make = Effect.gen(function* () {
       yield* Stream.runForEach(wake.wakes, (threadId) => processThreadImpl(agent, threadId));
     });
 
-  const runResolvedWorkerImpl = (
-    bindings: ReadonlyArray<ResolvedBinding>,
-  ): Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure> =>
-    Effect.gen(function* () {
-      // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
-      // Binding from the explicit registration array, so one worker pool serves parent and child
-      // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
-      const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
-      const seen = new Set<ThreadId>();
+  const runResolvedWorkerImpl = Effect.gen(function* () {
+    // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
+    // Binding from the explicit registration array, so one worker pool serves parent and child
+    // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
+    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const seen = new Set<ThreadId>();
 
-      for (const submission of nonterminal) {
-        if (seen.has(submission.threadId)) continue;
-        seen.add(submission.threadId);
-        yield* processThreadResolvedImpl(submission.threadId, bindings);
-      }
-      yield* Stream.runForEach(wake.wakes, (threadId) =>
-        processThreadResolvedImpl(threadId, bindings),
-      );
-    });
+    for (const submission of nonterminal) {
+      if (seen.has(submission.threadId)) continue;
+      seen.add(submission.threadId);
+      yield* processThreadResolvedImpl(submission.threadId);
+    }
+    yield* Stream.runForEach(wake.wakes, (threadId) => processThreadResolvedImpl(threadId));
+  });
 
   return DurableAgentRuntime.of({
     submit,
@@ -8501,7 +8501,7 @@ const make = Effect.gen(function* () {
     scanObligations: scanObligationsImpl,
     processThread: processThreadImpl,
     processThreadResolved: processThreadResolvedImpl,
-    processThreadHeadResolved: processThreadHeadResolvedImpl,
+    processThreadHead: processThreadHeadImpl,
     runWorker: runWorkerImpl,
     runResolvedWorker: runResolvedWorkerImpl,
     runRecovery: runRecoveryImpl(),
@@ -8548,8 +8548,8 @@ const make = Effect.gen(function* () {
  *   reimplemented over a singleton identity-exact (digest-transparent) Binding resolution: a
  *   claimed head belonging to a different Agent never runs against this binding (SUB-023); a
  *   parent-linked head refused this way settles with the framework `ChildCompatibilityFailure`.
- * - `processThreadResolved(threadId, bindings)` / `runResolvedWorker(bindings)` — the
- *   S2 multi-binding equivalents over explicit exact registrations (spec §11, D7): every claimed
+ * - `processThreadResolved(threadId)` / `runResolvedWorker` — the
+ *   S2 multi-binding equivalents over registrations owned by the runtime Layer (spec §11, D7): every claimed
  *   head's stored `(agentId, agentDigests)` resolves to the exact registered Binding before any
  *   code runs; an unresolvable parent-linked child settles with the Schema-stable framework
  *   `ChildCompatibilityFailure` (no application code, the child never executes), and an
@@ -8706,7 +8706,6 @@ export class DurableAgentRuntime extends Context.Service<
     >;
     readonly processThreadResolved: (
       threadId: ThreadId,
-      bindings: ReadonlyArray<ResolvedBinding>,
     ) => Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
     /**
      * Advance at most one FIFO-head Attempt, closing its resources before returning. A vacant,
@@ -8714,9 +8713,8 @@ export class DurableAgentRuntime extends Context.Service<
      * Ready input may join this Run through the existing Turn seams and settle with its head.
      * Interruption ends only this Attempt; ownership cleanup uses its latest renewed token.
      */
-    readonly processThreadHeadResolved: (
+    readonly processThreadHead: (
       threadId: ThreadId,
-      bindings: ReadonlyArray<ResolvedBinding>,
     ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
     readonly runWorker: <
       InputSchema extends Schema.Top,
@@ -8768,9 +8766,7 @@ export class DurableAgentRuntime extends Context.Service<
         InstructionRequirements
       >
     >;
-    readonly runResolvedWorker: (
-      bindings: ReadonlyArray<ResolvedBinding>,
-    ) => Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
+    readonly runResolvedWorker: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
     /** Apply one recovery decision for this Submission. */
     readonly recoverSubmission: (
@@ -8778,6 +8774,24 @@ export class DurableAgentRuntime extends Context.Service<
     ) => Effect.Effect<RecoveryReport, DurableWorkerFailure>;
   }
 >()("@effect-agent/thread/DurableAgentRuntime") {
+  /**
+   * Resolve typed registrations and capture their services once in the runtime's Layer Scope.
+   * Every claimed head must match an exact registered identity and digest triple. Worker calls
+   * cannot replace these registrations or their captured services. Tool authorization is required.
+   */
+  static layerRegistered<const Entries extends ReadonlyArray<AgentRegistration>>(
+    registrations: Entries,
+  ) {
+    return Layer.effect(DurableAgentRuntime)(
+      Effect.flatMap(compileRegistrations(registrations), make),
+    );
+  }
+
+  /** Construct from precompiled registrations whose captured resources belong to the caller's Scope. */
+  static layerWithBindings(bindings: ReadonlyArray<ResolvedBinding>) {
+    return Layer.effect(DurableAgentRuntime)(make(bindings));
+  }
+
   /** Captures optional context preparation; Tool authorization remains required in `R`. */
   static readonly layerWithServices: Layer.Layer<
     DurableAgentRuntime,
@@ -8790,7 +8804,7 @@ export class DurableAgentRuntime extends Context.Service<
     | ToolReconciler
     | RunToolAuthorization
     | Crypto.Crypto
-  > = Layer.effect(DurableAgentRuntime)(make);
+  > = DurableAgentRuntime.layerWithBindings([]);
 
   /** Compatible defaults: no host prompt transformation and allow-all Tool authorization. */
   static readonly layer: Layer.Layer<

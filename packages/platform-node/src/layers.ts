@@ -19,6 +19,8 @@ import {
   type SqliteStorageInitializationError,
 } from "@effect-agent/storage-sqlite";
 import {
+  type AgentRegistration,
+  type ResolvedBinding,
   type ScheduleStore,
   type ThreadStore,
   type WakeScheduler,
@@ -412,7 +414,69 @@ export class NodeDurableAgentRuntime {
     NodeDurableAgentRuntimeInitializationError | ContextError | AuthorizationError,
     Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
   > {
-    return Layer.unwrap(
+    return NodeDurableAgentRuntime.assemble(DurableAgentRuntime.layerWithServices, options);
+  }
+
+  /** Own typed executable registrations for every worker using this Node runtime. */
+  static layerRegistered<
+    const Entries extends ReadonlyArray<AgentRegistration>,
+    ContextError = never,
+    ContextRequirements = never,
+    AuthorizationError = never,
+    AuthorizationRequirements = never,
+  >(
+    registrations: Entries,
+    options: NodeDurableAgentRuntimeOptions<
+      ContextError,
+      ContextRequirements,
+      AuthorizationError,
+      AuthorizationRequirements
+    >,
+  ) {
+    return NodeDurableAgentRuntime.assemble(
+      DurableAgentRuntime.layerRegistered(registrations),
+      options,
+    );
+  }
+
+  /** Construct from registrations already resolved within the enclosing application Scope. */
+  static layerWithBindings<
+    ContextError = never,
+    ContextRequirements = never,
+    AuthorizationError = never,
+    AuthorizationRequirements = never,
+  >(
+    bindings: ReadonlyArray<ResolvedBinding>,
+    options: NodeDurableAgentRuntimeOptions<
+      ContextError,
+      ContextRequirements,
+      AuthorizationError,
+      AuthorizationRequirements
+    >,
+  ) {
+    return NodeDurableAgentRuntime.assemble(
+      DurableAgentRuntime.layerWithBindings(bindings),
+      options,
+    );
+  }
+
+  private static assemble<
+    RuntimeError,
+    RuntimeRequirements,
+    ContextError,
+    ContextRequirements,
+    AuthorizationError,
+    AuthorizationRequirements,
+  >(
+    runtimeLayer: Layer.Layer<DurableAgentRuntime, RuntimeError, RuntimeRequirements>,
+    options: NodeDurableAgentRuntimeOptions<
+      ContextError,
+      ContextRequirements,
+      AuthorizationError,
+      AuthorizationRequirements
+    >,
+  ) {
+    const assembled = Layer.unwrap(
       Effect.map(configFromOptions(options), (config) => {
         const nodeConfigLayer = Layer.succeed(NodeDurableAgentRuntimeConfig)(config);
 
@@ -446,7 +510,7 @@ export class NodeDurableAgentRuntime {
           ),
         );
 
-        return DurableAgentRuntime.layerWithServices.pipe(
+        return runtimeLayer.pipe(
           Layer.provideMerge(
             Layer.mergeAll(ports, durableRuntimeConfigLayer(options.estimateCostMicrousd)),
           ),
@@ -469,5 +533,13 @@ export class NodeDurableAgentRuntime {
         );
       }),
     );
+
+    const runtime: Layer.Layer<
+      NodeDurableAgentRuntimeServices,
+      Layer.Error<typeof assembled>,
+      Layer.Services<typeof assembled>
+    > = assembled;
+
+    return runtime;
   }
 }

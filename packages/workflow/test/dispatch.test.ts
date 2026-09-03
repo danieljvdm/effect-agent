@@ -349,17 +349,21 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
     Context.add(WorkflowRepairTrigger, { register: () => Effect.void }),
   );
 
-  const runtimeContext = yield* Layer.build(DurableAgentRuntime.layer).pipe(
-    Effect.provideContext(services),
-  );
+  const runtimeContext = yield* Layer.build(
+    DurableAgentRuntime.layerRegistered([
+      { agent: selectedDefinition, model: ordinaryTool ? blockingModel : model, definitions },
+    ]),
+  ).pipe(Effect.provideContext(services));
 
   const runtime = Context.get(runtimeContext, DurableAgentRuntime);
 
   const hostContext = yield* Layer.build(
-    WorkflowAgentHost.layerRegistered(
-      [{ agent: selectedDefinition, model: ordinaryTool ? blockingModel : model, definitions }],
-      { deploymentId, dispatchTimeoutMillis: 100, repairBatchSize: 16, executionConcurrency: 2 },
-    ),
+    WorkflowAgentHost.layer({
+      deploymentId,
+      dispatchTimeoutMillis: 100,
+      repairBatchSize: 16,
+      executionConcurrency: 2,
+    }),
   ).pipe(Effect.provideContext(Context.merge(services, runtimeContext)));
 
   const host = Context.get(hostContext, WorkflowAgentHost);

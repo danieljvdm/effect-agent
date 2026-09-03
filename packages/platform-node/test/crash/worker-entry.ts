@@ -17,7 +17,6 @@ import {
   childThreadIdFor,
   type DurableRuntimeFailpointHandler,
   type Receipt,
-  type ResolvedBinding,
   type Settlement,
   type SubmissionSnapshot,
 } from "@effect-agent/thread";
@@ -312,11 +311,11 @@ const makeSubagentBindings = Effect.gen(function* () {
   });
 });
 
-const driveResolved = (bindings: ReadonlyArray<ResolvedBinding>, thread: ThreadId) =>
+const driveResolved = (thread: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
 
-    return yield* runtime.processThreadResolved(thread, bindings);
+    return yield* runtime.processThreadResolved(thread);
   });
 
 const submitCoordinator = (key: string) =>
@@ -582,7 +581,6 @@ const scenario = Effect.gen(function* () {
     case "subagent-run": {
       // Establishment → child Settlement → join, all in one process over one pool of resolved
       // Bindings; armed kill/block failpoints land at exactly one durable step of that flow.
-      const bindings = yield* makeSubagentBindings;
       const receipt = yield* submitCoordinator(idempotencyKey);
 
       const childThread = childThreadIdFor(
@@ -590,9 +588,9 @@ const scenario = Effect.gen(function* () {
         decodeToolCallId(DELEGATE_CALL_ID),
       );
 
-      const establishment = yield* driveResolved(bindings, threadId);
-      const child = yield* driveResolved(bindings, childThread);
-      const join = yield* driveResolved(bindings, threadId);
+      const establishment = yield* driveResolved(threadId);
+      const child = yield* driveResolved(childThread);
+      const join = yield* driveResolved(threadId);
 
       yield* emitSettlements([...establishment, ...child, ...join]);
 
@@ -601,19 +599,17 @@ const scenario = Effect.gen(function* () {
     case "subagent-child": {
       // Second-process child worker: derive the child Thread from the parent Submission's
       // durable identity and drive ONLY that lane (independent ownership, SUB-020).
-      const bindings = yield* makeSubagentBindings;
       const parent = yield* lookupSubmission;
       const childThread = childThreadIdFor(parent.submissionId, decodeToolCallId(DELEGATE_CALL_ID));
 
-      yield* emitSettlements(yield* driveResolved(bindings, childThread));
+      yield* emitSettlements(yield* driveResolved(childThread));
 
       return;
     }
     case "subagent-abort": {
-      const bindings = yield* makeSubagentBindings;
       const receipt = yield* submitCoordinator(idempotencyKey);
 
-      yield* driveResolved(bindings, threadId);
+      yield* driveResolved(threadId);
       yield* runtime.abort(
         AbortCommand.make({
           submissionId: receipt.submissionId,
@@ -633,7 +629,7 @@ const scenario = Effect.gen(function* () {
           const host = yield* NodeDurableHost;
 
           yield* emit({ kind: "resolved", value: String(host.startupRecovery.length) });
-        }).pipe(Effect.provide(NodeDurableHost.layer())),
+        }).pipe(Effect.provide(NodeDurableHost.layer)),
       );
 
       return;
@@ -648,10 +644,21 @@ const decodeErrorTag = Schema.decodeUnknownOption(ErrorTag);
 const isFencedFailure = (tag: string): boolean =>
   tag === "FenceRejected" || tag === "OwnershipLost";
 
+const runtimeLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const bindings =
+      env.EFFECT_AGENT_SCENARIO === "subagent-run" ||
+      env.EFFECT_AGENT_SCENARIO === "subagent-child" ||
+      env.EFFECT_AGENT_SCENARIO === "subagent-abort"
+        ? yield* makeSubagentBindings
+        : [];
+
+    return NodeDurableAgentRuntime.layerWithBindings(bindings, options);
+  }),
+);
+
 const exit = await Effect.runPromiseExit(
-  scenario.pipe(
-    Effect.provide(Layer.mergeAll(NodeDurableAgentRuntime.layer(options), searchToolLayer)),
-  ),
+  scenario.pipe(Effect.provide(Layer.mergeAll(runtimeLayer, searchToolLayer))),
 );
 
 if (Exit.isFailure(exit)) {

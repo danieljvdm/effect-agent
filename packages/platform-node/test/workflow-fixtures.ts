@@ -135,14 +135,14 @@ export const hostLayer = <const Entries extends ReadonlyArray<AgentRegistration>
   memoryEngine = false,
   repairBatchSize = 2,
 ) =>
-  WorkflowAgentHost.layerRegistered(registrations, {
+  WorkflowAgentHost.layer({
     deploymentId,
     workflowName: workflowPrefix,
     executionConcurrency: 1,
     repairBatchSize,
   }).pipe(
     Layer.provideMerge(
-      NodeDurableAgentRuntime.layer({
+      NodeDurableAgentRuntime.layerRegistered(registrations, {
         filename: `${directory}/agent.sqlite`,
         deploymentId,
         producerId: "workflow-owner",

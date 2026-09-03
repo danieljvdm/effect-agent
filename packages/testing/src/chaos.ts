@@ -14,7 +14,12 @@ import {
   TurnId,
   type SubmissionId,
 } from "@effect-agent/core";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
+import {
+  DurableStep,
+  DurableStepError,
+  RunToolAuthorization,
+  ToolExecutionClass,
+} from "@effect-agent/engine";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -775,8 +780,15 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
         childLaneDigests(laneIndex),
       );
 
-      const bindings = [parentResolved, childResolved];
-      const driveResolved = (thread: ThreadId) => runtime.processThreadResolved(thread, bindings);
+      const registeredRuntime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithBindings([parentResolved, childResolved]).pipe(
+            Layer.provide(RunToolAuthorization.allowAll),
+          ),
+        ),
+      );
+
+      const driveResolved = (thread: ThreadId) => registeredRuntime.processThreadResolved(thread);
 
       const fixture: LaneFixture = {
         index: laneIndex,

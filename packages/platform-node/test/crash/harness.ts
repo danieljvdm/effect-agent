@@ -284,7 +284,12 @@ export const withRuntime = <A, E, R>(
   db: string,
   effect: Effect.Effect<A, E, R>,
   overrides?: Partial<NodeDurableAgentRuntimeOptions>,
-) => Effect.provide(effect, NodeDurableAgentRuntime.layer(runtimeOptions(db, overrides)));
+  bindings: ReadonlyArray<ResolvedBinding> = [],
+) =>
+  Effect.provide(
+    effect,
+    NodeDurableAgentRuntime.layerWithBindings(bindings, runtimeOptions(db, overrides)),
+  );
 
 export interface CrashSite {
   readonly db: string;
