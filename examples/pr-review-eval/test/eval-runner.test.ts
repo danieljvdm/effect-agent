@@ -527,11 +527,13 @@ describe("PR-review model eval", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("derives output-affecting guidance identity inside the live variant", () =>
+  it.effect("derives model, reasoning, and guidance identity inside the live variant", () =>
     Effect.gen(function* () {
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         guidance: "  Keep the public error channel typed.  ",
+        model: "gpt-5.6-terra",
+        reasoningEffort: "high",
       });
 
       type Review = ReturnType<typeof variant.review>;
@@ -552,9 +554,28 @@ describe("PR-review model eval", () => {
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
       expect(variant.configuration.reviewerProfile).toBe("diff-review-v5-capped");
       expect(variant.configuration.costLimitMicrousd).toBe(999_999);
+      expect(variant.configuration).toMatchObject({
+        model: "gpt-5.6-terra",
+        reasoningEffort: "high",
+        effective: { pricing: { input: 200, read: 20, write: 250, output: 1_200 } },
+      });
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestText("Keep the public error channel typed."),
       );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects an unpriced model before constructing a live variant", () =>
+    Effect.gen(function* () {
+      const failure = yield* makeCurrentOpenAiVariant({
+        id: "unpriced-model",
+        model: "unsupported-model",
+      }).pipe(Effect.flip);
+
+      expect(failure).toMatchObject({
+        _tag: "EvalConfigurationError",
+        message: "Missing pricing for the configured reviewer model",
+      });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

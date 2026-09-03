@@ -699,7 +699,11 @@ const batchChanges = (changes: ReadonlyArray<ReviewChange>): Array<Array<ReviewC
   return batches;
 };
 
-/** Fail on unknown paths, demote invalid anchors, and remove only exact duplicates. */
+/** Re-anchoring an otherwise identical claim preserves its first finding and candidate identity. */
+const findingKey = ({ path, severity, category, title, body }: ReviewFinding): string =>
+  JSON.stringify([path, severity, category, title, body]);
+
+/** Fail on unknown paths, demote invalid anchors, and remove repeated claims. */
 const validatedFindings = Effect.fn("validatedFindings")(function* (
   request: ReviewRequest,
   submitted: ReadonlyArray<typeof SubmittedFinding.Type>,
@@ -731,7 +735,7 @@ const validatedFindings = Effect.fn("validatedFindings")(function* (
       body: finding.body,
     });
 
-    const key = JSON.stringify(sanitized);
+    const key = findingKey(sanitized);
 
     if (seen.has(key)) continue;
     seen.add(key);
@@ -837,7 +841,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             requestDigest,
             baseRevision: request.baseRevision,
             headRevision: request.headRevision,
-            batch: candidateBatches.get(JSON.stringify(finding)) ?? 0,
+            batch: candidateBatches.get(findingKey(finding)) ?? 0,
             finding,
             disposition,
             publication:
@@ -1041,14 +1045,12 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
 
             const accepted = yield* Ref.modify(recorded, (current) => {
               const additions = report.findings.filter(
-                (entry) =>
-                  !current.some((prior) => JSON.stringify(prior) === JSON.stringify(entry)),
+                (entry) => !current.some((prior) => findingKey(prior) === findingKey(entry)),
               );
 
               if (current.length + additions.length > 24) return [false, current] as const;
 
-              for (const entry of additions)
-                candidateBatches.set(JSON.stringify(entry), batchIndex);
+              for (const entry of additions) candidateBatches.set(findingKey(entry), batchIndex);
 
               return [true, [...current, ...additions]] as const;
             });
@@ -1314,9 +1316,9 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
 
         if (Result.isSuccess(submitted)) {
           for (const finding of submitted.success.findings) {
-            if (!combined.some((prior) => JSON.stringify(prior) === JSON.stringify(finding))) {
+            if (!combined.some((prior) => findingKey(prior) === findingKey(finding))) {
               combined.push(finding);
-              candidateBatches.set(JSON.stringify(finding), batchIndex);
+              candidateBatches.set(findingKey(finding), batchIndex);
             }
           }
         }

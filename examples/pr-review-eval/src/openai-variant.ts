@@ -29,6 +29,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import {
   EvalConfigurationError,
   EvalEffectiveConfiguration,
+  type EvalReasoningEffort,
   EvalReviewerFailure,
   EvalVariantConfiguration,
   type EvalVariantId,
@@ -69,6 +70,8 @@ export const openAiClientLayer = OpenAiClient.layerConfig({
 export interface CurrentOpenAiVariantOptions {
   readonly id: EvalVariantId;
   readonly guidance?: string | undefined;
+  readonly model?: string;
+  readonly reasoningEffort?: EvalReasoningEffort;
   readonly strategy?: ReviewStrategy;
   readonly reviewerRevision?: string;
 }
@@ -80,7 +83,8 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
 
     const guidanceDigest = yield* digestText(effectiveGuidance ?? "");
     const strategy = options.strategy ?? "baseline";
-    const pricing = reviewModelPricing("gpt-5.6-sol");
+    const model = options.model ?? "gpt-5.6-sol";
+    const pricing = reviewModelPricing(model);
 
     if (pricing === undefined)
       return yield* EvalConfigurationError.make({
@@ -91,8 +95,8 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
       id: options.id,
       reviewerProfile: "diff-review-v5-capped",
       provider: "openai",
-      model: "gpt-5.6-sol",
-      reasoningEffort: "xhigh",
+      model,
+      reasoningEffort: options.reasoningEffort ?? "xhigh",
       maxOutputTokens: REVIEW_MAX_OUTPUT_TOKENS,
       strictJsonSchema: true,
       store: false,

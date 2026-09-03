@@ -664,29 +664,33 @@ layer(testLayer)("review output boundary", (it) => {
     }),
   );
 
-  it.effect("PRR-002 demotes invalid anchors and removes only exact duplicates", () =>
-    Effect.gen(function* () {
-      const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
-      const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
+  it.effect(
+    "PRR-002 demotes invalid anchors and retains the first anchor for repeated claims",
+    () =>
+      Effect.gen(function* () {
+        const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
+        const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
 
-      const model = scriptedModel(() =>
-        response({
-          findings: [
-            submittedFinding(blocker, 0),
-            submittedFinding(invalid, 1),
-            submittedFinding(topLevel, 1),
-            submittedFinding(invalid, 1),
-            submittedFinding(blocker, 0),
-          ],
-        }),
-      );
+        const model = scriptedModel(() =>
+          response({
+            findings: [
+              submittedFinding(blocker, 0),
+              submittedFinding(ReviewFinding.make({ ...blocker, line: 4 }), 0),
+              submittedFinding(ReviewFinding.make(Struct.omit(blocker, ["line"])), 0),
+              submittedFinding(invalid, 1),
+              submittedFinding(topLevel, 1),
+              submittedFinding(invalid, 1),
+              submittedFinding(blocker, 0),
+            ],
+          }),
+        );
 
-      const outcome = yield* makeReviewer({ model })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+        const outcome = yield* makeReviewer({ model })
+          .review(request)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(outcome.report.findings).toEqual([blocker, topLevel]);
-    }),
+        expect(outcome.report.findings).toEqual([blocker, topLevel]);
+      }),
   );
 
   it.effect.each([24, 25])("PRR-002 enforces the native finding bound: %s", (count) =>

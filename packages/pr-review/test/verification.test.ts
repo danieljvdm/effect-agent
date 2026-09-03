@@ -49,7 +49,7 @@ const submitted = (entry: ReviewFinding) => ({
   category: entry.category,
   title: entry.title,
   body: entry.body,
-  priority: 1,
+  priority: entry.severity === "blocking" ? 1 : entry.severity === "important" ? 2 : 3,
 });
 
 const usage = {
@@ -524,7 +524,11 @@ layer(testLayer)("mandatory candidate verification", (it) => {
 
                 return discoveryCalls === 1
                   ? toolResponse("record_finding", submitted(finding))
-                  : discoveryResponse([refuted, finding, unresolved]);
+                  : discoveryResponse([
+                      refuted,
+                      ReviewFinding.make({ ...finding, line: 1 }),
+                      unresolved,
+                    ]);
               }
               verifierCalls += 1;
               expect(prompt.content.filter(({ role }) => role === "assistant")).toHaveLength(
@@ -833,6 +837,86 @@ layer(testLayer)("mandatory candidate verification", (it) => {
         expect(outcome.incomplete).toBe(true);
         expect(outcome.diagnostics?.verification).toBe("complete");
       }),
+  );
+
+  it.effect("repeated anchors do not consume candidate capacity or verifier decisions", () =>
+    Effect.gen(function* () {
+      const findings = [
+        finding,
+        ReviewFinding.make({ ...finding, path: "src/other.ts" }),
+        ReviewFinding.make({ ...finding, severity: "important" }),
+        ReviewFinding.make({ ...finding, category: "reliability" }),
+        ReviewFinding.make({ ...finding, title: "A separate handle leaks" }),
+        ReviewFinding.make({ ...finding, body: "Cancellation skips cleanup of the handle." }),
+        ...Array.from({ length: 18 }, (_, index) =>
+          ReviewFinding.make({ ...finding, title: `Independent cause ${String(index)}` }),
+        ),
+      ];
+
+      const input = ReviewRequest.make({
+        ...request,
+        changes: [...request.changes, ReviewChange.make({ path: "src/other.ts", patch })],
+      });
+
+      const digest = yield* reviewRequestDigest(input);
+      let discoveryCalls = 0;
+      let verifierCalls = 0;
+
+      const outcome = yield* makeReviewer({
+        strategy: "verified",
+        model: scriptedModel((prompt, tools) => {
+          if (isVerifier(tools)) {
+            verifierCalls += 1;
+            const candidates = originalCandidates(prompt);
+
+            expect(candidates.map(({ finding }) => finding)).toEqual(findings);
+            expect(candidates.map(({ id }) => id)).toEqual(
+              findings.map((_, index) => `${digest}:${String(index + 1)}`),
+            );
+
+            return toolResponse("submit_verification", {
+              decisions: candidates.map((candidate) =>
+                decision(candidate, "supported", [
+                  { ...diffEvidence, path: candidate.finding.path },
+                ]),
+              ),
+            });
+          }
+          discoveryCalls += 1;
+          if (discoveryCalls === 1)
+            return Stream.fromIterable<Response.StreamPartEncoded>([
+              ...findings.map((entry, index): Response.StreamPartEncoded => ({
+                type: "tool-call",
+                id: `record-${String(index)}`,
+                name: "record_finding",
+                params: submitted(entry),
+              })),
+              { type: "finish", reason: "tool-calls", usage },
+            ]);
+          if (discoveryCalls === 2)
+            return toolResponse(
+              "record_finding",
+              submitted(ReviewFinding.make({ ...finding, line: 1 })),
+            );
+
+          return discoveryResponse(
+            findings.map((entry) => ReviewFinding.make({ ...entry, line: 1 })),
+          );
+        }),
+      })
+        .review(input)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+      expect(discoveryCalls).toBe(3);
+      expect(verifierCalls).toBe(1);
+      expect(outcome.report.findings).toEqual(findings);
+      expect(outcome.incomplete).toBeUndefined();
+      expect(outcome.diagnostics).toMatchObject({
+        discovery: "complete",
+        verification: "complete",
+        droppedCandidateCount: 0,
+      });
+    }),
   );
 
   it.effect.each(["discovery", "verification"] as const)(
