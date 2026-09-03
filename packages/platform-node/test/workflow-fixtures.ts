@@ -13,7 +13,7 @@ import {
 import {
   WorkflowDispatchScan,
   WorkflowDispatchStore,
-  WorkflowDurableHost,
+  WorkflowAgentHost,
 } from "@effect-agent/workflow";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
@@ -22,7 +22,7 @@ import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effec
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster";
 import { WorkflowEngine } from "effect/unstable/workflow";
 
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "../src/index.ts";
+import { NodeDurableAgentRuntime, type NodeDurableAgentRuntimeOptions } from "../src/index.ts";
 import { NodeWorkflowRepairTrigger, SqlWorkflowDispatchStore } from "../src/workflow.ts";
 
 export const deploymentId = Schema.decodeSync(DeploymentId)("workflow-certification");
@@ -131,18 +131,18 @@ export const workflowInfrastructure = (directory: string) => {
 export const hostLayer = <const Entries extends ReadonlyArray<AgentRegistration>>(
   directory: string,
   registrations: Entries,
-  options: Partial<NodeDurableRuntimeOptions> = {},
+  options: Partial<NodeDurableAgentRuntimeOptions> = {},
   memoryEngine = false,
   repairBatchSize = 2,
 ) =>
-  WorkflowDurableHost.layerRegistered(registrations, {
+  WorkflowAgentHost.layerRegistered(registrations, {
     deploymentId,
     workflowName: workflowPrefix,
     executionConcurrency: 1,
     repairBatchSize,
   }).pipe(
     Layer.provideMerge(
-      NodeDurableRuntime.layer({
+      NodeDurableAgentRuntime.layer({
         filename: `${directory}/agent.sqlite`,
         deploymentId,
         producerId: "workflow-owner",

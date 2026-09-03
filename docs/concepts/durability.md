@@ -59,7 +59,7 @@ least once and may repeat. Applications still need idempotency, reconciliation, 
 Use the same agent definition for ephemeral runs and durable registration. Durable hosts also
 need storage, versioned registrations, and a recovery driver. See the platform setup guides above.
 
-The optional [`WorkflowDurableHost`](../platforms/node#workflow) drives this runtime through an
+The optional [`WorkflowAgentHost`](../platforms/node#workflow) drives this runtime through an
 injected Effect `WorkflowEngine`. Replacing the engine Layer leaves the agent definitions and
 durable driver unchanged. The certified SQL setup is a single Node process; it adds no fleet or
 Cloudflare Workflow guarantee.

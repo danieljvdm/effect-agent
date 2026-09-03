@@ -35,11 +35,11 @@ import { NodeCrypto } from "@effect/platform-node";
 import { type Stream, Context, type Crypto, Effect, Layer, Ref, Schema } from "effect";
 
 import {
-  NodeDurableRuntime,
-  NodeDurableRuntimeConfig,
-  type NodeDurableRuntimeInitializationError,
-  type NodeDurableRuntimeOptions,
-  type NodeDurableRuntimeServices,
+  NodeDurableAgentRuntime,
+  NodeDurableAgentRuntimeConfig,
+  type NodeDurableAgentRuntimeInitializationError,
+  type NodeDurableAgentRuntimeOptions,
+  type NodeDurableAgentRuntimeServices,
 } from "./layers.ts";
 
 /**
@@ -53,7 +53,7 @@ export class AdmissionClosed extends Schema.TaggedError<AdmissionClosed>()("Admi
 const makeHost = (bindings: ReadonlyArray<ResolvedBinding>) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
-    const config = yield* NodeDurableRuntimeConfig;
+    const config = yield* NodeDurableAgentRuntimeConfig;
 
     // Startup gate (deployment §5, plan §host): configuration decoding and storage compatibility
     // already gated this Layer's dependencies; the last gate before admission opens is recovering
@@ -210,7 +210,7 @@ export class NodeDurableHost extends Context.Service<
     AuthorizationRequirements = never,
   >(
     registrations: Entries,
-    options: NodeDurableRuntimeOptions<
+    options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
@@ -225,7 +225,7 @@ export class NodeDurableHost extends Context.Service<
   }
 
   /**
-   * Host gates over an assembled `NodeDurableRuntime` stack. Bindings must carry the exact
+   * Host gates over an assembled `NodeDurableAgentRuntime` stack. Bindings must carry the exact
    * digests stored by submitters. Omission registers no Agents, so resolved work fails closed.
    */
   static readonly layer = (
@@ -233,26 +233,26 @@ export class NodeDurableHost extends Context.Service<
   ): Layer.Layer<
     NodeDurableHost,
     DurableWorkerFailure,
-    DurableAgentRuntime | NodeDurableRuntimeConfig
+    DurableAgentRuntime | NodeDurableAgentRuntimeConfig
   > => Layer.effect(NodeDurableHost)(makeHost(bindings));
 
-  /** The complete DN host: `NodeDurableRuntime.layer(options)` plus the host lifecycle gates. */
+  /** The complete DN host: `NodeDurableAgentRuntime.layer(options)` plus the host lifecycle gates. */
   static layerStack<
     ContextError = never,
     ContextRequirements = never,
     AuthorizationError = never,
     AuthorizationRequirements = never,
   >(
-    options: NodeDurableRuntimeOptions<
+    options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
       AuthorizationRequirements
     > & { readonly bindings?: ReadonlyArray<ResolvedBinding> },
   ): Layer.Layer<
-    NodeDurableHost | NodeDurableRuntimeServices,
+    NodeDurableHost | NodeDurableAgentRuntimeServices,
     | DurableWorkerFailure
-    | NodeDurableRuntimeInitializationError
+    | NodeDurableAgentRuntimeInitializationError
     | ContextError
     | AuthorizationError,
     Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
@@ -260,7 +260,7 @@ export class NodeDurableHost extends Context.Service<
     const { bindings = [], ...runtimeOptions } = options;
 
     return NodeDurableHost.layer(bindings).pipe(
-      Layer.provideMerge(NodeDurableRuntime.layer(runtimeOptions)),
+      Layer.provideMerge(NodeDurableAgentRuntime.layer(runtimeOptions)),
     );
   }
 }

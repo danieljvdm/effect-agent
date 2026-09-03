@@ -1,6 +1,6 @@
 import { Agent } from "@effect-agent/core";
 import { digestDefinitions } from "@effect-agent/thread";
-import { WorkflowDispatchFailpoint, WorkflowDurableHost } from "@effect-agent/workflow";
+import { WorkflowDispatchFailpoint, WorkflowAgentHost } from "@effect-agent/workflow";
 import { Config, Console, Effect, FileSystem, Layer, Schema, Stream } from "effect";
 import { Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -123,7 +123,7 @@ export const workflowCrashWorker = Effect.gen(function* () {
   }).pipe(Layer.provide(fixture.handlers));
 
   return yield* Effect.gen(function* () {
-    const host = yield* WorkflowDurableHost;
+    const host = yield* WorkflowAgentHost;
 
     yield* host.submit(
       fixture.agent,

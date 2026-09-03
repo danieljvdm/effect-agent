@@ -4,7 +4,7 @@ import {
   ResolutionCompletedWithResult,
   UnknownResolutionCommand,
 } from "@effect-agent/thread";
-import { WorkflowDurableHost } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
@@ -78,7 +78,7 @@ it.live.each(WorkflowCrashBoundary.literals)(
       const fixture = yield* makeCrashFixture(directory, ordinary);
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
         const runtime = yield* DurableAgentRuntime;
 
         const receipt = yield* runtime.submit(

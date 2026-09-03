@@ -28,7 +28,7 @@ import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
-import { NodeDurableRuntime } from "../src/index.ts";
+import { NodeDurableAgentRuntime } from "../src/index.ts";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const digests = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
@@ -142,7 +142,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
       const parentId = Schema.decodeSync(ThreadId)("shared-budget-parent");
 
       const runtimeLayer = () =>
-        NodeDurableRuntime.layer({
+        NodeDurableAgentRuntime.layer({
           filename: `${directory}/shared.sqlite`,
           deploymentId: "shared-budget",
           producerId: "shared-budget",
@@ -242,7 +242,7 @@ it.effect(
           ) =>
             effect.pipe(
               Effect.provide(
-                NodeDurableRuntime.layer({
+                NodeDurableAgentRuntime.layer({
                   filename,
                   deploymentId: "allowance-test",
                   producerId: `producer-${incarnation++}`,

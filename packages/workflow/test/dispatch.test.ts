@@ -46,7 +46,7 @@ import {
   WorkflowDispatchError,
   WorkflowDispatchIntent,
   WorkflowDispatchStore,
-  WorkflowDurableHost,
+  WorkflowAgentHost,
   WorkflowRepairTrigger,
   WorkflowSettlementReference,
   WorkflowSubmission,
@@ -356,13 +356,13 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
   const runtime = Context.get(runtimeContext, DurableAgentRuntime);
 
   const hostContext = yield* Layer.build(
-    WorkflowDurableHost.layerRegistered(
+    WorkflowAgentHost.layerRegistered(
       [{ agent: selectedDefinition, model: ordinaryTool ? blockingModel : model, definitions }],
       { deploymentId, dispatchTimeoutMillis: 100, repairBatchSize: 16, executionConcurrency: 2 },
     ),
   ).pipe(Effect.provideContext(Context.merge(services, runtimeContext)));
 
-  const host = Context.get(hostContext, WorkflowDurableHost);
+  const host = Context.get(hostContext, WorkflowAgentHost);
   const digests = yield* digestDefinitions(definitions).pipe(Effect.provideContext(base));
 
   const admit = Effect.fn("dispatch-test.admit")((name: string, key = name) =>

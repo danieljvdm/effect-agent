@@ -3,7 +3,7 @@ import { DurableAgentRuntime, SubmissionLedger } from "@effect-agent/thread";
 import { NodeRuntime } from "@effect/platform-node";
 import { Cause, Duration, Effect, Exit, Option, Schema, Stream } from "effect";
 
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "../../src/index.ts";
+import { NodeDurableAgentRuntime, type NodeDurableAgentRuntimeOptions } from "../../src/index.ts";
 import { SOAK_DEPLOYMENT_ID, SoakEnv, makeSoakBindings } from "./soak-fixtures.ts";
 
 /**
@@ -29,7 +29,7 @@ const WorkerEnv = Schema.Struct({
 
 const env = Schema.decodeUnknownSync(WorkerEnv)(process.env);
 
-const options: NodeDurableRuntimeOptions = {
+const options: NodeDurableAgentRuntimeOptions = {
   filename: env[SoakEnv.database],
   deploymentId: SOAK_DEPLOYMENT_ID,
   producerId: env[SoakEnv.producer],
@@ -78,4 +78,4 @@ const workerLoop = Effect.gen(function* () {
   }
 });
 
-NodeRuntime.runMain(workerLoop.pipe(Effect.provide(NodeDurableRuntime.layer(options))));
+NodeRuntime.runMain(workerLoop.pipe(Effect.provide(NodeDurableAgentRuntime.layer(options))));

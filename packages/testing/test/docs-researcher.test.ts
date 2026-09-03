@@ -1,6 +1,9 @@
 import { connectMcp, StructuralRedactorLive } from "@effect-agent/capabilities";
 import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import {
   assertDiscoveryMatchesAuthoredToolkit,
   docsCoordinatorConfidentialMarker,
@@ -52,8 +55,8 @@ const decodeDigest = Schema.decodeUnknownEffect(ResearchDigest);
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
@@ -297,7 +300,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
             expect(yield* harness.parentModelCalls).toBe(2);
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/docs-researcher.sqlite`)),
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/docs-researcher.sqlite`)),
             ),
           );
         }),

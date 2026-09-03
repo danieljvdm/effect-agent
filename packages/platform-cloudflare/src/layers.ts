@@ -70,7 +70,7 @@ import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
 /**
  * Raw (unvalidated) construction options for `ThreadObject.make`, mirroring
- * `NodeDurableRuntimeOptions`. Optional fields default to the documented production values
+ * `NodeDurableAgentRuntimeOptions`. Optional fields default to the documented production values
  * (`CLOUDFLARE_RUNTIME_DEFAULTS`); everything is schema-decoded into
  * `CloudflareDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
  */

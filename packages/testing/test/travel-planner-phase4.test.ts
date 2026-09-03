@@ -1,5 +1,8 @@
 import { ThreadId, type SubmissionId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   expectedTravelPlan,
@@ -47,8 +50,8 @@ const submitOptions = (threadId: ThreadId, idempotencyKey: string) =>
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: phase4TravelPlannerDeploymentId,
   producerId: phase4TravelPlannerProducerId,
@@ -126,8 +129,8 @@ const failureOf = <A, E>(exit: Exit.Exit<A, E>): unknown => {
 };
 
 /** One DN "host process": the full Node/SQLite runtime stack plus the deterministic services. */
-const dnLayer = (options: NodeDurableRuntimeOptions) =>
-  Layer.mergeAll(phase4TravelPlannerWorkerLayer, NodeDurableRuntime.layer(options));
+const dnLayer = (options: NodeDurableAgentRuntimeOptions) =>
+  Layer.mergeAll(phase4TravelPlannerWorkerLayer, NodeDurableAgentRuntime.layer(options));
 
 /** One expected happy-path Run: Turn 1 declares the three searches, Turn 2 emits the plan. */
 const RUN_TAGS = [
@@ -377,7 +380,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             expect(yield* lookupState(crashed.receipt.submissionId)).toBe("settled");
 
             return yield* readLog(threadId);
-          }).pipe(Effect.provide(NodeDurableRuntime.layer(runtimeOptions(restartFile))));
+          }).pipe(Effect.provide(NodeDurableAgentRuntime.layer(runtimeOptions(restartFile))));
 
           const settledEnvelope = recovered.find(
             (envelope) => envelope.record.payload._tag === "SubmissionSettled",

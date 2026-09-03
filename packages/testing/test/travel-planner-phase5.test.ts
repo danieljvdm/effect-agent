@@ -4,7 +4,10 @@ import type {
   RunApprovalHook,
   RunApprovalRequest,
 } from "@effect-agent/engine";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
 import {
   assertSettledBookingsExistAtSupplier,
@@ -1214,7 +1217,7 @@ const withTemporaryDirectory = <A, E>(
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
-const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
+const runtimeOptions = (filename: string): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: phase5TravelPlannerDeploymentId,
   producerId: phase5TravelPlannerProducerId,
@@ -1315,7 +1318,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             Layer.mergeAll(
               phase5TravelPlannerWorkerLayer,
               SupplierBookingDesk.layer,
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/p5.sqlite`)),
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/p5.sqlite`)),
             ),
           ),
         ),

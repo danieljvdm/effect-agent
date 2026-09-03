@@ -8,14 +8,14 @@ import { Effect, Layer, type Schema } from "effect";
 
 import {
   NodeDurableHost,
-  type NodeDurableRuntimeOptions,
+  type NodeDurableAgentRuntimeOptions,
   NodeScheduling,
 } from "../../src/index.ts";
 
 /** The caller supplies registered bindings, their real digests, and an explicit authorizer. */
 export const schedulingRuntimeLayer = (
   bindings: ReadonlyArray<ResolvedBinding>,
-  runtimeOptions: NodeDurableRuntimeOptions,
+  runtimeOptions: NodeDurableAgentRuntimeOptions,
 ) =>
   NodeScheduling.layer().pipe(
     Layer.provideMerge(NodeDurableHost.layerStack({ ...runtimeOptions, bindings })),

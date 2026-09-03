@@ -125,7 +125,7 @@ an empty processing result do not imply completion.
 
 ### `@effect-agent/workflow`
 
-Optional `WorkflowDurableHost` over an injected upstream Effect `WorkflowEngine`. It reuses the
+Optional `WorkflowAgentHost` over an injected upstream Effect `WorkflowEngine`. It reuses the
 durable runtime's admission, journal recovery, authorization, and settlement protocol.
 `WorkflowDispatchStore` retains dispatch intents; `WorkflowRepairTrigger` requires the host to
 schedule startup and repeated repair. The shared package starts no polling loop and imports no
@@ -163,11 +163,11 @@ Assembles SQLite storage, recovery, and workers through `NodeDurableHost`.
 Registers agent bindings before execution, recovers before admission, and releases ownership
 before closing storage. See the [Node.js guide](../platforms/node).
 
-`NodeDurableRuntimeOptions.toolFailureObserver` installs a local tool-failure observer.
+`NodeDurableAgentRuntimeOptions.toolFailureObserver` installs a local tool-failure observer.
 
 The optional `@effect-agent/platform-node/workflow` import supplies `SqlWorkflowDispatchStore`
 over an injected `SqlClient` and `NodeWorkflowRepairTrigger` with scoped startup and polling.
-Pair them with `NodeDurableRuntime.layer` and `WorkflowDurableHost`; this assembly does not start
+Pair them with `NodeDurableAgentRuntime.layer` and `WorkflowAgentHost`; this assembly does not start
 the ordinary Node worker loop.
 
 ### `@effect-agent/storage-cloudflare`

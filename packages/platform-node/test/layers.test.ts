@@ -65,11 +65,11 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
   NodeDurableHost,
-  NodeDurableRuntime,
-  NodeDurableRuntimeConfig,
-  type NodeDurableRuntimeInitializationError,
-  type NodeDurableRuntimeOptions,
-  type NodeDurableRuntimeServices,
+  NodeDurableAgentRuntime,
+  NodeDurableAgentRuntimeConfig,
+  type NodeDurableAgentRuntimeInitializationError,
+  type NodeDurableAgentRuntimeOptions,
+  type NodeDurableAgentRuntimeServices,
 } from "../src/index.ts";
 
 type Equal<Left, Right> =
@@ -80,7 +80,7 @@ type Equal<Left, Right> =
     : false;
 type Assert<Value extends true> = Value;
 
-const runtimeLayerProbe = NodeDurableRuntime.layer({
+const runtimeLayerProbe = NodeDurableAgentRuntime.layer({
   filename: "unused.sqlite",
   deploymentId: "deployment-proof",
   producerId: "producer-proof",
@@ -128,21 +128,24 @@ const configuredAuthorization = Layer.effect(
 );
 
 type RuntimeLayerServicesProof = Assert<
-  Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableRuntimeServices>
+  Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableAgentRuntimeServices>
 >;
 type RuntimeLayerErrorProof = Assert<
-  Equal<Layer.Error<typeof runtimeLayerProbe>, NodeDurableRuntimeInitializationError>
+  Equal<Layer.Error<typeof runtimeLayerProbe>, NodeDurableAgentRuntimeInitializationError>
 >;
 type RuntimeLayerRequirementsProof = Assert<Equal<Layer.Services<typeof runtimeLayerProbe>, never>>;
 type RuntimeInitializationErrorProof = Assert<
   Equal<
-    NodeDurableRuntimeInitializationError,
+    NodeDurableAgentRuntimeInitializationError,
     | SqliteStorageInitializationError
-    | Extract<NodeDurableRuntimeInitializationError, { readonly _tag: "NodePlatformConfigError" }>
+    | Extract<
+        NodeDurableAgentRuntimeInitializationError,
+        { readonly _tag: "NodePlatformConfigError" }
+      >
   >
 >;
 type HostLayerRequirementsProof = Assert<
-  Equal<Layer.Services<typeof hostLayerProbe>, DurableAgentRuntime | NodeDurableRuntimeConfig>
+  Equal<Layer.Services<typeof hostLayerProbe>, DurableAgentRuntime | NodeDurableAgentRuntimeConfig>
 >;
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -156,8 +159,8 @@ const decodeDeploymentId = Schema.decodeSync(AdmissionRequest.fields.deploymentI
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: "deployment-platform-node",
   producerId: "producer-platform-node",
@@ -237,12 +240,12 @@ const withSql = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientSe
 
 /** One host "process": the full DN stack over `filename`, closed (and drained) when `effect` ends. */
 const withHost = <A, E, R>(
-  options: NodeDurableRuntimeOptions,
+  options: NodeDurableAgentRuntimeOptions,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<
   A,
-  E | Layer.Error<typeof hostLayerProbe> | NodeDurableRuntimeInitializationError,
-  Exclude<R, NodeDurableHost | NodeDurableRuntimeServices>
+  E | Layer.Error<typeof hostLayerProbe> | NodeDurableAgentRuntimeInitializationError,
+  Exclude<R, NodeDurableHost | NodeDurableAgentRuntimeServices>
 > => Effect.provide(effect, NodeDurableHost.layerStack(options));
 
 const failureOf = <A, E>(exit: Exit.Exit<A, E>): unknown => {
@@ -279,7 +282,7 @@ const readLogTags = (threadId: ThreadId) =>
     return records.map((envelope) => envelope.record.payload._tag);
   });
 
-describe("NodeDurableRuntime", () => {
+describe("NodeDurableAgentRuntime", () => {
   it.effect(
     "compiles registrations in the host Scope and retains their services until shutdown",
     () =>
@@ -344,7 +347,7 @@ describe("NodeDurableRuntime", () => {
           const errors: Assert<
             Equal<
               Layer.Error<typeof live>,
-              DigestError | DurableWorkerFailure | NodeDurableRuntimeInitializationError
+              DigestError | DurableWorkerFailure | NodeDurableAgentRuntimeInitializationError
             >
           > = true;
 
@@ -457,12 +460,12 @@ describe("NodeDurableRuntime", () => {
   );
 
   it("preserves independent service construction errors and requirements through runtime and host assembly", () => {
-    const contextOnly = NodeDurableRuntime.layer({
+    const contextOnly = NodeDurableAgentRuntime.layer({
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
     });
 
-    const authorizationOnly = NodeDurableRuntime.layer({
+    const authorizationOnly = NodeDurableAgentRuntime.layer({
       ...runtimeOptions("unused.sqlite"),
       toolAuthorization: configuredAuthorization,
     });
@@ -476,7 +479,7 @@ describe("NodeDurableRuntime", () => {
     const contextErrors: Assert<
       Equal<
         Layer.Error<typeof contextOnly>,
-        NodeDurableRuntimeInitializationError | ContextSetupError
+        NodeDurableAgentRuntimeInitializationError | ContextSetupError
       >
     > = true;
 
@@ -485,7 +488,7 @@ describe("NodeDurableRuntime", () => {
     const authorizationErrors: Assert<
       Equal<
         Layer.Error<typeof authorizationOnly>,
-        NodeDurableRuntimeInitializationError | AuthorizationSetupError
+        NodeDurableAgentRuntimeInitializationError | AuthorizationSetupError
       >
     > = true;
 
@@ -497,7 +500,7 @@ describe("NodeDurableRuntime", () => {
       Equal<
         Layer.Error<typeof both>,
         | DigestError
-        | NodeDurableRuntimeInitializationError
+        | NodeDurableAgentRuntimeInitializationError
         | DurableWorkerFailure
         | ContextSetupError
         | AuthorizationSetupError
@@ -564,9 +567,9 @@ describe("NodeDurableRuntime", () => {
   it.effect("refuses out-of-bounds configuration with a typed error", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const opened = yield* Effect.service(NodeDurableRuntimeConfig).pipe(
+        const opened = yield* Effect.service(NodeDurableAgentRuntimeConfig).pipe(
           Effect.provide(
-            NodeDurableRuntime.layer(runtimeOptions(filename, { workerConcurrency: 0 })),
+            NodeDurableAgentRuntime.layer(runtimeOptions(filename, { workerConcurrency: 0 })),
           ),
           Effect.exit,
         );
@@ -655,7 +658,7 @@ describe("NodeDurableRuntime", () => {
           expect(ambient).toEqual([]);
         }).pipe(
           Effect.provide(
-            NodeDurableRuntime.layer(
+            NodeDurableAgentRuntime.layer(
               runtimeOptions(filename, {
                 toolFailureObserver: configured
                   ? {
@@ -1332,7 +1335,7 @@ describe("NodeDurableRuntime", () => {
           workerConcurrency: 3,
         }),
         Effect.gen(function* () {
-          const nodeConfig = yield* NodeDurableRuntimeConfig;
+          const nodeConfig = yield* NodeDurableAgentRuntimeConfig;
           const sessionConfig = yield* DurableRuntimeConfig;
 
           expect(nodeConfig.workerConcurrency).toBe(3);

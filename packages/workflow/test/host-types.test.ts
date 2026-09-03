@@ -16,7 +16,7 @@ import type {
   WorkflowHostConfigError,
   WorkflowRepairTrigger,
 } from "../src/index.ts";
-import { WorkflowDurableHost } from "../src/index.ts";
+import { WorkflowAgentHost } from "../src/index.ts";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -88,7 +88,7 @@ const proveComposition = (
   dispatch: Layer.Layer<WorkflowDispatchStore, DispatchError, DispatchConfig>,
   trigger: Layer.Layer<WorkflowRepairTrigger, TriggerError, TriggerConfig>,
 ) => {
-  const live = WorkflowDurableHost.layerRegistered([{ agent: definition, model, definitions }], {
+  const live = WorkflowAgentHost.layerRegistered([{ agent: definition, model, definitions }], {
     deploymentId: "types",
   });
 
@@ -114,7 +114,7 @@ const proveComposition = (
   const errors: Assert<Equal<Layer.Error<typeof live>, DigestError | WorkflowHostConfigError>> =
     true;
 
-  const output: Assert<Equal<Layer.Success<typeof live>, WorkflowDurableHost>> = true;
+  const output: Assert<Equal<Layer.Success<typeof live>, WorkflowAgentHost>> = true;
 
   const supplied = live.pipe(
     Layer.provide(engine),
@@ -158,7 +158,7 @@ const proveComposition = (
     >
   > = true;
 
-  const empty = WorkflowDurableHost.layerRegistered([], { deploymentId: "types" });
+  const empty = WorkflowAgentHost.layerRegistered([], { deploymentId: "types" });
   const emptyRequirements: Assert<Equal<Layer.Services<typeof empty>, HostServices>> = true;
 
   return [

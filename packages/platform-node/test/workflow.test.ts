@@ -8,7 +8,7 @@ import {
 import {
   WorkflowDispatchError,
   WorkflowDispatchFailpoint,
-  WorkflowDurableHost,
+  WorkflowAgentHost,
 } from "@effect-agent/workflow";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
@@ -40,7 +40,7 @@ it.live.each([false, true])(
       const fixture = yield* makePlanner();
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
         const options = submitOptions(fixture.digests);
         const receipt = yield* host.submit(fixture.agent, { question: "once" }, options);
         const duplicate = yield* host.submit(fixture.agent, { question: "once" }, options);
@@ -69,7 +69,7 @@ it.live.each(["intent:before-persist", "launch:before"] as const)(
       const options = submitOptions(fixture.digests);
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         const result = yield* host
           .submit(fixture.agent, { question: "recover" }, options)
@@ -94,7 +94,7 @@ it.live.each(["intent:before-persist", "launch:before"] as const)(
 
       yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
         const receipt = yield* runtime.submit(fixture.agent, { question: "recover" }, options);
 
         expect((yield* host.awaitSettlement(receipt)).outcome).toBe("completed");
@@ -121,7 +121,7 @@ it.live(
       });
 
       const first = yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         const receipt = yield* host.submit(
           fixture.agent,
@@ -141,7 +141,7 @@ it.live(
       expect(yield* Ref.get(fixture.calls)).toBe(1);
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         expect((yield* host.awaitSettlement(receipt)).outcome).toBe("completed");
         yield* until(pendingIntents, (rows) => rows.length === 0);
@@ -207,7 +207,7 @@ it.live(
 
       const receipts = yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
         const first = yield* host.submit(agent, { question: "first" }, submitOptions(digests));
 
         yield* until(readLog(first.threadId), (rows) =>
@@ -230,7 +230,7 @@ it.live(
       }).pipe(Effect.provide(stack));
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         yield* host.resolveApproval(
           new ApprovalDecisionCommand({

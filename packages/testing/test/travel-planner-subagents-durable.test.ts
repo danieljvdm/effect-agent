@@ -2,8 +2,8 @@ import { SubagentDurableAccounting, SubagentReservationAmounts } from "@effect-a
 import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import {
   NodeDurableHost,
-  NodeDurableRuntime,
-  type NodeDurableRuntimeOptions,
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
 } from "@effect-agent/platform-node";
 import {
   DestinationShortlist,
@@ -94,8 +94,8 @@ const armableFailpoint =
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: s2TravelPlannerDeploymentId,
   producerId: s2TravelPlannerProducerId,
@@ -406,7 +406,9 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(finalPrompt).not.toContain("Barbican brutalism walk");
             expect(yield* harness.parentModelCalls).toBe(2);
           }).pipe(
-            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/happy.sqlite`))),
+            Effect.provide(
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/happy.sqlite`)),
+            ),
           );
         }),
       ),
@@ -477,7 +479,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(resolution._tag).toBe("Admitted");
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              NodeDurableAgentRuntime.layer(
                 runtimeOptions(`${directory}/duplicate.sqlite`, {
                   runtimeFailpoint: armableFailpoint(arm),
                   ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
@@ -540,7 +542,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               expect(reservations.map((row) => row.status)).toEqual(["released"]);
             }).pipe(
               Effect.provide(
-                NodeDurableRuntime.layer(
+                NodeDurableAgentRuntime.layer(
                   runtimeOptions(`${directory}/${slug}.sqlite`, {
                     runtimeFailpoint: armableFailpoint(arm),
                     ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
@@ -602,7 +604,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             Effect.provide(
               NodeDurableHost.layer(harness.bindings).pipe(
                 Layer.provideMerge(
-                  NodeDurableRuntime.layer(
+                  NodeDurableAgentRuntime.layer(
                     runtimeOptions(`${directory}/pool.sqlite`, { workerConcurrency: 1 }),
                   ),
                 ),
@@ -649,7 +651,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             return { receipt, childThreadId, childSubmissionId: started.childSubmissionId };
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              NodeDurableAgentRuntime.layer(
                 runtimeOptions(filename, {
                   runtimeFailpoint: armableFailpoint(arm),
                 }),
@@ -738,7 +740,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
           }).pipe(
             Effect.provide(
               NodeDurableHost.layer(harness.bindings).pipe(
-                Layer.provideMerge(NodeDurableRuntime.layer(runtimeOptions(filename))),
+                Layer.provideMerge(NodeDurableAgentRuntime.layer(runtimeOptions(filename))),
               ),
             ),
           );
@@ -862,7 +864,9 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               (yield* childReservations(receipt.submissionId)).map((row) => row.status),
             ).toEqual(["released"]);
           }).pipe(
-            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/abort.sqlite`))),
+            Effect.provide(
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/abort.sqlite`)),
+            ),
           );
         }),
       ),
@@ -947,7 +951,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(fake.state).toBe("admitted");
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              NodeDurableAgentRuntime.layer(
                 runtimeOptions(`${directory}/idor.sqlite`, {
                   runtimeFailpoint: armableFailpoint(arm),
                   ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
@@ -1012,7 +1016,9 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(observedJson).not.toContain("Barbican brutalism walk");
             expect(observedJson).not.toContain("London favors museum mornings");
           }).pipe(
-            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/observe.sqlite`))),
+            Effect.provide(
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/observe.sqlite`)),
+            ),
           );
         }),
       ),

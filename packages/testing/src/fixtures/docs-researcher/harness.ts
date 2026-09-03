@@ -190,7 +190,7 @@ export interface DocsResearcherHarnessOptions {
 
 /** One durable coordinator/summarizer pair with observable counters and MCP evidence. */
 export interface DocsResearcherHarness {
-  /** Host registrations for `NodeDurableRuntimeOptions.bindings` (parent + child). */
+  /** Resolved registrations for the parent and child workers. */
   readonly bindings: ReadonlyArray<ResolvedBinding>;
   /** The validated MCP discovery the child toolkit registration was gated on. */
   readonly discovery: McpDiscovery;

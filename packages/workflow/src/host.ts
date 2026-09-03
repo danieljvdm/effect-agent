@@ -60,7 +60,7 @@ export class WorkflowAdmissionClosed extends Schema.TaggedError<WorkflowAdmissio
   { message: Schema.String },
 ) {}
 
-export interface WorkflowDurableHostOptions {
+export interface WorkflowAgentHostOptions {
   readonly deploymentId: string;
   /** Stable versioned name prefix. The native name also includes deploymentId. */
   readonly workflowName?: string;
@@ -87,9 +87,9 @@ const nativeOperation = <A, E, R>(operation: string, effect: Effect.Effect<A, E,
     ),
   );
 
-const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
+const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (
   bindings: ReadonlyArray<ResolvedBinding>,
-  options: WorkflowDurableHostOptions,
+  options: WorkflowAgentHostOptions,
 ) {
   const config = yield* Schema.decodeUnknownEffect(WorkflowHostConfig)({
     deploymentId: options.deploymentId,
@@ -138,7 +138,7 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
       ),
     );
 
-  const validateReceipt = Effect.fn("WorkflowDurableHost.validateReceipt")(function* (
+  const validateReceipt = Effect.fn("WorkflowAgentHost.validateReceipt")(function* (
     receipt: Receipt,
   ) {
     const found = yield* ledger.lookup(
@@ -163,7 +163,7 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
   // failure annotation suspends infrastructure failures and defects instead of settling them.
   yield* engine.register(
     workflow,
-    Effect.fn("WorkflowDurableHost.execute")(function* (payload, executionId) {
+    Effect.fn("WorkflowAgentHost.execute")(function* (payload, executionId) {
       yield* Effect.annotateCurrentSpan({
         "workflow.execution.id": executionId,
         "agent.submission.id": payload.receipt.submissionId,
@@ -227,7 +227,7 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
     }),
   );
 
-  const intentFor = Effect.fn("WorkflowDurableHost.intentFor")(function* (receipt: Receipt) {
+  const intentFor = Effect.fn("WorkflowAgentHost.intentFor")(function* (receipt: Receipt) {
     const payload = new WorkflowSubmission({
       version: 1,
       deploymentId: config.deploymentId,
@@ -243,7 +243,7 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
     });
   });
 
-  const dispatchIntent = Effect.fn("WorkflowDurableHost.dispatch")(
+  const dispatchIntent = Effect.fn("WorkflowAgentHost.dispatch")(
     function* (intent: WorkflowDispatchIntent): Effect.fn.Return<boolean, WorkflowRepairFailure> {
       const expected = yield* intentFor(intent.receipt);
 
@@ -389,7 +389,7 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
   );
   yield* Effect.addFinalizer(() => Ref.set(admission, false));
 
-  const submit = Effect.fn("WorkflowDurableHost.submit")(function* <InputSchema extends Schema.Top>(
+  const submit = Effect.fn("WorkflowAgentHost.submit")(function* <InputSchema extends Schema.Top>(
     agent: DurableSubmitAgent<InputSchema>,
     input: InputSchema["Type"],
     options: DurableSubmitOptions,
@@ -408,7 +408,7 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
     return receipt;
   });
 
-  return WorkflowDurableHost.of({
+  return WorkflowAgentHost.of({
     submit,
     awaitSettlement: runtime.awaitSettlement,
     observe: runtime.observe,
@@ -417,7 +417,7 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
     resolveUnknown: runtime.resolveUnknown,
     submissionStatus: runtime.submissionStatus,
     repair,
-    executionId: Effect.fn("WorkflowDurableHost.executionId")((receipt: Receipt) =>
+    executionId: Effect.fn("WorkflowAgentHost.executionId")((receipt: Receipt) =>
       intentFor(receipt).pipe(Effect.map((intent) => intent.executionId)),
     ),
   });
@@ -429,8 +429,8 @@ const makeHost = Effect.fn("WorkflowDurableHost.make")(function* (
  * Do not also start the ordinary Node worker loop. Waiter interruption only detaches;
  * abort and resolutions retain the runtime's authorization and durable intent protocol.
  */
-export class WorkflowDurableHost extends Context.Service<
-  WorkflowDurableHost,
+export class WorkflowAgentHost extends Context.Service<
+  WorkflowAgentHost,
   {
     readonly submit: <InputSchema extends Schema.Top>(
       agent: DurableSubmitAgent<InputSchema>,
@@ -450,12 +450,12 @@ export class WorkflowDurableHost extends Context.Service<
     readonly repair: Effect.Effect<WorkflowRepairReport, WorkflowRepairFailure>;
     readonly executionId: (receipt: Receipt) => Effect.Effect<string>;
   }
->()("@effect-agent/workflow/WorkflowDurableHost") {
+>()("@effect-agent/workflow/WorkflowAgentHost") {
   static layerRegistered<const Entries extends ReadonlyArray<AgentRegistration>>(
     registrations: Entries,
-    options: WorkflowDurableHostOptions,
+    options: WorkflowAgentHostOptions,
   ) {
-    return Layer.effect(WorkflowDurableHost)(
+    return Layer.effect(WorkflowAgentHost)(
       Effect.gen(function* () {
         const bindings = yield* compileRegistrations(registrations);
 

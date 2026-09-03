@@ -69,7 +69,7 @@ export const workers = <const Entries extends ReadonlyArray<AgentRegistration>>(
 Provide the remaining application services to `workers(registrations)`, then call
 `NodeRuntime.runMain` at the process entry point. Creating the host alone does not start workers.
 If the process also serves requests, share one host Layer between both effects.
-Use `NodeDurableRuntime.layer` for custom lifecycle composition.
+Use `NodeDurableAgentRuntime.layer` for custom lifecycle composition.
 
 ## Use an Effect Workflow engine {#workflow}
 
@@ -84,13 +84,13 @@ persist in SQL. The dispatch store shares that SQL connection. Canonical agent h
 submission ledger use a separate SQLite file.
 
 ```ts twoslash
-import { NodeDurableRuntime } from "@effect-agent/platform-node";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node";
 import {
   NodeWorkflowRepairTrigger,
   SqlWorkflowDispatchStore,
 } from "@effect-agent/platform-node/workflow";
 import type { AgentRegistration } from "@effect-agent/thread";
-import { WorkflowDurableHost } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
@@ -107,14 +107,14 @@ const infrastructure = Layer.mergeAll(engine, SqlWorkflowDispatchStore.layer).pi
 export const workflowHost = <const Entries extends ReadonlyArray<AgentRegistration>>(
   registrations: Entries,
 ) =>
-  WorkflowDurableHost.layerRegistered(registrations, {
+  WorkflowAgentHost.layerRegistered(registrations, {
     deploymentId: "travel-planner",
     executionConcurrency: 4,
     repairBatchSize: 32,
     dispatchTimeoutMillis: 10_000,
   }).pipe(
     Layer.provide(
-      NodeDurableRuntime.layer({
+      NodeDurableAgentRuntime.layer({
         filename: "./agents.sqlite",
         deploymentId: "travel-planner",
         producerId: "workflow-worker-1",
@@ -127,7 +127,7 @@ export const workflowHost = <const Entries extends ReadonlyArray<AgentRegistrati
 ```
 
 Provide the remaining model, tool, instruction, and schema services to this Layer, then share it
-with the application effects that use `WorkflowDurableHost`. Its inferred types retain
+with the application effects that use `WorkflowAgentHost`. Its inferred types retain
 construction errors and application requirements. Acquiring it registers native execution and
 starts repair. Do not also start the ordinary `NodeDurableHost` worker loop for this deployment.
 The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/workflow.ts)
@@ -185,7 +185,7 @@ is certified for a single Node process. It makes no multi-runner or Cloudflare W
 ## Configure runtime services
 
 Pass service layers through `NodeDurableHost.layerRegistered`, `NodeDurableHost.layerStack`,
-or `NodeDurableRuntime.layer`:
+or `NodeDurableAgentRuntime.layer`:
 
 | Option              | Service                 | Default                                                     |
 | ------------------- | ----------------------- | ----------------------------------------------------------- |
@@ -203,7 +203,7 @@ dependencies through ordinary `Layer.provide` composition before running the app
 Context preparation and authorization can each be configured independently.
 
 Let `layer` or `layerStack` infer the types from your options. When annotating reusable options,
-`NodeDurableRuntimeOptions<ContextError, ContextRequirements, AuthorizationError, AuthorizationRequirements>`
+`NodeDurableAgentRuntimeOptions<ContextError, ContextRequirements, AuthorizationError, AuthorizationRequirements>`
 preserves the two layers' construction contracts.
 
 The runtime captures services when the host layer is acquired. Keep their resources alive for

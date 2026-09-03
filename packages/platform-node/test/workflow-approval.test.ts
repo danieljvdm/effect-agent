@@ -1,6 +1,6 @@
 import { Agent, AgentPolicy, ToolCallId } from "@effect-agent/core";
 import { ApprovalDecisionCommand, digestDefinitions } from "@effect-agent/thread";
-import { WorkflowDurableHost } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
@@ -83,7 +83,7 @@ it.live("repairs an approval wake sent before native SQL Workflow suspension", (
     const release = yield* Deferred.make<void>();
 
     yield* Effect.gen(function* () {
-      const host = yield* WorkflowDurableHost;
+      const host = yield* WorkflowAgentHost;
 
       const receipt = yield* host.submit(
         fixture.agent,
@@ -155,7 +155,7 @@ it.live.each(["duration", "turns"] as const)(
       );
 
       const before = yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         const receipt = yield* host.submit(
           fixture.agent,
@@ -175,7 +175,7 @@ it.live.each(["duration", "turns"] as const)(
       if (limit === "duration") offset = 31000;
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         yield* host.resolveApproval(
           ApprovalDecisionCommand.make({

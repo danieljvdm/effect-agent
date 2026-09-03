@@ -26,8 +26,8 @@ import type { Response } from "effect/unstable/ai";
 
 import {
   NodeDurableHost,
-  NodeDurableRuntime,
-  type NodeDurableRuntimeOptions,
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
 } from "../../src/index.ts";
 import {
   CHILD_ANSWER,
@@ -170,7 +170,7 @@ const storageKill: SqliteStorageFailpointHandler | undefined =
     ? undefined
     : (location) => (location === env.EFFECT_AGENT_KILL_AT_STORAGE ? killIfGated : Effect.void);
 
-const options: NodeDurableRuntimeOptions = {
+const options: NodeDurableAgentRuntimeOptions = {
   filename: env.EFFECT_AGENT_DB,
   deploymentId: CRASH_DEPLOYMENT_ID,
   producerId: CHILD_PRODUCER_ID,
@@ -649,7 +649,9 @@ const isFencedFailure = (tag: string): boolean =>
   tag === "FenceRejected" || tag === "OwnershipLost";
 
 const exit = await Effect.runPromiseExit(
-  scenario.pipe(Effect.provide(Layer.mergeAll(NodeDurableRuntime.layer(options), searchToolLayer))),
+  scenario.pipe(
+    Effect.provide(Layer.mergeAll(NodeDurableAgentRuntime.layer(options), searchToolLayer)),
+  ),
 );
 
 if (Exit.isFailure(exit)) {

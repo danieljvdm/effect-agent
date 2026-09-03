@@ -62,8 +62,8 @@ export class NodePlatformConfigError extends Schema.TaggedError<NodePlatformConf
  * construction, exposed as a typed service). Every cadence is in milliseconds and every bound is
  * finite; `workerConcurrency` caps how many worker loops `NodeDurableHost.runWorkers` drives.
  */
-export class NodeDurableRuntimeConfigValue extends Schema.Class<NodeDurableRuntimeConfigValue>(
-  "@effect-agent/platform-node/NodeDurableRuntimeConfigValue",
+export class NodeDurableAgentRuntimeConfigValue extends Schema.Class<NodeDurableAgentRuntimeConfigValue>(
+  "@effect-agent/platform-node/NodeDurableAgentRuntimeConfigValue",
 )({
   /** SQLite database file backing BOTH the Thread Log and the Submission Ledger. */
   filename: Schema.NonEmptyString,
@@ -90,17 +90,17 @@ export class NodeDurableRuntimeConfigValue extends Schema.Class<NodeDurableRunti
 }) {}
 
 /** Explicit configuration authority for the assembled Node durable runtime. */
-export class NodeDurableRuntimeConfig extends Context.Service<
-  NodeDurableRuntimeConfig,
-  NodeDurableRuntimeConfigValue
->()("@effect-agent/platform-node/NodeDurableRuntimeConfig") {}
+export class NodeDurableAgentRuntimeConfig extends Context.Service<
+  NodeDurableAgentRuntimeConfig,
+  NodeDurableAgentRuntimeConfigValue
+>()("@effect-agent/platform-node/NodeDurableAgentRuntimeConfig") {}
 
 /**
- * Raw (unvalidated) construction options for `NodeDurableRuntime.layer`. Optional fields default
+ * Raw (unvalidated) construction options for `NodeDurableAgentRuntime.layer`. Optional fields default
  * to the documented production values; everything is schema-decoded into
- * `NodeDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
+ * `NodeDurableAgentRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
  */
-export interface NodeDurableRuntimeOptions<
+export interface NodeDurableAgentRuntimeOptions<
   ContextError = never,
   ContextRequirements = never,
   AuthorizationError = never,
@@ -161,25 +161,25 @@ export interface NodeDurableRuntimeOptions<
 }
 
 /** Built-in construction failures. `layer` also preserves supplied service Layers' errors. */
-export type NodeDurableRuntimeInitializationError =
+export type NodeDurableAgentRuntimeInitializationError =
   | NodePlatformConfigError
   | SqliteStorageInitializationError;
 
-/** The services `NodeDurableRuntime.layer` provides. */
-export type NodeDurableRuntimeServices =
+/** The services `NodeDurableAgentRuntime.layer` provides. */
+export type NodeDurableAgentRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
   | ThreadStore
   | ScheduleStore
   | WakeScheduler
   | DurableRuntimeConfig
-  | NodeDurableRuntimeConfig;
+  | NodeDurableAgentRuntimeConfig;
 
-const decodeConfigValue = Schema.decodeUnknownEffect(NodeDurableRuntimeConfigValue);
+const decodeConfigValue = Schema.decodeUnknownEffect(NodeDurableAgentRuntimeConfigValue);
 
 const configFromOptions = (
-  options: Omit<NodeDurableRuntimeOptions, "runContext" | "toolAuthorization">,
-): Effect.Effect<NodeDurableRuntimeConfigValue, NodePlatformConfigError> =>
+  options: Omit<NodeDurableAgentRuntimeOptions, "runContext" | "toolAuthorization">,
+): Effect.Effect<NodeDurableAgentRuntimeConfigValue, NodePlatformConfigError> =>
   decodeConfigValue({
     filename: options.filename,
     deploymentId: options.deploymentId,
@@ -204,27 +204,30 @@ const configFromOptions = (
   );
 
 /** SQLite storage configuration derived from the single validated Node configuration. */
-const sqliteStorageConfigLayer: Layer.Layer<SqliteStorageConfig, never, NodeDurableRuntimeConfig> =
-  Layer.effect(SqliteStorageConfig)(
-    Effect.gen(function* () {
-      const config = yield* NodeDurableRuntimeConfig;
+const sqliteStorageConfigLayer: Layer.Layer<
+  SqliteStorageConfig,
+  never,
+  NodeDurableAgentRuntimeConfig
+> = Layer.effect(SqliteStorageConfig)(
+  Effect.gen(function* () {
+    const config = yield* NodeDurableAgentRuntimeConfig;
 
-      return SqliteStorageConfigValue.make({
-        observationPollInterval: config.observationPollInterval,
-        busyTimeout: config.busyTimeout,
-        ownershipLeaseDuration: config.ownershipLeaseDuration,
-        verifyOnOpen: config.verifyOnOpen,
-      });
-    }),
-  );
+    return SqliteStorageConfigValue.make({
+      observationPollInterval: config.observationPollInterval,
+      busyTimeout: config.busyTimeout,
+      ownershipLeaseDuration: config.ownershipLeaseDuration,
+      verifyOnOpen: config.verifyOnOpen,
+    });
+  }),
+);
 
 /** Thread coordinator configuration derived from the single validated Node configuration. */
 const durableRuntimeConfigLayer = (
   estimateCostMicrousd: RunCostEstimator | undefined,
-): Layer.Layer<DurableRuntimeConfig, never, NodeDurableRuntimeConfig> =>
+): Layer.Layer<DurableRuntimeConfig, never, NodeDurableAgentRuntimeConfig> =>
   Layer.effect(DurableRuntimeConfig)(
     Effect.gen(function* () {
-      const config = yield* NodeDurableRuntimeConfig;
+      const config = yield* NodeDurableAgentRuntimeConfig;
 
       return DurableRuntimeConfig.make({
         deploymentId: config.deploymentId,
@@ -241,10 +244,10 @@ const durableRuntimeConfigLayer = (
 const wakeSchedulerConfigLayer: Layer.Layer<
   NodeWakeSchedulerConfig,
   never,
-  NodeDurableRuntimeConfig
+  NodeDurableAgentRuntimeConfig
 > = Layer.effect(NodeWakeSchedulerConfig)(
   Effect.gen(function* () {
-    const config = yield* NodeDurableRuntimeConfig;
+    const config = yield* NodeDurableAgentRuntimeConfig;
 
     return { scanInterval: Duration.millis(config.wakeScanInterval) };
   }),
@@ -373,7 +376,7 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
  * verified during construction: an incompatible database file fails the Layer with
  * `SqliteStorageCompatibilityError` before anything is mutated (DEPLOY-008).
  */
-export class NodeDurableRuntime {
+export class NodeDurableAgentRuntime {
   /** Validated configuration Layer; fails typed when the supplied options are out of bounds. */
   static configLayer<
     ContextError = never,
@@ -381,14 +384,14 @@ export class NodeDurableRuntime {
     AuthorizationError = never,
     AuthorizationRequirements = never,
   >(
-    options: NodeDurableRuntimeOptions<
+    options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
       AuthorizationRequirements
     >,
-  ): Layer.Layer<NodeDurableRuntimeConfig, NodePlatformConfigError> {
-    return Layer.effect(NodeDurableRuntimeConfig)(configFromOptions(options));
+  ): Layer.Layer<NodeDurableAgentRuntimeConfig, NodePlatformConfigError> {
+    return Layer.effect(NodeDurableAgentRuntimeConfig)(configFromOptions(options));
   }
 
   /** The full DN runtime stack over one SQLite file. */
@@ -398,20 +401,20 @@ export class NodeDurableRuntime {
     AuthorizationError = never,
     AuthorizationRequirements = never,
   >(
-    options: NodeDurableRuntimeOptions<
+    options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
       AuthorizationRequirements
     >,
   ): Layer.Layer<
-    NodeDurableRuntimeServices,
-    NodeDurableRuntimeInitializationError | ContextError | AuthorizationError,
+    NodeDurableAgentRuntimeServices,
+    NodeDurableAgentRuntimeInitializationError | ContextError | AuthorizationError,
     Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
   > {
     return Layer.unwrap(
       Effect.map(configFromOptions(options), (config) => {
-        const nodeConfigLayer = Layer.succeed(NodeDurableRuntimeConfig)(config);
+        const nodeConfigLayer = Layer.succeed(NodeDurableAgentRuntimeConfig)(config);
 
         const infrastructure = Layer.mergeAll(
           sqliteStorageConfigLayer,

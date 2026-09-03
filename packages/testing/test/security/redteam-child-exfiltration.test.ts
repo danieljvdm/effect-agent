@@ -4,7 +4,10 @@ import {
   SubagentExecutionFailure,
 } from "@effect-agent/capabilities";
 import { ThreadId, ToolCallId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -59,8 +62,8 @@ const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
@@ -199,7 +202,9 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             }
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/redteam-exfiltration.sqlite`)),
+              NodeDurableAgentRuntime.layer(
+                runtimeOptions(`${directory}/redteam-exfiltration.sqlite`),
+              ),
             ),
           );
         }),

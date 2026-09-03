@@ -5,7 +5,7 @@ import {
 } from "@effect-agent/capabilities";
 import { Agent, IdGenerator } from "@effect-agent/core";
 import { AbortCommand, digestDefinitions, DurableAgentRuntime } from "@effect-agent/thread";
-import { WorkflowDurableHost } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Fiber, FileSystem, Layer, Ref, Stream } from "effect";
@@ -93,7 +93,7 @@ it.live(
       ]).pipe(Layer.provide(handlers));
 
       const first = yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         yield* host.submit(parent, { question: "parent" }, submitOptions(digests));
 
@@ -105,7 +105,7 @@ it.live(
       expect(yield* Ref.get(finalized)).toBe(1);
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
         const receipt = yield* host.submit(parent, { question: "parent" }, submitOptions(digests));
 
         expect((yield* host.awaitSettlement(receipt)).outcome).toBe("completed");
@@ -141,7 +141,7 @@ it.live(
       );
 
       yield* Effect.gen(function* () {
-        const host = yield* WorkflowDurableHost;
+        const host = yield* WorkflowAgentHost;
 
         const receipt = yield* host.submit(
           fixture.agent,
@@ -223,15 +223,11 @@ it.live("competing Workflow owners fence the stale model result out of canonical
       }).pipe(Layer.provide(Layer.succeedContext(Clock.Clock.context(ownershipClock))));
 
     const first = yield* Effect.gen(function* () {
-      const host = yield* WorkflowDurableHost;
+      const host = yield* WorkflowAgentHost;
 
-      const receipt = yield* host.submit(
-        fixture.agent,
-        { question: "fence" },
-        submitOptions(fixture.digests),
-      );
+      yield* host.submit(fixture.agent, { question: "fence" }, submitOptions(fixture.digests));
 
-      yield* host.awaitSettlement(receipt);
+      // Dispatch cleanup proves this owner's native completion without another settlement waiter.
       yield* until(pendingIntents, (rows) => rows.length === 0);
       yield* Deferred.succeed(firstCompleted, undefined);
 
@@ -244,7 +240,7 @@ it.live("competing Workflow owners fence the stale model result out of canonical
     phase = "constructing replacement owner";
 
     yield* Effect.gen(function* () {
-      const host = yield* WorkflowDurableHost;
+      const host = yield* WorkflowAgentHost;
 
       phase = "submitting to replacement owner";
 

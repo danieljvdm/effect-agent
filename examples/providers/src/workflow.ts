@@ -1,10 +1,10 @@
-import { NodeDurableRuntime } from "@effect-agent/platform-node";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node";
 import {
   NodeWorkflowRepairTrigger,
   SqlWorkflowDispatchStore,
 } from "@effect-agent/platform-node/workflow";
 import type { AgentRegistration } from "@effect-agent/thread";
-import { WorkflowDurableHost } from "@effect-agent/workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
@@ -37,14 +37,14 @@ export const workflowHost = <
     Layer.provide(workflowDatabase),
   );
 
-  return WorkflowDurableHost.layerRegistered(registrations, {
+  return WorkflowAgentHost.layerRegistered(registrations, {
     deploymentId: options.deploymentId,
     executionConcurrency: 4,
     repairBatchSize: 32,
     dispatchTimeoutMillis: 10_000,
   }).pipe(
     Layer.provide(
-      NodeDurableRuntime.layer({
+      NodeDurableAgentRuntime.layer({
         filename: options.agentDatabase,
         deploymentId: options.deploymentId,
         producerId: options.producerId,

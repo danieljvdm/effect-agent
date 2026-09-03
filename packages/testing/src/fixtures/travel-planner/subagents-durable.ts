@@ -313,7 +313,7 @@ export interface DurableResearchHarnessOptions {
 
 /** One durable coordinator/researcher pair with observable invocation counters. */
 export interface DurableResearchHarness {
-  /** Host registrations for `NodeDurableRuntimeOptions.bindings` (parent + child). */
+  /** Host registrations for `NodeDurableAgentRuntimeOptions.bindings` (parent + child). */
   readonly bindings: ReadonlyArray<ResolvedBinding>;
   /** Total coordinator model invocations across every Attempt and runtime handle. */
   readonly parentModelCalls: Effect.Effect<number>;
@@ -334,7 +334,7 @@ export interface DurableResearchHarness {
  * guide, Turn 2 writes the report), and both worker Bindings captured with
  * their requirement Contexts via `DurableWorkerBinding.make` under the exact
  * fixture digests. The returned `bindings` are plain values: they can be
- * registered with several `NodeDurableRuntime` stacks over the same SQLite
+ * registered with several `NodeDurableAgentRuntime` stacks over the same SQLite
  * file while the counters keep counting across all of them.
  */
 export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptions) =>
