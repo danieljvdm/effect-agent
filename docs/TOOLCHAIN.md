@@ -132,18 +132,23 @@ Outside a generator, the formatter parses `*` as multiplication and inserts spac
 ## Link previews
 
 The docs config adds Open Graph and Twitter metadata to the built HTML. Each page uses its
-resolved title and description, a canonical URL on `https://effect-agent.com`, and the shared
-`docs/public/social-card.png`. Preview crawlers do not need JavaScript.
+resolved title and description, a canonical URL on `https://effect-agent.com`, and its own
+1200 × 630 PNG. `docs/.vitepress/social-images.ts` renders the page title, description, and URL
+using the installed IBM Plex fonts and `docs/public/mark.svg`. The build writes images under
+`docs/.vitepress/dist/social/`; no browser, remote font request, or manual screenshot is needed.
+Preview crawlers read the metadata and images without JavaScript.
 
-Edit `docs/.vitepress/assets/social-card.html` to change the artwork. Serve the repository root
-locally, open that file in a browser, wait for `document.fonts.ready`, and capture its `main`
-element at 1200 × 630 CSS pixels with device scale 1. Save the PNG to
-`docs/public/social-card.png`. The source uses the installed IBM Plex fonts and `docs/public/mark.svg`;
-it is not published. The 32 × 32 favicon and 180 × 180 Apple touch icon are PNG renders of that mark.
+Edit the renderer to change the artwork, or the page's frontmatter to change its title and
+description. The build fails if text cannot fit at the minimum font size. Section fragments such
+as `#workflow` are not sent to the server, so they share their parent page's preview. A section
+needs its own page URL to have a distinct preview.
+Link to `guide/workflows` for the Effect Workflows preview. The old `platforms/node#workflow`
+anchor points readers to that guide.
 
 Run `vp run docs:build` and inspect the generated HTML for the homepage, a guide, and a directory
-index such as `platforms/index.html`. Image URLs must be absolute, and canonical URLs must match
-the site's clean routes. Existing messages may retain a cached preview after a deployment.
+index such as `platforms/index.html`. Open their generated PNGs to check the layout. Image URLs
+must be absolute, and canonical URLs must match the site's clean routes. Existing messages may
+retain a cached preview after a deployment.
 
 ## Releasing to npm
 

@@ -19,6 +19,10 @@ track worker ownership, and recover after restarts.
 Choose Node.js when you operate a process and persistent disk.
 Choose Cloudflare when your application uses Workers and Durable Objects.
 
+To drive the durable runtime through an injected Effect `WorkflowEngine`, see
+[Effect Workflows](../guide/workflows). Platform adapters supply the runtime storage,
+dispatch store, and repair trigger; the guide includes a [Node.js setup](../guide/workflows#node).
+
 ## Choose what you need
 
 Use a durable host when accepted work must survive a restart.
