@@ -130,6 +130,8 @@ type CapturedAttempt<A extends ExecutableAgentBinding> = (
  */
 interface CapturedBinding {
   readonly agentId: AgentId;
+  /** Exact immutable definition whose codecs and behavior the worker captured. */
+  readonly definition: Agent.AnyDefinition;
   readonly attempt: (
     driver: ResolvedAttemptDriver,
     threadId: ThreadId,
@@ -161,6 +163,7 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
     Effect.context<Exclude<DurableWorkerRequirements<A>, Provides> | Requires>(),
     (context): CapturedBinding => ({
       agentId: agent.definition.id,
+      definition: agent.definition,
       attempt: (driver, threadId, claim) => {
         // Registration closes one concrete Binding before heterogeneous registrations are
         // collected. TypeScript cannot instantiate the higher-rank RuntimeBinding parameters

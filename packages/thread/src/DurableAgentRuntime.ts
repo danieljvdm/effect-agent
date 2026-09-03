@@ -7798,6 +7798,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       });
     }
 
+    if (!Object.is(binding.definition, agent.definition)) {
+      return yield* BindingUnavailable.make({
+        agentId: agent.definition.id,
+        message: "Registered admission requires the exact Agent Definition used in registration",
+      });
+    }
+
     return yield* submit(agent, input, { ...options, definitions: binding.digests });
   });
 
@@ -8640,7 +8647,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 export class DurableAgentRuntime extends Context.Service<
   DurableAgentRuntime,
   {
-    /** Admit against the unique registered version; reject missing or ambiguous registrations. */
+    /** Admit the exact registered Definition instance; reject missing, ambiguous, or different definitions. */
     readonly submitRegistered: <InputSchema extends Schema.Top>(
       agent: DurableSubmitAgent<InputSchema>,
       input: InputSchema["Type"],

@@ -3,7 +3,7 @@ import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
 import { SettlementFailureDiagnostic } from "@effect-agent/thread/Records";
 import { Schema } from "effect";
 
-/** The definition supplies codecs; executable model and tool services belong to registration. */
+/** Must be the exact registered Definition instance; its model and tool services belong to registration. */
 export interface WorkflowAgent<Input extends Schema.Top, Output extends Schema.Top> {
   readonly id: typeof AgentId.Type;
   readonly input: Input;

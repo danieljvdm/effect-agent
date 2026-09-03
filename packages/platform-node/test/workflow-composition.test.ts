@@ -91,49 +91,54 @@ it.live.each([false, true])(
     }).pipe(Effect.scoped, Effect.provide(platform)),
 );
 
-it.live("rejects changed input under the same workflow step identity", () =>
-  Effect.gen(function* () {
-    const directory = yield* temporaryDirectory;
-    const fixture = yield* makePlanner();
-    const reached = yield* Deferred.make<void>();
-    const question = yield* Ref.make("original");
-    const gate = DurableDeferred.make("change-input");
+it.live.each(["input", "definition"] as const)(
+  "rejects changed %s under the same workflow step identity",
+  (scenario) =>
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory;
+      const fixture = yield* makePlanner();
+      const reached = yield* Deferred.make<void>();
+      const question = yield* Ref.make("original");
+      const gate = DurableDeferred.make("change-input");
+      const replacement = { ...planner, output: Schema.Struct({ answer: Schema.String }) };
 
-    const live = Review.toLayer(
-      Effect.fn(function* () {
-        const output = yield* AgentWorkflow.execute(
-          planner,
-          { question: yield* Ref.get(question) },
-          { name: "triage" },
+      const live = Review.toLayer(
+        Effect.fn(function* () {
+          const current = yield* Ref.get(question);
+
+          const output = yield* AgentWorkflow.execute(
+            scenario === "definition" && current === "changed" ? replacement : planner,
+            { question: scenario === "input" ? current : "original" },
+            { name: "triage" },
+          );
+
+          yield* Deferred.succeed(reached, undefined);
+          yield* DurableDeferred.await(gate);
+
+          return output;
+        }),
+      ).pipe(Layer.provideMerge(hostLayer(directory, [fixture])));
+
+      yield* Effect.gen(function* () {
+        const id = yield* Review.execute({ id: "conflict" }, { discard: true });
+
+        yield* Deferred.await(reached);
+        yield* until(
+          Review.poll(id),
+          (result) => Option.isSome(result) && result.value._tag === "Suspended",
         );
-
-        yield* Deferred.succeed(reached, undefined);
-        yield* DurableDeferred.await(gate);
-
-        return output;
-      }),
-    ).pipe(Layer.provideMerge(hostLayer(directory, [fixture])));
-
-    yield* Effect.gen(function* () {
-      const id = yield* Review.execute({ id: "conflict" }, { discard: true });
-
-      yield* Deferred.await(reached);
-      yield* until(
-        Review.poll(id),
-        (result) => Option.isSome(result) && result.value._tag === "Suspended",
-      );
-      yield* Ref.set(question, "changed");
-      yield* DurableDeferred.succeed(gate, {
-        token: DurableDeferred.tokenFromExecutionId(gate, { workflow: Review, executionId: id }),
-        value: undefined,
-      });
-      expect(yield* Review.execute({ id: "conflict" }).pipe(Effect.result)).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "AdmissionConflict" },
-      });
-      expect(yield* Ref.get(fixture.calls)).toBe(1);
-    }).pipe(Effect.provide(live));
-  }).pipe(Effect.scoped, Effect.provide(platform)),
+        yield* Ref.set(question, "changed");
+        yield* DurableDeferred.succeed(gate, {
+          token: DurableDeferred.tokenFromExecutionId(gate, { workflow: Review, executionId: id }),
+          value: undefined,
+        });
+        expect(yield* Review.execute({ id: "conflict" }).pipe(Effect.result)).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: scenario === "input" ? "AdmissionConflict" : "BindingUnavailable" },
+        });
+        expect(yield* Ref.get(fixture.calls)).toBe(1);
+      }).pipe(Effect.provide(live));
+    }).pipe(Effect.scoped, Effect.provide(platform)),
 );
 
 it.live("suspends the parent for approval and resumes it after both SQL runtimes restart", () =>
@@ -311,7 +316,56 @@ it.live("distinct step names run independent agents in native structured concurr
   }).pipe(Effect.scoped, Effect.provide(platform)),
 );
 
-it.live.each(["failure", "output", "authorization", "registration", "name"] as const)(
+it.live.each(["input", "output", "instructions"] as const)(
+  "rejects a same-ID %s definition change before admission",
+  (scenario) =>
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory;
+      const fixture = yield* makePlanner();
+      const admissions = yield* Ref.make(0);
+
+      const live = Review.toLayer(() => {
+        if (scenario === "input") {
+          return AgentWorkflow.execute(
+            { ...planner, input: Schema.Struct({ question: Schema.Number }) },
+            { question: 42 },
+            { name: "step" },
+          );
+        }
+        if (scenario === "output") {
+          return AgentWorkflow.execute(
+            { ...planner, output: Schema.Struct({ count: Schema.Number }) },
+            { question: "test" },
+            { name: "step" },
+          ).pipe(Effect.as({ answer: "unreachable" }));
+        }
+
+        const replacement = {
+          ...planner,
+          instructions: "Different behavior with the same schemas.",
+        };
+
+        return AgentWorkflow.execute(replacement, { question: "test" }, { name: "step" });
+      }).pipe(
+        Layer.provideMerge(
+          hostLayer(directory, [fixture], {
+            runtimeFailpoint: (location) =>
+              location === "submit:after-admit"
+                ? Ref.update(admissions, (n) => n + 1)
+                : Effect.void,
+          }),
+        ),
+      );
+
+      expect(
+        yield* Review.execute({ id: scenario }).pipe(Effect.result, Effect.provide(live)),
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "BindingUnavailable" } });
+      expect(yield* Ref.get(admissions)).toBe(0);
+      expect(yield* Ref.get(fixture.calls)).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(platform)),
+);
+
+it.live.each(["failure", "authorization", "registration", "name"] as const)(
   "preserves a schema-encoded %s failure through Workflow.execute",
   (scenario) =>
     Effect.gen(function* () {
@@ -322,17 +376,11 @@ it.live.each(["failure", "output", "authorization", "registration", "name"] as c
       );
 
       const live = Review.toLayer(() =>
-        scenario === "output"
-          ? AgentWorkflow.execute(
-              { ...planner, output: Schema.Struct({ count: Schema.Number }) },
-              { question: "test" },
-              { name: "step" },
-            ).pipe(Effect.as({ answer: "unreachable" }))
-          : AgentWorkflow.execute(
-              planner,
-              { question: "test" },
-              { name: scenario === "name" ? "" : "step" },
-            ),
+        AgentWorkflow.execute(
+          planner,
+          { question: "test" },
+          { name: scenario === "name" ? "" : "step" },
+        ),
       ).pipe(
         Layer.provideMerge(hostLayer(directory, scenario === "registration" ? [] : [fixture])),
       );
@@ -354,13 +402,11 @@ it.live.each(["failure", "output", "authorization", "registration", "name"] as c
         _tag: "Failure",
         failure: {
           _tag:
-            scenario === "output"
-              ? "AgentOutputError"
-              : scenario === "authorization"
-                ? "OperationDenied"
-                : scenario === "registration"
-                  ? "BindingUnavailable"
-                  : "WorkflowExecutionFailure",
+            scenario === "authorization"
+              ? "OperationDenied"
+              : scenario === "registration"
+                ? "BindingUnavailable"
+                : "WorkflowExecutionFailure",
         },
       });
       if (scenario === "registration" || scenario === "name")

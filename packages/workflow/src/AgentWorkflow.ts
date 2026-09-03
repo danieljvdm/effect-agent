@@ -52,6 +52,8 @@ export type Error = typeof Error.Type;
  * canonical output again. Pending work suspends through Effect DurableDeferred; neither
  * suspension nor parent interruption aborts accepted agent work. Use the host's authorized abort.
  * Provide WorkflowAgentHost at the application boundary, sharing the parent's WorkflowEngine.
+ * Pass the exact Agent Definition instance used in runtime registration; a same-ID copy fails
+ * with BindingUnavailable before input encoding or admission.
  */
 export const execute = Effect.fn("AgentWorkflow.execute")(function* <
   Input extends Schema.Top,

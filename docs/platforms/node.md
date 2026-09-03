@@ -117,9 +117,13 @@ Multi-step handlers use ordinary `Effect.gen` and bounded `Effect.all`.
 The step `name` must be nonempty, stable across replays, and unique within a parent execution.
 Use stable item IDs for repeated calls in a loop. The parent workflow identity, step name,
 deployment, and configured principal determine a private Thread and submission key. Reusing a
-step with changed input, Agent, or registered definition versions fails with an admission
+step with changed input, Agent identity, or registered version declarations fails with an admission
 conflict rather than silently starting new work. Registered admission requires exactly one
-version for that Agent identity; explicit `host.submit` remains available for versioned routing.
+version for that Agent identity and the exact Agent Definition instance passed to registration.
+A same-ID copy or replacement fails with `BindingUnavailable` before input encoding or admission,
+including on replay. Import the same definition into registration and the workflow handler;
+there is no object identity persisted across restarts. Explicit `host.submit` remains available
+for versioned routing.
 
 `AgentWorkflow.Error` is the Schema for the exact typed failure channel. Failed or aborted
 Agent settlements become `WorkflowExecutionFailure`; invalid output becomes `AgentOutputError`.
