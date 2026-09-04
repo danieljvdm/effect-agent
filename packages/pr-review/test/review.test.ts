@@ -29,6 +29,7 @@ import {
   ReviewChange,
   ReviewContextError,
   ReviewCostSnapshot,
+  type ReviewDiagnostics,
   ReviewDiagnosticsSink,
   ReviewFileList,
   ReviewFinding,
@@ -1278,6 +1279,60 @@ new mode 100755`;
       expect(yield* Ref.get(finalized)).toBe(2);
       expect(outcome.incomplete).toBe(true);
       expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
+      expect(outcome.exhausted).toBeUndefined();
+      expect(outcome.resolutions).toBeUndefined();
+      expect(outcome.diagnostics?.stages.at(-1)).toMatchObject({
+        stage: "discovery",
+        completion: "failed",
+        stopReason: "deadline",
+      });
+      expect(outcome.diagnostics?.stages.at(-1)?.incompleteReason).toBeUndefined();
+    }),
+  );
+
+  it.effect("preserves an uncapped duration failure and its final diagnostics", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const finalized = yield* Ref.make(0);
+      const observed = yield* Ref.make<ReviewDiagnostics | undefined>(undefined);
+
+      const model = scriptedModel(() =>
+        Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+          Stream.flatMap(() => Stream.never),
+          Stream.ensuring(Ref.update(finalized, (count) => count + 1)),
+        ),
+      );
+
+      const fiber = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(
+          Effect.provideService(ReviewRepository, emptyRepository),
+          Effect.provideService(ReviewDiagnosticsSink, {
+            record: (value) => Ref.set(observed, value),
+          }),
+          Effect.result,
+          Effect.forkChild,
+        );
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("5 minutes");
+      const result = yield* Fiber.join(fiber);
+
+      expect(Result.isFailure(result) && result.failure).toMatchObject({
+        _tag: "AgentPolicyError",
+        limit: "duration",
+      });
+      expect(yield* Ref.get(finalized)).toBe(1);
+      const diagnostics = yield* Ref.get(observed);
+
+      expect(diagnostics?.discovery).toBe("failed");
+      expect(diagnostics?.candidates).toEqual([]);
+      expect(diagnostics?.stages[0]).toMatchObject({
+        stage: "discovery",
+        completion: "failed",
+        stopReason: "deadline",
+      });
+      expect(diagnostics?.stages[0]?.incompleteReason).toBeUndefined();
     }),
   );
 

@@ -284,6 +284,10 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
       ].join("\n\n"),
     );
 
+    if (diagnostics.stages.some(({ stopReason }) => stopReason === "deadline")) {
+      parts.push("The review reached its five-minute time limit. Coverage is incomplete.");
+    }
+
     const limitations = discoveryStages.filter(
       (stage) => stage.declaredAssessment === "incomplete" && stage.incompleteReason !== undefined,
     );

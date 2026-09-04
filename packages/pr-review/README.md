@@ -37,6 +37,10 @@ running within the same limits. The review stays incomplete and withholds all re
 Discovery stops on failures, invalid submissions, exhausted budgets, or 24 accepted findings
 before another batch. Unstarted patches remain pending; incomplete batches are not retried.
 
+Reaching the five-minute review limit records the host stop reason `deadline` in stage diagnostics.
+The Action explains this time limit separately from model-reported limitations; the review remains
+incomplete.
+
 An incomplete discovery submission may include an `incompleteReason` of up to 600 characters naming
 unfinished work or missing evidence. Its stage diagnostic retains that model-reported explanation, including when
 later batches complete. It is optional, unverified display text and must not enter telemetry.

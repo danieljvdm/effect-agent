@@ -14,6 +14,7 @@ import {
 import {
   Agent,
   AgentPolicy,
+  AgentPolicyError,
   AgentRuntime,
   ThreadHistory,
   RunContextPreparationPassthrough,
@@ -232,6 +233,7 @@ export class ReviewStageDiagnostic extends Schema.Class<ReviewStageDiagnostic>(
   declaredAssessment: Schema.optionalKey(Schema.Literals(["complete", "incomplete"])),
   /** Model-reported limitation for display, not verified evidence or telemetry. */
   incompleteReason: Schema.optionalKey(IncompleteReason),
+  /** Host stop category; `deadline` identifies the review's duration limit. */
   stopReason: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(64))),
   modelCalls: Schema.Natural,
   toolCalls: Schema.Natural,
@@ -1222,7 +1224,14 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
                           ? "interrupted"
                           : Cause.hasDies(exit.cause)
                             ? "defect"
-                            : "failure",
+                            : exit.cause.reasons.some(
+                                  (reason) =>
+                                    Cause.isFailReason(reason) &&
+                                    reason.error instanceof AgentPolicyError &&
+                                    reason.error.limit === "duration",
+                                )
+                              ? "deadline"
+                              : "failure",
                       }
                     : {}),
                   modelCalls: stageModelCalls,
@@ -1269,7 +1278,9 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
               ? ReviewStageDiagnostic.make({
                   ...entry,
                   completion,
-                  ...(stopReason === undefined ? {} : { stopReason }),
+                  ...(stopReason === undefined || entry.stopReason === "deadline"
+                    ? {}
+                    : { stopReason }),
                   ...(declaredAssessment === undefined ? {} : { declaredAssessment }),
                   ...(incompleteReason === undefined ? {} : { incompleteReason }),
                 })

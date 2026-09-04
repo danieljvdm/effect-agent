@@ -385,6 +385,65 @@ The new route accepts requests without checking the caller.
     }
   });
 
+  it.each(["deadline", "failure"] as const)(
+    "renders the host %s stop separately from model-reported limitations",
+    (stopReason) => {
+      const body = renderReviewBody({
+        report: ReviewReport.make({ summary: "The investigation did not complete.", findings: [] }),
+        diagnostics: ReviewDiagnostics.make({
+          strategy: "baseline",
+          requestDigest: "a".repeat(64),
+          discovery: "failed",
+          verification: "not-requested",
+          patchesSupplied: 1,
+          candidates: [],
+          activity: [],
+          droppedActivityCount: 0,
+          droppedCandidateCount: 0,
+          stages: [
+            ReviewStageDiagnostic.make({
+              stage: "discovery",
+              batch: 0,
+              completion: "failed",
+              stopReason,
+              modelCalls: 1,
+              toolCalls: 0,
+              usage: ReviewUsage.make({
+                inputTokens: 100,
+                uncachedInputTokens: 100,
+                cachedInputTokens: 0,
+                cacheWriteInputTokens: 0,
+                outputTokens: 0,
+              }),
+              suppliedPaths: ["src/index.ts"],
+            }),
+          ],
+        }),
+        automaticReviewsRemaining: 1,
+        scope: "full",
+        suppliedPatches: 1,
+        unreviewedFiles: 0,
+        ignoredFiles: 0,
+        modelTurns: 1,
+        complete: false,
+        unresolvedChangeRequests: 0,
+        inputTokens: 100,
+        uncachedInputTokens: 100,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        headRevision,
+      });
+
+      expect(body.includes("The review reached its five-minute time limit.")).toBe(
+        stopReason === "deadline",
+      );
+      expect(body).toContain("Review coverage is incomplete");
+      expect(body).toContain("Discovery declared assessment: **not declared**");
+      expect(body).not.toContain("Model-reported limitations");
+    },
+  );
+
   it("bounds findings, excluded paths and model-reported limitations in publication", () => {
     const findings = Array.from({ length: 24 }, (_, index) =>
       ReviewFinding.make({

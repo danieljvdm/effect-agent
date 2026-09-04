@@ -1360,6 +1360,12 @@ layer(testLayer)("mandatory candidate verification", (it) => {
       expect(outcome.diagnostics?.candidates[0]?.evidence).toEqual([diffEvidence]);
       expect(verifierCalls).toBe(2);
       expect(yield* Ref.get(closed)).toBe(3);
+      expect(outcome.diagnostics?.stages.at(-1)).toMatchObject({
+        stage: "verification",
+        completion: "failed",
+        stopReason: "deadline",
+      });
+      expect(outcome.diagnostics?.stages.at(-1)?.incompleteReason).toBeUndefined();
     }),
   );
 
