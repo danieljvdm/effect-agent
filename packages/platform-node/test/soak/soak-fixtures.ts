@@ -1,19 +1,14 @@
-import {
-  Subagent,
-  SubagentPolicy,
-  SubagentReservationsMemoryLive,
-  SubagentRuntime,
-} from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import {
-  DefinitionDigests,
-  Digest,
-  DurableWorkerBinding,
-  IdempotencyKey,
-  Principal,
-  type DurableSubmitOptions,
-  type ResolvedBinding,
-} from "@effect-agent/thread";
+import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Subagent";
+import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+import { type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { type Prompt, LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 

@@ -31,7 +31,22 @@ export default defineConfig({
   // defaults, so the published artifact's declarations and sourcemap are
   // pinned explicitly here.
   pack: {
-    entry: ["src/index.ts", "src/testing.ts"],
+    entry: [
+      "src/index.ts",
+      "src/DoMemoryStore.ts",
+      "src/DoScheduleStore.ts",
+      "src/DoStorageConfig.ts",
+      "src/DoStorageError.ts",
+      "src/DoStorageFailpoint.ts",
+      "src/DoStorageVersion.ts",
+      "src/DoSubmissionLedger.ts",
+      "src/DoSubscriptionStore.ts",
+      "src/DoThreadStore.ts",
+      "src/MemoryProtocol.ts",
+      "src/PortProtocol.ts",
+      "src/PortRouting.ts",
+      "src/DoStorageFailpointTesting.ts",
+    ],
     dts: true,
     sourcemap: true,
   },

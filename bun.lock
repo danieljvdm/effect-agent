@@ -16,7 +16,9 @@
         "@effect-agent/sandbox-local": "workspace:*",
         "@effect-agent/storage-memory": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
+        "@effect-agent/testing": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-browser": "catalog:",
@@ -26,11 +28,13 @@
         "@effect/tsgo": "catalog:",
         "@fontsource-variable/ibm-plex-sans": "catalog:",
         "@fontsource/ibm-plex-mono": "catalog:",
+        "@napi-rs/canvas": "catalog:",
         "@shikijs/vitepress-twoslash": "catalog:",
         "@stylistic/eslint-plugin": "5.10.0",
         "@types/node": "catalog:",
         "alchemy": "2.0.0-beta.72",
         "effect": "catalog:",
+        "effect-agent": "workspace:*",
         "effect-cf": "catalog:",
         "esbuild": "catalog:",
         "oxfmt": "0.64.0",
@@ -182,13 +186,16 @@
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/sandbox": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/testing": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@effect/sql-sqlite-node": "catalog:",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -242,7 +249,7 @@
     },
     "packages/capabilities": {
       "name": "@effect-agent/capabilities",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -261,7 +268,7 @@
     },
     "packages/core": {
       "name": "@effect-agent/core",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -273,7 +280,7 @@
     },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -290,7 +297,7 @@
     },
     "packages/engine": {
       "name": "@effect-agent/engine",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
       },
@@ -306,7 +313,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -344,12 +351,13 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect-agent/workflow": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
       },
@@ -366,8 +374,10 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
         "effect-agent": "workspace:*",
       },
       "devDependencies": {
@@ -392,6 +402,7 @@
         "effect": "catalog:",
       },
       "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
         "@effect/vitest": "catalog:",
         "@types/node": "catalog:",
         "typescript": "catalog:",
@@ -400,7 +411,7 @@
     },
     "packages/sandbox": {
       "name": "@effect-agent/sandbox",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -412,7 +423,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/sandbox": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -430,7 +441,7 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -453,12 +464,13 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
       },
       "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
@@ -471,7 +483,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -490,7 +502,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -515,12 +527,32 @@
     },
     "packages/thread": {
       "name": "@effect-agent/thread",
-      "version": "0.1.0-beta.42",
+      "version": "0.1.0-beta.44",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
       },
       "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.112",
+      },
+    },
+    "packages/workflow": {
+      "name": "@effect-agent/workflow",
+      "version": "0.1.0-beta.44",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/thread": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
+        "@effect-agent/storage-memory": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
@@ -555,6 +587,7 @@
     "@effect/vitest": "4.0.0-rc.112",
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
     "@fontsource/ibm-plex-mono": "5.3.0",
+    "@napi-rs/canvas": "1.0.8",
     "@shikijs/vitepress-twoslash": "4.4.2",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-router": "1.170.18",
@@ -848,6 +881,8 @@
 
     "@effect-agent/thread": ["@effect-agent/thread@workspace:packages/thread"],
 
+    "@effect-agent/workflow": ["@effect-agent/workflow@workspace:packages/workflow"],
+
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-2GQKD3IzfCJuS3DgeuBwUjEYk5iyOqgK5etQkYZ3Ho8IuL8BtGR9d8G5AIiRV0xkNy5DD4vGnDGSHxKWsW2TRg=="],
 
     "@effect/ai-openai": ["@effect/ai-openai@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-j2X86xvgpAtNiusyESADHZn3PUzMVatE1zWXd0No2aybx/euKiVBVWZOtzq7ntJ5KvPHRBOFXTGPADdApQrwug=="],
@@ -1113,6 +1148,30 @@
     "@msgpackr-extract/msgpackr-extract-linux-x64": ["@msgpackr-extract/msgpackr-extract-linux-x64@3.0.4", "", { "os": "linux", "cpu": "x64" }, "sha512-8TNXMEjJc3QEy7R/x1INhgiU+XakDAFUzBhaz7+Rbrs8NH5UQeHQxxmzsSBJGyV6I1jW79undiQm8tOI+D+8FQ=="],
 
     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.4", "", { "os": "win32", "cpu": "x64" }, "sha512-CmCXPQrkbwExx3j946/PtHWHbYJiCRBRDl4BlkRQcJB/YOwQxJRTpoo7aTsortjgoJ1x7opzTSxn7C+ASSLVjQ=="],
+
+    "@napi-rs/canvas": ["@napi-rs/canvas@1.0.8", "", { "optionalDependencies": { "@napi-rs/canvas-android-arm64": "1.0.8", "@napi-rs/canvas-darwin-arm64": "1.0.8", "@napi-rs/canvas-darwin-x64": "1.0.8", "@napi-rs/canvas-linux-arm-gnueabihf": "1.0.8", "@napi-rs/canvas-linux-arm64-gnu": "1.0.8", "@napi-rs/canvas-linux-arm64-musl": "1.0.8", "@napi-rs/canvas-linux-riscv64-gnu": "1.0.8", "@napi-rs/canvas-linux-x64-gnu": "1.0.8", "@napi-rs/canvas-linux-x64-musl": "1.0.8", "@napi-rs/canvas-win32-arm64-msvc": "1.0.8", "@napi-rs/canvas-win32-x64-msvc": "1.0.8" } }, "sha512-/SaLcvlqGWdm0HSCWMgHu7cjJiQXfP8/mOY+6dUyV9flQz7sPBBZ+ed2zYtoukojPmxOaL7bm+d/G4GeWWoN7g=="],
+
+    "@napi-rs/canvas-android-arm64": ["@napi-rs/canvas-android-arm64@1.0.8", "", { "os": "android", "cpu": "arm64" }, "sha512-5+nkh8i3gt6lqS/d2jTZ1xAn6tdgtB4Lf1mW6T0Qm5/rXNwBuV1sAEyLEWan5o9gJPU/GuvHR3rvSeZ+FaGrbw=="],
+
+    "@napi-rs/canvas-darwin-arm64": ["@napi-rs/canvas-darwin-arm64@1.0.8", "", { "os": "darwin", "cpu": "arm64" }, "sha512-7jQ47gi+fZ7KJmfc/5rNyy1CYw/cu4kZ0KPIYbo9UUgSdW0bKQJpt+WihEor6s4Lyp7+xc3a+3HeyXmAEbbnPg=="],
+
+    "@napi-rs/canvas-darwin-x64": ["@napi-rs/canvas-darwin-x64@1.0.8", "", { "os": "darwin", "cpu": "x64" }, "sha512-rRjDMZs9pIRKGxgijwezplKc1RnJsqUokrA9h88bbTkqQ+7ePj0ZN4ZnZDy8Vu0tXs7KRlI2tQLaK4mx9QlxHg=="],
+
+    "@napi-rs/canvas-linux-arm-gnueabihf": ["@napi-rs/canvas-linux-arm-gnueabihf@1.0.8", "", { "os": "linux", "cpu": "arm" }, "sha512-jGcCd+8ra6Q61xKqZeiItujTpp9a9eRLcQ0jW6qYNku+WpupqOPFPY0SrsuSnXFviJwkpKYT9p7QrB4lsf3LNQ=="],
+
+    "@napi-rs/canvas-linux-arm64-gnu": ["@napi-rs/canvas-linux-arm64-gnu@1.0.8", "", { "os": "linux", "cpu": "arm64" }, "sha512-od6I2Y7kU7i1SwZYG2EKW8rWz6JiedtPpko4WEe1DDsiikrfaotVBCRaUTM5/yeZKaZ92EatoAS+5xG+6uJlYA=="],
+
+    "@napi-rs/canvas-linux-arm64-musl": ["@napi-rs/canvas-linux-arm64-musl@1.0.8", "", { "os": "linux", "cpu": "arm64" }, "sha512-yYkPbJDJiWj6N0gASA3CAvRypZmVpJnxU0DQg3aBhneLDQde9TPLKADsQkobNoJUtTT/lj46aWpzT48PDb3Qcg=="],
+
+    "@napi-rs/canvas-linux-riscv64-gnu": ["@napi-rs/canvas-linux-riscv64-gnu@1.0.8", "", { "os": "linux", "cpu": "none" }, "sha512-PB00MSKAp4VwK/xwe6duKxRKmH8UH4GIl1pqHSbxng0jnU9Dr7FwaDypDiqwNFZ774N+8G7mJLGuLtg9NTcQsg=="],
+
+    "@napi-rs/canvas-linux-x64-gnu": ["@napi-rs/canvas-linux-x64-gnu@1.0.8", "", { "os": "linux", "cpu": "x64" }, "sha512-TWM2XWJoitLiIPCvgJh7SriC+L/T9qkYCVzC66AidsZy0QP1hkKzBzVwshCdcA3q6fIn3yE0ISbq4lMJSy8jFw=="],
+
+    "@napi-rs/canvas-linux-x64-musl": ["@napi-rs/canvas-linux-x64-musl@1.0.8", "", { "os": "linux", "cpu": "x64" }, "sha512-hb20MxKXXb5IB7AAwN8UHz9WRsa2HmdZfjsDCzjElwJoeV1aotVEwFU4FrFQcYQVzsJQLeaCc/2Qdt/0Q72mMg=="],
+
+    "@napi-rs/canvas-win32-arm64-msvc": ["@napi-rs/canvas-win32-arm64-msvc@1.0.8", "", { "os": "win32", "cpu": "arm64" }, "sha512-WwPN08IXE4SkL+FhJyPz/iFnycMAUkbphFIT4cmKLlvbSU0Zfn1R7BGJ3Hqky1S89QUYc0Q4IOScXb/42Re9wQ=="],
+
+    "@napi-rs/canvas-win32-x64-msvc": ["@napi-rs/canvas-win32-x64-msvc@1.0.8", "", { "os": "win32", "cpu": "x64" }, "sha512-XkrVqKb+pxyba7kjy2LJvABFVBTE0DNpEl7MrG4OYUmaWarrXH+t54z/Czj2YxCKtizYTV4mg6phNm3x24qjhQ=="],
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.2.0", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^2.0.0-alpha.3", "@emnapi/runtime": "^2.0.0-alpha.3" } }, "sha512-kDoONqMa+VnZ4vvvu/ZUurpJ4gkZU57e7g69qpNgWhYcZFPUHZM2CEMKm+cG6ufDVALbjMvfmMjFVqaK7uEMnA=="],
 

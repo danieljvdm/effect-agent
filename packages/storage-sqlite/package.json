@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-sqlite",
-  "version": "0.1.0-beta.43",
+  "version": "0.1.0-beta.47",
   "description": "Node SQLite persistence adapters for the Effect Agent durable runtime and optional memory lifecycle.",
   "license": "MIT",
   "repository": {
@@ -13,9 +13,19 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./SqliteActivityStore": "./src/SqliteActivityStore.ts",
+    "./SqliteScheduleStore": "./src/SqliteScheduleStore.ts",
+    "./SqliteStorageConfig": "./src/SqliteStorageConfig.ts",
+    "./SqliteStorageError": "./src/SqliteStorageError.ts",
+    "./SqliteStorageFailpoint": "./src/SqliteStorageFailpoint.ts",
+    "./SqliteStorageVersion": "./src/SqliteStorageVersion.ts",
+    "./SqliteSubmissionLedger": "./src/SqliteSubmissionLedger.ts",
+    "./SqliteSubscriptionStore": "./src/SqliteSubscriptionStore.ts",
+    "./SqliteThreadStore": "./src/SqliteThreadStore.ts",
+    "./testing/SqliteStorageFailpointTesting": "./src/SqliteStorageFailpointTesting.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/platform-node",
-  "version": "0.1.0-beta.43",
+  "version": "0.1.0-beta.47",
   "description": "Class DN layer assembly for Effect Agent: the durable Node/SQLite runtime host, wake scheduler, and ownership drain.",
   "license": "MIT",
   "repository": {
@@ -13,8 +13,15 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./NodeDurableAgentRuntime": "./src/NodeDurableAgentRuntime.ts",
+    "./NodeDurableHost": "./src/NodeDurableHost.ts",
+    "./NodeScheduling": "./src/NodeScheduling.ts",
+    "./NodeSubscriptions": "./src/NodeSubscriptions.ts",
+    "./NodeWakeScheduler": "./src/NodeWakeScheduler.ts",
+    "./NodeWorkflow": "./src/NodeWorkflow.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -29,6 +36,7 @@
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/thread": "workspace:*",
+    "@effect-agent/workflow": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:"
   },

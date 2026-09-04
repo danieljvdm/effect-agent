@@ -1,5 +1,5 @@
-import { IdGenerator } from "@effect-agent/core";
-import { ThreadHistoryError } from "@effect-agent/thread/history";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { ThreadHistoryError } from "@effect-agent/engine/ThreadHistory";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Schema } from "effect";
 import { Command } from "effect/unstable/cli";

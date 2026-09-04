@@ -1,57 +1,72 @@
-import { Agent, AgentPolicy, ThreadId, ToolCallId } from "@effect-agent/core";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import {
+  ObligationThresholds,
+  RECOVERY_DECISION_MEANINGS,
+  RetryCommand,
+  renderRecoveryExplanation,
+  type IntegrityCheckName,
+  type IntegrityReport,
+  type ObligationReport,
+  type RecoveryExplanation,
+} from "@effect-agent/thread/Admin";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableExplainFailure,
+  type DurableObligationFailure,
+  type DurableRetryFailure,
+  type DurableSubmitOptions,
+  type DurableVerifyFailure,
+  type RecoveryReport,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
+import {
+  OperationAuthorizer,
+  OperationDenied,
+  type AuthorizedOperation,
+  type OperationAuthorizationRequest,
+  type OperationAuthorizerService,
+} from "@effect-agent/thread/OperationAuthorizer";
+import {
+  CanonicalRecordEnvelope,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  RecordEnvelope,
+  UserInputRecorded,
+  type BatchId,
+} from "@effect-agent/thread/Records";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
-  CanonicalRecordEnvelope,
+  IdempotencyKey,
+  Principal,
+  RecoverySnapshot,
+  RecoverySnapshotRequest,
+  ResolutionNeverHappened,
+  SubmissionLedger,
+  SubmissionLookupByKey,
+  SubmissionLookupById,
+  UnknownResolutionCommand,
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { verifyThreadInvariants } from "@effect-agent/thread/ThreadInvariants";
+import {
   ThreadExport,
   ThreadExportRequest,
   ThreadRead,
   ThreadStore,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
-  IdempotencyKey,
-  ObligationThresholds,
-  OperationAuthorizer,
-  OperationDenied,
-  Principal,
-  ProducerId,
-  RECOVERY_DECISION_MEANINGS,
-  RecordEnvelope,
-  RecoverySnapshot,
-  RecoverySnapshotRequest,
-  ResolutionNeverHappened,
-  RetryCommand,
-  SubmissionLedger,
-  SubmissionLookupByKey,
-  SubmissionLookupById,
-  ToolReconciler,
-  UnknownResolutionCommand,
-  UserInputRecorded,
-  WakeScheduler,
-  renderRecoveryExplanation,
-  verifyThreadInvariants,
-  type AuthorizedOperation,
-  type BatchId,
-  type DurableExplainFailure,
-  type DurableObligationFailure,
-  type DurableRetryFailure,
-  type DurableRuntimeFailpointLocation,
-  type DurableSubmitOptions,
-  type DurableVerifyFailure,
-  type IntegrityCheckName,
-  type IntegrityReport,
-  type ObligationReport,
-  type OperationAuthorizationRequest,
-  type OperationAuthorizerService,
-  type RecoveryExplanation,
-  type RecoveryReport,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";

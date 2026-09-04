@@ -1,5 +1,28 @@
 # @effect-agent/core
 
+## 0.1.0-beta.47
+
+### Minor Changes
+
+- [#316](https://github.com/danieljvdm/effect-agent/pull/316) [`e6ff3bc`](https://github.com/danieljvdm/effect-agent/commit/e6ff3bcd1b5ce0f2348de668853482ba9d5e126b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Admit remembering durably and process it in a separate host-owned worker with saved proposals, exact command retries, conflict rebase, and source invalidation. Bind the portable checkpoint contract to existing host jobs and retain source references for later cleanup.
+
+## 0.1.0-beta.46
+
+### Minor Changes
+
+- [#313](https://github.com/danieljvdm/effect-agent/pull/313) [`c1a6e6a`](https://github.com/danieljvdm/effect-agent/commit/c1a6e6a915be73a49b2c266e2df74256f44c25e2) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Import module namespaces from package roots, or import declarations from their explicit PascalCase module paths, following the package map's migration examples. Discard unused modules from audited packages when bundling consumers.
+  BEHAVIOR CHANGE: Replace flat declaration imports, lowercase aggregate paths, cross-package aliases, and internal helper imports with their documented owning modules; use `MemoryThreadStoreLive` instead of `MemoryStorageLive`.
+
+## 0.1.0-beta.45
+
+## 0.1.0-beta.44
+
+### Patch Changes
+
+- [#307](https://github.com/danieljvdm/effect-agent/pull/307) [`f8365ee`](https://github.com/danieljvdm/effect-agent/commit/f8365eee4048076ced0a79b9149efc29297b7c41) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Upgrade to Effect rc.112 and `effect-cf` 0.40.0 while preserving MCP transports and Cloudflare host behavior.
+
+  BEHAVIOR CHANGE: Upgrade Effect and its provider/platform/SQL packages to rc.112 or a compatible version. In Cloudflare hosts, provide `effect-cf@^0.40.0` and enable `nodejs_compat` for its async context support.
+
 ## 0.1.0-beta.43
 
 ## 0.1.0-beta.42

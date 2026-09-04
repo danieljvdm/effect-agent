@@ -1,43 +1,54 @@
-import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
-import type { SubmissionId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import { type SubmissionId } from "@effect-agent/core/Identifiers";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import {
   RunContextPreparation,
   RunToolAuthorization,
-  ToolExecutionClass,
   toolFailureObserverLayer,
   type ToolFailureObservation,
-} from "@effect-agent/engine";
+} from "@effect-agent/engine/RunOptions";
 import {
-  CurrentSqliteStorageVersion,
-  SqliteStorageCompatibilityError,
-  type SqliteStorageInitializationError,
-} from "@effect-agent/storage-sqlite";
+  NodeDurableAgentRuntime,
+  NodeDurableAgentRuntimeConfig,
+  type NodeDurableAgentRuntimeInitializationError,
+  type NodeDurableAgentRuntimeOptions,
+  type NodeDurableAgentRuntimeServices,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import * as NodeHost from "@effect-agent/platform-node/NodeDurableHost";
+import { SqliteStorageCompatibilityError } from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { CurrentSqliteStorageVersion } from "@effect-agent/storage-sqlite/SqliteStorageVersion";
+import { type SqliteStorageInitializationError } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import type { DurableBindingFailure } from "@effect-agent/thread/AgentRegistration";
+import { type DigestError, digestDefinitions, digestJson } from "@effect-agent/thread/Digest";
 import {
-  AdmissionRequest,
-  ClaimRequest,
-  ThreadRead,
-  ThreadStore,
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+  type DurableWorkerFailure,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
+import {
   DefinitionDigests,
   DefinitionDigestInput,
   Digest,
-  type DigestError,
-  digestDefinitions,
-  digestJson,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
+  ProducerId,
+  type PersistedJson,
+} from "@effect-agent/thread/Records";
+import {
+  AdmissionRequest,
+  ClaimRequest,
   IdempotencyKey,
   MarkReadyRequest,
   Principal,
-  ProducerId,
   SubmissionLedger,
   SubmissionLookupById,
-  WakeScheduler,
-  type DurableSubmitOptions,
-  type DurableWorkerFailure,
-  type PersistedJson,
   type SubmissionState,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -63,15 +74,6 @@ import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import {
-  NodeDurableHost,
-  NodeDurableRuntime,
-  NodeDurableRuntimeConfig,
-  type NodeDurableRuntimeInitializationError,
-  type NodeDurableRuntimeOptions,
-  type NodeDurableRuntimeServices,
-} from "../src/index.ts";
-
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
     ? (<Value>() => Value extends Right ? 1 : 2) extends <Value>() => Value extends Left ? 1 : 2
@@ -80,13 +82,13 @@ type Equal<Left, Right> =
     : false;
 type Assert<Value extends true> = Value;
 
-const runtimeLayerProbe = NodeDurableRuntime.layer({
+const runtimeLayerProbe = NodeDurableAgentRuntime.layer({
   filename: "unused.sqlite",
   deploymentId: "deployment-proof",
   producerId: "producer-proof",
 });
 
-const hostLayerProbe = NodeDurableHost.layer();
+const hostLayerProbe = NodeDurableHost.layer;
 
 class ContextSetupError extends Schema.TaggedError<ContextSetupError>()("ContextSetupError", {}) {}
 class AuthorizationSetupError extends Schema.TaggedError<AuthorizationSetupError>()(
@@ -128,21 +130,24 @@ const configuredAuthorization = Layer.effect(
 );
 
 type RuntimeLayerServicesProof = Assert<
-  Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableRuntimeServices>
+  Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableAgentRuntimeServices>
 >;
 type RuntimeLayerErrorProof = Assert<
-  Equal<Layer.Error<typeof runtimeLayerProbe>, NodeDurableRuntimeInitializationError>
+  Equal<Layer.Error<typeof runtimeLayerProbe>, NodeDurableAgentRuntimeInitializationError>
 >;
 type RuntimeLayerRequirementsProof = Assert<Equal<Layer.Services<typeof runtimeLayerProbe>, never>>;
 type RuntimeInitializationErrorProof = Assert<
   Equal<
-    NodeDurableRuntimeInitializationError,
+    NodeDurableAgentRuntimeInitializationError,
     | SqliteStorageInitializationError
-    | Extract<NodeDurableRuntimeInitializationError, { readonly _tag: "NodePlatformConfigError" }>
+    | Extract<
+        NodeDurableAgentRuntimeInitializationError,
+        { readonly _tag: "NodePlatformConfigError" }
+      >
   >
 >;
 type HostLayerRequirementsProof = Assert<
-  Equal<Layer.Services<typeof hostLayerProbe>, DurableAgentRuntime | NodeDurableRuntimeConfig>
+  Equal<Layer.Services<typeof hostLayerProbe>, DurableAgentRuntime | NodeDurableAgentRuntimeConfig>
 >;
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -156,8 +161,8 @@ const decodeDeploymentId = Schema.decodeSync(AdmissionRequest.fields.deploymentI
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: "deployment-platform-node",
   producerId: "producer-platform-node",
@@ -237,12 +242,12 @@ const withSql = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientSe
 
 /** One host "process": the full DN stack over `filename`, closed (and drained) when `effect` ends. */
 const withHost = <A, E, R>(
-  options: NodeDurableRuntimeOptions,
+  options: NodeDurableAgentRuntimeOptions,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<
   A,
-  E | Layer.Error<typeof hostLayerProbe> | NodeDurableRuntimeInitializationError,
-  Exclude<R, NodeDurableHost | NodeDurableRuntimeServices>
+  E | Layer.Error<typeof hostLayerProbe> | NodeDurableAgentRuntimeInitializationError,
+  Exclude<R, NodeDurableHost | NodeDurableAgentRuntimeServices>
 > => Effect.provide(effect, NodeDurableHost.layerStack(options));
 
 const failureOf = <A, E>(exit: Exit.Exit<A, E>): unknown => {
@@ -279,9 +284,207 @@ const readLogTags = (threadId: ThreadId) =>
     return records.map((envelope) => envelope.record.payload._tag);
   });
 
-describe("NodeDurableRuntime", () => {
+describe("NodeDurableAgentRuntime", () => {
+  it.effect.each(["failure", "defect", "timeout", "interruption"] as const)(
+    "supervises managed workers and releases their resources on %s",
+    (mode) =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<NodeDurableHost["Service"]>();
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const marks: Array<string> = [];
+          const model = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
+
+          class Resource extends Context.Service<Resource, string>()("test/ManagedHostResource") {}
+
+          const agent = Agent.withModel(
+            Agent.make("managed-worker", {
+              input: plannerDefinition.input,
+              output: plannerDefinition.output,
+              instructions: () => Resource,
+              toolkit: Toolkit.empty,
+            }),
+            model,
+          );
+
+          const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });
+
+          const digests = yield* digestDefinitions(definitions).pipe(
+            Effect.provide(NodeCrypto.layer),
+          );
+
+          const live = NodeHost.layer(
+            [{ agent, definitions }],
+            runtimeOptions(filename, {
+              runtimeFailpoint: (location) =>
+                location === "claim:after-claim"
+                  ? Effect.gen(function* () {
+                      yield* Deferred.succeed(started, undefined);
+                      yield* Deferred.await(release);
+                      if (mode === "failure")
+                        return yield* DurableRuntimeFailpointError.make({ location });
+                      if (mode === "defect") return yield* Effect.die("worker defect");
+
+                      return yield* Effect.never;
+                    }).pipe(
+                      Effect.ensuring(
+                        Effect.sync(() => {
+                          marks.push("worker-finalized");
+                        }),
+                      ),
+                    )
+                  : Effect.void,
+            }),
+          ).pipe(
+            Layer.provide(
+              Layer.effect(
+                Resource,
+                Effect.acquireRelease(Effect.succeed("Answer as JSON."), () =>
+                  Effect.sync(() => {
+                    marks.push("resource-finalized");
+                  }),
+                ),
+              ),
+            ),
+          );
+
+          const main = Effect.gen(function* () {
+            const host = yield* NodeDurableHost;
+
+            yield* Deferred.succeed(ready, host);
+            yield* host.submit(
+              agent,
+              { question: "wait" },
+              {
+                ...submitOptions("managed-thread", "managed-input"),
+                definitions: digests,
+              },
+            );
+            yield* NodeHost.run.pipe(
+              Effect.onError(() =>
+                mode === "failure" || mode === "defect"
+                  ? Effect.gen(function* () {
+                      expect(yield* host.admissionOpen).toBe(false);
+                      expect(
+                        yield* host
+                          .submit(
+                            agent,
+                            { question: "too late" },
+                            {
+                              ...submitOptions("late-thread", "late-input"),
+                              definitions: digests,
+                            },
+                          )
+                          .pipe(Effect.result),
+                      ).toMatchObject({
+                        _tag: "Failure",
+                        failure: { _tag: "AdmissionClosed" },
+                      });
+                    })
+                  : Effect.void,
+              ),
+            );
+          }).pipe(Effect.provide(live));
+
+          const fiber = yield* (
+            mode === "timeout" ? main.pipe(Effect.timeout("1 second")) : main
+          ).pipe(Effect.forkChild);
+
+          const host = yield* Deferred.await(ready);
+
+          yield* Deferred.await(started);
+          yield* Deferred.succeed(release, undefined);
+          if (mode === "timeout") yield* TestClock.adjust("1 second");
+          if (mode === "interruption") yield* Fiber.interrupt(fiber);
+          const exit = yield* Fiber.await(fiber);
+
+          expect(marks).toEqual(["worker-finalized", "resource-finalized"]);
+          expect(yield* host.admissionOpen).toBe(false);
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (mode === "failure")
+            expect(failureOf(exit)).toMatchObject({ _tag: "DurableRuntimeFailpointError" });
+          if (mode === "defect") expect(failureOf(exit)).toBe("worker defect");
+          if (mode === "timeout") expect(failureOf(exit)).toMatchObject({ _tag: "TimeoutError" });
+          if (mode === "interruption") expect(Exit.hasInterrupts(exit)).toBe(true);
+        }),
+      ),
+  );
+
   it.effect(
-    "compiles registrations in the host Scope and retains their services until shutdown",
+    "shares one bounded managed pool across observers and closes admission before draining it",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>();
+          const ready = yield* Deferred.make<NodeDurableHost["Service"]>();
+          const claimed = yield* Ref.make(0);
+          const finalized = yield* Ref.make(0);
+          const model = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
+          const agent = Agent.withModel(plannerDefinition, model);
+          const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });
+
+          const digests = yield* digestDefinitions(definitions).pipe(
+            Effect.provide(NodeCrypto.layer),
+          );
+
+          const live = NodeHost.layer(
+            [{ agent, definitions }],
+            runtimeOptions(filename, {
+              workerConcurrency: 2,
+              runtimeFailpoint: (location) =>
+                location === "claim:after-claim"
+                  ? Effect.gen(function* () {
+                      const count = yield* Ref.updateAndGet(claimed, (n) => n + 1);
+
+                      if (count === 2) yield* Deferred.succeed(started, undefined);
+
+                      return yield* Effect.never;
+                    }).pipe(
+                      Effect.ensuring(
+                        Effect.gen(function* () {
+                          const host = yield* Deferred.await(ready);
+
+                          expect(yield* host.admissionOpen).toBe(false);
+                          yield* Ref.update(finalized, (n) => n + 1);
+                        }),
+                      ),
+                    )
+                  : Effect.void,
+            }),
+          );
+
+          yield* Effect.gen(function* () {
+            const host = yield* NodeDurableHost;
+
+            yield* Deferred.succeed(ready, host);
+            for (const id of ["first", "second", "third"]) {
+              yield* host.submit(
+                agent,
+                { question: id },
+                {
+                  ...submitOptions(id, id),
+                  definitions: digests,
+                },
+              );
+            }
+            yield* Deferred.await(started);
+            const first = yield* NodeHost.run.pipe(Effect.forkChild);
+            const second = yield* NodeHost.run.pipe(Effect.forkChild);
+
+            yield* Fiber.interrupt(first);
+            yield* Fiber.interrupt(second);
+            expect(yield* host.admissionOpen).toBe(true);
+            expect(yield* Ref.get(claimed)).toBe(2);
+            expect(yield* Ref.get(finalized)).toBe(0);
+          }).pipe(Effect.provide(live));
+          expect(yield* Ref.get(finalized)).toBe(2);
+        }),
+      ),
+  );
+
+  it.effect(
+    "starts registered workers with the host Layer and retains their services until shutdown",
     () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -329,7 +532,7 @@ describe("NodeDurableRuntime", () => {
             tools: [],
           });
 
-          const live = NodeDurableHost.layerRegistered(
+          const live = NodeHost.layer(
             [{ agent, definitions }],
             runtimeOptions(filename, {
               storageFailpoint: (location) =>
@@ -339,16 +542,52 @@ describe("NodeDurableRuntime", () => {
             }),
           );
 
+          const registered = NodeDurableAgentRuntime.layerRegistered(
+            [{ agent, definitions }],
+            runtimeOptions(filename),
+          );
+
+          const registeredOutput: Assert<
+            Equal<Layer.Success<typeof registered>, NodeDurableAgentRuntimeServices>
+          > = true;
+
+          const registeredRequirements: Assert<
+            Equal<Layer.Services<typeof registered>, Instructions>
+          > = true;
+
+          const registeredErrors: Assert<
+            Equal<
+              Layer.Error<typeof registered>,
+              DigestError | NodeDurableAgentRuntimeInitializationError
+            >
+          > = true;
+
           const requirements: Assert<Equal<Layer.Services<typeof live>, Instructions>> = true;
+
+          const runRequirements: Assert<
+            Equal<Effect.Services<typeof NodeHost.run>, NodeDurableHost>
+          > = true;
+
+          const runErrors: Assert<
+            Equal<Effect.Error<typeof NodeHost.run>, DurableWorkerFailure | DurableBindingFailure>
+          > = true;
 
           const errors: Assert<
             Equal<
               Layer.Error<typeof live>,
-              DigestError | DurableWorkerFailure | NodeDurableRuntimeInitializationError
+              DigestError | DurableWorkerFailure | NodeDurableAgentRuntimeInitializationError
             >
           > = true;
 
-          expect(requirements && errors).toBe(true);
+          expect(
+            requirements &&
+              runRequirements &&
+              runErrors &&
+              errors &&
+              registeredOutput &&
+              registeredRequirements &&
+              registeredErrors,
+          ).toBe(true);
 
           const digests = yield* digestDefinitions(definitions).pipe(
             Effect.provide(NodeCrypto.layer),
@@ -368,13 +607,10 @@ describe("NodeDurableRuntime", () => {
               },
             );
 
-            const worker = yield* host.runResolvedWorkers.pipe(Effect.forkChild);
-
             yield* Deferred.await(settled);
             const settlement = yield* host.awaitSettlement(receipt);
 
             expect(settlement.outcome).toBe("completed");
-            yield* Fiber.interrupt(worker);
             expect(yield* Ref.get(active)).toBe(true);
 
             return host;
@@ -424,7 +660,7 @@ describe("NodeDurableRuntime", () => {
             Effect.acquireRelease(Effect.succeed({}), () => Ref.set(released, true)),
           );
 
-          const live = NodeDurableHost.layerRegistered(
+          const live = NodeHost.layer(
             [
               {
                 agent,
@@ -457,17 +693,17 @@ describe("NodeDurableRuntime", () => {
   );
 
   it("preserves independent service construction errors and requirements through runtime and host assembly", () => {
-    const contextOnly = NodeDurableRuntime.layer({
+    const contextOnly = NodeDurableAgentRuntime.layer({
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
     });
 
-    const authorizationOnly = NodeDurableRuntime.layer({
+    const authorizationOnly = NodeDurableAgentRuntime.layer({
       ...runtimeOptions("unused.sqlite"),
       toolAuthorization: configuredAuthorization,
     });
 
-    const both = NodeDurableHost.layerRegistered([], {
+    const both = NodeHost.layer([], {
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
       toolAuthorization: configuredAuthorization,
@@ -476,7 +712,7 @@ describe("NodeDurableRuntime", () => {
     const contextErrors: Assert<
       Equal<
         Layer.Error<typeof contextOnly>,
-        NodeDurableRuntimeInitializationError | ContextSetupError
+        NodeDurableAgentRuntimeInitializationError | ContextSetupError
       >
     > = true;
 
@@ -485,7 +721,7 @@ describe("NodeDurableRuntime", () => {
     const authorizationErrors: Assert<
       Equal<
         Layer.Error<typeof authorizationOnly>,
-        NodeDurableRuntimeInitializationError | AuthorizationSetupError
+        NodeDurableAgentRuntimeInitializationError | AuthorizationSetupError
       >
     > = true;
 
@@ -497,7 +733,7 @@ describe("NodeDurableRuntime", () => {
       Equal<
         Layer.Error<typeof both>,
         | DigestError
-        | NodeDurableRuntimeInitializationError
+        | NodeDurableAgentRuntimeInitializationError
         | DurableWorkerFailure
         | ContextSetupError
         | AuthorizationSetupError
@@ -564,9 +800,9 @@ describe("NodeDurableRuntime", () => {
   it.effect("refuses out-of-bounds configuration with a typed error", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const opened = yield* Effect.service(NodeDurableRuntimeConfig).pipe(
+        const opened = yield* Effect.service(NodeDurableAgentRuntimeConfig).pipe(
           Effect.provide(
-            NodeDurableRuntime.layer(runtimeOptions(filename, { workerConcurrency: 0 })),
+            NodeDurableAgentRuntime.layer(runtimeOptions(filename, { workerConcurrency: 0 })),
           ),
           Effect.exit,
         );
@@ -655,7 +891,7 @@ describe("NodeDurableRuntime", () => {
           expect(ambient).toEqual([]);
         }).pipe(
           Effect.provide(
-            NodeDurableRuntime.layer(
+            NodeDurableAgentRuntime.layer(
               runtimeOptions(filename, {
                 toolFailureObserver: configured
                   ? {
@@ -728,114 +964,131 @@ describe("NodeDurableRuntime", () => {
     ),
   );
 
-  it.effect("captures independent preparation and authorization Layers in each Node host", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        const marks: Array<string> = [];
+  it.effect(
+    "captures independent preparation and authorization Layers in each registered Node host",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const marks: Array<string> = [];
 
-        const tools = Toolkit.make(
-          Tool.make("book", {
-            parameters: Schema.Struct({}),
-            success: Schema.String,
-          }).annotate(ToolExecutionClass, "readonly"),
-        );
+          const tools = Toolkit.make(
+            Tool.make("book", {
+              parameters: Schema.Struct({}),
+              success: Schema.String,
+            }).annotate(ToolExecutionClass, "readonly"),
+          );
 
-        const model = yield* makeScriptedModel((call) => [
-          {
-            type: "tool-call",
-            id: `book-${call}`,
-            name: "book",
-            params: {},
-            providerExecuted: false,
-          },
-          { type: "finish", reason: "tool-calls", usage },
-        ]);
+          const model = yield* makeScriptedModel((call) => [
+            {
+              type: "tool-call",
+              id: `book-${call}`,
+              name: "book",
+              params: {},
+              providerExecuted: false,
+            },
+            { type: "finish", reason: "tool-calls", usage },
+          ]);
 
-        const agent = Agent.withModel(
-          Agent.make("node-run-services", {
-            input: Schema.String,
-            output: Schema.String,
-            instructions: "Book it.",
-            toolkit: tools,
-            policy: plannerDefinition.policy,
-          }),
-          model,
-        );
-
-        const handlers = tools.toLayer({
-          book: () =>
-            Effect.sync(() => {
-              marks.push("handler");
-
-              return "booked";
+          const agent = Agent.withModel(
+            Agent.make("node-run-services", {
+              input: Schema.String,
+              output: Schema.String,
+              instructions: "Book it.",
+              toolkit: tools,
+              policy: plannerDefinition.policy,
             }),
-        });
+            model,
+          );
 
-        const threadId = decodeThreadId("node-run-services");
-
-        for (const incarnation of [1, 2]) {
-          const runContext = Layer.effect(
-            RunContextPreparation,
-            Effect.acquireRelease(
+          const handlers = tools.toLayer({
+            book: () =>
               Effect.sync(() => {
-                marks.push(`acquire-context:${incarnation}`);
+                marks.push("handler");
 
-                return RunContextPreparation.of({
-                  hook: {
-                    prepare: ({ source }) =>
-                      Effect.sync(() => {
-                        marks.push(`prepare:${incarnation}`);
-                        if (incarnation === 2) expect(JSON.stringify(source)).toContain("booked");
-
-                        return { prompt: source };
-                      }),
-                  },
-                });
+                return "booked";
               }),
-              () =>
-                Effect.sync(() => {
-                  marks.push(`release-context:${incarnation}`);
-                }),
-            ),
+          });
+
+          const definitions = DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" });
+
+          const definitionsDigest = yield* digestDefinitions(definitions).pipe(
+            Effect.provide(NodeCrypto.layer),
           );
 
-          const toolAuthorization = Layer.effect(
-            RunToolAuthorization,
-            Effect.acquireRelease(
-              Effect.sync(() =>
-                RunToolAuthorization.of({
-                  authorize: () =>
-                    Effect.sync(() => {
-                      marks.push(`authorize:${incarnation}`);
+          const threadId = decodeThreadId("node-run-services");
 
-                      return incarnation === 1
-                        ? { _tag: "allowed" as const }
-                        : { _tag: "denied" as const, reason: "revoked" };
-                    }),
+          for (const incarnation of [1, 2]) {
+            const runContext = Layer.effect(
+              RunContextPreparation,
+              Effect.acquireRelease(
+                Effect.sync(() => {
+                  marks.push(`acquire-context:${incarnation}`);
+
+                  return RunContextPreparation.of({
+                    hook: {
+                      prepare: ({ source }) =>
+                        Effect.sync(() => {
+                          marks.push(`prepare:${incarnation}`);
+                          if (incarnation === 2) expect(JSON.stringify(source)).toContain("booked");
+
+                          return { prompt: source };
+                        }),
+                    },
+                  });
                 }),
+                () =>
+                  Effect.sync(() => {
+                    marks.push(`release-context:${incarnation}`);
+                  }),
               ),
-              () =>
-                Effect.sync(() => {
-                  marks.push(`release-authorization:${incarnation}`);
-                }),
-            ),
-          );
+            );
 
-          yield* withHost(
-            runtimeOptions(filename, {
-              runContext,
-              toolAuthorization,
-              runtimeFailpoint: (location) =>
-                incarnation === 1 && location === "turn:after-results-append"
-                  ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
-                  : Effect.void,
-            }),
-            Effect.gen(function* () {
+            const toolAuthorization = Layer.effect(
+              RunToolAuthorization,
+              Effect.acquireRelease(
+                Effect.sync(() =>
+                  RunToolAuthorization.of({
+                    authorize: () =>
+                      Effect.sync(() => {
+                        marks.push(`authorize:${incarnation}`);
+
+                        return incarnation === 1
+                          ? { _tag: "allowed" as const }
+                          : { _tag: "denied" as const, reason: "revoked" };
+                      }),
+                  }),
+                ),
+                () =>
+                  Effect.sync(() => {
+                    marks.push(`release-authorization:${incarnation}`);
+                  }),
+              ),
+            );
+
+            const live = NodeDurableHost.layerRegistered(
+              [{ agent, definitions }],
+              runtimeOptions(filename, {
+                runContext,
+                toolAuthorization,
+                runtimeFailpoint: (location) =>
+                  incarnation === 1 && location === "turn:after-results-append"
+                    ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+                    : Effect.void,
+              }),
+            ).pipe(Layer.provide(handlers));
+
+            yield* Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
 
               if (incarnation === 1) {
-                yield* runtime.submit(agent, "book", submitOptions(threadId, "book"));
-                const interrupted = yield* runtime.processThread(agent, threadId).pipe(Effect.exit);
+                yield* runtime.submit(agent, "book", {
+                  ...submitOptions(threadId, "book"),
+                  definitions: definitionsDigest,
+                });
+
+                const interrupted = yield* runtime
+                  .processThreadResolved(threadId)
+                  .pipe(Effect.exit);
 
                 expect(failureOf(interrupted)).toHaveProperty(
                   "_tag",
@@ -843,7 +1096,7 @@ describe("NodeDurableRuntime", () => {
                 );
               } else {
                 const settlements = yield* runtime
-                  .processThread(agent, threadId)
+                  .processThreadResolved(threadId)
                   .pipe(Effect.provide(RunToolAuthorization.allowAll));
 
                 expect(settlements[0]).toMatchObject({
@@ -851,24 +1104,23 @@ describe("NodeDurableRuntime", () => {
                   failure: { errorTag: "AgentToolAuthorizationDenied" },
                 });
               }
-            }).pipe(Effect.provide(handlers)),
-          );
-          expect(marks).toContain(`release-context:${incarnation}`);
-          expect(marks).toContain(`release-authorization:${incarnation}`);
-        }
-        expect(marks.filter((mark) => /^(authorize|handler)/.test(mark))).toEqual([
-          "authorize:1",
-          "handler",
-          "authorize:2",
-        ]);
-        for (const incarnation of [1, 2]) {
-          expect(marks).toContain(`prepare:${incarnation}`);
-          expect(marks.indexOf(`prepare:${incarnation}`)).toBeLessThan(
-            marks.indexOf(`authorize:${incarnation}`),
-          );
-        }
-      }),
-    ),
+            }).pipe(Effect.provide(live));
+            expect(marks).toContain(`release-context:${incarnation}`);
+            expect(marks).toContain(`release-authorization:${incarnation}`);
+          }
+          expect(marks.filter((mark) => /^(authorize|handler)/.test(mark))).toEqual([
+            "authorize:1",
+            "handler",
+            "authorize:2",
+          ]);
+          for (const incarnation of [1, 2]) {
+            expect(marks).toContain(`prepare:${incarnation}`);
+            expect(marks.indexOf(`prepare:${incarnation}`)).toBeLessThan(
+              marks.indexOf(`authorize:${incarnation}`),
+            );
+          }
+        }),
+      ),
   );
 
   it.effect("keeps projected root and joined inputs private across Node host recovery", () =>
@@ -1332,7 +1584,7 @@ describe("NodeDurableRuntime", () => {
           workerConcurrency: 3,
         }),
         Effect.gen(function* () {
-          const nodeConfig = yield* NodeDurableRuntimeConfig;
+          const nodeConfig = yield* NodeDurableAgentRuntimeConfig;
           const sessionConfig = yield* DurableRuntimeConfig;
 
           expect(nodeConfig.workerConcurrency).toBe(3);

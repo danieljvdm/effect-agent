@@ -132,6 +132,7 @@ const readProductionEntryPoints = Effect.fn("packagePurity.readProductionEntryPo
   );
 
   const entries: Array<ProductionEntryPoint> = [];
+  const testingModules = new Set<string>();
   const manifestViolations: Array<string> = [];
 
   for (const directory of packageDirectories.sort()) {
@@ -175,7 +176,10 @@ const readProductionEntryPoints = Effect.fn("packagePurity.readProductionEntryPo
     for (const [exportPath, sourcePath] of Object.entries(manifest.exports).sort(
       ([left], [right]) => left.localeCompare(right),
     )) {
-      if (isTestingExport(exportPath)) continue;
+      if (isTestingExport(exportPath)) {
+        testingModules.add(path.join(relativeDirectory, sourcePath).replaceAll("\\", "/"));
+        continue;
+      }
       entries.push({
         displayName: displayNameFor(manifest.name, exportPath),
         sourcePath: path.join(relativeDirectory, sourcePath),
@@ -187,12 +191,13 @@ const readProductionEntryPoints = Effect.fn("packagePurity.readProductionEntryPo
     return yield* new PackagePurityViolation({ details: manifestViolations });
   }
 
-  return entries;
+  return { entries, testingModules };
 });
 
 const auditEntryPoint = Effect.fn("packagePurity.auditEntryPoint")(function* (
   repositoryRoot: string,
   entryPoint: ProductionEntryPoint,
+  testingModules: ReadonlySet<string>,
 ) {
   const result = yield* Effect.tryPromise({
     try: () =>
@@ -235,7 +240,9 @@ const auditEntryPoint = Effect.fn("packagePurity.auditEntryPoint")(function* (
   const violations: Array<PurityViolation> = [];
 
   for (const [sourcePath, input] of Object.entries(result.metafile.inputs)) {
-    const moduleReason = testOnlyModuleReason(sourcePath);
+    const moduleReason = testingModules.has(sourcePath.replaceAll("\\", "/"))
+      ? "bundles a declared testing entry point"
+      : testOnlyModuleReason(sourcePath);
 
     if (moduleReason !== undefined) violations.push({ reason: moduleReason, target: sourcePath });
     for (const imported of input.imports) {
@@ -309,15 +316,14 @@ const formatViolation = (audit: EntryPointAudit, violation: PurityViolation): st
   ].join("\n");
 };
 
-const program = Effect.gen(function* () {
-  const path = yield* Path.Path;
-  const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
-  const repositoryRoot = path.resolve(path.dirname(scriptPath), "..");
-  const entryPoints = yield* readProductionEntryPoints(repositoryRoot);
+export const verifyPackagePurity = Effect.fn("verifyPackagePurity")(function* (
+  repositoryRoot: string,
+) {
+  const { entries, testingModules } = yield* readProductionEntryPoints(repositoryRoot);
 
   const audits = yield* Effect.forEach(
-    entryPoints,
-    (entryPoint) => auditEntryPoint(repositoryRoot, entryPoint),
+    entries,
+    (entryPoint) => auditEntryPoint(repositoryRoot, entryPoint, testingModules),
     { concurrency: 4 },
   );
 
@@ -335,9 +341,16 @@ const program = Effect.gen(function* () {
   yield* Console.log(
     `Package purity check passed: ${audits.length} production entrypoints, ${moduleCount} bundled modules, ${bytes} bytes; no test-only dependency path found.`,
   );
+});
+
+const program = Effect.gen(function* () {
+  const path = yield* Path.Path;
+  const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
+
+  yield* verifyPackagePurity(path.resolve(path.dirname(scriptPath), ".."));
 }).pipe(
   Effect.tapError((error) => Console.error(error.message)),
   Effect.provide(NodeServices.layer),
 );
 
-NodeRuntime.runMain(program, { disableErrorReporting: true });
+if (import.meta.main) NodeRuntime.runMain(program, { disableErrorReporting: true });

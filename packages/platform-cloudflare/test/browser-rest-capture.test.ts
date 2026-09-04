@@ -1,4 +1,14 @@
-import { WebCapture } from "@effect-agent/capabilities";
+import * as WebCapture from "@effect-agent/capabilities/WebCapture";
+import {
+  browserRestCaptureImplementation,
+  browserRestCaptureLayer,
+  browserRestWorkersAiCaptureLayer,
+  CloudflareBrowserRest,
+} from "@effect-agent/platform-cloudflare/BrowserRestCapture";
+import {
+  BrowserQuickActionWorkersAi,
+  BrowserQuickActionWorkersAiPolicyError,
+} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
 import {
   CapturePageMarkdown,
   CapturePageScrape,
@@ -7,23 +17,12 @@ import {
   PageCaptureLimits,
   PageCaptureRequest,
   PageUrlTarget,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/PageCapture";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Logger, Redacted, Ref, Schema, Stream, type Layer } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { expectTypeOf } from "vite-plus/test";
-
-import {
-  BrowserQuickActionWorkersAi,
-  BrowserQuickActionWorkersAiPolicyError,
-} from "../src/browser-quick-action.ts";
-import {
-  browserRestCaptureImplementation,
-  browserRestCaptureLayer,
-  browserRestWorkersAiCaptureLayer,
-  CloudflareBrowserRest,
-} from "../src/browser-rest-capture.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -359,7 +358,7 @@ describe("Browser Run REST PageCapture adapter", () => {
   );
 
   it("loads as a Node-safe subpath", async () => {
-    const module = await import("@effect-agent/platform-cloudflare/browser-rest-capture");
+    const module = await import("@effect-agent/platform-cloudflare/BrowserRestCapture");
 
     expect(module.browserRestCaptureImplementation).toBe(browserRestCaptureImplementation);
   });

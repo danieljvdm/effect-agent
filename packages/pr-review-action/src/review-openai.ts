@@ -1,11 +1,11 @@
+import { type RunCostEstimator } from "@effect-agent/engine/RunOptions";
 import {
   type ReviewCostControl,
   ReviewCostSnapshot,
   type ReviewStage,
   type ReviewStrategy,
   ReviewUsage,
-  type RunCostEstimator,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
 import { Clock, Effect, Exit, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError, type Response } from "effect/unstable/ai";

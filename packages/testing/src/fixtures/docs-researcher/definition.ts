@@ -1,6 +1,8 @@
-import { Subagent, SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy } from "@effect-agent/core";
-import type { RuntimeBinding } from "@effect-agent/engine";
+import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Subagent";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { type RuntimeBinding } from "@effect-agent/engine/AgentRuntime";
 import { Context, Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 

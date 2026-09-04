@@ -1,11 +1,14 @@
-import { ScheduleStorageError, ScheduleStore } from "@effect-agent/thread";
-import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing";
+import {
+  DoScheduleTransaction,
+  scheduleStoreLayer,
+} from "@effect-agent/storage-cloudflare/DoScheduleStore";
+import { ScheduleStorageError, ScheduleStore } from "@effect-agent/thread/Schedule";
+import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing/ScheduleStoreConformance";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DoScheduleTransaction, scheduleStoreLayer } from "../src/index.ts";
 import { withScheduleStorage } from "./harness.ts";
 
 let objectCounter = 0;

@@ -1,4 +1,4 @@
-import { ReviewStrategy } from "@effect-agent/pr-review";
+import { ReviewStrategy } from "@effect-agent/pr-review/Review";
 import { Config, Console, Effect, FileSystem, Option, Schema, Stream } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";

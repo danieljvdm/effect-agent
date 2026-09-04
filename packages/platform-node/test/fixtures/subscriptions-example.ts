@@ -1,20 +1,13 @@
+import { type NodeDurableAgentRuntimeOptions } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { NodeSubscriptions } from "@effect-agent/platform-node/NodeSubscriptions";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-  SqliteStorageFailpoint,
-  subscriptionStoreLayer,
-} from "@effect-agent/storage-sqlite";
-import {
-  EventSources,
-  SubscriptionInputBindings,
-  makeSubscriptionInputBinding,
-  type SubscriptionInputBinding,
-  type SourcePartition,
-  SubscriptionAuthorizer,
-  SubscriptionIntake,
-  Subscriptions,
-  type EventSource,
-} from "@effect-agent/thread";
+} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
+import { EventSources, type EventSource } from "@effect-agent/thread/EventSource";
 import {
   acceptVerifiedGitHubWorkflowRunWebhook,
   githubWorkflowRunsHttpLayer,
@@ -26,16 +19,17 @@ import {
   makeGitHubWorkflowRunSource,
   type VerifiedGitHubWorkflowRunWebhookRequest,
   webCryptoGitHubWebhookSignatureVerifierLayer,
-} from "@effect-agent/thread/github";
+} from "@effect-agent/thread/GitHubWorkflowSource";
+import { type SourcePartition, SubscriptionAuthorizer } from "@effect-agent/thread/Subscription";
+import {
+  SubscriptionInputBindings,
+  makeSubscriptionInputBinding,
+  type SubscriptionInputBinding,
+} from "@effect-agent/thread/SubscriptionInput";
+import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
 import { NodeHttpClient } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Effect, Layer, Schema, type Redacted } from "effect";
-
-import {
-  NodeDurableHost,
-  type NodeDurableRuntimeOptions,
-  NodeSubscriptions,
-} from "../../src/index.ts";
 
 const sqliteSubscriptionInfrastructure = (filename: string) =>
   Layer.mergeAll(
@@ -52,7 +46,7 @@ const sqliteSubscriptionInfrastructure = (filename: string) =>
   );
 
 const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
-  readonly runtime: NodeDurableRuntimeOptions;
+  readonly runtime: NodeDurableAgentRuntimeOptions;
   readonly partition: SourcePartition;
   readonly sources: Layer.Layer<EventSources | SubscriptionInputBindings, E, R>;
   readonly authorizer: SubscriptionAuthorizer["Service"];
@@ -74,7 +68,7 @@ const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
  * host. The caller binds the permitted source catalog and explicit authorization policy.
  */
 export const subscriptionRuntimeLayer = (options: {
-  readonly runtime: NodeDurableRuntimeOptions;
+  readonly runtime: NodeDurableAgentRuntimeOptions;
   readonly partition: SourcePartition;
   readonly sources: ReadonlyArray<EventSource>;
   readonly bindings: ReadonlyArray<SubscriptionInputBinding>;
@@ -107,7 +101,7 @@ export const GitHubWorkflowContinuationInput = Schema.Struct({
  * arrives and no caller is waiting.
  */
 export const githubWorkflowSubscriptionRuntimeLayer = (options: {
-  readonly runtime: NodeDurableRuntimeOptions;
+  readonly runtime: NodeDurableAgentRuntimeOptions;
   readonly partition: SourcePartition;
   readonly repository: GitHubRepository;
   readonly githubToken: Redacted.Redacted<string>;

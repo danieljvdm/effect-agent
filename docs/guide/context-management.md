@@ -53,7 +53,7 @@ receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and 
 To add application instructions to each request:
 
 ```ts twoslash
-import { RunContextPreparation, type RunContextHook } from "@effect-agent/engine";
+import { RunContextPreparation, type RunContextHook } from "@effect-agent/engine/RunOptions";
 import { Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -104,7 +104,7 @@ unknown.
 This source reads a known Markdown note without a store or adapter:
 
 ```ts twoslash
-import { Memory } from "@effect-agent/capabilities";
+import * as Memory from "@effect-agent/core/Memory";
 import {
   MemoryAttribution,
   MemoryContent,
@@ -113,8 +113,11 @@ import {
   MemoryRecallError,
   MemoryRecallLimits,
   MemorySourceReference,
-} from "@effect-agent/core";
-import { RunContextPreparation, type RunTransientContextHook } from "@effect-agent/engine";
+} from "@effect-agent/core/MemoryReference";
+import {
+  RunContextPreparation,
+  type RunTransientContextHook,
+} from "@effect-agent/engine/RunOptions";
 import { Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -230,9 +233,16 @@ Keep authorization, credentials, and query policy inside an application service.
 one read method; it does not create a durable copy, write to the corpus, or create embeddings:
 
 ```ts twoslash
-import { Memory } from "@effect-agent/capabilities";
-import { type MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "@effect-agent/core";
-import { RunContextPreparation, type RunTransientContextHook } from "@effect-agent/engine";
+import * as Memory from "@effect-agent/core/Memory";
+import {
+  type MemoryLookup,
+  MemoryRecallError,
+  MemoryRecallLimits,
+} from "@effect-agent/core/MemoryReference";
+import {
+  RunContextPreparation,
+  type RunTransientContextHook,
+} from "@effect-agent/engine/RunOptions";
 import { Context, Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -307,8 +317,9 @@ and identity type. Definitions with the same identity fields but different names
 not interchangeable.
 
 ```ts twoslash
-import { MemoryKey, MemoryNamespace, MemoryScope } from "@effect-agent/core";
-import { MemoryAccess } from "@effect-agent/capabilities";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import { MemoryKey, MemoryScope } from "@effect-agent/core/MemoryStore";
 import { Schema } from "effect";
 
 const TenantId = Schema.NonEmptyString.pipe(Schema.brand("app/TenantId"));
@@ -404,13 +415,9 @@ The usual recall budget can omit a replacement that no longer fits. Source failu
 the consumer must explicitly choose any optional fallback.
 
 ```ts twoslash
-import {
-  MemoryContent,
-  MemoryKey,
-  MemoryNamespace,
-  MemoryScope,
-  MemoryWriter,
-} from "@effect-agent/core";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryContent } from "@effect-agent/core/MemoryReference";
+import { MemoryKey, MemoryScope, MemoryWriter } from "@effect-agent/core/MemoryStore";
 import { Effect, Schema } from "effect";
 
 const TeamMemory = MemoryNamespace.define({
@@ -478,7 +485,7 @@ effort and does not authorize sharing or guarantee privacy.
 For a local persistent source, install the optional SQLite adapter:
 
 ```ts twoslash
-import { memoryStoreLayer } from "@effect-agent/storage-sqlite";
+import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
 
@@ -504,6 +511,83 @@ It validates an entire candidate batch locally and returns one attributed respon
 the host decides which diagnostics to retain and who can inspect them.
 
 <a id="tool-results-are-bounded-at-the-source"></a>
+
+### Remember without delaying a response {#background-remembering}
+
+Remembering separates durable admission from extraction and memory updates. The foreground
+submits an identity-bound intent and receives a queued acknowledgement after persistence succeeds.
+Queued means accepted for processing. It does not mean that a fact was accepted, saved, or made
+available to another Thread. Admission adds bounded persistence work and can fail with a typed error.
+
+Use `Remembering.admit(store, intent)` from `effect-agent/Remembering` for admission and
+`Remembering.make({ proposal, loadSource, extract, merge, cleanup }).advance(...)` for a finite
+worker pass. The `RememberingStore` module defines the portable Schemas and injectable port.
+The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/remembering.ts)
+shows native Effect AI extraction and source-aware profile callbacks. Provide
+`RememberingStore.MutationFailpoint.layer` in production and replace it for fault tests.
+
+Automatic remembering follows the host's committed source activity and outbox. It needs no memory
+Tool or extra model turn. The outbox retains activity when admission is unavailable or full;
+that backlog does not turn a completed chat response into a failure. Explicit remember actions
+report admission failure instead of claiming success.
+
+The host runs a finite processing pass in a separate Scope with its own concurrency and model
+budgets. It owns discovery, source order, job quotas, retry deadlines, parking, and wake repair.
+Do not await processing after `AgentRuntime.run`: an awaited callback still delays the response.
+Do not hold a producer lock, database transaction, or all foreground provider permits while
+extracting, checking evidence, reading profiles, writing, retrying conflicts, or cleaning up.
+
+The protocol saves two different values:
+
+1. An extracted proposal, encoded with the application's Schema and bound to the admitted source.
+2. The exact prepared `MemoryWrite`, including its operation ID, expected revision, scopes,
+   content, and content timestamps, before dispatch to `MemoryWriter`.
+
+Unknown write outcomes retry that saved command unchanged. Only a definite `MemoryConflict`
+allows a new operation ID and rebase against the latest target. Rebase retains the saved proposal
+and does not repeat extraction. The application supplies source-aware merging so concurrent source
+contributions and human corrections survive. An operation-ID/content mismatch remains
+`MemoryOperationConflict`; it is not permission to create another command.
+
+`loadSource` checks the current authorized source after extraction and before saving a new command.
+It can return an authoritative invalidation event, which the worker durably admits. A saved command
+is already an uncertain write and must reconcile even if the source is now unavailable. Source
+changes after preparation therefore rely on durable suppression and current-source recall checks.
+Extraction may return `null` when there is no accepted fact; that finishes without reading a target.
+
+The application also supplies canonical source loading, fact acceptance, authorization, and
+conditional cleanup. Evidence must identify a known source revision and a literal quote or range
+from that source. The model cannot select a tenant, target, or authority. A valid quote proves
+provenance, not the truth of an extracted claim.
+
+Source edits, deletion, revocation, and Forget require durable suppression and cleanup admission
+before acknowledging the source event. Suppression does not discard an uncertain command:
+reconciliation must still establish its outcome and remove obsolete source-owned contributions.
+Current-source recall checks exclude invalid evidence while cleanup is pending. Human corrections
+have independent provenance and survive source cleanup. Disable new extraction separately from
+required reconciliation and cleanup.
+
+Active job removal must retain bounded source-to-target references, so later invalidation finds
+completed contributions without a prior read. Retain those references, suppression, and admission
+and write receipts throughout the host's supported replay, backfill, and restore window. Reject
+new work at capacity without evicting existing obligations. Hosts define source-position authority.
+Sequence numbers are ordered only within the same opaque authority generation. Different generations
+are incomparable, and revision strings are never ordered. The host fences old workers and performs
+any restore or authority cutover explicitly.
+An old database snapshot cannot prove that no later Forget or revocation occurred. Verify its
+lineage against the current source authority outside that restored snapshot and reject incompatible
+state before processing or recall. The protocol supplies no migration or automatic authority cutover.
+
+Recall remains the existing transient read path. Load current permitted memory and run the
+application's grouped canonical-source checks without draining jobs, waiting for readiness, or
+refreshing an index. Track first token, completed response, admission duration, and
+source-to-authorized-recall delay separately. Healthy background progress and cross-Thread
+freshness depend on the host's scheduling and source availability.
+
+Callbacks retain their typed errors and Effect service requirements. Defects and interruption
+remain distinct from expected failure; a processing deadline interrupts cooperative work and runs
+its finalizers. The helpers use named Effect spans without attaching source text, proposals,
+profiles, or private namespace identities. Hosts choose retry policy and operational metrics.
 
 ### Process committed Thread activity {#committed-memory}
 
@@ -541,22 +625,16 @@ does not become another witness. Applications that extract assistant references 
 the original `originId` instead of assigning independent evidence identity.
 
 ```ts twoslash
-import {
-  MemoryContent,
-  MemoryKey,
-  MemoryNamespace,
-  MemoryScope,
-  MemoryWrite,
-  MemoryWriter,
-  ThreadId,
-} from "@effect-agent/core";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryContent } from "@effect-agent/core/MemoryReference";
+import { MemoryKey, MemoryScope, MemoryWrite, MemoryWriter } from "@effect-agent/core/MemoryStore";
+import { ThreadId } from "@effect-agent/core/Identifiers";
 import {
   ActivityPassLimits,
-  ActivityProcessorKey,
   processCommittedActivity,
-  type CanonicalRecordEnvelope,
-  type PreparedActivity,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/CommittedActivity";
+import { ActivityProcessorKey, type PreparedActivity } from "@effect-agent/thread/ActivityStore";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import { Clock, DateTime, Effect, Schema } from "effect";
 
 // The application owns this message format and which Threads use it.
@@ -641,7 +719,8 @@ host's existing `ThreadStore` and `Crypto` Layer to the pass as well; the proces
 Thread ownership epochs, `SubmissionLedger`, or engine checkpoints for its own progress.
 
 ```ts twoslash
-import { activityProcessorStoreLayer, memoryStoreLayer } from "@effect-agent/storage-sqlite";
+import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/SqliteActivityStore";
+import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
 
@@ -689,21 +768,18 @@ passage retrieval instead of this index.
 
 ```ts twoslash
 import {
-  MemoryAccess,
   SemanticIndexLimits,
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-  Memory,
-} from "@effect-agent/capabilities";
-import {
-  MemoryKey,
-  MemoryNamespace,
-  MemoryRecallLimits,
-  MemoryScope,
-  SemanticMemoryProfile,
-} from "@effect-agent/core";
-import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
+} from "@effect-agent/capabilities/SemanticMemory";
+import * as Memory from "@effect-agent/core/Memory";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import { MemoryKey, MemoryScope } from "@effect-agent/core/MemoryStore";
+import { MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
+import { SemanticMemoryProfile } from "@effect-agent/core/SemanticMemoryIndex";
+import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory/MemorySemanticIndex";
 import { Effect, Schema } from "effect";
 
 // Keep this Layer alive across refreshes and queries. A new instance starts empty.
@@ -947,8 +1023,8 @@ cannot cover the current run. The canonical log remains append-only.
 `contextCompactorRunContextLayer` provides a `RunContextPreparation` service using your compactor:
 
 ```ts
-import { contextCompactorRunContextLayer } from "@effect-agent/capabilities";
-import { ContextCompactor } from "@effect-agent/engine";
+import { contextCompactorRunContextLayer } from "@effect-agent/capabilities/RunHooks";
+import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer } from "effect";
 

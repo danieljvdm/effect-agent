@@ -1,19 +1,11 @@
-import {
-  MemoryAccess,
-  indexMemorySource,
-  querySemanticMemory,
-  Memory,
-} from "@effect-agent/capabilities";
-import {
-  MemoryNamespace,
-  MemoryScope,
-  MemoryKey,
-  MemoryWriter,
-  SemanticMemoryIndex,
-  SemanticMemoryProfile,
-} from "@effect-agent/core";
-import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory";
-import { memoryStoreLayer } from "@effect-agent/storage-sqlite";
+import { indexMemorySource, querySemanticMemory } from "@effect-agent/capabilities/SemanticMemory";
+import * as Memory from "@effect-agent/core/Memory";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import { MemoryScope, MemoryKey, MemoryWriter } from "@effect-agent/core/MemoryStore";
+import { SemanticMemoryIndex, SemanticMemoryProfile } from "@effect-agent/core/SemanticMemoryIndex";
+import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory/MemorySemanticIndex";
+import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";

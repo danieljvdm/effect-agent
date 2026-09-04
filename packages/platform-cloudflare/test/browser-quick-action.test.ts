@@ -1,4 +1,16 @@
-import { WebCapture } from "@effect-agent/capabilities";
+import * as WebCapture from "@effect-agent/capabilities/WebCapture";
+import {
+  BrowserQuickActionBrowserBinding,
+  BrowserQuickActionRpcError,
+  BrowserQuickActionWorkersAi,
+  BrowserQuickActionWorkersAiPolicyError,
+  CloudflareBrowser,
+  browserQuickActionCaptureLayer,
+  browserQuickActionWorkersAiCaptureLayer,
+  type BrowserQuickActionCaptureOptions,
+  type BrowserQuickActionClient,
+  type BrowserQuickActionWorkersAiPolicy,
+} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
 import {
   CapturePageContent,
   CapturePageLinks,
@@ -12,24 +24,11 @@ import {
   PageUrlTarget,
   type PageCaptureError,
   type PageCaptureResult,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/PageCapture";
 import { Context, Deferred, Effect, Fiber, Layer, Schema, SchemaGetter, Stream } from "effect";
 import type { Tool } from "effect/unstable/ai";
 import { Toolkit } from "effect/unstable/ai";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-
-import {
-  BrowserQuickActionBrowserBinding,
-  BrowserQuickActionRpcError,
-  BrowserQuickActionWorkersAi,
-  BrowserQuickActionWorkersAiPolicyError,
-  CloudflareBrowser,
-  browserQuickActionCaptureLayer,
-  browserQuickActionWorkersAiCaptureLayer,
-  type BrowserQuickActionCaptureOptions,
-  type BrowserQuickActionClient,
-  type BrowserQuickActionWorkersAiPolicy,
-} from "../src/browser-quick-action.ts";
 
 interface RecordedCall {
   readonly action: "screenshot" | "content" | "markdown" | "links" | "scrape" | "json";

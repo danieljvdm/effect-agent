@@ -1,58 +1,72 @@
-import { Agent, AgentPolicy, ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
 import {
   DurableStep,
   DurableStepError,
+  ToolExecutionClass,
+} from "@effect-agent/engine/DurableStep";
+import {
   RunContextPreparation,
   RunContextPreparationPassthrough,
   RunToolAuthorization,
-  ToolExecutionClass,
   toolFailureObserverLayer,
   type ToolFailureObservation,
   type RunToolAuthorizationDecision,
   type RunToolAuthorizationRequest,
-} from "@effect-agent/engine";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+} from "@effect-agent/engine/RunOptions";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { compileRegistrations } from "@effect-agent/thread/AgentRegistration";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
 import {
   type CanonicalRecordEnvelope,
-  compileRegistrations,
   DefinitionDigestInput,
-  AbortCommand,
-  ThreadRead,
-  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
-  IdempotencyKey,
-  Principal,
   ProducerId,
-  ReconciliationCompleted,
-  ReconciliationSafeToRetry,
-  ReconciliationUncertain,
-  ResolutionAbortSubmission,
-  ResolutionCompletedWithResult,
-  ResolutionNeverHappened,
-  SubmissionLedger,
-  SubmissionLookupById,
-  ToolReconciler,
-  UnknownResolutionCommand,
+} from "@effect-agent/thread/Records";
+import {
   modelResponseInterruptedRecordId,
   modelResponseRecordId,
   promptFromCanonicalRecords,
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolStepSettledRecordId,
-  type DurableRuntimeFailpointLocation,
-  type DurableSubmitOptions,
-  type PreparedToolCallEvidence,
-  type ReconciliationDecision,
+} from "@effect-agent/thread/RunJournal";
+import {
+  AbortCommand,
+  IdempotencyKey,
+  Principal,
+  ResolutionAbortSubmission,
+  ResolutionCompletedWithResult,
+  ResolutionNeverHappened,
+  SubmissionLedger,
+  SubmissionLookupById,
+  UnknownResolutionCommand,
   type SettlementConflict,
   type UnknownResolutionConflict,
-  WakeScheduler,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import {
+  ReconciliationCompleted,
+  ReconciliationSafeToRetry,
+  ReconciliationUncertain,
+  ToolReconciler,
+  type PreparedToolCallEvidence,
+  type ReconciliationDecision,
+} from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
@@ -517,7 +531,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         },
       ]);
 
-      const runtime = yield* DurableAgentRuntime;
+      const runtime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(DurableAgentRuntime.layerWithBindings(bindings)),
+      );
 
       for (let run = 0; run < 2; run++) {
         const threadId = `attempt-scope-${run}`;
@@ -527,7 +543,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           { question: "probe" },
           { ...submitOptions(threadId, threadId), definitions: bindings[0]!.digests },
         );
-        yield* runtime.processThreadResolved(decodeThreadId(threadId), bindings);
+        yield* runtime.processThreadResolved(decodeThreadId(threadId));
       }
       expect(observed).toHaveLength(4);
       expect(observed[0]).toBe(observed[1]);
@@ -552,13 +568,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* armFailpoint("turn:after-results-append");
 
       const interrupted = yield* runtime
-        .processThreadResolved(decodeThreadId(interruptedThread), bindings)
+        .processThreadResolved(decodeThreadId(interruptedThread))
         .pipe(Effect.exit);
 
       expect(Exit.isFailure(interrupted)).toBe(true);
       expect(lifecycle.at(-1)).toBe(`close:${observed[4]}`);
       yield* clearFailpoint;
-      yield* runtime.processThreadResolved(decodeThreadId(interruptedThread), bindings);
+      yield* runtime.processThreadResolved(decodeThreadId(interruptedThread));
       expect(observed).toHaveLength(6);
       expect(observed[4]).not.toBe(observed[5]);
       expect(lifecycle.slice(-4)).toEqual([

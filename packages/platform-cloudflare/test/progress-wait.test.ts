@@ -1,9 +1,12 @@
-import { ApprovalDecisionCommand, CanonicalSequence, type Receipt } from "@effect-agent/thread";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { CanonicalSequence } from "@effect-agent/thread/Records";
+import { ApprovalDecisionCommand } from "@effect-agent/thread/SubmissionLedger";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Cause, Effect, Fiber, Option, Schema } from "effect";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
 
-import { CloudflareThreadClient, ProgressWaitRegistry } from "../src/index.ts";
+import { ProgressWaitRegistry } from "../src/internal/progress-wait.ts";
 import {
   decodeThreadId,
   BOOK_TOOL_CALL_ID,

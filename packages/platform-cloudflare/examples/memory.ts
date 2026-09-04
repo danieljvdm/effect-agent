@@ -1,14 +1,17 @@
-import type { MemoryLookup, MemoryRecallLimits, MemoryWrite } from "@effect-agent/core";
-import { MemoryAccess, MemoryNamespace, MemoryScope } from "@effect-agent/core";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { type MemoryLookup, type MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import { type MemoryWrite } from "@effect-agent/core/MemoryStore";
+import { MemoryScope } from "@effect-agent/core/MemoryStore";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
-} from "@effect-agent/storage-cloudflare";
-import { Principal } from "@effect-agent/thread";
+} from "@effect-agent/storage-cloudflare/MemoryProtocol";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Effect, Layer, Schema } from "effect";
 
-import { MemoryObject, CloudflareMemoryClient } from "../src/memory.ts";
+import { MemoryObject, CloudflareMemoryClient } from "../src/CloudflareMemory.ts";
 
 export const Projects = MemoryNamespace.define({
   name: "application/projects",

@@ -6,13 +6,12 @@ import {
   CodeExecutor,
   CodeHostCallFailure,
   CodeHostCallSuccess,
-  NetworkAllowlist,
-  NetworkDisabled,
   type CodeExecutionError,
   type CodeHostCall,
   type CodeHostCallResult,
-} from "@effect-agent/sandbox";
-import { codeExecutorConformanceCases } from "@effect-agent/testing/code-executor";
+} from "@effect-agent/sandbox/CodeExecutor";
+import { NetworkAllowlist, NetworkDisabled } from "@effect-agent/sandbox/Sandbox";
+import { codeExecutorConformanceCases } from "@effect-agent/testing/CodeExecutorConformance";
 import { DurableObject } from "cloudflare:workers";
 import {
   Cause,
@@ -30,7 +29,7 @@ import {
   disposeRpcHandle,
   dynamicWorkerCodeExecutorLayer,
   dynamicWorkerImplementation,
-} from "../../src/code-mode-executor.ts";
+} from "../../src/CloudflareCodeMode.ts";
 
 interface WorkerEnv {
   readonly LOADER: WorkerLoader;

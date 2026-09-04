@@ -1,21 +1,15 @@
-import {
-  type DurableSubmitAgent,
-  type ResolvedBinding,
-  type ScheduleCreateOptions,
-  Scheduling,
-} from "@effect-agent/thread";
+import { type NodeDurableAgentRuntimeOptions } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { NodeScheduling } from "@effect-agent/platform-node/NodeScheduling";
+import { type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+import { type DurableSubmitAgent } from "@effect-agent/thread/DurableAgentRuntime";
+import { type ScheduleCreateOptions, Scheduling } from "@effect-agent/thread/Scheduling";
 import { Effect, Layer, type Schema } from "effect";
-
-import {
-  NodeDurableHost,
-  type NodeDurableRuntimeOptions,
-  NodeScheduling,
-} from "../../src/index.ts";
 
 /** The caller supplies registered bindings, their real digests, and an explicit authorizer. */
 export const schedulingRuntimeLayer = (
   bindings: ReadonlyArray<ResolvedBinding>,
-  runtimeOptions: NodeDurableRuntimeOptions,
+  runtimeOptions: NodeDurableAgentRuntimeOptions,
 ) =>
   NodeScheduling.layer().pipe(
     Layer.provideMerge(NodeDurableHost.layerStack({ ...runtimeOptions, bindings })),

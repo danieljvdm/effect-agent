@@ -1,27 +1,29 @@
+import { digestJson } from "@effect-agent/thread/Digest";
 import {
-  AdmissionRequest,
-  ApprovalDecisionCommand,
   CanonicalSequence,
   DefinitionDigests,
   DeploymentId,
   Digest,
-  digestJson,
-  IdempotencyKey,
-  Principal,
   ProducerEpoch,
   ProducerId,
   RecordEnvelope,
-  SettlementReservation,
   SubmissionSettled,
   SubmissionSettledRecord,
+  type PersistedJson,
+  type SettlementOutcome,
+} from "@effect-agent/thread/Records";
+import {
+  AdmissionRequest,
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  SettlementReservation,
   submissionSettlementId,
   submissionSettlementRecordId,
   type AdmissionResult,
   type OwnershipToken,
   type ParentLinkage,
-  type PersistedJson,
-  type SettlementOutcome,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect, Schema } from "effect";
 import { TestClock } from "effect/testing";

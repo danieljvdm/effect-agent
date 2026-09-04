@@ -47,7 +47,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `packages/*`                        | Framework and private PR-review integration packages  |
 | `examples/demo`                     | Local browser app                                     |
 | `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
-| `examples/providers`                | Provider bindings and persistent-history example      |
+| `examples/providers`                | Provider bindings, persistent history, Workflow host  |
 | `examples/repo-ops`                 | Repository evidence auditor                           |
 | `examples/browser-run-worker-proof` | Opt-in hosted Browser Run verification; owns Wrangler |
 | `examples/pr-review-eval`           | Opt-in live review evaluation                         |
@@ -62,6 +62,7 @@ core <- engine <- capabilities
 core <- sandbox <- sandbox-local
 core <- sandbox <- capabilities
 core <- engine <- thread <- storage adapters
+core + thread <- workflow <- platform-node/workflow
 engine + thread + sandbox + adapters <- platform packages
 core + engine <- testing
 core + engine + capabilities <- effect-agent <- pr-review
@@ -131,22 +132,27 @@ Outside a generator, the formatter parses `*` as multiplication and inserts spac
 ## Link previews
 
 The docs config adds Open Graph and Twitter metadata to the built HTML. Each page uses its
-resolved title and description, a canonical URL on `https://effect-agent.com`, and the shared
-`docs/public/social-card.png`. Preview crawlers do not need JavaScript.
+resolved title and description, a canonical URL on `https://effect-agent.com`, and its own
+1200 × 630 PNG. `docs/.vitepress/social-images.ts` renders the page title, description, and URL
+using the installed IBM Plex fonts and `docs/public/mark.svg`. The build writes images under
+`docs/.vitepress/dist/social/`; no browser, remote font request, or manual screenshot is needed.
+Preview crawlers read the metadata and images without JavaScript.
 
-Edit `docs/.vitepress/assets/social-card.html` to change the artwork. Serve the repository root
-locally, open that file in a browser, wait for `document.fonts.ready`, and capture its `main`
-element at 1200 × 630 CSS pixels with device scale 1. Save the PNG to
-`docs/public/social-card.png`. The source uses the installed IBM Plex fonts and `docs/public/mark.svg`;
-it is not published. The 32 × 32 favicon and 180 × 180 Apple touch icon are PNG renders of that mark.
+Edit the renderer to change the artwork, or the page's frontmatter to change its title and
+description. The build fails if text cannot fit at the minimum font size. Section fragments such
+as `#workflow` are not sent to the server, so they share their parent page's preview. A section
+needs its own page URL to have a distinct preview.
+Link to `guide/workflows` for the Effect Workflows preview. The old `platforms/node#workflow`
+anchor points readers to that guide.
 
 Run `vp run docs:build` and inspect the generated HTML for the homepage, a guide, and a directory
-index such as `platforms/index.html`. Image URLs must be absolute, and canonical URLs must match
-the site's clean routes. Existing messages may retain a cached preview after a deployment.
+index such as `platforms/index.html`. Open their generated PNGs to check the layout. Image URLs
+must be absolute, and canonical URLs must match the site's clean routes. Existing messages may
+retain a cached preview after a deployment.
 
 ## Releasing to npm
 
-All fourteen public packages share one Changesets fixed group and publish to `beta`
+All fifteen public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The project is in prerelease mode. Leaving it requires an explicit release decision and
 `vp run changeset pre exit`.
@@ -242,6 +248,93 @@ Get owner agreement before adding a new framework concern.
 
 `vp run build` dispatches `vp pack`. A package-level Vite config overrides zero-config pack
 defaults, so declare `dts` and `sourcemap` there when needed.
+
+## Exports and entry points
+
+Follow the pinned Effect package's module layout. Package roots and public groups use namespace
+exports such as `export * as Agent from "./Agent.ts"`; explicit named conveniences are also
+allowed, as Effect does for `pipe` and `flow`. Public modules use PascalCase names and direct
+subpaths. `import { Agent } from "effect-agent"` and
+`import * as Agent from "effect-agent/Agent"` select the same module.
+
+- Keep implementations in named modules. A public module exposes every declaration it exports;
+  move sibling-only helpers into private files. A small, explicit public selector may expose
+  supported declarations from a private implementation without exposing its helpers.
+- Import sibling implementations relatively and directly. Do not route them through the package's
+  own public entry points or index barrels. Re-export-only files under `internal/` add no public
+  boundary and should be removed.
+- Import other framework packages through their declared public entry points. Direct modules,
+  roots, and namespace groups are allowed; declare the dependency and respect package direction.
+- Keep one implementation owner for each API. Deliberate public modules may forward another
+  package's bindings, including with `export *`, as Effect's platform packages do. A namespace
+  group such as `/testing` is also a valid public boundary. Review additions for consumer value;
+  avoid accumulating overlapping aliases without a reason.
+- Keep test-only groups and modules under `/testing` or `/testing/Module`, excluded from production
+  entry points. Optional browser adapters and fixtures may remain direct-only imports.
+- Keep `package.json` exports explicit, with matching pack entries. The current release publisher
+  requires flat source targets: a group may map `./testing` to `./src/Testing.ts`. Nested physical
+  targets and wildcard export maps would require publisher support first. These are repository
+  tooling constraints, not Effect conventions. Do not publish `internal` or `index` subpaths.
+
+See the [package map](reference/packages.md#public-imports) for API ownership and import changes.
+
+Oxlint enforces export-only root and group indexes, prevents self-barrel imports, and rejects
+re-export-only internal files during `vp lint`, `vp check`, and the pre-commit hook. Indexes may
+contain namespace and explicit named re-exports, but not bare wildcard exports or implementation
+code. Public forwarding modules need no umbrella-specific exception or file allowlist.
+
+The export check in `vp run check` verifies manifest paths, exact filename casing, namespace
+targets, pack entries, and declared workspace dependencies. The purity check uses declared testing
+targets as well as known test-module paths to prevent production entry points from reaching
+test-only code. Choosing supported APIs and useful public groups still requires review.
+
+Audited packages declare `"sideEffects": []`, as Effect does, so bundlers can discard unused
+modules. This describes import-time behavior, not whether exported operations perform effects.
+Keep I/O and registration inside Effects and Layers. Recheck the declaration when adding an
+import-time initializer or upgrading a dependency with startup behavior. The Cloudflare platform
+package remains unmarked because its optional Puppeteer adapters patch globals on import.
+
+## Bundle size comparisons
+
+Pull requests run the **Bundle size** workflow against the exact base and head commits.
+Like [Effect's bundle check](https://github.com/Effect-TS/effect/tree/main/packages/tools/bundle),
+it bundles small consumer fixtures against built packages. Each checkout installs its own
+lockfile. The comparison uses the PR's esbuild version and the same fixture source for both sides.
+
+The fixtures in `scripts/bundle` cover agent construction, importing the runtime's `run` function,
+and loading that runtime on demand, through both the root and direct module imports. The
+analyzer stages copies of `dist` and uses the release publisher's manifest conversion. It does
+not bundle workspace source or externalize Effect. It uses minified ESM, a browser target,
+`es2022`, production mode, and gzip level 9 per emitted chunk.
+
+**Initial** counts the entry and every statically reachable shared chunk. **Deferred** counts
+the remaining output, and **total** counts each chunk once. These are byte measurements, not
+startup timing or a promise about another bundler. Newly introduced export paths show `n/a`
+for the base. Build failures fail the report; size increases are informational.
+
+Use direct module paths at lazy-loading boundaries. With the measured esbuild configuration,
+statically importing `Agent` from the root and dynamically importing `AgentRuntime` from the same
+root pulls the runtime into the initial chunk. Direct `effect-agent/Agent` and
+`effect-agent/AgentRuntime` imports preserve a deferred runtime chunk; shared Effect dependencies
+still count toward the initial load.
+
+The comparison also bundles and executes `runtime-smoke.ts` against the PR's staged packages.
+This Node check verifies root/direct bindings and a deterministic agent run after minification
+and tree shaking. It is excluded from browser byte totals, and failure prevents a success report.
+
+To reproduce locally, install dependencies and run `vp run -F './packages/*' build` in each
+checkout, then run from the PR checkout:
+
+```sh
+vp run bundle:compare -- --base-dir /path/to/base-checkout
+```
+
+`.bundle-report/report.md` contains the table; `report.json` contains exact raw/gzip bytes,
+revisions, Effect versions, and chunk membership. Each fixture also gets emitted `.mjs` files,
+an esbuild `meta.json`, and `modules.txt` with module contributions. The metafile can be opened
+in [esbuild's analyzer](https://esbuild.github.io/analyze/). CI attaches these as `bundle-stats`
+and `bundle-analysis` artifacts and updates one PR comment through a separate trusted workflow.
+The comment workflow becomes active after it is merged into the default branch.
 
 ## CI and hooks
 

@@ -5,35 +5,38 @@ import {
   ReceiptId,
   SubmissionId,
   ToolCallId,
-} from "@effect-agent/core";
-import { describe, expect, it } from "@effect/vitest";
-import { DateTime, Schema } from "effect";
-
+} from "@effect-agent/core/Identifiers";
 import {
-  AbortIntent,
-  ApprovalDecisionIntent,
   CanonicalSequence,
-  ChildAttachmentSnapshot,
-  ChildBudgetReservationSnapshot,
-  ChildReservationId,
-  classifyRecovery,
-  DeclaredPendingBatchEvidence,
   DefinitionDigests,
   DeploymentId,
   Digest,
-  IdempotencyKey,
-  InputAppliedMarker,
-  OpenDelegationCallEvidence,
-  OpenToolCallEvidence,
-  OwnershipSnapshot,
-  ParentLinkage,
-  PendingApprovalEvidence,
-  Principal,
   ProducerEpoch,
   ProducerId,
-  QueueSequence,
   RecordEnvelope,
+  type SettlementOutcome,
+} from "@effect-agent/thread/Records";
+import {
+  classifyRecovery,
+  DeclaredPendingBatchEvidence,
+  OpenDelegationCallEvidence,
+  OpenToolCallEvidence,
+  PendingApprovalEvidence,
   RecoveryEvidence,
+  type DelegationAdmissionEvidence,
+} from "@effect-agent/thread/Recovery";
+import {
+  AbortIntent,
+  ApprovalDecisionIntent,
+  ChildAttachmentSnapshot,
+  ChildBudgetReservationSnapshot,
+  ChildReservationId,
+  IdempotencyKey,
+  InputAppliedMarker,
+  OwnershipSnapshot,
+  ParentLinkage,
+  Principal,
+  QueueSequence,
   RecoverySnapshot,
   ResolutionNeverHappened,
   ResolutionSafeToRetry,
@@ -48,10 +51,10 @@ import {
   WaitingChild,
   WaitingForChildSuspension,
   type ChildReservationStatus,
-  type DelegationAdmissionEvidence,
-  type SettlementOutcome,
   type SubmissionState,
-} from "../src/index.ts";
+} from "@effect-agent/thread/SubmissionLedger";
+import { describe, expect, it } from "@effect/vitest";
+import { DateTime, Schema } from "effect";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const SHA_B = Schema.decodeSync(Digest)("b".repeat(64));

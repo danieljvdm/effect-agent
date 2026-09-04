@@ -94,8 +94,8 @@ Use `layerWithServices` to supply your own service layers. It requires
 Here is the default authorization policy; replace it with your application's implementation:
 
 ```ts twoslash
-import { RunToolAuthorization } from "@effect-agent/engine";
-import { DurableAgentRuntime } from "@effect-agent/thread";
+import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { Layer } from "effect";
 
 export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(
@@ -167,7 +167,7 @@ A tool may fail and the model may still complete the run. Install `toolFailureOb
 `@effect-agent/engine` to report such failures.
 
 ```ts
-import { toolFailureObserverLayer } from "@effect-agent/engine";
+import { toolFailureObserverLayer } from "@effect-agent/engine/RunOptions";
 import { Effect, ErrorReporter } from "effect";
 
 const failureReporting = toolFailureObserverLayer({

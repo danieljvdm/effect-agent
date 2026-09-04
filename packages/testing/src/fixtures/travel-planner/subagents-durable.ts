@@ -1,21 +1,15 @@
 import {
   delegationAllocationFromPolicy,
-  SubagentReservationsMemoryLive,
   SubagentRuntime,
-} from "@effect-agent/capabilities";
-import { Agent, type ThreadId } from "@effect-agent/core";
-import type { RuntimeBinding } from "@effect-agent/engine";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  DurableWorkerBinding,
-  Principal,
-  ProducerId,
-  type DurableSubmitOptions,
-  type IdempotencyKey,
-  type ResolvedBinding,
-} from "@effect-agent/thread";
+} from "@effect-agent/capabilities/Subagent";
+import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
+import * as Agent from "@effect-agent/core/Agent";
+import { type ThreadId } from "@effect-agent/core/Identifiers";
+import { type RuntimeBinding } from "@effect-agent/engine/AgentRuntime";
+import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+import { type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
+import { Principal, type IdempotencyKey } from "@effect-agent/thread/SubmissionLedger";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response, type Toolkit } from "effect/unstable/ai";
 
@@ -313,7 +307,7 @@ export interface DurableResearchHarnessOptions {
 
 /** One durable coordinator/researcher pair with observable invocation counters. */
 export interface DurableResearchHarness {
-  /** Host registrations for `NodeDurableRuntimeOptions.bindings` (parent + child). */
+  /** Host registrations for `NodeDurableAgentRuntimeOptions.bindings` (parent + child). */
   readonly bindings: ReadonlyArray<ResolvedBinding>;
   /** Total coordinator model invocations across every Attempt and runtime handle. */
   readonly parentModelCalls: Effect.Effect<number>;
@@ -334,7 +328,7 @@ export interface DurableResearchHarness {
  * guide, Turn 2 writes the report), and both worker Bindings captured with
  * their requirement Contexts via `DurableWorkerBinding.make` under the exact
  * fixture digests. The returned `bindings` are plain values: they can be
- * registered with several `NodeDurableRuntime` stacks over the same SQLite
+ * registered with several `NodeDurableAgentRuntime` stacks over the same SQLite
  * file while the counters keep counting across all of them.
  */
 export const makeDurableResearchHarness = (options?: DurableResearchHarnessOptions) =>

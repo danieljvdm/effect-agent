@@ -1,22 +1,23 @@
 import * as path from "node:path";
 
-import { Agent, ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
-import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing/fixtures/travel-planner";
+import * as Agent from "@effect-agent/core/Agent";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local/LocalSandbox";
+import { phase7LiveProfileEnabled } from "@effect-agent/testing/TravelPlanner";
+import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { runIdForSubmission, toolStepSettledRecordId } from "@effect-agent/thread/RunJournal";
 import {
   ApprovalDecisionCommand,
-  ThreadRead,
-  ThreadStore,
-  DurableAgentRuntime,
   IdempotencyKey,
   SubmissionLedger,
   SubmissionLookupById,
-  runIdForSubmission,
-  toolStepSettledRecordId,
-  type CanonicalRecordEnvelope,
-  type Receipt,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -54,8 +55,8 @@ const decodeReport = Schema.decodeUnknownEffect(EvidenceAuditReport);
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: repoOpsDeploymentId,
   producerId: repoOpsProducerId,
@@ -347,7 +348,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
           }).pipe(
             Effect.provide(
               Layer.merge(
-                NodeDurableRuntime.layer(runtimeOptions(`${directory}/audit.sqlite`)),
+                NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/audit.sqlite`)),
                 NodeFileSystem.layer,
               ),
             ),
@@ -426,7 +427,9 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
 
             expect(report.documentsAudited).toBe(1);
           }).pipe(
-            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/live.sqlite`))),
+            Effect.provide(
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/live.sqlite`)),
+            ),
           );
         }),
       ),

@@ -2,12 +2,14 @@ import {
   makeReviewer,
   ReviewChange,
   ReviewDiagnosticsSink,
+  ReviewRequest,
+} from "@effect-agent/pr-review/Review";
+import {
   ReviewFileList,
   ReviewLineMatches,
   ReviewRepository,
-  ReviewRequest,
   ReviewSource,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/ReviewRepository";
 import type { OpenAiSchema } from "@effect/ai-openai";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { NodeCrypto, NodeServices } from "@effect/platform-node";

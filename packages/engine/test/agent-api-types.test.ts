@@ -1,16 +1,17 @@
-import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
-import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
-import { expectTypeOf, it } from "vite-plus/test";
-
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { AgentRuntime } from "@effect-agent/engine";
 import {
-  AgentRuntime,
   type AgentResult,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
-  type ThreadHistory,
-} from "../src/index.ts";
+} from "@effect-agent/engine/AgentRuntime";
+import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { expectTypeOf, it } from "vite-plus/test";
 
 class Instructions extends Context.Service<Instructions, string>()("api-types/Instructions") {}
 class ProviderClient extends Context.Service<ProviderClient, string>()(
@@ -21,6 +22,8 @@ class Encoder extends Context.Service<Encoder, string>()("api-types/Encoder") {}
 class Catalog extends Context.Service<Catalog, string>()("api-types/Catalog") {}
 class InstructionError extends Schema.TaggedError<InstructionError>()("InstructionError", {}) {}
 class ToolError extends Schema.TaggedError<ToolError>()("ToolError", {}) {}
+class TurnHost extends Context.Service<TurnHost, string>()("api-types/TurnHost") {}
+class TurnHostError extends Schema.TaggedError<TurnHostError>()("TurnHostError", {}) {}
 
 const Lookup = Tool.make("lookup", {
   parameters: Schema.Struct({ city: Schema.String }),
@@ -107,6 +110,17 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<AgentRuntimeFailure<typeof planner>>();
 
   const stream = AgentRuntime.stream(planner, input);
+
+  const gated = AgentRuntime.stream(planner, input, {
+    beforeTurn: () => TurnHost.pipe(Effect.andThen(Effect.fail(new TurnHostError()))),
+  });
+
+  expectTypeOf<Stream.Services<typeof gated>>().toEqualTypeOf<
+    Stream.Services<typeof stream> | TurnHost
+  >();
+  expectTypeOf<Stream.Error<typeof gated>>().toEqualTypeOf<
+    Stream.Error<typeof stream> | TurnHostError
+  >();
 
   expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<
     DefinitionServices | NativeServices | IdGenerator

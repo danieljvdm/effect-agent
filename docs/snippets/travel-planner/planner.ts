@@ -1,5 +1,6 @@
-import { Agent, AgentPolicy } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { Effect, Schema } from "effect";
 

@@ -1,15 +1,18 @@
-import { SubscriptionError, SubscriptionStore } from "@effect-agent/thread";
+import {
+  DoSubscriptionTransaction,
+  doSubscriptionStoreLayer,
+} from "@effect-agent/storage-cloudflare/DoSubscriptionStore";
+import { SubscriptionError, SubscriptionStore } from "@effect-agent/thread/Subscription";
 import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/testing/SubscriptionStoreConformance";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DoSubscriptionTransaction, doSubscriptionStoreLayer } from "../src/index.ts";
 import { withScheduleStorage } from "./harness.ts";
 
 let objectCounter = 0;

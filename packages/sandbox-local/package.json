@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/sandbox-local",
-  "version": "0.1.0-beta.43",
+  "version": "0.1.0-beta.47",
   "description": "Node-local child-process Sandbox adapter for Effect Agent; honestly labeled unisolated development tooling, not a security boundary.",
   "license": "MIT",
   "repository": {
@@ -13,8 +13,10 @@
     "src"
   ],
   "type": "module",
+  "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./LocalSandbox": "./src/LocalSandbox.ts"
   },
   "publishConfig": {
     "access": "public"

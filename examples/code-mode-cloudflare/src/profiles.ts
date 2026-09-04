@@ -1,4 +1,4 @@
-import { Agent } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Ref, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";

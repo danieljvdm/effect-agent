@@ -1,11 +1,19 @@
-import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-import type { RunContextPreparation } from "@effect-agent/engine";
+import * as CodeMode from "@effect-agent/capabilities/CodeMode";
 import {
-  ThreadHistory,
-  AgentRuntime,
-  ToolExecutionClass,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
+  type WebCaptureFailure,
+  type WebCaptureScrapeSuccess,
+  type WebCaptureSuccess,
+} from "@effect-agent/capabilities/WebCapture";
+import * as WebCapture from "@effect-agent/capabilities/WebCapture";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { type RunContextPreparation } from "@effect-agent/engine/RunOptions";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import {
   PageCapture,
   PageCaptureInferencePolicyError,
@@ -16,20 +24,13 @@ import {
   PageMarkdownCaptured,
   PageScrapeCaptured,
   PageStructuredCaptured,
-  SandboxImplementation,
   type PageCaptureError,
   type PageCaptureRequest,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/PageCapture";
+import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Context, Effect, Layer, Ref, Schema, SchemaGetter, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-
-import type {
-  WebCaptureFailure,
-  WebCaptureScrapeSuccess,
-  WebCaptureSuccess,
-} from "../src/index.ts";
-import { CodeMode, WebCapture } from "../src/index.ts";
 
 describe("WebCapture construction", () => {
   it("classifies browser JavaScript as uncertain and excludes capture from readonly Code Mode", () => {

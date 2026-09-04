@@ -4,7 +4,7 @@ import {
   ReviewRequest,
   ReviewSeverity,
   ReviewStrategy,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import { Schema } from "effect";
 
 const BoundedIdentifier = Schema.NonEmptyString.check(

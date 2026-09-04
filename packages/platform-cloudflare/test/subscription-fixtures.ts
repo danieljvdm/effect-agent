@@ -1,14 +1,15 @@
-import { AgentId, ThreadId } from "@effect-agent/core";
+import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
+import { EventSources, makeEventSource } from "@effect-agent/thread/EventSource";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import {
-  EventSources,
-  Principal,
   SourcePartition,
   SubscriptionAuthorizer,
   SubscriptionFailpoint,
-  makeEventSource,
+} from "@effect-agent/thread/Subscription";
+import {
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubscriptionInput";
 import { Effect, Layer, Schema } from "effect";
 import { DurableObjectState } from "effect-cf";
 

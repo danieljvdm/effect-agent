@@ -3,7 +3,7 @@ import {
   ReviewOutcome,
   ReviewReport,
   type ReviewRequest,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, FileSystem, Path, Schema, Sink, Stream } from "effect";

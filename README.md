@@ -43,6 +43,8 @@ Effect Agent uses Effect AI's tools, models, and provider integrations directly.
 - [Transient recall](docs/guide/context-management.md) from application-owned readable sources.
 - [Revision-aware memory stores](docs/guide/context-management.md) with conditional corrections and
   withdrawal.
+- [Background remembering](docs/guide/context-management.md#background-remembering) with durable
+  admission, saved proposals and commands, and source invalidation.
 - [Resumable processing of committed Thread activity](docs/guide/context-management.md).
 - [Attached subagents](docs/guide/subagents.md) with explicit permissions and budgets.
 - [Scheduled input](docs/guide/operations.md#scheduled-input) and
@@ -56,6 +58,12 @@ Effect Agent uses Effect AI's tools, models, and provider integrations directly.
 Saving thread history does not make a run durable. Durable execution is available on
 [Node.js with SQLite](docs/platforms/node.md) and
 [Cloudflare Workers with Durable Objects](docs/platforms/cloudflare.md).
+
+The optional [`@effect-agent/workflow` host](docs/guide/workflows.md) drives the same durable
+runtime through an injected Effect `WorkflowEngine`. Platform adapters supply storage and repair
+scheduling while preserving the same agent definitions and canonical settlement contract.
+Use `AgentWorkflow.execute(agent, input, { name })` inside a native `Workflow.toLayer` handler
+to suspend for pending work and return the Agent's typed output when it settles.
 
 Both hosts save work before acknowledging it, record one terminal settlement per accepted
 submission, and reject commits from workers that have lost ownership. They support approval
@@ -72,7 +80,7 @@ live-model/provider suites are opt-in.
 ## Limits and safety
 
 There is no hosted service, bundled chat UI, visual builder, or marketplace. Runtime Skills,
-framework-owned memory extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn
+framework-owned fact extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn
 Plans are not implemented. Subagents cannot nest, hand off, or detach. See the
 [capability inventory](docs/reference/packages.md#capability-inventory) for the full list.
 

@@ -42,15 +42,15 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CodeMode } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
-import {
-  AgentRuntime,
-  ThreadHistory,
-  ToolExecutionClass,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare";
+import * as CodeMode from "@effect-agent/capabilities/CodeMode";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/CloudflareCodeMode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";

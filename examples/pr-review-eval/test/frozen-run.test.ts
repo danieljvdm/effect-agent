@@ -4,7 +4,7 @@ import {
   ReviewFinding,
   ReviewOutcome,
   ReviewReport,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { type Crypto, Effect, Path, Schema, Stream } from "effect";

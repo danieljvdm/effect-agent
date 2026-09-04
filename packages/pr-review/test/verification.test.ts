@@ -1,28 +1,29 @@
+import {
+  makeReviewer,
+  ReviewCandidate,
+  ReviewChange,
+  ReviewCostSnapshot,
+  type ReviewDiagnostics,
+  ReviewDiagnosticsSink,
+  ReviewFinding,
+  ReviewFollowUp,
+  ReviewRequest,
+  type ReviewStage,
+  ReviewUsage,
+  reviewRequestDigest,
+} from "@effect-agent/pr-review/Review";
+import {
+  ReviewContextError,
+  ReviewFileList,
+  ReviewLineMatches,
+  ReviewRepository,
+  ReviewSource,
+} from "@effect-agent/pr-review/ReviewRepository";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, type Prompt, type Response, type Tool } from "effect/unstable/ai";
-
-import {
-  makeReviewer,
-  ReviewCandidate,
-  ReviewChange,
-  ReviewContextError,
-  ReviewCostSnapshot,
-  type ReviewDiagnostics,
-  ReviewDiagnosticsSink,
-  ReviewFileList,
-  ReviewFinding,
-  ReviewLineMatches,
-  ReviewFollowUp,
-  ReviewRepository,
-  ReviewRequest,
-  ReviewSource,
-  type ReviewStage,
-  ReviewUsage,
-  reviewRequestDigest,
-} from "../src/index.ts";
 
 const patch = "@@ -1,2 +1,2 @@\n context\n-old\n+new";
 

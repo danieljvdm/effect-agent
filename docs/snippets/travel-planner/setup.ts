@@ -1,5 +1,6 @@
-import { IdGenerator } from "@effect-agent/core";
-import { ThreadHistory, RunContextPreparationPassthrough } from "@effect-agent/engine";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { AnthropicClient } from "@effect/ai-anthropic";
 import { Config, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";

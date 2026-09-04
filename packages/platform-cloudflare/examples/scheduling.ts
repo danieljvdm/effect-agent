@@ -1,18 +1,14 @@
-import {
-  type ScheduleAuthorizer,
-  type DurableSubmitAgent,
-  type ScheduleCreateOptions,
-  Scheduling,
-} from "@effect-agent/thread";
-import { Effect, Layer, type Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
-
+import { ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import {
   CloudflareSchedulingClient,
-  ThreadObjectNamespace,
   ScheduleOwnerNamespace,
   makeScheduleOwnerObjectClass,
-} from "../src/index.ts";
+} from "@effect-agent/platform-cloudflare/CloudflareScheduling";
+import { type DurableSubmitAgent } from "@effect-agent/thread/DurableAgentRuntime";
+import { type ScheduleAuthorizer } from "@effect-agent/thread/Schedule";
+import { type ScheduleCreateOptions, Scheduling } from "@effect-agent/thread/Scheduling";
+import { Effect, Layer, type Schema } from "effect";
+import { WorkerEnvironment } from "effect-cf";
 
 /**
  * Export the returned class. The cached policy Layer must not acquire resources that need

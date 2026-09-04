@@ -1,11 +1,16 @@
-import { Agent, ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core";
-import type {
-  RunApprovalDecision,
-  RunApprovalHook,
-  RunApprovalRequest,
-} from "@effect-agent/engine";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+import * as Agent from "@effect-agent/core/Agent";
+import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
+import {
+  type RunApprovalDecision,
+  type RunApprovalHook,
+  type RunApprovalRequest,
+} from "@effect-agent/engine/RunOptions";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
   assertSettledBookingsExistAtSupplier,
   bookFlightIdempotencyKey,
@@ -24,31 +29,35 @@ import {
   TravelPlannerPhase5,
   TravelSupplierReconcilerLayer,
   TripRequest,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import {
-  ApprovalDecisionCommand,
-  ThreadRead,
-  ThreadStore,
   DurableAgentRuntime,
   DurableApprovalResolver,
   DurableRuntimeConfig,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import {
   DurableRuntimeFailpointError,
-  IdempotencyKey,
-  PersistedJson,
-  ResolutionCompletedWithResult,
-  SubmissionLedger,
-  SubmissionLookupById,
-  ToolReconciler,
-  UnknownResolutionCommand,
-  WakeScheduler,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
+import { PersistedJson, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import {
   promptFromCanonicalRecords,
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolStepSettledRecordId,
-  type DurableRuntimeFailpointLocation,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/RunJournal";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  ResolutionCompletedWithResult,
+  SubmissionLedger,
+  SubmissionLookupById,
+  UnknownResolutionCommand,
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import type { PlatformError } from "effect";
@@ -1214,7 +1223,7 @@ const withTemporaryDirectory = <A, E>(
     }),
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
-const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
+const runtimeOptions = (filename: string): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: phase5TravelPlannerDeploymentId,
   producerId: phase5TravelPlannerProducerId,
@@ -1315,7 +1324,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             Layer.mergeAll(
               phase5TravelPlannerWorkerLayer,
               SupplierBookingDesk.layer,
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/p5.sqlite`)),
+              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/p5.sqlite`)),
             ),
           ),
         ),

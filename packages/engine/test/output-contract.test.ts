@@ -1,20 +1,16 @@
-import {
-  Agent,
-  AgentOutputError,
-  AgentPolicy,
-  ThreadId,
-  IdGenerator,
-  RunId,
-  TurnId,
-} from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentOutputError } from "@effect-agent/core/AgentError";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Logger, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import { AgentRuntime } from "../src/index.ts";
-import { insertOutputContract, outputSchemaContract } from "../src/output-contract-internal.ts";
-import { RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+import { insertOutputContract, outputSchemaContract } from "../src/internal/output-contract.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 /**
  * The model-visible final-output contract (RUN-028, TEST-016).

@@ -1,25 +1,24 @@
 import {
   SqliteStorageFailpointError,
   SqliteStorageFailpointLocation,
-  layer as sqliteThreadStoreLayer,
-  ledgerLayer as sqliteLedgerLayer,
-} from "@effect-agent/storage-sqlite";
+} from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { ledgerLayer as sqliteLedgerLayer } from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
+import { layer as sqliteThreadStoreLayer } from "@effect-agent/storage-sqlite/SqliteThreadStore";
 import {
   chaosSeedFromEnv,
   generateChaosPlans,
   runChaosPlan,
   type ChaosAdapterFailpoints,
   type ChaosPlan,
-} from "@effect-agent/testing/chaos";
+} from "@effect-agent/testing/Chaos";
 import {
-  DeploymentId,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  ProducerId,
-  ToolReconciler,
-  WakeScheduler,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DeploymentId, ProducerId } from "@effect-agent/thread/Records";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";

@@ -1,10 +1,9 @@
-import { Agent, type RunEvent } from "@effect-agent/core";
-import {
-  ThreadHistory,
-  AgentRuntime,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
+import * as Agent from "@effect-agent/core/Agent";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
 import {
   ActivityCatalog,
   ActivityCatalogLayer,
@@ -23,7 +22,7 @@ import {
   TravelPlan,
   TravelPlanner,
   TravelPlannerToolkitLayer,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { Model } from "effect/unstable/ai";

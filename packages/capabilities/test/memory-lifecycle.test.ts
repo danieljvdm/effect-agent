@@ -1,17 +1,21 @@
+import * as Memory from "@effect-agent/core/Memory";
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import {
-  MemoryNamespace,
-  MemoryScope,
-  ActiveMemoryDocument,
   MemoryAttribution,
   MemoryContent,
-  MemoryKey,
   type MemoryLookup,
   MemoryPassage,
-  MemoryReader,
   MemoryRecallLimits,
+} from "@effect-agent/core/MemoryReference";
+import { MemoryAccess, revalidateMemoryLookup } from "@effect-agent/core/MemoryRevalidation";
+import {
+  MemoryScope,
+  ActiveMemoryDocument,
+  MemoryKey,
+  MemoryReader,
   MemoryStorageError,
   WithdrawnMemoryDocument,
-} from "@effect-agent/core";
+} from "@effect-agent/core/MemoryStore";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Schema as NamespaceSchema,
@@ -24,8 +28,6 @@ import {
   Ref,
 } from "effect";
 import { TestClock } from "effect/testing";
-
-import { MemoryAccess, Memory, revalidateMemoryLookup } from "../src/index.ts";
 
 const TestNamespace = MemoryNamespace.define({
   name: "test/memory",

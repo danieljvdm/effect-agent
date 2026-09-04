@@ -1,17 +1,20 @@
-import { InteractiveBrowser, InteractiveBrowserPolicy } from "@effect-agent/sandbox";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Redacted, Schema } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { expectTypeOf, vi } from "vite-plus/test";
-
-import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
 import {
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveHost,
   BrowserRunViewport,
   CloudflareInteractiveBrowser,
   browserRunInteractiveHostLayer,
-} from "../src/interactive-browser.ts";
+} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+import {
+  InteractiveBrowser,
+  InteractiveBrowserPolicy,
+} from "@effect-agent/sandbox/InteractiveBrowser";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Layer, Redacted, Schema } from "effect";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { expectTypeOf, vi } from "vite-plus/test";
+
+import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
 const sdk = vi.hoisted(() => ({ launch: vi.fn<(...args: Array<unknown>) => Promise<object>>() }));
 

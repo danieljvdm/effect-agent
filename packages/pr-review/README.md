@@ -58,7 +58,7 @@ same budget and limits. Supported findings publish unchanged; refuted findings s
 unresolved findings remain visibly unverified and make the review incomplete. Only supported
 blockers may request changes. The Action still uses baseline.
 
-See the [API](src/review.ts), [Action setup](../../action/README.md), and
+See the [API](src/Review.ts), [Action setup](../../action/README.md), and
 [evaluation guide](../../examples/pr-review-eval/README.md).
 
 Review instructions partly adapted from [PR-Agent](https://github.com/The-PR-Agent/pr-agent).

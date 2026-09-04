@@ -1,3 +1,25 @@
+import {
+  isCommentableLine,
+  makeReviewer,
+  ReviewChange,
+  ReviewCostSnapshot,
+  type ReviewDiagnostics,
+  ReviewDiagnosticsSink,
+  ReviewFinding,
+  ReviewFollowUp,
+  ReviewResolution,
+  type ReviewOutcome,
+  ReviewRequest,
+  ReviewUsage,
+  type ReviewVerificationError,
+} from "@effect-agent/pr-review/Review";
+import {
+  ReviewContextError,
+  ReviewFileList,
+  ReviewLineMatches,
+  ReviewRepository,
+  ReviewSource,
+} from "@effect-agent/pr-review/ReviewRepository";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, expectTypeOf, layer } from "@effect/vitest";
 import {
@@ -22,27 +44,6 @@ import {
   Tool,
 } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
-
-import {
-  isCommentableLine,
-  makeReviewer,
-  ReviewChange,
-  ReviewContextError,
-  ReviewCostSnapshot,
-  type ReviewDiagnostics,
-  ReviewDiagnosticsSink,
-  ReviewFileList,
-  ReviewFinding,
-  ReviewLineMatches,
-  ReviewFollowUp,
-  ReviewResolution,
-  type ReviewOutcome,
-  ReviewRepository,
-  ReviewRequest,
-  ReviewSource,
-  ReviewUsage,
-  type ReviewVerificationError,
-} from "../src/index.ts";
 
 const patch = `@@ -1,3 +1,4 @@
  unchanged

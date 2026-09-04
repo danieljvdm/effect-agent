@@ -1,5 +1,5 @@
-import { MemoryStorageLive } from "@effect-agent/storage-memory";
-import { layer as sqliteStorageLayer } from "@effect-agent/storage-sqlite";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { layer as sqliteStorageLayer } from "@effect-agent/storage-sqlite/SqliteThreadStore";
 import {
   expectedTravelPlan,
   makePhase3TravelPlannerCheckpoint,
@@ -8,25 +8,25 @@ import {
   phase3TravelPlannerEncodedFixture,
   phase3TravelPlannerProfile,
   travelPlanFromProjection,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { CanonicalBatch, CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
 import {
-  CanonicalBatch,
-  CanonicalSequence,
+  ThreadProjection,
+  replayThread,
+  replayThreadFromCheckpoint,
+} from "@effect-agent/thread/ThreadProjection";
+import {
   ThreadExport,
   ThreadExportRequest,
   ThreadMaterialization,
   ThreadObservation,
-  ThreadProjection,
   ThreadRead,
   ThreadStore,
-  EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   LoadCheckpointRequest,
-  ProducerEpoch,
-  replayThread,
-  replayThreadFromCheckpoint,
   SaveCheckpointRequest,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
@@ -153,7 +153,7 @@ const inspectPersistentTravelPlanner = Effect.gen(function* () {
   };
 });
 
-const memoryLayer = MemoryStorageLive.pipe(Layer.provide(NodeCrypto.layer));
+const memoryLayer = MemoryThreadStoreLive.pipe(Layer.provide(NodeCrypto.layer));
 
 const withTemporaryDatabase = <A, E>(use: (filename: string) => Effect.Effect<A, E>) =>
   Effect.scoped(

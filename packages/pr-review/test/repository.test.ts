@@ -1,8 +1,10 @@
+import {
+  type ReviewContextError,
+  ReviewLineMatches,
+  ReviewRepository,
+} from "@effect-agent/pr-review/ReviewRepository";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import { Effect } from "effect";
-
-import type { ReviewContextError } from "../src/index.ts";
-import { ReviewLineMatches, ReviewRepository } from "../src/index.ts";
 
 const input = {
   path: "src/provider.ts",

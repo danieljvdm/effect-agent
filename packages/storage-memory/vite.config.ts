@@ -6,7 +6,14 @@ import { defineConfig } from "vite-plus";
 // in the published artifact.
 export default defineConfig({
   pack: {
-    entry: ["src/index.ts", "src/testing.ts"],
+    entry: [
+      "src/index.ts",
+      "src/MemoryScheduleStore.ts",
+      "src/MemorySemanticIndex.ts",
+      "src/MemorySubmissionLedger.ts",
+      "src/MemorySubscriptionStore.ts",
+      "src/MemoryThreadStore.ts",
+    ],
     dts: true,
     sourcemap: true,
   },

@@ -1,10 +1,10 @@
+import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
+import { SubagentExecutionFailure } from "@effect-agent/capabilities/Subagent";
+import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
 import {
-  Redactor,
-  StructuralRedactorLive,
-  SubagentExecutionFailure,
-} from "@effect-agent/capabilities";
-import { ThreadId, ToolCallId } from "@effect-agent/core";
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -19,17 +19,12 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "@effect-agent/testing/fixtures/docs-researcher";
-import {
-  ThreadRead,
-  ThreadStore,
-  DurableAgentRuntime,
-  IdempotencyKey,
-  childThreadIdFor,
-  runIdForSubmission,
-  type CanonicalRecordEnvelope,
-  type ResolvedBinding,
-} from "@effect-agent/thread";
+} from "@effect-agent/testing/DocsResearcher";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
+import { IdempotencyKey } from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
@@ -59,8 +54,8 @@ const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
 const runtimeOptions = (
   filename: string,
-  overrides?: Partial<NodeDurableRuntimeOptions>,
-): NodeDurableRuntimeOptions => ({
+  overrides?: Partial<NodeDurableAgentRuntimeOptions>,
+): NodeDurableAgentRuntimeOptions => ({
   filename,
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
@@ -94,11 +89,11 @@ const submitMission = (thread: string, key: string) =>
     );
   });
 
-const drive = (bindings: ReadonlyArray<ResolvedBinding>, threadId: ThreadId) =>
+const drive = (threadId: ThreadId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
 
-    return yield* runtime.processThreadResolved(threadId, bindings);
+    return yield* runtime.processThreadResolved(threadId);
   });
 
 const readLog = (threadId: ThreadId) =>
@@ -132,13 +127,13 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             );
 
             // Establish, run each child, and join — the full durable delegation.
-            yield* drive(harness.bindings, receipt.threadId);
+            yield* drive(receipt.threadId);
             for (const childThreadId of childThreads) {
-              const settlements = yield* drive(harness.bindings, childThreadId);
+              const settlements = yield* drive(childThreadId);
 
               expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             }
-            const settlements = yield* drive(harness.bindings, receipt.threadId);
+            const settlements = yield* drive(receipt.threadId);
 
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
@@ -199,7 +194,10 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
             }
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/redteam-exfiltration.sqlite`)),
+              NodeDurableAgentRuntime.layerWithBindings(
+                harness.bindings,
+                runtimeOptions(`${directory}/redteam-exfiltration.sqlite`),
+              ),
             ),
           );
         }),

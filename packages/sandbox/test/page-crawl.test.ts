@@ -1,13 +1,12 @@
-import { Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-
 import {
   PageCrawlError,
   PageCrawlLimits,
   PageCrawlRecord,
   PageCrawlRequest,
-  SandboxImplementation,
-} from "../src/index.ts";
+} from "@effect-agent/sandbox/PageCrawl";
+import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
+import { Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 const implementation = SandboxImplementation.make({
   isolation: "isolated",

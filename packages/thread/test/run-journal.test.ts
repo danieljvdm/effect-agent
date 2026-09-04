@@ -1,23 +1,22 @@
-import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it, layer } from "@effect/vitest";
-import { DateTime, Effect, Schema } from "effect";
-import { Prompt } from "effect/unstable/ai";
-
+import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
 import {
   BatchId,
   CanonicalRecordEnvelope,
   CanonicalSequence,
-  childThreadIdFor,
-  childIdempotencyKeyFor,
   DeploymentId,
   ObservationOffset,
   ProducerId,
   RecordEnvelope,
+  type CanonicalBatch,
+} from "@effect-agent/thread/Records";
+import {
+  childThreadIdFor,
+  childIdempotencyKeyFor,
   RunJournalError,
   modelResponseRecordId,
   promptFromCanonicalRecords,
   projectRunJournal,
+  projectRunJournalStream,
   runCompletedRecordId,
   runIdForSubmission,
   subagentJoinBatchId,
@@ -36,8 +35,11 @@ import {
   turnResponseBatchId,
   turnResultsBatch,
   turnResultsBatchId,
-  type CanonicalBatch,
-} from "../src/index.ts";
+} from "@effect-agent/thread/RunJournal";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
+import { DateTime, Effect, Schema, Stream } from "effect";
+import { Prompt } from "effect/unstable/ai";
 
 const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
 const RUN_ID = runIdForSubmission(SUBMISSION_ID);
@@ -1094,6 +1096,59 @@ describe("engine compaction records and projection (RUN-026)", () => {
             { bookingRef: "flight-42" },
             { bookingRef: "lodging-7" },
           ]);
+        }),
+    );
+
+    it.effect(
+      "streams a validated summary without decoding covered responses, but rejects split coverage",
+      () =>
+        Effect.gen(function* () {
+          const turn = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+
+          const records = envelopesOf([turn]).map((envelope) => {
+            const payload = envelope.record.payload;
+
+            return payload._tag !== "ModelResponseRecorded"
+              ? envelope
+              : CanonicalRecordEnvelope.make({
+                  ...envelope,
+                  record: RecordEnvelope.make({
+                    ...envelope.record,
+                    payload: { ...payload, messages: { archived: true } },
+                  }),
+                });
+          });
+
+          const summarize = envelopeAt(
+            records.length + 1,
+            auditRecord("stream-summary", compactionPayload({ coversThrough: 3 })),
+          );
+
+          let traversals = 0;
+
+          const source = Stream.suspend(() => {
+            traversals += 1;
+
+            return Stream.fromIterable([...records, summarize]);
+          });
+
+          const projected = yield* projectRunJournalStream(source, LATER_RUN_ID);
+
+          expect(promptText(projected.prompt)).toContain("Goal: book the Kyoto trip");
+          expect(toolResults(projected.prompt)).toEqual([]);
+          expect(traversals).toBeLessThanOrEqual(4);
+
+          const split = envelopeAt(
+            records.length + 1,
+            auditRecord("stream-split", compactionPayload({ coversThrough: 1 })),
+          );
+
+          const failure = yield* projectRunJournalStream(
+            Stream.fromIterable([...records, split]),
+            LATER_RUN_ID,
+          ).pipe(Effect.flip);
+
+          expect(failure._tag).toBe("RunJournalError");
         }),
     );
 

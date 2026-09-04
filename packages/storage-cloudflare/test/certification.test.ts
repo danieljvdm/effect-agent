@@ -1,25 +1,23 @@
+import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
+import { submissionLedgerLayer } from "@effect-agent/storage-cloudflare/DoSubmissionLedger";
+import {
+  threadStoreLayer,
+  storageConfigLayer,
+} from "@effect-agent/storage-cloudflare/DoThreadStore";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   tier2NeverFiredLocations,
-} from "@effect-agent/testing/certification";
-import {
-  CertificationReport,
-  threadStoreConformanceCases,
-  submissionLedgerConformanceCases,
-} from "@effect-agent/thread/testing";
+} from "@effect-agent/testing/Certification";
+import { CertificationReport } from "@effect-agent/thread/testing/Certification";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
+import { threadStoreConformanceCases } from "@effect-agent/thread/testing/ThreadStoreConformance";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  DoStorageFailpoint,
-  threadStoreLayer,
-  storageConfigLayer,
-  submissionLedgerLayer,
-} from "../src/index.ts";
 import { withThreadStorage } from "./harness.ts";
 
 // ---------------------------------------------------------------------------

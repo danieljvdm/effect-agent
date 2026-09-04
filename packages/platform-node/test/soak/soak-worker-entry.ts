@@ -1,9 +1,13 @@
-import type { ThreadId } from "@effect-agent/core";
-import { DurableAgentRuntime, SubmissionLedger } from "@effect-agent/thread";
+import { type ThreadId } from "@effect-agent/core/Identifiers";
+import {
+  NodeDurableAgentRuntime,
+  type NodeDurableAgentRuntimeOptions,
+} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
 import { NodeRuntime } from "@effect/platform-node";
-import { Cause, Duration, Effect, Exit, Option, Schema, Stream } from "effect";
+import { Cause, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "../../src/index.ts";
 import { SOAK_DEPLOYMENT_ID, SoakEnv, makeSoakBindings } from "./soak-fixtures.ts";
 
 /**
@@ -29,7 +33,7 @@ const WorkerEnv = Schema.Struct({
 
 const env = Schema.decodeUnknownSync(WorkerEnv)(process.env);
 
-const options: NodeDurableRuntimeOptions = {
+const options: NodeDurableAgentRuntimeOptions = {
   filename: env[SoakEnv.database],
   deploymentId: SOAK_DEPLOYMENT_ID,
   producerId: env[SoakEnv.producer],
@@ -55,8 +59,7 @@ const tolerateTyped = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<v
 const workerLoop = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
   const ledger = yield* SubmissionLedger;
-  const bindings = yield* makeSoakBindings();
-  const driveResolved = (thread: ThreadId) => runtime.processThreadResolved(thread, bindings);
+  const driveResolved = (thread: ThreadId) => runtime.processThreadResolved(thread);
 
   while (true) {
     // Heal what a killed sibling left behind, then drive every discovered lane once.
@@ -78,4 +81,10 @@ const workerLoop = Effect.gen(function* () {
   }
 });
 
-NodeRuntime.runMain(workerLoop.pipe(Effect.provide(NodeDurableRuntime.layer(options))));
+const runtimeLayer = Layer.unwrap(
+  Effect.map(makeSoakBindings(), (bindings) =>
+    NodeDurableAgentRuntime.layerWithBindings(bindings, options),
+  ),
+);
+
+NodeRuntime.runMain(workerLoop.pipe(Effect.provide(runtimeLayer)));

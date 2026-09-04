@@ -1,20 +1,26 @@
+import * as Agent from "@effect-agent/core/Agent";
 import {
-  Agent,
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
   AgentRunDispositionError,
-  AgentPolicy,
   AgentPolicyError,
-  ThreadId,
-  IdGenerator,
   ModelProtocolError,
-  RunId,
-  ToolCallId,
-  TurnId,
-  type RunEvent,
-} from "@effect-agent/core";
+} from "@effect-agent/core/AgentError";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, ToolCallId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { AgentResultSchema, withTerminalDefectEvent } from "@effect-agent/engine/AgentRuntime";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import {
+  type RunBudgetHook,
+  type RunToolAuthorizationRequest,
+  type RunTurnResume,
+  type RunUsageDelta,
+} from "@effect-agent/engine/RunOptions";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -47,22 +53,10 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
-import { boundedValueFootprint } from "../src/bounded-value-internal.ts";
-import { errorMessage, errorTag } from "../src/error-diagnostic-internal.ts";
-import {
-  AgentResultSchema,
-  AgentRuntime,
-  ToolExecutionClass,
-  withTerminalDefectEvent,
-  type RunBudgetHook,
-  type RunToolAuthorizationRequest,
-  type RunTurnResume,
-  type RunUsageDelta,
-} from "../src/index.ts";
-import { boundedJsonSnapshot } from "../src/provider-result-staging-internal.ts";
-import { RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
-import { emitThenAfter, isolateToolDerivative } from "../src/tool-derivative-internal.ts";
+import { boundedValueFootprint } from "../src/internal/bounded-value.ts";
+import { errorMessage, errorTag } from "../src/internal/error-diagnostic.ts";
+import { boundedJsonSnapshot } from "../src/internal/provider-result-staging.ts";
+import { emitThenAfter, isolateToolDerivative } from "../src/internal/tool-derivative.ts";
 import {
   annotateToolSpanTerminalOutcome,
   makeIsolatedToolTracer,
@@ -70,7 +64,9 @@ import {
   stripToolSpanFailures,
   ToolSpanTelemetry,
   ToolSpanFailure,
-} from "../src/tool-telemetry-internal.ts";
+} from "../src/internal/tool-telemetry.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 class ScheduledToolFailure extends Schema.TaggedError<ScheduledToolFailure>()(
   "ScheduledToolFailure",

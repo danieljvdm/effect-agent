@@ -1,6 +1,8 @@
-import { ApprovalRequest, UsageBudgetLimits, UsageTotals } from "@effect-agent/capabilities";
-import { ThreadId, RunEvent, RunId, ToolCallId } from "@effect-agent/core";
-import { SandboxEvent } from "@effect-agent/sandbox";
+import { ApprovalRequest } from "@effect-agent/capabilities/Approval";
+import { UsageBudgetLimits, UsageTotals } from "@effect-agent/capabilities/Budget";
+import { ThreadId, RunId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { RunEvent } from "@effect-agent/core/RunEvent";
+import { SandboxEvent } from "@effect-agent/sandbox/Sandbox";
 import { Schema } from "effect";
 
 import { ChatInput } from "./general-chat";

@@ -1,4 +1,9 @@
-import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ContextCompactor, type CompactionDecision } from "@effect-agent/engine/ContextCompactor";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
@@ -16,9 +21,8 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
 
-import { AgentRuntime, ContextCompactor, type CompactionDecision } from "../src/index.ts";
-import { RunContextPreparationPassthrough } from "../src/run-options.ts";
-import { ThreadHistory } from "../src/thread-history.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
   nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("input-prompt-thread")),

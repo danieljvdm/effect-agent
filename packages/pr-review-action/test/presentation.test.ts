@@ -6,7 +6,7 @@ import {
   ReviewReport,
   ReviewStageDiagnostic,
   ReviewUsage,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import { describe, expect, it } from "@effect/vitest";
 
 import {

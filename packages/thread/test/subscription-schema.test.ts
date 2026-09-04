@@ -1,6 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
-import { Schema } from "effect";
-
 import {
   AcceptedEvent,
   EventAcknowledgement,
@@ -9,7 +6,9 @@ import {
   SubscriptionDeliverySnapshot,
   SubscriptionRecord,
   SubscriptionSnapshot,
-} from "../src/index.ts";
+} from "@effect-agent/thread/Subscription";
+import { describe, expect, it } from "@effect/vitest";
+import { Schema } from "effect";
 
 // Encoded fixtures pin the durable wire format independently of constructors and driver output.
 const partition = { tenantId: "fixture-tenant", address: "repository:42" };

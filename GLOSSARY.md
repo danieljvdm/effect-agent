@@ -298,6 +298,24 @@ A terminal change that excludes a source from future authoritative recall checks
 after successful withdrawal exclude it; already captured views may finish. Original history,
 past outputs, idempotency receipts, and backups have separate retention policies.
 
+**Remembering intent**
+
+A host-authorized request to derive a contribution from one identified source into one memory
+target. Durable admission returns queued. Extraction and target updates run separately under a
+host Scope; queued does not mean saved or available to recall.
+
+**Remembering proposal**
+
+An application-Schema value saved after extraction, with evidence bound to the admitted source.
+The worker retains it across target revision conflicts. A prepared command separately saves the
+complete conditional Memory Write before dispatch, so an uncertain outcome replays that command.
+
+**Remembering suppression**
+
+A durable source fence that prevents obsolete evidence from passing current-source recall and
+retains reconciliation and cleanup obligations. Source-to-target references outlive active jobs.
+Cleanup removes source-owned contributions while preserving unrelated entries and human corrections.
+
 **Memory namespace**
 
 An application-defined name, version, and Schema-validated identity addressing memory sources,

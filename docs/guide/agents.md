@@ -127,7 +127,8 @@ Set `completion` when a successful tool result should become the agent's output 
 model turn. The projector receives decoded tool parameters and result:
 
 ```ts twoslash
-import { Agent, AgentPolicy } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 

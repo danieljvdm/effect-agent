@@ -1,3 +1,38 @@
+import { type SqliteStorageConfig } from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+import {
+  SqliteStorageCompatibilityError,
+  SqliteStorageFailpointError,
+  SqliteWriteContention,
+  type SqliteStorageFailpointLocation,
+} from "@effect-agent/storage-sqlite/SqliteStorageError";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { CurrentSqliteStorageVersion } from "@effect-agent/storage-sqlite/SqliteStorageVersion";
+import {
+  ledgerLayer,
+  submissionLedgerLayer,
+} from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
+import {
+  threadStoreLayer,
+  storageConfigLayer,
+  type SqliteStorageInitializationError,
+} from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import {
+  CanonicalBatch,
+  CanonicalRecord,
+  CanonicalSequence,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerEpoch,
+  ProducerId,
+  RecordEnvelope,
+  SubmissionSettled,
+  SubmissionSettledRecord,
+  UserInputRecorded,
+  type PersistedJson,
+  type SettlementOutcome,
+} from "@effect-agent/thread/Records";
 import {
   AbortCommand,
   AdmissionRequest,
@@ -5,24 +40,11 @@ import {
   ApprovalPendingSuspension,
   AttachChildToReservationRequest,
   BeginChildBudgetReleaseRequest,
-  CanonicalBatch,
-  CanonicalRecord,
-  CanonicalSequence,
   ChildBudgetReservationRequest,
   ChildReservationId,
   ChildSettledNotification,
   ClaimJoiningRequest,
   ClaimRequest,
-  ThreadMaterialization,
-  ThreadStore,
-  ThreadTailRequest,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  digestJson,
-  EMPTY_TAIL_DIGEST,
-  FencedAppendRequest,
-  FenceRejected,
   IdempotencyKey,
   LedgerError,
   MarkInputAppliedRequest,
@@ -32,9 +54,6 @@ import {
   OwnershipLost,
   ParentLinkage,
   Principal,
-  ProducerEpoch,
-  ProducerId,
-  RecordEnvelope,
   RecoverySnapshotRequest,
   ReleaseChildBudgetRequest,
   RenewOwnershipRequest,
@@ -47,8 +66,6 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-  SubmissionSettled,
-  SubmissionSettledRecord,
   SuspendRequest,
   UnknownResolutionCommand,
   WaitingChild,
@@ -56,14 +73,18 @@ import {
   submissionInputRecordId,
   submissionSettlementId,
   submissionSettlementRecordId,
-  UserInputRecorded,
   type AdmissionResult,
-  type AppendResult,
   type OwnershipToken,
-  type PersistedJson,
-  type SettlementOutcome,
-} from "@effect-agent/thread";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
+import {
+  ThreadMaterialization,
+  ThreadStore,
+  ThreadTailRequest,
+  FencedAppendRequest,
+  FenceRejected,
+  type AppendResult,
+} from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -82,21 +103,6 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
-
-import {
-  type SqliteStorageConfig,
-  threadStoreLayer,
-  CurrentSqliteStorageVersion,
-  ledgerLayer,
-  storageConfigLayer,
-  SqliteStorageCompatibilityError,
-  SqliteStorageFailpoint,
-  SqliteStorageFailpointError,
-  SqliteWriteContention,
-  submissionLedgerLayer,
-  type SqliteStorageFailpointLocation,
-  type SqliteStorageInitializationError,
-} from "../src/index.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -2375,4 +2381,4 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 });
-import { SubmissionId } from "@effect-agent/core";
+import { SubmissionId } from "@effect-agent/core/Identifiers";

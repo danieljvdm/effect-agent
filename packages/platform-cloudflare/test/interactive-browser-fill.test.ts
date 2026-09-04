@@ -1,17 +1,17 @@
 import {
+  BrowserRunInteractiveBinding,
+  browserRunInteractiveLayer,
+} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+import {
   BrowserFillRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "@effect-agent/sandbox";
+} from "@effect-agent/sandbox/InteractiveBrowser";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { vi } from "vite-plus/test";
 
-import { BrowserRunSessionLifecycle } from "../src/browser-session-lifecycle.ts";
-import {
-  BrowserRunInteractiveBinding,
-  browserRunInteractiveLayer,
-} from "../src/interactive-browser.ts";
+import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
 const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
 

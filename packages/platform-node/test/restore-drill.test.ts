@@ -1,26 +1,28 @@
 import * as fs from "node:fs";
 
-import { Agent } from "@effect-agent/core";
+import * as Agent from "@effect-agent/core/Agent";
+import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { ObligationThresholds } from "@effect-agent/thread/Admin";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { ProducerId } from "@effect-agent/thread/Records";
+import {
+  runIdForSubmission,
+  toolCallPreparedRecordId,
+  toolCallSettledRecordId,
+} from "@effect-agent/thread/RunJournal";
 import {
   ClaimRequest,
-  DurableAgentRuntime,
-  ObligationThresholds,
-  ProducerId,
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
   ResolutionCompletedWithResult,
   SubmissionLedger,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
-  runIdForSubmission,
-  toolCallPreparedRecordId,
-  toolCallSettledRecordId,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/SubmissionLedger";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
-import { NodeDurableHost } from "../src/index.ts";
 import {
   BOOK_CALL_ID,
   BOOK_REF,

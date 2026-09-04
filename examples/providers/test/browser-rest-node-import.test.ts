@@ -2,8 +2,8 @@ import {
   CloudflareBrowserRest,
   browserRestWorkersAiCaptureLayer,
   type browserRestCaptureLayer,
-} from "@effect-agent/platform-cloudflare/browser-rest-capture";
-import type { PageCapture } from "@effect-agent/sandbox";
+} from "@effect-agent/platform-cloudflare/BrowserRestCapture";
+import { type PageCapture } from "@effect-agent/sandbox/PageCapture";
 import { Redacted, Layer } from "effect";
 import type { HttpClient } from "effect/unstable/http";
 import { expect, it } from "vite-plus/test";
@@ -33,7 +33,7 @@ type RestOutput = Equal<
 >;
 
 it("loads and composes the REST subpath in a Node-only consumer", async () => {
-  const module = await import("@effect-agent/platform-cloudflare/browser-rest-capture");
+  const module = await import("@effect-agent/platform-cloudflare/BrowserRestCapture");
   const requirement: RestRequirement = true;
   const output: RestOutput = true;
 

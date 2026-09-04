@@ -1,36 +1,38 @@
+import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/DoStorageConfig";
 import {
-  CanonicalBatch,
-  CanonicalRecord,
-  ThreadMaterialization,
-  ThreadStore,
-  ThreadStoreError,
-  EMPTY_TAIL_DIGEST,
-  FencedAppendRequest,
-  UserInputRecorded,
-} from "@effect-agent/thread";
-import {
-  threadStoreConformanceCases,
-  threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Option, Schema, Tracer } from "effect";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import { describe, expect, it } from "vite-plus/test";
-
-import {
-  CurrentDoStorageVersion,
-  type DoStorageConfig,
-  threadStoreLayer,
   DoStorageCompatibilityError,
   DoStorageError,
-  DoStorageFailpoint,
   DoValueBoundExceeded,
+} from "@effect-agent/storage-cloudflare/DoStorageError";
+import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
+import { CurrentDoStorageVersion } from "@effect-agent/storage-cloudflare/DoStorageVersion";
+import {
+  threadStoreLayer,
   layer,
   storageConfigLayer,
   type DoStorageInitializationError,
-} from "../src/index.ts";
+} from "@effect-agent/storage-cloudflare/DoThreadStore";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@effect-agent/thread/Records";
+import {
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "@effect-agent/thread/testing/ThreadStoreConformance";
+import {
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
+  FencedAppendRequest,
+} from "@effect-agent/thread/ThreadStore";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import type { Crypto } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema, Stream, Tracer } from "effect";
+import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import { describe, expect, it } from "vite-plus/test";
+
 import {
   thread,
   epoch,
@@ -147,6 +149,94 @@ describe("DoThreadStore", () => {
     expect(requirementsProof).toBe(true);
     expect(errorProof).toBe(true);
   });
+
+  it("streams large reads from their captured membership and resumes observation through later appends", () =>
+    withThreadStorage("wp1-store-large-read-snapshot", (storage) =>
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const threadId = thread("thread-large-read-snapshot");
+        let tail = { lastSequence: sequence(0), tailDigest: EMPTY_TAIL_DIGEST };
+
+        yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }));
+
+        const appendInput = Effect.fn("DoThreadStoreTest.appendLargeInput")(function* (
+          name: string,
+          input: string,
+        ) {
+          tail = yield* store.append(
+            FencedAppendRequest.make({
+              threadId,
+              batch: batch(`large-batch-${name}`, [inputRecord(`large-record-${name}`, input)]),
+              expectedTailSequence: tail.lastSequence,
+              expectedTailDigest: tail.tailDigest,
+              producerEpoch: epoch(1),
+            }),
+          );
+        });
+
+        const input = "x".repeat(900_000);
+
+        for (let index = 1; index <= 9; index++) yield* appendInput(String(index), input);
+
+        const records = yield* store.read(ThreadRead.make({ threadId, limit: 1_024 })).pipe(
+          Stream.mapEffect(
+            Effect.fn(function* (record) {
+              if (record.sequence === 1) yield* appendInput("during-read", "later");
+
+              return { sequence: record.sequence, offset: record.offset };
+            }),
+          ),
+          Stream.runCollect,
+        );
+
+        expect(records.map((record) => record.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        const limited = yield* store
+          .read(ThreadRead.make({ threadId, afterSequence: sequence(2), limit: 5 }))
+          .pipe(
+            Stream.map((record) => record.sequence),
+            Stream.runCollect,
+          );
+
+        expect(limited).toEqual([3, 4, 5, 6, 7]);
+
+        const observed = yield* store
+          .observe(ThreadObservation.make({ threadId, afterOffset: records[3].offset }))
+          .pipe(
+            Stream.mapEffect(
+              Effect.fn(function* (record) {
+                if (record.sequence === 5) yield* appendInput("during-observe", "later again");
+
+                return record.sequence;
+              }),
+            ),
+            Stream.take(7),
+            Stream.runCollect,
+          );
+
+        expect(observed).toEqual([5, 6, 7, 8, 9, 10, 11]);
+
+        const changed = yield* store.read(ThreadRead.make({ threadId, limit: 9 })).pipe(
+          Stream.tap((record) =>
+            Effect.sync(() => {
+              if (record.sequence === 1) {
+                storage.sql.exec(
+                  "DELETE FROM effect_agent_canonical_records WHERE thread_id = ? AND sequence = 9",
+                  threadId,
+                );
+              }
+            }),
+          ),
+          Stream.runDrain,
+          Effect.flip,
+        );
+
+        expect(changed).toMatchObject({
+          _tag: "ThreadStoreError",
+          cause: { _tag: "DoStorageCorruptionError" },
+        });
+      }).pipe(Effect.provide(layer({ storage }))),
+    ));
 
   it("validates convenience-layer configuration before initializing storage", () =>
     withThreadStorage("wp1-store-invalid-config", (storage) =>
@@ -302,4 +392,4 @@ describe("DoThreadStore", () => {
       ),
     ));
 });
-import { SubmissionId } from "@effect-agent/core";
+import { SubmissionId } from "@effect-agent/core/Identifiers";

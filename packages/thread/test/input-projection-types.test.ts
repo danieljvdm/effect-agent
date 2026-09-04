@@ -1,5 +1,19 @@
-import { Agent, AgentPolicy, type ThreadId, type IdGenerator } from "@effect-agent/core";
-import { type ThreadHistory, AgentRuntime, type AgentRuntimeFailure } from "@effect-agent/engine";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { type ThreadId } from "@effect-agent/core/Identifiers";
+import { type IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { type AgentRuntimeFailure } from "@effect-agent/engine/AgentRuntime";
+import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+import { type DigestError } from "@effect-agent/thread/Digest";
+import {
+  type DurableAgentRuntime,
+  type DurableWorkerRequirements,
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
+import { type DefinitionDigests } from "@effect-agent/thread/Records";
+import { type ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { describe, expect, it } from "@effect/vitest";
 import {
   type Crypto,
@@ -13,18 +27,8 @@ import {
 } from "effect";
 import { Toolkit, type LanguageModel, type Model, Tool } from "effect/unstable/ai";
 
-import { compileRegistrations } from "../src/agent-registration.ts";
-import { PersistentHistory } from "../src/history.ts";
-import {
-  type DurableAgentRuntime,
-  DurableWorkerBinding,
-  type DefinitionDigests,
-  type DigestError,
-  type DurableWorkerRequirements,
-  type ThreadStore,
-  type ResolvedBinding,
-} from "../src/index.ts";
-import { DefinitionDigestInput } from "../src/records.ts";
+import { compileRegistrations } from "../src/internal/agent-registration.ts";
+import { DefinitionDigestInput } from "../src/Records.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2

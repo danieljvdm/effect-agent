@@ -3,7 +3,7 @@ import {
   ReviewDiagnosticsSink,
   type ReviewOutcome,
   type ReviewRequest,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import {
   Cause,
   Clock,

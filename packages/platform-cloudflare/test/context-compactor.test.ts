@@ -1,9 +1,9 @@
-import { submissionSettlementRecordId } from "@effect-agent/thread";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { submissionSettlementRecordId } from "@effect-agent/thread/SubmissionLedger";
 import { runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareThreadClient } from "../src/index.ts";
 import {
   contextCompactorDefinition,
   contextCompactorProbe,

@@ -1,8 +1,8 @@
-import type { RunEvent } from "@effect-agent/core";
+import { type RunEvent } from "@effect-agent/core/RunEvent";
 import {
   TravelPlan,
   type TravelPlan as TravelPlanValue,
-} from "@effect-agent/testing/fixtures/travel-planner";
+} from "@effect-agent/testing/TravelPlanner";
 import { Effect, Schema, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 

@@ -1,4 +1,5 @@
-import { Subagent, SubagentPolicy } from "@effect-agent/capabilities";
+import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { SubagentPolicy } from "@effect-agent/capabilities/Subagent";
 import { Effect, Schema } from "effect";
 
 import { Researcher } from "./researcher.ts";

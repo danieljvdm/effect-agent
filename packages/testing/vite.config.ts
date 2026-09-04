@@ -4,11 +4,13 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
-      "src/certification.ts",
-      "src/chaos.ts",
-      "src/code-executor.ts",
-      "src/docs-researcher.ts",
-      "src/travel-planner.ts",
+      "src/Certification.ts",
+      "src/Chaos.ts",
+      "src/CodeExecutorConformance.ts",
+      "src/CodeExecutorSubstitute.ts",
+      "src/DocsResearcher.ts",
+      "src/ScriptedModel.ts",
+      "src/TravelPlanner.ts",
     ],
     dts: true,
     sourcemap: true,

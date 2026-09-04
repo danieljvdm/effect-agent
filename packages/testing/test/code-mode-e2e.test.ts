@@ -1,30 +1,29 @@
-import { CodeMode } from "@effect-agent/capabilities";
-import { Agent, AgentPolicy, ThreadId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import * as CodeMode from "@effect-agent/capabilities/CodeMode";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import {
-  ThreadHistory,
   RunContextPreparationPassthrough,
-  AgentRuntime,
-  ToolExecutionClass,
   toolFailureObserverLayer,
   type ToolFailureObservation,
-} from "@effect-agent/engine";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
-import { inProcessCodeExecutorLayer } from "@effect-agent/testing/code-executor";
+} from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { inProcessCodeExecutorLayer } from "@effect-agent/testing/CodeExecutorSubstitute";
 import {
-  ThreadRead,
-  ThreadStore,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  DurableRuntimeFailpoint,
-  IdempotencyKey,
-  Principal,
-  ProducerId,
-  ToolReconciler,
-  WakeScheduler,
-} from "@effect-agent/thread";
+} from "@effect-agent/thread/DurableAgentRuntime";
+import { DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Layer, Logger, Ref, References, Schema, Stream } from "effect";

@@ -1,75 +1,72 @@
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { type IdGenerator } from "@effect-agent/core/IdGenerator";
+import { COMPACTION_SUMMARY_PREFIX, estimatePromptTokens } from "@effect-agent/engine/Compaction";
+import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { RunContextPreparation, RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { ToolBroker } from "@effect-agent/engine/ToolBroker";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
 import {
-  Agent,
-  AgentPolicy,
-  CompactionPolicy,
-  ThreadId,
-  ReceiptId,
-  SubmissionId,
-  ToolCallId,
-  type IdGenerator,
-} from "@effect-agent/core";
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  Receipt,
+  recoveryRepairRecordId,
+  type DurableSubmitOptions,
+} from "@effect-agent/thread/DurableAgentRuntime";
 import {
-  COMPACTION_SUMMARY_PREFIX,
-  ContextCompactor,
-  RunContextPreparation,
-  RunToolAuthorization,
-  estimatePromptTokens,
-  ToolExecutionClass,
-  ToolBroker,
-} from "@effect-agent/engine";
-import { MemoryThreadStoreLive, MemorySubmissionLedgerLive } from "@effect-agent/storage-memory";
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "@effect-agent/thread/DurableFailpoint";
 import {
-  AbortCommand,
-  ApprovalDecisionCommand,
   BatchId,
   CanonicalRecordEnvelope,
   CanonicalSequence,
-  ThreadRead,
-  ThreadStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  DurableRuntimeFailpointError,
-  IdempotencyKey,
   ModelResponseRecorded,
   ObservationOffset,
   PersistedJson,
-  Principal,
   ProducerId,
-  QueueSequence,
-  Receipt,
   RecordEnvelope,
-  RecoverySnapshotRequest,
   RunCompleted,
+} from "@effect-agent/thread/Records";
+import {
+  modelResponseRecordId,
+  projectRunJournal,
+  promptFromCanonicalRecords,
+  runCompletedRecordId,
+  runIdForSubmission,
+  runStartedRecordId,
+  toolCallSettledRecordId,
+  turnCanonicalBatch,
+  turnIdForRun,
+} from "@effect-agent/thread/RunJournal";
+import {
+  AbortCommand,
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  QueueSequence,
+  RecoverySnapshotRequest,
   Settlement,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-  ToolReconciler,
-  WakeScheduler,
-  makeWakeSubscriptionHub,
-  modelResponseRecordId,
-  projectRunJournal,
-  promptFromCanonicalRecords,
-  replayThread,
-  recoveryRepairRecordId,
-  runCompletedRecordId,
-  runIdForSubmission,
-  runStartedRecordId,
   submissionInputRecordId,
   submissionSettlementRecordId,
-  toolCallSettledRecordId,
-  turnCanonicalBatch,
-  turnIdForRun,
-  type DurableRuntimeFailpointLocation,
-  type DurableSubmitOptions,
   type AdmissionConflict,
-  type FenceRejected,
   type SettlementConflict,
-} from "@effect-agent/thread";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing";
+} from "@effect-agent/thread/SubmissionLedger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { replayThread } from "@effect-agent/thread/ThreadProjection";
+import { ThreadRead, ThreadStore, type FenceRejected } from "@effect-agent/thread/ThreadStore";
+import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
+import { WakeScheduler, makeWakeSubscriptionHub } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, layer } from "@effect/vitest";
 import {
@@ -4322,51 +4319,236 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
 });
 
 layer(testLayer)("RUN-030 canonical duration", (it) => {
-  it.effect("refuses executed history whose original start evidence is missing", () =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-      const store = yield* ThreadStore;
-      const scripted = yield* makeScriptedModel(() => toolCallParts);
-      const agent = Agent.withModel(searchDefinition, scripted.model);
+  it.effect(
+    "an already-expired host deadline yields before initial context preparation or provider I/O",
+    () =>
+      Effect.gen(function* () {
+        const prepared = yield* Ref.make(0);
+        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"later"}'));
+        const agent = Agent.withModel(plannerDefinition, scripted.model);
+        const binding = yield* DurableWorkerBinding.make(agent, DIGESTS);
 
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "missing clock" },
-        submitOptions("missing-run-start", "start"),
-      );
+        yield* Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
 
-      yield* armFailpoint("turn:after-response-append");
-      expect(
-        failureTag(
-          yield* Effect.exit(
-            runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(searchToolLayer)),
-          ),
-        ),
-      ).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
+          const receipt = yield* runtime.submit(
+            agent,
+            { question: "initial yield" },
+            submitOptions("host-yield-initial", "one"),
+          );
 
-      const withoutStart = ThreadStore.of({
-        ...store,
-        read: (request) =>
-          store
-            .read(request)
-            .pipe(Stream.filter(({ record }) => record.payload._tag !== "RunStarted")),
-      });
+          const yieldAfter = yield* DateTime.now;
 
-      const recovered = yield* Effect.exit(
-        Effect.flatMap(DurableAgentRuntime, (fresh) =>
-          fresh.processThread(agent, receipt.threadId),
-        ).pipe(
-          Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
-          Effect.provideService(ThreadStore, withoutStart),
-          Effect.provide(searchToolLayer),
-        ),
-      );
+          expect(
+            Option.isNone(yield* runtime.processThreadHead(receipt.threadId, { yieldAfter })),
+          ).toBe(true);
+          expect(yield* Ref.get(prepared)).toBe(0);
+          expect(scripted.prompts).toHaveLength(0);
+          expect(
+            (yield* readLog("host-yield-initial")).some(
+              ({ record }) => record.payload._tag === "SubmissionSettled",
+            ),
+          ).toBe(false);
+          const completed = yield* runtime.processThreadHead(receipt.threadId);
 
-      expect(failureTag(recovered)).toBe("RunJournalError");
-      expect(scripted.prompts).toHaveLength(1);
-    }),
+          expect(Option.isSome(completed) && completed.value.outcome).toBe("completed");
+          expect(scripted.prompts).toHaveLength(1);
+        }).pipe(
+          Effect.provide(DurableAgentRuntime.layerWithBindings([binding])),
+          Effect.provideService(RunContextPreparation, {
+            hook: {
+              prepare: ({ source }) =>
+                Ref.update(prepared, (count) => count + 1).pipe(Effect.as({ prompt: source })),
+            },
+          }),
+        );
+      }),
   );
+
+  for (const expired of [false, true])
+    it.effect(
+      `yields before the next provider call, releases resources, and ${expired ? "preserves the original deadline" : "resumes the same Run"}`,
+      () =>
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const acquired = yield* Ref.make(0);
+          const released = yield* Ref.make(0);
+          const toolCalls = yield* Ref.make(0);
+          const preparations = yield* Ref.make(0);
+          const thread = `host-yield-${expired}`;
+
+          const scripted = yield* makeScriptedModel((call) =>
+            call === 0 ? toolCallParts : finalParts('{"answer":"resumed"}'),
+          );
+
+          const model = Layer.merge(
+            scripted.model,
+            Layer.effectDiscard(
+              Effect.acquireRelease(
+                Ref.update(acquired, (count) => count + 1),
+                () => Ref.update(released, (count) => count + 1),
+              ),
+            ),
+          );
+
+          const yieldingTools = Toolkit.make(Search.annotate(ToolExecutionClass, "ordinary"));
+
+          const definition = Agent.make("host-yield-search", {
+            input: searchDefinition.input,
+            output: searchDefinition.output,
+            instructions: "Search before answering.",
+            toolkit: yieldingTools,
+            policy: searchDefinition.policy,
+          });
+
+          const agent = Agent.withModel(definition, model);
+
+          const binding = yield* DurableWorkerBinding.make(agent, DIGESTS).pipe(
+            Effect.provide(
+              yieldingTools.toLayer({
+                search: () =>
+                  Ref.update(toolCalls, (count) => count + 1).pipe(
+                    Effect.andThen(TestClock.adjust(Duration.seconds(1))),
+                    Effect.as({ available: true }),
+                  ),
+              }),
+            ),
+          );
+
+          yield* Effect.gen(function* () {
+            const runtime = yield* DurableAgentRuntime;
+
+            const receipt = yield* runtime.submit(
+              agent,
+              { question: "yield" },
+              submitOptions(thread, "one"),
+            );
+
+            const now = yield* DateTime.now;
+            const yieldAfter = DateTime.toUtc(DateTime.makeUnsafe(DateTime.toEpochMillis(now) + 1));
+            const first = yield* runtime.processThreadHead(receipt.threadId, { yieldAfter });
+
+            expect(Option.isNone(first)).toBe(true);
+            expect(scripted.prompts).toHaveLength(1);
+            expect(yield* Ref.get(preparations)).toBe(1);
+            expect(yield* Ref.get(acquired)).toBe(1);
+            expect(yield* Ref.get(released)).toBe(1);
+
+            const pending = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+            );
+
+            expect(pending.ownership).toBeUndefined();
+            expect(pending.submission.state).not.toBe("settled");
+            const before = yield* readLog(thread);
+
+            expect(
+              before.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
+            ).toHaveLength(1);
+            const start = before.find(({ record }) => record.payload._tag === "RunStarted");
+
+            if (expired) yield* TestClock.adjust(Duration.seconds(30));
+            const second = yield* runtime.processThreadHead(receipt.threadId);
+
+            expect(Option.isSome(second) && second.value.outcome).toBe(
+              expired ? "failed" : "completed",
+            );
+            expect(scripted.prompts).toHaveLength(expired ? 1 : 2);
+            expect(yield* Ref.get(acquired)).toBe(2);
+            expect(yield* Ref.get(released)).toBe(2);
+            expect(yield* Ref.get(toolCalls)).toBe(1);
+            const after = yield* readLog(thread);
+
+            expect(after.filter(({ record }) => record.payload._tag === "RunStarted")).toEqual([
+              start,
+            ]);
+            expect(
+              after.filter(({ record }) => record.payload._tag === "ToolCallPrepared"),
+            ).toHaveLength(1);
+            expect(
+              after.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
+            ).toHaveLength(1);
+          }).pipe(
+            Effect.provide(DurableAgentRuntime.layerWithBindings([binding])),
+            Effect.provideService(RunContextPreparation, {
+              hook: {
+                prepare: ({ source }) =>
+                  Ref.update(preparations, (count) => count + 1).pipe(
+                    Effect.as({ prompt: source }),
+                  ),
+              },
+            }),
+          );
+        }),
+    );
+
+  for (const corruption of ["missing", "wrong-run"] as const)
+    it.effect(`refuses executed history whose original start evidence is ${corruption}`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const store = yield* ThreadStore;
+        const scripted = yield* makeScriptedModel(() => toolCallParts);
+        const agent = Agent.withModel(searchDefinition, scripted.model);
+
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "missing clock" },
+          submitOptions(`invalid-run-start-${corruption}`, "start"),
+        );
+
+        yield* armFailpoint("turn:after-response-append");
+        expect(
+          failureTag(
+            yield* Effect.exit(
+              runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(searchToolLayer)),
+            ),
+          ),
+        ).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+
+        const withoutStart = ThreadStore.of({
+          ...store,
+          read: (request) =>
+            store.read(request).pipe(
+              Stream.filter(
+                ({ record }) => corruption !== "missing" || record.payload._tag !== "RunStarted",
+              ),
+              Stream.map((envelope) => {
+                const payload = envelope.record.payload;
+
+                if (corruption !== "wrong-run" || payload._tag !== "RunStarted") return envelope;
+
+                return CanonicalRecordEnvelope.make({
+                  ...envelope,
+                  record: RecordEnvelope.make({
+                    ...envelope.record,
+                    payload: {
+                      ...payload,
+                      runId: runIdForSubmission(Schema.decodeSync(SubmissionId)("wrong-run-start")),
+                    },
+                  }),
+                });
+              }),
+            ),
+        });
+
+        const recovered = yield* Effect.exit(
+          Effect.flatMap(DurableAgentRuntime, (fresh) =>
+            fresh.processThread(agent, receipt.threadId),
+          ).pipe(
+            Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+            Effect.provideService(ThreadStore, withoutStart),
+            Effect.provide(searchToolLayer),
+          ),
+        );
+
+        // A missing record leaves a sequence gap, rejected before Run-specific clock validation.
+        expect(failureTag(recovered)).toBe(
+          corruption === "missing" ? "ThreadStoreError" : "RunJournalError",
+        );
+        expect(scripted.prompts).toHaveLength(1);
+      }),
+    );
 
   it.effect("starts the clock once across both Run-start append failpoints", () =>
     Effect.gen(function* () {

@@ -1,12 +1,12 @@
-import { Agent, AgentPolicy, ThreadId } from "@effect-agent/core";
-import {
-  AgentRuntime,
-  ThreadHistory,
-  RunContextPreparationPassthrough,
-} from "@effect-agent/engine";
-import { layer as sqliteStore } from "@effect-agent/storage-sqlite";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing";
-import { PersistentHistory } from "@effect-agent/thread/history";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { ThreadId } from "@effect-agent/core/Identifiers";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { layer as sqliteStore } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
+import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
 import { Console, Effect, Layer, Schema } from "effect";
 import { Model, Prompt, Toolkit } from "effect/unstable/ai";
 import { Command, Flag } from "effect/unstable/cli";

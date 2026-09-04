@@ -1,15 +1,4 @@
 import {
-  type ReviewRepository,
-  type ReviewDiagnosticsSink,
-  type ReviewStrategy,
-  makeReviewer,
-  type ReviewRequest,
-  type ReviewUsage,
-  reviewInstructions,
-  REVIEW_VERIFICATION_INSTRUCTIONS,
-  REVIEW_LIMITS,
-} from "@effect-agent/pr-review";
-import {
   makeReviewOpenAi,
   REVIEW_COST_LIMIT_MICROUSD,
   reviewCostEstimator,
@@ -22,6 +11,17 @@ import {
   REVIEW_CACHE_POLICY,
   reviewModelPricing,
 } from "@effect-agent/pr-review-action/review-openai";
+import {
+  type ReviewDiagnosticsSink,
+  type ReviewStrategy,
+  makeReviewer,
+  type ReviewRequest,
+  type ReviewUsage,
+  reviewInstructions,
+  REVIEW_VERIFICATION_INSTRUCTIONS,
+  REVIEW_LIMITS,
+} from "@effect-agent/pr-review/Review";
+import { type ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { AiError } from "effect/unstable/ai";

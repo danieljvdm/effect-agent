@@ -3,7 +3,7 @@ import {
   ReviewFinding,
   type ReviewOutcome,
   type ReviewSeverity,
-} from "@effect-agent/pr-review";
+} from "@effect-agent/pr-review/Review";
 import { Effect, Schema } from "effect";
 
 import {

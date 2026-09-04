@@ -26,9 +26,10 @@ Compose agent registrations and application services as a layer, then pass it to
 Object namespace in the generated `Cloudflare.Env`.
 
 ```ts
-import { Agent, AgentPolicy } from "@effect-agent/core";
-import { ThreadObject } from "@effect-agent/platform-cloudflare";
-import { DefinitionDigestInput } from "@effect-agent/thread";
+import * as Agent from "@effect-agent/core/Agent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import { DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -135,7 +136,8 @@ for Workers using the older `migrations` array.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareThreadClient, type ThreadObjectRpc } from "@effect-agent/platform-cloudflare";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { type ThreadObjectRpc } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 
 export const threadClientLayer = (env: { THREADS: DurableObjectNamespace<ThreadObjectRpc> }) =>
   CloudflareThreadClient.layerFromBinding({ namespace: env.THREADS });
@@ -182,15 +184,15 @@ Bind the namespace and principal in authenticated host code. Never accept them f
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
+import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+import { MemoryLookup, MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
+import { MemoryScope } from "@effect-agent/core/MemoryStore";
 import {
-  MemoryAccess,
-  MemoryLookup,
-  MemoryNamespace,
-  MemoryRecallLimits,
-  MemoryScope,
-} from "@effect-agent/core";
-import { CloudflareMemoryClient, type MemoryObjectRpc } from "@effect-agent/platform-cloudflare";
-import { Principal } from "@effect-agent/thread";
+  CloudflareMemoryClient,
+  type MemoryObjectRpc,
+} from "@effect-agent/platform-cloudflare/CloudflareMemory";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Effect, Schema } from "effect";
 
 const Projects = MemoryNamespace.define({
@@ -289,17 +291,75 @@ The [opt-in deployed benchmark](https://github.com/danieljvdm/effect-agent/tree/
 16 sources plus duplicate-heavy candidates, with separate validation-RPC and full-recall durations.
 Local SQLite and workerd runs do not establish deployed latency.
 
+### Background remembering
+
+Bind the [remembering checkpoint contract](../guide/context-management#background-remembering)
+to the application's existing owner-local jobs. Source commit and outbox admission must be durable;
+the owner then runs finite remembering passes in a separate Scope. Keep its model permits separate
+from foreground runs. A blocked extraction or profile write must not hold a producer lock or a
+database transaction.
+
+The [persistent host fixture](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/test/restart/remembering-worker.ts)
+uses the existing memory reader/writer and SQLite-backed source, outbox, job, and retained checkpoint
+tables. It demonstrates host-owned wake repair and current-source recall. It is an application
+binding example, not an additional scheduler or a Cloudflare `ActivityProcessorStore` requirement.
+The actual application's job discovery, retry schedule, quotas, authorization, and alarm composition
+remain host responsibilities.
+
+Retain source-to-target checkpoints after pruning active jobs. Invalidation reactivates them for
+conditional cleanup and preserves uncertain prepared commands. Cleanup of an aggregate profile's
+last contribution should leave an empty writable profile; a `Withdraw` memory command permanently
+withdraws the entire target. Do not discard receipts or suppression to admit more work.
+
 ## Recovery and limits
 
 Alarms recover pending work after eviction without another user request.
 The host owns the Object's [single alarm](https://developers.cloudflare.com/durable-objects/api/alarms/);
 do not replace its handler or schedule unrelated alarms on that Object.
 
+Each Thread alarm reconciles recovery and advances at most one head Attempt. Accepted input can
+still join that Run through its normal turn boundaries. After ten minutes, the Attempt commits
+its completed turn and yields before preparing another turn, including context summarization.
+A later alarm resumes the same Run with its original duration deadline and cumulative usage.
+
+The whole Thread alarm has a fourteen-minute watchdog, including time waiting for another pass.
+The Schedule Owner uses the same watchdog while scanning due schedules. It continues past failed
+pages so a page of broken schedules cannot block healthy followers. Interrupted work keeps its
+durable retry obligation. These timers leave room below Cloudflare's
+[fifteen-minute alarm lifetime](https://developers.cloudflare.com/durable-objects/platform/limits/),
+but cannot preempt synchronous CPU work or an uninterruptible finalizer. Cloudflare's CPU limit
+is separate from elapsed time.
+
 `maxQueueDepthPerLane`, `maxInputBytes`, and `maxDatabaseBytes` refuse excess work with
 `AdmissionLimitExceeded` before admission. Keep Object RPC private and supply
 `operationAuthorizer` for application access rules. The default policy trusts service possession.
 
-Unconfirmed tool outcomes need authorized resolution. See [operations](../guide/operations).
+An ordinary tool interrupted before its outcome is confirmed can become Unknown during recovery;
+it is never automatically replayed. Unconfirmed outcomes need authorized resolution. See
+[operations](../guide/operations).
+
+## Runtime memory
+
+Cloudflare's 128 MB memory limit applies to an isolate, which can contain multiple Durable Objects
+and their Worker. It is not a separate allowance for every Object. See
+[memory usage metrics](https://developers.cloudflare.com/durable-objects/observability/metrics-and-analytics/#memory-usage).
+
+Use the package subpaths shown above to keep dependencies explicit. The package also declares
+unused modules removable, so Wrangler can remove unused adapters from root imports.
+
+Canonical reads and observations fetch at most 4 MiB of record JSON per internal SQL page, after
+capturing up to 1,024 sequence and size entries. Decoded objects and strings require additional
+heap. Recovery retains evidence for the addressed runs; prompt projection scans a fixed canonical
+tail and avoids retaining summarized response payloads. Metadata and scanning work still grow
+with history, and an uncompacted prompt still grows with the conversation. Configure
+[`contextTokenLimit`, compaction, tool result bounds, and concurrency](../guide/context-management)
+for the workload from the start. Admission and record-size limits do not reserve isolate memory.
+Whole-thread export still returns a complete collection; use paged reads for large histories.
+
+The [local heap benchmark](https://github.com/danieljvdm/effect-agent/tree/main/examples/cloudflare-memory#local-heap-measurements)
+measures exact Worker bundles and several concurrent Thread Objects using a synthetic model and
+tools. It requires no model key or deployment. Its local JavaScript heap snapshots help compare
+changes; profile production-like histories and tool payloads before choosing deployment capacity.
 
 ## Code execution and browsers
 
