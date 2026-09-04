@@ -39,6 +39,7 @@ const FindingJudgmentFields = Schema.Struct({
   candidateId: Schema.optionalKey(ReviewCandidate.fields.id),
   observationDigest: Schema.optionalKey(EvalInputDigest),
   oracleDigest: Schema.optionalKey(EvalInputDigest),
+  /** Independent whole-claim severity; diagnostic only for matches-expected scoring. */
   severity: Schema.optionalKey(ReviewSeverity),
   label: EvalAdjudicationLabel,
   matchedDefectIds: Schema.Array(EvalDefectId).check(Schema.isMaxLength(12)),

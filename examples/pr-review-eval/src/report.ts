@@ -2,7 +2,7 @@ import {
   ReviewCandidate,
   ReviewFinding,
   type ReviewOutcome,
-  type ReviewSeverity,
+  ReviewSeverity,
 } from "@effect-agent/pr-review/Review";
 import { Effect, Schema } from "effect";
 
@@ -27,7 +27,7 @@ import {
   EvalVariantId,
 } from "./contracts.ts";
 import { digestEvalOracle, digestObservation, digestText, validateEvalSuite } from "./corpus.ts";
-import type { EvalFindingJudgment, EvalJudgmentSet } from "./judgments.ts";
+import { EvalFindingJudgment, type EvalJudgmentSet } from "./judgments.ts";
 
 export class EvalReportError extends Schema.TaggedError<EvalReportError>()("EvalReportError", {
   message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
@@ -209,6 +209,48 @@ export class EvalFindingReference extends Schema.Class<EvalFindingReference>(
   finding: ReviewFinding,
 }) {}
 
+export const EvalSeverityComparison = Schema.Literals(["equal", "higher", "lower", "unassessed"]);
+
+export class EvalFindingSeverityDiagnostic extends Schema.Class<EvalFindingSeverityDiagnostic>(
+  "@effect-agent/example-pr-review-eval/EvalFindingSeverityDiagnostic",
+)({
+  reference: EvalFindingReference,
+  judgment: EvalFindingJudgment,
+  matchedDefects: Schema.Array(Schema.Struct({ id: EvalDefectId, severity: ReviewSeverity })).check(
+    Schema.isMaxLength(12),
+  ),
+  oracleSeverity: Schema.optionalKey(ReviewSeverity),
+  findingVsIndependent: EvalSeverityComparison,
+  /** Whole-finding severity versus the maximum across all matched oracle defects. */
+  independentVsOracle: Schema.Literals([
+    "equal",
+    "higher",
+    "lower",
+    "unassessed",
+    "not-applicable",
+  ]),
+}) {}
+
+export class EvalSeverityDiagnostics extends Schema.Class<EvalSeverityDiagnostics>(
+  "@effect-agent/example-pr-review-eval/EvalSeverityDiagnostics",
+)(
+  Schema.Struct({
+    scope: Schema.Literal("published-valid-findings-all-trials"),
+    assessed: Schema.Natural,
+    unassessed: Schema.Natural,
+    findings: Schema.Array(EvalFindingSeverityDiagnostic).check(Schema.isMaxLength(100_000)),
+  }).check(
+    Schema.makeFilter(
+      (diagnostics) =>
+        diagnostics.assessed ===
+          diagnostics.findings.filter((finding) => finding.judgment.severity !== undefined)
+            .length &&
+        diagnostics.assessed + diagnostics.unassessed === diagnostics.findings.length,
+      { title: "Severity assessment coverage counts published valid findings" },
+    ),
+  ),
+) {}
+
 export class EvalLaterBlocker extends Schema.Class<EvalLaterBlocker>(
   "@effect-agent/example-pr-review-eval/EvalLaterBlocker",
 )({
@@ -367,6 +409,8 @@ export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   rollout: EvalRolloutDecision,
   /** Counts supplied judgment records across all trials; absent historical reports are unknown. */
   judgmentProvenance: Schema.optionalKey(EvalJudgmentProvenance),
+  /** Informational only; absence in a historical report means coverage was not recorded. */
+  severityDiagnostics: Schema.optionalKey(EvalSeverityDiagnostics),
 }) {}
 
 const encodeObservationArray = Schema.encodeEffect(
@@ -645,6 +689,53 @@ const judgedSeverity = (
     : severities.includes("important")
       ? "important"
       : "nit";
+};
+
+const compareSeverities = (
+  left: ReviewSeverity,
+  right: ReviewSeverity,
+): typeof EvalSeverityComparison.Type => {
+  const rank = { nit: 0, important: 1, blocking: 2 };
+
+  return left === right ? "equal" : rank[left] > rank[right] ? "higher" : "lower";
+};
+
+const severityDiagnostic = (
+  finding: IndexedFinding,
+  evalCase: EvalCase,
+): EvalFindingSeverityDiagnostic | undefined => {
+  const judgment = finding.judgment;
+
+  if (
+    !isPublished(finding) ||
+    judgment === undefined ||
+    (judgment.label !== "matches-expected" && judgment.label !== "new-valid")
+  ) {
+    return undefined;
+  }
+  const independentSeverity = judgment.severity;
+
+  const oracleSeverity =
+    judgment.label === "matches-expected" ? judgedSeverity(finding, evalCase) : undefined;
+
+  return EvalFindingSeverityDiagnostic.make({
+    reference: finding.reference,
+    judgment,
+    matchedDefects: evalCase.expectedDefects
+      .filter((defect) => judgment.matchedDefectIds.includes(defect.id))
+      .map((defect) => ({ id: defect.id, severity: defect.severity })),
+    ...(oracleSeverity === undefined ? {} : { oracleSeverity }),
+    findingVsIndependent:
+      independentSeverity === undefined
+        ? "unassessed"
+        : compareSeverities(finding.reference.finding.severity, independentSeverity),
+    independentVsOracle:
+      oracleSeverity === undefined
+        ? "not-applicable"
+        : independentSeverity === undefined
+          ? "unassessed"
+          : compareSeverities(independentSeverity, oracleSeverity),
+  });
 };
 
 interface ValidatedInputs {
@@ -1435,6 +1526,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
   const variants: Array<EvalVariantQualityReport> = [];
   const unjudgedFindings: Array<EvalFindingReference> = [];
   const unmappedValidFindings: Array<EvalFindingReference> = [];
+  const severityFindings: Array<EvalFindingSeverityDiagnostic> = [];
 
   for (const [variantId, configuration] of [...validated.configurations].sort(([left], [right]) =>
     left.localeCompare(right),
@@ -1463,6 +1555,9 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
           validated.judgments,
           validated.observationDigests,
         )) {
+          const diagnostic = severityDiagnostic(indexed, evalCase);
+
+          if (diagnostic !== undefined) severityFindings.push(diagnostic);
           if (indexed.judgment === undefined) unjudgedFindings.push(indexed.reference);
           if (indexed.judgment?.label === "new-valid") {
             unmappedValidFindings.push(indexed.reference);
@@ -1576,6 +1671,14 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
     unmappedValidFindings,
     rollout: rolloutDecision(suite, validated, variants),
     judgmentProvenance: EvalJudgmentProvenance.make(judgmentProvenance),
+    severityDiagnostics: EvalSeverityDiagnostics.make({
+      scope: "published-valid-findings-all-trials",
+      assessed: severityFindings.filter((finding) => finding.judgment.severity !== undefined)
+        .length,
+      unassessed: severityFindings.filter((finding) => finding.judgment.severity === undefined)
+        .length,
+      findings: severityFindings,
+    }),
   });
 });
 
@@ -1656,10 +1759,32 @@ const renderRate = (rate: EvalRate): string =>
     ? `${rate.numerator}/${rate.denominator}`
     : `${rate.numerator}/${rate.denominator} (${rate.status})`;
 
+const renderSeverityDiagnostics = (diagnostics: EvalSeverityDiagnostics | undefined): string => {
+  if (diagnostics === undefined) return "Severity diagnostics: unavailable (not recorded).\n";
+
+  const findingDisagreements = diagnostics.findings.filter(
+    (finding) =>
+      finding.findingVsIndependent === "higher" || finding.findingVsIndependent === "lower",
+  ).length;
+
+  const oracleDisagreements = diagnostics.findings.filter(
+    (finding) =>
+      finding.independentVsOracle === "higher" || finding.independentVsOracle === "lower",
+  ).length;
+
+  return (
+    `Severity assessment: ${diagnostics.assessed}/${diagnostics.findings.length} published valid findings assessed; ${diagnostics.unassessed} unassessed (all trials).\n` +
+    (findingDisagreements + oracleDisagreements === 0
+      ? ""
+      : `Warning: disagreements between finding severity and independent assessment: ${findingDisagreements}; disagreements between independent assessment and the highest matched oracle severity: ${oracleDisagreements}. Scores and labels are unchanged; review source evidence before attributing the disagreements.\n`)
+  );
+};
+
 export const renderQualityReport = (report: EvalQualityReport): string =>
   (report.judgmentProvenance === undefined
     ? "Judgment provenance: unknown (not recorded).\n"
     : `Judgment provenance: ${report.judgmentProvenance.agent} agent, ${report.judgmentProvenance.human} human, ${report.judgmentProvenance.unknown} unknown (all trials).\n`) +
+  renderSeverityDiagnostics(report.severityDiagnostics) +
   report.variants
     .map((variant) => {
       const quality = variant.firstTrialFindings;

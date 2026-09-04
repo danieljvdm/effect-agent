@@ -1334,6 +1334,232 @@ describe("PR-review eval quality report", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("reports independent severity disagreements without changing oracle-based scores", () =>
+    Effect.gen(function* () {
+      const original = (yield* loadFixture).cases.find((entry) => entry.kind === "known-defects");
+      const originalDefect = original?.expectedDefects[0];
+
+      if (original === undefined || originalDefect === undefined)
+        return yield* Effect.die("Missing known-defect fixture");
+      const important = EvalExpectedDefect.make({ ...originalDefect, severity: "important" });
+
+      const blocking = EvalExpectedDefect.make({
+        ...originalDefect,
+        id: Schema.decodeSync(EvalDefectId)("separate-blocking-mechanism"),
+      });
+
+      const known = EvalCase.make({ ...original, expectedDefects: [important, blocking] });
+      const suite = EvalSuite.make({ version: 1, cases: [known] });
+      const variant = configuration("severity-diagnostics");
+
+      const claims = [
+        finding("Oracle disagreement"),
+        finding("Finding disagreement"),
+        finding("Independent severity absent"),
+        finding("Compound claim"),
+        finding("New valid claim"),
+        finding("Unclear claim"),
+        finding("Invalid claim"),
+        finding("Unjudged claim"),
+      ];
+
+      const observations = [observation(known, variant, 1, succeeded(claims))];
+      const digest = yield* digestObservationSet(observations);
+
+      const entries = [
+        EvalFindingJudgment.make({
+          ...judgment(known, variant, 1, 0, "matches-expected", [important.id]),
+          severity: "blocking",
+          rationale: "The supplied independent assessment disagrees with the frozen oracle.",
+        }),
+        EvalFindingJudgment.make({
+          ...judgment(known, variant, 1, 1, "matches-expected", [important.id]),
+          severity: "important",
+        }),
+        judgment(known, variant, 1, 2, "matches-expected", [important.id]),
+        EvalFindingJudgment.make({
+          ...judgment(known, variant, 1, 3, "matches-expected", [important.id, blocking.id]),
+          severity: "blocking",
+        }),
+        EvalFindingJudgment.make({
+          ...judgment(known, variant, 1, 4, "new-valid"),
+          severity: "important",
+        }),
+        EvalFindingJudgment.make({
+          ...judgment(known, variant, 1, 5, "unclear"),
+          severity: "blocking",
+        }),
+        EvalFindingJudgment.make({
+          ...judgment(known, variant, 1, 6, "invalid"),
+          severity: "blocking",
+        }),
+      ];
+
+      const report = yield* makeQualityReport(suite, observations, 1, judgmentSet(digest, entries));
+
+      const withoutIndependentMatches = yield* makeQualityReport(
+        suite,
+        observations,
+        1,
+        judgmentSet(
+          digest,
+          entries.map((entry) => {
+            if (entry.label !== "matches-expected") return entry;
+            const { severity: _severity, ...fields } = entry;
+
+            return EvalFindingJudgment.make(fields);
+          }),
+        ),
+      );
+
+      expect(report.variants).toEqual(withoutIndependentMatches.variants);
+      expect(report.rollout).toEqual(withoutIndependentMatches.rollout);
+      expect(report.observationSetDigest).toBe(digest);
+      expect(report.variants[0]?.firstTrialBlockingFindings).toMatchObject({
+        aligned: 1,
+        overstated: 5,
+        unresolved: 2,
+      });
+      expect(report.severityDiagnostics).toMatchObject({
+        scope: "published-valid-findings-all-trials",
+        assessed: 4,
+        unassessed: 1,
+      });
+      const diagnostics = report.severityDiagnostics?.findings;
+
+      expect(diagnostics).toHaveLength(5);
+      expect(diagnostics?.[0]).toMatchObject({
+        reference: { finding: claims[0], findingIndex: 0 },
+        judgment: entries[0],
+        matchedDefects: [{ id: important.id, severity: "important" }],
+        oracleSeverity: "important",
+        findingVsIndependent: "equal",
+        independentVsOracle: "higher",
+      });
+      expect(diagnostics?.[1]).toMatchObject({
+        findingVsIndependent: "higher",
+        independentVsOracle: "equal",
+      });
+      expect(diagnostics?.[2]).toMatchObject({
+        findingVsIndependent: "unassessed",
+        independentVsOracle: "unassessed",
+      });
+      expect(diagnostics?.[3]).toMatchObject({
+        matchedDefects: [
+          { id: important.id, severity: "important" },
+          { id: blocking.id, severity: "blocking" },
+        ],
+        oracleSeverity: "blocking",
+        findingVsIndependent: "equal",
+        independentVsOracle: "equal",
+      });
+      expect(diagnostics?.[4]).toMatchObject({
+        matchedDefects: [],
+        findingVsIndependent: "higher",
+        independentVsOracle: "not-applicable",
+      });
+      expect(diagnostics?.[4]?.oracleSeverity).toBeUndefined();
+      expect(renderQualityReport(report)).toContain(
+        "Severity assessment: 4/5 published valid findings assessed; 1 unassessed (all trials).",
+      );
+      expect(renderQualityReport(report)).toContain(
+        "Warning: disagreements between finding severity and independent assessment: 2; disagreements between independent assessment and the highest matched oracle severity: 1.",
+      );
+      expect(
+        Schema.decodeSync(EvalQualityReport)(Schema.encodeSync(EvalQualityReport)(report)),
+      ).toEqual(report);
+
+      const { severityDiagnostics: _diagnostics, ...historical } =
+        Schema.encodeSync(EvalQualityReport)(report);
+
+      expect(
+        renderQualityReport(yield* Schema.decodeUnknownEffect(EvalQualityReport)(historical)),
+      ).toContain("Severity diagnostics: unavailable (not recorded).");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "includes failed published claims in severity coverage but excludes withheld claims",
+    () =>
+      Effect.gen(function* () {
+        const known = (yield* loadFixture).cases.find((entry) => entry.kind === "known-defects");
+        const defectId = known?.expectedDefects[0]?.id;
+
+        if (known === undefined || defectId === undefined)
+          return yield* Effect.die("Missing known-defect fixture");
+        const variant = configuration("failed-severity-diagnostics");
+
+        const candidates = (["published", "suppressed", "unverified"] as const).map(
+          (publication, index) =>
+            ReviewCandidate.make({
+              id: `${known.inputDigest}:${index + 1}`,
+              requestDigest: known.inputDigest,
+              baseRevision: known.request.baseRevision,
+              headRevision: known.request.headRevision,
+              batch: 0,
+              finding: finding(`Retained ${publication} claim`),
+              disposition: "unresolved",
+              publication,
+              evidence: [],
+            }),
+        );
+
+        const row = observation(
+          known,
+          variant,
+          1,
+          EvalTrialFailed.make({
+            errorTag: "ProviderUnavailable",
+            message: "Stopped after recording candidates",
+            diagnostics: ReviewDiagnostics.make({
+              strategy: "baseline",
+              requestDigest: known.inputDigest,
+              discovery: "failed",
+              verification: "not-requested",
+              patchesSupplied: 1,
+              candidates,
+              activity: [],
+              droppedActivityCount: 0,
+              droppedCandidateCount: 0,
+              stages: [],
+            }),
+          }),
+        );
+
+        const observationDigest = yield* digestObservation(row);
+        const oracleDigest = yield* digestEvalOracle(known);
+
+        const entries = candidates.map((candidate, index) =>
+          EvalFindingJudgment.make({
+            ...judgment(known, variant, 1, index, "matches-expected", [defectId]),
+            candidateId: candidate.id,
+            observationDigest,
+            oracleDigest,
+            severity: "blocking",
+          }),
+        );
+
+        const report = yield* makeQualityReport(
+          EvalSuite.make({ version: 1, cases: [known] }),
+          [row],
+          1,
+          judgmentSet(yield* digestObservationSet([row]), entries),
+        );
+
+        expect(report.variants[0]?.resources.failedTrials).toBe(1);
+        expect(report.severityDiagnostics).toMatchObject({ assessed: 1, unassessed: 0 });
+        expect(report.severityDiagnostics?.findings).toHaveLength(1);
+        expect(report.severityDiagnostics?.findings[0]?.reference).toMatchObject({
+          candidate: candidates[0],
+          candidateId: candidates[0]?.id,
+          finding: candidates[0]?.finding,
+          observationDigest,
+        });
+        expect(report.severityDiagnostics?.findings[0]?.judgment).toEqual(entries[0]);
+        expect(renderQualityReport(report)).not.toContain("Warning:");
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("rejects incompatible observation and judgment identities", () =>
     Effect.gen(function* () {
       const suite = yield* loadFixture;

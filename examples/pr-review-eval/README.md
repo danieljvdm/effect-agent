@@ -122,6 +122,23 @@ independent severity for `new-valid`. A published blocker judged important or ni
 overstated; a new-valid blocker without independent severity remains unresolved. This calibration
 does not add the finding to expected-defect recall or satisfy the oracle-correction rollout gate.
 
+The optional report field `severityDiagnostics` separates finding-versus-independent severity
+from independent-versus-oracle severity. It retains the exact finding reference, supplied judgment
+and rationale, and the original matched defect IDs and severities. For a compound claim, the
+oracle comparison uses the highest severity across all matched defects. A blocking whole claim
+that also matches an important defect does not establish a disagreement with that constituent.
+`new-valid` has no matched oracle comparison. `higher` and `lower` describe the left side of each
+named comparison, not which assessment is correct.
+
+Its coverage is published findings judged `matches-expected` or `new-valid` across all original
+trials, including explicitly published candidates retained in failed trials. Suppressed and
+unverified candidates, invalid or unclear judgments, and unjudged findings are excluded.
+`assessed` counts eligible findings with an explicit independent `severity`; `unassessed` counts
+those without one. Missing severity never implies agreement. An absent historical diagnostic
+means coverage was not recorded. The text report warns about observed disagreements, but these
+diagnostics change no scores, recall, labels, or rollout rules. In particular, `matches-expected`
+scoring still uses the frozen oracle even when the supplied independent severity disagrees.
+
 Set each judgment's optional `adjudicatorKind` to `agent`, `human`, or `unknown`. Omitted historical
 values are unknown; adjudicator names never establish provenance. JSON and text reports show
 counts of supplied agent, human, and unknown judgments across all trials. This records provenance
@@ -146,6 +163,12 @@ Increment `oracleVersion` for each corrected case and remove its old `oracleDige
 source snapshots, splits, and related groups unchanged. The rescore command requires the complete
 original paired grid. It keeps the frozen original configurations and results, writes a new freeze,
 and records each predecessor observation digest. Original files remain unchanged.
+
+A severity disagreement alone does not establish an oracle error. Check the claim's scope and
+source evidence before correcting a case. For a prospective correction, freeze the corrected
+case version before the next comparison. Explicit rescoring is a separate result and does not
+replace a historical decision; the command below supports native frozen paired comparisons,
+not individual baseline frozen runs or arbitrary study layouts.
 
 ```sh
 vp run pr-review-eval -- --cases ./data/corrected-cases.json rescore --previous-cases ./data/frozen.json --observations ./results/paired.jsonl --correction-id oracle-2 --frozen-output ./data/corrected-frozen.json --output ./results/rescored.jsonl
