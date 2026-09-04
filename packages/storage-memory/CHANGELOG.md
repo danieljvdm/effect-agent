@@ -1,5 +1,17 @@
 # @effect-agent/storage-memory
 
+## 0.1.0-beta.49
+
+### Patch Changes
+
+- [#327](https://github.com/danieljvdm/effect-agent/pull/327) [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Poll durable abort intent without loading unrelated recovery state. Implement `SubmissionLedger.readAbortIntent` in custom ledger adapters.
+
+- [#325](https://github.com/danieljvdm/effect-agent/pull/325) [`aab6124`](https://github.com/danieljvdm/effect-agent/commit/aab612444af73e3c389e2a0122cdbcfdd769eb07) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Read in-memory Thread pages without scanning or copying the rest of the history.
+
+- Updated dependencies [[`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f), [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f), [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f)]:
+  - @effect-agent/thread@0.1.0-beta.49
+  - @effect-agent/core@0.1.0-beta.49
+
 ## 0.1.0-beta.48
 
 ### Patch Changes

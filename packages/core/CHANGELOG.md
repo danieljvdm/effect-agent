@@ -1,5 +1,7 @@
 # @effect-agent/core
 
+## 0.1.0-beta.49
+
 ## 0.1.0-beta.48
 
 ### Patch Changes
