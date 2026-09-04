@@ -33,6 +33,7 @@ import {
   Fiber,
   Layer,
   Logger,
+  Metric,
   Option,
   Redacted,
   Ref,
@@ -3475,6 +3476,102 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }
         expect(promptOrder).toEqual(["lookup-1", "lookup-2", "lookup-3"]);
       }),
+  );
+
+  it.effect("bounds waiting stream fibers when a large Tool batch is blocked", () =>
+    Effect.gen(function* () {
+      const concurrency = 2;
+
+      const blockedBatch = Effect.fnUntraced(function* (batchSize: number) {
+        const entered = yield* Deferred.make<void>();
+        let starts = 0;
+        let finalized = 0;
+        let fibers = 0;
+
+        const metrics: Metric.FiberRuntimeMetricsService = {
+          recordFiberStart: () => {
+            fibers += 1;
+          },
+          recordFiberEnd: () => {
+            fibers -= 1;
+          },
+        };
+
+        const Lookup = Tool.make("lookup", {
+          parameters: Schema.Struct({ index: Schema.Int }),
+          success: Schema.String,
+        });
+
+        const toolkit = Toolkit.make(Lookup);
+
+        const handlers = toolkit.toLayer({
+          lookup: () =>
+            Effect.gen(function* () {
+              starts += 1;
+              if (starts === concurrency) yield* Deferred.succeed(entered, undefined);
+
+              return yield* Effect.never;
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  finalized += 1;
+                }),
+              ),
+            ),
+        });
+
+        const definition = Agent.make("blocked-batch", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Run the lookups.",
+          toolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 2,
+            maxToolCalls: batchSize,
+            maxDuration: "30 seconds",
+            toolConcurrency: concurrency,
+          }),
+        });
+
+        const parts: Array<Response.StreamPartEncoded> = Array.from(
+          { length: batchSize },
+          (_, index) => ({
+            type: "tool-call",
+            id: `lookup-${index}`,
+            name: "lookup",
+            params: { index },
+            providerExecuted: false,
+          }),
+        );
+
+        parts.push({ type: "finish", reason: "tool-calls", usage });
+
+        const fiber = yield* AgentRuntime.run(
+          Agent.withModel(definition, modelFromParts(parts)),
+          "go",
+        ).pipe(
+          Effect.provide(handlers),
+          Effect.provideService(Metric.FiberRuntimeMetrics, metrics),
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(entered);
+        // Advance no time, but wait for the runtime fibers to reach suspension before sampling.
+        yield* TestClock.adjust(0);
+        const waitingFibers = fibers;
+
+        expect(starts).toBe(concurrency);
+        yield* Fiber.interrupt(fiber);
+        expect(finalized).toBe(concurrency);
+
+        return waitingFibers;
+      });
+
+      const smallBatch = yield* blockedBatch(4);
+      const largeBatch = yield* blockedBatch(64);
+
+      expect(largeBatch).toBeLessThanOrEqual(smallBatch + concurrency);
+    }),
   );
 
   it.effect("preflights the complete Tool batch before starting any handler", () =>

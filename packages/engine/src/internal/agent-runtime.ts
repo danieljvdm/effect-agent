@@ -71,6 +71,7 @@ import { InputTokenUsage, ModelCallUsage, OutputTokenUsage } from "@effect-agent
 import type { Layer, Take } from "effect";
 import {
   Cause,
+  Channel,
   Clock,
   Context,
   DateTime,
@@ -721,14 +722,30 @@ const inspectModelResponsePartCapacity = (
  * parameter Schemas; the engine decodes and canonically re-encodes each call
  * against the Definition-owned Schema before it enters history or executes.
  */
-const encodedToolParameterToolkit = <Tools extends Record<string, Tool.Any>>(
-  toolkit: Toolkit.Toolkit<Tools>,
-): Toolkit.Any =>
+const encodedToolParameterToolkit = (toolkit: Toolkit.Any): Toolkit.Any =>
   Toolkit.make(
     ...Object.values(toolkit.tools).map((tool) =>
       tool.setParameters(Schema.toEncoded(tool.parametersSchema)),
     ),
   );
+
+const makeModelResponseCodec = (toolkit: Toolkit.Any) =>
+  Schema.toCodecJson(Response.StreamPart(encodedToolParameterToolkit(toolkit)));
+
+// Native Toolkits are immutable. Weak keys let discarded definitions and handler Toolkits go
+// away while each live Toolkit shares its canonical codec across response parts and Turns.
+const modelResponseCodecs = new WeakMap<Toolkit.Any, ReturnType<typeof makeModelResponseCodec>>();
+
+const modelResponseCodecFor = (toolkit: Toolkit.Any) => {
+  const cached = modelResponseCodecs.get(toolkit);
+
+  if (cached !== undefined) return cached;
+  const codec = makeModelResponseCodec(toolkit);
+
+  modelResponseCodecs.set(toolkit, codec);
+
+  return codec;
+};
 
 const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
   Tools extends Record<string, Tool.Any>,
@@ -755,7 +772,7 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
   } else {
     yield* inspectModelResponsePartCapacity(usage, part, limits);
   }
-  const codec = Schema.toCodecJson(Response.StreamPart(encodedToolParameterToolkit(toolkit)));
+  const codec = modelResponseCodecFor(toolkit);
 
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding",
@@ -2189,8 +2206,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
         >
       >((stream, group) => {
-        const next = Stream.mergeAll(
-          group.map((call) =>
+        const channels = group.map(
+          (call) =>
             withSemaphorePermit(
               semaphore,
               executePreparedToolCall(
@@ -2213,9 +2230,13 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                 Stream.provideService(ToolBroker, brokerFor(call).service),
                 Stream.ensuring(Effect.sync(() => brokerFor(call).close())),
               ),
-            ),
-          ),
-          { concurrency: "unbounded" },
+            ).channel,
+        );
+
+        // Stream.mergeAll uses sequential concatenation at concurrency one. Keep a scoped call
+        // fiber even then so early downstream close still runs terminal telemetry and observers.
+        const next = Stream.fromChannel(
+          Channel.mergeAll(Channel.fromIterable(channels), { concurrency }),
         );
 
         return stream.pipe(Stream.concat(next));
@@ -6960,11 +6981,13 @@ const measureProgrammaticToolCall = <R>(
     );
   });
 
-const brokerEncodedByteLength = (value: unknown): number | undefined => {
+const brokerSerializeJson = (
+  value: unknown,
+): { readonly text: string; readonly bytes: number } | undefined => {
   try {
-    const encoded = JSON.stringify(value);
+    const text = JSON.stringify(value);
 
-    return encoded === undefined ? undefined : utf8ByteLength(encoded);
+    return text === undefined ? undefined : { text, bytes: utf8ByteLength(text) };
   } catch {
     return undefined;
   }
@@ -7369,9 +7392,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                     encodedResult: terminal.encodedResult,
                   } as const;
                 }
-                if (
-                  Option.isNone(Schema.decodeUnknownOption(Schema.Json)(terminal.encodedResult))
-                ) {
+                if (Option.isNone(brokerDecodeJson(terminal.encodedResult))) {
                   return yield* startedFailure(
                     "protocol",
                     "ModelProtocolError",
@@ -7394,17 +7415,35 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   }
                   encodedResult = redacted.value;
                 }
-                const bytes = brokerEncodedByteLength(encodedResult);
+                const snapshot = brokerSerializeJson(encodedResult);
 
-                if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+                if (snapshot === undefined || snapshot.bytes > passOptions.maxResultBytes) {
                   return yield* startedFailure(
                     "infrastructure",
                     "ProgrammaticResultLimitError",
-                    `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
+                    `Tool ${input.toolName} result of ${snapshot?.bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
                   );
                 }
 
-                return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
+                // Retain the exact representation admitted above. Reusing the handler or redactor
+                // value would let later mutation or stateful getters escape the byte bound.
+                const owned = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(
+                  snapshot.text,
+                );
+
+                if (Option.isNone(owned)) {
+                  return yield* startedFailure(
+                    "protocol",
+                    "ModelProtocolError",
+                    `Tool ${input.toolName} produced a success encoding outside JSON`,
+                  );
+                }
+
+                return {
+                  _tag: "ProgrammaticCallSuccess",
+                  index,
+                  encodedResult: owned.value,
+                } as const;
               }),
             );
 
