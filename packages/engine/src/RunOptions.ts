@@ -213,13 +213,13 @@ export interface PreparedRunContext {
   readonly prompt: Prompt.Prompt;
 }
 
-/**
- * Dependency-neutral ordered context transformation / compaction hook.
- * Resources acquired by `prepare` belong to the current Turn and close before
- * the next Turn starts. Acquire resources shared across Turns in a surrounding
- * Run Layer or Scope instead.
- */
+/** Dependency-neutral ordered context transformation / compaction hook. */
 export interface RunContextHook<Error = never, Requirements = never> {
+  /**
+   * Resources acquired by `prepare` belong to the current Turn and close before
+   * the next Turn starts. Acquire resources shared across Turns in a surrounding
+   * Run Layer or Scope instead.
+   */
   readonly prepare: (
     request: RunContextRequest,
   ) => Effect.Effect<PreparedRunContext, Error, Requirements>;
