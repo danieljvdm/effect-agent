@@ -291,9 +291,8 @@ const validateReceiptResult = Effect.fn("SqliteMemoryStore.validateReceiptResult
   }
 });
 
-const readUsage = Effect.fn("SqliteMemoryStore.readUsage")(function* (
-  sql: SqlClientService.SqlClient,
-) {
+const readUsage = Effect.fn("SqliteMemoryStore.readUsage")(function* () {
+  const sql = yield* SqlClientService.SqlClient;
   const operation = "read memory usage";
 
   const rows = yield* query(
@@ -359,7 +358,7 @@ const initializeMemoryUsage = Effect.fn("SqliteMemoryStore.initializeUsage")(fun
       return yield* storageError(operation, "corrupt");
     }
   }
-  yield* readUsage(sql);
+  yield* readUsage();
 });
 
 const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(function* () {
@@ -513,6 +512,7 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
 
 const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
   const sql = yield* SqlClientService.SqlClient;
+  const usage = readUsage().pipe(Effect.provideService(SqlClientService.SqlClient, sql));
   const failpoint = yield* MemoryMutationFailpoint;
   const limits = yield* decodeInput(Limits, yield* SqlMemoryLimits, "memory storage limits");
 
@@ -629,7 +629,7 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
             return yield* storageError("memory row byte limit", "invalid-input");
           }
 
-          const used = yield* readUsage(sql);
+          const used = yield* usage;
 
           if (used.bytes < (currentRow?.bytes ?? 0) || (current !== null && used.documents === 0)) {
             return yield* storageError("read memory usage", "corrupt");
