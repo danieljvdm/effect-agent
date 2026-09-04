@@ -20,6 +20,7 @@ import {
 import {
   type AdmissionResult,
   AbortCommand,
+  AbortIntentRequest,
   AdmissionConflict,
   AdmissionRequest,
   ApprovalConflict,
@@ -1153,6 +1154,13 @@ const abortIdempotency = conformanceCase(
         yield* admissionRequest(threadId, "abort-key-1", { work: "abort" }),
       );
 
+      const readRequest = AbortIntentRequest.make({ submissionId: admitted.submissionId });
+
+      yield* ensure(
+        (yield* ledger.readAbortIntent(readRequest)) === undefined,
+        "An admitted Submission without an abort intent must return undefined",
+      );
+
       const intent = yield* ledger.requestAbort(
         AbortCommand.make({
           submissionId: admitted.submissionId,
@@ -1178,11 +1186,30 @@ const abortIdempotency = conformanceCase(
         "Repeating an abort command must return the recorded intent unchanged",
       );
       const snapshot = yield* recoverySnapshot(admitted.submissionId);
+      const narrow = yield* ledger.readAbortIntent(readRequest);
 
       yield* ensure(
         snapshot.abortIntent !== undefined && snapshot.abortIntent.reason === intent.reason,
         "The recovery snapshot must expose the recorded abort intent",
       );
+      yield* ensure(
+        narrow !== undefined &&
+          narrow.submissionId === intent.submissionId &&
+          narrow.author === intent.author &&
+          narrow.reason === intent.reason &&
+          sameInstant(narrow.requestedAt, intent.requestedAt) &&
+          narrow.canonicalRecordId === snapshot.abortIntent?.canonicalRecordId,
+        "The narrow read must preserve the recorded intent and canonical proof",
+      );
+
+      const unknown = yield* expectFailure(
+        "reading an unknown Submission's abort intent",
+        ledger.readAbortIntent(
+          AbortIntentRequest.make({ submissionId: decodeSubmissionId("unknown-abort-target") }),
+        ),
+      );
+
+      yield* ensure(unknown._tag === "LedgerError", "Unknown abort targets must fail typed");
 
       const settledLane = decodeThreadId("ledger-conformance-abort-settled");
       const settledWork = yield* admitReady(settledLane, "abort-key-2", { work: "settled" });

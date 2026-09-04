@@ -918,6 +918,54 @@ describe("engine compaction records and projection (RUN-026)", () => {
   });
 
   layer(NodeCrypto.layer)((it) => {
+    it.effect("preserves an earlier Run's policy usage under a later Run's summary", () =>
+      Effect.gen(function* () {
+        const failedTurn = secondToolTurn.map((message) =>
+          message.role === "tool"
+            ? Prompt.makeMessage("tool", {
+                content: message.content.map((part) =>
+                  part.type === "tool-result" ? { ...part, isFailure: true } : part,
+                ),
+              })
+            : message,
+        );
+
+        const turn = yield* turnCanonicalBatch(
+          turnInput(failedTurn, 1, RUN_ID, {
+            inputTokens: 12,
+            outputTokens: 3,
+          }),
+        );
+
+        const envelopes = envelopesOf([turn]);
+        const uncompacted = yield* projectRunJournal(envelopes, RUN_ID);
+
+        const compacted = yield* projectRunJournal(
+          [
+            ...envelopes,
+            envelopeAt(
+              envelopes.length + 1,
+              auditRecord(
+                "later-run-summary",
+                compactionPayload({ coversThrough: envelopes.length }),
+              ),
+            ),
+          ],
+          RUN_ID,
+        );
+
+        expect(compacted.policyUsage).toEqual(uncompacted.policyUsage);
+        expect(compacted.policyUsage).toMatchObject({
+          committedTurns: 1,
+          toolCalls: 1,
+          consecutiveToolFailures: 1,
+        });
+        expect(compacted.usage).toEqual(uncompacted.usage);
+        expect(promptText(compacted.prompt)).toContain("Goal: book the Kyoto trip");
+        expect(toolResults(compacted.prompt)).toEqual([]);
+      }),
+    );
+
     it.effect("RUN-026: a summarize compaction folds covered records into the summary", () =>
       Effect.gen(function* () {
         const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
@@ -1136,7 +1184,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
 
           expect(promptText(projected.prompt)).toContain("Goal: book the Kyoto trip");
           expect(toolResults(projected.prompt)).toEqual([]);
-          expect(traversals).toBeLessThanOrEqual(4);
+          expect(traversals).toBe(2);
 
           const split = envelopeAt(
             records.length + 1,

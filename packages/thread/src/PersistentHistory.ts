@@ -135,6 +135,10 @@ const layer = Layer.effect(
         Effect.mapError((cause) => error("encoding", cause.message, cause)),
       );
 
+      const expectedTailSequence = base.tailSequence;
+      const expectedTailDigest = base.tailDigest;
+      const initialPromptLength = prompt.content.length;
+
       const createdAt = yield* DateTime.now;
 
       const record = (id: string, payload: RecordEnvelope["payload"], timestamp = createdAt) =>
@@ -149,6 +153,8 @@ const layer = Layer.effect(
 
       let input: RecordEnvelope | undefined;
       let messages: PersistedJson | undefined;
+      let stagedSource: ReadonlyArray<Prompt.Message> = [];
+      let encodedMessages: ReadonlyArray<Prompt.MessageEncoded> = [];
 
       return {
         prompt,
@@ -163,14 +169,35 @@ const layer = Layer.effect(
           );
         }),
         stageHistory: Effect.fn("PersistentHistory.stageHistory")(function* (next: Prompt.Prompt) {
-          messages = yield* Schema.encodeEffect(Prompt.Prompt)(
-            Prompt.fromMessages(next.content.slice(prompt.content.length)),
+          const source = next.content.slice(initialPromptLength);
+          let retained = 0;
+
+          while (
+            retained < source.length &&
+            retained < stagedSource.length &&
+            source[retained] === stagedSource[retained]
+          ) {
+            retained++;
+          }
+
+          // Normal engine updates append messages. Rewritten or shortened histories retain only
+          // their unchanged prefix, so direct staging callers keep the same replacement behavior.
+          const suffix = yield* Schema.encodeEffect(Prompt.Prompt)(
+            Prompt.fromMessages(source.slice(retained)),
           ).pipe(
             Effect.mapError((cause) =>
               error("encoding", "Run history could not be encoded", cause),
             ),
-            Effect.flatMap(persisted),
           );
+
+          const nextEncoded = [...encodedMessages.slice(0, retained), ...suffix.content];
+          const nextMessages = yield* persisted({ content: nextEncoded });
+
+          // Aggregate validation stays at every history update: per-message limits would admit
+          // oversized Runs and move failures past the next model or Tool call.
+          messages = nextMessages;
+          encodedMessages = nextEncoded;
+          stagedSource = source;
         }),
         commit: Effect.fn("PersistentHistory.commit")(function* (completion: RunCompletedEvent) {
           if (input === undefined || messages === undefined) {
@@ -196,8 +223,8 @@ const layer = Layer.effect(
               FencedAppendRequest.make({
                 threadId,
                 producerEpoch: HISTORY_EPOCH,
-                expectedTailSequence: base.tailSequence,
-                expectedTailDigest: base.tailDigest,
+                expectedTailSequence,
+                expectedTailDigest,
                 batch: CanonicalBatch.make({
                   batchId: batchId(`history:${runId}`),
                   producerId: producer(`history:${runId}`),

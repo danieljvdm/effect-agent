@@ -25,6 +25,7 @@ import {
   MarkJoinedRequest,
   MarkReadyRequest,
   RecoverySnapshotRequest,
+  AbortIntentRequest,
   RenewOwnershipRequest,
   SettlementConflict,
   SettlementFinalization,
@@ -892,6 +893,9 @@ describe("cross-DO port routing", () => {
         );
         yield* expectCrossLedger(
           ledger.loadRecoverySnapshot(RecoverySnapshotRequest.make({ submissionId: foreignSid })),
+        );
+        yield* expectCrossLedger(
+          ledger.readAbortIntent(AbortIntentRequest.make({ submissionId: foreignSid })),
         );
 
         const observeFailure = yield* store

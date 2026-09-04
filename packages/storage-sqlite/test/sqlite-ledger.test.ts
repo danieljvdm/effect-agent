@@ -35,6 +35,7 @@ import {
 } from "@effect-agent/thread/Records";
 import {
   AbortCommand,
+  AbortIntentRequest,
   AdmissionRequest,
   ApprovalDecisionCommand,
   ApprovalPendingSuspension,
@@ -103,6 +104,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import { CurrentTransformer } from "effect/unstable/sql/Statement";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -307,6 +309,45 @@ const combinedLayer = (filename: string) =>
   );
 
 describe("SqliteSubmissionLedger", () => {
+  it.effect("reads an abort intent with one query regardless of other admitted inputs", () =>
+    withTemporaryDatabase((filename) =>
+      withLedger(
+        filename,
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const admitted = yield* ledger.admit(yield* admission("abort-poll", "target", {}));
+          const request = AbortIntentRequest.make({ submissionId: admitted.submissionId });
+          const queries = yield* Ref.make(0);
+
+          const read = ledger
+            .readAbortIntent(request)
+            .pipe(
+              Effect.provideService(CurrentTransformer, (statement) =>
+                Ref.update(queries, (count) => count + 1).pipe(Effect.as(statement)),
+              ),
+            );
+
+          expect(yield* read).toBeUndefined();
+          for (let index = 0; index < 5; index++) {
+            yield* ledger.admit(
+              yield* admission("abort-poll", `other-${index}`, { text: "x".repeat(1024) }),
+            );
+          }
+          expect(yield* read).toBeUndefined();
+          yield* ledger.requestAbort(
+            AbortCommand.make({
+              submissionId: admitted.submissionId,
+              author: "operator",
+              reason: "stop",
+            }),
+          );
+          expect(yield* read).toMatchObject({ reason: "stop" });
+          expect(yield* Ref.get(queries)).toBe(3);
+        }),
+      ),
+    ),
+  );
+
   describe("shared SubmissionLedger conformance", () => {
     for (const conformanceCase of submissionLedgerConformanceCases) {
       it.effect(conformanceCase.name, () =>

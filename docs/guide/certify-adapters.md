@@ -25,6 +25,25 @@ Checkpoint support is optional and used only by explicit projection consumers. R
 and durable recovery do not read it. An adapter with checkpoints must also run the checkpoint
 conformance suite.
 
+Implement `SubmissionLedger.readAbortIntent` as a strongly consistent read of one submission's
+abort intent. The runtime polls this method during execution, so its work must stay independent
+of other submissions, approvals, and attached children. Unknown submissions fail with `LedgerError`.
+The read grants no ownership, and `canonicalRecordId` must come from canonical history.
+
+```ts
+import type { SubmissionId } from "@effect-agent/core/Identifiers";
+import { AbortIntentRequest, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import { Effect } from "effect";
+
+const readAbort = Effect.fn(function* (submissionId: SubmissionId) {
+  const ledger = yield* SubmissionLedger;
+  return yield* ledger.readAbortIntent(AbortIntentRequest.make({ submissionId }));
+});
+```
+
+Cloudflare keeps this read local to the submission's owning Durable Object. The abort command
+still becomes canonical under the append gate before the runtime interrupts execution.
+
 ## Run the certification
 
 ```ts

@@ -359,6 +359,7 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
         finalizeSettlement: (request) =>
           ledger.finalizeSettlement(request).pipe(Effect.tap(() => untrack(request.submissionId))),
         requestAbort: ledger.requestAbort,
+        readAbortIntent: ledger.readAbortIntent,
         claimJoining: ledger.claimJoining,
         markJoined: ledger.markJoined,
         revertJoining: ledger.revertJoining,
