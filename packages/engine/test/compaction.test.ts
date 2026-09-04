@@ -1,5 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import {
+  AgentPolicyError,
   ContextBudgetError,
   ContextOverflowError,
   ModelProtocolError,
@@ -18,6 +19,7 @@ import {
 import {
   type RunUsageDelta,
   type RunCompactionCommit,
+  type RunContextHook,
   type RunDurabilityHook,
   type RunTransientContextHook,
   type RunTurnUsage,
@@ -199,6 +201,8 @@ interface RunSetup {
   readonly noteTurnUsage?: (usage: RunTurnUsage) => Effect.Effect<void>;
   readonly consume?: (delta: RunUsageDelta) => Effect.Effect<void>;
   readonly transientContext?: RunTransientContextHook | undefined;
+  readonly context?: RunContextHook | undefined;
+  readonly history?: Prompt.Prompt | undefined;
 }
 
 const basePolicy = {
@@ -232,6 +236,7 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
     });
 
     const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+    const histories: Array<Prompt.Prompt> = [];
 
     const durability: RunDurabilityHook | undefined =
       commitCompaction === undefined
@@ -251,6 +256,9 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
       Agent.withModel(definition, model),
       { question: "compact?" },
       {
+        context: setup.context,
+        history: setup.history,
+        onHistory: (history) => Effect.sync(() => void histories.push(history)),
         ...(durability === undefined ? {} : { durability }),
         ...(setup.transientContext === undefined
           ? {}
@@ -266,7 +274,7 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
       Effect.exit,
     );
 
-    return { exit, requests, events: yield* Ref.get(events) };
+    return { exit, requests, histories, events: yield* Ref.get(events) };
   });
 
 /** Drive one scripted run and capture requests, events, and the exit. */
@@ -294,6 +302,318 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
     ],
     results: ["a".repeat(4_000), "b".repeat(4_000)],
   };
+
+  for (const limit of ["context", "reserve", "grace"] as const) {
+    it.effect(`admits replaced prepared content against the ${limit} limit`, () =>
+      Effect.gen(function* () {
+        const result = yield* driveRun({
+          policy: AgentPolicy.make({
+            ...basePolicy,
+            ...(limit === "reserve"
+              ? { tokenBudget: 3_000, completionReserveTokens: 1_000 }
+              : { contextTokenLimit: 2_000 }),
+            ...(limit === "grace"
+              ? { maxTurns: 1, onExhaustion: "final-answer" }
+              : { onExhaustion: "fail" }),
+            compaction: CompactionPolicy.make({ mode: "prune" }),
+          }),
+          context: {
+            prepare: ({ source, turn }) =>
+              Effect.succeed({
+                prompt: Prompt.fromMessages([
+                  Prompt.systemMessage({ content: turn === 1 ? "brief" : "GROWTH ".repeat(5_000) }),
+                  ...source.content,
+                ]),
+              }),
+          },
+          script: [
+            toolCallParts("s1", "search", {}, usageOf(100, 5)),
+            finalParts('{"answer":"unreachable"}'),
+          ],
+          results: ["small"],
+        });
+
+        expect(failureFrom(result.exit)).toBeInstanceOf(
+          limit === "reserve" ? AgentPolicyError : ContextBudgetError,
+        );
+        expect(result.requests).toHaveLength(1);
+        expect(JSON.stringify(result.histories)).not.toContain("GROWTH");
+      }),
+    );
+  }
+
+  for (const change of ["equivalent", "insert", "replace", "reorder"] as const) {
+    it.effect(`preserves protected prepared history across compaction: ${change}`, () =>
+      Effect.gen(function* () {
+        const result = yield* driveRun({
+          ...replacementSetup,
+          policy: AgentPolicy.make({
+            ...basePolicy,
+            contextTokenLimit: 2_000,
+            compaction: CompactionPolicy.make({ mode: "summarize", keepRecentTokens: 300 }),
+          }),
+          context: {
+            prepare: ({ source, turn }) => {
+              const messages = [...source.content];
+
+              if (turn === 4) {
+                if (change === "insert") {
+                  messages.splice(
+                    1,
+                    0,
+                    Prompt.userMessage({ content: [Prompt.textPart({ text: "UNRELATED" })] }),
+                  );
+                } else if (change === "replace") {
+                  messages[2] = Prompt.assistantMessage({
+                    content: [Prompt.textPart({ text: "UNRELATED" })],
+                  });
+                } else if (change === "reorder") {
+                  messages.splice(
+                    2,
+                    4,
+                    ...source.content.slice(4, 6),
+                    ...source.content.slice(2, 4),
+                  );
+                }
+              }
+
+              return Effect.succeed({
+                prompt: Schema.decodeUnknownSync(Prompt.Prompt)(
+                  JSON.parse(JSON.stringify({ content: messages })),
+                ),
+              });
+            },
+          },
+          script: [
+            toolCallParts("s1", "search", {}, usageOf(100, 5)),
+            toolCallParts("s2", "search", {}, usageOf(1_300, 5)),
+            toolCallParts("s3", "search", {}, usageOf(50, 5)),
+            finalParts('{"answer":"done"}'),
+          ],
+          results: ["a".repeat(4_000), "b".repeat(4_000), "small"],
+        }).pipe(
+          Effect.provideService(ContextCompactor, {
+            estimate: estimatePromptTokens,
+            compact: () =>
+              Stream.succeed({ kind: "summarize", through: 4, summary: "First result covered" }),
+          }),
+        );
+
+        expect(promptText(result.requests[2]?.prompt ?? Prompt.empty)).toContain("compact?");
+        if (change === "equivalent") {
+          if (Exit.isFailure(result.exit)) return yield* Effect.failCause(result.exit.cause);
+          expect(result.requests).toHaveLength(4);
+          expect(toolResultValues(result.requests[3]?.prompt ?? Prompt.empty)).toEqual([
+            "b".repeat(4_000),
+            "small",
+          ]);
+        } else {
+          expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+          expect(result.requests).toHaveLength(3);
+        }
+        expect(JSON.stringify(result.histories)).toContain("a".repeat(4_000));
+        expect(JSON.stringify(result.histories)).not.toContain("UNRELATED");
+      }),
+    );
+  }
+
+  it.effect("rejects compaction when preparation cannot map the protected input", () =>
+    Effect.gen(function* () {
+      const result = yield* driveRun({
+        ...replacementSetup,
+        context: {
+          prepare: ({ source }) =>
+            Effect.succeed({
+              prompt: Prompt.fromMessages(
+                source.content.map((message, index) =>
+                  index === 1
+                    ? Prompt.userMessage({
+                        content: [Prompt.textPart({ text: "replacement input" })],
+                      })
+                    : message,
+                ),
+              ),
+            }),
+        },
+      }).pipe(
+        Effect.provideService(ContextCompactor, {
+          estimate: estimatePromptTokens,
+          compact: () =>
+            Stream.succeed({ kind: "summarize", through: 4, summary: "unsafe replacement" }),
+        }),
+      );
+
+      expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+      expect(compactionEvents(result.events)).toEqual([]);
+      expect(JSON.stringify(result.histories)).toContain("compact?");
+    }),
+  );
+
+  it.effect("maps identity preparation to the current input when prior history repeats it", () =>
+    Effect.gen(function* () {
+      const result = yield* driveRun({
+        ...replacementSetup,
+        policy: AgentPolicy.make({
+          ...basePolicy,
+          contextTokenLimit: 2_000,
+          compaction: CompactionPolicy.make({ mode: "summarize", keepRecentTokens: 300 }),
+        }),
+        history: Prompt.fromMessages([
+          Prompt.systemMessage({
+            content: "Research the question with the search tool, then answer.",
+          }),
+          ...Prompt.make(JSON.stringify({ question: "compact?" })).content,
+        ]),
+        context: { prepare: ({ source }) => Effect.succeed({ prompt: source }) },
+      }).pipe(
+        Effect.provideService(ContextCompactor, {
+          estimate: estimatePromptTokens,
+          compact: () =>
+            Stream.succeed({
+              kind: "summarize",
+              through: 6,
+              summary: "Prior input and first search covered",
+            }),
+        }),
+      );
+
+      if (Exit.isFailure(result.exit)) return yield* Effect.failCause(result.exit.cause);
+      expect(result.requests).toHaveLength(3);
+      const outgoing = result.requests[2]?.prompt ?? Prompt.empty;
+
+      expect(
+        outgoing.content.filter(
+          (message) => messageText(message) === JSON.stringify({ question: "compact?" }),
+        ),
+      ).toHaveLength(1);
+      expect(toolResultValues(outgoing)).toEqual(["b".repeat(4_000)]);
+      expect(JSON.stringify(result.histories)).toContain("a".repeat(4_000));
+    }),
+  );
+
+  it.effect(
+    "omits oversized structured tool previews without changing summary source evidence",
+    () =>
+      Effect.gen(function* () {
+        const compactor = yield* ContextCompactor;
+        const result = { evidence: "large evidence ".repeat(10_000) };
+
+        const source = Prompt.fromMessages([
+          Prompt.assistantMessage({
+            content: [
+              Prompt.toolCallPart({
+                id: "large",
+                name: "search",
+                params: {},
+                providerExecuted: false,
+              }),
+            ],
+          }),
+          Prompt.toolMessage({
+            content: [
+              Prompt.toolResultPart({
+                id: "large",
+                name: "search",
+                result,
+                isFailure: false,
+                providerExecuted: false,
+              }),
+            ],
+          }),
+          ...Array.from({ length: 100 }, (_, index) =>
+            Prompt.userMessage({
+              content: [Prompt.textPart({ text: `entry-${index} ${"x".repeat(2_000)}` })],
+            }),
+          ),
+          Prompt.userMessage({ content: [Prompt.textPart({ text: "recent tail" })] }),
+        ]);
+
+        const prompts: Array<Prompt.Prompt> = [];
+
+        yield* compactor
+          .compact({
+            source,
+            state: initialCompactionState(),
+            policy: CompactionPolicy.make({ keepRecentTokens: 1, mode: "summarize" }),
+            targetTokens: 10,
+            forceSummarize: false,
+            allowSummarize: true,
+            summarize: (prompt) =>
+              Effect.sync(() => {
+                prompts.push(prompt);
+
+                return "summary";
+              }),
+          })
+          .pipe(Stream.runCollect);
+
+        expect(prompts).toHaveLength(1);
+        const transcript = promptText(prompts[0] ?? Prompt.empty);
+
+        expect(transcript.length).toBeLessThanOrEqual(SUMMARY_INPUT_BUDGET);
+        expect(transcript).toContain(
+          "[tool result search: [omitted oversized or unsupported JSON]]",
+        );
+        expect(transcript).toContain("messages omitted from summary input");
+        expect(transcript).toContain("entry-0 ");
+        expect(transcript).toContain("entry-99 ");
+        expect(toolResultValues(source)).toEqual([result]);
+      }),
+  );
+
+  it.effect(
+    "bounds the complete default summary request and rejects an oversized prior summary",
+    () =>
+      Effect.gen(function* () {
+        const compactor = yield* ContextCompactor;
+
+        const source = Prompt.fromMessages([
+          ...Array.from({ length: 100 }, (_, index) =>
+            Prompt.userMessage({
+              content: [Prompt.textPart({ text: `entry-${index} ${"x".repeat(2_000)}` })],
+            }),
+          ),
+          Prompt.userMessage({ content: [Prompt.textPart({ text: "recent tail" })] }),
+        ]);
+
+        for (const length of [65_536, 65_537, 100_000]) {
+          const prompts: Array<Prompt.Prompt> = [];
+          const state = { ...initialCompactionState(), summary: "s".repeat(length) };
+
+          const exit = yield* compactor
+            .compact({
+              source,
+              state,
+              policy: CompactionPolicy.make({ keepRecentTokens: 1, mode: "summarize" }),
+              targetTokens: 10,
+              forceSummarize: false,
+              allowSummarize: true,
+              summarize: (prompt) =>
+                Effect.sync(() => {
+                  prompts.push(prompt);
+
+                  return "summary";
+                }),
+            })
+            .pipe(Stream.runCollect, Effect.exit);
+
+          if (length === 65_536) {
+            expect(Exit.isSuccess(exit)).toBe(true);
+            expect(promptText(prompts[0] ?? Prompt.empty).length).toBeLessThanOrEqual(
+              SUMMARY_INPUT_BUDGET,
+            );
+            expect(promptText(prompts[0] ?? Prompt.empty)).toContain(state.summary);
+            expect(promptText(prompts[0] ?? Prompt.empty)).toContain("entry-0 ");
+            expect(promptText(prompts[0] ?? Prompt.empty)).toContain("entry-99 ");
+          } else {
+            expect(failureFrom(exit)).toBeInstanceOf(CompactionError);
+            expect(prompts).toEqual([]);
+            expect(renderForSummary([], state.summary)).toBeUndefined();
+          }
+          expect(state.summary.length).toBe(length);
+        }
+      }),
+  );
 
   it.effect(
     "decorates the injected strategy and estimator while retaining summary Model metering and history",
@@ -540,6 +860,11 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             estimate: estimatePromptTokens,
             compact: () => Stream.succeed({ kind: "summarize", through: 4, summary: " \n\t " }),
           }),
+          ContextCompactor.of({
+            estimate: estimatePromptTokens,
+            compact: () =>
+              Stream.succeed({ kind: "summarize", through: 4, summary: "s".repeat(65_537) }),
+          }),
         ]) {
           const commits: Array<RunCompactionCommit> = [];
 
@@ -720,6 +1045,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
       // Per-message clip applies to plain text, not only tool results.
       const oversized = renderForSummary([userMessage(`start${"x".repeat(10_000)}end`)], undefined);
 
+      if (oversized === undefined) throw new Error("Expected bounded summary rendering");
       expect(oversized.length).toBeLessThan(3_000);
 
       // Total budget: many clipped messages exceed it; middle-out retention
@@ -730,6 +1056,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
       const rendered = renderForSummary(many, "previous summary text");
 
+      if (rendered === undefined) throw new Error("Expected bounded summary rendering");
       expect(rendered.length + COMPACTION_INSTRUCTION.length).toBeLessThanOrEqual(
         SUMMARY_INPUT_BUDGET,
       );
@@ -873,6 +1200,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
     readonly name: string;
     readonly parts: ReadonlyArray<Response.StreamPartEncoded>;
   }> = [
+    { name: "oversized", parts: finalParts("s".repeat(65_537), usageOf(50, 20)) },
     { name: "finish-only", parts: [{ type: "finish", reason: "stop", usage: usageOf(50, 20) }] },
     { name: "whitespace-only", parts: finalParts(" \n\t ", usageOf(50, 20)) },
     {
@@ -929,7 +1257,9 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
               }),
           });
 
-          expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
+          expect(failureFrom(exit)).toBeInstanceOf(
+            invalid.name === "oversized" ? CompactionError : ModelProtocolError,
+          );
           expect(requests).toHaveLength(5);
           expect(compactionEvents(events).map((event) => event.kind)).toEqual(["summarize"]);
           expect(commits.map((commit) => commit.summary)).toEqual(["Goal: preserved summary"]);
@@ -1336,7 +1666,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
     Effect.gen(function* () {
       const policy = AgentPolicy.make({
         ...basePolicy,
-        contextTokenLimit: 20_000,
+        contextTokenLimit: 5_000,
         compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
       });
 
@@ -1346,7 +1676,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           toolCallParts("s1", "search", {}, usageOf(100, 5)),
           toolCallParts("s2", "search", {}, usageOf(200, 5)),
           { fail: "maximum context length exceeded" },
-          finalParts(`Goal: ${"summary".repeat(20_000)}`, usageOf(20, 10)),
+          finalParts(`Goal: ${"summary".repeat(8_000)}`, usageOf(20, 10)),
         ],
         results: ["a".repeat(4_000), "b".repeat(4_000)],
       });

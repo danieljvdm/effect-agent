@@ -7,20 +7,26 @@ import {
   choosePruneBound,
   chooseSummarizeCut,
   collectCoveredMessages,
-  COMPACTION_INSTRUCTION,
   estimatePromptTokens,
   renderForSummary,
+  SUMMARY_MAX_LENGTH,
+  SUMMARY_REQUEST_PREFIX,
+  SUMMARY_REQUEST_SUFFIX,
   type ContextCompactionState,
 } from "./internal/compaction.ts";
 
-/** A proposed view change. Source indices are exclusive prefix bounds, never record sequences. */
+/**
+ * A proposed view change. Source indices are exclusive prefix bounds, never record sequences.
+ * Summaries contain at most 65,536 characters; the interpreter rejects oversized decisions
+ * before committing or changing coverage.
+ */
 export const CompactionDecision = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("clear-tool-results"), through: Schema.Natural }),
   Schema.Struct({
     kind: Schema.Literal("summarize"),
     through: Schema.Natural,
     summary: Schema.NonEmptyString.check(
-      Schema.isMaxLength(8 * 1024 * 1024),
+      Schema.isMaxLength(SUMMARY_MAX_LENGTH),
       Schema.isPattern(/\S/),
     ),
   }),
@@ -111,11 +117,17 @@ const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
               if (covered.length === 0) return Stream.empty;
               const transcript = renderForSummary(covered, state.summary);
 
+              if (transcript === undefined) {
+                return yield* CompactionError.make({
+                  message: `Previous compaction summary exceeds ${SUMMARY_MAX_LENGTH} characters`,
+                });
+              }
+
               const prompt = Prompt.fromMessages([
                 Prompt.userMessage({
                   content: [
                     Prompt.textPart({
-                      text: `${COMPACTION_INSTRUCTION}\n\n<transcript>\n${transcript}\n</transcript>`,
+                      text: `${SUMMARY_REQUEST_PREFIX}${transcript}${SUMMARY_REQUEST_SUFFIX}`,
                     }),
                   ],
                 }),

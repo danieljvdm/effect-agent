@@ -78,6 +78,14 @@ For durable execution, install `MetricContextLive` when [configuring the runtime
 Transforms change the model prompt, not stored input or history. Use
 [`inputPrompt`](./agents#choose-model-visible-input) to choose which input fields the model sees.
 
+Prepared prompts receive fresh context estimates, including replacement content. For nondurable
+compaction, retain the original instruction/input messages or an unambiguous, content-equivalent
+ordering of them. The engine rejects compaction with `CompactionError` when that block cannot be
+mapped safely. Original message identities disambiguate repeated instructions or input text.
+After compaction, preparation must preserve the content and order of the covered prefix. Rebuilding
+equivalent messages is supported; replacing, inserting into, or reordering that prefix fails before
+another model request. Durable reconstruction keeps its canonical coverage checks at commit time.
+
 ## Recall application-owned sources {#recall-memory}
 
 `Memory.recall` turns readable, application-selected sources into a bounded transient model view.
@@ -967,8 +975,10 @@ always fail because another model call would add time or cost.
 
 ## Compaction
 
-With `contextTokenLimit`, the engine estimates the next prompt before every turn. It starts from
-the last provider-reported input and estimates appended content. The default compactor then:
+With `contextTokenLimit`, the engine estimates the next prompt before every turn. Ordinary
+append-only history starts from the last provider-reported input and estimates appended content.
+Preparation and transient-context hooks use a fresh estimate. Within a turn, the engine reuses
+the history view and estimate until compaction changes them. The default compactor then:
 
 1. clears old application tool results outside the protected `keepRecentTokens` tail while keeping
    message structure and call/result pairs;
@@ -981,7 +991,16 @@ the same compacted view.
 
 A summary must finish successfully and contain non-whitespace text. The interpreter charges its
 usage before validating it. A rejected summary leaves the previous summary and coverage in place;
-already committed pruning remains. Durable summaries are limited to 65,536 characters.
+already committed pruning remains. All summaries, including custom strategy decisions, are limited
+to 65,536 characters and fail with `CompactionError` above that bound. Summaries are never silently
+truncated to fit.
+
+The complete default summarizer request fits within 80,000 characters, including instructions,
+transcript delimiters, and the previous summary. It retains the oldest and newest covered messages
+and marks the omitted middle. Message and string-result previews are clipped before rendering;
+oversized structured tool results receive an explicit omission marker. An oversized previous summary
+is rejected before rendering. These limits change only the model view, leaving canonical evidence
+intact.
 
 If the provider reports context overflow, the engine may compact and retry once. Transport
 ambiguity can duplicate that model call. A second rejection, or overflow without

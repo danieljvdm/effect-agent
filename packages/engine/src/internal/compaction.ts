@@ -1,5 +1,7 @@
 import { Prompt } from "effect/unstable/ai";
 
+import { boundedCanonicalJsonSnapshot } from "./provider-result-staging.ts";
+
 /**
  * Pure helpers for engine-native context compaction (RUN-026/RUN-027). Everything here is deterministic and side-effect free:
  * the engine's turn loop owns the state transitions, the durable coordinator
@@ -92,18 +94,20 @@ export const estimatePromptTokens = (messages: ReadonlyArray<Prompt.Message>): n
 /**
  * Mutable per-Run compaction state held on the engine's RunContext. Indices
  * are positions in the SOURCE prompt (the official-history basis handed to
- * each Turn), which grows append-only within an Attempt, so recorded indices
- * stay valid across Turns.
+ * each Turn). Ordinary history grows append-only. Prepared history must retain
+ * content-equivalent covered prefixes or the engine rejects the next Turn.
  */
 export interface ContextCompactionState {
   /**
    * Source-index bounds `[start, end)` of the protected instruction/input
-   * block. `-1` when the source is hook-prepared (durable resume): the block
-   * cannot be located by index there, so protection falls back to
-   * system-role messages.
+   * block, mapped to prepared indices when necessary. `-1` when durable
+   * reconstruction cannot locate it: its commit hook protects owner-Run
+   * records, and the view retains system-role messages.
    */
   protectedStart: number;
   protectedEnd: number;
+  /** Prepared prompts also retain application-added system instructions. */
+  protectSystemMessages?: boolean;
   /** Tool messages at source index below this bound render as cleared. */
   clearedThrough: number;
   /**
@@ -141,6 +145,7 @@ const isProtected = (
   source: ReadonlyArray<Prompt.Message>,
   index: number,
 ): boolean => {
+  if (state.protectSystemMessages && source[index]?.role === "system") return true;
   if (state.protectedStart >= 0) {
     return index >= state.protectedStart && index < state.protectedEnd;
   }
@@ -198,7 +203,19 @@ export const buildCompactedView = (
   const view: Array<Prompt.Message> = [];
 
   if (state.summary !== undefined && state.summarizedThrough > 0) {
-    for (let index = 0; index < state.summarizedThrough && index < source.length; index += 1) {
+    const protectedStart =
+      state.protectedStart >= 0 && !state.protectSystemMessages ? state.protectedStart : 0;
+
+    const protectedEnd =
+      state.protectedStart >= 0 && !state.protectSystemMessages
+        ? state.protectedEnd
+        : state.summarizedThrough;
+
+    for (
+      let index = protectedStart;
+      index < Math.min(protectedEnd, state.summarizedThrough, source.length);
+      index += 1
+    ) {
       const message = source[index];
 
       if (message !== undefined && isProtected(state, source, index)) {
@@ -341,6 +358,15 @@ export const collectCoveredMessages = (
 
 const SUMMARY_TOOL_RESULT_CLIP = 2_000;
 
+const jsonPreview = (value: unknown, limit: number): string => {
+  if (typeof value === "string") return JSON.stringify(value.slice(0, limit)).slice(0, limit);
+  const snapshot = boundedCanonicalJsonSnapshot(value, limit);
+
+  return snapshot === undefined
+    ? "[omitted oversized or unsupported JSON]"
+    : JSON.stringify(snapshot.value);
+};
+
 const partText = (part: Prompt.Message["content"][number] | string): string => {
   if (typeof part === "string") return part;
   switch (part.type) {
@@ -351,26 +377,10 @@ const partText = (part: Prompt.Message["content"][number] | string): string => {
       return "";
     }
     case "tool-call": {
-      let params: string;
-
-      try {
-        params = JSON.stringify(part.params) ?? "";
-      } catch {
-        params = "";
-      }
-
-      return `[tool call ${part.name} ${params.slice(0, 500)}]`;
+      return `[tool call ${part.name.slice(0, 500)} ${jsonPreview(part.params, 500)}]`;
     }
     case "tool-result": {
-      let result: string;
-
-      try {
-        result = JSON.stringify(part.result) ?? "";
-      } catch {
-        result = "";
-      }
-
-      return `[tool result ${part.name}: ${result.slice(0, SUMMARY_TOOL_RESULT_CLIP)}]`;
+      return `[tool result ${part.name.slice(0, 500)}: ${jsonPreview(part.result, SUMMARY_TOOL_RESULT_CLIP)}]`;
     }
     default: {
       return `[${part.type}]`;
@@ -379,15 +389,36 @@ const partText = (part: Prompt.Message["content"][number] | string): string => {
 };
 
 /**
- * Total character budget for one summarizer request, the fixed instruction
- * and previous summary counted first. Deterministic and provider-agnostic:
- * ~80k chars is ~20k tokens, far inside every supported window, so the
- * overflow-recovery summarization can never itself overflow.
+ * Character budget for the complete default summarizer request, including
+ * its instruction, transcript delimiters, previous summary, and elision marker.
  */
 export const SUMMARY_INPUT_BUDGET = 80_000;
+export const SUMMARY_MAX_LENGTH = 65_536;
+export const SUMMARY_REQUEST_PREFIX = `${COMPACTION_INSTRUCTION}\n\n<transcript>\n`;
+export const SUMMARY_REQUEST_SUFFIX = "\n</transcript>";
 
 const SUMMARY_MESSAGE_CLIP = 2_000;
 const SUMMARY_ELISION_RESERVE = 128;
+
+const summaryBlock = (message: Prompt.Message): string => {
+  let text = "";
+
+  if (typeof message.content === "string") {
+    text = message.content.slice(0, SUMMARY_MESSAGE_CLIP + 1);
+  } else {
+    for (const part of message.content) {
+      const piece = partText(part);
+
+      if (piece.length === 0) continue;
+      if (text.length > 0) text += "\n";
+      text += piece.slice(0, SUMMARY_MESSAGE_CLIP + 1 - text.length);
+      if (text.length > SUMMARY_MESSAGE_CLIP) break;
+    }
+  }
+  if (text.length === 0) return "";
+
+  return `[${message.role}]\n${text.length > SUMMARY_MESSAGE_CLIP ? `${text.slice(0, SUMMARY_MESSAGE_CLIP)}…` : text}`;
+};
 
 /**
  * Render the covered span as plain text for the summarizer call, bounded
@@ -396,89 +427,73 @@ const SUMMARY_ELISION_RESERVE = 128;
  * `SUMMARY_INPUT_BUDGET` with middle-out retention — oldest and newest
  * blocks survive, the middle collapses into one deterministic elision
  * marker. A previous summary is folded in first so nothing silently drops
- * out of coverage across repeated compactions.
+ * out of coverage across repeated compactions. An oversized previous summary
+ * returns undefined before rendering: callers must reject it, never truncate it.
  */
 export const renderForSummary = (
   covered: ReadonlyArray<Prompt.Message>,
   previousSummary: string | undefined,
-): string => {
+): string | undefined => {
+  if (previousSummary !== undefined && previousSummary.length > SUMMARY_MAX_LENGTH)
+    return undefined;
   const joiner = "\n\n";
-  const blocks: Array<string> = [];
-
-  for (const message of covered) {
-    const text =
-      typeof message.content === "string"
-        ? message.content
-        : message.content
-            .map((part) => partText(part))
-            .filter((piece) => piece.length > 0)
-            .join("\n");
-
-    if (text.length === 0) continue;
-
-    const clipped =
-      text.length > SUMMARY_MESSAGE_CLIP ? `${text.slice(0, SUMMARY_MESSAGE_CLIP)}…` : text;
-
-    blocks.push(`[${message.role}]\n${clipped}`);
-  }
 
   const previousBlock =
     previousSummary === undefined ? undefined : `[Previous summary]\n${previousSummary}`;
 
   const fixed =
     (previousBlock === undefined ? 0 : previousBlock.length + joiner.length) +
-    COMPACTION_INSTRUCTION.length;
+    SUMMARY_REQUEST_PREFIX.length +
+    SUMMARY_REQUEST_SUFFIX.length;
 
   const budget = SUMMARY_INPUT_BUDGET - fixed - SUMMARY_ELISION_RESERVE;
-  let selected: ReadonlyArray<string> = blocks;
-  let total = 0;
+  const head: Array<string> = [];
+  const tail: Array<string> = [];
+  let length = 0;
+  let start = 0;
+  let end = covered.length - 1;
+  let boundaryBlock: string | undefined;
 
-  for (const block of blocks) {
-    total += block.length + joiner.length;
-  }
-  if (total > budget) {
-    const head: Array<string> = [];
-    const tail: Array<string> = [];
-    let headLength = 0;
-    let tailLength = 0;
-    let start = 0;
-    let end = blocks.length - 1;
-    const half = Math.floor(budget / 2);
+  while (start <= end) {
+    const message = covered[start];
+    const block = message === undefined ? "" : summaryBlock(message);
 
-    while (start <= end) {
-      const candidate = blocks[start];
-
-      if (candidate === undefined || headLength + candidate.length + joiner.length > half) break;
-      head.push(candidate);
-      headLength += candidate.length + joiner.length;
-      start += 1;
+    if (block.length > 0 && length + block.length + joiner.length > Math.floor(budget / 2)) {
+      boundaryBlock = block;
+      break;
     }
-    while (end >= start) {
-      const candidate = blocks[end];
-
-      if (
-        candidate === undefined ||
-        headLength + tailLength + candidate.length + joiner.length > budget
-      ) {
-        break;
-      }
-      tail.unshift(candidate);
-      tailLength += candidate.length + joiner.length;
-      end -= 1;
+    if (block.length > 0) {
+      head.push(block);
+      length += block.length + joiner.length;
     }
-    const omitted = end - start + 1;
-
-    selected =
-      omitted > 0
-        ? [...head, `[… ${omitted} messages omitted from summary input …]`, ...tail]
-        : [...head, ...tail];
+    start += 1;
   }
+  while (end >= start) {
+    const message = covered[end];
+
+    const block =
+      end === start && boundaryBlock !== undefined
+        ? boundaryBlock
+        : message === undefined
+          ? ""
+          : summaryBlock(message);
+
+    if (block.length > 0 && length + block.length + joiner.length > budget) break;
+    if (block.length > 0) {
+      tail.push(block);
+      length += block.length + joiner.length;
+    }
+    end -= 1;
+  }
+  const omitted = end - start + 1;
   const lines: Array<string> = [];
 
   if (previousBlock !== undefined) {
     lines.push(previousBlock);
   }
-  lines.push(...selected);
+  lines.push(...head);
+  if (omitted > 0) lines.push(`[… ${omitted} messages omitted from summary input …]`);
+  lines.push(...tail.reverse());
 
   return lines.join(joiner);
 };
