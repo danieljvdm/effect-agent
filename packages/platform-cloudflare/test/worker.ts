@@ -300,17 +300,20 @@ const progressIncarnation = (ctx: DurableObjectState): number => {
   return created;
 };
 
-export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, {
-  ...baseOptions,
-  eventLayer: Layer.effect(
-    Clock.Clock,
-    Effect.gen(function* () {
-      const identity = yield* ThreadObjectIdentity;
+// Initialization arms maintenance alarms before event-only layers are available.
+const maintenanceClockLayer = Layer.effect(
+  Clock.Clock,
+  Effect.gen(function* () {
+    const identity = yield* ThreadObjectIdentity;
 
-      return maintenanceClocks.get(identity.threadId) ?? (yield* Clock.Clock);
-    }),
-  ),
-}) {
+    return maintenanceClocks.get(identity.threadId) ?? (yield* Clock.Clock);
+  }),
+);
+
+export class TestThreadObject extends ThreadObject.make(
+  testRuntimeLayer.pipe(Layer.provideMerge(maintenanceClockLayer)),
+  baseOptions,
+) {
   memoryChange(project: string, encoded: unknown) {
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {

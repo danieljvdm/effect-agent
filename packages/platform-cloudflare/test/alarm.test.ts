@@ -233,6 +233,16 @@ describe("DC alarm semantics", () => {
             alarmAttemptHolds.delete(thread);
           }),
         );
+
+        const initializedAlarm = yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), async (instance, state) => {
+            await instance[DurableObject.RunSymbol](Effect.void);
+
+            return state.storage.getAlarm();
+          }),
+        );
+
+        expect(initializedAlarm).toBeGreaterThanOrEqual(yield* Clock.currentTimeMillis);
         const receipt = yield* Effect.promise(() => submitTo(plannerDefinition, thread));
 
         const pass = yield* Effect.tryPromise({
