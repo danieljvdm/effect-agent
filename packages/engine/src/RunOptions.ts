@@ -742,6 +742,12 @@ export interface RunBufferLimits {
   readonly maxModelResponseBytes?: number | undefined;
   /** Maximum semantic Run events, including the reserved terminal event. */
   readonly maxRunEvents?: number | undefined;
+  /**
+   * Maximum cumulative UTF-8 JSON bytes in published ToolProgress results, including provider
+   * progress and detached replay. Defaults to 8 MiB. Invalid or oversized application progress
+   * fails with ModelProtocolError; terminal Tool results use the Agent's toolResultBounds.
+   */
+  readonly maxToolProgressBytes?: number | undefined;
   /** Maximum Subagent lifecycle payloads queued by one Tool batch. */
   readonly maxSubagentEventsPerBatch?: number | undefined;
 }

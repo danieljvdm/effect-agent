@@ -35,9 +35,10 @@ that declaration.
 The runtime validates the complete model response before starting any handler. It resolves tool
 names, decodes parameters, checks budgets, and obtains approvals for the whole batch.
 
-It then runs scoped child fibers behind a finite Effect `Semaphore`. Live progress follows actual
-completion order. Canonical history and the next model turn use declaration order. The model never
-sees a partial batch.
+It bounds both active call streams and handler execution by the resolved concurrency, using scoped
+child fibers and a finite Effect `Semaphore`. Pending calls do not allocate waiting stream fibers.
+Live progress follows actual completion order. Canonical history and the next model turn use
+declaration order. The model never sees a partial batch.
 
 ## Keep tool failures typed {#failure-remains-failure}
 

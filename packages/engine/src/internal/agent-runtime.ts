@@ -71,6 +71,7 @@ import { InputTokenUsage, ModelCallUsage, OutputTokenUsage } from "@effect-agent
 import type { Layer, Take } from "effect";
 import {
   Cause,
+  Channel,
   Clock,
   Context,
   DateTime,
@@ -441,6 +442,8 @@ interface RunContext {
   /** Finite engine-owned memory ceilings, optionally tightened per Run. */
   readonly bufferLimits: EffectiveRunBufferLimits;
   sequence: number;
+  /** Cumulative JSON bytes of published progress, retained by detached replay until Scope close. */
+  toolProgressBytes: number;
   /**
    * Run-wide count of reserved programmatic (broker) Tool invocations.
    * A committed reservation survives interruption before Handler start.
@@ -552,6 +555,7 @@ const DEFAULT_RUN_BUFFER_LIMITS = {
   maxModelResponseParts: 16_384,
   maxModelResponseBytes: 8 * 1024 * 1024,
   maxRunEvents: 65_536,
+  maxToolProgressBytes: 8 * 1024 * 1024,
   maxSubagentEventsPerBatch: 1_024,
 } as const;
 
@@ -559,6 +563,7 @@ interface EffectiveRunBufferLimits {
   readonly maxModelResponseParts: number;
   readonly maxModelResponseBytes: number;
   readonly maxRunEvents: number;
+  readonly maxToolProgressBytes: number;
   readonly maxSubagentEventsPerBatch: number;
 }
 
@@ -589,6 +594,11 @@ const effectiveRunBufferLimits = (
     configured?.maxRunEvents,
     DEFAULT_RUN_BUFFER_LIMITS.maxRunEvents,
     2,
+  ),
+  maxToolProgressBytes: tighteningBufferLimit(
+    configured?.maxToolProgressBytes,
+    DEFAULT_RUN_BUFFER_LIMITS.maxToolProgressBytes,
+    1,
   ),
   maxSubagentEventsPerBatch: tighteningBufferLimit(
     configured?.maxSubagentEventsPerBatch,
@@ -721,14 +731,30 @@ const inspectModelResponsePartCapacity = (
  * parameter Schemas; the engine decodes and canonically re-encodes each call
  * against the Definition-owned Schema before it enters history or executes.
  */
-const encodedToolParameterToolkit = <Tools extends Record<string, Tool.Any>>(
-  toolkit: Toolkit.Toolkit<Tools>,
-): Toolkit.Any =>
+const encodedToolParameterToolkit = (toolkit: Toolkit.Any): Toolkit.Any =>
   Toolkit.make(
     ...Object.values(toolkit.tools).map((tool) =>
       tool.setParameters(Schema.toEncoded(tool.parametersSchema)),
     ),
   );
+
+const makeModelResponseCodec = (toolkit: Toolkit.Any) =>
+  Schema.toCodecJson(Response.StreamPart(encodedToolParameterToolkit(toolkit)));
+
+// Native Toolkits are immutable. Weak keys let discarded definitions and handler Toolkits go
+// away while each live Toolkit shares its canonical codec across response parts and Turns.
+const modelResponseCodecs = new WeakMap<Toolkit.Any, ReturnType<typeof makeModelResponseCodec>>();
+
+const modelResponseCodecFor = (toolkit: Toolkit.Any) => {
+  const cached = modelResponseCodecs.get(toolkit);
+
+  if (cached !== undefined) return cached;
+  const codec = makeModelResponseCodec(toolkit);
+
+  modelResponseCodecs.set(toolkit, codec);
+
+  return codec;
+};
 
 const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
   Tools extends Record<string, Tool.Any>,
@@ -755,7 +781,7 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
   } else {
     yield* inspectModelResponsePartCapacity(usage, part, limits);
   }
-  const codec = Schema.toCodecJson(Response.StreamPart(encodedToolParameterToolkit(toolkit)));
+  const codec = modelResponseCodecFor(toolkit);
 
   const encodingFailure = ModelProtocolError.make({
     message: "Model response part failed canonical encoding",
@@ -1778,12 +1804,14 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
         const toolCallId = yield* decodeToolCallId(call.id);
 
         if (result.preliminary) {
+          const owned = yield* ownApplicationToolProgress(context, result.encodedResult);
+
           const event: RunEvent = ToolProgress.make({
             ...(yield* eventBase(context)),
             turnId,
             toolCallId,
             toolName: call.name,
-            result: yield* decodeEventJson(result.encodedResult, "Tool result"),
+            result: owned,
             providerExecuted: false,
           });
 
@@ -2189,8 +2217,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
         >
       >((stream, group) => {
-        const next = Stream.mergeAll(
-          group.map((call) =>
+        const channels = group.map(
+          (call) =>
             withSemaphorePermit(
               semaphore,
               executePreparedToolCall(
@@ -2213,9 +2241,13 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                 Stream.provideService(ToolBroker, brokerFor(call).service),
                 Stream.ensuring(Effect.sync(() => brokerFor(call).close())),
               ),
-            ),
-          ),
-          { concurrency: "unbounded" },
+            ).channel,
+        );
+
+        // Stream.mergeAll uses sequential concatenation at concurrency one. Keep a scoped call
+        // fiber even then so early downstream close still runs terminal telemetry and observers.
+        const next = Stream.fromChannel(
+          Channel.mergeAll(Channel.fromIterable(channels), { concurrency }),
         );
 
         return stream.pipe(Stream.concat(next));
@@ -2982,6 +3014,41 @@ const eventBase = (context: RunContext) => eventBaseFor(context, false);
 /** The ordinary event budget always reserves one slot for this typed terminal projection. */
 const terminalEventBase = (context: RunContext) => eventBaseFor(context, true);
 
+const toolProgressLimitError = (context: RunContext) =>
+  ModelProtocolError.make({
+    message: `Run exceeded the ${context.bufferLimits.maxToolProgressBytes}-byte Tool progress limit or received invalid progress JSON`,
+  });
+
+const admitToolProgress = (
+  context: RunContext,
+  snapshot: BoundedJsonSnapshot,
+): Effect.Effect<Schema.Json, ModelProtocolError> =>
+  Effect.suspend(() => {
+    if (snapshot.bytes > context.bufferLimits.maxToolProgressBytes - context.toolProgressBytes) {
+      return Effect.fail(toolProgressLimitError(context));
+    }
+    context.toolProgressBytes += snapshot.bytes;
+
+    return Effect.succeed(snapshot.value);
+  });
+
+const ownApplicationToolProgress = (
+  context: RunContext,
+  result: unknown,
+): Effect.Effect<Schema.Json, ModelProtocolError> =>
+  Effect.suspend(() => {
+    // Bound traversal before Schema validation or serialization can allocate a full copy. The
+    // owned frozen value is the only payload published to live consumers and detached replay.
+    const snapshot = boundedCanonicalJsonSnapshot(
+      result,
+      context.bufferLimits.maxToolProgressBytes - context.toolProgressBytes,
+    );
+
+    return snapshot === undefined
+      ? Effect.fail(toolProgressLimitError(context))
+      : admitToolProgress(context, snapshot);
+  });
+
 const snapshotStagedProviderEvent = (
   trace: TurnTrace,
   payload: unknown,
@@ -3094,7 +3161,18 @@ const stampProviderResultEvent = (
   turnId: TurnId,
   payload: ProviderResultEventPayload,
 ): Effect.Effect<RunEvent, ModelProtocolError> =>
-  Effect.map(eventBase(context), (base) => {
+  Effect.gen(function* () {
+    if (payload._tag === "ToolProgress") {
+      // Provider staging already owns and normalizes this value under its 1 MiB aggregate cap.
+      // Measure that bounded representation and reuse it without changing provider JSON semantics.
+      const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(
+        payload.result,
+      ).pipe(Effect.mapError(() => toolProgressLimitError(context)));
+
+      yield* admitToolProgress(context, { value: payload.result, bytes: utf8ByteLength(text) });
+    }
+    const base = yield* eventBase(context);
+
     switch (payload._tag) {
       case "ToolProgress":
         return ToolProgress.make({ ...base, turnId, ...payload });
@@ -6218,6 +6296,7 @@ function streamWithCompletion<
             compactor,
             bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
             sequence: 0,
+            toolProgressBytes: 0,
             programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
             finalizationUsed: resumeUsage?.finalizationUsed ?? false,
             policyReservations: yield* Semaphore.make(1),
@@ -6960,11 +7039,13 @@ const measureProgrammaticToolCall = <R>(
     );
   });
 
-const brokerEncodedByteLength = (value: unknown): number | undefined => {
+const brokerSerializeJson = (
+  value: unknown,
+): { readonly text: string; readonly bytes: number } | undefined => {
   try {
-    const encoded = JSON.stringify(value);
+    const text = JSON.stringify(value);
 
-    return encoded === undefined ? undefined : utf8ByteLength(encoded);
+    return text === undefined ? undefined : { text, bytes: utf8ByteLength(text) };
   } catch {
     return undefined;
   }
@@ -7369,9 +7450,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                     encodedResult: terminal.encodedResult,
                   } as const;
                 }
-                if (
-                  Option.isNone(Schema.decodeUnknownOption(Schema.Json)(terminal.encodedResult))
-                ) {
+                if (Option.isNone(brokerDecodeJson(terminal.encodedResult))) {
                   return yield* startedFailure(
                     "protocol",
                     "ModelProtocolError",
@@ -7394,17 +7473,35 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   }
                   encodedResult = redacted.value;
                 }
-                const bytes = brokerEncodedByteLength(encodedResult);
+                const snapshot = brokerSerializeJson(encodedResult);
 
-                if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+                if (snapshot === undefined || snapshot.bytes > passOptions.maxResultBytes) {
                   return yield* startedFailure(
                     "infrastructure",
                     "ProgrammaticResultLimitError",
-                    `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
+                    `Tool ${input.toolName} result of ${snapshot?.bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
                   );
                 }
 
-                return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
+                // Retain the exact representation admitted above. Reusing the handler or redactor
+                // value would let later mutation or stateful getters escape the byte bound.
+                const owned = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(
+                  snapshot.text,
+                );
+
+                if (Option.isNone(owned)) {
+                  return yield* startedFailure(
+                    "protocol",
+                    "ModelProtocolError",
+                    `Tool ${input.toolName} produced a success encoding outside JSON`,
+                  );
+                }
+
+                return {
+                  _tag: "ProgrammaticCallSuccess",
+                  index,
+                  encodedResult: owned.value,
+                } as const;
               }),
             );
 

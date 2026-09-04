@@ -1034,6 +1034,68 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     }),
   );
 
+  it.effect.each([false, true])(
+    "owns the admitted JSON result across later mutation, with redaction %s",
+    (redact) =>
+      Effect.gen(function* () {
+        const innerToolkit = Toolkit.make(LooseTool);
+        const maxResultBytes = 256;
+        let expanded = false;
+        const retained = { nested: { value: "small" } };
+
+        const dynamic = {
+          get value() {
+            return expanded ? "x".repeat(1_048_576) : "small";
+          },
+        };
+
+        const values = [dynamic, retained];
+        let nextResult = 0;
+
+        yield* runOrchestrated({
+          innerToolkit,
+          innerHandlers: innerToolkit.toLayer({
+            loose: () => Effect.sync(() => (redact ? null : values[nextResult++])),
+          }),
+          passOptions: {
+            maxResultBytes,
+            ...(redact ? { redactResult: () => Effect.sync(() => values[nextResult++]) } : {}),
+          },
+          program: (pass) =>
+            Effect.gen(function* () {
+              const dynamicOutcome = yield* pass.invoke({
+                toolName: "loose",
+                encodedArguments: { key: "dynamic" },
+              });
+
+              const retainedOutcome = yield* pass.invoke({
+                toolName: "loose",
+                encodedArguments: { key: "retained" },
+              });
+
+              expanded = true;
+              retained.nested.value = "x".repeat(1_048_576);
+              for (const outcome of [dynamicOutcome, retainedOutcome]) {
+                expect(outcome._tag).toBe("ProgrammaticCallSuccess");
+                if (outcome._tag !== "ProgrammaticCallSuccess") {
+                  throw new Error("Expected a JSON result within the broker limit");
+                }
+                // Every character in these fixtures is ASCII, so string length is UTF-8 bytes.
+                expect(JSON.stringify(outcome.encodedResult).length).toBeLessThanOrEqual(
+                  maxResultBytes,
+                );
+              }
+              expect(dynamicOutcome).toMatchObject({ encodedResult: { value: "small" } });
+              expect(retainedOutcome).toMatchObject({
+                encodedResult: { nested: { value: "small" } },
+              });
+
+              return null;
+            }),
+        });
+      }),
+  );
+
   it.effect("RUN-017 budget exhaustion prevents the next call mid-pass", () =>
     Effect.gen(function* () {
       const invocations = yield* Ref.make(0);

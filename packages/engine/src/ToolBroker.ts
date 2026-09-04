@@ -21,7 +21,7 @@ export interface ProgrammaticToolInput {
   readonly encodedArguments: unknown;
 }
 
-/** The handler ran and settled with its encoded success value. */
+/** The handler ran and settled with an owned JSON snapshot of its encoded success value. */
 export interface ProgrammaticCallSuccess {
   readonly _tag: "ProgrammaticCallSuccess";
   /** Broker-owned zero-based index of this call within the pass (RUN-016). */
@@ -71,8 +71,9 @@ export type ProgrammaticCallOutcome =
 export interface ToolBrokerPassOptions {
   /**
    * Maximum UTF-8 byte size of one encoded success result at the sandbox
-   * boundary. The broker owns this bound (runtime spec §12.1); the executor
-   * enforces its own transport bound independently.
+   * boundary. The returned value is decoded from the exact JSON representation
+   * admitted by this bound, after redaction. Later handler or redactor mutations
+   * cannot change it. The executor enforces its own transport bound independently.
    */
   readonly maxResultBytes: number;
   /**
