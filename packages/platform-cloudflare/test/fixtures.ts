@@ -70,9 +70,9 @@ export const alarmAttemptHolds = new Map<
   string,
   {
     readonly location: DurableRuntimeFailpointLocation;
-    readonly entered: Deferred.Deferred<void>;
-    readonly finished: Deferred.Deferred<void>;
-    readonly release?: Deferred.Deferred<void>;
+    readonly entered: Effect.Effect<void>;
+    readonly finished: Effect.Effect<void>;
+    readonly release?: Effect.Effect<void>;
   }
 >();
 
@@ -145,9 +145,9 @@ export const runtimeEvictionFailpoint =
         alarmAttemptHolds.delete(name);
 
         return Effect.acquireUseRelease(
-          Deferred.succeed(hold.entered, undefined),
-          () => (hold.release === undefined ? Effect.never : Deferred.await(hold.release)),
-          () => Deferred.succeed(hold.finished, undefined),
+          hold.entered,
+          () => hold.release ?? Effect.never,
+          () => hold.finished,
         );
       }
       if (armedRuntimeFailures.get(name) === location) {
