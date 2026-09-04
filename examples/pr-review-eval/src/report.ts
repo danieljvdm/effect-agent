@@ -1,6 +1,17 @@
-import { ReviewFinding, type ReviewOutcome } from "@effect-agent/pr-review/Review";
+import {
+  ReviewCandidate,
+  ReviewFinding,
+  type ReviewOutcome,
+  ReviewSeverity,
+} from "@effect-agent/pr-review/Review";
 import { Effect, Schema } from "effect";
 
+import {
+  configurationIdentity,
+  freezeEvalSuite,
+  validateFrozenComparison,
+  validateFrozenRun,
+} from "./comparison.ts";
 import {
   type EvalCase,
   EvalCaseId,
@@ -15,8 +26,8 @@ import {
   EvalVariantConfiguration,
   EvalVariantId,
 } from "./contracts.ts";
-import { digestText } from "./corpus.ts";
-import type { EvalFindingJudgment, EvalJudgmentSet } from "./judgments.ts";
+import { digestEvalOracle, digestObservation, digestText, validateEvalSuite } from "./corpus.ts";
+import { EvalFindingJudgment, type EvalJudgmentSet } from "./judgments.ts";
 
 export class EvalReportError extends Schema.TaggedError<EvalReportError>()("EvalReportError", {
   message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
@@ -130,11 +141,24 @@ const ResourceSummaryFields = Schema.Struct({
   uncostedSucceededTrials: Schema.Natural,
   uncostedIncompleteTrials: Schema.Natural,
   estimatedCostMicrousd: Schema.Natural,
+  /** Sum of known outstanding reservations, not incurred spend. Absent when none are known. */
+  reservedCostMicrousd: Schema.optionalKey(Schema.Natural),
+  /** Optional only for reading reports produced before reservation accounting. */
+  reservationKnownTrials: Schema.optionalKey(Schema.Natural),
+  reservationUnknownTrials: Schema.optionalKey(Schema.Natural),
+  /** Total local elapsed time across every returned trial, including failed and incomplete trials. */
   elapsedMillis: Schema.Natural,
+  /** Same population as the total; absent for empty populations and historical reports. */
+  medianElapsedMillis: Schema.optionalKey(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
 }).check(
   Schema.makeFilter(
     (resources) => {
       const failureTags = resources.failuresByTag.map((failure) => failure.errorTag);
+
+      const hasReservationAccounting =
+        resources.reservationKnownTrials !== undefined ||
+        resources.reservationUnknownTrials !== undefined ||
+        resources.reservedCostMicrousd !== undefined;
 
       return (
         resources.attemptedTrials ===
@@ -150,7 +174,15 @@ const ResourceSummaryFields = Schema.Struct({
           resources.costedSucceededTrials + resources.uncostedSucceededTrials &&
         resources.incompleteTrials ===
           resources.costedIncompleteTrials + resources.uncostedIncompleteTrials &&
-        resources.costedFailedTrials <= resources.failedTrials
+        resources.costedFailedTrials <= resources.failedTrials &&
+        (resources.medianElapsedMillis === undefined || resources.attemptedTrials > 0) &&
+        (!hasReservationAccounting ||
+          (resources.reservationKnownTrials !== undefined &&
+            resources.reservationUnknownTrials !== undefined &&
+            resources.reservationKnownTrials + resources.reservationUnknownTrials ===
+              resources.attemptedTrials &&
+            (resources.reservationKnownTrials === 0) ===
+              (resources.reservedCostMicrousd === undefined)))
       );
     },
     { title: "Resource summary counts and token classes are consistent" },
@@ -170,8 +202,54 @@ export class EvalFindingReference extends Schema.Class<EvalFindingReference>(
   variantId: EvalVariantId,
   trial: Schema.Int.check(Schema.isGreaterThan(0)),
   findingIndex: Schema.Natural,
+  candidateId: Schema.optionalKey(ReviewCandidate.fields.id),
+  observationDigest: Schema.optionalKey(EvalInputDigest),
+  oracleDigest: Schema.optionalKey(EvalInputDigest),
+  candidate: Schema.optionalKey(ReviewCandidate),
   finding: ReviewFinding,
 }) {}
+
+export const EvalSeverityComparison = Schema.Literals(["equal", "higher", "lower", "unassessed"]);
+
+export class EvalFindingSeverityDiagnostic extends Schema.Class<EvalFindingSeverityDiagnostic>(
+  "@effect-agent/example-pr-review-eval/EvalFindingSeverityDiagnostic",
+)({
+  reference: EvalFindingReference,
+  judgment: EvalFindingJudgment,
+  matchedDefects: Schema.Array(Schema.Struct({ id: EvalDefectId, severity: ReviewSeverity })).check(
+    Schema.isMaxLength(12),
+  ),
+  oracleSeverity: Schema.optionalKey(ReviewSeverity),
+  findingVsIndependent: EvalSeverityComparison,
+  /** Whole-finding severity versus the maximum across all matched oracle defects. */
+  independentVsOracle: Schema.Literals([
+    "equal",
+    "higher",
+    "lower",
+    "unassessed",
+    "not-applicable",
+  ]),
+}) {}
+
+export class EvalSeverityDiagnostics extends Schema.Class<EvalSeverityDiagnostics>(
+  "@effect-agent/example-pr-review-eval/EvalSeverityDiagnostics",
+)(
+  Schema.Struct({
+    scope: Schema.Literal("published-valid-findings-all-trials"),
+    assessed: Schema.Natural,
+    unassessed: Schema.Natural,
+    findings: Schema.Array(EvalFindingSeverityDiagnostic).check(Schema.isMaxLength(100_000)),
+  }).check(
+    Schema.makeFilter(
+      (diagnostics) =>
+        diagnostics.assessed ===
+          diagnostics.findings.filter((finding) => finding.judgment.severity !== undefined)
+            .length &&
+        diagnostics.assessed + diagnostics.unassessed === diagnostics.findings.length,
+      { title: "Severity assessment coverage counts published valid findings" },
+    ),
+  ),
+) {}
 
 export class EvalLaterBlocker extends Schema.Class<EvalLaterBlocker>(
   "@effect-agent/example-pr-review-eval/EvalLaterBlocker",
@@ -205,6 +283,17 @@ export class EvalCaseQualityReport extends Schema.Class<EvalCaseQualityReport>(
   firstTrialFindings: EvalFindingQuality,
   allTrialFindings: EvalFindingQuality,
   firstTrialBlockingFindings: EvalBlockingFindingQuality,
+  /** Expected blockers absent after all possible first-trial matches have been adjudicated. */
+  discoveryMisses: Schema.Natural,
+  /** Unmatched expected blockers that an unjudged or unclear first-trial candidate may cover. */
+  unresolvedDiscoveryMisses: Schema.Natural,
+  validCandidatesRefuted: Schema.Natural,
+  validCandidatesWithheld: Schema.Natural,
+  validBlockingCandidatesRefuted: Schema.Natural,
+  validBlockingCandidatesWithheld: Schema.Natural,
+  firstTrialIncomplete: Schema.Boolean,
+  repeatedTrialInstability: Schema.Boolean,
+  unresolvedRepeatedTrialInstability: Schema.Boolean,
   firstTrialFailureTag: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
   resources: EvalResourceSummary,
 }) {}
@@ -251,6 +340,14 @@ export class EvalVariantQualityReport extends Schema.Class<EvalVariantQualityRep
   allTrialFindings: EvalFindingQuality,
   firstTrialBlockingFindings: EvalBlockingFindingQuality,
   firstTrialFailures: Schema.Natural,
+  discoveryMisses: Schema.Natural,
+  unresolvedDiscoveryMisses: Schema.Natural,
+  validCandidatesRefuted: Schema.Natural,
+  validCandidatesWithheld: Schema.Natural,
+  validBlockingCandidatesRefuted: Schema.Natural,
+  validBlockingCandidatesWithheld: Schema.Natural,
+  repeatedTrialInstability: Schema.Natural,
+  unresolvedRepeatedTrialInstability: Schema.Natural,
   resources: EvalResourceSummary,
   cases: Schema.Array(EvalCaseQualityReport),
 }) {}
@@ -262,19 +359,58 @@ export class EvalCaseIdentity extends Schema.Class<EvalCaseIdentity>(
   version: Schema.Literal(1),
   inputDigest: EvalInputDigest,
   repositoryDigest: Schema.optionalKey(EvalInputDigest),
+  oracleDigest: Schema.optionalKey(EvalInputDigest),
+  oracleVersion: Schema.optionalKey(Schema.Natural),
+}) {}
+
+export class EvalRolloutDecision extends Schema.Class<EvalRolloutDecision>(
+  "@effect-agent/example-pr-review-eval/EvalRolloutDecision",
+)(
+  Schema.Struct({
+    decision: Schema.Literals(["eligible", "experimental", "not-applicable"]),
+    basis: Schema.Literals(["frozen-heldout-first-trials", "frozen-baseline-run"]),
+    heldoutCases: Schema.Natural,
+    baselineFalseBlockers: Schema.Natural,
+    verifiedFalseBlockers: Schema.optionalKey(Schema.Natural),
+    reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+      Schema.isMaxLength(20),
+    ),
+  }).check(
+    Schema.makeFilter(
+      (decision) =>
+        decision.basis === "frozen-baseline-run"
+          ? decision.decision === "not-applicable" && decision.verifiedFalseBlockers === undefined
+          : decision.decision !== "not-applicable" && decision.verifiedFalseBlockers !== undefined,
+      { title: "Baseline runs cannot make paired rollout decisions" },
+    ),
+  ),
+) {}
+
+export class EvalJudgmentProvenance extends Schema.Class<EvalJudgmentProvenance>(
+  "@effect-agent/example-pr-review-eval/EvalJudgmentProvenance",
+)({
+  agent: Schema.Natural,
+  human: Schema.Natural,
+  unknown: Schema.Natural,
 }) {}
 
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   "@effect-agent/example-pr-review-eval/EvalQualityReport",
 )({
-  version: Schema.Literal(3),
+  version: Schema.Literal(5),
   observationSetDigest: EvalObservationSetDigest,
+  frozenRunDigest: Schema.optionalKey(EvalInputDigest),
   runnerVersion: EvalRunnerVersion,
   trialCount: Schema.Int.check(Schema.isGreaterThan(0)),
   caseSet: Schema.Array(EvalCaseIdentity).check(Schema.isMinLength(1)),
   variants: Schema.Array(EvalVariantQualityReport).check(Schema.isMinLength(1)),
   unjudgedFindings: Schema.Array(EvalFindingReference),
   unmappedValidFindings: Schema.Array(EvalFindingReference),
+  rollout: EvalRolloutDecision,
+  /** Counts supplied judgment records across all trials; absent historical reports are unknown. */
+  judgmentProvenance: Schema.optionalKey(EvalJudgmentProvenance),
+  /** Informational only; absence in a historical report means coverage was not recorded. */
+  severityDiagnostics: Schema.optionalKey(EvalSeverityDiagnostics),
 }) {}
 
 const encodeObservationArray = Schema.encodeEffect(
@@ -288,13 +424,13 @@ const observationKey = (observation: EvalObservation): string =>
   trialKey(observation.caseId, observation.variant.id, observation.trial);
 
 const judgmentKey = (judgment: EvalFindingJudgment): string =>
-  `${judgment.caseId}\0${judgment.variantId}\0${judgment.trial}\0${judgment.findingIndex}`;
+  `${judgment.caseId}\0${judgment.variantId}\0${judgment.trial}\0${judgment.candidateId ?? judgment.findingIndex}`;
 
 const findingKey = (
   caseId: EvalCaseId,
   variantId: EvalVariantId,
   trial: number,
-  findingIndex: number,
+  findingIndex: string | number,
 ): string => `${caseId}\0${variantId}\0${trial}\0${findingIndex}`;
 
 const sortedObservations = (observations: ReadonlyArray<EvalObservation>) =>
@@ -367,10 +503,6 @@ const blockingFindingQuality = (
   findings: ReadonlyArray<IndexedFinding>,
   evalCase: EvalCase,
 ): EvalBlockingFindingQuality => {
-  const expectedSeverity = new Map(
-    evalCase.expectedDefects.map((defect) => [defect.id, defect.severity] as const),
-  );
-
   let aligned = 0;
   let overstated = 0;
   let unresolved = 0;
@@ -379,20 +511,21 @@ const blockingFindingQuality = (
     if (indexed.reference.finding.severity !== "blocking") continue;
     switch (indexed.judgment?.label) {
       case "matches-expected":
-        if (
-          indexed.judgment.matchedDefectIds.some(
-            (defectId) => expectedSeverity.get(defectId) === "blocking",
-          )
-        ) {
+      case "new-valid": {
+        const severity = judgedSeverity(indexed, evalCase);
+
+        if (severity === undefined) {
+          unresolved += 1;
+        } else if (severity === "blocking") {
           aligned += 1;
         } else {
           overstated += 1;
         }
         break;
+      }
       case "invalid":
         overstated += 1;
         break;
-      case "new-valid":
       case "unclear":
       case undefined:
         unresolved += 1;
@@ -408,10 +541,16 @@ const blockingFindingQuality = (
   });
 };
 
-const isIncompleteReview = (outcome: ReviewOutcome): boolean =>
-  outcome.incomplete === true || outcome.exhausted !== undefined;
+const isIncompleteReview = (outcome: ReviewOutcome, evalCase?: EvalCase): boolean =>
+  outcome.incomplete === true ||
+  outcome.exhausted !== undefined ||
+  (outcome.pendingPaths?.length ?? 0) > 0 ||
+  (evalCase?.request.unreviewedPaths.length ?? 0) > 0;
 
-const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalResourceSummary => {
+const resourceSummary = (
+  observations: ReadonlyArray<EvalObservation>,
+  cases: ReadonlyArray<EvalCase>,
+): EvalResourceSummary => {
   let succeededTrials = 0;
   let incompleteTrials = 0;
   let failedTrials = 0;
@@ -425,11 +564,23 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
   let costedIncompleteTrials = 0;
   let costedFailedTrials = 0;
   let estimatedCostMicrousd = 0;
+  let reservedCostMicrousd = 0;
+  let reservationKnownTrials = 0;
   let elapsedMillis = 0;
   const failureCounts = new Map<string, number>();
 
   for (const observation of observations) {
     elapsedMillis += observation.elapsedMillis;
+
+    const reserved =
+      observation.result._tag === "Failed"
+        ? observation.result.reservedCostMicrousd
+        : observation.result.outcome.usage.reservedCostMicrousd;
+
+    if (reserved !== undefined) {
+      reservationKnownTrials += 1;
+      reservedCostMicrousd += reserved;
+    }
     if (observation.result._tag === "Failed") {
       failedTrials += 1;
       failureCounts.set(
@@ -442,7 +593,11 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
       }
       continue;
     }
-    const incomplete = isIncompleteReview(observation.result.outcome);
+
+    const incomplete = isIncompleteReview(
+      observation.result.outcome,
+      cases.find((evalCase) => evalCase.id === observation.caseId),
+    );
 
     if (incomplete) incompleteTrials += 1;
     else succeededTrials += 1;
@@ -460,6 +615,18 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
       estimatedCostMicrousd += usage.estimatedCostMicrousd;
     }
   }
+
+  const trialElapsedMillis = observations
+    .map((observation) => observation.elapsedMillis)
+    .sort((left, right) => left - right);
+
+  const lowerMiddle = trialElapsedMillis[Math.floor((trialElapsedMillis.length - 1) / 2)];
+  const upperMiddle = trialElapsedMillis[Math.floor(trialElapsedMillis.length / 2)];
+
+  const medianElapsedMillis =
+    lowerMiddle === undefined || upperMiddle === undefined
+      ? undefined
+      : (lowerMiddle + upperMiddle) / 2;
 
   return EvalResourceSummary.make({
     attemptedTrials: observations.length,
@@ -481,7 +648,11 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
     uncostedSucceededTrials: succeededTrials - costedSucceededTrials,
     uncostedIncompleteTrials: incompleteTrials - costedIncompleteTrials,
     estimatedCostMicrousd,
+    ...(reservationKnownTrials === 0 ? {} : { reservedCostMicrousd }),
+    reservationKnownTrials,
+    reservationUnknownTrials: observations.length - reservationKnownTrials,
     elapsedMillis,
+    ...(medianElapsedMillis === undefined ? {} : { medianElapsedMillis }),
   });
 };
 
@@ -489,6 +660,83 @@ interface IndexedFinding {
   readonly reference: EvalFindingReference;
   readonly judgment: EvalFindingJudgment | undefined;
 }
+
+const observationCandidates = (observation: EvalObservation) =>
+  observation.result._tag === "Succeeded"
+    ? observation.result.outcome.diagnostics?.candidates
+    : observation.result.diagnostics?.candidates;
+
+const isPublished = (finding: IndexedFinding): boolean =>
+  finding.reference.candidate === undefined ||
+  finding.reference.candidate.publication === "published";
+
+const isValid = (finding: IndexedFinding): boolean =>
+  finding.judgment?.label === "matches-expected" || finding.judgment?.label === "new-valid";
+
+const judgedSeverity = (
+  finding: IndexedFinding,
+  evalCase: EvalCase,
+): ReviewSeverity | undefined => {
+  if (finding.judgment?.label === "new-valid") return finding.judgment.severity;
+  if (finding.judgment?.label !== "matches-expected") return undefined;
+
+  const severities = evalCase.expectedDefects
+    .filter((defect) => finding.judgment?.matchedDefectIds.includes(defect.id))
+    .map((defect) => defect.severity);
+
+  return severities.includes("blocking")
+    ? "blocking"
+    : severities.includes("important")
+      ? "important"
+      : "nit";
+};
+
+const compareSeverities = (
+  left: ReviewSeverity,
+  right: ReviewSeverity,
+): typeof EvalSeverityComparison.Type => {
+  const rank = { nit: 0, important: 1, blocking: 2 };
+
+  return left === right ? "equal" : rank[left] > rank[right] ? "higher" : "lower";
+};
+
+const severityDiagnostic = (
+  finding: IndexedFinding,
+  evalCase: EvalCase,
+): EvalFindingSeverityDiagnostic | undefined => {
+  const judgment = finding.judgment;
+
+  if (
+    !isPublished(finding) ||
+    judgment === undefined ||
+    (judgment.label !== "matches-expected" && judgment.label !== "new-valid")
+  ) {
+    return undefined;
+  }
+  const independentSeverity = judgment.severity;
+
+  const oracleSeverity =
+    judgment.label === "matches-expected" ? judgedSeverity(finding, evalCase) : undefined;
+
+  return EvalFindingSeverityDiagnostic.make({
+    reference: finding.reference,
+    judgment,
+    matchedDefects: evalCase.expectedDefects
+      .filter((defect) => judgment.matchedDefectIds.includes(defect.id))
+      .map((defect) => ({ id: defect.id, severity: defect.severity })),
+    ...(oracleSeverity === undefined ? {} : { oracleSeverity }),
+    findingVsIndependent:
+      independentSeverity === undefined
+        ? "unassessed"
+        : compareSeverities(finding.reference.finding.severity, independentSeverity),
+    independentVsOracle:
+      oracleSeverity === undefined
+        ? "not-applicable"
+        : independentSeverity === undefined
+          ? "unassessed"
+          : compareSeverities(independentSeverity, oracleSeverity),
+  });
+};
 
 interface ValidatedInputs {
   readonly observationSetDigest: EvalObservationSetDigest;
@@ -498,6 +746,7 @@ interface ValidatedInputs {
   readonly configurations: ReadonlyMap<EvalVariantId, EvalVariantConfiguration>;
   readonly observations: ReadonlyMap<string, EvalObservation>;
   readonly judgments: ReadonlyMap<string, EvalFindingJudgment>;
+  readonly observationDigests: ReadonlyMap<string, EvalInputDigest>;
 }
 
 const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* (
@@ -512,6 +761,13 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     ),
   );
 
+  yield* validateEvalSuite(suite);
+
+  const comparison =
+    suite.comparison === undefined ? undefined : yield* validateFrozenComparison(suite);
+
+  const frozenRun = suite.frozenRun === undefined ? undefined : yield* validateFrozenRun(suite);
+
   if (observations.length === 0) {
     return yield* EvalReportError.make({ message: "At least one eval observation is required" });
   }
@@ -521,8 +777,18 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   const configurations = new Map<EvalVariantId, EvalVariantConfiguration>();
   const encodedConfigurations = new Map<EvalVariantId, string>();
   const runnerVersions = new Set<EvalRunnerVersion>();
+  const observationDigests = new Map<string, EvalInputDigest>();
+  const oracleDigests = new Map<EvalCaseId, EvalInputDigest>();
+
+  for (const evalCase of suite.cases)
+    oracleDigests.set(evalCase.id, yield* digestEvalOracle(evalCase));
 
   for (const observation of observations) {
+    if (observation.frozenRunDigest !== undefined && frozenRun === undefined) {
+      return yield* EvalReportError.make({
+        message: "Tagged baseline observations require their original frozen run manifest",
+      });
+    }
     const evalCase = cases.get(observation.caseId);
 
     if (
@@ -535,12 +801,104 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
         message: `Observation case identity is incompatible for ${observation.caseId}`,
       });
     }
+    if (
+      frozenRun !== undefined &&
+      (observation.frozenRunDigest !== frozenRun.digest ||
+        observation.comparisonDigest !== undefined ||
+        observation.previousObservationDigest !== undefined ||
+        observation.oracleDigest === undefined ||
+        observation.runId === undefined ||
+        observation.sequence === undefined ||
+        observation.cacheNamespace !==
+          (yield* digestText(
+            `${observation.runId}:${evalCase.id}:baseline:${observation.trial}`,
+          )) ||
+        configurationIdentity(observation.variant) !==
+          configurationIdentity(frozenRun.configuration))
+    ) {
+      return yield* EvalReportError.make({
+        message: `Observation does not match the original frozen baseline run for ${observation.caseId}`,
+      });
+    }
+    if (
+      (observation.oracleDigest !== undefined &&
+        (observation.oracleDigest !== oracleDigests.get(evalCase.id) ||
+          observation.oracleVersion !== (evalCase.oracleVersion ?? 1))) ||
+      (comparison !== undefined &&
+        (observation.oracleDigest === undefined ||
+          observation.comparisonDigest !== comparison.digest ||
+          observation.cacheNamespace === undefined ||
+          observation.runId === undefined ||
+          observation.sequence === undefined ||
+          !comparison.configurations.some(
+            (configuration) =>
+              configurationIdentity(configuration) === configurationIdentity(observation.variant),
+          )))
+    ) {
+      return yield* EvalReportError.make({
+        message: `Observation oracle or frozen configuration identity is incompatible for ${observation.caseId}; version corrections and rescore both strategies explicitly`,
+      });
+    }
     const key = observationKey(observation);
+
+    const diagnostics =
+      observation.result._tag === "Succeeded"
+        ? observation.result.outcome.diagnostics
+        : observation.result.diagnostics;
+
+    if (
+      diagnostics !== undefined &&
+      (diagnostics.requestDigest !== observation.inputDigest ||
+        diagnostics.strategy !== (observation.variant.strategy ?? "baseline") ||
+        diagnostics.candidates.some(
+          (candidate, index) =>
+            candidate.id !== `${observation.inputDigest}:${index + 1}` ||
+            candidate.requestDigest !== observation.inputDigest ||
+            candidate.baseRevision !== evalCase.request.baseRevision ||
+            candidate.headRevision !== evalCase.request.headRevision,
+        ))
+    ) {
+      return yield* EvalReportError.make({
+        message: `Candidate identity does not match the immutable review input for ${observation.caseId}`,
+      });
+    }
+    if (
+      (comparison !== undefined || frozenRun !== undefined) &&
+      observation.result._tag === "Succeeded" &&
+      diagnostics === undefined
+    ) {
+      return yield* EvalReportError.make({
+        message:
+          "Frozen observations must retain every original candidate and its publication disposition",
+      });
+    }
+    if (
+      frozenRun !== undefined &&
+      diagnostics !== undefined &&
+      (diagnostics.verification !== "not-requested" ||
+        diagnostics.candidates.some(
+          (candidate) =>
+            candidate.disposition !== "not-requested" || candidate.publication !== "published",
+        ) ||
+        (observation.result._tag === "Succeeded" &&
+          Schema.encodeSync(Schema.fromJsonString(Schema.Array(ReviewFinding)))(
+            diagnostics.candidates.map((candidate) => candidate.finding),
+          ) !==
+            Schema.encodeSync(Schema.fromJsonString(Schema.Array(ReviewFinding)))(
+              observation.result.outcome.report.findings,
+            )))
+    ) {
+      return yield* EvalReportError.make({
+        message:
+          "Baseline observations must retain the original unverified candidates and published findings",
+      });
+    }
 
     if (byKey.has(key)) {
       return yield* EvalReportError.make({ message: `Duplicate eval observation ${key}` });
     }
     byKey.set(key, observation);
+    observationDigests.set(key, yield* digestObservation(observation));
     runnerVersions.add(observation.runnerVersion);
 
     const encoded = JSON.stringify(
@@ -556,6 +914,71 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     }
     encodedConfigurations.set(observation.variant.id, encoded);
     configurations.set(observation.variant.id, observation.variant);
+  }
+
+  if (frozenRun !== undefined) {
+    const expected = suite.cases.flatMap((evalCase) =>
+      Array.from({ length: frozenRun.trials }, (_, index) =>
+        trialKey(evalCase.id, frozenRun.configuration.id, index + 1),
+      ),
+    );
+
+    if (
+      observations.length !== frozenRun.plannedRuns ||
+      trialCount !== frozenRun.trials ||
+      new Set(observations.map((observation) => observation.runId)).size !== 1 ||
+      new Set(observations.map((observation) => observation.cacheNamespace)).size !==
+        observations.length ||
+      observations.some(
+        (observation, index) =>
+          observation.sequence !== index || observationKey(observation) !== expected[index],
+      )
+    ) {
+      return yield* EvalReportError.make({
+        message:
+          "Frozen baseline reports require the complete case-then-trial grid, one run identity, and isolated caches",
+      });
+    }
+  }
+
+  if (comparison !== undefined) {
+    if (
+      observations.length !== comparison.plannedRuns ||
+      trialCount !== 3 ||
+      new Set(observations.map((observation) => observation.runId)).size !== 1 ||
+      new Set(observations.map((observation) => observation.cacheNamespace)).size !==
+        observations.length
+    ) {
+      return yield* EvalReportError.make({
+        message:
+          "Frozen comparison requires its complete run budget, one run identity, and isolated trial cache namespaces",
+      });
+    }
+    const expected: Array<string> = [];
+    let pair = 0;
+
+    for (let trial = 1; trial <= 3; trial += 1) {
+      for (const evalCase of comparison.cases) {
+        const order =
+          pair++ % 2 === 0 ? comparison.configurations : [...comparison.configurations].reverse();
+
+        for (const configuration of order)
+          expected.push(trialKey(evalCase.id, configuration.id, trial));
+      }
+    }
+    if (
+      new Set(observations.map((observation) => observation.sequence)).size !==
+        observations.length ||
+      observations.some(
+        (observation) =>
+          observation.sequence === undefined ||
+          expected[observation.sequence] !== observationKey(observation),
+      )
+    ) {
+      return yield* EvalReportError.make({
+        message: "Observations do not match the fixed balanced execution order",
+      });
+    }
   }
 
   if (runnerVersions.size !== 1) {
@@ -600,8 +1023,9 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
       judgments.has(key) ||
       !Number.isSafeInteger(judgment.trial) ||
       judgment.trial < 1 ||
-      !Number.isSafeInteger(judgment.findingIndex) ||
-      judgment.findingIndex < 0 ||
+      (judgment.findingIndex !== undefined &&
+        (!Number.isSafeInteger(judgment.findingIndex) || judgment.findingIndex < 0)) ||
+      (judgment.findingIndex === undefined && judgment.candidateId === undefined) ||
       new Set(matchedIds).size !== matchedIds.length ||
       (judgment.label === "matches-expected" ? matchedIds.length === 0 : matchedIds.length > 0)
     ) {
@@ -617,11 +1041,26 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
       evalCase === undefined ||
       judgment.caseVersion !== evalCase.version ||
       judgment.inputDigest !== evalCase.inputDigest ||
-      observation.result._tag !== "Succeeded" ||
-      judgment.findingIndex >= observation.result.outcome.report.findings.length
+      (observationCandidates(observation) === undefined
+        ? observation.result._tag !== "Succeeded" ||
+          judgment.findingIndex === undefined ||
+          judgment.findingIndex >= observation.result.outcome.report.findings.length
+        : judgment.candidateId === undefined ||
+          !observationCandidates(observation)?.some(
+            (candidate) => candidate.id === judgment.candidateId,
+          ))
     ) {
       return yield* EvalReportError.make({
         message: `Finding judgment does not identify an emitted finding: ${key}`,
+      });
+    }
+    if (
+      observationCandidates(observation) !== undefined &&
+      (judgment.observationDigest !== observationDigests.get(observationKey(observation)) ||
+        judgment.oracleDigest !== oracleDigests.get(evalCase.id))
+    ) {
+      return yield* EvalReportError.make({
+        message: `Candidate judgment must bind the exact observation and oracle digests: ${key}`,
       });
     }
     const expectedIds = new Set(evalCase.expectedDefects.map((defect) => defect.id));
@@ -651,21 +1090,29 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
     configurations,
     observations: byKey,
     judgments,
+    observationDigests,
   } satisfies ValidatedInputs;
 });
 
 const indexFindings = (
   observation: EvalObservation,
   judgments: ReadonlyMap<string, EvalFindingJudgment>,
+  observationDigests?: ReadonlyMap<string, EvalInputDigest>,
 ): ReadonlyArray<IndexedFinding> => {
-  if (observation.result._tag === "Failed") return [];
+  const candidates = observationCandidates(observation);
 
-  return observation.result.outcome.report.findings.map((finding, findingIndex) => {
+  const findings =
+    candidates?.map((candidate) => candidate.finding) ??
+    (observation.result._tag === "Failed" ? [] : observation.result.outcome.report.findings);
+
+  return findings.map((finding, findingIndex) => {
+    const candidate = candidates?.[findingIndex];
+
     const key = findingKey(
       observation.caseId,
       observation.variant.id,
       observation.trial,
-      findingIndex,
+      candidate?.id ?? findingIndex,
     );
 
     return {
@@ -676,6 +1123,13 @@ const indexFindings = (
         variantId: observation.variant.id,
         trial: observation.trial,
         findingIndex,
+        ...(candidate === undefined ? {} : { candidate, candidateId: candidate.id }),
+        ...(observation.oracleDigest === undefined
+          ? {}
+          : { oracleDigest: observation.oracleDigest }),
+        ...(observationDigests?.get(observationKey(observation)) === undefined
+          ? {}
+          : { observationDigest: observationDigests.get(observationKey(observation)) }),
         finding,
       }),
       judgment: judgments.get(key),
@@ -720,7 +1174,7 @@ const caseReport = (
   const indexed = observations.flatMap((observation) => indexFindings(observation, judgments));
   const firstFindings = indexed.filter((finding) => finding.reference.trial === 1);
   const firstDetected = matchedBlockingDefects(firstFindings, evalCase, false);
-  const firstMatched = matchedBlockingDefects(firstFindings, evalCase, true);
+  const firstMatched = matchedBlockingDefects(firstFindings.filter(isPublished), evalCase, true);
 
   const expectedBlockers = evalCase.expectedDefects.filter(
     (defect) => defect.severity === "blocking",
@@ -735,22 +1189,19 @@ const caseReport = (
   );
 
   const firstUnresolved =
-    firstMatched.size < expectedBlockers.length &&
-    firstObservation.result._tag === "Succeeded" &&
-    unresolvedBlockingFindings.length > 0;
+    firstMatched.size < expectedBlockers.length && unresolvedBlockingFindings.length > 0;
 
   const unresolvedDetectionFindings = firstFindings.filter(
     (finding) => finding.judgment === undefined || finding.judgment.label === "unclear",
   );
 
-  const firstDetectionUnresolved =
-    firstDetected.size < expectedBlockers.length &&
-    firstObservation.result._tag === "Succeeded" &&
-    unresolvedDetectionFindings.length > 0;
+  const unmatchedBlockers = expectedBlockers.length - firstDetected.size;
+
+  const firstDetectionUnresolved = unmatchedBlockers > 0 && unresolvedDetectionFindings.length > 0;
 
   const firstIncomplete =
     firstObservation.result._tag === "Succeeded" &&
-    isIncompleteReview(firstObservation.result.outcome);
+    isIncompleteReview(firstObservation.result.outcome, evalCase);
 
   const blockerStatus: EvalBlockerCaseStatus =
     expectedBlockers.length === 0
@@ -766,16 +1217,14 @@ const caseReport = (
   const laterOnlyBlockingDefects: Array<EvalLaterBlocker> = [];
 
   const firstTrialIsResolved =
-    firstObservation.result._tag === "Failed" ||
-    unresolvedBlockingFindings.length === 0 ||
-    firstMatched.size === expectedBlockers.length;
+    unresolvedBlockingFindings.length === 0 || firstMatched.size === expectedBlockers.length;
 
   if (firstTrialIsResolved) {
     for (const defect of expectedBlockers) {
       if (firstMatched.has(defect.id)) continue;
       for (let trial = 2; trial <= observations.length; trial += 1) {
         const trialMatched = matchedBlockingDefects(
-          indexed.filter((finding) => finding.reference.trial === trial),
+          indexed.filter((finding) => finding.reference.trial === trial && isPublished(finding)),
           evalCase,
           true,
         );
@@ -794,6 +1243,25 @@ const caseReport = (
     }
   }
 
+  const trialStatus = (observation: EvalObservation) =>
+    observation.result._tag === "Failed"
+      ? "failed"
+      : isIncompleteReview(observation.result.outcome, evalCase)
+        ? "incomplete"
+        : "complete";
+
+  const operationalInstability = new Set(observations.map(trialStatus)).size > 1;
+
+  const unresolvedRepeatedTrialInstability =
+    observations.length > 1 &&
+    !operationalInstability &&
+    indexed.some(
+      (finding) =>
+        finding.judgment === undefined ||
+        finding.judgment.label === "unclear" ||
+        finding.judgment.label === "new-valid",
+    );
+
   return EvalCaseQualityReport.make({
     caseId: evalCase.id,
     caseVersion: evalCase.version,
@@ -811,17 +1279,62 @@ const caseReport = (
           cleanControlPassed:
             firstObservation.result._tag === "Succeeded" &&
             !firstIncomplete &&
-            firstFindings.length === 0,
+            firstFindings.filter(isPublished).length === 0,
         }
       : {}),
     laterOnlyBlockingDefects,
     firstTrialFindings: firstQuality,
     allTrialFindings: findingQuality(indexed),
-    firstTrialBlockingFindings: blockingFindingQuality(firstFindings, evalCase),
+    firstTrialBlockingFindings: blockingFindingQuality(firstFindings.filter(isPublished), evalCase),
+    discoveryMisses: firstDetectionUnresolved ? 0 : unmatchedBlockers,
+    unresolvedDiscoveryMisses: firstDetectionUnresolved ? unmatchedBlockers : 0,
+    validCandidatesRefuted: firstFindings.filter(
+      (finding) => isValid(finding) && finding.reference.candidate?.disposition === "refuted",
+    ).length,
+    validCandidatesWithheld: firstFindings.filter(
+      (finding) => isValid(finding) && !isPublished(finding),
+    ).length,
+    validBlockingCandidatesRefuted: firstFindings.filter(
+      (finding) =>
+        judgedSeverity(finding, evalCase) === "blocking" &&
+        finding.reference.candidate?.disposition === "refuted",
+    ).length,
+    validBlockingCandidatesWithheld: firstFindings.filter(
+      (finding) => judgedSeverity(finding, evalCase) === "blocking" && !isPublished(finding),
+    ).length,
+    firstTrialIncomplete: firstIncomplete,
+    unresolvedRepeatedTrialInstability,
+    repeatedTrialInstability:
+      operationalInstability ||
+      (!unresolvedRepeatedTrialInstability &&
+        new Set(
+          observations.map((observation) =>
+            JSON.stringify({
+              status: trialStatus(observation),
+              blockers: [
+                ...matchedBlockingDefects(
+                  indexed.filter(
+                    (finding) =>
+                      finding.reference.trial === observation.trial && isPublished(finding),
+                  ),
+                  evalCase,
+                  true,
+                ),
+              ].sort(),
+              falseBlockers: blockingFindingQuality(
+                indexed.filter(
+                  (finding) =>
+                    finding.reference.trial === observation.trial && isPublished(finding),
+                ),
+                evalCase,
+              ).overstated,
+            }),
+          ),
+        ).size > 1),
     ...(firstObservation.result._tag === "Failed"
       ? { firstTrialFailureTag: firstObservation.result.errorTag }
       : {}),
-    resources: resourceSummary(observations),
+    resources: resourceSummary(observations, [evalCase]),
   });
 };
 
@@ -867,6 +1380,142 @@ const aggregateBlockingFindingQuality = (
   });
 };
 
+const rolloutDecision = (
+  suite: EvalSuite,
+  validated: ValidatedInputs,
+  variants: ReadonlyArray<EvalVariantQualityReport>,
+): EvalRolloutDecision => {
+  const reasons = new Set<string>();
+
+  const heldout = suite.cases.filter(
+    (evalCase) => evalCase.split === "heldout" && evalCase.kind !== "unadjudicated",
+  );
+
+  const baseline = variants.find((variant) => variant.configuration.strategy === "baseline");
+  const verified = variants.find((variant) => variant.configuration.strategy === "verified");
+
+  if (suite.frozenRun !== undefined) {
+    const baselineId = suite.frozenRun.configuration.id;
+
+    const baselineFalseBlockers = heldout.reduce((total, evalCase) => {
+      const observation = validated.observations.get(trialKey(evalCase.id, baselineId, 1));
+
+      return (
+        total +
+        (observation === undefined
+          ? 0
+          : blockingFindingQuality(
+              indexFindings(observation, validated.judgments).filter(isPublished),
+              evalCase,
+            ).overstated)
+      );
+    }, 0);
+
+    return EvalRolloutDecision.make({
+      decision: "not-applicable",
+      basis: "frozen-baseline-run",
+      heldoutCases: heldout.length,
+      baselineFalseBlockers,
+      reasons: [
+        "Descriptive baseline run; no paired rollout decision is made. Verified false blockers are unassessed.",
+      ],
+    });
+  }
+
+  if (suite.comparison === undefined) reasons.add("No frozen paired comparison is available.");
+  if (baseline === undefined || verified === undefined)
+    reasons.add("Both baseline and verified observations are required.");
+  if (
+    !heldout.some((evalCase) => evalCase.kind === "clean-control") ||
+    !heldout.some((evalCase) =>
+      evalCase.expectedDefects.some((defect) => defect.severity === "blocking"),
+    )
+  )
+    reasons.add("Heldout first trials need independently established clean controls and blockers.");
+  let baselineFalseBlockers = 0;
+  let verifiedFalseBlockers = 0;
+
+  if (baseline !== undefined && verified !== undefined) {
+    for (const evalCase of heldout) {
+      const left = validated.observations.get(trialKey(evalCase.id, baseline.configuration.id, 1));
+      const right = validated.observations.get(trialKey(evalCase.id, verified.configuration.id, 1));
+
+      if (left === undefined || right === undefined) {
+        reasons.add("Heldout first trials are missing.");
+        continue;
+      }
+      const leftFindings = indexFindings(left, validated.judgments);
+      const rightFindings = indexFindings(right, validated.judgments);
+      const all = [...leftFindings, ...rightFindings];
+
+      if (
+        all.some(
+          (finding) => finding.judgment === undefined || finding.judgment.label === "unclear",
+        )
+      )
+        reasons.add(
+          "Resolve all heldout first-trial candidate judgments independently of verifier outcomes.",
+        );
+      if (all.some((finding) => finding.judgment?.label === "new-valid"))
+        reasons.add(
+          "New valid defects require a versioned oracle correction and rescoring both strategies.",
+        );
+      baselineFalseBlockers += blockingFindingQuality(
+        leftFindings.filter(isPublished),
+        evalCase,
+      ).overstated;
+      verifiedFalseBlockers += blockingFindingQuality(
+        rightFindings.filter(isPublished),
+        evalCase,
+      ).overstated;
+      const detected = matchedBlockingDefects(leftFindings, evalCase, false);
+      const retained = matchedBlockingDefects(rightFindings.filter(isPublished), evalCase, false);
+      const blocking = matchedBlockingDefects(leftFindings.filter(isPublished), evalCase, true);
+
+      const retainedBlocking = matchedBlockingDefects(
+        rightFindings.filter(isPublished),
+        evalCase,
+        true,
+      );
+
+      if ([...detected].some((id) => !retained.has(id)))
+        reasons.add("Verification did not preserve every baseline-detected blocker.");
+      if ([...blocking].some((id) => !retainedBlocking.has(id)))
+        reasons.add("A baseline blocking finding was withheld or downgraded.");
+      if (
+        rightFindings.some(
+          (finding) =>
+            judgedSeverity(finding, evalCase) === "blocking" &&
+            finding.reference.candidate?.disposition === "refuted",
+        )
+      )
+        reasons.add("Verification wrongly refuted a valid blocking candidate.");
+
+      const leftIncomplete =
+        left.result._tag === "Failed" || isIncompleteReview(left.result.outcome, evalCase);
+
+      const rightIncomplete =
+        right.result._tag === "Failed" || isIncompleteReview(right.result.outcome, evalCase);
+
+      if (!leftIncomplete && rightIncomplete)
+        reasons.add("Verification added an incomplete or failed heldout first trial.");
+      if (left.result._tag !== "Failed" && right.result._tag === "Failed")
+        reasons.add("Verification added a failed heldout first trial.");
+    }
+  }
+  if (verifiedFalseBlockers >= baselineFalseBlockers)
+    reasons.add("Fewer false blocking findings have not been established.");
+
+  return EvalRolloutDecision.make({
+    decision: reasons.size === 0 ? "eligible" : "experimental",
+    basis: "frozen-heldout-first-trials",
+    heldoutCases: heldout.length,
+    baselineFalseBlockers,
+    verifiedFalseBlockers,
+    reasons: [...reasons],
+  });
+};
+
 export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(function* (
   suite: EvalSuite,
   observations: ReadonlyArray<EvalObservation>,
@@ -877,6 +1526,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
   const variants: Array<EvalVariantQualityReport> = [];
   const unjudgedFindings: Array<EvalFindingReference> = [];
   const unmappedValidFindings: Array<EvalFindingReference> = [];
+  const severityFindings: Array<EvalFindingSeverityDiagnostic> = [];
 
   for (const [variantId, configuration] of [...validated.configurations].sort(([left], [right]) =>
     left.localeCompare(right),
@@ -900,7 +1550,14 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
         });
       }
       for (const observation of caseObservations) {
-        for (const indexed of indexFindings(observation, validated.judgments)) {
+        for (const indexed of indexFindings(
+          observation,
+          validated.judgments,
+          validated.observationDigests,
+        )) {
+          const diagnostic = severityDiagnostic(indexed, evalCase);
+
+          if (diagnostic !== undefined) severityFindings.push(diagnostic);
           if (indexed.judgment === undefined) unjudgedFindings.push(indexed.reference);
           if (indexed.judgment?.label === "new-valid") {
             unmappedValidFindings.push(indexed.reference);
@@ -954,15 +1611,47 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
         firstTrialBlockingFindings: aggregateBlockingFindingQuality(cases),
         firstTrialFailures: cases.filter((report) => report.firstTrialFailureTag !== undefined)
           .length,
-        resources: resourceSummary(variantObservations),
+        discoveryMisses: cases.reduce((sum, report) => sum + report.discoveryMisses, 0),
+        unresolvedDiscoveryMisses: cases.reduce(
+          (sum, report) => sum + report.unresolvedDiscoveryMisses,
+          0,
+        ),
+        validCandidatesRefuted: cases.reduce(
+          (sum, report) => sum + report.validCandidatesRefuted,
+          0,
+        ),
+        validCandidatesWithheld: cases.reduce(
+          (sum, report) => sum + report.validCandidatesWithheld,
+          0,
+        ),
+        validBlockingCandidatesRefuted: cases.reduce(
+          (sum, report) => sum + report.validBlockingCandidatesRefuted,
+          0,
+        ),
+        validBlockingCandidatesWithheld: cases.reduce(
+          (sum, report) => sum + report.validBlockingCandidatesWithheld,
+          0,
+        ),
+        repeatedTrialInstability: cases.filter((report) => report.repeatedTrialInstability).length,
+        unresolvedRepeatedTrialInstability: cases.filter(
+          (report) => report.unresolvedRepeatedTrialInstability,
+        ).length,
+        resources: resourceSummary(variantObservations, validated.cases),
         cases,
       }),
     );
   }
 
+  const judgmentProvenance = { agent: 0, human: 0, unknown: 0 };
+
+  for (const judgment of validated.judgments.values()) {
+    judgmentProvenance[judgment.adjudicatorKind ?? "unknown"] += 1;
+  }
+
   return EvalQualityReport.make({
-    version: 3,
+    version: 5,
     observationSetDigest: validated.observationSetDigest,
+    ...(suite.frozenRun === undefined ? {} : { frozenRunDigest: suite.frozenRun.digest }),
     runnerVersion: validated.runnerVersion,
     trialCount: validated.trialCount,
     caseSet: validated.cases.map((evalCase) =>
@@ -970,6 +1659,8 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
         id: evalCase.id,
         version: evalCase.version,
         inputDigest: evalCase.inputDigest,
+        ...(evalCase.oracleDigest === undefined ? {} : { oracleDigest: evalCase.oracleDigest }),
+        ...(evalCase.oracleVersion === undefined ? {} : { oracleVersion: evalCase.oracleVersion }),
         ...(evalCase.repository === undefined
           ? {}
           : { repositoryDigest: evalCase.repository.digest }),
@@ -978,7 +1669,89 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
     variants,
     unjudgedFindings,
     unmappedValidFindings,
+    rollout: rolloutDecision(suite, validated, variants),
+    judgmentProvenance: EvalJudgmentProvenance.make(judgmentProvenance),
+    severityDiagnostics: EvalSeverityDiagnostics.make({
+      scope: "published-valid-findings-all-trials",
+      assessed: severityFindings.filter((finding) => finding.judgment.severity !== undefined)
+        .length,
+      unassessed: severityFindings.filter((finding) => finding.judgment.severity === undefined)
+        .length,
+      findings: severityFindings,
+    }),
   });
+});
+
+/** Rebind a complete paired run to an explicitly versioned correction without replacing evidence. */
+export const rescoreEvalObservations = Effect.fn("PrReviewEval.rescoreEvalObservations")(function* (
+  previousSuite: EvalSuite,
+  correctedCases: EvalSuite,
+  observations: ReadonlyArray<EvalObservation>,
+  correctionId: string,
+) {
+  const previous = yield* validateFrozenComparison(previousSuite);
+
+  yield* validateInputs(previousSuite, observations, 3, undefined);
+  if (correctedCases.cases.length !== previousSuite.cases.length)
+    return yield* EvalReportError.make({
+      message: "Oracle correction must retain the complete original case set",
+    });
+  let corrections = 0;
+
+  for (const evalCase of correctedCases.cases) {
+    const original = previousSuite.cases.find((entry) => entry.id === evalCase.id);
+
+    if (
+      original === undefined ||
+      original.inputDigest !== evalCase.inputDigest ||
+      original.repository?.digest !== evalCase.repository?.digest ||
+      original.split !== evalCase.split ||
+      original.relatedGroup !== evalCase.relatedGroup
+    ) {
+      return yield* EvalReportError.make({
+        message:
+          "Oracle correction cannot change request, source snapshot, split, or related group",
+      });
+    }
+    const changed = (yield* digestEvalOracle(original)) !== (yield* digestEvalOracle(evalCase));
+
+    if (changed) {
+      if (
+        evalCase.oracleVersion === undefined ||
+        evalCase.oracleVersion <= (original.oracleVersion ?? 1)
+      )
+        return yield* EvalReportError.make({
+          message: `Oracle correction for ${evalCase.id} requires a higher oracleVersion`,
+        });
+      corrections += 1;
+    }
+  }
+  if (corrections === 0 || correctionId === previous.id)
+    return yield* EvalReportError.make({
+      message: "Use a new correction ID and at least one explicitly versioned oracle correction",
+    });
+  const suite = yield* freezeEvalSuite(correctedCases, previous.configurations, correctionId);
+  const comparison = yield* validateFrozenComparison(suite);
+
+  const rebound = yield* Effect.forEach(
+    observations,
+    Effect.fn("PrReviewEval.rebindOracle")(function* (observation) {
+      const evalCase = suite.cases.find((entry) => entry.id === observation.caseId);
+
+      if (evalCase === undefined)
+        return yield* EvalReportError.make({ message: "Oracle correction lost an observed case" });
+
+      return EvalObservation.make({
+        ...observation,
+        oracleVersion: evalCase.oracleVersion,
+        oracleDigest: evalCase.oracleDigest,
+        comparisonDigest: comparison.digest,
+        previousObservationDigest: yield* digestObservation(observation),
+      });
+    }),
+  );
+
+  return { suite, observations: rebound };
 });
 
 const renderRate = (rate: EvalRate): string =>
@@ -986,33 +1759,69 @@ const renderRate = (rate: EvalRate): string =>
     ? `${rate.numerator}/${rate.denominator}`
     : `${rate.numerator}/${rate.denominator} (${rate.status})`;
 
+const renderSeverityDiagnostics = (diagnostics: EvalSeverityDiagnostics | undefined): string => {
+  if (diagnostics === undefined) return "Severity diagnostics: unavailable (not recorded).\n";
+
+  const findingDisagreements = diagnostics.findings.filter(
+    (finding) =>
+      finding.findingVsIndependent === "higher" || finding.findingVsIndependent === "lower",
+  ).length;
+
+  const oracleDisagreements = diagnostics.findings.filter(
+    (finding) =>
+      finding.independentVsOracle === "higher" || finding.independentVsOracle === "lower",
+  ).length;
+
+  return (
+    `Severity assessment: ${diagnostics.assessed}/${diagnostics.findings.length} published valid findings assessed; ${diagnostics.unassessed} unassessed (all trials).\n` +
+    (findingDisagreements + oracleDisagreements === 0
+      ? ""
+      : `Warning: disagreements between finding severity and independent assessment: ${findingDisagreements}; disagreements between independent assessment and the highest matched oracle severity: ${oracleDisagreements}. Scores and labels are unchanged; review source evidence before attributing the disagreements.\n`)
+  );
+};
+
 export const renderQualityReport = (report: EvalQualityReport): string =>
+  (report.judgmentProvenance === undefined
+    ? "Judgment provenance: unknown (not recorded).\n"
+    : `Judgment provenance: ${report.judgmentProvenance.agent} agent, ${report.judgmentProvenance.human} human, ${report.judgmentProvenance.unknown} unknown (all trials).\n`) +
+  renderSeverityDiagnostics(report.severityDiagnostics) +
   report.variants
     .map((variant) => {
       const quality = variant.firstTrialFindings;
       const blockingQuality = variant.firstTrialBlockingFindings;
+      const resources = variant.resources;
+
+      const estimatedTrials =
+        resources.costedSucceededTrials +
+        resources.costedIncompleteTrials +
+        resources.costedFailedTrials;
 
       return [
         `${variant.configuration.id}: blocking-recall ${renderRate(variant.blockerRecall)}`,
         `detected ${renderRate(variant.blockerDetection)}`,
-        `complete ${variant.blockerCases.complete}/${variant.blockerCases.total}`,
+        `blocker-cases-complete ${variant.blockerCases.complete}/${variant.blockerCases.total}`,
         `precision ${renderRate(quality.precision)}`,
         `blocking-precision ${renderRate(blockingQuality.precision)}`,
-        `overstated-blocking ${blockingQuality.overstated}`,
-        `invalid ${quality.invalid}`,
+        `overstated-blocking ${blockingQuality.overstated} adjudicated`,
+        `invalid ${quality.invalid} adjudicated`,
         `unclear ${quality.unclear}`,
         `unjudged ${quality.unjudged}`,
-        `later-only ${variant.laterOnlyBlockingDefects.length}`,
+        `later-only ${variant.laterOnlyBlockingDefects.length} confirmed`,
+        `discovery-misses ${variant.discoveryMisses} confirmed; ${variant.unresolvedDiscoveryMisses} awaiting judgment`,
+        `valid-refuted ${variant.validCandidatesRefuted} confirmed`,
+        `valid-withheld ${variant.validCandidatesWithheld} confirmed`,
+        `unstable-cases ${variant.repeatedTrialInstability} confirmed; ${variant.unresolvedRepeatedTrialInstability} awaiting judgment`,
         `incomplete ${variant.resources.incompleteTrials}/${variant.resources.attemptedTrials}`,
         `failures ${variant.resources.failedTrials}/${variant.resources.attemptedTrials}`,
         `tokens ${variant.resources.inputTokens} in/${variant.resources.outputTokens} out`,
-        variant.resources.costedSucceededTrials +
-          variant.resources.costedIncompleteTrials +
-          variant.resources.costedFailedTrials ===
-        0
-          ? "cost unavailable"
-          : `cost ${variant.resources.estimatedCostMicrousd}µUSD (${variant.resources.costedSucceededTrials} succeeded + ${variant.resources.costedIncompleteTrials} incomplete + ${variant.resources.costedFailedTrials} failed costed)`,
-        `elapsed ${variant.resources.elapsedMillis}ms`,
+        estimatedTrials === 0
+          ? "settled estimate unavailable"
+          : `settled estimate ${resources.estimatedCostMicrousd}µUSD (${resources.costedSucceededTrials} succeeded + ${resources.costedIncompleteTrials} incomplete + ${resources.costedFailedTrials} failed; ${resources.attemptedTrials - estimatedTrials} unknown)`,
+        resources.reservedCostMicrousd === undefined
+          ? `outstanding reservations unavailable (${resources.attemptedTrials} trials unknown)`
+          : `outstanding reservations ${resources.reservedCostMicrousd}µUSD (${resources.reservationKnownTrials} trials known; ${resources.reservationUnknownTrials} unknown)`,
+        `local trial elapsed: total ${variant.resources.elapsedMillis}ms, median ${variant.resources.medianElapsedMillis === undefined ? "unknown" : `${variant.resources.medianElapsedMillis}ms`} (all returned trials)`,
       ].join("; ");
     })
-    .join("\n");
+    .join("\n") +
+  `\nRollout: ${report.rollout.decision}. ${report.rollout.reasons.join(" ")}`;

@@ -374,7 +374,7 @@ it.effect("PRR-009 publishes twenty-four blocking findings at the review field b
       report: ReviewReport.make({ summary: "Blocking defects were found.", findings }),
       automaticReviewsRemaining: 1,
       scope: "full",
-      reviewedFiles: 1,
+      suppliedPatches: 1,
       unreviewedFiles: 0,
       ignoredFiles: 0,
       modelTurns: 3,

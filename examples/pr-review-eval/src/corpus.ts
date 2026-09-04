@@ -3,6 +3,9 @@ import { Crypto, Effect, Encoding, FileSystem, Schema, Stream } from "effect";
 
 import {
   EvalDataError,
+  type EvalCase,
+  EvalCaseKind,
+  EvalExpectedDefect,
   EvalInputDigest,
   EvalObservation,
   type EvalRepositorySnapshot,
@@ -21,6 +24,41 @@ const encodeRepositoryJson = Schema.encodeEffect(
 );
 
 const encodeObservationJson = Schema.encodeEffect(Schema.fromJsonString(EvalObservation));
+
+const Oracle = Schema.Struct({
+  version: Schema.Int.check(Schema.isGreaterThan(0)),
+  kind: EvalCaseKind,
+  expectedDefects: Schema.Array(EvalExpectedDefect),
+});
+
+/** Oracle identity is separate from request identity, including independently judged severity. */
+export const digestEvalOracle = Effect.fn("PrReviewEval.digestEvalOracle")(function* (
+  evalCase: EvalCase,
+) {
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Oracle))({
+    version: evalCase.oracleVersion ?? 1,
+    kind: evalCase.kind,
+    expectedDefects: evalCase.expectedDefects,
+  }).pipe(
+    Effect.mapError((cause) =>
+      dataError("encode oracle", "Eval oracle failed canonical encoding", { cause }),
+    ),
+  );
+
+  return yield* digestText(encoded);
+});
+
+export const digestObservation = Effect.fn("PrReviewEval.digestObservation")(function* (
+  observation: EvalObservation,
+) {
+  const encoded = yield* encodeObservationJson(observation).pipe(
+    Effect.mapError((cause) =>
+      dataError("encode observation", "Eval observation failed canonical encoding", { cause }),
+    ),
+  );
+
+  return yield* digestText(encoded);
+});
 
 const dataError = (
   operation: string,
@@ -93,6 +131,15 @@ export const validateEvalSuite = Effect.fn("PrReviewEval.validateEvalSuite")(fun
         return yield* dataError(
           "validate case digest",
           `Case ${evalCase.id} has input digest ${evalCase.inputDigest}, expected ${actual}`,
+        );
+      }
+      if (
+        evalCase.oracleDigest !== undefined &&
+        evalCase.oracleDigest !== (yield* digestEvalOracle(evalCase))
+      ) {
+        return yield* dataError(
+          "validate oracle digest",
+          `Case ${evalCase.id} has a mismatched oracle identity; correct and version the oracle explicitly`,
         );
       }
       if (evalCase.repository !== undefined) {

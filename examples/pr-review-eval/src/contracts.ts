@@ -1,4 +1,10 @@
-import { ReviewOutcome, ReviewRequest, ReviewSeverity } from "@effect-agent/pr-review/Review";
+import {
+  ReviewDiagnostics,
+  ReviewOutcome,
+  ReviewRequest,
+  ReviewSeverity,
+  ReviewStrategy,
+} from "@effect-agent/pr-review/Review";
 import { Schema } from "effect";
 
 const BoundedIdentifier = Schema.NonEmptyString.check(
@@ -16,7 +22,7 @@ export const EvalRunnerVersion = Schema.String.check(
 
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
-export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.1");
+export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.3.0");
 
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
@@ -69,12 +75,12 @@ export class EvalRepositoryFile extends Schema.Class<EvalRepositoryFile>(
 )({
   path: BoundedPath,
   revision: Schema.Literals(["base", "head"]),
-  content: Schema.String.check(Schema.isMaxLength(200_000)),
+  content: Schema.String.check(Schema.isMaxLength(512_000)),
 }) {}
 
 const EvalRepositorySnapshotUnsigned = Schema.Struct({
   version: Schema.Literal(1),
-  files: Schema.Array(EvalRepositoryFile).check(Schema.isMaxLength(200)),
+  files: Schema.Array(EvalRepositoryFile).check(Schema.isMaxLength(1_000)),
 });
 
 export class EvalRepositorySnapshot extends Schema.Class<EvalRepositorySnapshot>(
@@ -86,6 +92,7 @@ export class EvalRepositorySnapshot extends Schema.Class<EvalRepositorySnapshot>
 
 export const EvalCaseKind = Schema.Literals(["known-defects", "clean-control", "unadjudicated"]);
 export type EvalCaseKind = typeof EvalCaseKind.Type;
+export const EvalSplit = Schema.Literals(["development", "heldout"]);
 
 const EvalCaseFields = Schema.Struct({
   version: Schema.Literal(1),
@@ -97,6 +104,10 @@ const EvalCaseFields = Schema.Struct({
   request: ReviewRequest,
   repository: Schema.optionalKey(EvalRepositorySnapshot),
   expectedDefects: Schema.Array(EvalExpectedDefect).check(Schema.isMaxLength(12)),
+  oracleVersion: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  oracleDigest: Schema.optionalKey(EvalInputDigest),
+  split: Schema.optionalKey(EvalSplit),
+  relatedGroup: Schema.optionalKey(BoundedIdentifier),
 }).check(
   Schema.makeFilter(
     (evalCase) => {
@@ -130,22 +141,40 @@ export class EvalCase extends Schema.Class<EvalCase>(
   "@effect-agent/example-pr-review-eval/EvalCase",
 )(EvalCaseFields) {}
 
-const EvalSuiteFields = Schema.Struct({
-  version: Schema.Literal(1),
-  cases: Schema.Array(EvalCase).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
-}).check(
-  Schema.makeFilter(
-    (suite) => new Set(suite.cases.map((evalCase) => evalCase.id)).size === suite.cases.length,
-    { title: "Eval case IDs are unique" },
-  ),
-);
-
-export class EvalSuite extends Schema.Class<EvalSuite>(
-  "@effect-agent/example-pr-review-eval/EvalSuite",
-)(EvalSuiteFields) {}
-
 export const EvalReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh"]);
 export type EvalReasoningEffort = typeof EvalReasoningEffort.Type;
+
+export class EvalEffectiveConfiguration extends Schema.Class<EvalEffectiveConfiguration>(
+  "@effect-agent/example-pr-review-eval/EvalEffectiveConfiguration",
+)({
+  reviewerRevision: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/))),
+  discoveryPromptDigest: EvalInputDigest,
+  verificationPromptDigest: EvalInputDigest,
+  serviceTier: Schema.Literal("default"),
+  discoveryLimitMicrousd: Schema.Natural,
+  verificationReserveMicrousd: Schema.Natural,
+  maxInputTokens: Schema.Natural,
+  maxTurns: Schema.Natural,
+  maxToolCalls: Schema.Natural,
+  maxDurationMillis: Schema.Natural,
+  contextTokenLimit: Schema.Natural,
+  completionReserveTokens: Schema.Natural,
+  candidateCapacity: Schema.Natural,
+  patchBatchCharacters: Schema.Natural,
+  pricingVersion: BoundedIdentifier,
+  pricingValidUntil: Schema.Natural,
+  pricing: Schema.Struct({
+    input: Schema.Natural,
+    read: Schema.Natural,
+    write: Schema.Natural,
+    output: Schema.Natural,
+  }),
+  cache: Schema.Struct({
+    mode: Schema.Literal("explicit"),
+    ttl: Schema.Literal("30m"),
+    namespacePolicy: Schema.Literal("isolated-case-strategy-trial-v1"),
+  }),
+}) {}
 
 export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfiguration>(
   "@effect-agent/example-pr-review-eval/EvalVariantConfiguration",
@@ -160,7 +189,71 @@ export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfigurat
   store: Schema.Literal(false),
   costLimitMicrousd: Schema.optionalKey(Schema.Natural),
   guidanceDigest: Schema.optionalKey(EvalInputDigest),
+  strategy: Schema.optionalKey(ReviewStrategy),
+  effective: Schema.optionalKey(EvalEffectiveConfiguration),
 }) {}
+
+export class EvalFrozenCaseIdentity extends Schema.Class<EvalFrozenCaseIdentity>(
+  "@effect-agent/example-pr-review-eval/EvalFrozenCaseIdentity",
+)({
+  id: EvalCaseId,
+  inputDigest: EvalInputDigest,
+  repositoryDigest: EvalInputDigest,
+  oracleVersion: Schema.Int.check(Schema.isGreaterThan(0)),
+  oracleDigest: EvalInputDigest,
+  split: EvalSplit,
+  relatedGroup: BoundedIdentifier,
+}) {}
+
+export const EvalComparisonPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  id: BoundedIdentifier,
+  cases: Schema.Array(EvalFrozenCaseIdentity).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
+  configurations: Schema.Array(EvalVariantConfiguration).check(Schema.isLengthBetween(2, 2)),
+  trials: Schema.Literal(3),
+  plannedRuns: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120 })),
+  maximumCostMicrousd: Schema.Natural.check(Schema.isLessThanOrEqualTo(119_999_880)),
+  order: Schema.Literal("alternating-pairs-v1"),
+});
+
+export class EvalComparison extends Schema.Class<EvalComparison>(
+  "@effect-agent/example-pr-review-eval/EvalComparison",
+)({ ...EvalComparisonPayload.fields, digest: EvalInputDigest }) {}
+
+export const EvalFrozenRunPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  id: BoundedIdentifier,
+  configuration: EvalVariantConfiguration,
+  /** SHA-256 of the schema-encoded full cases, in their execution order. */
+  casesDigest: EvalInputDigest,
+  trials: EvalTrialCount,
+  plannedRuns: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120 })),
+  maximumCostMicrousd: Schema.Natural.check(Schema.isLessThanOrEqualTo(119_999_880)),
+  order: Schema.Literal("case-then-trial-v1"),
+});
+
+export class EvalFrozenRun extends Schema.Class<EvalFrozenRun>(
+  "@effect-agent/example-pr-review-eval/EvalFrozenRun",
+)({ ...EvalFrozenRunPayload.fields, digest: EvalInputDigest }) {}
+
+const EvalSuiteFields = Schema.Struct({
+  version: Schema.Literal(1),
+  cases: Schema.Array(EvalCase).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
+  comparison: Schema.optionalKey(EvalComparison),
+  frozenRun: Schema.optionalKey(EvalFrozenRun),
+}).check(
+  Schema.makeFilter(
+    (suite) => new Set(suite.cases.map((evalCase) => evalCase.id)).size === suite.cases.length,
+    { title: "Eval case IDs are unique" },
+  ),
+  Schema.makeFilter((suite) => suite.comparison === undefined || suite.frozenRun === undefined, {
+    title: "A suite cannot contain both a paired comparison and a baseline frozen run",
+  }),
+);
+
+export class EvalSuite extends Schema.Class<EvalSuite>(
+  "@effect-agent/example-pr-review-eval/EvalSuite",
+)(EvalSuiteFields) {}
 
 export class EvalReviewerFailure extends Schema.TaggedError<EvalReviewerFailure>()(
   "EvalReviewerFailure",
@@ -168,6 +261,9 @@ export class EvalReviewerFailure extends Schema.TaggedError<EvalReviewerFailure>
     errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
     message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
     estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
+    /** Maximum additional charge for unsettled requests; absence means unavailable. */
+    reservedCostMicrousd: Schema.optionalKey(Schema.Natural),
+    diagnostics: Schema.optionalKey(ReviewDiagnostics),
   },
 ) {}
 
@@ -180,6 +276,9 @@ export class EvalTrialFailed extends Schema.TaggedClass<EvalTrialFailed>()("Fail
   errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
   estimatedCostMicrousd: Schema.optionalKey(Schema.Natural),
+  /** Maximum additional charge for unsettled requests; absence means unavailable. */
+  reservedCostMicrousd: Schema.optionalKey(Schema.Natural),
+  diagnostics: Schema.optionalKey(ReviewDiagnostics),
 }) {}
 
 export const EvalTrialResult = Schema.Union([EvalTrialSucceeded, EvalTrialFailed]);
@@ -194,6 +293,14 @@ export class EvalObservation extends Schema.Class<EvalObservation>(
   caseVersion: Schema.Literal(1),
   inputDigest: EvalInputDigest,
   repositoryDigest: Schema.optionalKey(EvalInputDigest),
+  oracleVersion: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  oracleDigest: Schema.optionalKey(EvalInputDigest),
+  comparisonDigest: Schema.optionalKey(EvalInputDigest),
+  frozenRunDigest: Schema.optionalKey(EvalInputDigest),
+  previousObservationDigest: Schema.optionalKey(EvalInputDigest),
+  runId: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
+  cacheNamespace: Schema.optionalKey(EvalInputDigest),
+  sequence: Schema.optionalKey(Schema.Natural),
   variant: EvalVariantConfiguration,
   trial: Schema.Int.check(Schema.isGreaterThan(0)),
   recordedAt: Schema.DateTimeUtcFromString,

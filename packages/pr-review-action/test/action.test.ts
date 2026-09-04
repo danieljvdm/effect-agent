@@ -188,6 +188,62 @@ describe("immutable review source", () => {
     }),
   );
 
+  it.effect("searches one exact revision and keeps denied paths outside source reads", () =>
+    Effect.gen(function* () {
+      const reads: Array<string> = [];
+
+      const head = snapshot(
+        "head-sha",
+        {
+          "src/provider.ts": `${"unrelated\n".repeat(3_152)}const getUsage = () => 1;\n`,
+          "ignored/provider.ts": "getUsage",
+          "unavailable.ts": "getUsage",
+          "asset.png": "getUsage",
+        },
+        new Set(["linked.ts"]),
+      );
+
+      const repository = makeReviewRepository({
+        base: snapshot("base-sha", { "src/provider.ts": "const getUsage = () => 0;\n" }),
+        head: {
+          ...head,
+          readTextFile: (path) =>
+            Effect.sync(() => reads.push(path)).pipe(Effect.andThen(head.readTextFile(path))),
+        },
+        ignore: ["ignored/**"],
+        unavailablePaths: new Set(["unavailable.ts"]),
+      });
+
+      const input = {
+        path: "src/provider.ts",
+        revision: "head",
+        literal: "getUsage",
+        startLine: 1,
+      } as const;
+
+      for (const path of [
+        "ignored/provider.ts",
+        "unavailable.ts",
+        "asset.png",
+        "linked.ts",
+        "missing.ts",
+      ]) {
+        const failure = yield* repository.findInFile({ ...input, path }).pipe(Effect.flip);
+
+        expect(failure._tag).toBe("ReviewContextError");
+      }
+      expect(reads).toEqual([]);
+      const base = yield* repository.findInFile({ ...input, revision: "base" });
+      const found = yield* repository.findInFile(input);
+      const source = yield* repository.readFile({ ...input, startLine: 3_153, lineCount: 1 });
+
+      expect(base).toMatchObject({ revision: "base", lines: [1], truncated: false });
+      expect(found).toMatchObject({ revision: "head", lines: [3_153], truncated: false });
+      expect(source.content).toBe("const getUsage = () => 1;");
+      expect(reads).toEqual(["src/provider.ts", "src/provider.ts"]);
+    }),
+  );
+
   it.effect("fails closed for ignored paths and source ranges above the return bound", () =>
     Effect.gen(function* () {
       const repository = makeReviewRepository({
@@ -1042,7 +1098,7 @@ describe("Incremental review scope", () => {
       expect(requested.some((request) => request.includes("/compare/"))).toBe(true);
       expect(requested.filter((request) => request.includes("/git/trees/"))).toHaveLength(2);
       expect(published).toHaveLength(1);
-      expect(published[0]).toContain("| **Incremental** | 0 reviewed | ✅ None |");
+      expect(published[0]).toContain("| **Incremental** | 0 patches supplied | ✅ None |");
       expect(published[0]).toContain(
         "No pull-request files changed since the last completed review.",
       );

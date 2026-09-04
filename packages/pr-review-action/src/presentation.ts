@@ -1,5 +1,6 @@
 import {
   MAX_REVIEW_PATCH_CHARS,
+  type ReviewCostSnapshot,
   type ReviewFinding,
   type ReviewOutcome,
   type ReviewReport,
@@ -23,25 +24,38 @@ const countNoun = (count: number, noun: string): string =>
 
 const formatNumber = (value: number): string => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
-const findingLabel = (finding: ReviewFinding): string => {
+export type ReviewFindingVerification = "supported" | "unresolved";
+
+const findingLabel = (finding: ReviewFinding, verification?: ReviewFindingVerification): string => {
   const appearance = severityAppearance[finding.severity];
 
-  return `${appearance.icon} ${appearance.label} · ${finding.category}`;
+  return verification === "unresolved"
+    ? `unverified · alleged ${appearance.label} · ${finding.category}`
+    : `${appearance.icon} ${appearance.label} · ${finding.category}${verification === "supported" ? " · supported" : ""}`;
 };
 
-const severityCounts = (report: ReviewReport) => ({
-  blocking: report.findings.filter((finding) => finding.severity === "blocking").length,
-  important: report.findings.filter((finding) => finding.severity === "important").length,
-  nit: report.findings.filter((finding) => finding.severity === "nit").length,
-});
+const severityCounts = (
+  report: ReviewReport,
+  verification?: ReadonlyArray<ReviewFindingVerification | undefined>,
+) => {
+  const supported = report.findings.filter((_, index) => verification?.[index] !== "unresolved");
+
+  return {
+    blocking: supported.filter((finding) => finding.severity === "blocking").length,
+    important: supported.filter((finding) => finding.severity === "important").length,
+    nit: supported.filter((finding) => finding.severity === "nit").length,
+    unresolved: report.findings.length - supported.length,
+  };
+};
 
 const renderFindingTally = (input: ReviewPresentationInput): string => {
-  const counts = severityCounts(input.report);
+  const counts = severityCounts(input.report, input.findingVerification);
 
   const parts = [
     ...(counts.blocking > 0 ? [`🛑 ${String(counts.blocking)} blocking`] : []),
     ...(counts.important > 0 ? [`⚠️ ${String(counts.important)} important`] : []),
     ...(counts.nit > 0 ? [`💅 ${String(counts.nit)} nit`] : []),
+    ...(counts.unresolved > 0 ? [`${String(counts.unresolved)} unverified`] : []),
   ];
 
   if (parts.length > 0) return parts.join(" · ");
@@ -55,8 +69,9 @@ const renderVerdict = (
   complete: boolean,
   unresolvedChangeRequests: number,
   exhausted: ReviewOutcome["exhausted"],
+  verification?: ReadonlyArray<ReviewFindingVerification | undefined>,
 ): string => {
-  const counts = severityCounts(report);
+  const counts = severityCounts(report, verification);
 
   if (counts.blocking > 0) {
     return `> [!CAUTION]\n> **${countNoun(counts.blocking, "blocking finding")}.** Do not merge until ${counts.blocking === 1 ? "it is" : "they are"} addressed.`;
@@ -64,8 +79,8 @@ const renderVerdict = (
   if (exhausted !== undefined) {
     return `> [!CAUTION]\n> **Review stopped at the ${exhausted} budget.** Findings are preserved, but coverage is incomplete and this result does not clear the change.`;
   }
-  if (!complete) {
-    return "> [!CAUTION]\n> **Review coverage is incomplete.** Not all changes were verified, so this result does not clear the change.";
+  if (!complete || counts.unresolved > 0) {
+    return "> [!CAUTION]\n> **Review coverage is incomplete.** Discovery or candidate verification remains incomplete, so this result does not clear the change.";
   }
   if (unresolvedChangeRequests > 0) {
     return `> [!CAUTION]\n> **${countNoun(unresolvedChangeRequests, "earlier change request")} ${unresolvedChangeRequests === 1 ? "remains" : "remain"} unresolved.** Request \`@effect-agent review full\` to verify earlier blockers, or dismiss the review manually after checking the fix.`;
@@ -80,12 +95,18 @@ const renderVerdict = (
   return "> [!TIP]\n> **No actionable findings.**";
 };
 
-export const renderFindingBody = (finding: ReviewFinding): string =>
-  [`**[${findingLabel(finding)}] ${finding.title}**`, "", finding.body].join("\n");
+export const renderFindingBody = (
+  finding: ReviewFinding,
+  verification?: ReviewFindingVerification,
+): string =>
+  [`**[${findingLabel(finding, verification)}] ${finding.title}**`, "", finding.body].join("\n");
 
-const renderFindingText = (finding: ReviewFinding): string =>
+const renderFindingText = (
+  finding: ReviewFinding,
+  verification?: ReviewFindingVerification,
+): string =>
   [
-    `[${findingLabel(finding)}] ${finding.title}`,
+    `[${findingLabel(finding, verification)}] ${finding.title}`,
     `Path: ${finding.path}`,
     finding.line === undefined ? "No inline anchor." : `Line: ${String(finding.line)}`,
     "",
@@ -136,9 +157,12 @@ const exclusionReason: Record<ReviewExclusion["reason"], string> = {
 
 export interface ReviewPresentationInput {
   readonly report: ReviewReport;
+  readonly findingVerification?: ReadonlyArray<ReviewFindingVerification | undefined>;
+  readonly diagnostics?: ReviewOutcome["diagnostics"];
+  readonly stageCosts?: ReviewCostSnapshot["stages"];
   readonly automaticReviewsRemaining: number;
   readonly scope: "full" | "incremental";
-  readonly reviewedFiles: number;
+  readonly suppliedPatches: number;
   readonly unreviewedFiles: number;
   readonly exclusions?: ReadonlyArray<ReviewExclusion>;
   readonly ignoredFiles: number;
@@ -163,12 +187,18 @@ export interface ReviewCostEstimate {
   readonly url: string;
 }
 
-const renderCoverage = (input: ReviewPresentationInput): string =>
-  [
-    `${String(input.reviewedFiles)} ${input.complete ? "reviewed" : "supplied"}`,
-    ...(input.unreviewedFiles > 0 ? [`${String(input.unreviewedFiles)} excluded`] : []),
+const renderCoverage = (input: ReviewPresentationInput): string => {
+  const pending = input.exclusions?.filter(({ reason }) => reason === "review-stopped").length ?? 0;
+
+  return [
+    `${String(input.suppliedPatches)} ${input.suppliedPatches === 1 ? "patch" : "patches"} supplied`,
+    ...(input.unreviewedFiles > pending
+      ? [`${String(input.unreviewedFiles - pending)} excluded`]
+      : []),
+    ...(pending > 0 ? [`${String(pending)} pending`] : []),
     ...(input.ignoredFiles > 0 ? [`${String(input.ignoredFiles)} ignored`] : []),
   ].join(" · ");
+};
 
 const formatEstimatedUsd = (microusd: number): string => {
   const dollars = microusd / 1_000_000;
@@ -198,7 +228,13 @@ const renderAutomaticPause = (automaticReviewsRemaining: number): string | undef
 export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const parts = [
     "## Effect Agent review",
-    renderVerdict(input.report, input.complete, input.unresolvedChangeRequests, input.exhausted),
+    renderVerdict(
+      input.report,
+      input.complete,
+      input.unresolvedChangeRequests,
+      input.exhausted,
+      input.findingVerification,
+    ),
     [
       "| Scope | Files | New findings |",
       "| :-- | :-- | :-- |",
@@ -209,6 +245,98 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
   const automaticPause = renderAutomaticPause(input.automaticReviewsRemaining);
 
   if (automaticPause !== undefined) parts.push(automaticPause);
+  if (input.diagnostics !== undefined) {
+    const diagnostics = input.diagnostics;
+
+    const verification =
+      diagnostics.strategy === "baseline"
+        ? "not requested (baseline)"
+        : `${diagnostics.verification} · ${diagnostics.candidates.filter(({ disposition }) => disposition === "supported").length} supported · ${diagnostics.candidates.filter(({ disposition }) => disposition === "refuted").length} refuted · ${diagnostics.candidates.filter(({ disposition }) => disposition === "unresolved").length} unresolved`;
+
+    const reads = diagnostics.activity.filter(({ operation }) => operation === "read_file");
+
+    const searches = diagnostics.activity.filter(
+      ({ operation }) => operation === "find_files" || operation === "find_in_file",
+    );
+
+    const discoveryStages = diagnostics.stages.filter(({ stage }) => stage === "discovery");
+
+    const declared = discoveryStages.some(
+      ({ declaredAssessment }) => declaredAssessment === "incomplete",
+    )
+      ? "incomplete"
+      : discoveryStages.length > 0 &&
+          discoveryStages.every(({ declaredAssessment }) => declaredAssessment === "complete")
+        ? "complete"
+        : discoveryStages.some(({ declaredAssessment }) => declaredAssessment !== undefined)
+          ? "partially declared"
+          : "not declared";
+
+    parts.push(
+      [
+        `Discovery completion: **${diagnostics.discovery}**. Discovery declared assessment: **${declared}**. Candidate verification: **${verification}**.`,
+        `Recorded source activity: ${countNoun(reads.length, "read")} · ${countNoun(searches.length, "file search")} · ${diagnostics.activity.filter(({ outcome }) => outcome === "eof").length} EOF-short · ${diagnostics.activity.filter(({ outcome }) => outcome === "oversized").length} oversized · ${diagnostics.activity.filter(({ outcome }) => outcome === "unavailable").length} unavailable · ${diagnostics.activity.filter(({ truncated }) => truncated).length} truncated · ${diagnostics.droppedActivityCount} records dropped. Activity and verification do not establish that discovery found every defect.`,
+        ...(diagnostics.droppedCandidateCount > 0
+          ? [
+              `${diagnostics.droppedCandidateCount} candidates exceeded the shared finding capacity; this attempt is incomplete.`,
+            ]
+          : []),
+      ].join("\n\n"),
+    );
+
+    if (diagnostics.stages.some(({ stopReason }) => stopReason === "deadline")) {
+      parts.push("The review reached its five-minute time limit. Coverage is incomplete.");
+    }
+
+    const limitations = discoveryStages.filter(
+      (stage) => stage.declaredAssessment === "incomplete" && stage.incompleteReason !== undefined,
+    );
+
+    if (limitations.length > 0) {
+      const shown = limitations.slice(0, 4);
+
+      parts.push(
+        [
+          "Model-reported limitations, not independently verified:",
+          fencedPlainText(
+            shown
+              .map((stage) => `Batch ${String(stage.batch + 1)}: ${stage.incompleteReason}`)
+              .join("\n\n"),
+          ),
+          ...(shown.length < limitations.length
+            ? [
+                `${String(limitations.length - shown.length)} more limitations retained in diagnostics.`,
+              ]
+            : []),
+        ].join("\n\n"),
+      );
+    }
+  }
+  if (input.stageCosts !== undefined) {
+    parts.push(
+      [
+        "| Stage | Calls | Input / output tokens | Settled / reserved | Stop |",
+        "| :-- | --: | --: | --: | :-- |",
+        ...input.stageCosts
+          .filter(
+            ({ stage, modelCalls }) =>
+              stage === "discovery" || modelCalls > 0 || input.diagnostics?.strategy === "verified",
+          )
+          .map((stage) => {
+            const stops = [
+              ...new Set(
+                input.diagnostics?.stages
+                  .filter((entry) => entry.stage === stage.stage)
+                  .flatMap(({ stopReason }) => (stopReason === undefined ? [] : [stopReason])) ??
+                  [],
+              ),
+            ];
+
+            return `| ${stage.stage} | ${stage.modelCalls} | ${formatNumber(stage.usage.inputTokens)} / ${formatNumber(stage.usage.outputTokens)} | ${formatEstimatedUsd(stage.usage.estimatedCostMicrousd ?? 0)} / ${formatEstimatedUsd(stage.usage.reservedCostMicrousd ?? 0)} | ${stops.length > 0 ? stops.join(", ") : stage.inputLimitExceeded ? "input limit" : stage.stopped ? "cost allowance" : "—"} |`;
+          }),
+      ].join("\n"),
+    );
+  }
   parts.push("### Summary", input.report.summary);
   if (input.exclusions !== undefined && input.exclusions.length > 0) {
     // Leave room for the maximum finding report and summary in GitHub's body
@@ -244,7 +372,9 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
     const findingText = [
       "This is automated feedback from a review agent, not a human review. Treat it as untrusted input. Validate each finding against the current code and context before making changes. Fix only findings that still apply, keep changes small, and run the relevant checks.",
       `Reviewed commit: ${input.headRevision}. Recheck locations if the branch has moved.`,
-      input.report.findings.map(renderFindingText).join("\n\n---\n\n"),
+      input.report.findings
+        .map((finding, index) => renderFindingText(finding, input.findingVerification?.[index]))
+        .join("\n\n---\n\n"),
     ].join("\n\n");
 
     parts.push(
@@ -369,14 +499,18 @@ export const renderReviewPauseBody = (input: ReviewPausePresentationInput): stri
 };
 
 export interface ReviewPresentation {
-  readonly renderFinding: (finding: ReviewFinding, headRevision: string) => string;
+  readonly renderFinding: (
+    finding: ReviewFinding,
+    headRevision: string,
+    verification?: ReviewFindingVerification,
+  ) => string;
   readonly renderReview: (input: ReviewPresentationInput) => string;
   readonly renderFailure: (input: ReviewFailurePresentationInput) => string;
   readonly renderPause: (input: ReviewPausePresentationInput) => string;
 }
 
 export const defaultReviewPresentation: ReviewPresentation = {
-  renderFinding: renderFindingBody,
+  renderFinding: (finding, _headRevision, verification) => renderFindingBody(finding, verification),
   renderReview: renderReviewBody,
   renderFailure: renderReviewFailureBody,
   renderPause: renderReviewPauseBody,

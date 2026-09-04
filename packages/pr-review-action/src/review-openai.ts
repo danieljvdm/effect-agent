@@ -2,6 +2,8 @@ import { type RunCostEstimator } from "@effect-agent/engine/RunOptions";
 import {
   type ReviewCostControl,
   ReviewCostSnapshot,
+  type ReviewStage,
+  type ReviewStrategy,
   ReviewUsage,
 } from "@effect-agent/pr-review/Review";
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
@@ -11,11 +13,13 @@ import { HttpBody, HttpClientError, HttpClientResponse } from "effect/unstable/h
 
 /** Strictly below one dollar, including outstanding reservations. Not configurable upward. */
 export const REVIEW_COST_LIMIT_MICROUSD = 999_999;
-const MAX_INPUT_TOKENS = 128_000;
-const MAX_OUTPUT_TOKENS = 32_000;
-const PRICING_VERSION = "openai-standard-2026-08-30";
+export const REVIEW_DISCOVERY_COST_LIMIT_MICROUSD = 699_999;
+export const REVIEW_VERIFICATION_RESERVE_MICROUSD = 300_000;
+export const REVIEW_MAX_INPUT_TOKENS = 128_000;
+export const REVIEW_MAX_OUTPUT_TOKENS = 32_000;
+export const REVIEW_PRICING_VERSION = "openai-standard-2026-08-30";
 // Refresh the rate card before Sol's guaranteed promotional window ends.
-const PRICING_VALID_UNTIL = 1_795_305_600_000; // 2026-11-22T00:00:00Z
+export const REVIEW_PRICING_VALID_UNTIL = 1_795_305_600_000; // 2026-11-22T00:00:00Z
 
 interface Pricing {
   readonly label: string;
@@ -89,7 +93,7 @@ export const reviewCostEstimator =
     Effect.succeed({
       costMicrousd: estimateGpt56CostMicrousd(model, usage) ?? 0,
       serviceTier: "default",
-      pricingVersion: PRICING_VERSION,
+      pricingVersion: REVIEW_PRICING_VERSION,
     });
 
 const CacheBreakpoint = Schema.Struct({ mode: Schema.Literal("explicit") });
@@ -98,6 +102,8 @@ const CacheOptions = Schema.Struct({
   mode: Schema.Literal("explicit"),
   ttl: Schema.Literal("30m"),
 });
+
+export const REVIEW_CACHE_POLICY = CacheOptions.make({ mode: "explicit", ttl: "30m" });
 
 const InputTokenCount = Schema.Struct({
   object: Schema.Literal("response.input_tokens"),
@@ -142,7 +148,7 @@ const cacheContent = (content: string | ReadonlyArray<OpenAiSchema.InputContent>
 export const withReviewPromptCache = (payload: Payload, key: string) => ({
   ...payload,
   prompt_cache_key: key,
-  prompt_cache_options: CacheOptions.make({ mode: "explicit", ttl: "30m" }),
+  prompt_cache_options: REVIEW_CACHE_POLICY,
   input:
     typeof payload.input === "string"
       ? [{ role: "user" as const, content: cacheContent(payload.input) }]
@@ -183,18 +189,17 @@ const admissionError = (description: string) =>
 
 interface Reservation {
   readonly id: number;
+  readonly stage: ReviewStage;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly microusd: number;
   readonly outputLimitedByCost: boolean;
 }
 
-interface Spending {
+interface StageSpending {
   readonly stopped: boolean;
   readonly inputLimitExceeded: boolean;
-  readonly closed: boolean;
   readonly modelCalls: number;
-  readonly pending: ReadonlyMap<number, Reservation>;
   readonly input: number;
   readonly read: number;
   readonly write: number;
@@ -202,14 +207,50 @@ interface Spending {
   readonly cost: number;
 }
 
-const reservedCost = (state: Spending) =>
-  [...state.pending.values()].reduce((total, item) => total + item.microusd, 0);
+interface Spending {
+  readonly stage: ReviewStage;
+  readonly closed: boolean;
+  readonly stages: Readonly<Record<ReviewStage, StageSpending>>;
+  readonly pending: ReadonlyMap<number, Reservation>;
+}
+
+const emptyStage = (): StageSpending => ({
+  stopped: false,
+  inputLimitExceeded: false,
+  modelCalls: 0,
+  input: 0,
+  read: 0,
+  write: 0,
+  output: 0,
+  cost: 0,
+});
+
+const totals = (state: Spending) => {
+  const discovery = state.stages.discovery;
+  const verification = state.stages.verification;
+
+  return {
+    modelCalls: discovery.modelCalls + verification.modelCalls,
+    input: discovery.input + verification.input,
+    read: discovery.read + verification.read,
+    write: discovery.write + verification.write,
+    output: discovery.output + verification.output,
+    cost: discovery.cost + verification.cost,
+  };
+};
+
+const reservedCost = (state: Spending, stage?: ReviewStage) =>
+  [...state.pending.values()].reduce(
+    (total, item) => total + (stage === undefined || stage === item.stage ? item.microusd : 0),
+    0,
+  );
 
 /** One ephemeral review's client and spending ledger. Never share it between review attempts. */
 export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options: {
   readonly client: OpenAiClient.Service;
   readonly model: string;
   readonly cacheKey: string;
+  readonly strategy?: ReviewStrategy;
 }) {
   const pricing = reviewModelPricing(options.model);
 
@@ -218,16 +259,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   }
 
   const state = yield* Ref.make<Spending>({
-    stopped: false,
-    inputLimitExceeded: false,
+    stage: "discovery",
     closed: false,
-    modelCalls: 0,
+    stages: { discovery: emptyStage(), verification: emptyStage() },
     pending: new Map(),
-    input: 0,
-    read: 0,
-    write: 0,
-    output: 0,
-    cost: 0,
   });
 
   const admissions = yield* Semaphore.make(1);
@@ -235,6 +270,24 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 
   const refuse = (message: string) =>
     close.pipe(Effect.andThen(Effect.fail(admissionError(message))));
+
+  const stopStage = (stage: ReviewStage, inputLimitExceeded = false) =>
+    Ref.update(state, (current) => ({
+      ...current,
+      stages: {
+        ...current.stages,
+        [stage]: {
+          ...current.stages[stage],
+          stopped: !inputLimitExceeded || current.stages[stage].stopped,
+          inputLimitExceeded: inputLimitExceeded || current.stages[stage].inputLimitExceeded,
+        },
+      },
+    }));
+
+  const stageLimit = (stage: ReviewStage) =>
+    options.strategy === "verified" && stage === "discovery"
+      ? REVIEW_DISCOVERY_COST_LIMIT_MICROUSD
+      : REVIEW_COST_LIMIT_MICROUSD;
 
   const countAttempt = Effect.fn("ReviewOpenAi.countAttempt")(function* (payload: Payload) {
     // This endpoint does no inference. Count the exact outgoing token-affecting
@@ -287,7 +340,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const now = yield* Clock.currentTimeMillis;
 
     if (
-      now >= PRICING_VALID_UNTIL ||
+      now >= REVIEW_PRICING_VALID_UNTIL ||
       original.model !== options.model ||
       original.service_tier !== "default" ||
       original.store !== false ||
@@ -298,14 +351,18 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       original.tools?.some((tool) => tool.type !== "function") ||
       !Number.isSafeInteger(original.max_output_tokens) ||
       (original.max_output_tokens ?? 0) < 16 ||
-      (original.max_output_tokens ?? 0) > MAX_OUTPUT_TOKENS
+      (original.max_output_tokens ?? 0) > REVIEW_MAX_OUTPUT_TOKENS
     ) {
       return yield* refuse("The review request is outside the verified pricing contract.");
     }
     const before = yield* Ref.get(state);
 
     if (before.closed) return yield* refuse("Review spending admission has already stopped.");
-    const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
+    if (before.stages[before.stage].stopped || before.stages[before.stage].inputLimitExceeded)
+      return yield* admissionError("This review stage has already stopped.");
+    const beforeTotals = totals(before);
+    const allowance = stageLimit(before.stage);
+    const balance = allowance - beforeTotals.cost - reservedCost(before);
 
     // Outgoing-only host feedback. Count these exact bytes before reserving or
     // dispatching; withReviewPromptCache leaves run-status outside the cache.
@@ -313,7 +370,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     // a token allowance calculated for an earlier or smaller prompt.
     const spendingStatus = [
       "<run-status>",
-      `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
+      `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(allowance / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(beforeTotals.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
       `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(2)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
       "</run-status>",
     ].join("\n");
@@ -336,17 +393,20 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       Effect.catch(() => refuse("Unable to count the review input before paid inference.")),
     );
 
-    if (inputTokens > MAX_INPUT_TOKENS) {
-      yield* Ref.update(state, (current) => ({ ...current, inputLimitExceeded: true }));
+    if (inputTokens > REVIEW_MAX_INPUT_TOKENS) {
+      yield* stopStage(before.stage, true);
       yield* Effect.logInfo("Review input-token limit reached before dispatch", {
-        modelCalls: before.modelCalls,
+        stage: before.stage,
+        modelCalls: beforeTotals.modelCalls,
         inputTokens,
-        inputTokenLimit: MAX_INPUT_TOKENS,
+        inputTokenLimit: REVIEW_MAX_INPUT_TOKENS,
       });
 
-      return yield* refuse("The counted review input exceeds the 128,000-token price boundary.");
+      return yield* admissionError(
+        "The counted review input exceeds the 128,000-token price boundary.",
+      );
     }
-    const requestedOutputTokens = original.max_output_tokens ?? MAX_OUTPUT_TOKENS;
+    const requestedOutputTokens = original.max_output_tokens ?? REVIEW_MAX_OUTPUT_TOKENS;
 
     const outputTokens = Math.min(
       requestedOutputTokens,
@@ -354,18 +414,20 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     );
 
     if (outputTokens < 16) {
-      yield* Ref.update(state, (current) => ({ ...current, stopped: true }));
+      yield* stopStage(before.stage);
       yield* Effect.logInfo("Review spending limit reached before dispatch", {
-        modelCalls: before.modelCalls,
+        stage: before.stage,
+        modelCalls: beforeTotals.modelCalls,
         inputTokens,
         remainingCostMicrousd: balance,
         minimumRequestCostMicrousd: Math.ceil(
           (inputTokens * pricing.write + 16 * pricing.output) / 100,
         ),
         costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+        stageCostLimitMicrousd: allowance,
       });
 
-      return yield* refuse("No paid request fits; deliver recorded findings without inference.");
+      return yield* admissionError("No paid request fits this stage's remaining allowance.");
     }
     // A smaller output allowance still permits research. Only a refused request or a
     // response truncated by this cost limit stops the review; tool choice stays native.
@@ -373,7 +435,8 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const microusd = Math.ceil((inputTokens * pricing.write + outputTokens * pricing.output) / 100);
 
     const reservation: Reservation = {
-      id: before.modelCalls + 1,
+      id: beforeTotals.modelCalls + 1,
+      stage: before.stage,
       inputTokens,
       outputTokens,
       microusd,
@@ -384,17 +447,25 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 
     if (
       current.closed ||
-      current.cost + reservedCost(current) + microusd > REVIEW_COST_LIMIT_MICROUSD
+      current.stage !== before.stage ||
+      totals(current).cost + reservedCost(current) + microusd > allowance
     ) {
       return yield* refuse("The review's remaining spending allowance changed before dispatch.");
     }
     yield* Ref.update(state, (current) => ({
       ...current,
-      modelCalls: reservation.id,
+      stages: {
+        ...current.stages,
+        [reservation.stage]: {
+          ...current.stages[reservation.stage],
+          modelCalls: current.stages[reservation.stage].modelCalls + 1,
+        },
+      },
       pending: new Map([...current.pending, [reservation.id, reservation]]),
     }));
     yield* Effect.logInfo("Review request admitted", {
       modelCall: reservation.id,
+      stage: reservation.stage,
       toolDefinitions: payload.tools?.length ?? 0,
       inputTokens,
       requestedMaxOutputTokens: requestedOutputTokens,
@@ -403,9 +474,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       reservedCostMicrousd: microusd,
       remainingCostMicrousd: balance - microusd,
       costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+      stageCostLimitMicrousd: allowance,
       cacheMode: "explicit",
       serviceTier: "default",
-      pricingVersion: PRICING_VERSION,
+      pricingVersion: REVIEW_PRICING_VERSION,
     });
 
     return { payload: { ...payload, max_output_tokens: outputTokens }, reservation };
@@ -415,6 +487,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     reservation: Reservation,
     response: OpenAiSchema.Response,
   ) {
+    // Providers can emit the same terminal response more than once. A settled
+    // request cannot charge again or invalidate its already accepted accounting.
+    if (!(yield* Ref.get(state)).pending.has(reservation.id)) return;
+
     const usage = yield* Schema.decodeUnknownEffect(ChargedUsage)(response.usage).pipe(
       Effect.catch(() =>
         refuse("Provider usage is missing or invalid; retain its full reservation."),
@@ -454,6 +530,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const updated = yield* Ref.modify(state, (current) => {
       if (!current.pending.has(reservation.id)) return [false, current] as const;
       const pending = new Map(current.pending);
+      const stage = current.stages[reservation.stage];
 
       pending.delete(reservation.id);
 
@@ -462,25 +539,34 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         {
           ...current,
           pending,
-          stopped: current.stopped || outputLimitReached,
-          closed: current.closed || outputLimitReached,
-          input: current.input + usage.input_tokens,
-          read: current.read + read,
-          write: current.write + write,
-          output: current.output + usage.output_tokens,
-          cost: current.cost + cost,
+          stages: {
+            ...current.stages,
+            [reservation.stage]: {
+              ...stage,
+              stopped: stage.stopped || outputLimitReached,
+              input: stage.input + usage.input_tokens,
+              read: stage.read + read,
+              write: stage.write + write,
+              output: stage.output + usage.output_tokens,
+              cost: stage.cost + cost,
+            },
+          },
         },
       ] as const;
     });
 
     if (!updated) return;
-    const totals = yield* Ref.get(state);
+    const current = yield* Ref.get(state);
+    const total = totals(current);
 
     yield* Effect.logInfo("Review model usage", {
       modelCall: reservation.id,
+      stage: reservation.stage,
       functionCalls: response.output.filter((item) => item.type === "function_call").length,
       completionCalls: response.output.filter(
-        (item) => item.type === "function_call" && item.name === "submit_review",
+        (item) =>
+          item.type === "function_call" &&
+          (item.name === "submit_review" || item.name === "submit_verification"),
       ).length,
       inputTokens: usage.input_tokens,
       uncachedInputTokens: ordinary,
@@ -490,27 +576,49 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       outputLimitReached,
       cacheHitRatio: usage.input_tokens === 0 ? 0 : read / usage.input_tokens,
       estimatedCostMicrousd: cost,
-      cumulativeCostMicrousd: totals.cost,
-      reservedCostMicrousd: reservedCost(totals),
-      remainingCostMicrousd: REVIEW_COST_LIMIT_MICROUSD - totals.cost - reservedCost(totals),
+      cumulativeCostMicrousd: total.cost,
+      reservedCostMicrousd: reservedCost(current),
+      remainingCostMicrousd: REVIEW_COST_LIMIT_MICROUSD - total.cost - reservedCost(current),
     });
   });
 
+  const usageSnapshot = (amount: ReturnType<typeof totals>, reservedCostMicrousd: number) =>
+    ReviewUsage.make({
+      inputTokens: amount.input,
+      uncachedInputTokens: amount.input - amount.read - amount.write,
+      cachedInputTokens: amount.read,
+      cacheWriteInputTokens: amount.write,
+      outputTokens: amount.output,
+      estimatedCostMicrousd: amount.cost,
+      reservedCostMicrousd,
+    });
+
   const costControl: ReviewCostControl = {
+    beginStage: (stage) =>
+      Ref.update(state, (current) => {
+        if (stage === current.stage) return current;
+        if (current.stage === "verification" || options.strategy !== "verified")
+          return { ...current, closed: true };
+
+        return { ...current, stage };
+      }).pipe(admissions.withPermit),
     snapshot: Effect.map(Ref.get(state), (current) =>
       ReviewCostSnapshot.make({
-        stopped: current.stopped,
-        ...(current.inputLimitExceeded ? { inputLimitExceeded: true } : {}),
-        modelCalls: current.modelCalls,
-        usage: ReviewUsage.make({
-          inputTokens: current.input,
-          uncachedInputTokens: current.input - current.read - current.write,
-          cachedInputTokens: current.read,
-          cacheWriteInputTokens: current.write,
-          outputTokens: current.output,
-          estimatedCostMicrousd: current.cost,
-          reservedCostMicrousd: reservedCost(current),
-        }),
+        stage: current.stage,
+        globalStopped: current.closed,
+        stopped: current.stages[current.stage].stopped,
+        ...(current.stages[current.stage].inputLimitExceeded ? { inputLimitExceeded: true } : {}),
+        modelCalls: totals(current).modelCalls,
+        usage: usageSnapshot(totals(current), reservedCost(current)),
+        stages: (["discovery", "verification"] as const).map((stage) => ({
+          stage,
+          stopped: current.stages[stage].stopped,
+          ...(current.stages[stage].inputLimitExceeded
+            ? { inputLimitExceeded: true as const }
+            : {}),
+          modelCalls: current.stages[stage].modelCalls,
+          usage: usageSnapshot(current.stages[stage], reservedCost(current, stage)),
+        })),
       }),
     ),
   };
@@ -529,7 +637,9 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 
         return result;
       },
-      Effect.onExit((exit) => (Exit.isFailure(exit) ? close : Effect.void)),
+      Effect.onExit((exit) =>
+        Exit.hasDies(exit) || Exit.hasInterrupts(exit) ? close : Effect.void,
+      ),
     ),
     createResponseStream: Effect.fn("ReviewOpenAi.createResponseStream")(
       function* (original) {
@@ -565,10 +675,13 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
                 current.pending.has(reservation.id) ? close : Effect.void,
               ),
             ),
+            Stream.onExit((exit) => (Exit.isFailure(exit) ? close : Effect.void)),
           ),
         ] as const;
       },
-      Effect.onExit((exit) => (Exit.isFailure(exit) ? close : Effect.void)),
+      Effect.onExit((exit) =>
+        Exit.hasDies(exit) || Exit.hasInterrupts(exit) ? close : Effect.void,
+      ),
     ),
   });
 

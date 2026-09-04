@@ -3,6 +3,9 @@ import {
   makeReviewer,
   MAX_REVIEW_PATCH_CHARS,
   ReviewChange,
+  type ReviewCostSnapshot,
+  type ReviewDiagnostics,
+  ReviewDiagnosticsSink,
   ReviewFinding,
   type ReviewOutcome,
   ReviewReport,
@@ -12,6 +15,7 @@ import {
 import {
   ReviewContextError,
   ReviewFileList,
+  ReviewLineMatches,
   ReviewRepository,
   ReviewSource,
 } from "@effect-agent/pr-review/ReviewRepository";
@@ -42,6 +46,7 @@ import {
 } from "./github.ts";
 import {
   type ReviewCostEstimate,
+  type ReviewFindingVerification,
   ReviewExclusion,
   ReviewPresentation,
   withReviewMarker,
@@ -150,6 +155,91 @@ export const reviewPublicationFailure = (input: {
 
   return undefined;
 };
+
+/** Publication preserves original finding text; verifier labels cannot create a new blocker. */
+export const prepareReviewPublication = (
+  outcome: Pick<ReviewOutcome, "report" | "diagnostics">,
+) => {
+  const diagnostics = outcome.diagnostics;
+  const verified = diagnostics?.strategy === "verified";
+  const findings: Array<ReviewFinding> = [];
+  const findingVerification: Array<ReviewFindingVerification | undefined> = [];
+
+  for (const finding of outcome.report.findings) {
+    const candidate = diagnostics?.candidates.find(
+      ({ finding: original }) =>
+        original.path === finding.path &&
+        original.line === finding.line &&
+        original.severity === finding.severity &&
+        original.category === finding.category &&
+        original.title === finding.title &&
+        original.body === finding.body,
+    );
+
+    if (verified && candidate?.disposition === "refuted") continue;
+    findings.push(finding);
+    findingVerification.push(
+      !verified
+        ? undefined
+        : candidate?.disposition === "supported" && candidate.publication === "published"
+          ? "supported"
+          : "unresolved",
+    );
+  }
+
+  return {
+    report: ReviewReport.make({ ...outcome.report, findings }),
+    findingVerification,
+    blockingFindings: findings.filter(
+      (finding, index) =>
+        finding.severity === "blocking" && findingVerification[index] !== "unresolved",
+    ).length,
+    verificationIncomplete:
+      verified &&
+      ((diagnostics.verification !== "complete" && diagnostics.verification !== "skipped") ||
+        diagnostics.droppedCandidateCount > 0 ||
+        diagnostics.candidates.some(
+          ({ disposition }) => disposition === "unresolved" || disposition === "not-requested",
+        ) ||
+        findingVerification.includes("unresolved")),
+  };
+};
+
+const logReviewDiagnostics = Effect.fn("logReviewDiagnostics")(function* (
+  diagnostics: ReviewDiagnostics,
+) {
+  yield* Effect.logInfo("Review diagnostics", {
+    strategy: diagnostics.strategy,
+    requestDigest: diagnostics.requestDigest,
+    discovery: diagnostics.discovery,
+    verification: diagnostics.verification,
+    patchesSupplied: diagnostics.patchesSupplied,
+    droppedActivityCount: diagnostics.droppedActivityCount,
+    droppedCandidateCount: diagnostics.droppedCandidateCount,
+  });
+  for (const entry of diagnostics.activity) yield* Effect.logInfo("Review source activity", entry);
+  for (const stage of diagnostics.stages)
+    yield* Effect.logInfo("Review stage", {
+      stage: stage.stage,
+      batch: stage.batch,
+      completion: stage.completion,
+      declaredAssessment: stage.declaredAssessment,
+      stopReason: stage.stopReason,
+      modelCalls: stage.modelCalls,
+      toolCalls: stage.toolCalls,
+      usage: stage.usage,
+      suppliedPaths: stage.suppliedPaths,
+    });
+  for (const candidate of diagnostics.candidates) {
+    yield* Effect.logInfo("Review candidate disposition", {
+      id: candidate.id,
+      batch: candidate.batch,
+      severity: candidate.finding.severity,
+      disposition: candidate.disposition,
+      publication: candidate.publication,
+    });
+  }
+});
 
 const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
   entries: ReadonlyArray<readonly [string, string | number]>,
@@ -521,6 +611,7 @@ const reviewContextFailure = (message: string): ReviewContextError =>
 
 type ReviewReadFileInput = Parameters<ReviewRepository["Service"]["readFile"]>[0];
 type ReviewFindFilesInput = Parameters<ReviewRepository["Service"]["findFiles"]>[0];
+type ReviewFindInFileInput = Parameters<ReviewRepository["Service"]["findInFile"]>[0];
 
 /** Bind model context reads to the exact verified base and head trees. */
 export const makeReviewRepository = (input: {
@@ -539,22 +630,25 @@ export const makeReviewRepository = (input: {
   const isReadableEntry = (entry: ReturnType<RepositorySnapshot["entry"]>) =>
     entry?.type === "blob" && entry.mode !== "120000";
 
-  const readFile = Effect.fn("ReviewRepository.readFile")(function* (request: ReviewReadFileInput) {
-    if (outsideScope(request.path)) {
+  const readText = Effect.fn("ReviewRepository.readText")(function* (
+    path: string,
+    revision: "base" | "head",
+  ) {
+    if (outsideScope(path)) {
       return yield* reviewContextFailure(
         "The requested path is outside this review's source scope.",
       );
     }
-    const selected = snapshot(request.revision);
+    const selected = snapshot(revision);
 
-    if (!isReadableEntry(selected.entry(request.path))) {
+    if (!isReadableEntry(selected.entry(path))) {
       return yield* reviewContextFailure(
         "Text source is unavailable for the requested path and revision.",
       );
     }
 
-    const content = yield* selected
-      .readTextFile(request.path)
+    return yield* selected
+      .readTextFile(path)
       .pipe(
         Effect.mapError(() =>
           reviewContextFailure(
@@ -562,8 +656,19 @@ export const makeReviewRepository = (input: {
           ),
         ),
       );
+  });
 
-    return yield* ReviewSource.fromText(request, content);
+  const readFile = Effect.fn("ReviewRepository.readFile")(function* (request: ReviewReadFileInput) {
+    return yield* ReviewSource.fromText(request, yield* readText(request.path, request.revision));
+  });
+
+  const findInFile = Effect.fn("ReviewRepository.findInFile")(function* (
+    request: ReviewFindInFileInput,
+  ) {
+    return yield* ReviewLineMatches.fromText(
+      request,
+      yield* readText(request.path, request.revision),
+    );
   });
 
   const findFiles = (request: ReviewFindFilesInput) => {
@@ -584,7 +689,7 @@ export const makeReviewRepository = (input: {
     );
   };
 
-  return ReviewRepository.of({ readFile, findFiles });
+  return ReviewRepository.of({ readFile, findFiles, findInFile });
 };
 
 export const reviewEventFor = (blockingFindings: number): "COMMENT" | "REQUEST_CHANGES" =>
@@ -822,6 +927,7 @@ export const reviewActionProgram = Effect.gen(function* () {
 
     if (surface.changes.length === 0) {
       const resolutions: ReadonlyArray<ReviewResolution> = [];
+      const findingVerification: ReadonlyArray<ReviewFindingVerification | undefined> = [];
 
       return {
         resolutions,
@@ -830,6 +936,10 @@ export const reviewActionProgram = Effect.gen(function* () {
         modelTurns: 0,
         exhausted: undefined,
         incomplete: false,
+        diagnostics: undefined,
+        stageCosts: undefined,
+        findingVerification,
+        blockingFindings: 0,
         inputTokens: 0,
         uncachedInputTokens: 0,
         cachedInputTokens: 0,
@@ -862,9 +972,11 @@ export const reviewActionProgram = Effect.gen(function* () {
       client: yield* OpenAiClient.make({ apiKey: yield* Config.redacted("OPENAI_API_KEY") }),
       model: modelName,
       cacheKey: `pr-review-v2:${pull.headRevision}`,
+      strategy: "baseline",
     });
 
     const reviewer = makeReviewer({
+      strategy: "baseline",
       model: OpenAiLanguageModel.model(modelName, {
         max_output_tokens: 32_000,
         store: false,
@@ -893,6 +1005,7 @@ export const reviewActionProgram = Effect.gen(function* () {
         }),
       )
       .pipe(
+        Effect.provide(Layer.succeed(ReviewDiagnosticsSink, { record: logReviewDiagnostics })),
         Effect.provideService(ReviewRepository, reviewRepository),
         Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
         Effect.onExit(() =>
@@ -902,6 +1015,8 @@ export const reviewActionProgram = Effect.gen(function* () {
                 modelCalls: snapshot.modelCalls,
                 costLimited: snapshot.stopped,
                 inputLimited: snapshot.inputLimitExceeded === true,
+                globalStopped: snapshot.globalStopped,
+                stages: snapshot.stages,
                 ...snapshot.usage,
                 costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
               }),
@@ -909,6 +1024,9 @@ export const reviewActionProgram = Effect.gen(function* () {
           ),
         ),
       );
+
+    const publication = prepareReviewPublication(result);
+    const stageCosts: ReviewCostSnapshot["stages"] = (yield* provider.costControl.snapshot).stages;
 
     const pending = new Set(result.pendingPaths ?? []);
 
@@ -926,7 +1044,11 @@ export const reviewActionProgram = Effect.gen(function* () {
       },
       modelTurns: result.turns,
       exhausted: result.exhausted,
-      incomplete: result.incomplete === true,
+      incomplete: result.incomplete === true || publication.verificationIncomplete,
+      diagnostics: result.diagnostics,
+      stageCosts,
+      findingVerification: publication.findingVerification,
+      blockingFindings: publication.blockingFindings,
       inputTokens: result.usage.inputTokens,
       uncachedInputTokens: result.usage.uncachedInputTokens,
       cachedInputTokens: result.usage.cachedInputTokens,
@@ -934,7 +1056,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       outputTokens: result.usage.outputTokens,
       estimatedCostMicrousd: result.usage.estimatedCostMicrousd,
       reservedCostMicrousd: result.usage.reservedCostMicrousd ?? 0,
-      report: reanchorToFullPullRequest(fullFiles, result.report),
+      report: reanchorToFullPullRequest(fullFiles, publication.report),
     };
   }).pipe(Effect.exit);
 
@@ -1013,6 +1135,10 @@ export const reviewActionProgram = Effect.gen(function* () {
     incomplete,
     resolutions,
     followUps,
+    diagnostics,
+    stageCosts,
+    findingVerification,
+    blockingFindings: blocking,
   } = attemptExit.value;
 
   const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
@@ -1027,8 +1153,6 @@ export const reviewActionProgram = Effect.gen(function* () {
           label: pricing.label,
           url: pricing.url,
         };
-
-  const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
 
   // Only positive verification from a complete, nonblocking pass can retire prior feedback.
   // Dismissals retain the inspected commit and evidence even if later publication fails.
@@ -1088,9 +1212,12 @@ export const reviewActionProgram = Effect.gen(function* () {
   const body = withReviewMarker(
     presentation.renderReview({
       report,
+      findingVerification,
+      diagnostics,
+      stageCosts,
       automaticReviewsRemaining: selection.automaticReviewsRemaining,
       scope,
-      reviewedFiles: surface.changes.length,
+      suppliedPatches: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
       exclusions: surface.exclusions,
       ignoredFiles: surface.ignoredPaths.length,
@@ -1117,14 +1244,18 @@ export const reviewActionProgram = Effect.gen(function* () {
       commitId: pull.headRevision,
       event: reviewEventFor(blocking),
       body,
-      comments: report.findings.flatMap((finding) =>
+      comments: report.findings.flatMap((finding, index) =>
         finding.line === undefined
           ? []
           : [
               {
                 path: finding.path,
                 line: finding.line,
-                body: presentation.renderFinding(finding, pull.headRevision),
+                body: presentation.renderFinding(
+                  finding,
+                  pull.headRevision,
+                  findingVerification[index],
+                ),
               },
             ],
       ),

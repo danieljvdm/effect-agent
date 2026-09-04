@@ -409,8 +409,10 @@
     {
       "version": 1,
       "id": "effect-agent-65-0f4d8ff",
+      "oracleVersion": 2,
+      "oracleDigest": "2868639810d4260888be017efbeac5c41b46d97e7bbf4bd960a0a49e168ab92e",
       "kind": "known-defects",
-      "provenance": "Public PR #65 full-diff snapshot at 0f4d8ff, reconstructed from the exact Git compare and unchanged PR title/body. All 12 admitted text patches are included; bun.lock is omitted under the original reviewer's generated-file ignore policy. The newly added request-size guard was independently checked with the exact historical parsing function against a streamed 131122-byte body; the subsequent fix rejects that body before durable submission. This oracle covers the incomplete guard, not a newly introduced buffering behavior. After the rejected #191 screen, source-assisted adjudication added one nonblocking seeding defect as a corpus repair, not a blocker win; no SQL payload was executed.",
+      "provenance": "Public PR #65 full-diff snapshot at 0f4d8ff, reconstructed from the exact Git compare and unchanged PR title/body. All 12 admitted text patches are included; bun.lock is omitted under the original reviewer's generated-file ignore policy. The newly added request-size guard was independently checked with the exact historical parsing function against a streamed 131122-byte body; the subsequent fix rejects that body before durable submission. This oracle covers the incomplete guard, not a newly introduced buffering behavior. After the rejected #191 screen, source-assisted adjudication added one nonblocking seeding defect as a corpus repair, not a blocker win; no SQL payload was executed. Oracle version 2 retains the body-size guard defect as important without claiming demonstrated exhaustion, and restricts the seeding defect to concurrent first D1 requests because partial-seed failure already existed before this change.",
       "sourceUrl": "https://github.com/danieljvdm/effect-agent/pull/65",
       "inputDigest": "de62e498e041a7dadb7cae7457ad7dbfbf48a6396f6baa3e23abc0246cbf1daf",
       "request": {
@@ -473,7 +475,7 @@
       "expectedDefects": [
         {
           "id": "request-size-guard-accepts-streamed-oversize-body",
-          "severity": "blocking",
+          "severity": "important",
           "invariant": "The newly introduced /ask request-size guard must enforce MAX_BODY_BYTES on bytes actually consumed. A supported streamed request larger than 65536 bytes must be rejected before database seeding or durable submission, even when Content-Length is absent.",
           "evidence": [
             {
@@ -501,7 +503,7 @@
         {
           "id": "invoice-seeding-is-not-atomic",
           "severity": "important",
-          "invariant": "Per-request invoice seeding must converge to one complete seed set under concurrent calls and partial failure.",
+          "invariant": "Per-request invoice seeding must converge to one complete seed set under concurrent first requests.",
           "evidence": [
             {
               "path": "examples/code-mode-cloudflare/src/worker.ts",
@@ -516,7 +518,7 @@
             {
               "path": "examples/code-mode-cloudflare/src/db.ts",
               "line": 56,
-              "description": "The count check and inserts are separate operations: two requests can both observe zero and insert two seed sets, while failure after one insert makes later calls skip the missing rows."
+              "description": "The count check and inserts are separate operations: two concurrent first requests can both observe zero and insert two seed sets."
             },
             {
               "path": "examples/code-mode-cloudflare/src/profiles.ts",

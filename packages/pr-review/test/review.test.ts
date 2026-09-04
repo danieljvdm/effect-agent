@@ -3,6 +3,8 @@ import {
   makeReviewer,
   ReviewChange,
   ReviewCostSnapshot,
+  type ReviewDiagnostics,
+  ReviewDiagnosticsSink,
   ReviewFinding,
   ReviewFollowUp,
   ReviewResolution,
@@ -14,14 +16,27 @@ import {
 import {
   ReviewContextError,
   ReviewFileList,
+  ReviewLineMatches,
   ReviewRepository,
   ReviewSource,
 } from "@effect-agent/pr-review/ReviewRepository";
-import { describe, expect, expectTypeOf, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Layer, Ref, Result, Stream, Struct } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, expectTypeOf, layer } from "@effect/vitest";
+import {
+  type Crypto,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Ref,
+  Result,
+  Stream,
+  Struct,
+} from "effect";
 import { TestClock } from "effect/testing";
 import {
-  type AiError,
+  AiError,
   LanguageModel,
   Model,
   type Prompt,
@@ -93,6 +108,7 @@ const scriptedModel = (
 const emptyRepository = ReviewRepository.of({
   readFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
   findFiles: () => Effect.succeed(ReviewFileList.make({ paths: [], truncated: false })),
+  findInFile: () => Effect.fail(ReviewContextError.make({ message: "Source unavailable" })),
 });
 
 const largeRequest = (count: number, patchCharacters = 70_014) =>
@@ -177,7 +193,102 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
     )
     .at(0) ?? "";
 
-describe("review output boundary", () => {
+const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop);
+
+layer(testLayer)("review output boundary", (it) => {
+  it.effect(
+    "follows a literal match to a late definition without retaining the query or source in activity",
+    () =>
+      Effect.gen(function* () {
+        const source = `${"unrelated\n".repeat(3_152)}const privateLookup = () => 1;\n`;
+        let calls = 0;
+
+        const outcome = yield* makeReviewer({
+          model: scriptedModel((prompt) => {
+            calls += 1;
+            if (calls === 1)
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                {
+                  type: "tool-call",
+                  id: "locate",
+                  name: "find_in_file",
+                  params: {
+                    path: "src/provider.ts",
+                    revision: "base",
+                    literal: "privateLookup",
+                    startLine: 1,
+                  },
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ]);
+            if (calls === 2) {
+              const searches = prompt.content.flatMap((message) =>
+                message.role === "tool"
+                  ? message.content.filter(
+                      (part) => part.type === "tool-result" && part.name === "find_in_file",
+                    )
+                  : [],
+              );
+
+              expect(searches).toMatchObject([
+                {
+                  isFailure: false,
+                  result: {
+                    path: "src/provider.ts",
+                    revision: "base",
+                    lines: [3_153],
+                    truncated: false,
+                  },
+                },
+              ]);
+
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                {
+                  type: "tool-call",
+                  id: "definition",
+                  name: "read_file",
+                  params: {
+                    path: "src/provider.ts",
+                    revision: "base",
+                    startLine: 3_153,
+                    lineCount: 1,
+                  },
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ]);
+            }
+            expect(sourceResults(prompt).at(-1)).toMatchObject({
+              result: { content: "const privateLookup = () => 1;" },
+            });
+
+            return response({ findings: [] });
+          }),
+        })
+          .review(request)
+          .pipe(
+            Effect.provideService(ReviewRepository, {
+              ...emptyRepository,
+              findInFile: (input) => ReviewLineMatches.fromText(input, source),
+              readFile: (input) => ReviewSource.fromText(input, source),
+            }),
+          );
+
+        expect(calls).toBe(3);
+        expect(outcome.diagnostics?.stages[0]?.toolCalls).toBe(3);
+        expect(outcome.diagnostics?.activity).toMatchObject([
+          {
+            operation: "find_in_file",
+            revision: request.baseRevision,
+            path: "src/provider.ts",
+            returnedMatches: 1,
+            outcome: "success",
+          },
+          { operation: "read_file", returnedStartLine: 3_153, returnedEndLine: 3_153 },
+        ]);
+        expect(JSON.stringify(outcome.diagnostics?.activity)).not.toContain("privateLookup");
+      }),
+  );
+
   it.effect.each(["complete", "incomplete", "excluded", "cost", "omitted"] as const)(
     "returns only explicit resolutions after complete coverage: %s",
     (mode) =>
@@ -196,6 +307,8 @@ describe("review output boundary", () => {
                     findings: [],
                     ...(mode === "omitted" ? {} : { resolutions: [resolution] }),
                     incomplete: mode === "incomplete",
+                    incompleteReason:
+                      "The changed retry path still needs its helper implementation.",
                   }),
                 ),
               ),
@@ -219,7 +332,9 @@ describe("review output boundary", () => {
           }),
         );
 
-        expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+        expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
+          ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+        >();
         expectTypeOf<
           Extract<Effect.Error<typeof review>, ReviewVerificationError>
         >().toEqualTypeOf<ReviewVerificationError>();
@@ -229,11 +344,16 @@ describe("review output boundary", () => {
         );
 
         expect(outcome.resolutions ?? []).toEqual(mode === "complete" ? [resolution] : []);
+        expect(outcome.diagnostics?.stages[0]?.incompleteReason).toBe(
+          mode === "incomplete"
+            ? "The changed retry path still needs its helper implementation."
+            : undefined,
+        );
       }),
   );
 
   it.effect.each(["unknown", "duplicate", "out-of-scope"] as const)(
-    "rejects invalid resolutions without widening new-finding scope: %s",
+    "retains valid new findings and withholds resolutions after host rejection: %s",
     (mode) =>
       Effect.gen(function* () {
         const outcome = yield* makeReviewer({
@@ -242,15 +362,16 @@ describe("review output boundary", () => {
               findings:
                 mode === "out-of-scope"
                   ? [
+                      submittedFinding(blocker, 1),
                       submittedFinding(
                         ReviewFinding.make({ ...blocker, path: "src/unchanged.ts" }),
                         1,
                       ),
                     ]
-                  : [],
+                  : [submittedFinding(blocker, 1)],
               resolutions:
                 mode === "unknown"
-                  ? [{ ...resolution, id: "forged" }]
+                  ? [resolution, { ...resolution, id: "forged" }]
                   : mode === "duplicate"
                     ? [resolution, resolution]
                     : [resolution],
@@ -258,9 +379,16 @@ describe("review output boundary", () => {
           ),
         })
           .review(ReviewRequest.make({ ...request, followUps: [followUp] }))
-          .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.flip);
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-        expect(outcome._tag).toBe("ReviewVerificationError");
+        expect(outcome.report.findings).toEqual([blocker]);
+        expect(outcome.incomplete).toBe(true);
+        expect(outcome.resolutions).toBeUndefined();
+        expect(outcome.diagnostics?.stages[0]).toMatchObject({
+          completion: "incomplete",
+          stopReason: "invalid-submission",
+          declaredAssessment: "complete",
+        });
       }),
   );
 
@@ -306,7 +434,174 @@ describe("review output boundary", () => {
       expect(outcome.incomplete).toBe(true);
       expect(outcome.exhausted).toBeUndefined();
       expect(outcome.report.summary).toContain("remaining change has not been verified");
+      expect(outcome.diagnostics?.stages[0]?.declaredAssessment).toBe("incomplete");
+      expect(outcome.diagnostics?.stages[0]?.incompleteReason).toBeUndefined();
     }),
+  );
+
+  it.effect(
+    "continues later batches without clearing incomplete coverage or closing blockers",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const input = ReviewRequest.make({ ...largeRequest(3, 256_000), followUps: [followUp] });
+
+        const findings = input.changes.map(({ path }) =>
+          ReviewFinding.make({ ...blocker, path, line: 1 }),
+        );
+
+        const outcome = yield* makeReviewer({
+          costControl: costControl(calls),
+          model: scriptedModel((prompt) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+                const current = findings[call - 1]!;
+
+                expect(reviewInput(prompt)).toContain(current.path);
+                expect(reviewInput(prompt)).not.toContain(followUp.description);
+
+                return response({
+                  findings: [submittedFinding(current, 1)],
+                  incomplete: call === 1,
+                  incompleteReason:
+                    call === 1
+                      ? "The retry helper was unavailable; its failure cleanup remains unresolved."
+                      : "This complete batch must not retain a limitation.",
+                });
+              }),
+            ),
+          ),
+        })
+          .review(input)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(yield* Ref.get(calls)).toBe(3);
+        expect(outcome.report.findings).toEqual(findings);
+        expect(outcome.incomplete).toBe(true);
+        expect(outcome.resolutions).toBeUndefined();
+        expect(outcome.pendingPaths).toBeUndefined();
+        expect(outcome.exhausted).toBeUndefined();
+        expect(outcome.diagnostics?.candidates.map(({ batch }) => batch)).toEqual([0, 1, 2]);
+        expect(outcome.diagnostics?.stages.map(({ completion }) => completion)).toEqual([
+          "incomplete",
+          "complete",
+          "complete",
+        ]);
+        expect(outcome.diagnostics?.stages[0]?.stopReason).toBe("declared-incomplete");
+        expect(outcome.diagnostics?.stages.map(({ incompleteReason }) => incompleteReason)).toEqual(
+          [
+            "The retry helper was unavailable; its failure cleanup remains unresolved.",
+            undefined,
+            undefined,
+          ],
+        );
+      }),
+  );
+
+  it.effect.each([1, 2])(
+    "admits no later batch after exactly 24 accepted findings: %s batches",
+    (batchCount) =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const input = largeRequest(batchCount, 256_000);
+
+        const findings = Array.from({ length: 24 }, (_, index) =>
+          ReviewFinding.make({
+            ...blocker,
+            path: "src/part-0.ts",
+            line: 1,
+            title: `Independent cause ${String(index)}`,
+          }),
+        );
+
+        const outcome = yield* makeReviewer({
+          costControl: costControl(calls),
+          model: scriptedModel(() =>
+            Stream.unwrap(
+              Ref.update(calls, (count) => count + 1).pipe(
+                Effect.as(
+                  response({ findings: findings.map((entry) => submittedFinding(entry, 1)) }),
+                ),
+              ),
+            ),
+          ),
+        })
+          .review(input)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(yield* Ref.get(calls)).toBe(1);
+        expect(outcome.report.findings).toEqual(findings);
+        expect(outcome.incomplete).toBe(batchCount === 1 ? undefined : true);
+        expect(outcome.pendingPaths).toEqual(batchCount === 1 ? undefined : ["src/part-1.ts"]);
+        expect(outcome.diagnostics?.droppedCandidateCount).toBe(0);
+        expect(outcome.diagnostics?.stages).toMatchObject([
+          { completion: "complete", declaredAssessment: "complete" },
+        ]);
+      }),
+  );
+
+  it.effect.each(["provider", "native", "finding", "resolution", "cost"] as const)(
+    "stops later batches after %s failure despite an earlier incomplete assessment",
+    (failure) =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const control = costControl(calls);
+        const first = ReviewFinding.make({ ...blocker, path: "src/part-0.ts", line: 1 });
+
+        const outcome = yield* makeReviewer({
+          costControl: {
+            snapshot: control.snapshot.pipe(
+              Effect.map((snapshot) =>
+                ReviewCostSnapshot.make({
+                  ...snapshot,
+                  stopped: failure === "cost" && snapshot.modelCalls >= 2,
+                }),
+              ),
+            ),
+          },
+          model: scriptedModel(() =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+
+                if (call === 1)
+                  return response({ findings: [submittedFinding(first, 1)], incomplete: true });
+                if (failure === "provider")
+                  return Stream.fail(
+                    AiError.make({
+                      module: "scripted",
+                      method: "streamText",
+                      reason: new AiError.RateLimitError({}),
+                    }),
+                  );
+                if (failure === "native") return response({ malformed: true });
+
+                return response({
+                  findings: failure === "finding" ? [submittedFinding(blocker, 1)] : [],
+                  ...(failure === "resolution" ? { resolutions: [resolution] } : {}),
+                });
+              }),
+            ),
+          ),
+        })
+          .review(largeRequest(3, 256_000))
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(yield* Ref.get(calls)).toBe(2);
+        expect(outcome.report.findings).toEqual([first]);
+        expect(outcome.incomplete).toBe(true);
+        expect(outcome.resolutions).toBeUndefined();
+        expect(outcome.pendingPaths).toEqual(["src/part-2.ts"]);
+        expect(outcome.exhausted).toBe(failure === "cost" ? "cost" : undefined);
+        expect(outcome.diagnostics?.stages.at(-1)?.stopReason).toBe(
+          failure === "cost"
+            ? "cost"
+            : failure === "provider" || failure === "native"
+              ? "failure"
+              : "invalid-submission",
+        );
+      }),
   );
 
   it.effect("PRR-002 completes one native review and keeps independent same-line blockers", () =>
@@ -318,6 +613,7 @@ describe("review output boundary", () => {
         expect(tools.map((tool) => tool.name)).toEqual([
           "read_file",
           "find_files",
+          "find_in_file",
           "record_finding",
           "submit_review",
         ]);
@@ -342,6 +638,20 @@ describe("review output boundary", () => {
           expect(schema).not.toContain('"severity"');
           expect(schema.indexOf('"body"')).toBeLessThan(schema.indexOf('"priority"'));
         }
+        const lookup = tools.find((tool) => tool.name === "find_in_file");
+
+        expect(lookup).toBeDefined();
+        if (lookup !== undefined) {
+          const schema = Tool.getJsonSchema(lookup, { transformer: toCodecOpenAI });
+
+          expect(schema).toMatchObject({
+            required: ["path", "revision", "literal", "startLine"],
+            properties: {
+              literal: { type: "string" },
+              startLine: { type: "integer", minimum: 1, maximum: 1_000_000 },
+            },
+          });
+        }
 
         return Stream.unwrap(
           Ref.update(calls, (count) => count + 1).pipe(
@@ -365,7 +675,9 @@ describe("review output boundary", () => {
         estimateCostMicrousd: () => Effect.succeed(123),
       }).review(request);
 
-      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
+        ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+      >();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       expectTypeOf<
         Extract<Effect.Error<typeof review>, AiError.AiError | ReviewVerificationError>
@@ -373,6 +685,7 @@ describe("review output boundary", () => {
       const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
       expect(yield* Ref.get(calls)).toBe(1);
+      expect(outcome.diagnostics?.stages[0]?.declaredAssessment).toBe("complete");
       expect(outcome.report.findings).toEqual([
         blocker,
         otherBlocker,
@@ -626,7 +939,7 @@ describe("review output boundary", () => {
       }),
   );
 
-  it.effect("PRR-002 rejects a finding that does not name a causative changed path", () =>
+  it.effect("PRR-002 returns empty incomplete coverage for an invalid-only final submission", () =>
     Effect.gen(function* () {
       const model = scriptedModel(() =>
         response({
@@ -636,37 +949,48 @@ describe("review output boundary", () => {
         }),
       );
 
-      const result = yield* makeReviewer({ model })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
-
-      expect(Result.isFailure(result) && result.failure._tag).toBe("ReviewVerificationError");
-    }),
-  );
-
-  it.effect("PRR-002 demotes invalid anchors and removes only exact duplicates", () =>
-    Effect.gen(function* () {
-      const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
-      const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
-
-      const model = scriptedModel(() =>
-        response({
-          findings: [
-            submittedFinding(blocker, 0),
-            submittedFinding(invalid, 1),
-            submittedFinding(topLevel, 1),
-            submittedFinding(invalid, 1),
-            submittedFinding(blocker, 0),
-          ],
-        }),
-      );
-
       const outcome = yield* makeReviewer({ model })
         .review(request)
         .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(outcome.report.findings).toEqual([blocker, topLevel]);
+      expect(outcome.report.findings).toEqual([]);
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.resolutions).toBeUndefined();
+      expect(outcome.diagnostics?.stages[0]).toMatchObject({
+        completion: "incomplete",
+        stopReason: "invalid-submission",
+        declaredAssessment: "complete",
+      });
     }),
+  );
+
+  it.effect(
+    "PRR-002 demotes invalid anchors and retains the first anchor for repeated claims",
+    () =>
+      Effect.gen(function* () {
+        const topLevel = ReviewFinding.make(Struct.omit(otherBlocker, ["line"]));
+        const invalid = ReviewFinding.make({ ...otherBlocker, line: 999 });
+
+        const model = scriptedModel(() =>
+          response({
+            findings: [
+              submittedFinding(blocker, 0),
+              submittedFinding(ReviewFinding.make({ ...blocker, line: 4 }), 0),
+              submittedFinding(ReviewFinding.make(Struct.omit(blocker, ["line"])), 0),
+              submittedFinding(invalid, 1),
+              submittedFinding(topLevel, 1),
+              submittedFinding(invalid, 1),
+              submittedFinding(blocker, 0),
+            ],
+          }),
+        );
+
+        const outcome = yield* makeReviewer({ model })
+          .review(request)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(outcome.report.findings).toEqual([blocker, topLevel]);
+      }),
   );
 
   it.effect.each([24, 25])("PRR-002 enforces the native finding bound: %s", (count) =>
@@ -713,43 +1037,46 @@ describe("review output boundary", () => {
     }),
   );
 
-  it.effect("preserves recorded findings when a later completion fails validation", () =>
-    Effect.gen(function* () {
-      let calls = 0;
+  it.effect.each([false, true])(
+    "preserves recorded findings when completion omits them; invalid=%s",
+    (invalid) =>
+      Effect.gen(function* () {
+        let calls = 0;
 
-      const model = scriptedModel(() => {
-        calls += 1;
+        const model = scriptedModel(() => {
+          calls += 1;
 
-        return calls === 1
-          ? Stream.fromIterable([
-              {
-                type: "tool-call",
-                id: "saved",
-                name: "record_finding",
-                params: submittedFinding(blocker, 1),
-              },
-              { type: "finish", reason: "tool-calls", usage },
-            ])
-          : response({
-              findings: [
-                submittedFinding(
-                  ReviewFinding.make({ ...otherBlocker, path: "src/unchanged.ts" }),
-                  1,
-                ),
-              ],
-            });
-      });
+          return calls === 1
+            ? Stream.fromIterable([
+                {
+                  type: "tool-call",
+                  id: "saved",
+                  name: "record_finding",
+                  params: submittedFinding(blocker, 1),
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ])
+            : response({
+                findings: invalid
+                  ? [
+                      submittedFinding(
+                        ReviewFinding.make({ ...otherBlocker, path: "src/unchanged.ts" }),
+                        1,
+                      ),
+                    ]
+                  : [],
+              });
+        });
 
-      const outcome = yield* makeReviewer({ model })
-        .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+        const outcome = yield* makeReviewer({ model })
+          .review(request)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(calls).toBe(2);
-      expect(outcome.incomplete).toBe(true);
-      expect(outcome.exhausted).toBeUndefined();
-      expect(outcome.report.findings).toEqual([blocker]);
-      expect(outcome.report.summary).toContain("remaining change has not been verified");
-    }),
+        expect(calls).toBe(2);
+        expect(outcome.incomplete).toBe(invalid ? true : undefined);
+        expect(outcome.exhausted).toBeUndefined();
+        expect(outcome.report.findings).toEqual([blocker]);
+      }),
   );
 
   it.effect("PRR-002 retains headers, mode metadata, and complete deletion hunks", () =>
@@ -849,7 +1176,9 @@ new mode 100755`;
         costControl: costControl(calls),
       }).review(input);
 
-      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<ReviewRepository>();
+      expectTypeOf<Effect.Services<typeof review>>().toEqualTypeOf<
+        ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+      >();
       expectTypeOf<Effect.Error<typeof review>>().not.toBeAny();
       const outcome = yield* review.pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
@@ -860,48 +1189,58 @@ new mode 100755`;
     }),
   );
 
-  it.effect("does not renew the tool allowance when the next patch batch starts", () =>
-    Effect.gen(function* () {
-      const calls = yield* Ref.make(0);
-      const reads = yield* Ref.make(0);
-      const input = largeRequest(9);
+  it.effect.each(["find_files", "find_in_file"] as const)(
+    "does not renew the %s allowance when the next patch batch starts",
+    (operation) =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const reads = yield* Ref.make(0);
+        const input = largeRequest(9);
 
-      const model = scriptedModel((_prompt, _tools, choice) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+        const model = scriptedModel((_prompt, _tools, choice) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
 
-            if (call === 2 || typeof choice === "object") return response({ findings: [] });
+              if (call === 2 || typeof choice === "object")
+                return response({ findings: [], incomplete: call === 2 });
 
-            return Stream.fromIterable<Response.StreamPartEncoded>([
-              ...Array.from({ length: 32 }, (_, index): Response.StreamPartEncoded => ({
-                type: "tool-call",
-                id: `read-${String(call)}-${String(index)}`,
-                name: "find_files",
-                params: { revision: "head", query: "part" },
-              })),
-              { type: "finish", reason: "tool-calls", usage },
-            ]);
-          }),
-        ),
-      );
-
-      const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
-        .review(input)
-        .pipe(
-          Effect.provideService(ReviewRepository, {
-            ...emptyRepository,
-            findFiles: () =>
-              Ref.update(reads, (count) => count + 1).pipe(
-                Effect.as(ReviewFileList.make({ paths: [], truncated: false })),
-              ),
-          }),
+              return Stream.fromIterable<Response.StreamPartEncoded>([
+                ...Array.from({ length: 32 }, (_, index): Response.StreamPartEncoded => ({
+                  type: "tool-call",
+                  id: `read-${String(call)}-${String(index)}`,
+                  name: operation,
+                  params:
+                    operation === "find_files"
+                      ? { revision: "head", query: "part" }
+                      : { revision: "head", path: "src/part.ts", literal: "part", startLine: 1 },
+                })),
+                { type: "finish", reason: "tool-calls", usage },
+              ]);
+            }),
+          ),
         );
 
-      expect(yield* Ref.get(reads)).toBe(32);
-      expect(outcome.exhausted).toBe("tool-calls");
-      expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
-    }),
+        const outcome = yield* makeReviewer({ model, costControl: costControl(calls) })
+          .review(input)
+          .pipe(
+            Effect.provideService(ReviewRepository, {
+              ...emptyRepository,
+              findFiles: () =>
+                Ref.update(reads, (count) => count + 1).pipe(
+                  Effect.as(ReviewFileList.make({ paths: [], truncated: false })),
+                ),
+              findInFile: (input) =>
+                Ref.update(reads, (count) => count + 1).pipe(
+                  Effect.andThen(ReviewLineMatches.fromText(input, "")),
+                ),
+            }),
+          );
+
+        expect(yield* Ref.get(reads)).toBe(32);
+        expect(outcome.exhausted).toBe("tool-calls");
+        expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
+      }),
   );
 
   it.effect("keeps one deadline across batches and closes each model stream", () =>
@@ -920,7 +1259,7 @@ new mode 100755`;
             yield* Deferred.succeed(call === 1 ? firstStarted : secondStarted, undefined);
 
             return Stream.fromEffect(Effect.sleep("4 minutes")).pipe(
-              Stream.flatMap(() => response({ findings: [] })),
+              Stream.flatMap(() => response({ findings: [], incomplete: call === 1 })),
               Stream.ensuring(Ref.update(finalized, (count) => count + 1)),
             );
           }),
@@ -941,6 +1280,60 @@ new mode 100755`;
       expect(yield* Ref.get(finalized)).toBe(2);
       expect(outcome.incomplete).toBe(true);
       expect(outcome.pendingPaths).toEqual(input.changes.slice(6).map((change) => change.path));
+      expect(outcome.exhausted).toBeUndefined();
+      expect(outcome.resolutions).toBeUndefined();
+      expect(outcome.diagnostics?.stages.at(-1)).toMatchObject({
+        stage: "discovery",
+        completion: "failed",
+        stopReason: "deadline",
+      });
+      expect(outcome.diagnostics?.stages.at(-1)?.incompleteReason).toBeUndefined();
+    }),
+  );
+
+  it.effect("preserves an uncapped duration failure and its final diagnostics", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const finalized = yield* Ref.make(0);
+      const observed = yield* Ref.make<ReviewDiagnostics | undefined>(undefined);
+
+      const model = scriptedModel(() =>
+        Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+          Stream.flatMap(() => Stream.never),
+          Stream.ensuring(Ref.update(finalized, (count) => count + 1)),
+        ),
+      );
+
+      const fiber = yield* makeReviewer({ model })
+        .review(request)
+        .pipe(
+          Effect.provideService(ReviewRepository, emptyRepository),
+          Effect.provideService(ReviewDiagnosticsSink, {
+            record: (value) => Ref.set(observed, value),
+          }),
+          Effect.result,
+          Effect.forkChild,
+        );
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("5 minutes");
+      const result = yield* Fiber.join(fiber);
+
+      expect(Result.isFailure(result) && result.failure).toMatchObject({
+        _tag: "AgentPolicyError",
+        limit: "duration",
+      });
+      expect(yield* Ref.get(finalized)).toBe(1);
+      const diagnostics = yield* Ref.get(observed);
+
+      expect(diagnostics?.discovery).toBe("failed");
+      expect(diagnostics?.candidates).toEqual([]);
+      expect(diagnostics?.stages[0]).toMatchObject({
+        stage: "discovery",
+        completion: "failed",
+        stopReason: "deadline",
+      });
+      expect(diagnostics?.stages[0]?.incompleteReason).toBeUndefined();
     }),
   );
 
@@ -959,7 +1352,7 @@ new mode 100755`;
 
               const stream =
                 call === 1
-                  ? response({ findings: [] })
+                  ? response({ findings: [], incomplete: true })
                   : Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
                       Stream.flatMap(() =>
                         failure === "interrupt" ? Stream.never : Stream.die("batch defect"),
@@ -1054,18 +1447,29 @@ const typedReviews = (model: typeof typedModel) => ({
       ),
     },
   }).review(request),
+  verified: makeReviewer({ model, strategy: "verified" }).review(request),
 });
 
 type TypedReviews = ReturnType<typeof typedReviews>;
 
 const pricingTypeProofs: readonly [
   Assert<Equal<EffectError<TypedReviews["controlled"]>, EffectError<TypedReviews["unpriced"]>>>,
-  Assert<Equal<EffectRequirements<TypedReviews["controlled"]>, ReviewRepository>>,
+  Assert<
+    Equal<
+      EffectRequirements<TypedReviews["controlled"]>,
+      ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+    >
+  >,
   Assert<Equal<EffectError<TypedReviews["priced"]>, EffectError<TypedReviews["unpriced"]>>>,
   Assert<
     Equal<EffectRequirements<TypedReviews["priced"]>, EffectRequirements<TypedReviews["unpriced"]>>
   >,
-  Assert<Equal<EffectRequirements<TypedReviews["priced"]>, ReviewRepository>>,
+  Assert<
+    Equal<
+      EffectRequirements<TypedReviews["priced"]>,
+      ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+    >
+  >,
   Assert<Equal<Effect.Success<TypedReviews["priced"]>, ReviewOutcome>>,
   Assert<
     Equal<
@@ -1073,6 +1477,13 @@ const pricingTypeProofs: readonly [
       ReviewVerificationError
     >
   >,
-] = [true, true, true, true, true, true, true];
+  Assert<Equal<EffectError<TypedReviews["verified"]>, EffectError<TypedReviews["unpriced"]>>>,
+  Assert<
+    Equal<
+      EffectRequirements<TypedReviews["verified"]>,
+      ReviewRepository | Crypto.Crypto | ReviewDiagnosticsSink
+    >
+  >,
+] = [true, true, true, true, true, true, true, true, true];
 
 void pricingTypeProofs;

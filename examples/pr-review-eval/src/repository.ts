@@ -1,6 +1,7 @@
 import {
   ReviewContextError,
   ReviewFileList,
+  ReviewLineMatches,
   ReviewRepository,
   ReviewSource,
 } from "@effect-agent/pr-review/ReviewRepository";
@@ -42,5 +43,16 @@ export const repositoryLayer = (snapshot: EvalRepositorySnapshot | undefined) =>
           ReviewFileList.make({ paths: paths.slice(0, 100), truncated: paths.length > 100 }),
         );
       },
+      findInFile: Effect.fn("EvalRepository.findInFile")(function* (
+        input: Parameters<ReviewRepository["Service"]["findInFile"]>[0],
+      ) {
+        const file = snapshot?.files.find(
+          (candidate) => candidate.path === input.path && candidate.revision === input.revision,
+        );
+
+        if (file === undefined) return yield* missing(input.path, input.revision);
+
+        return yield* ReviewLineMatches.fromText(input, file.content);
+      }),
     }),
   );

@@ -1,3 +1,4 @@
+import { ReviewCandidate, ReviewSeverity } from "@effect-agent/pr-review/Review";
 import { Schema } from "effect";
 
 import {
@@ -24,6 +25,9 @@ export const EvalAdjudicationLabel = Schema.Literals([
 
 export type EvalAdjudicationLabel = typeof EvalAdjudicationLabel.Type;
 
+export const EvalAdjudicatorKind = Schema.Literals(["agent", "human", "unknown"]);
+export type EvalAdjudicatorKind = typeof EvalAdjudicatorKind.Type;
+
 const FindingJudgmentFields = Schema.Struct({
   version: Schema.Literal(1),
   caseId: EvalCaseId,
@@ -31,17 +35,25 @@ const FindingJudgmentFields = Schema.Struct({
   inputDigest: EvalInputDigest,
   variantId: EvalVariantId,
   trial: Schema.Int.check(Schema.isGreaterThan(0)),
-  findingIndex: Schema.Natural,
+  findingIndex: Schema.optionalKey(Schema.Natural),
+  candidateId: Schema.optionalKey(ReviewCandidate.fields.id),
+  observationDigest: Schema.optionalKey(EvalInputDigest),
+  oracleDigest: Schema.optionalKey(EvalInputDigest),
+  /** Independent whole-claim severity; diagnostic only for matches-expected scoring. */
+  severity: Schema.optionalKey(ReviewSeverity),
   label: EvalAdjudicationLabel,
   matchedDefectIds: Schema.Array(EvalDefectId).check(Schema.isMaxLength(12)),
   rationale: BoundedRationale,
   adjudicator: Adjudicator,
+  /** Absent historical provenance is unknown; never infer it from the adjudicator's name. */
+  adjudicatorKind: Schema.optionalKey(EvalAdjudicatorKind),
 }).check(
   Schema.makeFilter(
     (judgment) => {
       const ids = judgment.matchedDefectIds;
 
       return (
+        (judgment.candidateId !== undefined || judgment.findingIndex !== undefined) &&
         new Set(ids).size === ids.length &&
         (judgment.label === "matches-expected" ? ids.length > 0 : ids.length === 0)
       );
@@ -65,7 +77,7 @@ const JudgmentSetFields = Schema.Struct({
     (set) => {
       const keys = set.judgments.map(
         (judgment) =>
-          `${judgment.caseId}\0${judgment.variantId}\0${judgment.trial}\0${judgment.findingIndex}`,
+          `${judgment.caseId}\0${judgment.variantId}\0${judgment.trial}\0${judgment.candidateId ?? judgment.findingIndex}`,
       );
 
       return new Set(keys).size === keys.length;

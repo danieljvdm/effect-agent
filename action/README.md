@@ -44,12 +44,36 @@ When a rename or content replacement crosses between binary and text, the textua
 is still reviewed as an addition or deletion. Explicit ignore rules continue to exclude
 an entire rename when either path matches.
 
-One bounded review run assesses every admitted patch before using immutable base and head source
-to resolve specific questions about plausible defects. Straightforward changes can finish from
+The shipping Action uses the **baseline** strategy. It supplies bounded patches and immutable
+base/head source to one sequential discovery workflow. The review says **N patches supplied**;
+discovery's declared assessment status does not establish that every file was assessed.
+Straightforward changes can finish from
 the diff; source tools are not an exhaustive repository audit. The host validates paths and
 RIGHT-side anchors and publishes against the inspected head. A stopped run preserves findings
 recorded before research ended. Preparation failures publish a failure marker. Blocking findings
 request changes and fail the Action after publication; other outcomes remain comments.
+
+Source tools can locate paths, search a case-sensitive literal within one authorized file,
+and read surrounding lines. In-file search returns at most 20 matching line numbers, with
+pagination when more remain. It uses the same immutable revisions, access rules, and tool budget
+as source reads; a match alone does not supply source evidence.
+
+The review displays discovery's declared status separately from candidate verification, excluded
+paths, ignored paths, and pending batches. Its compact activity summary counts reads, source searches,
+EOF-short reads, oversized rejections, unavailable source, truncated results, and dropped records.
+Action logs retain at most 128 source-activity records, with stage, batch, immutable revision, path,
+requested and returned read spans, search match counts, outcome, and truncation. They exclude source contents, search
+queries, credentials, raw causes, verifier reasons, and model reasoning. Calls, usage, reservations,
+and stop reasons have stage attribution alongside one reconciled attempt total. Diagnostics are
+finalized after expected failure, defect, or interruption while the process remains alive.
+
+The **verified** strategy remains evaluation-only until the frozen comparison supports rollout.
+Its host always challenges accepted candidates after discovery when shared limits permit. Supported
+findings retain their original text and severity; refuted candidates remain in evaluation diagnostics
+and are suppressed. Unresolved candidates remain visible as **unverified**, including inline feedback
+and the copy-all block. Only supported blockers can create a new change request in that strategy.
+Unresolved-only feedback produces a comment and an incomplete Action failure. Verification cannot
+clear incomplete discovery, exclusions, pending batches, or earlier change requests.
 
 Reviews with findings include a **Copy all findings** dropdown. Expand it and use the code
 block's copy button to copy every finding from that review, including paths, inline line numbers
@@ -102,10 +126,14 @@ an incremental baseline or clear an earlier change request. This preserves usefu
 claiming the full change was reviewed.
 The model's `incomplete` flag describes unfinished assessment of supplied patches. The Action
 separately lists excluded paths and their reasons, including input limits, unreadable source, and
-batches that never started. Excluded paths prevent a complete review even when assessment of the
+batches that never started, which count separately as pending. Excluded paths prevent a complete review even when assessment of the
 supplied patches completes. The comment shows up to 30 exclusions; the Action log includes all of
 them. Paths excluded only by input capacity remain available to bounded source tools, while ignore
 rules and unsupported or unreadable entries continue to block access.
+
+When the model supplies an explanation, the comment shows up to four short, model-reported
+limitations. These do not replace host coverage checks or establish a defect. Remaining explanations
+stay in outcome diagnostics; the Action does not log their prose.
 
 ### Generated files
 
@@ -133,6 +161,14 @@ then reserves every input token at the cache-write rate plus the full output all
 reasoning. Admission never assumes a cache hit. The ledger releases unused reservations only after
 validating the response's usage, model, tier, and counted bounds. Failed, interrupted, or unmetered
 requests retain their possible charge; the transport does not automatically retry them.
+
+The baseline gives discovery the full $0.999999 allowance. Evaluation's verified strategy gives
+discovery $0.699999, including its settled charges and outstanding reservations, and holds $0.300000
+for verification. Verification may use that holdback plus unspent, unreserved discovery allowance.
+Changing stages preserves the same ledger and all outstanding reservations. A discovery allowance
+refusal does not close verification; uncertain charges or invalid accounting close both stages.
+Each billable request, including compaction and completion, reserves before dispatch and settles
+at most once. Held dollars cannot extend the shared deadline, turn, context, or tool limits.
 
 Character admission does not guarantee a token fit. If the engine's context estimate or the
 provider's exact count exceeds the input limit, the Action publishes an incomplete token-budget

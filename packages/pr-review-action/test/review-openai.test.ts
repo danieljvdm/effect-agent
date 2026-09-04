@@ -1,13 +1,19 @@
-import { makeReviewer, ReviewChange, ReviewRequest } from "@effect-agent/pr-review/Review";
+import {
+  makeReviewer,
+  ReviewChange,
+  ReviewDiagnosticsSink,
+  ReviewRequest,
+} from "@effect-agent/pr-review/Review";
 import {
   ReviewFileList,
+  ReviewLineMatches,
   ReviewRepository,
   ReviewSource,
 } from "@effect-agent/pr-review/ReviewRepository";
 import type { OpenAiSchema } from "@effect/ai-openai";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
 import {
   Cause,
   ConfigProvider,
@@ -16,6 +22,7 @@ import {
   Encoding,
   Exit,
   Fiber,
+  Layer,
   Logger,
   Option,
   Redacted,
@@ -106,6 +113,7 @@ const repository = ReviewRepository.of({
     ),
   findFiles: () =>
     Effect.succeed(ReviewFileList.make({ paths: ["src/value.ts"], truncated: false })),
+  findInFile: (input) => ReviewLineMatches.fromText(input, "private-source-fixture"),
 });
 
 const rawUsage = (input: number, output: number, read = 0, write = input - read) => ({
@@ -132,6 +140,7 @@ const sse = (
   calls: ReadonlyArray<{ readonly name: string; readonly parameters: Schema.Json }>,
   usage: unknown,
   finish: "completed" | "incomplete" = "completed",
+  duplicateCompletion = false,
 ) => {
   const reasoning = {
     type: "reasoning",
@@ -177,6 +186,9 @@ const sse = (
     httpRequest,
     new globalThis.Response(
       events
+        .flatMap((event, index) =>
+          duplicateCompletion && index === events.length - 1 ? [event, event] : [event],
+        )
         .map(
           (event, sequence_number) => `data: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
         )
@@ -207,7 +219,210 @@ const payload: OpenAiSchema.CreateResponse = {
   store: false,
 };
 
-describe("review provider boundary", () => {
+const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop);
+
+layer(testLayer)("review provider boundary", (it) => {
+  it.effect.each(["refused", "truncated"] as const)(
+    "keeps the verifier allowance after discovery is %s without resetting the ledger",
+    (stop) =>
+      Effect.gen(function* () {
+        let sends = 0;
+
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, {
+                  object: "response.input_tokens",
+                  input_tokens: sends === 0 ? 70_000 : 20_000,
+                });
+              sends += 1;
+
+              return sends === 1 && stop === "truncated"
+                ? sse(httpRequest, sends, [], rawUsage(70_000, 17_499), "incomplete", true)
+                : json(
+                    httpRequest,
+                    response(sends === 1 ? rawUsage(70_000, 17_499) : rawUsage(20_000, 1_000)),
+                  );
+            }),
+          ),
+        );
+
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "stage-budget",
+          strategy: "verified",
+        });
+
+        if (stop === "truncated") {
+          const [, stream] = yield* provider.client.createResponseStream(payload);
+
+          yield* Stream.runDrain(stream);
+        } else {
+          yield* provider.client.createResponse(payload);
+        }
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect(yield* provider.costControl.snapshot).toMatchObject({
+          stage: "discovery",
+          stopped: true,
+          globalStopped: false,
+          modelCalls: 1,
+          usage: { estimatedCostMicrousd: 699_980, reservedCostMicrousd: 0 },
+        });
+        yield* provider.costControl.beginStage!("verification");
+        yield* provider.client.createResponse(payload);
+        const snapshot = yield* provider.costControl.snapshot;
+
+        expect(sends).toBe(2);
+        expect(snapshot).toMatchObject({
+          stage: "verification",
+          stopped: false,
+          globalStopped: false,
+          modelCalls: 2,
+          usage: { estimatedCostMicrousd: 819_980, reservedCostMicrousd: 0 },
+          stages: [
+            {
+              stage: "discovery",
+              stopped: true,
+              modelCalls: 1,
+              usage: { estimatedCostMicrousd: 699_980 },
+            },
+            {
+              stage: "verification",
+              stopped: false,
+              modelCalls: 1,
+              usage: { estimatedCostMicrousd: 120_000 },
+            },
+          ],
+        });
+        yield* provider.costControl.beginStage!("discovery");
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect(sends).toBe(2);
+        expect((yield* provider.costControl.snapshot).globalStopped).toBe(true);
+      }),
+  );
+
+  it.effect(
+    "counts every outstanding reservation across the discovery-to-verification transition",
+    () =>
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>();
+        const dispatched = yield* Deferred.make<void>();
+        const verifierDispatched = yield* Deferred.make<void>();
+        const outputLimits: Array<number | undefined> = [];
+
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.gen(function* () {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, { object: "response.input_tokens", input_tokens: 1_000 });
+              outputLimits.push(decodeWire(httpRequest).max_output_tokens);
+              if (outputLimits.length === 2) yield* Deferred.succeed(dispatched, undefined);
+              if (outputLimits.length === 3) yield* Deferred.succeed(verifierDispatched, undefined);
+              yield* Deferred.await(release);
+
+              return json(httpRequest, response(rawUsage(1_000, 10)));
+            }),
+          ),
+        );
+
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "pending-stage-budget",
+          strategy: "verified",
+        });
+
+        const discoveries = yield* Effect.all(
+          [provider.client.createResponse(payload), provider.client.createResponse(payload)],
+          { concurrency: 2 },
+        ).pipe(Effect.forkChild);
+
+        yield* Deferred.await(dispatched);
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect((yield* provider.costControl.snapshot).usage.reservedCostMicrousd).toBe(699_980);
+        yield* provider.costControl.beginStage!("verification");
+        const verifier = yield* provider.client.createResponse(payload).pipe(Effect.forkChild);
+
+        yield* Deferred.await(verifierDispatched);
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect(outputLimits).toEqual([32_000, 2_499, 14_750]);
+        expect((yield* provider.costControl.snapshot).usage.reservedCostMicrousd).toBe(999_980);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(discoveries);
+        yield* Fiber.join(verifier);
+        expect(yield* provider.costControl.snapshot).toMatchObject({
+          modelCalls: 3,
+          usage: { estimatedCostMicrousd: 15_600, reservedCostMicrousd: 0 },
+          stages: [
+            { stage: "discovery", modelCalls: 2, usage: { estimatedCostMicrousd: 10_400 } },
+            { stage: "verification", modelCalls: 1, usage: { estimatedCostMicrousd: 5_200 } },
+          ],
+        });
+      }),
+  );
+
+  it.effect.each(["invalid-usage", "failure", "interruption", "defect"] as const)(
+    "retains uncertain discovery charges and globally prevents verification after %s",
+    (failure) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        let sends = 0;
+        let finalized = 0;
+
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.gen(function* () {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, { object: "response.input_tokens", input_tokens: 70_000 });
+              sends += 1;
+              if (failure === "interruption")
+                return yield* Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.ensuring(Effect.sync(() => finalized++)),
+                );
+              yield* Deferred.succeed(started, undefined);
+              if (failure === "defect") return yield* Effect.die("private-provider-defect");
+
+              return failure === "failure"
+                ? json(httpRequest, { error: "private-provider-error" }, 500)
+                : json(httpRequest, response(null));
+            }),
+          ),
+        );
+
+        const provider = yield* makeReviewOpenAi({
+          client: native,
+          model: "gpt-5.6-sol",
+          cacheKey: "uncertain-stage-budget",
+          strategy: "verified",
+        });
+
+        const pending = yield* provider.client.createResponse(payload).pipe(Effect.forkChild);
+
+        yield* Deferred.await(started);
+        if (failure === "interruption") yield* Fiber.interrupt(pending);
+        const exit = yield* Fiber.await(pending);
+
+        expect(Exit.hasInterrupts(exit)).toBe(failure === "interruption");
+        expect(Exit.hasDies(exit)).toBe(failure === "defect");
+        expect(finalized).toBe(failure === "interruption" ? 1 : 0);
+        yield* provider.costControl.beginStage!("verification");
+        yield* provider.client.createResponse(payload).pipe(Effect.flip);
+        expect(sends).toBe(1);
+        expect(yield* provider.costControl.snapshot).toMatchObject({
+          globalStopped: true,
+          modelCalls: 1,
+          usage: { estimatedCostMicrousd: 0, reservedCostMicrousd: 699_980 },
+          stages: [
+            { stage: "discovery", modelCalls: 1, usage: { reservedCostMicrousd: 699_980 } },
+            { stage: "verification", modelCalls: 0 },
+          ],
+        });
+      }),
+  );
+
   it.effect("continues PR #291's affordable research beyond eight turns", () =>
     Effect.gen(function* () {
       // First eight rows are observed usage; continuation is scripted, not a live quality claim.
@@ -1025,7 +1240,7 @@ describe("review provider boundary", () => {
         expect(published[0]?.body).toContain("Automatic reviews are paused");
         if (!complete) {
           expect(published[0]?.body).not.toContain("**No actionable findings.**");
-          expect(published[0]?.body).toContain("1 supplied");
+          expect(published[0]?.body).toContain("1 patch supplied");
         }
         expect(published[0]?.body).toContain("$0.999999 spending ceiling");
         if (protocolFailure) {
