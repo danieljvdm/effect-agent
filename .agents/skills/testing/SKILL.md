@@ -1,28 +1,22 @@
 ---
 name: testing
-description: Set an extremely high bar for automated tests. Use whenever software work raises the question of adding, changing, retaining, or removing tests.
+description: Decide whether committed tests are warranted, design regression tests, or follow explicitly requested TDD.
+license: MIT
 ---
 
 # Testing
 
-**If in doubt, don't test it.**
+Follow the repository's testing policy and the user's requested scope. Adding
+source code does not by itself justify committed tests. Prefer the cheapest
+verification that proves the changed behavior.
 
-Committed tests must prove durable value. Tests are permanent product code, not a reflexive companion to each source file.
+- Whether to add, retain, or remove a test: [test selection](references/selection.md).
+- A test boundary, substitute, or mocking decision: [test design](references/test-design.md).
+- An explicit TDD, red-green, or test-first request: [TDD](references/tdd.md).
+  Ordinary feature verification does not require this workflow.
 
-Write a test only when every condition holds:
+Honor an explicit testing request within its scope. Express expectations
+independently of implementation, exercise a stable public boundary, and follow
+repository evidence and placement rules. Keep the final suite green.
 
-- It protects stable product behavior rather than an implementation detail.
-- A regression is plausible and would be costly.
-- The behavior is observable through a stable public seam.
-- The test will survive likely refactors.
-- The expected result is independent of the implementation.
-- Existing tests, types, static checks, or a smoke check cannot cover the risk adequately.
-
-If any condition fails, skip the test and use the cheapest sufficient verification instead. Moving MVP behavior often warrants no committed tests.
-
-Test capabilities, not files. Use the fewest tests that protect the risk, and ignore coverage targets unless the user explicitly asks for them.
-
-Never commit an intentionally failing or red-only suite. Keep time-driven tests
-deterministic instead of stabilizing them with wall-clock sleeps. A shared fake
-or in-memory implementation must fully provide the behavior its name promises;
-keep partial substitutes local to the tests that need them.
+TDD attribution is in [NOTICE](NOTICE); terms are in [LICENSE](LICENSE).

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Build Effect APIs"
-  short_description: "Build and consume typed Effect HTTP APIs"
-  default_prompt: "Use $build-effect-apis to build a shared Effect HTTP API and consume it from the application client."

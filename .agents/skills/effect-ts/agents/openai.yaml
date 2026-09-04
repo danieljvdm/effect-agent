@@ -1,4 +1,0 @@
-interface:
-  display_name: "Effect TypeScript Setup"
-  short_description: "Set up version-matched Effect guidance"
-  default_prompt: "Use $effect-ts to set up Effect and its package-bundled agent guidance."

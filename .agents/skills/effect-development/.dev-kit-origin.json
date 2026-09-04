@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "selector": "effect-development",
+  "name": "effect-development",
+  "baseDigest": "sha256:788ee124d19cb7c1ffdfbf88d55176e205f129129cc250e6ffcb58f2df10f8f9",
+  "source": {
+    "type": "bundled",
+    "version": "1.0.2"
+  }
+}
