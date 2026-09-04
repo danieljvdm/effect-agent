@@ -12,6 +12,7 @@ import {
 import {
   AbortCommand,
   AbortIntent,
+  AbortIntentRequest,
   AdmissionAdmitted,
   AdmissionConflict,
   AdmissionNotAdmitted,
@@ -202,6 +203,15 @@ class AbortIntentRow extends Schema.Class<AbortIntentRow>("AbortIntentRow")({
 
 class MaxQueueSequenceRow extends Schema.Class<MaxQueueSequenceRow>("MaxQueueSequenceRow")({
   max_queue_sequence: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+}) {}
+
+class AbortIntentLookupRow extends Schema.Class<AbortIntentLookupRow>("AbortIntentLookupRow")({
+  submission_id: BoundedIdentifier,
+  abort_submission_id: Schema.NullOr(BoundedIdentifier),
+  author: Schema.NullOr(BoundedIdentifier),
+  reason: Schema.NullOr(BoundedStoredText),
+  requested_at: Schema.NullOr(BoundedTimestamp),
+  canonical_record_id: Schema.NullOr(BoundedIdentifier),
 }) {}
 
 class CanonicalRecordIdRow extends Schema.Class<CanonicalRecordIdRow>("CanonicalRecordIdRow")({
@@ -2905,6 +2915,77 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     LedgerError
   >(undefined, scanPage);
 
+  const readAbortIntentForSubmission: SubmissionLedger["Service"]["readAbortIntent"] = Effect.fn(
+    "SqliteSubmissionLedger.readAbortIntentForSubmission",
+  )(function* (request) {
+    const operation = "ledger read abort intent";
+
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(AbortIntentRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+
+    const recordId = submissionAbortRecordId(validated.submissionId);
+
+    const rows = yield* sql<Record<string, unknown>>`
+      SELECT
+        submission.submission_id,
+        abort.submission_id AS abort_submission_id,
+        abort.author,
+        abort.reason,
+        abort.requested_at,
+        canonical.record_id AS canonical_record_id
+      FROM effect_agent_submissions AS submission
+      LEFT JOIN effect_agent_abort_intents AS abort
+        ON abort.submission_id = submission.submission_id
+      LEFT JOIN effect_agent_canonical_records AS canonical
+        ON canonical.thread_id = submission.thread_id
+          AND canonical.record_id = ${recordId}
+      WHERE submission.submission_id = ${validated.submissionId}
+    `.pipe(Effect.mapError(sqlFailure(operation)));
+
+    const decoded = yield* decodeRows(
+      Schema.Array(AbortIntentLookupRow),
+      "effect_agent_abort_intents",
+      validated.submissionId,
+      rows,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+
+    if (decoded.length === 0) {
+      return yield* LedgerError.make({
+        operation,
+        message: `Unknown submission ${validated.submissionId}.`,
+      });
+    }
+    if (decoded.length !== 1) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_abort_intents",
+        validated.submissionId,
+        "An abort intent lookup returned more than one row.",
+      );
+    }
+    const row = decoded[0];
+
+    if (row.abort_submission_id === null) return undefined;
+
+    return yield* decodeAbortIntent({
+      submissionId: row.abort_submission_id,
+      author: row.author,
+      reason: row.reason,
+      requestedAt: row.requested_at,
+      ...(row.canonical_record_id === null ? {} : { canonicalRecordId: row.canonical_record_id }),
+    }).pipe(
+      Effect.mapError((error) =>
+        corruptionFailure(
+          operation,
+          "effect_agent_abort_intents",
+          validated.submissionId,
+          error.message,
+        ),
+      ),
+    );
+  });
+
   const loadRecoverySnapshot: SubmissionLedger["Service"]["loadRecoverySnapshot"] = Effect.fn(
     "SqliteSubmissionLedger.loadRecoverySnapshot",
   )(function* (request: RecoverySnapshotRequest) {
@@ -3156,6 +3237,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       releaseChildBudget,
       scanNonterminal,
       loadRecoverySnapshot,
+      readAbortIntent: readAbortIntentForSubmission,
     }),
   );
 });

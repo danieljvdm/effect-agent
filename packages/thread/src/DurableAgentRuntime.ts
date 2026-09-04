@@ -218,6 +218,7 @@ import {
 } from "./RunJournal.ts";
 import {
   type AbortIntent,
+  AbortIntentRequest,
   type AdmissionConflict,
   type Claim,
   type JoinedToHost,
@@ -5950,11 +5951,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           while (true) {
             yield* Effect.sleep(config.abortPollInterval);
 
-            const snapshot = yield* ledger.loadRecoverySnapshot(
-              RecoverySnapshotRequest.make({ submissionId }),
-            );
-
-            const intent = snapshot.abortIntent;
+            const intent = yield* ledger.readAbortIntent(AbortIntentRequest.make({ submissionId }));
 
             if (intent === undefined) continue;
             yield* appendAbortRecord(ctx, intent);

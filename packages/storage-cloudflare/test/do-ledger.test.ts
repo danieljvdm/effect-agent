@@ -15,6 +15,8 @@ import {
 import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting";
 import { digestJson } from "@effect-agent/thread/Digest";
 import {
+  AbortCommand,
+  AbortIntentRequest,
   BeginChildBudgetReleaseRequest,
   ChildBudgetReservationRequest,
   ChildReservationId,
@@ -33,8 +35,9 @@ import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";
 import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import { CurrentTransformer } from "effect/unstable/sql/Statement";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -69,6 +72,41 @@ const isDoStorageError = Schema.is(DoStorageError);
 const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 describe("DoSubmissionLedger", () => {
+  it("reads an abort intent with one query regardless of other admitted inputs", () =>
+    withThreadStorage("wp1-ledger-abort-poll", (storage) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const admitted = yield* ledger.admit(yield* admission("abort-poll", "target", {}));
+        const request = AbortIntentRequest.make({ submissionId: admitted.submissionId });
+        const queries = yield* Ref.make(0);
+
+        const read = ledger
+          .readAbortIntent(request)
+          .pipe(
+            Effect.provideService(CurrentTransformer, (statement) =>
+              Ref.update(queries, (count) => count + 1).pipe(Effect.as(statement)),
+            ),
+          );
+
+        expect(yield* read).toBeUndefined();
+        for (let index = 0; index < 5; index++) {
+          yield* ledger.admit(
+            yield* admission("abort-poll", `other-${index}`, { text: "x".repeat(1024) }),
+          );
+        }
+        expect(yield* read).toBeUndefined();
+        yield* ledger.requestAbort(
+          AbortCommand.make({
+            submissionId: admitted.submissionId,
+            author: "operator",
+            reason: "stop",
+          }),
+        );
+        expect(yield* read).toMatchObject({ reason: "stop" });
+        expect(yield* Ref.get(queries)).toBe(3);
+      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
+    ));
+
   // The SAME adapter-neutral contract suite the Node/SQLite and in-memory adapters run —
   // all cases, including lease expiry via TestClock, producer fencing, joined input,
   // suspensions, unknown outcomes, and the S2 subagent operations — executed in-workerd

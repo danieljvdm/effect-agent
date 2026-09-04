@@ -692,6 +692,15 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     // The local scan IS the whole worklist: one Thread per Object (durability §5).
     scanNonterminal: local.scanNonterminal,
 
+    readAbortIntent: (request) =>
+      submissionTarget("ledger read abort intent", request.submissionId).pipe(
+        Effect.flatMap((target) =>
+          target._tag === "local"
+            ? local.readAbortIntent(request)
+            : Effect.fail(crossThreadLedgerError("ledger read abort intent", target.threadId)),
+        ),
+      ),
+
     loadRecoverySnapshot: (request) =>
       submissionTarget("ledger load recovery snapshot", request.submissionId).pipe(
         Effect.flatMap((target) =>

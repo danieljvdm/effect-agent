@@ -70,6 +70,7 @@ import {
   SettlementReservationSnapshot,
   settlementFailureFromRecord,
   AbortIntent,
+  AbortIntentRequest,
   SubmissionLedger,
   SubmissionLookup,
   SubmissionLookupByKey,
@@ -2256,6 +2257,19 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       ),
     );
 
+    const readAbortIntent: SubmissionLedger["Service"]["readAbortIntent"] = Effect.fn(
+      "MemorySubmissionLedger.readAbortIntent",
+    )(function* (unvalidated) {
+      const request = yield* validate(AbortIntentRequest, "readAbortIntent", unvalidated);
+      const stored = (yield* Ref.get(state)).submissions.get(request.submissionId);
+
+      if (stored === undefined) {
+        return yield* ledgerError("readAbortIntent", `Unknown Submission ${request.submissionId}`);
+      }
+
+      return stored.abortIntent;
+    });
+
     const loadRecoverySnapshot: SubmissionLedger["Service"]["loadRecoverySnapshot"] = Effect.fn(
       "MemorySubmissionLedger.loadRecoverySnapshot",
     )((unvalidated) =>
@@ -2402,6 +2416,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       releaseChildBudget,
       scanNonterminal,
       loadRecoverySnapshot,
+      readAbortIntent,
     });
   });
 

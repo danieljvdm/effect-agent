@@ -409,6 +409,11 @@ export class AbortIntent extends Schema.Class<AbortIntent>("@effect-agent/thread
   canonicalRecordId: Schema.optionalKey(RecordId),
 }) {}
 
+/** Address one lane-local abort intent without loading unrelated recovery state. */
+export class AbortIntentRequest extends Schema.Class<AbortIntentRequest>(
+  "@effect-agent/thread/AbortIntentRequest",
+)({ submissionId: SubmissionId }) {}
+
 /**
  * Atomic claim of the contiguous ready prefix of strictly-later queued Submissions for joining
  * into the active host Run (plan §2.5). Fenced by the host Attempt's ownership token — no epoch
@@ -1071,6 +1076,13 @@ export class SubmissionLedger extends Context.Service<
     readonly requestAbort: (
       request: AbortCommand,
     ) => Effect.Effect<AbortIntent, SettlementConflict | JoinedToHost | LedgerError>;
+    /**
+     * Strongly consistent lane-local read. Unknown Submissions fail with LedgerError. Canonical
+     * proof has the same meaning as in RecoverySnapshot; this read grants no execution authority.
+     */
+    readonly readAbortIntent: (
+      request: AbortIntentRequest,
+    ) => Effect.Effect<AbortIntent | undefined, LedgerError>;
     readonly claimJoining: (
       request: ClaimJoiningRequest,
     ) => Effect.Effect<ReadonlyArray<JoiningClaim>, OwnershipLost | LedgerError>;
