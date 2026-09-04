@@ -83,6 +83,7 @@ import {
   Option,
   PubSub,
   Queue,
+  Result,
   Schema,
   Scope,
   Semaphore,
@@ -4318,6 +4319,22 @@ function decodeRunDisposition<DispositionSchema extends Schema.Top>(
     : decodeRunDispositionCandidate(declaration, encoded);
 }
 
+/** Internal control output consumed by the driver before RunEvent publication. */
+interface NextTurn {
+  readonly _tag: "NextTurn";
+  readonly prompt: Prompt.Prompt;
+  readonly turn: number;
+  readonly toolCalls: number;
+}
+
+type TurnOutput = RunEvent | NextTurn;
+
+const nextTurn = (
+  prompt: Prompt.Prompt,
+  turn: number,
+  toolCalls: number,
+): Stream.Stream<TurnOutput> => Stream.succeed({ _tag: "NextTurn", prompt, turn, toolCalls });
+
 const makeTurn = <
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
@@ -4349,7 +4366,7 @@ const makeTurn = <
   priorToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
 ): Stream.Stream<
-  RunEvent,
+  TurnOutput,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
   InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > =>
@@ -5109,7 +5126,7 @@ const makeTurn = <
            * Turn is final-answer constrained via `tokenExhausted`.
            */
           type TurnEvents = Stream.Stream<
-            RunEvent,
+            TurnOutput,
             AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
             InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
           >;
@@ -5163,8 +5180,8 @@ const makeTurn = <
                     }
 
                     const emitThen = <NextError, NextRequirements>(
-                      nextStream: Stream.Stream<RunEvent, NextError, NextRequirements>,
-                    ): Stream.Stream<RunEvent, NextError, NextRequirements> =>
+                      nextStream: Stream.Stream<TurnOutput, NextError, NextRequirements>,
+                    ): Stream.Stream<TurnOutput, NextError, NextRequirements> =>
                       pre.length === 0
                         ? nextStream
                         : Stream.fromIterable(pre).pipe(Stream.concat(nextStream));
@@ -5254,7 +5271,7 @@ const makeTurn = <
               const steering = yield* drainInputs(context, options);
               const nextPrompt = yield* appendInputs(context, history, steering, options);
 
-              return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+              return nextTurn(nextPrompt, turn + 1, toolCalls);
             });
 
           /**
@@ -5296,7 +5313,7 @@ const makeTurn = <
                 );
                 const nextPrompt = yield* appendInputs(context, history, queued, options);
 
-                return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+                return nextTurn(nextPrompt, turn + 1, toolCalls);
               }
               const output = yield* decodeFinalOutput(agent, trace.text.join(""));
               const declaration = agent.definition.runDisposition;
@@ -5535,7 +5552,7 @@ const toolBatchContinuation = <
   toolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
 ): Stream.Stream<
-  RunEvent,
+  TurnOutput,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
   InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > =>
@@ -5651,7 +5668,7 @@ const toolBatchContinuation = <
       const steering = yield* drainInputs(context, options);
       const nextPrompt = yield* appendInputs(context, history, steering, options);
 
-      return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+      return nextTurn(nextPrompt, turn + 1, toolCalls);
     }),
   );
 
@@ -5699,7 +5716,7 @@ const makeResumeTurn = <
   countedToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
 ): Stream.Stream<
-  RunEvent,
+  TurnOutput,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
   InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > =>
@@ -6420,29 +6437,80 @@ function streamWithCompletion<
                 context.compaction.protectedEnd = prompt.content.length;
               }
               yield* advanceHistory(context, prompt, options);
+
+              let pending:
+                | {
+                    readonly prompt: Prompt.Prompt;
+                    readonly turn: number;
+                    readonly toolCalls: number;
+                    readonly resume?: RunTurnResume;
+                  }
+                | undefined;
+
               if (resumed !== undefined) {
                 // A declared-batch resume re-enters mid-Turn: steering seams
                 // reopen only after the resumed batch settles, so the initial
                 // drain is skipped and the continuation drains at the safe seam.
-                return makeResumeTurn(
-                  agent,
-                  context,
+                pending = {
                   prompt,
-                  resumed.batch,
-                  resumed.usage.toolCalls,
-                  options,
-                );
-              }
-              const steering = yield* drainInputs(context, options);
-              const initialPrompt = yield* appendInputs(context, prompt, steering, options);
+                  turn: resumed.batch.turn,
+                  toolCalls: resumed.usage.toolCalls,
+                  resume: resumed.batch,
+                };
+              } else {
+                const steering = yield* drainInputs(context, options);
+                const initialPrompt = yield* appendInputs(context, prompt, steering, options);
 
-              return makeTurn(
-                agent,
-                context,
-                initialPrompt,
-                (resumeUsage?.committedTurns ?? 0) + 1,
-                resumeUsage?.toolCalls ?? 0,
-                options,
+                pending = {
+                  prompt: initialPrompt,
+                  turn: (resumeUsage?.committedTurns ?? 0) + 1,
+                  toolCalls: resumeUsage?.toolCalls ?? 0,
+                };
+              }
+
+              // Each finite Turn returns at most one successor request. Sequential
+              // flatMap releases its child pull and Scope before taking that
+              // request, so prior traces and prepared prompts do not remain
+              // reachable through recursively nested Stream.concat descriptions.
+              return Stream.fromEffectRepeat(
+                Effect.suspend(() => {
+                  const current = pending;
+
+                  pending = undefined;
+
+                  return current === undefined ? Cause.done() : Effect.succeed(current);
+                }),
+              ).pipe(
+                Stream.flatMap((request) =>
+                  request.resume === undefined
+                    ? makeTurn(
+                        agent,
+                        context,
+                        request.prompt,
+                        request.turn,
+                        request.toolCalls,
+                        options,
+                      )
+                    : makeResumeTurn(
+                        agent,
+                        context,
+                        request.prompt,
+                        request.resume,
+                        request.toolCalls,
+                        options,
+                      ),
+                ),
+                Stream.filterMapEffect((output) =>
+                  Effect.sync(() => {
+                    if (output._tag === "NextTurn") {
+                      pending = output;
+
+                      return Result.fail(undefined);
+                    }
+
+                    return Result.succeed(output);
+                  }),
+                ),
               );
             }),
           );

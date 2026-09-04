@@ -215,6 +215,11 @@ export interface PreparedRunContext {
 
 /** Dependency-neutral ordered context transformation / compaction hook. */
 export interface RunContextHook<Error = never, Requirements = never> {
+  /**
+   * Resources acquired by `prepare` belong to the current Turn and close before
+   * the next Turn starts. Acquire resources shared across Turns in a surrounding
+   * Run Layer or Scope instead.
+   */
   readonly prepare: (
     request: RunContextRequest,
   ) => Effect.Effect<PreparedRunContext, Error, Requirements>;
@@ -763,6 +768,7 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * and compaction calls. The preceding Tool batch and history advance have finished. A resumed
    * canonical Tool batch bypasses this hook until it continues to a new Turn. This hook does not
    * reset the Run deadline or change prompt protection, and is not automatically inherited by spawned children.
+   * Resources acquired here close with the current Turn, before the next Turn starts.
    */
   readonly beforeTurn?: (() => Effect.Effect<void, HookError, HookRequirements>) | undefined;
   /** Reuse a Thread identity, including retained history, instead of allocating one. */
