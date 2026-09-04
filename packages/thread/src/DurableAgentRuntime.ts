@@ -2274,10 +2274,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     ctx: AttemptAppendContext,
     submission: SubmissionSnapshot,
     maxDurationMillis: number,
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
   ) {
     const runId = runIdForSubmission(submission.submissionId);
     const recordId = runStartedRecordId(runId);
-    const records = yield* readControl(submission.threadId, [submission.submissionId]);
     const existing = yield* canonicalRunStartFromRecords(records, runId);
     let start: RecordEnvelope;
 
@@ -6161,7 +6161,40 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId }));
       }
       const ctx = yield* attemptContextFor(threadId, claim.producerEpoch);
-      const records = yield* readControl(threadId, [submissionId]);
+
+      let controlThrough = (yield* store.inspectTail(ThreadTailRequest.make({ threadId })))
+        .tailSequence;
+
+      let records: ReadonlyArray<CanonicalRecordEnvelope> = yield* readCanonicalRange(
+        threadId,
+        ZERO_SEQUENCE,
+        controlThrough,
+        controlRecords([submissionId]),
+      );
+
+      // The append-only prefix remains valid for this Attempt. Retain only this Run's control
+      // evidence and validate each newly visible suffix against its own captured tail.
+      const refreshControl = Effect.fn("DurableAgentRuntime.refreshAttemptControl")(function* (
+        throughSequence?: CanonicalSequence,
+      ) {
+        const through =
+          throughSequence ??
+          (yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).tailSequence;
+
+        if (through > controlThrough) {
+          const suffix = yield* readCanonicalRange(
+            threadId,
+            controlThrough,
+            through,
+            controlRecords([submissionId]),
+          );
+
+          records = [...records, ...suffix];
+          controlThrough = through;
+        }
+
+        return records;
+      });
 
       const childPolicy =
         submission.parentLinkage === undefined
@@ -6225,6 +6258,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         ctx,
         submission,
         Duration.toMillis(agent.definition.policy.maxDuration),
+        yield* refreshControl(),
       );
 
       let expiredChildObligation = false;
@@ -6236,7 +6270,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       // Recheck after duration interruption too: that Attempt may have prepared new ordinary calls.
       const ordinaryCallsResolved = Effect.gen(function* () {
-        const reconciliationRecords = yield* readControl(threadId, [submissionId]);
+        const reconciliationRecords = yield* refreshControl();
 
         const reconciliationSnapshot = yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId }),
@@ -6306,9 +6340,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
         const canonical = canonicalRange(threadId, tail.tailSequence);
 
-        const currentRecords = yield* Stream.runCollect(
-          canonical.pipe(Stream.filter(controlRecords([submissionId]))),
-        );
+        const currentRecords = yield* refreshControl(tail.tailSequence);
 
         const outcome = yield* runModel(
           agent,

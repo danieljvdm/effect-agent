@@ -16,6 +16,7 @@ import { digestJson, type DigestError } from "./Digest.ts";
 import {
   BatchId,
   CanonicalBatch,
+  type CompactionCreated,
   ModelResponseRecorded,
   PersistedJson,
   RecordEnvelope,
@@ -509,8 +510,9 @@ export interface JournalBoundary {
 
 /**
  * Reconstruct a fixed canonical prefix from a re-readable stream. The caller must keep the same
- * records visible on every traversal. Compaction metadata and the resulting live Prompt remain
- * resident; covered historical message/tool payloads do not. An uncompacted Prompt still grows
+ * records visible on both traversals. The first collects compaction and settlement metadata; the
+ * second decodes each uncovered response once while rebuilding Prompt and usage. Metadata and the
+ * live Prompt remain resident; covered historical message/tool payloads do not. An uncompacted Prompt still grows
  * with its conversation, so hosts must configure an appropriate context compaction policy.
  * @internal
  */
@@ -548,12 +550,17 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
   const settledToolCallRecordIds = new Set<string>();
   const settledById = new Map<string, Pick<ToolCallSettled, "isFailure" | "budgetRejected">>();
+  const compactions: Array<{ readonly payload: CompactionCreated; readonly sequence: number }> = [];
 
   yield* Stream.runForEach(records, (envelope) =>
     Effect.sync(() => {
       const payload = envelope.record.payload;
 
-      if (payload._tag === "CompactionCreated") return;
+      if (payload._tag === "CompactionCreated") {
+        compactions.push({ payload, sequence: envelope.sequence });
+
+        return;
+      }
       if ("runId" in payload && typeof payload.runId === "string") {
         if (!firstSequenceByRun.has(payload.runId)) {
           firstSequenceByRun.set(payload.runId, envelope.sequence);
@@ -596,27 +603,22 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   let summarizeSequence = -1;
   let clearBound = 0;
 
-  yield* Stream.runForEach(records, (envelope) =>
-    Effect.sync(() => {
-      const payload = envelope.record.payload;
-
-      if (payload._tag !== "CompactionCreated") return;
-      if (!boundIsValid(payload.runId, payload.coversThrough, envelope.sequence)) return;
-      if (payload.kind === "summarize") {
-        if (payload.summary === undefined) return;
-        if (
-          payload.coversThrough > summarizeBound ||
-          (payload.coversThrough === summarizeBound && envelope.sequence > summarizeSequence)
-        ) {
-          summarizeBound = payload.coversThrough;
-          summarizeSummary = payload.summary;
-          summarizeSequence = envelope.sequence;
-        }
-      } else if (payload.coversThrough > clearBound) {
-        clearBound = payload.coversThrough;
+  for (const { payload, sequence } of compactions) {
+    if (!boundIsValid(payload.runId, payload.coversThrough, sequence)) continue;
+    if (payload.kind === "summarize") {
+      if (payload.summary === undefined) continue;
+      if (
+        payload.coversThrough > summarizeBound ||
+        (payload.coversThrough === summarizeBound && sequence > summarizeSequence)
+      ) {
+        summarizeBound = payload.coversThrough;
+        summarizeSummary = payload.summary;
+        summarizeSequence = sequence;
       }
-    }),
-  );
+    } else if (payload.coversThrough > clearBound) {
+      clearBound = payload.coversThrough;
+    }
+  }
   let summaryEmitted = false;
 
   const emitSummary = () => {
@@ -661,76 +663,56 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     finalizationUsed: false,
   };
 
-  yield* Stream.runForEach(records, (envelope) =>
-    Effect.gen(function* () {
-      const record = envelope.record;
-      const payload = envelope.record.payload;
+  const accountResponse = Effect.fn("RunJournal.accountResponse")(function* (
+    envelope: CanonicalRecordEnvelope,
+    payload: ModelResponseRecorded,
+    messages: Prompt.Prompt,
+  ) {
+    const record = envelope.record;
 
-      if (payload._tag === "RunPolicyUsageReserved" && payload.runId === ownerRunId) {
-        if (
-          payload.programmaticToolCalls < policyUsage.programmaticToolCalls ||
-          (policyUsage.finalizationUsed && !payload.finalizationUsed)
-        ) {
-          return yield* journalError("Run policy reservations must be monotonic");
-        }
-        policyUsage.programmaticToolCalls = payload.programmaticToolCalls;
-        policyUsage.finalizationUsed = payload.finalizationUsed;
-      }
-      if (payload._tag !== "ModelResponseRecorded") return;
-      if (envelope.sequence <= summarizeBound && payload.runId !== ownerRunId) return;
-      const messages = yield* decodePromptMessages(payload.messages);
+    const declared = declaredApplicationToolCallIds(messages);
+    const declaredRecordIds: Array<RecordId> = [];
 
-      const declared = declaredApplicationToolCallIds(messages);
-      const declaredRecordIds: Array<RecordId> = [];
+    for (const id of declared) {
+      const toolCallId = yield* Effect.try({
+        try: () => decodeToolCallId(id),
+        catch: (cause) => journalError("Failed to decode a declared Tool Call ID", cause),
+      });
 
-      for (const id of declared) {
-        const toolCallId = yield* Effect.try({
-          try: () => decodeToolCallId(id),
-          catch: (cause) => journalError("Failed to decode a declared Tool Call ID", cause),
-        });
+      declaredRecordIds.push(toolCallSettledRecordId(payload.runId, payload.turn, toolCallId));
+    }
+    if (declaredRecordIds.some((recordId) => !settledToolCallRecordIds.has(recordId))) {
+      incompleteToolTurns.add(envelope.record.recordId);
+      for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
+    }
+    if (payload.runId !== ownerRunId) return;
+    policyUsage.committedTurns = Math.max(policyUsage.committedTurns, payload.turn);
 
-        declaredRecordIds.push(toolCallSettledRecordId(payload.runId, payload.turn, toolCallId));
-      }
-      if (declaredRecordIds.some((recordId) => !settledToolCallRecordIds.has(recordId))) {
-        incompleteToolTurns.add(envelope.record.recordId);
-        for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
-      }
-      if (payload.runId !== ownerRunId) return;
-      policyUsage.committedTurns = Math.max(policyUsage.committedTurns, payload.turn);
+    const calls = messages.content.flatMap((message) =>
+      message.role === "assistant"
+        ? message.content.filter((part) => part.type === "tool-call")
+        : [],
+    );
 
-      const calls = messages.content.flatMap((message) =>
-        message.role === "assistant"
-          ? message.content.filter((part) => part.type === "tool-call")
-          : [],
-      );
+    policyUsage.toolCalls += calls.length;
+    if (incompleteToolTurns.has(record.recordId)) return;
+    for (const call of calls) {
+      const result = call.providerExecuted
+        ? messages.content
+            .flatMap((message) => (message.role === "assistant" ? message.content : []))
+            .find(
+              (part) => part.type === "tool-result" && part.providerExecuted && part.id === call.id,
+            )
+        : settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${call.id}`);
 
-      policyUsage.toolCalls += calls.length;
-      if (incompleteToolTurns.has(record.recordId)) return;
-      for (const call of calls) {
-        const result = call.providerExecuted
-          ? messages.content
-              .flatMap((message) => (message.role === "assistant" ? message.content : []))
-              .find(
-                (part) =>
-                  part.type === "tool-result" && part.providerExecuted && part.id === call.id,
-              )
-          : settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${call.id}`);
-
-        if (result === undefined || ("budgetRejected" in result && result.budgetRejected === true))
-          continue;
-        if (!("isFailure" in result)) continue;
-        policyUsage.consecutiveToolFailures = result.isFailure
-          ? policyUsage.consecutiveToolFailures + 1
-          : 0;
-      }
-    }),
-  );
-
-  const validatedPolicyUsage = yield* Schema.decodeUnknownEffect(RunPolicyUsage)(policyUsage).pipe(
-    Effect.mapError((cause) =>
-      journalError("Run policy accounting exceeds its Schema bounds", cause),
-    ),
-  );
+      if (result === undefined || ("budgetRejected" in result && result.budgetRejected === true))
+        continue;
+      if (!("isFailure" in result)) continue;
+      policyUsage.consecutiveToolFailures = result.isFailure
+        ? policyUsage.consecutiveToolFailures + 1
+        : 0;
+    }
+  });
 
   const flushTools = Effect.fn("RunJournal.flushTools")(function* (
     current: FoldState,
@@ -752,6 +734,16 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     Effect.gen(function* () {
       const payload = envelope.record.payload;
 
+      if (payload._tag === "RunPolicyUsageReserved" && payload.runId === ownerRunId) {
+        if (
+          payload.programmaticToolCalls < policyUsage.programmaticToolCalls ||
+          (policyUsage.finalizationUsed && !payload.finalizationUsed)
+        ) {
+          return yield* journalError("Run policy reservations must be monotonic");
+        }
+        policyUsage.programmaticToolCalls = payload.programmaticToolCalls;
+        policyUsage.finalizationUsed = payload.finalizationUsed;
+      }
       if (PROMPT_TRANSPARENT_TAGS.has(payload._tag)) return;
       // The compaction record governs the fold (pre-scan) and contributes no
       // message of its own; records at or below the summarize bound render as
@@ -762,6 +754,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         // into the summary (the append side never covers the owner, but stay
         // fail-safe if it ever did).
         if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
+          const messages = yield* decodePromptMessages(payload.messages);
+
+          yield* accountResponse(envelope, payload, messages);
           const responseUsage = yield* projectedResponseUsage(payload);
 
           usage.modelCalls = yield* addProjectedUsage(
@@ -846,6 +841,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       const messages = yield* decodePromptMessages(payload.messages);
       const forRun = payload.runId === ownerRunId;
 
+      yield* accountResponse(envelope, payload, messages);
       if (forRun) {
         const responseUsage = yield* projectedResponseUsage(payload);
 
@@ -906,6 +902,12 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   );
   emitSummary();
   state = yield* flushTools(state);
+
+  const validatedPolicyUsage = yield* Schema.decodeUnknownEffect(RunPolicyUsage)(policyUsage).pipe(
+    Effect.mapError((cause) =>
+      journalError("Run policy accounting exceeds its Schema bounds", cause),
+    ),
+  );
 
   return {
     policyUsage: validatedPolicyUsage,
