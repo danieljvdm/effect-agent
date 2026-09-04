@@ -1,5 +1,20 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.48
+
+### Minor Changes
+
+- [#317](https://github.com/danieljvdm/effect-agent/pull/317) [`671516a`](https://github.com/danieljvdm/effect-agent/commit/671516af0ecc66169af1fc81d5d0bf9242143c1e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Start a scoped worker pool with `NodeDurableHost.layer(registrations, options)` and supervise it with `NodeDurableHost.run`. Close admission when the pool exits and stop workers before releasing runtime resources.
+
+### Patch Changes
+
+- Updated dependencies [[`e640747`](https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22), [`8899bdb`](https://github.com/danieljvdm/effect-agent/commit/8899bdbcbbd16c5b7f9981564939f64729b73015)]:
+  - @effect-agent/engine@0.1.0-beta.48
+  - @effect-agent/thread@0.1.0-beta.48
+  - @effect-agent/core@0.1.0-beta.48
+  - @effect-agent/workflow@0.1.0-beta.48
+  - @effect-agent/storage-sqlite@0.1.0-beta.48
+
 ## 0.1.0-beta.47
 
 ### Patch Changes
