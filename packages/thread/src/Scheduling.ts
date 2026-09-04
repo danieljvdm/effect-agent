@@ -5,7 +5,6 @@ import {
   Crypto,
   DateTime,
   Effect,
-  Encoding,
   Layer,
   Option,
   Result,
@@ -22,6 +21,7 @@ import {
   scheduleNextAfter,
   scheduleResumeCursor,
 } from "./internal/schedule-time.ts";
+import { utf8ByteLength } from "./internal/utf8.ts";
 import { admitPreparedInput } from "./PreparedInputAdmission.ts";
 import { DefinitionDigests, type Digest, PersistedJson } from "./Records.ts";
 import {
@@ -134,8 +134,7 @@ const asSnapshot = (record: ScheduleRecord, observedAtMillis: number): ScheduleS
   };
 };
 
-const inputByteLength = (input: PersistedJson): number =>
-  Encoding.encodeHex(JSON.stringify(input)).length / 2;
+const inputByteLength = (input: PersistedJson): number => utf8ByteLength(JSON.stringify(input));
 
 const currentMillis = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
 

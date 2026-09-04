@@ -8,6 +8,7 @@ import { SubmissionLedger, type SubmissionSnapshot } from "@effect-agent/thread/
 import {
   Clock,
   Context,
+  DateTime,
   Effect,
   Layer,
   Option,
@@ -156,11 +157,11 @@ export class DurableAlarmService extends Context.Service<
 export class MaintenancePassReport extends Schema.Class<MaintenancePassReport>(
   "@effect-agent/platform-cloudflare/MaintenancePassReport",
 )({
-  /** `caught-up` is generation-only; `actionable` ran recovery and one bounded drain. */
+  /** `caught-up` is generation-only; `actionable` ran recovery and at most one head Attempt. */
   phase: Schema.Literals(["caught-up", "actionable"]),
   /** Recovery decisions executed (or deferred) BEFORE any new claim in this pass. */
   recovered: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  /** Settlements the drain pass finalized. */
+  /** Whether the head Attempt settled. Joined input may settle with that head. */
   settled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Submissions still nonterminal after the pass (suspended/unknown lanes stay honest). */
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -278,11 +279,12 @@ export type MaintenancePassFailure =
 /**
  * Incremental, quiescent maintenance over a durable dirty/processed generation (issue #93).
  *
- * `pass` = generation snapshot/pre-arm → recovery → bounded drain → generation acknowledgement:
+ * `pass` = generation snapshot/pre-arm → recovery → one head Attempt → generation acknowledgement:
  *
  * 1. One storage transaction reads dirty/processed and re-arms before work. A caught-up forced
  *    alarm takes an O(1) path without recovery, ledger scans, or canonical-history reads.
- * 2. Recovery still strictly precedes a new claim, and one bounded drain advances the lane.
+ * 2. Recovery strictly precedes a new claim. One head Attempt advances the lane and requests
+ *    a safe yield after ten minutes. The whole event has a fourteen-minute cooperative timeout.
  * 3. The final transaction acknowledges only the generation observed at pass start. A racing
  *    mutation therefore remains `dirty > processed` and retains its atomically-established alarm.
  * 4. Stable external waits acknowledge and clear. Autonomous retry, indeterminate, and lease
@@ -460,10 +462,9 @@ export class ThreadMaintenance extends Context.Service<
         return Math.min(jittered, config.wakeScanInterval);
       });
 
-      const pass = Effect.fn("ThreadMaintenance.pass")(function* (): Effect.fn.Return<
-        MaintenancePassReport,
-        MaintenancePassFailure
-      > {
+      const pass = Effect.fn("ThreadMaintenance.pass")(function* (
+        yieldAfter: DateTime.Utc,
+      ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure> {
         const annotate = (report: MaintenancePassReport) =>
           Effect.annotateCurrentSpan({
             phase: report.phase,
@@ -495,8 +496,9 @@ export class ThreadMaintenance extends Context.Service<
         }
         // Step 2 — reconciliation strictly precedes new work in this pass (exit gate).
         const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.runRecovery;
-        // Step 3 — one bounded drain pass over this Object's own lane.
-        const settlements = yield* runtime.processThreadResolved(identity.threadId);
+        // One head Attempt per event. The runtime yields after a committed turn when the
+        // soft deadline is reached; queued followers belong to a subsequent alarm.
+        const settlement = yield* runtime.processThreadHead(identity.threadId, { yieldAfter });
         // Observe residual state before acknowledging this exact pass-start generation.
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const reports = new Map(recovered.map((report) => [report.submissionId, report]));
@@ -518,7 +520,8 @@ export class ThreadMaintenance extends Context.Service<
         });
 
         const progressed =
-          settlements.length > 0 || recovered.some((report) => report.disposition === "repaired");
+          Option.isSome(settlement) ||
+          recovered.some((report) => report.disposition === "repaired");
 
         const delay = autonomous ? yield* rearmDelay(progressed) : 0;
         const now = yield* Clock.currentTimeMillis;
@@ -584,7 +587,7 @@ export class ThreadMaintenance extends Context.Service<
           MaintenancePassReport.make({
             phase: "actionable",
             recovered: recovered.length,
-            settled: settlements.length,
+            settled: Option.isSome(settlement) ? 1 : 0,
             nonterminal: remaining.length,
             alarm: alarmDisposition,
           }),
@@ -593,7 +596,25 @@ export class ThreadMaintenance extends Context.Service<
 
       return ThreadMaintenance.of({
         // A mid-pass immediate hint is droppable; durable dirty state decides the final alarm.
-        pass: alarm.withWakesDeferred(maintenancePassGate.withPermit(pass())),
+        pass: Effect.gen(function* () {
+          const yieldAfter = DateTime.makeUnsafe((yield* Clock.currentTimeMillis) + 10 * 60_000);
+
+          return yield* alarm.withWakesDeferred(maintenancePassGate.withPermit(pass(yieldAfter)));
+        }).pipe(
+          // Include permit waiting, recovery and acknowledgement in the event deadline.
+          // Interruption releases Attempt ownership, leaving the prearmed dirty generation
+          // for recovery. It never changes the logical Run duration or settles a policy failure.
+          // This cooperative timer cannot preempt synchronous CPU work or stuck finalizers.
+          Effect.timeoutOrElse({
+            duration: "14 minutes",
+            orElse: () =>
+              DurableAlarmError.make({
+                operation: "maintenance pass deadline",
+                message:
+                  "The maintenance event exceeded its 14 minute deadline; durable recovery remains pending",
+              }),
+          }),
+        ),
         ensureAlarm: ensureAlarm(),
         withMutation,
       });

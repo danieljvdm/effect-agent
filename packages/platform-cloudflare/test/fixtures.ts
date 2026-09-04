@@ -38,7 +38,7 @@ import {
   ReconciliationUncertain,
   ToolReconciler,
 } from "@effect-agent/thread/ToolReconciler";
-import { Duration, Effect, Layer, Schema, Stream } from "effect";
+import { type Clock, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";
@@ -62,6 +62,19 @@ const armedRuntimeEvictions = new Map<string, Array<DurableRuntimeFailpointLocat
 
 /** Typed (thrown, NOT abort) pass failures for the workerd alarm-retry row. */
 export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocation>();
+
+/** Virtual event clocks and a scoped post-claim hold for native alarm deadline evidence. */
+export const maintenanceClocks = new Map<string, Clock.Clock>();
+
+export const alarmAttemptHolds = new Map<
+  string,
+  {
+    readonly location: DurableRuntimeFailpointLocation;
+    readonly entered: Deferred.Deferred<void>;
+    readonly finished: Deferred.Deferred<void>;
+    readonly release?: Deferred.Deferred<void>;
+  }
+>();
 
 /**
  * Arm an ORDERED queue of eviction locations for one Thread. Chained rows (a location
@@ -126,6 +139,17 @@ export const runtimeEvictionFailpoint =
       const name = ctx.id.name;
 
       if (name === undefined) return Effect.void;
+      const hold = alarmAttemptHolds.get(name);
+
+      if (hold !== undefined && location === hold.location) {
+        alarmAttemptHolds.delete(name);
+
+        return Effect.acquireUseRelease(
+          Deferred.succeed(hold.entered, undefined),
+          () => (hold.release === undefined ? Effect.never : Deferred.await(hold.release)),
+          () => Deferred.succeed(hold.finished, undefined),
+        );
+      }
       if (armedRuntimeFailures.get(name) === location) {
         armedRuntimeFailures.delete(name);
 
@@ -499,6 +523,14 @@ const schedulePolicyResources = new Map<
   }
 >();
 
+export const schedulePrepareHolds = new Map<
+  string,
+  {
+    readonly entered: Deferred.Deferred<void>;
+    readonly finished: Deferred.Deferred<void>;
+  }
+>();
+
 export const observeSchedulePolicyResources = (owner: ScheduleOwner) => {
   const probe = { acquired: 0, released: 0, fail: false };
 
@@ -539,6 +571,17 @@ export const scheduleAuthorizer = (owner: ScheduleOwner) => {
     prepare: () =>
       Effect.suspend(() => {
         const key = scheduleOwnerKey(owner);
+        const deadlineHold = schedulePrepareHolds.get(key);
+
+        if (deadlineHold !== undefined) {
+          schedulePrepareHolds.delete(key);
+
+          return Effect.acquireUseRelease(
+            Deferred.succeed(deadlineHold.entered, undefined),
+            () => Effect.never,
+            () => Deferred.succeed(deadlineHold.finished, undefined),
+          );
+        }
         const hold = scheduleAuthorizationFailureHolds.get(key);
 
         if (hold?.held === true) {

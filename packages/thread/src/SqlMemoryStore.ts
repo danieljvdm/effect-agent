@@ -11,9 +11,11 @@ import {
   MemoryWrite,
   MemoryWriter,
 } from "@effect-agent/core/MemoryStore";
-import { Clock, Context, Effect, Encoding, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
+
+import { utf8ByteLength } from "./internal/utf8.ts";
 
 const STORAGE_VERSION = 2 as const;
 const METADATA_COMPONENT = "memory";
@@ -484,7 +486,7 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
             limits.maxDocuments !== Number.MAX_SAFE_INTEGER ||
             limits.maxReceipts !== Number.MAX_SAFE_INTEGER
           ) {
-            const bytes = (value: string) => Encoding.encodeHex(value).length / 2;
+            const bytes = utf8ByteLength;
             const identityBytes = bytes(next.key.namespace.address) + bytes(next.key.id);
             const documentBytes = identityBytes + bytes(documentJson) + 128;
 

@@ -616,11 +616,17 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
   });
 
   const loadRecords = Effect.fn("DoThreadStore.loadRecords")(function* (request: RawReadRequest) {
-    const rows = yield* journal
+    const result = yield* journal
       .read(request)
       .pipe(Effect.mapError((error) => storeError("read canonical records", error)));
 
-    return yield* Effect.forEach(rows, decodeEnvelope);
+    return {
+      count: result.count,
+      records: result.records.pipe(
+        Stream.mapError((error) => storeError("read canonical records", error)),
+        Stream.mapEffect(decodeEnvelope),
+      ),
+    };
   });
 
   const readEffect = Effect.fn("DoThreadStore.read")(function* (request: ThreadRead) {
@@ -630,7 +636,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
 
     yield* requireThread(journal, validated.threadId);
 
-    const records = yield* loadRecords(
+    const result = yield* loadRecords(
       RawReadRequest.make({
         threadId: validated.threadId,
         fromSequenceExclusive: validated.afterSequence ?? ZERO_CANONICAL_SEQUENCE,
@@ -638,7 +644,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
       }),
     );
 
-    return Stream.fromIterable(records);
+    return result.records;
   });
 
   const read: ThreadStore["Service"]["read"] = (request) => Stream.unwrap(readEffect(request));
@@ -655,7 +661,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     const poll = Effect.fn("DoThreadStore.observePoll")(function* () {
       const fromSequenceExclusive = yield* Ref.get(cursor);
 
-      const records = yield* loadRecords(
+      const result = yield* loadRecords(
         RawReadRequest.make({
           threadId: validated.threadId,
           fromSequenceExclusive,
@@ -663,17 +669,16 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
         }),
       );
 
-      if (records.length === 0) {
+      if (result.count === 0) {
         yield* Effect.sleep(config.observationPollInterval);
 
-        return [];
+        return Stream.empty;
       }
-      yield* Ref.set(cursor, records[records.length - 1].sequence);
 
-      return records;
+      return result.records.pipe(Stream.tap((record) => Ref.set(cursor, record.sequence)));
     });
 
-    return Stream.fromIterableEffectRepeat(poll());
+    return Stream.fromEffectRepeat(poll()).pipe(Stream.flatten);
   });
 
   const observe: ThreadStore["Service"]["observe"] = (request) =>

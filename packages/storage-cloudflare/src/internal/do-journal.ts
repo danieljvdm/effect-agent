@@ -1,6 +1,6 @@
 import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError } from "effect/unstable/sql/SqlError";
 
@@ -27,6 +27,7 @@ const BoundedStoredText = Schema.String.check(Schema.isMaxLength(2_000_000));
 const BoundedIdentifier = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
 const MAX_RECORDS_PER_THREAD = 65_536;
 const MAX_IDENTIFIER_LENGTH = 1_024;
+const MAX_READ_PAGE_JSON_BYTES = 4 * 1024 * 1024;
 /** Durable Object SQL storage allows at most 100 bound parameters per statement. */
 const MAX_BOUND_PARAMETERS = 100;
 const isSqlError = Schema.is(SqlError);
@@ -76,6 +77,13 @@ class RecordRow extends Schema.Class<RecordRow>("RecordRow")({
   record_json: BoundedStoredText,
   sequence: CanonicalSequence,
 }) {}
+
+const ReadPlanRow = Schema.Struct({
+  sequence: CanonicalSequence,
+  record_json_bytes: Schema.Natural.check(Schema.isLessThanOrEqualTo(MAX_READ_PAGE_JSON_BYTES)),
+});
+
+type ReadPage = [typeof ReadPlanRow.Type, ...Array<typeof ReadPlanRow.Type>];
 
 class CheckpointRow extends Schema.Class<CheckpointRow>("CheckpointRow")({
   checkpoint_json: BoundedStoredText,
@@ -134,8 +142,6 @@ export class RawCheckpoint extends Schema.Class<RawCheckpoint>(
 export class RawThreadExport extends Schema.Class<RawThreadExport>(
   "@effect-agent/storage-cloudflare/RawThreadExport",
 )({
-  batches: Schema.Array(BatchRow),
-  checkpoints: Schema.Array(CheckpointRow),
   thread: ThreadRow,
   records: Schema.Array(RecordRow),
 }) {}
@@ -737,13 +743,12 @@ const makeJournal = (
   });
 
   const read = Effect.fn("DoJournal.read")(function* (request: RawReadRequest) {
-    const rows = yield* sql<Record<string, unknown>>`
+    // Capture membership without retaining payloads. Append-only sequences keep each later
+    // payload query inside this snapshot, even when new records arrive during consumption.
+    const planRows = yield* sql<Record<string, unknown>>`
       SELECT
-        thread_id,
         sequence,
-        record_id,
-        batch_id,
-        record_json
+        length(CAST(record_json AS BLOB)) AS record_json_bytes
       FROM effect_agent_canonical_records
       WHERE thread_id = ${request.threadId}
         AND sequence > ${request.fromSequenceExclusive}
@@ -751,12 +756,78 @@ const makeJournal = (
       LIMIT ${request.limit}
     `.pipe(Effect.mapError(storageError("read canonical records")));
 
-    return yield* decodeRows(
-      Schema.Array(RecordRow),
+    const plan = yield* decodeRows(
+      Schema.Array(ReadPlanRow),
       "effect_agent_canonical_records",
       `${request.threadId}>${request.fromSequenceExclusive}`,
-      rows,
+      planRows,
     );
+
+    const mismatch = () =>
+      DoStorageCorruptionError.make({
+        table: "effect_agent_canonical_records",
+        rowKey: `${request.threadId}>${request.fromSequenceExclusive}`,
+        message: "Canonical read membership, sequence, or payload size changed from its read plan.",
+      });
+
+    if (plan.length > request.limit) return yield* mismatch();
+
+    const pages: Array<ReadPage> = [];
+    let page: ReadPage | undefined;
+    let pageBytes = 0;
+    let previousSequence = request.fromSequenceExclusive;
+
+    for (const row of plan) {
+      if (row.sequence !== previousSequence + 1) return yield* mismatch();
+      previousSequence = row.sequence;
+      if (page === undefined || pageBytes + row.record_json_bytes > MAX_READ_PAGE_JSON_BYTES) {
+        page = [row];
+        pages.push(page);
+        pageBytes = row.record_json_bytes;
+      } else {
+        page.push(row);
+        pageBytes += row.record_json_bytes;
+      }
+    }
+
+    const readPage = Effect.fn("DoJournal.readPage")(function* (page: ReadPage) {
+      const rows = yield* sql<Record<string, unknown>>`
+        SELECT thread_id, sequence, record_id, batch_id, record_json
+        FROM effect_agent_canonical_records
+        WHERE thread_id = ${request.threadId}
+          AND sequence >= ${page[0].sequence}
+          AND sequence <= ${page[page.length - 1].sequence}
+        ORDER BY sequence
+      `.pipe(Effect.mapError(storageError("read canonical records")));
+
+      const decoded = yield* decodeRows(
+        Schema.Array(RecordRow),
+        "effect_agent_canonical_records",
+        `${request.threadId}/${page[0].sequence}`,
+        rows,
+      );
+
+      if (
+        decoded.length !== page.length ||
+        decoded.some(
+          (row, index) =>
+            row.thread_id !== request.threadId ||
+            row.sequence !== page[index].sequence ||
+            storedTextBytes(row.record_json) !== page[index].record_json_bytes,
+        )
+      ) {
+        return yield* mismatch();
+      }
+
+      return decoded;
+    });
+
+    return {
+      count: plan.length,
+      records: Stream.fromIterable(pages).pipe(
+        Stream.flatMap((page) => Stream.fromIterableEffect(readPage(page))),
+      ),
+    };
   });
 
   const exportThread = Effect.fn("DoJournal.exportThread")(function* (threadId: string) {
@@ -783,20 +854,6 @@ const makeJournal = (
 
           yield* failpoint("export:after-thread-read");
 
-          const batchRows = yield* sql<Record<string, unknown>>`
-            SELECT
-              thread_id,
-              batch_id,
-              first_sequence,
-              last_sequence,
-              batch_digest,
-              tail_digest,
-              batch_json
-            FROM effect_agent_canonical_batches
-            WHERE thread_id = ${threadId}
-            ORDER BY first_sequence
-          `.pipe(Effect.mapError(storageError("export canonical batches")));
-
           const recordRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -809,36 +866,13 @@ const makeJournal = (
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("export canonical records")));
 
-          const checkpointRows = yield* sql<Record<string, unknown>>`
-            SELECT
-              thread_id,
-              through_sequence,
-              tail_digest,
-              checkpoint_json
-            FROM effect_agent_checkpoints
-            WHERE thread_id = ${threadId}
-            ORDER BY through_sequence
-          `.pipe(Effect.mapError(storageError("export checkpoints")));
-
           return RawThreadExport.make({
             thread,
-            batches: yield* decodeRows(
-              Schema.Array(BatchRow),
-              "effect_agent_canonical_batches",
-              threadId,
-              batchRows,
-            ),
             records: yield* decodeRows(
               Schema.Array(RecordRow),
               "effect_agent_canonical_records",
               threadId,
               recordRows,
-            ),
-            checkpoints: yield* decodeRows(
-              Schema.Array(CheckpointRow),
-              "effect_agent_checkpoints",
-              threadId,
-              checkpointRows,
             ),
           });
         }),

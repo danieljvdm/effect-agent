@@ -9,7 +9,7 @@ import {
 import { type Settlement } from "@effect-agent/thread/SubmissionLedger";
 import { type SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
 import { expectTypeOf, it } from "@effect/vitest";
-import type { Effect, Option } from "effect";
+import type { DateTime, Effect, Option } from "effect";
 
 type Runtime = DurableAgentRuntime["Service"];
 type Head = ReturnType<Runtime["processThreadHead"]>;
@@ -18,7 +18,9 @@ type Inspection = ReturnType<Runtime["inspectSubmissionStatus"]>;
 type Recovery = ReturnType<Runtime["recoverSubmission"]>;
 
 it("keeps bounded worker operations and status reads typed without hidden requirements", () => {
-  expectTypeOf<Parameters<Runtime["processThreadHead"]>>().toEqualTypeOf<[threadId: ThreadId]>();
+  expectTypeOf<Parameters<Runtime["processThreadHead"]>>().toEqualTypeOf<
+    [threadId: ThreadId, options?: { readonly yieldAfter?: DateTime.Utc }]
+  >();
   expectTypeOf<Parameters<Runtime["processThreadResolved"]>>().toEqualTypeOf<
     [threadId: ThreadId]
   >();

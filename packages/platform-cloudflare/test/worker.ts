@@ -19,7 +19,7 @@ import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-clo
 import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
 import { OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
 import { ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread/Schedule";
-import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Crypto, Effect, Layer, Schema } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
@@ -30,6 +30,7 @@ import {
   PRODUCER_PREFIX,
   fixtureReconcilerLayer,
   maintenanceRaceFailpoint,
+  maintenanceClocks,
   makeContextCompactorRunContextLayer,
   makeContextAuthorizationLayer,
   plannerDefinition,
@@ -299,7 +300,17 @@ const progressIncarnation = (ctx: DurableObjectState): number => {
   return created;
 };
 
-export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, baseOptions) {
+export class TestThreadObject extends ThreadObject.make(testRuntimeLayer, {
+  ...baseOptions,
+  eventLayer: Layer.effect(
+    Clock.Clock,
+    Effect.gen(function* () {
+      const identity = yield* ThreadObjectIdentity;
+
+      return maintenanceClocks.get(identity.threadId) ?? (yield* Clock.Clock);
+    }),
+  ),
+}) {
   memoryChange(project: string, encoded: unknown) {
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {

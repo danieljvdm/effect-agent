@@ -4279,6 +4279,8 @@ const makeTurn = <
     Effect.gen(function* () {
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
+
+      if (options.beforeTurn !== undefined) yield* options.beforeTurn();
       const now = yield* Clock.currentTimeMillis;
 
       if (now >= context.durationDeadlineMillis) {

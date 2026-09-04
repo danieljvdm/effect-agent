@@ -11,6 +11,7 @@ export class DigestError extends Schema.TaggedError<DigestError>()("DigestError"
 
 const JsonArray = Schema.Array(Schema.Json);
 const isJsonArray = Schema.is(JsonArray);
+const utf8 = new TextEncoder();
 
 const canonicalJson = (value: Schema.Json): string => {
   if (
@@ -40,9 +41,7 @@ export const digestJson = Effect.fn("Thread.digestJson")(function* (
 ): Effect.fn.Return<Digest, DigestError, Crypto.Crypto> {
   const crypto = yield* Crypto.Crypto;
 
-  const bytes = yield* Effect.fromResult(
-    Encoding.decodeHex(Encoding.encodeHex(canonicalJson(value))),
-  ).pipe(Effect.mapError(() => DigestError.make({ message: "Canonical JSON encoding failed" })));
+  const bytes = utf8.encode(canonicalJson(value));
 
   const digest = yield* crypto
     .digest("SHA-256", bytes)

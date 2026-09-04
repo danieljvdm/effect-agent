@@ -6,15 +6,19 @@ import {
 import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare/DoScheduleStore";
 import {
   ScheduleId,
+  defaultSchedulingLimits,
   type ScheduleAuthorizer,
   type ScheduleOwner,
 } from "@effect-agent/thread/Schedule";
+import { scheduleOwnerKey } from "@effect-agent/thread/ScheduleTransition";
 import { Scheduling } from "@effect-agent/thread/Scheduling";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect, type Layer, Schema } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, type Layer, Schema } from "effect";
 import { DurableObject, type DurableObjectState, type WorkerEnvironment } from "effect-cf";
+import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
 
+import { scheduleAlarmHandler } from "../src/CloudflareScheduling.ts";
 import {
   TEST_DIGESTS,
   TEST_PRINCIPAL,
@@ -28,6 +32,7 @@ import {
   observeScheduleIdle,
   observeSchedulePolicyResources,
   plannerDefinition,
+  schedulePrepareHolds,
 } from "./fixtures.ts";
 import { laneRows, runScheduleClient, scheduleStubFor } from "./harness.ts";
 
@@ -144,6 +149,128 @@ const manage = (
   );
 
 describe("Cloudflare Schedule Owner", () => {
+  it("reaches healthy work after a full corrupt due page and retains its recovery alarm", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const healthy = fixture("healthy-after-page");
+
+        const broken = Array.from({ length: 16 }, () => ({
+          ...fixture("broken-first-page"),
+          owner: healthy.owner,
+          scope: healthy.scope,
+        }));
+
+        for (const entry of [...broken, healthy]) {
+          yield* Effect.promise(() =>
+            manage(entry, Date.now() + 86_400_000, "progress past failed work"),
+          );
+        }
+        yield* Effect.promise(() =>
+          runInDurableObject(scheduleStubFor(healthy.owner), (_instance, state) => {
+            state.storage.sql.exec(
+              "UPDATE effect_agent_schedules SET deadline_at_millis = 0, record_json = json_set(record_json, '$.nextAtMillis', 0)",
+            );
+            state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0");
+            for (const entry of broken) {
+              state.storage.sql.exec(
+                "UPDATE effect_agent_schedules SET record_json = ? WHERE schedule_id = ?",
+                "{invalid-json",
+                entry.scheduleId,
+              );
+            }
+          }),
+        );
+        yield* TestClock.setTime(Date.now() + 3_600_000);
+        const clock = yield* Clock.Clock;
+        const before = yield* Effect.promise(() => storeProbe(healthy.owner));
+
+        const runPass = () =>
+          Effect.promise(() =>
+            runInDurableObject(scheduleStubFor(healthy.owner), (instance) =>
+              instance[DurableObject.RunSymbol](
+                scheduleAlarmHandler(defaultSchedulingLimits).pipe(
+                  Effect.provideService(Clock.Clock, clock),
+                ),
+              ),
+            ),
+          );
+
+        yield* runPass();
+
+        expect((yield* Effect.promise(() => snapshotFor(healthy))).lastReceipt).not.toBeNull();
+        expect(yield* Effect.promise(() => laneRows(healthy.thread))).toHaveLength(1);
+        const after = yield* Effect.promise(() => storeProbe(healthy.owner));
+
+        expect(after?.alarm_generation).toBeGreaterThan(before?.alarm_generation ?? 0);
+        const alarms = yield* Effect.promise(() => alarmRows(healthy.owner));
+
+        expect(alarms).toHaveLength(1);
+        expect(alarms[0]?.run_at).toBeGreaterThan(yield* Clock.currentTimeMillis);
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
+  it("interrupts an overlong schedule alarm and preserves its replacement wake and scoped cleanup", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const data = fixture("alarm-deadline");
+        const entered = yield* Deferred.make<void>();
+        const finished = yield* Deferred.make<void>();
+
+        yield* Effect.promise(() => manage(data, Date.now() + 86_400_000, "deadline recovery"));
+        yield* Effect.promise(() =>
+          runInDurableObject(scheduleStubFor(data.owner), (_instance, state) => {
+            state.storage.sql.exec(
+              "UPDATE effect_agent_schedules SET deadline_at_millis = 0, record_json = json_set(record_json, '$.nextAtMillis', 0)",
+            );
+            state.storage.sql.exec("UPDATE effect_cf_scheduled_alarms SET run_at = 0");
+          }),
+        );
+        yield* TestClock.setTime(Date.now() + 3_600_000);
+        const clock = yield* Clock.Clock;
+        const key = scheduleOwnerKey(data.owner);
+
+        schedulePrepareHolds.set(key, { entered, finished });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            schedulePrepareHolds.delete(key);
+          }),
+        );
+        const before = yield* Effect.promise(() => storeProbe(data.owner));
+
+        const runPass = () =>
+          Effect.tryPromise({
+            try: () =>
+              runInDurableObject(scheduleStubFor(data.owner), (instance) =>
+                instance[DurableObject.RunSymbol](
+                  scheduleAlarmHandler(defaultSchedulingLimits).pipe(
+                    Effect.provideService(Clock.Clock, clock),
+                  ),
+                ),
+              ),
+            catch: (cause) => String(cause),
+          });
+
+        const pending = yield* runPass().pipe(Effect.exit, Effect.forkChild);
+
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust("14 minutes");
+        const exit = yield* Fiber.join(pending);
+
+        expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "success").toContain(
+          "TimeoutError",
+        );
+        expect(yield* Deferred.isDone(finished)).toBe(true);
+        expect(
+          (yield* Effect.promise(() => storeProbe(data.owner)))?.alarm_generation,
+        ).toBeGreaterThan(before?.alarm_generation ?? 0);
+        expect(yield* Effect.promise(() => alarmRows(data.owner))).toHaveLength(1);
+        expect((yield* Effect.promise(() => snapshotFor(data))).lastReceipt).toBeNull();
+        yield* runPass();
+        expect((yield* Effect.promise(() => snapshotFor(data))).lastReceipt).not.toBeNull();
+        expect(yield* Effect.promise(() => laneRows(data.thread))).toHaveLength(1);
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
   it("requires host policy and routing Layers with all application dependencies provided", () => {
     type Host = Parameters<typeof makeScheduleOwnerObjectClass>[0];
     type Ports = ScheduleAuthorizer | ThreadObjectNamespace;
