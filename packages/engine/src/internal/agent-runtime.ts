@@ -4240,6 +4240,12 @@ function decodeRunDisposition<DispositionSchema extends Schema.Top>(
     : decodeRunDispositionCandidate(declaration, encoded);
 }
 
+type ContinueTurn = (
+  prompt: Prompt.Prompt,
+  turn: number,
+  toolCalls: number,
+) => Stream.Stream<never>;
+
 const makeTurn = <
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
@@ -4270,6 +4276,7 @@ const makeTurn = <
   turn: number,
   priorToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
+  nextTurn: ContinueTurn,
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
@@ -5149,6 +5156,7 @@ const makeTurn = <
                                 turn,
                                 toolCalls,
                                 options,
+                                nextTurn,
                               ),
                             ),
                           ),
@@ -5176,7 +5184,7 @@ const makeTurn = <
               const steering = yield* drainInputs(context, options);
               const nextPrompt = yield* appendInputs(context, history, steering, options);
 
-              return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+              return nextTurn(nextPrompt, turn + 1, toolCalls);
             });
 
           /**
@@ -5218,7 +5226,7 @@ const makeTurn = <
                 );
                 const nextPrompt = yield* appendInputs(context, history, queued, options);
 
-                return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+                return nextTurn(nextPrompt, turn + 1, toolCalls);
               }
               const output = yield* decodeFinalOutput(agent, trace.text.join(""));
               const declaration = agent.definition.runDisposition;
@@ -5327,6 +5335,7 @@ const makeTurn = <
                         turn,
                         toolCalls,
                         options,
+                        nextTurn,
                       ),
                     ),
                   );
@@ -5390,7 +5399,16 @@ const makeTurn = <
 
                 return toolResults.pipe(
                   Stream.concat(
-                    toolBatchContinuation(agent, context, trace, prompt, turn, toolCalls, options),
+                    toolBatchContinuation(
+                      agent,
+                      context,
+                      trace,
+                      prompt,
+                      turn,
+                      toolCalls,
+                      options,
+                      nextTurn,
+                    ),
                   ),
                 );
               }),
@@ -5456,6 +5474,7 @@ const toolBatchContinuation = <
   turn: number,
   toolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
+  nextTurn: ContinueTurn,
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
@@ -5573,7 +5592,7 @@ const toolBatchContinuation = <
       const steering = yield* drainInputs(context, options);
       const nextPrompt = yield* appendInputs(context, history, steering, options);
 
-      return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+      return nextTurn(nextPrompt, turn + 1, toolCalls);
     }),
   );
 
@@ -5620,6 +5639,7 @@ const makeResumeTurn = <
   resume: RunTurnResume,
   countedToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
+  nextTurn: ContinueTurn,
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
@@ -5902,7 +5922,16 @@ const makeResumeTurn = <
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
       const continueAfterBatch = () =>
-        toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options);
+        toolBatchContinuation(
+          agent,
+          context,
+          trace,
+          resumedPrompt,
+          turn,
+          toolCalls,
+          options,
+          nextTurn,
+        );
 
       // RUN-018 on the resume path: a canonically declared over-budget batch
       // settles synthetically under final-answer mode — recorded settled
@@ -6341,29 +6370,78 @@ function streamWithCompletion<
                 context.compaction.protectedEnd = prompt.content.length;
               }
               yield* advanceHistory(context, prompt, options);
+
+              let pending:
+                | {
+                    readonly prompt: Prompt.Prompt;
+                    readonly turn: number;
+                    readonly toolCalls: number;
+                    readonly resume?: RunTurnResume;
+                  }
+                | undefined;
+
+              const nextTurn: ContinueTurn = (prompt, turn, toolCalls) =>
+                Stream.fromEffectDrain(
+                  Effect.sync(() => {
+                    pending = { prompt, turn, toolCalls };
+                  }),
+                );
+
               if (resumed !== undefined) {
                 // A declared-batch resume re-enters mid-Turn: steering seams
                 // reopen only after the resumed batch settles, so the initial
                 // drain is skipped and the continuation drains at the safe seam.
-                return makeResumeTurn(
-                  agent,
-                  context,
+                pending = {
                   prompt,
-                  resumed.batch,
-                  resumed.usage.toolCalls,
-                  options,
-                );
-              }
-              const steering = yield* drainInputs(context, options);
-              const initialPrompt = yield* appendInputs(context, prompt, steering, options);
+                  turn: resumed.batch.turn,
+                  toolCalls: resumed.usage.toolCalls,
+                  resume: resumed.batch,
+                };
+              } else {
+                const steering = yield* drainInputs(context, options);
+                const initialPrompt = yield* appendInputs(context, prompt, steering, options);
 
-              return makeTurn(
-                agent,
-                context,
-                initialPrompt,
-                (resumeUsage?.committedTurns ?? 0) + 1,
-                resumeUsage?.toolCalls ?? 0,
-                options,
+                pending = {
+                  prompt: initialPrompt,
+                  turn: (resumeUsage?.committedTurns ?? 0) + 1,
+                  toolCalls: resumeUsage?.toolCalls ?? 0,
+                };
+              }
+
+              // Each finite Turn schedules at most one successor. Sequential
+              // flatMap releases its child pull and Scope before taking that
+              // request, so prior traces and prepared prompts do not remain
+              // reachable through recursively nested Stream.concat descriptions.
+              return Stream.fromEffectRepeat(
+                Effect.suspend(() => {
+                  const current = pending;
+
+                  pending = undefined;
+
+                  return current === undefined ? Cause.done() : Effect.succeed(current);
+                }),
+              ).pipe(
+                Stream.flatMap((request) =>
+                  request.resume === undefined
+                    ? makeTurn(
+                        agent,
+                        context,
+                        request.prompt,
+                        request.turn,
+                        request.toolCalls,
+                        options,
+                        nextTurn,
+                      )
+                    : makeResumeTurn(
+                        agent,
+                        context,
+                        request.prompt,
+                        request.resume,
+                        request.toolCalls,
+                        options,
+                        nextTurn,
+                      ),
+                ),
               );
             }),
           );

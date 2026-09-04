@@ -50,6 +50,11 @@ contract. Compaction summaries never receive transient references. Durable
 recovery rebuilds the committed model view before applying prompt preparation; a transient loader
 receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and Turn number.
 
+Each turn releases its response trace and prepared context before the next turn starts. Official
+history and detached event replay retain their own records. Resources acquired by `beforeTurn`
+or `context.prepare` also close at that turn boundary, including on failure or interruption.
+Acquire resources needed across turns in a surrounding run Layer or Scope.
+
 To add application instructions to each request:
 
 ```ts twoslash
