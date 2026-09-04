@@ -168,7 +168,435 @@ const readCurrent = (filename: string) =>
 const runRaw = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
   effect.pipe(Effect.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
+// Derive the oracle from retained rows, independently of the accounting triggers.
+const checkUsage = (filename: string) =>
+  runRaw(
+    filename,
+    Effect.gen(function* () {
+      const sql = yield* SqlClientService.SqlClient;
+
+      const documents = yield* sql<{ namespace: string; source_id: string; document_json: string }>`
+    SELECT namespace, source_id, document_json FROM effect_agent_memory_documents_v1
+  `;
+
+      const receipts = yield* sql<{
+        namespace: string;
+        source_id: string;
+        operation_id: string;
+        command_json: string;
+        result_json: string;
+      }>`
+    SELECT namespace, source_id, operation_id, command_json, result_json FROM effect_agent_memory_receipts_v1
+  `;
+
+      const bytes = [...documents, ...receipts].reduce(
+        (total, row) =>
+          total +
+          128 +
+          Object.values(row).reduce(
+            (size, value) => size + new TextEncoder().encode(value).length,
+            0,
+          ),
+        0,
+      );
+
+      const usage = yield* sql<{ documents: number; receipts: number; bytes: number }>`
+    SELECT documents, receipts, bytes FROM effect_agent_memory_usage_v1
+  `;
+
+      expect(usage).toEqual([{ documents: documents.length, receipts: receipts.length, bytes }]);
+
+      return { documents: documents.length, receipts: receipts.length, bytes };
+    }),
+  );
+
+// Reproduce the beta.47 layout without touching canonical document/receipt bytes.
+const legacyLayout = (filename: string) =>
+  runRaw(
+    filename,
+    Effect.gen(function* () {
+      const sql = yield* SqlClientService.SqlClient;
+
+      for (const table of ["documents", "receipts"]) {
+        for (const event of ["insert", "update", "delete"]) {
+          yield* sql.unsafe(`DROP TRIGGER effect_agent_memory_${table}_v1_usage_${event}`);
+        }
+      }
+      yield* sql`DROP TABLE effect_agent_memory_usage_v1`;
+      yield* sql`DELETE FROM effect_agent_memory_metadata WHERE component = 'memory-usage'`;
+    }),
+  );
+
 describe("SQLite memory store", () => {
+  it.effect("admits shrinking UTF-8 replacements by their retained byte delta", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const first = put("large", null, "🌱".repeat(1_000));
+        const replacement = put("small", "1", "é");
+        const defaults = yield* SqlMemoryLimits;
+
+        yield* Effect.flatMap(MemoryWriter, (writer) => writer.change(first)).pipe(
+          Effect.provide(storeLayer(filename)),
+        );
+        const before = yield* checkUsage(filename);
+
+        // The smaller head releases more bytes than the new small receipt consumes.
+        const bounded = storeLayer(filename).pipe(
+          Layer.provide(
+            Layer.succeed(SqlMemoryLimits, {
+              ...defaults,
+              maxStorageBytes: before.bytes,
+              maxDocuments: 1,
+            }),
+          ),
+        );
+
+        const result = yield* Effect.flatMap(MemoryWriter, (writer) =>
+          writer.change(replacement),
+        ).pipe(Effect.provide(bounded));
+
+        expect(result.generation).toBe(2);
+        const after = yield* checkUsage(filename);
+
+        expect(after.bytes).toBeLessThan(before.bytes);
+        expect(after).toMatchObject({ documents: 1, receipts: 2 });
+        yield* Effect.gen(function* () {
+          const writer = yield* MemoryWriter;
+
+          expect(yield* writer.change(replacement)).toEqual(result);
+          expect(
+            yield* writer.change(put("small", "1", "changed")).pipe(Effect.flip),
+          ).toBeInstanceOf(MemoryOperationConflict);
+        }).pipe(Effect.provide(bounded));
+        expect(yield* checkUsage(filename)).toEqual(after);
+      }),
+    ),
+  );
+
+  it.effect(
+    "reserves receipt capacity for terminal withdrawal and permits exact replay at the hard limit",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const defaults = yield* SqlMemoryLimits;
+
+          const bounded = storeLayer(filename).pipe(
+            Layer.provide(
+              Layer.succeed(SqlMemoryLimits, {
+                ...defaults,
+                maxDocuments: 1,
+                maxReceipts: 2,
+                reservedWithdrawalReceipts: 1,
+              }),
+            ),
+          );
+
+          yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+
+            expect(yield* writer.change(withdraw("missing", "1")).pipe(Effect.flip)).toBeInstanceOf(
+              MemoryConflict,
+            );
+            const original = yield* writer.change(put("original", null, "retained"));
+
+            expect(
+              yield* writer.change(put("correction", "1", "new")).pipe(Effect.flip),
+            ).toMatchObject({ reason: "invalid-input" });
+            const tombstone = yield* writer.change(withdraw("withdraw", "1"));
+
+            expect(yield* writer.change(withdraw("withdraw", "1"))).toEqual(tombstone);
+            expect(yield* writer.change(put("original", null, "retained"))).toEqual(original);
+            expect(
+              yield* writer.change(put("late", "2", "resurrect")).pipe(Effect.flip),
+            ).toBeInstanceOf(MemoryWithdrawn);
+          }).pipe(Effect.provide(bounded));
+          expect(yield* checkUsage(filename)).toMatchObject({ documents: 1, receipts: 2 });
+        }),
+      ),
+  );
+
+  it.effect("uses finite byte headroom after migration above the ordinary threshold", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const defaults = yield* SqlMemoryLimits;
+
+        yield* Effect.flatMap(MemoryWriter, (writer) =>
+          writer.change(put("seed", null, "short")),
+        ).pipe(Effect.provide(storeLayer(filename)));
+        const before = yield* checkUsage(filename);
+
+        yield* legacyLayout(filename);
+
+        const limits = {
+          ...defaults,
+          maxStorageBytes: before.bytes + 5_000,
+          reservedWithdrawalBytes: 5_000,
+        };
+
+        const bounded = storeLayer(filename).pipe(
+          Layer.provide(Layer.succeed(SqlMemoryLimits, limits)),
+        );
+
+        yield* Effect.gen(function* () {
+          const writer = yield* MemoryWriter;
+
+          expect(
+            yield* writer.change(put("ordinary", "1", "short")).pipe(Effect.flip),
+          ).toMatchObject({ reason: "invalid-input" });
+          expect(
+            yield* writer
+              .change(
+                MemoryWrite.make({
+                  _tag: "Withdraw",
+                  key,
+                  operationId: "cleanup",
+                  expectedRevision: "1",
+                  reason: "€".repeat(4_096),
+                }),
+              )
+              .pipe(Effect.flip),
+          ).toMatchObject({ operation: "memory storage limit", reason: "invalid-input" });
+          expect(yield* writer.change(withdraw("cleanup", "1"))).toMatchObject({
+            _tag: "WithdrawnMemoryDocument",
+          });
+        }).pipe(Effect.provide(bounded));
+        expect((yield* checkUsage(filename)).bytes).toBeLessThanOrEqual(limits.maxStorageBytes);
+      }),
+    ),
+  );
+
+  it.effect("keeps trusted cleanup Put within the same hard limit over one SQL client", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const defaults = yield* SqlMemoryLimits;
+        const sqlLayer = SqliteClient.layer({ filename });
+
+        const ordinary = memoryStoreLayer.pipe(
+          Layer.provide(
+            Layer.succeed(SqlMemoryLimits, {
+              ...defaults,
+              maxReceipts: 2,
+              reservedWithdrawalReceipts: 1,
+            }),
+          ),
+        );
+
+        const cleanup = memoryStoreLayer.pipe(
+          Layer.provide(
+            Layer.succeed(SqlMemoryLimits, {
+              ...defaults,
+              maxReceipts: 2,
+            }),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+
+            yield* writer.change(put("profile", null, "source-owned and unrelated"));
+            expect(
+              yield* writer.change(put("cleanup", "1", "unrelated")).pipe(Effect.flip),
+            ).toMatchObject({ reason: "invalid-input" });
+          }).pipe(Effect.provide(ordinary));
+          yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+
+            expect(yield* writer.change(put("cleanup", "1", "unrelated"))).toMatchObject({
+              generation: 2,
+            });
+            expect(
+              yield* writer.change(put("overflow", "2", "more")).pipe(Effect.flip),
+            ).toMatchObject({ reason: "invalid-input" });
+          }).pipe(Effect.provide(cleanup));
+        }).pipe(Effect.provide(sqlLayer));
+        expect(yield* checkUsage(filename)).toMatchObject({ documents: 1, receipts: 2 });
+      }),
+    ),
+  );
+
+  for (const point of [
+    "memory:initialize:before-accounting",
+    "memory:initialize:after-accounting",
+  ] as const) {
+    it.effect(`migrates legacy receipts atomically after ${point}`, () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const old = put("legacy", null, "old plaintext 🌱");
+
+          const otherKey = MemoryKey.make({
+            namespace: TestNamespace.make("tenant-b"),
+            id: key.id,
+          });
+
+          const other = putFor(otherKey, "legacy", null, "different namespace");
+
+          const results = yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+            const original = yield* writer.change(old);
+
+            yield* writer.change(put("correction", "1", "corrected"));
+            const tombstone = yield* writer.change(withdraw("terminal", "2"));
+            const second = yield* writer.change(other);
+
+            return { original, tombstone, second };
+          }).pipe(Effect.provide(storeLayer(filename)));
+
+          const snapshot = () =>
+            runRaw(
+              filename,
+              Effect.gen(function* () {
+                const sql = yield* SqlClientService.SqlClient;
+
+                return yield* sql`SELECT * FROM effect_agent_memory_receipts_v1 ORDER BY namespace, operation_id`;
+              }),
+            );
+
+          const receipts = yield* snapshot();
+
+          yield* legacyLayout(filename);
+          expect(yield* readCurrent(filename)).toEqual(results.tombstone);
+
+          const failed = yield* Effect.void.pipe(
+            Effect.provide(
+              failpointLayer(filename, (current) =>
+                current === point
+                  ? Effect.fail(MemoryMutationFailure.make({ point }))
+                  : Effect.void,
+              ),
+            ),
+            Effect.flip,
+          );
+
+          expect(failed).toEqual(MemoryMutationFailure.make({ point }));
+
+          const tables = yield* runRaw(
+            filename,
+            Effect.gen(function* () {
+              const sql = yield* SqlClientService.SqlClient;
+
+              return yield* sql`SELECT name FROM sqlite_master WHERE name = 'effect_agent_memory_usage_v1'`;
+            }),
+          );
+
+          expect(tables).toEqual([]);
+          yield* TestClock.setTime(50_000);
+          yield* Effect.gen(function* () {
+            const writer = yield* MemoryWriter;
+
+            expect(yield* writer.change(old)).toEqual(results.original);
+            expect(yield* writer.change(other)).toEqual(results.second);
+            expect(yield* writer.change(withdraw("terminal", "2"))).toEqual(results.tombstone);
+            expect(
+              yield* writer.change(put("legacy", null, "changed")).pipe(Effect.flip),
+            ).toBeInstanceOf(MemoryOperationConflict);
+            expect(
+              yield* writer.change(put("late", "3", "resurrect")).pipe(Effect.flip),
+            ).toBeInstanceOf(MemoryWithdrawn);
+          }).pipe(Effect.provide(storeLayer(filename)));
+          expect(yield* snapshot()).toEqual(receipts);
+          expect(yield* checkUsage(filename)).toMatchObject({ documents: 2, receipts: 4 });
+        }),
+      ),
+    );
+  }
+
+  it.effect("serializes independent connections against the last ordinary receipt", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const defaults = yield* SqlMemoryLimits;
+
+        yield* Effect.void.pipe(Effect.provide(storeLayer(filename)));
+
+        const writes = ["a", "b"].map((id) =>
+          Effect.flatMap(MemoryWriter, (writer) =>
+            writer.change(
+              putFor(MemoryKey.make({ namespace: key.namespace, id }), id, null, "text"),
+            ),
+          ).pipe(
+            Effect.provide(
+              storeLayer(filename).pipe(
+                Layer.provide(
+                  Layer.succeed(SqlMemoryLimits, {
+                    ...defaults,
+                    maxReceipts: 2,
+                    reservedWithdrawalReceipts: 1,
+                  }),
+                ),
+              ),
+            ),
+            Effect.result,
+          ),
+        );
+
+        const results = yield* Effect.all(writes, { concurrency: 2 });
+
+        expect(results.filter(Result.isSuccess)).toHaveLength(1);
+        expect(results.filter(Result.isFailure)).toHaveLength(1);
+        expect(yield* checkUsage(filename)).toMatchObject({ documents: 1, receipts: 1 });
+      }),
+    ),
+  );
+
+  for (const damage of ["row", "marker", "trigger", "counter"] as const) {
+    it.effect(`rejects damaged established accounting: ${damage}`, () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          yield* Effect.flatMap(MemoryWriter, (writer) =>
+            writer.change(put("retained", null, "text")),
+          ).pipe(Effect.provide(storeLayer(filename)));
+          yield* runRaw(
+            filename,
+            Effect.gen(function* () {
+              const sql = yield* SqlClientService.SqlClient;
+
+              if (damage === "row") yield* sql`DELETE FROM effect_agent_memory_usage_v1`;
+              if (damage === "marker")
+                yield* sql`DELETE FROM effect_agent_memory_metadata WHERE component = 'memory-usage'`;
+              if (damage === "trigger")
+                yield* sql`DROP TRIGGER effect_agent_memory_documents_v1_usage_update`;
+              if (damage === "counter") {
+                yield* sql`PRAGMA ignore_check_constraints = ON`;
+                yield* sql`UPDATE effect_agent_memory_usage_v1 SET receipts = -1`;
+              }
+            }),
+          );
+          expect(
+            yield* Effect.void.pipe(Effect.provide(storeLayer(filename)), Effect.flip),
+          ).toMatchObject({ _tag: "MemoryStorageError", reason: "corrupt" });
+          expect(yield* readCurrent(filename)).toMatchObject({ generation: 1 });
+        }),
+      ),
+    );
+  }
+
+  it.effect("rejects invalid reserves before creating storage", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const defaults = yield* SqlMemoryLimits;
+
+        for (const reserve of [-1, 1.5, 3]) {
+          expect(
+            yield* Effect.void.pipe(
+              Effect.provide(
+                storeLayer(filename).pipe(
+                  Layer.provide(
+                    Layer.succeed(SqlMemoryLimits, {
+                      ...defaults,
+                      maxReceipts: 2,
+                      reservedWithdrawalReceipts: reserve,
+                    }),
+                  ),
+                ),
+              ),
+              Effect.flip,
+            ),
+          ).toMatchObject({ reason: "invalid-input" });
+        }
+      }),
+    ),
+  );
+
   for (const limit of ["maxDocuments", "maxReceipts", "maxStorageBytes"] as const) {
     it.effect(`enforces ${limit} independently without a row byte limit`, () =>
       withTemporaryDatabase((filename) =>
@@ -524,6 +952,7 @@ describe("SQLite memory store", () => {
           MemoryConflict.make({ key, expectedRevision: "1", actualRevision: "2" }),
         );
         expect((yield* readCurrent(filename))?.generation).toBe(2);
+        expect(yield* checkUsage(filename)).toMatchObject({ documents: 1, receipts: 2 });
       }),
     ),
   );
@@ -580,6 +1009,7 @@ describe("SQLite memory store", () => {
 
           expect(failed).toEqual(MemoryMutationFailure.make({ point }));
           expect(yield* readCurrent(filename)).toBeNull();
+          expect(yield* checkUsage(filename)).toEqual({ documents: 0, receipts: 0, bytes: 0 });
 
           const recovered = yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
@@ -622,6 +1052,7 @@ describe("SQLite memory store", () => {
 
           expect(failed).toEqual(MemoryMutationFailure.make({ point }));
           expect(yield* readCurrent(filename)).toEqual(active);
+          expect(yield* checkUsage(filename)).toMatchObject({ documents: 1, receipts: 1 });
 
           const recovered = yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
@@ -660,6 +1091,9 @@ describe("SQLite memory store", () => {
 
         expect(failure).toEqual(MemoryMutationFailure.make({ point: "memory:change:after" }));
         const committed = yield* readCurrent(filename);
+
+        // Upgrade the persisted beta.47 layout while the caller still lacks its acknowledgement.
+        yield* legacyLayout(filename);
 
         yield* TestClock.setTime(20_000);
 
@@ -726,7 +1160,12 @@ describe("SQLite memory store", () => {
     ),
   );
 
-  for (const point of ["memory:initialize:before", "memory:initialize:after"] as const) {
+  for (const point of [
+    "memory:initialize:before",
+    "memory:initialize:before-accounting",
+    "memory:initialize:after-accounting",
+    "memory:initialize:after",
+  ] as const) {
     it.effect(`recovers initialization at ${point} without canonical storage tables`, () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -762,7 +1201,63 @@ describe("SQLite memory store", () => {
             "effect_agent_memory_documents_v1",
             "effect_agent_memory_metadata",
             "effect_agent_memory_receipts_v1",
+            "effect_agent_memory_usage_v1",
           ]);
+        }),
+      ),
+    );
+  }
+
+  for (const mode of ["defect", "timeout", "interruption"] as const) {
+    it.effect(`rolls back accounting migration on ${mode}`, () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          yield* Effect.flatMap(MemoryWriter, (writer) =>
+            writer.change(put("retained", null, "text")),
+          ).pipe(Effect.provide(storeLayer(filename)));
+          yield* legacyLayout(filename);
+          const reached = yield* Deferred.make<void>();
+
+          const opening = Effect.void.pipe(
+            Effect.provide(
+              failpointLayer(filename, (point) =>
+                point === "memory:initialize:after-accounting"
+                  ? mode === "defect"
+                    ? Effect.die("injected")
+                    : Deferred.succeed(reached, undefined).pipe(Effect.andThen(Effect.never))
+                  : Effect.void,
+              ),
+            ),
+          );
+
+          if (mode === "defect") {
+            const result = yield* Effect.exit(opening);
+
+            expect(Exit.isFailure(result) && Cause.hasDies(result.cause)).toBe(true);
+          } else {
+            const fiber = yield* (
+              mode === "timeout" ? opening.pipe(Effect.timeout("1 second")) : opening
+            ).pipe(Effect.forkChild);
+
+            yield* Deferred.await(reached);
+            if (mode === "timeout") yield* TestClock.adjust("1 second");
+            else yield* Fiber.interrupt(fiber);
+            expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
+          }
+
+          const partial = yield* runRaw(
+            filename,
+            Effect.gen(function* () {
+              const sql = yield* SqlClientService.SqlClient;
+
+              return yield* sql`SELECT name FROM sqlite_master WHERE name = 'effect_agent_memory_usage_v1'`;
+            }),
+          );
+
+          expect(partial).toEqual([]);
+          yield* Effect.void.pipe(Effect.provide(storeLayer(filename)));
+          expect(yield* checkUsage(filename)).toMatchObject({ documents: 1, receipts: 1 });
+          expect(yield* readCurrent(filename)).toMatchObject({ generation: 1 });
         }),
       ),
     );
@@ -786,6 +1281,7 @@ describe("SQLite memory store", () => {
 
         expect(Exit.isFailure(defectExit) && Cause.hasDies(defectExit.cause)).toBe(true);
         expect(yield* readCurrent(filename)).toBeNull();
+        expect(yield* checkUsage(filename)).toEqual({ documents: 0, receipts: 0, bytes: 0 });
 
         const timeoutFile = `${filename}-timeout`;
         const timeoutReached = yield* Deferred.make<void>();
@@ -810,6 +1306,7 @@ describe("SQLite memory store", () => {
         yield* TestClock.adjust("1 second");
         expect(Exit.isFailure(yield* Fiber.await(timeoutFiber))).toBe(true);
         expect(yield* readCurrent(timeoutFile)).toBeNull();
+        expect(yield* checkUsage(timeoutFile)).toEqual({ documents: 0, receipts: 0, bytes: 0 });
 
         const interruptedFile = `${filename}-interrupted`;
         const interruptionReached = yield* Deferred.make<void>();
@@ -839,6 +1336,7 @@ describe("SQLite memory store", () => {
           true,
         );
         expect(yield* readCurrent(interruptedFile)).toBeNull();
+        expect(yield* checkUsage(interruptedFile)).toEqual({ documents: 0, receipts: 0, bytes: 0 });
       }),
     ),
   );

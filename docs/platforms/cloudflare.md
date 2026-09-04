@@ -269,8 +269,32 @@ Default owner limits are 16 distinct sources, 1 MiB encoded request, 4 MiB encod
 16 MiB revalidation input, and a 10-second deadline. `MemoryObject.make` accepts `rpcLimits` and
 `storageLimits`. Storage defaults cap encoded rows at 1,900,000 bytes, 10,000 documents, 100,000
 operation receipts, and 512 MiB of conservatively accounted row data. SQLite page/index overhead is
-not included. Tombstones and receipts count toward capacity; there is no automatic pruning. A
-replacement conservatively charges both the old and new document while admitting the write.
+not included. Tombstones and receipts count toward capacity; there is no automatic pruning.
+Replacements charge the difference between the old and new encoded document, plus the new receipt.
+Persistent counters make admission independent of retained history size. Opening an existing
+version-2 store initializes counters once, atomically, without rewriting documents or receipts.
+
+Optional `reservedWithdrawalReceipts` and `reservedWithdrawalBytes` storage limits default to zero.
+They withhold capacity from ordinary `Put` within the existing hard receipt and byte limits;
+`Withdraw` can use the remaining hard budget. Row and document limits still apply. A withdrawal
+of an existing source adds one receipt and no document identity. A missing source cannot be
+withdrawn: the host must retain suppression for work that arrives before a document exists.
+
+Reserves are finite. Budget enough receipts and encoded bytes for the cleanup commands the host
+must complete; they do not guarantee unlimited cleanup. An existing store above the ordinary
+threshold remains readable and replayable, while new ordinary writes fail typed. A full store
+needs an explicit capacity increase within supported bounds before it has cleanup headroom.
+
+Deploy exclusively upgraded writers before relying on reserves. Accounting triggers include
+already-open older writers, but those writers can consume the reserved region because they do not
+know the new admission policy. Keep the database, accounting table, triggers and metadata together
+in backups; missing established accounting fails rather than silently resetting usage.
+
+Cleanup that edits a shared profile is a `Put`. A trusted host can build a second
+`memoryStoreLayer` with `SqlMemoryLimits` over the **same owner SQL client**, omitting the reserves
+while retaining the same hard totals. Authorize that capability only for cleanup obligations.
+Limits are captured when the Layer is built; providing different limits around an existing
+writer call does not change them. Do not create a second independently locked DO SQL client.
 
 Expected failures cross RPC in Schema-defined envelopes. `MemoryRpcError` distinguishes denied,
 protocol, budget, timeout, and unavailable failures; source and write errors retain their domain tags.

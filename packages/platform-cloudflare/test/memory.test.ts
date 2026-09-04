@@ -714,6 +714,70 @@ describe("shared Cloudflare memory owner", () => {
     );
   });
 
+  it("accounts replacements and reserved withdrawal receipts in real DO transactions", async () => {
+    const name = project();
+
+    await runInDurableObject(stub(name), (_instance, state) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const writer = yield* MemoryWriter;
+          const original = memoryPut(name, "source", "original", null, "🌱".repeat(1_000));
+
+          yield* writer.change(original);
+
+          const before = state.storage.sql
+            .exec<{ bytes: number }>("SELECT bytes FROM effect_agent_memory_usage_v1")
+            .one().bytes;
+
+          const correction = memoryPut(name, "source", "correction", "1", "é");
+
+          yield* writer.change(correction);
+
+          const after = state.storage.sql
+            .exec<{ bytes: number }>("SELECT bytes FROM effect_agent_memory_usage_v1")
+            .one().bytes;
+
+          expect(after).toBeLessThan(before);
+          expect(
+            yield* writer
+              .change(memoryPut(name, "source", "blocked", "2", "text"))
+              .pipe(Effect.flip),
+          ).toMatchObject({ reason: "invalid-input" });
+
+          const withdrawal = MemoryWrite.make({
+            _tag: "Withdraw",
+            key: original.key,
+            operationId: "cleanup",
+            expectedRevision: "2",
+            reason: "removed",
+          });
+
+          const tombstone = yield* writer.change(withdrawal);
+
+          expect(yield* writer.change(withdrawal)).toEqual(tombstone);
+          expect(
+            state.storage.sql
+              .exec("SELECT documents, receipts FROM effect_agent_memory_usage_v1")
+              .toArray(),
+          ).toEqual([{ documents: 1, receipts: 3 }]);
+        }).pipe(
+          Effect.provide(
+            doMemoryStoreLayer(
+              state.storage,
+              DoMemoryStorageLimits.make({
+                maxRowBytes: 20_000,
+                maxStorageBytes: 40_000,
+                maxDocuments: 1,
+                maxReceipts: 3,
+                reservedWithdrawalReceipts: 1,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
   it("finalizes owner authorization on timeout and lets a client interrupt without waiting for the owner", () =>
     Effect.runPromise(
       Effect.gen(function* () {
