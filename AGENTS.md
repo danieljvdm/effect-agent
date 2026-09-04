@@ -50,8 +50,8 @@ Before editing code:
 4. Read the relevant guide, API comments, and neighboring tests for the modules in scope.
 5. Read `node_modules/effect/AGENTS.md` before writing Effect code (the canonical Effect
    guidance; `.agents/skills` carries the focused task skills).
-6. Read `.agents/skills/build-effect-clis/SKILL.md` before creating or changing repository
-   scripts.
+6. Read `.agents/skills/effect-development/references/cli/index.md` before creating or
+   changing repository scripts.
 7. Inspect neighboring package tests before introducing a new pattern.
 
 Keep user-facing behavior in existing guides, implementation contracts beside the code, and

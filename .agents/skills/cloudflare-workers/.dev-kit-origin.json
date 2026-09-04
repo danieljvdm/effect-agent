@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "selector": "cloudflare-workers",
+  "name": "cloudflare-workers",
+  "baseDigest": "sha256:45cf9f525de9c4b6c041afd502bc7cfde87de6e834fe2f870dfc6fc76f01732a",
+  "source": {
+    "type": "bundled",
+    "version": "1.0.2"
+  }
+}

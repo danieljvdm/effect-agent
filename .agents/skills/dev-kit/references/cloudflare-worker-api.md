@@ -1,6 +1,6 @@
 # Cloudflare Worker API
 
-Use the `build-effect-apis`, `workers-best-practices`, and `wrangler` skills when
+Use the `effect-development` and `cloudflare-workers` skills when
 they are available. Read current installed or primary Cloudflare documentation
 before choosing Wrangler configuration, compatibility dates, bindings, or local
 development commands.

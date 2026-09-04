@@ -12,8 +12,8 @@ prefer the narrowest matching skills:
 
 ```bash
 bunx @danieljvdm/dev-kit@latest skills search cloudflare
-bunx @danieljvdm/dev-kit@latest skills info workers-best-practices
-bunx @danieljvdm/dev-kit@latest skills add workers-best-practices wrangler
+bunx @danieljvdm/dev-kit@latest skills info cloudflare-workers
+bunx @danieljvdm/dev-kit@latest skills add cloudflare-workers
 ```
 
 Treat source families as broad selections: add one only when every member applies.

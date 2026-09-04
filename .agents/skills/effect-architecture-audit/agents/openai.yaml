@@ -1,4 +1,0 @@
-interface:
-  display_name: "Effect Architecture Audit"
-  short_description: "Audit Effect service and boundary ownership"
-  default_prompt: "Use $effect-architecture-audit to audit this Effect codebase's services, Layers, and type boundaries."

@@ -1,0 +1,7 @@
+Dev Kit adaptation of https://github.com/mattpocock/skills
+Copyright (c) 2026 Matt Pocock. MIT license retained in LICENSE.
+Source revision: 2ab958093e83e0ec752e6c1c5932da465bf23e0c
+Includes the repository-owned TDD guidance previously distributed by Dev Kit.
+
+Modified by Dev Kit to reuse user-selected boundaries, avoid redundant
+confirmation, and let repository testing policy own committed test decisions.

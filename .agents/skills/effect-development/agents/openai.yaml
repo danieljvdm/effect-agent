@@ -1,0 +1,4 @@
+interface:
+  display_name: "Effect Development"
+  short_description: "Effect Atom state, APIs, scripts, and architecture"
+  default_prompt: "Use $effect-development for this Effect change, reading only the guide for its client, server, CLI, or architecture boundary."

@@ -1,0 +1,9 @@
+Dev Kit adaptation of https://github.com/cloudflare/skills
+Source revision: 30553f89ae1ef1e3c2917cd09d72dac992bb4e9a
+Apache License 2.0 retained in LICENSE.
+
+Modified by Dev Kit: scope-specific entrypoints and references replace copied
+manuals, automatic setup changes, and blanket implementation prescriptions.
+Use the target repository's versions, command authority, and testing policy.
+
+Combines workers-best-practices, durable-objects, wrangler, and sandbox-sdk.

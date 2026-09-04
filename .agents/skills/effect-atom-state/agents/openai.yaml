@@ -1,4 +1,0 @@
-interface:
-  display_name: "Effect Atom State"
-  short_description: "Manage Effect Atom client state and React integration"
-  default_prompt: "Use $effect-atom-state to move this component's client state and workflows into Effect Atom."
