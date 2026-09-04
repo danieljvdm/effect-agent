@@ -58,6 +58,12 @@ same budget and limits. Supported findings publish unchanged; refuted findings s
 unresolved findings remain visibly unverified and make the review incomplete. Only supported
 blockers may request changes. The Action still uses baseline.
 
+Verifier evidence submissions accept `base` and `head` as revision selectors. An exact match to
+either request revision takes precedence, including when that revision is literally named `base`
+or `head`. Retained evidence uses the request's exact revisions. Selectors do not authorize source
+access or satisfy evidence coverage: source must have been delivered in that verifier run, and diff
+references must still belong to the selected side of the supplied patch.
+
 See the [API](src/Review.ts), [Action setup](../../action/README.md), and
 [evaluation guide](../../examples/pr-review-eval/README.md).
 

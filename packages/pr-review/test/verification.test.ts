@@ -157,6 +157,195 @@ const testLayer = Layer.merge(NodeCrypto.layer, ReviewDiagnosticsSink.layerNoop)
 
 layer(testLayer)("mandatory candidate verification", (it) => {
   it.effect.each([
+    { kind: "source", startLine: 154 },
+    { kind: "diff", startLine: 157 },
+  ] as const)(
+    "retains canonical revisions for a $kind selector at $startLine",
+    ({ kind, startLine }) =>
+      Effect.gen(function* () {
+        const path = ".github/workflows/ci.yml";
+        const baseRevision = "13acbbcf7b099334bb44082c0849de5833337793";
+        const headRevision = "7734374b3dc0df3cedd290d562ee410047dae42c";
+
+        const input = ReviewRequest.make({
+          ...request,
+          baseRevision,
+          headRevision,
+          changes: [
+            ReviewChange.make({
+              path,
+              patch:
+                "@@ -151,14 +151,14 @@\n" + Array.from({ length: 14 }, () => " context").join("\n"),
+            }),
+          ],
+        });
+
+        const entry = ReviewFinding.make({ ...finding, path, line: 157 });
+        let verifierCalls = 0;
+
+        const outcome = yield* makeReviewer({
+          strategy: "verified",
+          model: scriptedModel((prompt, tools) => {
+            if (!isVerifier(tools)) return discoveryResponse([entry]);
+            verifierCalls += 1;
+            if (kind === "source" && verifierCalls === 1)
+              return toolResponse("read_file", {
+                path,
+                revision: "head",
+                startLine: 130,
+                lineCount: 35,
+              });
+            expect(verifierCalls).toBe(kind === "source" ? 2 : 1);
+
+            return toolResponse("submit_verification", {
+              decisions: originalCandidates(prompt).map((candidate) =>
+                decision(candidate, "supported", [
+                  {
+                    kind,
+                    path,
+                    revision: "head",
+                    startLine,
+                    endLine: 164,
+                  },
+                ]),
+              ),
+            });
+          }),
+        })
+          .review(input)
+          .pipe(
+            Effect.provideService(ReviewRepository, {
+              ...emptyRepository,
+              readFile: (read) =>
+                ReviewSource.fromText(read, Array.from({ length: 164 }, () => "source").join("\n")),
+            }),
+          );
+
+        expect(outcome.incomplete).toBeUndefined();
+        expect(outcome.report.findings).toEqual([entry]);
+        expect(outcome.diagnostics?.candidates[0]?.evidence).toEqual([
+          {
+            kind,
+            path,
+            revision: headRevision,
+            startLine,
+            endLine: 164,
+          },
+        ]);
+        expect(outcome.diagnostics?.requestDigest).toBe(yield* reviewRequestDigest(input));
+        expect(outcome.turns).toBe(kind === "source" ? 3 : 2);
+      }),
+  );
+
+  it.effect.each([
+    {
+      name: "swapped literal revisions",
+      base: "head",
+      head: "base",
+      refs: [
+        { revision: "head", line: 10 },
+        { revision: "base", line: 20 },
+      ],
+      expected: ["head", "base"],
+    },
+    {
+      name: "equal literal revisions",
+      base: "head",
+      head: "head",
+      refs: [
+        { revision: "head", line: 20 },
+        { revision: "base", line: 20 },
+      ],
+      expected: ["head", "head"],
+    },
+    {
+      name: "base selector on base-only lines",
+      base: "base-id",
+      head: "head-id",
+      refs: [{ revision: "base", line: 10 }],
+      expected: ["base-id"],
+    },
+    {
+      name: "head selector on base-only lines",
+      base: "base-id",
+      head: "head-id",
+      refs: [{ revision: "head", line: 10 }],
+      expected: [],
+    },
+    {
+      name: "base selector on head-only lines",
+      base: "base-id",
+      head: "head-id",
+      refs: [{ revision: "base", line: 20 }],
+      expected: [],
+    },
+    {
+      name: "unrecognized selector spelling",
+      base: "base-id",
+      head: "head-id",
+      refs: [{ revision: "HEAD", line: 20 }],
+      expected: [],
+    },
+  ] as const)(
+    "preserves revision identity and diff sides: $name",
+    ({ base, head, refs, expected }) =>
+      Effect.gen(function* () {
+        const input = ReviewRequest.make({
+          ...request,
+          baseRevision: base,
+          headRevision: head,
+          changes: [
+            ReviewChange.make({
+              path: finding.path,
+              patch: "@@ -10,2 +20,2 @@\n-old\n+new\n context",
+            }),
+          ],
+        });
+
+        const entry = ReviewFinding.make({ ...finding, line: 20 });
+        let verifierCalls = 0;
+
+        const outcome = yield* makeReviewer({
+          strategy: "verified",
+          model: scriptedModel((prompt, tools) => {
+            if (!isVerifier(tools)) return discoveryResponse([entry]);
+            verifierCalls += 1;
+            if (verifierCalls > 1) {
+              expect(expected).toEqual([]);
+              expect(verifierCalls).toBe(2);
+              expect(verificationFeedback(prompt).at(-1)).toContain("evidence 1");
+            }
+
+            return toolResponse("submit_verification", {
+              decisions: originalCandidates(prompt).map((candidate) =>
+                decision(
+                  candidate,
+                  verifierCalls === 1 ? "supported" : "unresolved",
+                  verifierCalls === 1
+                    ? refs.map(({ revision, line }) => ({
+                        ...diffEvidence,
+                        revision,
+                        startLine: line,
+                        endLine: line,
+                      }))
+                    : [],
+                ),
+              ),
+            });
+          }),
+        })
+          .review(input)
+          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+        expect(outcome.incomplete).toBe(expected.length > 0 ? undefined : true);
+        expect(
+          outcome.diagnostics?.candidates[0]?.evidence.map(({ revision }) => revision),
+        ).toEqual(expected);
+        expect(verifierCalls).toBe(expected.length > 0 ? 1 : 2);
+      }),
+  );
+
+  it.effect.each([
     "contiguous",
     "overlapping",
     "contained",
@@ -166,9 +355,11 @@ layer(testLayer)("mandatory candidate verification", (it) => {
     "truncated",
     "eof",
     "search-only",
+    "discovery-only",
   ] as const)("validates cited source coverage across delivered reads: %s", (mode) =>
     Effect.gen(function* () {
       let calls = 0;
+      let discoveryCalls = 0;
       const accepted = mode === "contiguous" || mode === "overlapping" || mode === "contained";
 
       const source = Array.from({ length: mode === "eof" ? 5 : 8 }, (_, index) =>
@@ -178,9 +369,20 @@ layer(testLayer)("mandatory candidate verification", (it) => {
       const outcome = yield* makeReviewer({
         strategy: "verified",
         model: scriptedModel((prompt, tools) => {
-          if (!isVerifier(tools)) return discoveryResponse();
+          if (!isVerifier(tools)) {
+            discoveryCalls += 1;
+            if (mode === "discovery-only" && discoveryCalls === 1)
+              return toolResponse("read_file", {
+                path: "src/source.ts",
+                revision: "head",
+                startLine: 1,
+                lineCount: 8,
+              });
+
+            return discoveryResponse();
+          }
           calls += 1;
-          if (calls === 1) {
+          if (calls === 1 && mode !== "discovery-only") {
             if (mode === "search-only")
               return toolResponse("find_in_file", {
                 path: "src/source.ts",
@@ -220,9 +422,9 @@ layer(testLayer)("mandatory candidate verification", (it) => {
               { type: "finish", reason: "tool-calls", usage },
             ]);
           }
-          if (calls > 2) {
+          if (calls > (mode === "discovery-only" ? 1 : 2)) {
             expect(accepted).toBe(false);
-            expect(calls).toBe(3);
+            expect(calls).toBe(mode === "discovery-only" ? 2 : 3);
             expect(verificationFeedback(prompt).at(-1)).toContain("evidence 1");
 
             return toolResponse("submit_verification", {
@@ -237,7 +439,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
               decision(candidate, "supported", [
                 {
                   kind: "source",
-                  revision: request.headRevision,
+                  revision: "head",
                   path: "src/source.ts",
                   startLine: 2,
                   endLine: 7,
@@ -259,7 +461,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
           }),
         );
 
-      expect(calls).toBe(accepted ? 2 : 3);
+      expect(calls).toBe(accepted || mode === "discovery-only" ? 2 : 3);
       expect(outcome.diagnostics?.candidates[0]?.disposition).toBe(
         accepted ? "supported" : "unresolved",
       );
@@ -696,6 +898,7 @@ layer(testLayer)("mandatory candidate verification", (it) => {
                             : [
                                 {
                                   ...diffEvidence,
+                                  revision: "head",
                                   ...(mode === "wrong-revision"
                                     ? { revision: "head-from-another-request" }
                                     : {}),
@@ -1090,8 +1293,8 @@ layer(testLayer)("mandatory candidate verification", (it) => {
             return toolResponse("submit_verification", {
               decisions: originalCandidates(prompt).map((candidate) =>
                 decision(candidate, "supported", [
-                  diffEvidence,
-                  { ...diffEvidence, kind: "source" },
+                  { ...diffEvidence, revision: "head" },
+                  { ...diffEvidence, revision: "head", kind: "source" },
                 ]),
               ),
             });

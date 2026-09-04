@@ -163,7 +163,11 @@ export const ReviewStageCompletion = Schema.Literals([
 
 export type ReviewStageCompletion = typeof ReviewStageCompletion.Type;
 
-/** A reference is evidence only after the host checks its availability in this verifier run. */
+/**
+ * A reference is evidence only after the host checks its availability in this verifier run.
+ * Submission selectors `base` and `head` resolve to exact request revisions unless already exact;
+ * retained evidence always names the canonical revision.
+ */
 export class ReviewEvidence extends Schema.Class<ReviewEvidence>(
   "@effect-agent/pr-review/ReviewEvidence",
 )({
@@ -1570,11 +1574,27 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
                     continue;
                   }
 
-                  const evidence = decision.evidence.filter((reference) =>
+                  const references = decision.evidence.map((reference) => {
+                    const revision =
+                      reference.revision === request.baseRevision ||
+                      reference.revision === request.headRevision
+                        ? reference.revision
+                        : reference.revision === "base"
+                          ? request.baseRevision
+                          : reference.revision === "head"
+                            ? request.headRevision
+                            : reference.revision;
+
+                    return revision === reference.revision
+                      ? reference
+                      : ReviewEvidence.make({ ...reference, revision });
+                  });
+
+                  const evidence = references.filter((reference) =>
                     evidenceAvailable(reference, verificationRequest, verifierReads),
                   );
 
-                  const invalidReference = decision.evidence.findIndex(
+                  const invalidReference = references.findIndex(
                     (reference) =>
                       !evidenceAvailable(reference, verificationRequest, verifierReads),
                   );
