@@ -60,6 +60,24 @@ and one terminal classification. Provider SDK chunks do not enter this stable un
 The stream uses bounded backpressure. Completion, failure, and interruption close its resources.
 Interrupting the only ephemeral consumer interrupts the run.
 
+Published `ToolProgress` results are owned JSON snapshots. Their cumulative UTF-8 JSON size is
+limited to 8 MiB per run, shared by application and provider progress. This also bounds progress
+payloads retained for detached replay. Oversized progress fails with `ModelProtocolError` without
+truncation. Application progress must contain plain JSON data; accessors, custom serialization,
+and non-finite numbers fail with the same error. Terminal tool results use `toolResultBounds`
+separately.
+
+Lower the progress allowance with `bufferLimits` on `run`, `stream`, or `start`. Larger values
+cannot raise the engine's ceiling:
+
+```ts twoslash
+import { type RunBufferLimits } from "@effect-agent/engine/RunOptions";
+
+export const progressBufferLimits: RunBufferLimits = {
+  maxToolProgressBytes: 1024 * 1024,
+};
+```
+
 ## Start and re-observe locally
 
 ```ts

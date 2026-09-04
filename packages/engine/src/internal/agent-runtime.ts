@@ -442,6 +442,8 @@ interface RunContext {
   /** Finite engine-owned memory ceilings, optionally tightened per Run. */
   readonly bufferLimits: EffectiveRunBufferLimits;
   sequence: number;
+  /** Cumulative JSON bytes of published progress, retained by detached replay until Scope close. */
+  toolProgressBytes: number;
   /**
    * Run-wide count of reserved programmatic (broker) Tool invocations.
    * A committed reservation survives interruption before Handler start.
@@ -553,6 +555,7 @@ const DEFAULT_RUN_BUFFER_LIMITS = {
   maxModelResponseParts: 16_384,
   maxModelResponseBytes: 8 * 1024 * 1024,
   maxRunEvents: 65_536,
+  maxToolProgressBytes: 8 * 1024 * 1024,
   maxSubagentEventsPerBatch: 1_024,
 } as const;
 
@@ -560,6 +563,7 @@ interface EffectiveRunBufferLimits {
   readonly maxModelResponseParts: number;
   readonly maxModelResponseBytes: number;
   readonly maxRunEvents: number;
+  readonly maxToolProgressBytes: number;
   readonly maxSubagentEventsPerBatch: number;
 }
 
@@ -590,6 +594,11 @@ const effectiveRunBufferLimits = (
     configured?.maxRunEvents,
     DEFAULT_RUN_BUFFER_LIMITS.maxRunEvents,
     2,
+  ),
+  maxToolProgressBytes: tighteningBufferLimit(
+    configured?.maxToolProgressBytes,
+    DEFAULT_RUN_BUFFER_LIMITS.maxToolProgressBytes,
+    1,
   ),
   maxSubagentEventsPerBatch: tighteningBufferLimit(
     configured?.maxSubagentEventsPerBatch,
@@ -1795,12 +1804,14 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
         const toolCallId = yield* decodeToolCallId(call.id);
 
         if (result.preliminary) {
+          const owned = yield* ownApplicationToolProgress(context, result.encodedResult);
+
           const event: RunEvent = ToolProgress.make({
             ...(yield* eventBase(context)),
             turnId,
             toolCallId,
             toolName: call.name,
-            result: yield* decodeEventJson(result.encodedResult, "Tool result"),
+            result: owned,
             providerExecuted: false,
           });
 
@@ -3003,6 +3014,41 @@ const eventBase = (context: RunContext) => eventBaseFor(context, false);
 /** The ordinary event budget always reserves one slot for this typed terminal projection. */
 const terminalEventBase = (context: RunContext) => eventBaseFor(context, true);
 
+const toolProgressLimitError = (context: RunContext) =>
+  ModelProtocolError.make({
+    message: `Run exceeded the ${context.bufferLimits.maxToolProgressBytes}-byte Tool progress limit or received invalid progress JSON`,
+  });
+
+const admitToolProgress = (
+  context: RunContext,
+  snapshot: BoundedJsonSnapshot,
+): Effect.Effect<Schema.Json, ModelProtocolError> =>
+  Effect.suspend(() => {
+    if (snapshot.bytes > context.bufferLimits.maxToolProgressBytes - context.toolProgressBytes) {
+      return Effect.fail(toolProgressLimitError(context));
+    }
+    context.toolProgressBytes += snapshot.bytes;
+
+    return Effect.succeed(snapshot.value);
+  });
+
+const ownApplicationToolProgress = (
+  context: RunContext,
+  result: unknown,
+): Effect.Effect<Schema.Json, ModelProtocolError> =>
+  Effect.suspend(() => {
+    // Bound traversal before Schema validation or serialization can allocate a full copy. The
+    // owned frozen value is the only payload published to live consumers and detached replay.
+    const snapshot = boundedCanonicalJsonSnapshot(
+      result,
+      context.bufferLimits.maxToolProgressBytes - context.toolProgressBytes,
+    );
+
+    return snapshot === undefined
+      ? Effect.fail(toolProgressLimitError(context))
+      : admitToolProgress(context, snapshot);
+  });
+
 const snapshotStagedProviderEvent = (
   trace: TurnTrace,
   payload: unknown,
@@ -3115,7 +3161,18 @@ const stampProviderResultEvent = (
   turnId: TurnId,
   payload: ProviderResultEventPayload,
 ): Effect.Effect<RunEvent, ModelProtocolError> =>
-  Effect.map(eventBase(context), (base) => {
+  Effect.gen(function* () {
+    if (payload._tag === "ToolProgress") {
+      // Provider staging already owns and normalizes this value under its 1 MiB aggregate cap.
+      // Measure that bounded representation and reuse it without changing provider JSON semantics.
+      const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(
+        payload.result,
+      ).pipe(Effect.mapError(() => toolProgressLimitError(context)));
+
+      yield* admitToolProgress(context, { value: payload.result, bytes: utf8ByteLength(text) });
+    }
+    const base = yield* eventBase(context);
+
     switch (payload._tag) {
       case "ToolProgress":
         return ToolProgress.make({ ...base, turnId, ...payload });
@@ -6239,6 +6296,7 @@ function streamWithCompletion<
             compactor,
             bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
             sequence: 0,
+            toolProgressBytes: 0,
             programmaticToolCalls: resumeUsage?.programmaticToolCalls ?? 0,
             finalizationUsed: resumeUsage?.finalizationUsed ?? false,
             policyReservations: yield* Semaphore.make(1),

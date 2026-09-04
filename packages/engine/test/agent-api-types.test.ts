@@ -8,6 +8,7 @@ import {
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
 } from "@effect-agent/engine/AgentRuntime";
+import { type RunBufferLimits } from "@effect-agent/engine/RunOptions";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
@@ -84,7 +85,8 @@ const model = Model.make(
 
 it("preserves encoded input, output, failures and every unsatisfied service", () => {
   const input = { city: "Lisbon", days: "2" };
-  const run = AgentRuntime.run(planner, input);
+  const bufferLimits: RunBufferLimits = { maxToolProgressBytes: 1_024 };
+  const run = AgentRuntime.run(planner, input, { bufferLimits });
   const provided = run.pipe(Effect.provide(model));
 
   type DefinitionServices =
