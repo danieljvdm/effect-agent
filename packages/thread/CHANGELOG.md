@@ -1,5 +1,17 @@
 # @effect-agent/session
 
+## 0.1.0-beta.48
+
+### Patch Changes
+
+- [#321](https://github.com/danieljvdm/effect-agent/pull/321) [`e640747`](https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Stream durable history and bound Cloudflare journal read payloads while removing unused startup modules and temporary encodings. Bound alarm execution time and let durable runs yield between committed turns while preserving recovery and original run budgets.
+
+- [#322](https://github.com/danieljvdm/effect-agent/pull/322) [`8899bdb`](https://github.com/danieljvdm/effect-agent/commit/8899bdbcbbd16c5b7f9981564939f64729b73015) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep SQL memory admission work bounded as retained history grows, charge replacements by their byte delta, and preserve existing exact-result receipts. Add optional withdrawal capacity reserves within hard storage limits; deploy exclusively upgraded writers before relying on reserves.
+
+- Updated dependencies [[`e640747`](https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22), [`8899bdb`](https://github.com/danieljvdm/effect-agent/commit/8899bdbcbbd16c5b7f9981564939f64729b73015)]:
+  - @effect-agent/engine@0.1.0-beta.48
+  - @effect-agent/core@0.1.0-beta.48
+
 ## 0.1.0-beta.47
 
 ### Patch Changes

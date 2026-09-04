@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.48
+
+### Patch Changes
+
+- [#322](https://github.com/danieljvdm/effect-agent/pull/322) [`8899bdb`](https://github.com/danieljvdm/effect-agent/commit/8899bdbcbbd16c5b7f9981564939f64729b73015) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep SQL memory admission work bounded as retained history grows, charge replacements by their byte delta, and preserve existing exact-result receipts. Add optional withdrawal capacity reserves within hard storage limits; deploy exclusively upgraded writers before relying on reserves.
+
 ## 0.1.0-beta.47
 
 ### Minor Changes
