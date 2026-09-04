@@ -72,6 +72,8 @@ export const maintenanceClocks = new Map<string, Clock.Clock>();
 export const makeAlarmAttemptHold = (location: DurableRuntimeFailpointLocation) => {
   let enter!: () => void;
   let release!: () => void;
+  let finish!: () => void;
+  let didEnter = false;
   let finished = false;
 
   const entered = new Promise<void>((resolve) => {
@@ -82,15 +84,24 @@ export const makeAlarmAttemptHold = (location: DurableRuntimeFailpointLocation) 
     release = resolve;
   });
 
+  const completion = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+
   return {
     location,
     entered,
     released,
-    enter: () => enter(),
+    enter: () => {
+      didEnter = true;
+      enter();
+    },
     release: () => release(),
     finish: () => {
       finished = true;
+      finish();
     },
+    awaitFinished: () => (didEnter ? completion : Promise.resolve()),
     isFinished: () => finished,
   };
 };

@@ -109,6 +109,7 @@ const startAlarm = (thread: string) => {
 };
 
 describe("DC alarm semantics", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
   it("returns after one head Attempt and leaves later FIFO work armed for another event", () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -121,11 +122,13 @@ describe("DC alarm semantics", () => {
         maintenanceClocks.set(thread, yield* Clock.Clock);
         alarmAttemptHolds.set(thread, hold);
         yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
+          Effect.promise(async () => {
+            alarmAttemptHolds.delete(thread);
             hold.release();
             nextHold.release();
+            await hold.awaitFinished();
+            await nextHold.awaitFinished();
             maintenanceClocks.delete(thread);
-            alarmAttemptHolds.delete(thread);
           }),
         );
         const first = yield* Effect.promise(() => submitTo(plannerDefinition, thread));

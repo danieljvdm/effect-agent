@@ -201,6 +201,8 @@ export class MemoryStorageError extends Schema.TaggedError<MemoryStorageError>()
 
 export const MemoryMutationPoint = Schema.Literals([
   "memory:initialize:before",
+  "memory:initialize:before-accounting",
+  "memory:initialize:after-accounting",
   "memory:initialize:after",
   "memory:change:before",
   "memory:change:after-state",
@@ -267,6 +269,9 @@ export class MemoryReader extends Context.Service<
  * durable idempotency receipts can be guaranteed. Apply authorization before calling it.
  * Reconcile an existing operation receipt before evaluating tombstones or expected revisions:
  * identical commands return the original result; changed commands fail MemoryOperationConflict.
+ * Original results include content, even for a historical Put replayed after withdrawal;
+ * replay does not change the current head. Revalidate a source before using recalled content.
+ * A failed acknowledgement can hide a committed change: retain and retry the exact command.
  * Successful withdrawal excludes checks begun afterward; already captured views may finish.
  * Receipts and original Thread history are separate retention concerns.
  */
