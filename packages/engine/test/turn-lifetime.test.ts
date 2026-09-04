@@ -2,7 +2,7 @@ import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { RunId, ThreadId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import type { RunEvent } from "@effect-agent/core/RunEvent";
+import { RunEvent } from "@effect-agent/core/RunEvent";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { expect, layer } from "@effect/vitest";
@@ -163,6 +163,12 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("Turn lifetime"
         expect(modelFinalizers).toBe(1);
         expect(toolCalls).toBe(2);
         expect(historyLengths).toEqual([2, 4, 6]);
+
+        const eventCodec = Schema.Array(RunEvent);
+
+        expect(Schema.decodeSync(eventCodec)(Schema.encodeSync(eventCodec)(events))).toEqual(
+          events,
+        );
         expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(2);
         if (ending === "complete") {
           expect(Exit.isSuccess(exit)).toBe(true);

@@ -82,6 +82,7 @@ import {
   Option,
   PubSub,
   Queue,
+  Result,
   Schema,
   Scope,
   Semaphore,
@@ -4240,11 +4241,21 @@ function decodeRunDisposition<DispositionSchema extends Schema.Top>(
     : decodeRunDispositionCandidate(declaration, encoded);
 }
 
-type ContinueTurn = (
+/** Internal control output consumed by the driver before RunEvent publication. */
+interface NextTurn {
+  readonly _tag: "NextTurn";
+  readonly prompt: Prompt.Prompt;
+  readonly turn: number;
+  readonly toolCalls: number;
+}
+
+type TurnOutput = RunEvent | NextTurn;
+
+const nextTurn = (
   prompt: Prompt.Prompt,
   turn: number,
   toolCalls: number,
-) => Stream.Stream<never>;
+): Stream.Stream<TurnOutput> => Stream.succeed({ _tag: "NextTurn", prompt, turn, toolCalls });
 
 const makeTurn = <
   InputSchema extends Schema.Top,
@@ -4276,9 +4287,8 @@ const makeTurn = <
   turn: number,
   priorToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
-  nextTurn: ContinueTurn,
 ): Stream.Stream<
-  RunEvent,
+  TurnOutput,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
   InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > =>
@@ -5038,7 +5048,7 @@ const makeTurn = <
            * Turn is final-answer constrained via `tokenExhausted`.
            */
           type TurnEvents = Stream.Stream<
-            RunEvent,
+            TurnOutput,
             AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
             InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
           >;
@@ -5092,8 +5102,8 @@ const makeTurn = <
                     }
 
                     const emitThen = <NextError, NextRequirements>(
-                      nextStream: Stream.Stream<RunEvent, NextError, NextRequirements>,
-                    ): Stream.Stream<RunEvent, NextError, NextRequirements> =>
+                      nextStream: Stream.Stream<TurnOutput, NextError, NextRequirements>,
+                    ): Stream.Stream<TurnOutput, NextError, NextRequirements> =>
                       pre.length === 0
                         ? nextStream
                         : Stream.fromIterable(pre).pipe(Stream.concat(nextStream));
@@ -5156,7 +5166,6 @@ const makeTurn = <
                                 turn,
                                 toolCalls,
                                 options,
-                                nextTurn,
                               ),
                             ),
                           ),
@@ -5335,7 +5344,6 @@ const makeTurn = <
                         turn,
                         toolCalls,
                         options,
-                        nextTurn,
                       ),
                     ),
                   );
@@ -5399,16 +5407,7 @@ const makeTurn = <
 
                 return toolResults.pipe(
                   Stream.concat(
-                    toolBatchContinuation(
-                      agent,
-                      context,
-                      trace,
-                      prompt,
-                      turn,
-                      toolCalls,
-                      options,
-                      nextTurn,
-                    ),
+                    toolBatchContinuation(agent, context, trace, prompt, turn, toolCalls, options),
                   ),
                 );
               }),
@@ -5474,9 +5473,8 @@ const toolBatchContinuation = <
   turn: number,
   toolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
-  nextTurn: ContinueTurn,
 ): Stream.Stream<
-  RunEvent,
+  TurnOutput,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
   InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > =>
@@ -5639,9 +5637,8 @@ const makeResumeTurn = <
   resume: RunTurnResume,
   countedToolCalls: number,
   options: RunOptions<HookError, HookRequirements>,
-  nextTurn: ContinueTurn,
 ): Stream.Stream<
-  RunEvent,
+  TurnOutput,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
   InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > =>
@@ -5922,16 +5919,7 @@ const makeResumeTurn = <
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
       const continueAfterBatch = () =>
-        toolBatchContinuation(
-          agent,
-          context,
-          trace,
-          resumedPrompt,
-          turn,
-          toolCalls,
-          options,
-          nextTurn,
-        );
+        toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options);
 
       // RUN-018 on the resume path: a canonically declared over-budget batch
       // settles synthetically under final-answer mode — recorded settled
@@ -6380,13 +6368,6 @@ function streamWithCompletion<
                   }
                 | undefined;
 
-              const nextTurn: ContinueTurn = (prompt, turn, toolCalls) =>
-                Stream.fromEffectDrain(
-                  Effect.sync(() => {
-                    pending = { prompt, turn, toolCalls };
-                  }),
-                );
-
               if (resumed !== undefined) {
                 // A declared-batch resume re-enters mid-Turn: steering seams
                 // reopen only after the resumed batch settles, so the initial
@@ -6408,7 +6389,7 @@ function streamWithCompletion<
                 };
               }
 
-              // Each finite Turn schedules at most one successor. Sequential
+              // Each finite Turn returns at most one successor request. Sequential
               // flatMap releases its child pull and Scope before taking that
               // request, so prior traces and prepared prompts do not remain
               // reachable through recursively nested Stream.concat descriptions.
@@ -6430,7 +6411,6 @@ function streamWithCompletion<
                         request.turn,
                         request.toolCalls,
                         options,
-                        nextTurn,
                       )
                     : makeResumeTurn(
                         agent,
@@ -6439,8 +6419,18 @@ function streamWithCompletion<
                         request.resume,
                         request.toolCalls,
                         options,
-                        nextTurn,
                       ),
+                ),
+                Stream.filterMapEffect((output) =>
+                  Effect.sync(() => {
+                    if (output._tag === "NextTurn") {
+                      pending = output;
+
+                      return Result.fail(undefined);
+                    }
+
+                    return Result.succeed(output);
+                  }),
                 ),
               );
             }),
