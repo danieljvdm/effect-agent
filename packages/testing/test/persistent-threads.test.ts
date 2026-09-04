@@ -1,8 +1,8 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId } from "@effect-agent/core/Identifiers";
+import { RunId, ThreadId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import { type RunEvent } from "@effect-agent/core/RunEvent";
+import { RunCompleted, type RunEvent } from "@effect-agent/core/RunEvent";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
@@ -144,6 +144,173 @@ const withDatabase = <A, E, R>(use: (filename: string) => Effect.Effect<A, E, R>
   ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, services)));
 
 describe("persistent threads", () => {
+  it.effect("does not reread an encoded message when later history updates append messages", () =>
+    Effect.gen(function* () {
+      const history = yield* ThreadHistory;
+
+      const opened = yield* history.open({
+        threadId,
+        runId: Schema.decodeSync(RunId)("staging-encoded-prefix"),
+      });
+
+      if (opened === undefined) return yield* Effect.die("Missing retained history staging");
+
+      let reads = 0;
+      const part = Prompt.makePart("text", { text: "retained" });
+
+      Object.defineProperty(part, "text", {
+        get: () => {
+          reads++;
+
+          return "retained";
+        },
+      });
+
+      let messages: ReadonlyArray<Prompt.Message> = [
+        Prompt.makeMessage("assistant", { content: [part] }),
+      ];
+
+      yield* opened.stageHistory(Prompt.fromMessages(messages));
+      const initialReads = reads;
+
+      expect(initialReads).toBeGreaterThan(0);
+      for (let turn = 0; turn < 10; turn++) {
+        messages = [
+          ...messages,
+          Prompt.makeMessage("assistant", {
+            content: [Prompt.makePart("text", { text: `addition-${turn}` })],
+          }),
+        ];
+        yield* opened.stageHistory(Prompt.fromMessages(messages));
+      }
+      expect(reads).toBe(initialReads);
+    }).pipe(Effect.provide(memory)),
+  );
+
+  it.effect(
+    "preserves the last valid history through replacement, shortening, and failed staging",
+    () =>
+      Effect.gen(function* () {
+        const history = yield* ThreadHistory;
+        const runId = Schema.decodeSync(RunId)("staging-replacement");
+        const opened = yield* history.open({ threadId, runId });
+
+        if (opened === undefined) return yield* Effect.die("Missing retained history staging");
+
+        const user = Prompt.makeMessage("user", {
+          content: [Prompt.makePart("text", { text: "input" })],
+        });
+
+        const removed = Prompt.makeMessage("assistant", {
+          content: [Prompt.makePart("text", { text: "removed" })],
+        });
+
+        const replacement = Prompt.makeMessage("assistant", {
+          content: [Prompt.makePart("text", { text: "replacement" })],
+        });
+
+        yield* opened.stageInput("input");
+        yield* opened.stageHistory(Prompt.fromMessages([user]));
+        yield* opened.stageHistory(Prompt.fromMessages([user, removed]));
+        yield* opened.stageHistory(Prompt.fromMessages([user, replacement]));
+        yield* opened.stageHistory(Prompt.fromMessages([user]));
+        yield* opened.stageHistory(Prompt.fromMessages([replacement]));
+        yield* opened.stageHistory(Prompt.fromMessages([replacement]));
+
+        const failure = yield* opened
+          .stageHistory(
+            Prompt.fromMessages([
+              replacement,
+              Prompt.makeMessage("assistant", {
+                content: [Prompt.makePart("text", { text: "x".repeat(1_048_576) })],
+              }),
+            ]),
+          )
+          .pipe(Effect.flip);
+
+        expect(failure).toMatchObject({ _tag: "ThreadHistoryError", reason: "limit" });
+        yield* opened.commit(
+          RunCompleted.make({
+            eventVersion: 1,
+            runId,
+            threadId,
+            agentId: definition.id,
+            sequence: 1,
+            timestamp: yield* DateTime.now,
+            output: "done",
+            turns: 1,
+            finishReason: "completed",
+          }),
+        );
+        expect((yield* history.load(threadId)).content).toEqual([replacement]);
+      }).pipe(Effect.provide(memory)),
+  );
+
+  for (const limit of ["bytes", "nodes", "collection", "depth"] as const) {
+    it.effect(`rejects ${limit} overflow at history staging before any commit`, () =>
+      Effect.gen(function* () {
+        const history = yield* ThreadHistory;
+
+        const opened = yield* history.open({
+          threadId,
+          runId: Schema.decodeSync(RunId)(`staging-${limit}`),
+        });
+
+        if (opened === undefined) return yield* Effect.die("Missing retained history staging");
+
+        const text = (value: string) =>
+          Prompt.makeMessage("user", { content: [Prompt.makePart("text", { text: value })] });
+
+        const result = (value: unknown, index: number) =>
+          Prompt.makeMessage("tool", {
+            content: [
+              Prompt.makePart("tool-result", {
+                id: `result-${index}`,
+                name: "lookup",
+                result: value,
+                isFailure: false,
+                providerExecuted: false,
+              }),
+            ],
+          });
+
+        let fitting: ReadonlyArray<Prompt.Message>;
+        let overflowing: ReadonlyArray<Prompt.Message>;
+
+        switch (limit) {
+          case "bytes":
+            fitting = [text("x".repeat(600_000))];
+            overflowing = [...fitting, text("y".repeat(600_000))];
+            break;
+          case "nodes":
+            fitting = Array.makeBy(16, (index) => result(Array.replicate(0, 4_000), index));
+            overflowing = [...fitting, result(Array.replicate(0, 4_000), 16)];
+            break;
+          case "collection":
+            fitting = Array.makeBy(4_096, () => text("x"));
+            overflowing = [...fitting, text("y")];
+            break;
+          case "depth": {
+            let deep: unknown = 0;
+
+            for (let depth = 0; depth < 64; depth++) deep = { value: deep };
+            fitting = [text("input")];
+            overflowing = [...fitting, result(deep, 0)];
+            break;
+          }
+        }
+        yield* opened.stageHistory(Prompt.fromMessages(fitting));
+
+        const failure = yield* opened
+          .stageHistory(Prompt.fromMessages(overflowing))
+          .pipe(Effect.flip);
+
+        expect(failure).toMatchObject({ _tag: "ThreadHistoryError", reason: "limit" });
+        expect((yield* exported).records).toEqual([]);
+      }).pipe(Effect.provide(memory)),
+    );
+  }
+
   it.effect("rejects competing history ownership before model execution", () =>
     Effect.gen(function* () {
       yield* AgentRuntime.run(agent([answer("retained")]), "prior", options);
