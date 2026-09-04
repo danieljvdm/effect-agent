@@ -1,5 +1,18 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.49
+
+### Patch Changes
+
+- [#327](https://github.com/danieljvdm/effect-agent/pull/327) [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Poll durable abort intent without loading unrelated recovery state. Implement `SubmissionLedger.readAbortIntent` in custom ledger adapters.
+
+- Updated dependencies [[`91ac3bf`](https://github.com/danieljvdm/effect-agent/commit/91ac3bf8cabe1cd7d7851995a3fd714b02db58a0), [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f), [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f), [`b54eea8`](https://github.com/danieljvdm/effect-agent/commit/b54eea8ce9973a1ef2a58ddd6eb87bcc912bec75), [`e3024c0`](https://github.com/danieljvdm/effect-agent/commit/e3024c00673a12b0df79127bcf68176742c51294), [`b54eea8`](https://github.com/danieljvdm/effect-agent/commit/b54eea8ce9973a1ef2a58ddd6eb87bcc912bec75), [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f)]:
+  - @effect-agent/engine@0.1.0-beta.49
+  - @effect-agent/thread@0.1.0-beta.49
+  - @effect-agent/storage-sqlite@0.1.0-beta.49
+  - @effect-agent/workflow@0.1.0-beta.49
+  - @effect-agent/core@0.1.0-beta.49
+
 ## 0.1.0-beta.48
 
 ### Minor Changes

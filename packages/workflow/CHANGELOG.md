@@ -1,5 +1,13 @@
 # @effect-agent/workflow
 
+## 0.1.0-beta.49
+
+### Patch Changes
+
+- Updated dependencies [[`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f), [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f), [`b285e5b`](https://github.com/danieljvdm/effect-agent/commit/b285e5b06a52ac7fc4e3c7fc0ff232650e33857f)]:
+  - @effect-agent/thread@0.1.0-beta.49
+  - @effect-agent/core@0.1.0-beta.49
+
 ## 0.1.0-beta.48
 
 ### Patch Changes

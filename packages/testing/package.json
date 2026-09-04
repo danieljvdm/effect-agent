@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/testing",
-  "version": "0.1.0-beta.48",
+  "version": "0.1.0-beta.49",
   "description": "Scripted models, deterministic fixtures, and adapter conformance kits for testing Effect Agent applications.",
   "license": "MIT",
   "repository": {

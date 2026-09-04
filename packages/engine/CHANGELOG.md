@@ -1,5 +1,24 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.49
+
+### Patch Changes
+
+- [#329](https://github.com/danieljvdm/effect-agent/pull/329) [`91ac3bf`](https://github.com/danieljvdm/effect-agent/commit/91ac3bf8cabe1cd7d7851995a3fd714b02db58a0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Release completed turn state before starting the next turn to reduce memory retained during long runs.
+
+  BEHAVIOR CHANGE: Resources acquired by `beforeTurn` or `context.prepare` now close with that turn. Move resources needed across turns into a surrounding run Layer or Scope.
+
+- [#326](https://github.com/danieljvdm/effect-agent/pull/326) [`b54eea8`](https://github.com/danieljvdm/effect-agent/commit/b54eea8ce9973a1ef2a58ddd6eb87bcc912bec75) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Bound published Tool progress to 8 MiB of JSON per Run and retain owned snapshots for live events and detached replay. Reject invalid or oversized application progress with `ModelProtocolError`, and allow a smaller cumulative limit through `bufferLimits.maxToolProgressBytes`.
+
+- [#328](https://github.com/danieljvdm/effect-agent/pull/328) [`e3024c0`](https://github.com/danieljvdm/effect-agent/commit/e3024c00673a12b0df79127bcf68176742c51294) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Enforce prepared-context limits and preserve protected history while reusing per-turn context estimates. Bound default summarizer requests to 80,000 characters and reject summaries above 65,536 characters.
+
+  BEHAVIOR CHANGE: Custom compaction strategies must emit summaries of at most 65,536 characters. Preparation hooks must preserve covered prefixes after compaction and retain a mappable instruction/input block for nondurable compaction.
+
+- [#326](https://github.com/danieljvdm/effect-agent/pull/326) [`b54eea8`](https://github.com/danieljvdm/effect-agent/commit/b54eea8ce9973a1ef2a58ddd6eb87bcc912bec75) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reuse response codecs across streamed chunks and bound pending Tool stream fibers by the configured concurrency. Return owned JSON snapshots from programmatic Tool calls so later handler or redactor mutations cannot exceed the admitted result limit.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.49
+
 ## 0.1.0-beta.48
 
 ### Patch Changes
