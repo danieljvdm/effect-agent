@@ -8,7 +8,7 @@ import {
   SubmissionLedger,
 } from "@effect-agent/thread/SubmissionLedger";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import { Cause, Clock, Effect, Exit, Schema } from "effect";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -30,6 +30,7 @@ import {
   releaseMaintenancePause,
   submitOptions,
   alarmAttemptHolds,
+  makeAlarmAttemptHold,
   maintenanceClocks,
 } from "./fixtures.ts";
 import {
@@ -98,57 +99,59 @@ const maintenanceGeneration = (thread: string) =>
     ),
   );
 
+// Keep the cross-DO RPC and its completion on native Promise continuations.
+const startAlarm = (thread: string) => {
+  const pending = runInDurableObject(stubFor(thread), (instance) =>
+    Promise.resolve(instance.alarm()),
+  ).then(Exit.succeed, (cause) => Exit.fail(String(cause)));
+
+  return { await: Effect.promise(() => pending) };
+};
+
 describe("DC alarm semantics", () => {
   it("returns after one head Attempt and leaves later FIFO work armed for another event", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const thread = lane("one-head");
-        const entered = yield* Deferred.make<void>();
-        const finished = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
+        const hold = makeAlarmAttemptHold("terminalize:after-canonical-append");
+        const nextHold = makeAlarmAttemptHold("claim:after-claim");
 
         // Future virtual time keeps native automatic alarms from racing explicit deliveries.
         yield* TestClock.setTime(Date.now() + 86_400_000);
         maintenanceClocks.set(thread, yield* Clock.Clock);
-        alarmAttemptHolds.set(thread, {
-          location: "terminalize:after-canonical-append",
-          entered,
-          finished,
-          release,
-        });
+        alarmAttemptHolds.set(thread, hold);
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
+            hold.release();
+            nextHold.release();
             maintenanceClocks.delete(thread);
             alarmAttemptHolds.delete(thread);
           }),
         );
         const first = yield* Effect.promise(() => submitTo(plannerDefinition, thread));
 
-        const pass = yield* Effect.promise(() =>
-          runInDurableObject(stubFor(thread), (instance) => Promise.resolve(instance.alarm())),
-        ).pipe(Effect.forkChild);
+        const pass = yield* Effect.acquireRelease(
+          Effect.sync(() => startAlarm(thread)),
+          (pending) =>
+            Effect.gen(function* () {
+              hold.release();
+              nextHold.release();
+              yield* pending.await;
+            }),
+        );
 
-        yield* Deferred.await(entered);
+        yield* Effect.promise(() => hold.entered);
         // The head has completed its model and join seams. This follower needs its own Attempt.
-        const nextEntered = yield* Deferred.make<void>();
-        const nextFinished = yield* Deferred.make<void>();
-        const nextRelease = yield* Deferred.make<void>();
-
         // Native alarms may redeliver immediately. Hold the follower so only a separate
         // event can own it; the first pass must return without waiting for this resource.
-        alarmAttemptHolds.set(thread, {
-          location: "claim:after-claim",
-          entered: nextEntered,
-          finished: nextFinished,
-          release: nextRelease,
-        });
+        alarmAttemptHolds.set(thread, nextHold);
 
         const second = yield* Effect.promise(() =>
           submitTo(plannerDefinition, thread, `${thread}-next`),
         );
 
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(pass);
+        yield* Effect.sync(hold.release);
+        yield* yield* pass.await;
         const rows = yield* Effect.promise(() => laneRows(thread));
 
         expect(rows[0]).toMatchObject({ submission_id: first.submissionId, state: "settled" });
@@ -158,7 +161,7 @@ describe("DC alarm semantics", () => {
 
         expect(generation.dirty > generation.processed).toBe(true);
         expect(yield* Effect.promise(() => scheduledAlarm(thread))).not.toBeNull();
-        yield* Deferred.succeed(nextRelease, undefined);
+        yield* Effect.sync(nextHold.release);
         yield* Effect.promise(() =>
           runInDurableObject(stubFor(thread), (instance) => Promise.resolve(instance.alarm())),
         );
@@ -174,34 +177,42 @@ describe("DC alarm semantics", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         const thread = lane("event-deadline");
-        const entered = yield* Deferred.make<void>();
-        const finished = yield* Deferred.make<void>();
+        const hold = makeAlarmAttemptHold("claim:after-claim");
 
         yield* TestClock.setTime(Date.now() + 86_400_000);
-        maintenanceClocks.set(thread, yield* Clock.Clock);
-        alarmAttemptHolds.set(thread, { location: "claim:after-claim", entered, finished });
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+
+        maintenanceClocks.set(thread, clock);
+        alarmAttemptHolds.set(thread, hold);
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
+            hold.release();
             maintenanceClocks.delete(thread);
             alarmAttemptHolds.delete(thread);
           }),
         );
         const receipt = yield* Effect.promise(() => submitTo(plannerDefinition, thread));
 
-        const pass = yield* Effect.tryPromise({
-          try: () =>
-            runInDurableObject(stubFor(thread), (instance) => Promise.resolve(instance.alarm())),
-          catch: (cause) => String(cause),
-        }).pipe(Effect.exit, Effect.forkChild);
+        const pass = yield* Effect.acquireRelease(
+          Effect.sync(() => startAlarm(thread)),
+          (pending) =>
+            Effect.gen(function* () {
+              hold.release();
+              yield* pending.await;
+            }),
+        );
 
-        yield* Deferred.await(entered);
-        yield* TestClock.adjust("14 minutes");
-        const exit = yield* Fiber.join(pass);
+        yield* Effect.promise(() => hold.entered);
+        // Advancing the clock synchronously resumes target-DO sleepers, so do it there.
+        yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), () => Effect.runPromise(clock.adjust("14 minutes"))),
+        );
+        const exit = yield* pass.await;
 
         expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "success").toContain(
           "14 minute deadline",
         );
-        expect(yield* Deferred.isDone(finished)).toBe(true);
+        expect(hold.isFinished()).toBe(true);
         const generation = yield* Effect.promise(() => maintenanceGeneration(thread));
 
         expect(generation.dirty > generation.processed).toBe(true);

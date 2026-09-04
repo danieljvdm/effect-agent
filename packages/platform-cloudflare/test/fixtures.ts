@@ -14,6 +14,7 @@ import {
   type ThreadMaintenanceFailpointHandler,
   type ThreadMaintenanceFailpointLocation,
 } from "@effect-agent/platform-cloudflare/Alarm";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/DoStorageError";
 import { type DoStorageFailpointHandler } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
 import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting";
@@ -38,7 +39,7 @@ import {
   ReconciliationUncertain,
   ToolReconciler,
 } from "@effect-agent/thread/ToolReconciler";
-import { type Clock, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
+import { Clock, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";
@@ -66,15 +67,35 @@ export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocat
 /** Virtual event clocks and a scoped post-claim hold for native alarm deadline evidence. */
 export const maintenanceClocks = new Map<string, Clock.Clock>();
 
-export const alarmAttemptHolds = new Map<
-  string,
-  {
-    readonly location: DurableRuntimeFailpointLocation;
-    readonly entered: Deferred.Deferred<void>;
-    readonly finished: Deferred.Deferred<void>;
-    readonly release?: Deferred.Deferred<void>;
-  }
->();
+// Native Promise continuations preserve the Runner/target DO I/O context. Completing an
+// Effect Deferred here would synchronously resume a fiber owned by the other context.
+export const makeAlarmAttemptHold = (location: DurableRuntimeFailpointLocation) => {
+  let enter!: () => void;
+  let release!: () => void;
+  let finished = false;
+
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return {
+    location,
+    entered,
+    released,
+    enter: () => enter(),
+    release: () => release(),
+    finish: () => {
+      finished = true;
+    },
+    isFinished: () => finished,
+  };
+};
+
+export const alarmAttemptHolds = new Map<string, ReturnType<typeof makeAlarmAttemptHold>>();
 
 /**
  * Arm an ORDERED queue of eviction locations for one Thread. Chained rows (a location
@@ -145,9 +166,9 @@ export const runtimeEvictionFailpoint =
         alarmAttemptHolds.delete(name);
 
         return Effect.acquireUseRelease(
-          Deferred.succeed(hold.entered, undefined),
-          () => (hold.release === undefined ? Effect.never : Deferred.await(hold.release)),
-          () => Deferred.succeed(hold.finished, undefined),
+          Effect.sync(hold.enter),
+          () => Effect.promise(() => hold.released),
+          () => Effect.sync(hold.finish),
         );
       }
       if (armedRuntimeFailures.get(name) === location) {
@@ -1119,7 +1140,20 @@ export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = E
   },
 );
 
-export const testRuntimeLayer = Layer.unwrap(Effect.map(makeTestBindings, layerFromBindings));
+export const testRuntimeLayer = Layer.unwrap(Effect.map(makeTestBindings, layerFromBindings)).pipe(
+  // Bootstrap also pre-arms recovery. It must use the event's virtual clock, otherwise
+  // its earlier wall-clock alarm survives later pre-arming and races manual deliveries.
+  Layer.provideMerge(
+    Layer.effect(
+      Clock.Clock,
+      Effect.gen(function* () {
+        const { threadId } = yield* ThreadObjectIdentity;
+
+        return maintenanceClocks.get(threadId) ?? (yield* Clock.Clock);
+      }),
+    ),
+  ),
+);
 
 export const registrationDefinitions = DefinitionDigestInput.make({
   agent: { id: plannerDefinition.id, revision: 1 },
