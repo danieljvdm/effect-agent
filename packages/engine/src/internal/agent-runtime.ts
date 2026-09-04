@@ -77,6 +77,7 @@ import {
   DateTime,
   Duration,
   Effect,
+  Equal,
   Exit,
   Fiber,
   Metric,
@@ -433,6 +434,14 @@ interface RunContext {
   exhaustedDimension: "tokens" | "tool-calls" | "turns" | undefined;
   /** Model-visible view state for engine-native compaction (RUN-026). */
   readonly compaction: ContextCompactionState;
+  /** Owned content snapshots bind disposable compaction indices to prepared history. */
+  preparedCompactionSource:
+    | {
+        readonly protectedReferences: ReadonlyArray<Prompt.Message>;
+        readonly protectedMessages: ReadonlyArray<Schema.Json>;
+        prefix: ReadonlyArray<Schema.Json>;
+      }
+    | undefined;
   readonly compactor: ContextCompactor["Service"];
   /** One allowance shared by threshold compaction and the same Turn's overflow retry. */
   readonly compactionTurn: {
@@ -3224,6 +3233,21 @@ const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(functi
   return yield* estimateContextTokens(context, view);
 });
 
+const snapshotCompactionMessages = Effect.fnUntraced(function* (
+  messages: ReadonlyArray<Prompt.Message>,
+) {
+  return yield* Effect.try({
+    try: () =>
+      messages.map((message) =>
+        Schema.decodeUnknownSync(Schema.Json)(
+          JSON.parse(JSON.stringify(Schema.encodeSync(Prompt.Message)(message))),
+        ),
+      ),
+    catch: (cause) =>
+      CompactionError.make({ message: "Could not snapshot prepared compaction history", cause }),
+  });
+});
+
 /** Text a provider overflow classification matches against (message + reason). */
 const overflowText = (error: AiError.AiError): string => `${error.message} ${error.reason.message}`;
 
@@ -3256,6 +3280,85 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     const events: Array<RunEvent> = [];
     const messages = source.content;
     const allowance = context.compactionTurn;
+    const preparedSource = context.preparedCompactionSource;
+
+    const preparedSnapshot =
+      preparedSource === undefined ? undefined : yield* snapshotCompactionMessages(messages);
+
+    if (preparedSource !== undefined && preparedSnapshot !== undefined) {
+      let start = -1;
+      let end = 0;
+      let mapped = true;
+      const positions: Array<number> = [];
+
+      const originalPositions = preparedSource.protectedReferences.map((message) =>
+        messages.indexOf(message),
+      );
+
+      const originalMapping = preparedSource.protectedReferences.every((message, position) => {
+        const index = originalPositions[position];
+
+        return (
+          index !== undefined &&
+          index >= 0 &&
+          index > (originalPositions[position - 1] ?? -1) &&
+          messages.lastIndexOf(message) === index &&
+          Equal.equals(preparedSnapshot[index], preparedSource.protectedMessages[position])
+        );
+      });
+
+      for (
+        let position = 0;
+        !originalMapping && position < preparedSource.protectedMessages.length;
+        position += 1
+      ) {
+        const protectedMessage = preparedSource.protectedMessages[position];
+
+        const index = preparedSnapshot.findIndex(
+          (message, index) => index >= end && Equal.equals(message, protectedMessage),
+        );
+
+        if (index < 0) {
+          mapped = false;
+          break;
+        }
+        if (start < 0) start = index;
+        end = index + 1;
+        positions.push(index);
+      }
+      let reverseEnd = preparedSnapshot.length;
+
+      for (
+        let position = preparedSource.protectedMessages.length - 1;
+        !originalMapping && mapped && position >= 0;
+        position -= 1
+      ) {
+        const protectedMessage = preparedSource.protectedMessages[position];
+
+        const index = preparedSnapshot.findLastIndex(
+          (message, index) => index < reverseEnd && Equal.equals(message, protectedMessage),
+        );
+
+        if (index !== positions[position]) mapped = false;
+        reverseEnd = index;
+      }
+      if (originalMapping) {
+        mapped = true;
+        start = originalPositions[0] ?? -1;
+        end = (originalPositions.at(-1) ?? -1) + 1;
+      }
+      if (!mapped && options.durability === undefined) {
+        return yield* CompactionError.make({
+          message:
+            "Prepared context cannot map the protected instructions and input for compaction",
+        });
+      }
+      // Durable reconstruction can replace this Attempt's evaluated block. Its
+      // commit hook remains responsible for rejecting coverage of the owner Run.
+      state.protectedStart = mapped ? start : -1;
+      state.protectedEnd = mapped ? end : -1;
+      state.protectSystemMessages = true;
+    }
 
     if (allowance.turn !== turn) {
       allowance.turn = turn;
@@ -3480,6 +3583,12 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
             if (options.durability !== undefined)
               yield* options.durability.commitCompaction(commit);
             Object.assign(state, next);
+            if (preparedSource !== undefined && preparedSnapshot !== undefined) {
+              preparedSource.prefix = preparedSnapshot.slice(
+                0,
+                Math.max(next.clearedThrough, next.summarizedThrough),
+              );
+            }
             applied.add(decision.kind);
             events.push(
               CompactionPerformed.make({
@@ -4434,6 +4543,20 @@ const makeTurn = <
       const modelContext =
         options.context === undefined ? { prompt } : yield* options.context.prepare(contextRequest);
 
+      const priorCompactionPrefix = context.preparedCompactionSource?.prefix;
+
+      if (priorCompactionPrefix !== undefined && priorCompactionPrefix.length > 0) {
+        const preparedPrefix = yield* snapshotCompactionMessages(
+          modelContext.prompt.content.slice(0, priorCompactionPrefix.length),
+        );
+
+        if (!Equal.equals(preparedPrefix, priorCompactionPrefix)) {
+          return yield* CompactionError.make({
+            message: "Prepared context changed a prefix already covered by compaction",
+          });
+        }
+      }
+
       const trace: TurnTrace = {
         responsePartCount: 0,
         responsePartBytes: 0,
@@ -4521,37 +4644,57 @@ const makeTurn = <
       // The output contract (RUN-028) rides every outgoing request after
       // compaction, so the view must fit the limit with the contract the
       // engine will append.
+      const admissionRequired =
+        policy.contextTokenLimit !== undefined ||
+        (!context.finalizing && !finalAnswerOnly && policy.tokenBudget !== undefined);
+
       const outputContractTokens =
-        outputContractMessage === undefined
+        !admissionRequired || outputContractMessage === undefined
           ? 0
           : yield* estimateContextTokens(context, [
               Prompt.makeMessage("system", { content: outputContractMessage }),
             ]);
 
-      const canonicalDecoration = yield* outgoingModelPrompt(
-        policy,
-        context,
-        Prompt.empty,
-        turn,
-        priorToolCalls,
-      );
+      const canonicalDecoration = !admissionRequired
+        ? Prompt.empty
+        : yield* outgoingModelPrompt(policy, context, Prompt.empty, turn, priorToolCalls);
 
-      const canonicalDecorationTokens =
-        outputContractTokens + (yield* estimateContextTokens(context, canonicalDecoration.content));
+      const canonicalDecorationTokens = !admissionRequired
+        ? 0
+        : outputContractTokens +
+          (yield* estimateContextTokens(context, canonicalDecoration.content));
 
-      // Provider-reported input usage includes the previous Turn's transient
-      // context, whose size can change independently of canonical history.
-      // A fresh full estimate avoids carrying that stale amount into this
-      // Turn's admission. Runs without transient context retain the anchored
-      // estimate used by existing context economics.
+      // Preparation may replace an existing prefix, and transient context may
+      // change independently of history. Only ordinary append-only history can
+      // reuse the last provider-reported input as an estimation anchor.
       const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
-        options.transientContext === undefined
+        options.context === undefined && options.transientContext === undefined
           ? nextContextEstimate(context, view)
           : estimateContextTokens(context, view);
 
+      let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
+      let sourceTokens: number | undefined;
+
+      const preparedSourceTokens = Effect.suspend(() =>
+        sourceTokens === undefined
+          ? estimateSourceContext(prepared).pipe(
+              Effect.tap((tokens) =>
+                Effect.sync(() => {
+                  sourceTokens = tokens;
+                }),
+              ),
+            )
+          : Effect.succeed(sourceTokens),
+      );
+
+      const refreshPrepared = () => {
+        prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
+        sourceTokens = undefined;
+      };
+
       let preEvents: ReadonlyArray<RunEvent> = [];
 
-      if (!context.finalizing) {
+      if (!context.finalizing && admissionRequired) {
         const consumedTokens = context.inputTokens + context.outputTokens;
 
         const tokenCallTarget =
@@ -4573,8 +4716,7 @@ const makeTurn = <
             ? undefined
             : Math.max(0, fullTarget - canonicalDecorationTokens);
 
-        const view = buildCompactedView(modelContext.prompt.content, context.compaction);
-        const estimate = (yield* estimateSourceContext(view)) + canonicalDecorationTokens;
+        const estimate = (yield* preparedSourceTokens) + canonicalDecorationTokens;
         const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
         const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
 
@@ -4601,11 +4743,11 @@ const makeTurn = <
           );
 
           preEvents = outcome.events;
+          if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
+            refreshPrepared();
         }
-        const prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
 
-        const preparedEstimate =
-          (yield* estimateSourceContext(prepared)) + canonicalDecorationTokens;
+        const preparedEstimate = (yield* preparedSourceTokens) + canonicalDecorationTokens;
 
         // A summarizing compaction is itself a priced model call. Recompute
         // admission from its reported usage instead of carrying the stale
@@ -4659,12 +4801,13 @@ const makeTurn = <
           ? canonicalDecoration
           : yield* outgoingModelPrompt(policy, context, transientContext, turn, priorToolCalls);
 
-      const derivedPromptTokens =
-        options.transientContext === undefined
+      const derivedPromptTokens = !admissionRequired
+        ? 0
+        : options.transientContext === undefined
           ? canonicalDecorationTokens
           : outputContractTokens + (yield* estimateContextTokens(context, derivedPrompt.content));
 
-      if (!context.finalizing && options.transientContext !== undefined) {
+      if (!context.finalizing && admissionRequired && options.transientContext !== undefined) {
         const contextTokenLimit = policy.contextTokenLimit;
 
         const tokenCallTarget =
@@ -4687,8 +4830,7 @@ const makeTurn = <
         const sourceTarget =
           fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
 
-        let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
-        let preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+        let preparedEstimate = (yield* preparedSourceTokens) + derivedPromptTokens;
 
         const contextPressure =
           contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit;
@@ -4726,8 +4868,9 @@ const makeTurn = <
           );
 
           preEvents = [...preEvents, ...outcome.events];
-          prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
-          preparedEstimate = (yield* estimateSourceContext(prepared)) + derivedPromptTokens;
+          if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
+            refreshPrepared();
+          preparedEstimate = (yield* preparedSourceTokens) + derivedPromptTokens;
         }
         if (context.tokenExhausted) {
           finalAnswerOnly = true;
@@ -4781,11 +4924,9 @@ const makeTurn = <
 
       /** The model-visible view of the Turn basis under current compaction state. */
       const compactedOutgoing = (): Prompt.Prompt => {
-        const view = buildCompactedView(modelContext.prompt.content, context.compaction);
+        context.compaction.lastViewLength = prepared.length;
 
-        context.compaction.lastViewLength = view.length;
-
-        return Prompt.fromMessages([...view]);
+        return Prompt.fromMessages(prepared);
       };
 
       const attempt = (basis: Prompt.Prompt) =>
@@ -4809,22 +4950,23 @@ const makeTurn = <
                   ? outgoing
                   : insertOutputContract(outgoing, outputContractMessage);
 
-              // Transient context can change independently at every Turn. A
+              // Prepared and transient context can change at every Turn. A
               // final full-prompt check closes the per-call boundary for grace
               // finalization and any future path that bypasses research
-              // compaction admission. Runs without this hook keep their
+              // compaction admission. Runs without either hook keep their
               // provider-reported incremental estimate.
               const contextTokenLimit = policy.contextTokenLimit;
 
               const admission =
-                options.transientContext === undefined || contextTokenLimit === undefined
+                (options.context === undefined && options.transientContext === undefined) ||
+                contextTokenLimit === undefined
                   ? Effect.void
                   : estimateContextTokens(context, providerPrompt.content).pipe(
                       Effect.flatMap((estimatedTokens) =>
                         estimatedTokens <= contextTokenLimit
                           ? Effect.void
                           : ContextBudgetError.make({
-                              message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+                              message: `Prepared context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
                               estimatedTokens,
                               targetTokens: contextTokenLimit,
                               completionReserveTokens: policy.completionReserveTokens,
@@ -4949,13 +5091,10 @@ const makeTurn = <
                   ),
                 );
 
-                const retryView = buildCompactedView(
-                  modelContext.prompt.content,
-                  context.compaction,
-                );
+                if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
+                  refreshPrepared();
 
-                const retryEstimate =
-                  (yield* estimateSourceContext(retryView)) + derivedPromptTokens;
+                const retryEstimate = (yield* preparedSourceTokens) + derivedPromptTokens;
 
                 if (retryEstimate > contextTokenLimit) {
                   return yield* ContextBudgetError.make({
@@ -6309,6 +6448,7 @@ function streamWithCompletion<
             tokenExhausted: false,
             exhaustedDimension: undefined,
             compaction: initialCompactionState(),
+            preparedCompactionSource: undefined,
             compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
             compactor,
             bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
@@ -6428,13 +6568,22 @@ function streamWithCompletion<
               const priorHistoryLength = context.history.content.length;
               const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context.history);
 
-              // RUN-022: the instruction/input block is protected from compaction
-              // by source index. A hook-prepared prompt (durable resume) replaces
-              // the source, so index protection is unavailable there and the view
-              // falls back to protecting system-role messages.
+              // Ordinary history keeps stable indices. Prepared history must map
+              // an owned copy of this block before applying compaction coverage.
               if (options.context === undefined) {
                 context.compaction.protectedStart = priorHistoryLength;
                 context.compaction.protectedEnd = prompt.content.length;
+              } else if (
+                agent.definition.policy.contextTokenLimit !== undefined ||
+                agent.definition.policy.tokenBudget !== undefined
+              ) {
+                context.preparedCompactionSource = {
+                  protectedReferences: prompt.content.slice(priorHistoryLength),
+                  protectedMessages: yield* snapshotCompactionMessages(
+                    prompt.content.slice(priorHistoryLength),
+                  ),
+                  prefix: [],
+                };
               }
               yield* advanceHistory(context, prompt, options);
 

@@ -213,7 +213,11 @@ export interface PreparedRunContext {
   readonly prompt: Prompt.Prompt;
 }
 
-/** Dependency-neutral ordered context transformation / compaction hook. */
+/**
+ * Model-only prompt transformation. Compaction requires a safely mapped original
+ * instruction/input block and content-equivalent covered prefixes across Turns.
+ * Incompatible changes fail with CompactionError before compaction or model I/O.
+ */
 export interface RunContextHook<Error = never, Requirements = never> {
   /**
    * Resources acquired by `prepare` belong to the current Turn and close before
