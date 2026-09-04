@@ -21,6 +21,8 @@ const STORAGE_VERSION = 2 as const;
 const METADATA_COMPONENT = "memory";
 const DOCUMENT_TABLE = "effect_agent_memory_documents_v1";
 const RECEIPT_TABLE = "effect_agent_memory_receipts_v1";
+const USAGE_COMPONENT = "memory-usage";
+const USAGE_TABLE = "effect_agent_memory_usage_v1";
 const MAX_STORED_JSON_CODE_UNITS = 16 * 1024 * 1024;
 const StoredJson = Schema.String.check(Schema.isMaxLength(MAX_STORED_JSON_CODE_UNITS));
 
@@ -35,9 +37,20 @@ const equivalentScopes = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields
 
 /**
  * Independent adapter limits. Counts and encoded bytes include durable operation receipts.
- * Accounting is skipped only when all limits retain their unbounded defaults.
+ * Bytes count UTF-8 row payloads plus 128 bytes per row, excluding SQLite pages/indexes.
+ * Replacements charge their byte delta; receipts and tombstones are never pruned.
+ * Optional reserves (default zero) withhold capacity from Put, within the hard totals.
+ * They require exclusive upgraded writer ownership: older writers count toward usage
+ * but do not honor reserves. Limits are captured when the writer Layer is built.
  */
-export const SqlMemoryLimits = Context.Reference("@effect-agent/thread/SqlMemoryLimits", {
+export const SqlMemoryLimits = Context.Reference<{
+  readonly maxRowBytes: number;
+  readonly maxStorageBytes: number;
+  readonly maxDocuments: number;
+  readonly maxReceipts: number;
+  readonly reservedWithdrawalBytes?: number;
+  readonly reservedWithdrawalReceipts?: number;
+}>("@effect-agent/thread/SqlMemoryLimits", {
   defaultValue: () => ({
     maxRowBytes: Number.MAX_SAFE_INTEGER,
     maxStorageBytes: Number.MAX_SAFE_INTEGER,
@@ -46,11 +59,53 @@ export const SqlMemoryLimits = Context.Reference("@effect-agent/thread/SqlMemory
   }),
 });
 
+const Limits = Schema.Struct({
+  maxRowBytes: Schema.Natural,
+  maxStorageBytes: Schema.Natural,
+  maxDocuments: Schema.Natural,
+  maxReceipts: Schema.Natural,
+  reservedWithdrawalBytes: Schema.optional(Schema.Natural),
+  reservedWithdrawalReceipts: Schema.optional(Schema.Natural),
+}).check(
+  Schema.makeFilter(
+    (limits) =>
+      (limits.reservedWithdrawalBytes ?? 0) <= limits.maxStorageBytes &&
+      (limits.reservedWithdrawalReceipts ?? 0) <= limits.maxReceipts,
+    { expected: "withdrawal reserves within hard storage limits" },
+  ),
+);
+
 const UsageRow = Schema.Struct({
   documents: Schema.Natural,
   receipts: Schema.Natural,
   bytes: Schema.Natural,
 });
+
+// These expressions deliberately match the legacy aggregate's logical byte accounting.
+const documentBytesSql = (row: string) =>
+  `length(CAST(${row}.namespace AS BLOB)) + length(CAST(${row}.source_id AS BLOB)) + length(CAST(${row}.document_json AS BLOB)) + 128`;
+
+const receiptBytesSql = (row: string) =>
+  `length(CAST(${row}.namespace AS BLOB)) + length(CAST(${row}.source_id AS BLOB)) + length(CAST(${row}.operation_id AS BLOB)) + length(CAST(${row}.command_json AS BLOB)) + length(CAST(${row}.result_json AS BLOB)) + 128`;
+
+// Triggers keep already-open version-2 writers accounted for. Their admission policy
+// is still the old policy; deployment must drain them before relying on reserves.
+const usageTriggers = [
+  { table: DOCUMENT_TABLE, count: "documents", bytes: documentBytesSql },
+  { table: RECEIPT_TABLE, count: "receipts", bytes: receiptBytesSql },
+].flatMap(({ table, count, bytes }) =>
+  ["INSERT", "UPDATE", "DELETE"].map((event) => ({
+    name: `${table}_usage_${event.toLowerCase()}`,
+    sql: `CREATE TRIGGER ${table}_usage_${event.toLowerCase()} AFTER ${event} ON ${table}
+      BEGIN
+        UPDATE ${USAGE_TABLE} SET
+          ${count} = ${count} + ${event === "INSERT" ? 1 : event === "DELETE" ? -1 : 0},
+          bytes = bytes + (${event === "DELETE" ? "0" : bytes("NEW")}) - (${event === "INSERT" ? "0" : bytes("OLD")})
+        WHERE singleton = 1;
+        SELECT CASE WHEN changes() <> 1 THEN RAISE(ABORT, 'missing memory usage') END;
+      END`,
+  })),
+);
 
 class MemoryMetadataRow extends Schema.Class<MemoryMetadataRow>(
   "@effect-agent/storage-sqlite/MemoryMetadataRow",
@@ -73,6 +128,7 @@ class MemoryDocumentRow extends Schema.Class<MemoryDocumentRow>(
   generation: Schema.Int,
   revision: Schema.NonEmptyString,
   document_json: StoredJson,
+  stored_bytes: Schema.Natural,
 }) {}
 
 class MemoryReceiptRow extends Schema.Class<MemoryReceiptRow>(
@@ -235,6 +291,77 @@ const validateReceiptResult = Effect.fn("SqliteMemoryStore.validateReceiptResult
   }
 });
 
+const readUsage = Effect.fn("SqliteMemoryStore.readUsage")(function* (
+  sql: SqlClientService.SqlClient,
+) {
+  const operation = "read memory usage";
+
+  const rows = yield* query(
+    sql<Record<string, unknown>>`
+      SELECT documents, receipts, bytes FROM effect_agent_memory_usage_v1 WHERE singleton = 1
+    `,
+    operation,
+  ).pipe(Effect.flatMap((rows) => decodeRows(UsageRow, rows, operation)));
+
+  if (rows.length !== 1) return yield* storageError(operation, "corrupt");
+
+  return rows[0];
+});
+
+// Called inside schema initialization's transaction. The separate marker distinguishes
+// a legacy store from damaged established accounting; reopening never rebuilds counters.
+const initializeMemoryUsage = Effect.fn("SqliteMemoryStore.initializeUsage")(function* () {
+  const sql = yield* SqlClientService.SqlClient;
+  const failpoint = yield* MemoryMutationFailpoint;
+  const operation = "initialize memory usage";
+
+  const metadata = yield* sql<Record<string, unknown>>`
+    SELECT version FROM effect_agent_memory_metadata WHERE component = ${USAGE_COMPONENT}
+  `.pipe(Effect.flatMap((rows) => decodeRows(MemoryMetadataRow, rows, operation)));
+
+  const objects = yield* sql<Record<string, unknown>>`
+    SELECT name FROM sqlite_master
+    WHERE name = ${USAGE_TABLE} OR name IN ${sql.in(usageTriggers.map((trigger) => trigger.name))}
+  `.pipe(Effect.flatMap((rows) => decodeRows(MemoryTableRow, rows, operation)));
+
+  if (metadata.length === 0) {
+    if (objects.length !== 0) return yield* storageError(operation, "corrupt");
+    yield* failpoint.hit("memory:initialize:before-accounting");
+    yield* sql`
+      CREATE TABLE effect_agent_memory_usage_v1 (
+        singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+        documents INTEGER NOT NULL CHECK (typeof(documents) = 'integer' AND documents BETWEEN 0 AND 9007199254740991),
+        receipts INTEGER NOT NULL CHECK (typeof(receipts) = 'integer' AND receipts BETWEEN 0 AND 9007199254740991),
+        bytes INTEGER NOT NULL CHECK (typeof(bytes) = 'integer' AND bytes BETWEEN 0 AND 9007199254740991)
+      )
+    `;
+    yield* sql`
+      INSERT INTO effect_agent_memory_usage_v1 (singleton, documents, receipts, bytes)
+      SELECT 1,
+        (SELECT COUNT(*) FROM effect_agent_memory_documents_v1),
+        (SELECT COUNT(*) FROM effect_agent_memory_receipts_v1),
+        COALESCE((SELECT SUM(length(CAST(namespace AS BLOB)) + length(CAST(source_id AS BLOB)) +
+          length(CAST(document_json AS BLOB)) + 128) FROM effect_agent_memory_documents_v1), 0) +
+        COALESCE((SELECT SUM(length(CAST(namespace AS BLOB)) + length(CAST(source_id AS BLOB)) +
+          length(CAST(operation_id AS BLOB)) + length(CAST(command_json AS BLOB)) +
+          length(CAST(result_json AS BLOB)) + 128) FROM effect_agent_memory_receipts_v1), 0)
+    `;
+    for (const trigger of usageTriggers) yield* sql.unsafe(trigger.sql);
+    yield* sql`
+      INSERT INTO effect_agent_memory_metadata (component, version) VALUES (${USAGE_COMPONENT}, 1)
+    `;
+    yield* failpoint.hit("memory:initialize:after-accounting");
+  } else {
+    if (metadata.length !== 1 || metadata[0].version !== 1) {
+      return yield* storageError(operation, "incompatible");
+    }
+    if (objects.length !== usageTriggers.length + 1) {
+      return yield* storageError(operation, "corrupt");
+    }
+  }
+  yield* readUsage(sql);
+});
+
 const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(function* () {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* MemoryMutationFailpoint;
@@ -322,6 +449,7 @@ const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(functio
           FROM effect_agent_memory_receipts_v1
           LIMIT 0
         `;
+        yield* initializeMemoryUsage();
       }),
     )
     .pipe(Effect.catchTag("SqlError", () => Effect.fail(storageError("initialize memory schema"))));
@@ -334,10 +462,15 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
   const readDocument = Effect.fn("SqliteMemoryStore.readDocument")(function* (
     key: MemoryKey,
     operation: string,
-  ): Effect.fn.Return<MemoryDocument | null, MemoryStorageError> {
+  ): Effect.fn.Return<
+    { readonly document: MemoryDocument; readonly bytes: number } | null,
+    MemoryStorageError
+  > {
     const rawRows = yield* query(
       sql<Record<string, unknown>>`
-        SELECT namespace, source_id, format_version, generation, revision, document_json
+        SELECT namespace, source_id, format_version, generation, revision, document_json,
+          length(CAST(namespace AS BLOB)) + length(CAST(source_id AS BLOB)) +
+          length(CAST(document_json AS BLOB)) + 128 AS stored_bytes
         FROM effect_agent_memory_documents_v1
         WHERE namespace = ${key.namespace.address} AND source_id = ${key.id}
       `,
@@ -366,13 +499,13 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
       return yield* storageError(operation, "corrupt");
     }
 
-    return document;
+    return { document, bytes: row.stored_bytes };
   });
 
   const get = Effect.fn("SqliteMemoryStore.get")(function* (key: MemoryKey) {
     const decodedKey = yield* decodeInput(MemoryKey.Wire, key, "get memory document");
 
-    return yield* readDocument(decodedKey, "get memory document");
+    return (yield* readDocument(decodedKey, "get memory document"))?.document ?? null;
   });
 
   return { get, readDocument };
@@ -381,7 +514,7 @@ const makeMemoryReader = Effect.fn("SqliteMemoryStore.makeReader")(function* () 
 const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* MemoryMutationFailpoint;
-  const limits = yield* SqlMemoryLimits;
+  const limits = yield* decodeInput(Limits, yield* SqlMemoryLimits, "memory storage limits");
 
   yield* initializeMemorySchema();
   const { get, readDocument } = yield* makeMemoryReader();
@@ -466,7 +599,8 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
             return { document: receipt.result, changed: false } as const;
           }
 
-          const current = yield* readDocument(decodedWrite.key, operation);
+          const currentRow = yield* readDocument(decodedWrite.key, operation);
+          const current = currentRow?.document ?? null;
           const modifiedAt = yield* Clock.currentTimeMillis;
           const next = yield* applyMemoryWrite(current, decodedWrite, modifiedAt);
 
@@ -480,50 +614,43 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
 
           yield* validateEncodedChange({ commandJson, documentJson, resultJson }, operation);
 
+          const bytes = utf8ByteLength;
+          const identityBytes = bytes(next.key.namespace.address) + bytes(next.key.id);
+          const documentBytes = identityBytes + bytes(documentJson) + 128;
+
+          const receiptBytes =
+            identityBytes +
+            bytes(decodedWrite.operationId) +
+            bytes(commandJson) +
+            bytes(resultJson) +
+            128;
+
+          if (Math.max(documentBytes, receiptBytes) > limits.maxRowBytes) {
+            return yield* storageError("memory row byte limit", "invalid-input");
+          }
+
+          const used = yield* readUsage(sql);
+
+          if (used.bytes < (currentRow?.bytes ?? 0) || (current !== null && used.documents === 0)) {
+            return yield* storageError("read memory usage", "corrupt");
+          }
+
+          const maxReceipts =
+            limits.maxReceipts -
+            (decodedWrite._tag === "Put" ? (limits.reservedWithdrawalReceipts ?? 0) : 0);
+
+          const maxStorageBytes =
+            limits.maxStorageBytes -
+            (decodedWrite._tag === "Put" ? (limits.reservedWithdrawalBytes ?? 0) : 0);
+
+          // Subtract the persisted old row before adding its replacement. Subtraction
+          // comparisons avoid overflowing safe integer budgets near unbounded defaults.
           if (
-            limits.maxRowBytes !== Number.MAX_SAFE_INTEGER ||
-            limits.maxStorageBytes !== Number.MAX_SAFE_INTEGER ||
-            limits.maxDocuments !== Number.MAX_SAFE_INTEGER ||
-            limits.maxReceipts !== Number.MAX_SAFE_INTEGER
+            used.documents > limits.maxDocuments - (current === null ? 1 : 0) ||
+            used.receipts >= maxReceipts ||
+            used.bytes - (currentRow?.bytes ?? 0) > maxStorageBytes - documentBytes - receiptBytes
           ) {
-            const bytes = utf8ByteLength;
-            const identityBytes = bytes(next.key.namespace.address) + bytes(next.key.id);
-            const documentBytes = identityBytes + bytes(documentJson) + 128;
-
-            const receiptBytes =
-              identityBytes +
-              bytes(decodedWrite.operationId) +
-              bytes(commandJson) +
-              bytes(resultJson) +
-              128;
-
-            if (Math.max(documentBytes, receiptBytes) > limits.maxRowBytes) {
-              return yield* storageError("memory row byte limit", "invalid-input");
-            }
-
-            const usage = yield* sql<Record<string, unknown>>`
-              SELECT
-                (SELECT COUNT(*) FROM effect_agent_memory_documents_v1) AS documents,
-                (SELECT COUNT(*) FROM effect_agent_memory_receipts_v1) AS receipts,
-                COALESCE((SELECT SUM(length(CAST(namespace AS BLOB)) + length(CAST(source_id AS BLOB)) +
-                  length(CAST(document_json AS BLOB)) + 128) FROM effect_agent_memory_documents_v1), 0) +
-                COALESCE((SELECT SUM(length(CAST(namespace AS BLOB)) + length(CAST(source_id AS BLOB)) +
-                  length(CAST(operation_id AS BLOB)) + length(CAST(command_json AS BLOB)) +
-                  length(CAST(result_json AS BLOB)) + 128) FROM effect_agent_memory_receipts_v1), 0) AS bytes
-            `.pipe(Effect.flatMap((rows) => decodeRows(UsageRow, rows, operation)));
-
-            const used = usage[0];
-
-            if (usage.length !== 1 || used === undefined)
-              return yield* storageError(operation, "corrupt");
-            // Conservatively charge the replacement document as well. Receipts are never pruned.
-            if (
-              used.documents + (current === null ? 1 : 0) > limits.maxDocuments ||
-              used.receipts + 1 > limits.maxReceipts ||
-              used.bytes + documentBytes + receiptBytes > limits.maxStorageBytes
-            ) {
-              return yield* storageError("memory storage limit", "invalid-input");
-            }
+            return yield* storageError("memory storage limit", "invalid-input");
           }
 
           if (current === null) {

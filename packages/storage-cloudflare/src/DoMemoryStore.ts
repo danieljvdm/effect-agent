@@ -13,6 +13,8 @@ export class DoMemoryStorageLimits extends Schema.Class<DoMemoryStorageLimits>(
   maxStorageBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 536_870_912 })),
   maxDocuments: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100_000 })),
   maxReceipts: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000_000 })),
+  reservedWithdrawalBytes: Schema.optional(Schema.Natural),
+  reservedWithdrawalReceipts: Schema.optional(Schema.Natural),
 }) {}
 
 export const defaultDoMemoryStorageLimits = DoMemoryStorageLimits.make({
@@ -26,6 +28,9 @@ export const defaultDoMemoryStorageLimits = DoMemoryStorageLimits.make({
  * Local memory only, without Thread tables. Keep one SQL client per owner and pass the
  * full storage handle: sql-only handles cannot provide atomic receipts and revisions.
  * Byte limits conservatively count encoded rows, not SQLite page/index overhead.
+ * Optional withdrawal reserves default to zero and stay within hard byte/receipt limits.
+ * Ordinary Put cannot consume them. Deploy exclusively upgraded writers before relying
+ * on reserves; the SQL accounting migration preserves older writers and their receipts.
  */
 export const doMemoryStoreLayerWithFailpoints = (
   storage: NonNullable<SqliteClient.SqliteClientConfig["storage"]>,
