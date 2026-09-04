@@ -128,6 +128,76 @@ const append = (
   );
 
 describe("MemoryThreadStore", () => {
+  it.effect("reads bounded pages from one snapshot while another batch is appended", () =>
+    Effect.gen(function* () {
+      const store = yield* ThreadStore;
+
+      yield* store.materialize(
+        ThreadMaterialization.make({ threadId, producerEpoch: FIRST_PRODUCER_EPOCH }),
+      );
+      expect(
+        yield* store.read(ThreadRead.make({ threadId, limit: 2 })).pipe(Stream.runCollect),
+      ).toEqual([]);
+
+      const first = yield* append(
+        store,
+        batch("page-first", [inputRecord("page-1", "one"), inputRecord("page-2", "two")]),
+      );
+
+      const tail = yield* append(
+        store,
+        batch("page-second", [inputRecord("page-3", "three"), inputRecord("page-4", "four")]),
+        first,
+      );
+
+      const snapshot = yield* store.export(ThreadExportRequest.make({ threadId }));
+      const readStarted = yield* Deferred.make<void>();
+      const resumeRead = yield* Deferred.make<void>();
+
+      const reader = yield* store.read(ThreadRead.make({ threadId, limit: 10 })).pipe(
+        Stream.tap(() =>
+          Deferred.succeed(readStarted, undefined).pipe(Effect.andThen(Deferred.await(resumeRead))),
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* Deferred.await(readStarted);
+      yield* append(store, batch("page-third", [inputRecord("page-5", "five")]), tail);
+      yield* Deferred.succeed(resumeRead, undefined);
+      expect(yield* Fiber.join(reader)).toEqual(snapshot.records);
+
+      const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
+
+      const cases = [
+        { afterSequence: undefined, expected: [0, 1] },
+        { afterSequence: 0, expected: [0, 1] },
+        { afterSequence: 1, expected: [1, 2] },
+        { afterSequence: 3, expected: [3, 4] },
+        { afterSequence: 4, expected: [4] },
+        { afterSequence: 5, expected: [] },
+        { afterSequence: 6, expected: [] },
+        { afterSequence: Number.MAX_SAFE_INTEGER, expected: [] },
+      ];
+
+      for (const { afterSequence, expected } of cases) {
+        const page = yield* store
+          .read(
+            ThreadRead.make({
+              threadId,
+              ...(afterSequence === undefined
+                ? {}
+                : { afterSequence: canonicalSequence(afterSequence) }),
+              limit: 2,
+            }),
+          )
+          .pipe(Stream.runCollect);
+
+        expect(page).toEqual(expected.map((index) => exported.records[index]));
+      }
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   describe("shared ThreadStore conformance", () => {
     for (const conformanceCase of threadStoreConformanceCases) {
       it.effect(conformanceCase.name, () =>

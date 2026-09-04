@@ -409,11 +409,12 @@ const makeThreadStore = Effect.gen(function* () {
     (threadId: ThreadId, afterSequence: CanonicalSequence | undefined, limit: number) =>
       Ref.get(state).pipe(
         Effect.flatMap((current) => findThread(current, threadId)),
-        Effect.map((thread) =>
-          thread.records
-            .filter((record) => record.sequence > (afterSequence ?? ZERO_CANONICAL_SEQUENCE))
-            .slice(0, limit),
-        ),
+        Effect.map((thread) => {
+          // Append assigns gap-free sequences starting at 1, so the exclusive cursor is an index.
+          const start = afterSequence ?? ZERO_CANONICAL_SEQUENCE;
+
+          return thread.records.slice(start, start + limit);
+        }),
       ),
   );
 
