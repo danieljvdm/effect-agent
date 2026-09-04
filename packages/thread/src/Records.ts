@@ -20,8 +20,10 @@ import {
   ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
 import { ModelCallUsage, RunUsageSummary } from "@effect-agent/core/Usage";
-import { Encoding, Schema } from "effect";
+import { Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
+
+import { utf8ByteLength } from "./internal/utf8.ts";
 
 const identifier = <const Name extends string>(name: Name) =>
   Schema.NonEmptyString.pipe(Schema.brand(`@effect-agent/thread/${name}`));
@@ -157,9 +159,7 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
     if (!isJson(input)) return false;
     const encoded = JSON.stringify(input);
 
-    return (
-      encoded !== undefined && Encoding.encodeHex(encoded).length / 2 <= MAX_PERSISTED_JSON_BYTES
-    );
+    return encoded !== undefined && utf8ByteLength(encoded) <= MAX_PERSISTED_JSON_BYTES;
   } catch {
     return false;
   }

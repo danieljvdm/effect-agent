@@ -1,19 +1,9 @@
 import { ThreadId } from "@effect-agent/core/Identifiers";
-import {
-  Cause,
-  Context,
-  Crypto,
-  DateTime,
-  Effect,
-  Encoding,
-  Layer,
-  Option,
-  Schema,
-  Semaphore,
-} from "effect";
+import { Cause, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect";
 
 import { digestJson } from "./Digest.ts";
 import { EventSources, type NormalizedEvent } from "./EventSource.ts";
+import { utf8ByteLength } from "./internal/utf8.ts";
 import { admitPreparedInput, PreparedInputAdmission } from "./PreparedInputAdmission.ts";
 import { DefinitionDigests, type PersistedJson } from "./Records.ts";
 import { type ScheduleRetryReason } from "./Schedule.ts";
@@ -48,7 +38,7 @@ const now = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
 const failure = (reason: SubscriptionError["reason"], code: string) =>
   SubscriptionError.make({ reason, code });
 
-const bytes = (value: PersistedJson) => Encoding.encodeHex(JSON.stringify(value)).length / 2;
+const bytes = (value: PersistedJson) => utf8ByteLength(JSON.stringify(value));
 
 const sameSource = (a: EventSourceVersion, b: EventSourceVersion) =>
   a.name === b.name && a.version === b.version;

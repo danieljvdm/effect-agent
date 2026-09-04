@@ -9,7 +9,7 @@ import { type ExhaustedLimit } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
 import { ModelCallUsage, summarizeModelUsage } from "@effect-agent/core/Usage";
 import { CLEARED_TOOL_RESULT, COMPACTION_SUMMARY_PREFIX } from "@effect-agent/engine/Compaction";
-import { type Crypto, Effect, Schema, type DateTime } from "effect";
+import { type Crypto, Effect, Schema, Stream, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { digestJson, type DigestError } from "./Digest.ts";
@@ -23,6 +23,7 @@ import {
   RunCompleted,
   ToolCallSettled,
   type CanonicalRecordEnvelope,
+  type CanonicalSequence,
   type DeploymentId,
   type ProducerId,
 } from "./Records.ts";
@@ -499,10 +500,28 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
  * later Run: the orphan assistant Tool declaration and any partial Tool results from that Turn
  * are excluded, while preceding instruction/user messages in the response record remain history.
  */
-const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwner")(function* (
-  records: ReadonlyArray<CanonicalRecordEnvelope>,
+/** @internal Lightweight canonical boundaries collected without retaining record payloads. */
+export interface JournalBoundary {
+  readonly sequence: CanonicalSequence;
+  readonly tag: "ModelResponseRecorded" | "ToolCallSettled";
+  readonly promptLength: number;
+}
+
+/**
+ * Reconstruct a fixed canonical prefix from a re-readable stream. The caller must keep the same
+ * records visible on every traversal. Compaction metadata and the resulting live Prompt remain
+ * resident; covered historical message/tool payloads do not. An uncompacted Prompt still grows
+ * with its conversation, so hosts must configure an appropriate context compaction policy.
+ * @internal
+ */
+export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalStream")(function* <
+  E,
+  R,
+>(
+  records: Stream.Stream<CanonicalRecordEnvelope, E, R>,
   ownerRunId: RunId | undefined,
-): Effect.fn.Return<RunJournalProjection, RunJournalError> {
+  onBoundary?: (boundary: JournalBoundary) => void,
+): Effect.fn.Return<RunJournalProjection, RunJournalError | E, R> {
   let state: FoldState = {
     all: [],
     before: [],
@@ -527,26 +546,38 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
   const firstSequenceByRun = new Map<string, number>();
   const lastResponseSequenceByRun = new Map<string, number>();
   const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
+  const settledToolCallRecordIds = new Set<string>();
+  const settledById = new Map<string, Pick<ToolCallSettled, "isFailure" | "budgetRejected">>();
 
-  for (const envelope of records) {
-    const payload = envelope.record.payload;
+  yield* Stream.runForEach(records, (envelope) =>
+    Effect.sync(() => {
+      const payload = envelope.record.payload;
 
-    if (payload._tag === "CompactionCreated") continue;
-    if ("runId" in payload && typeof payload.runId === "string") {
-      if (!firstSequenceByRun.has(payload.runId)) {
-        firstSequenceByRun.set(payload.runId, envelope.sequence);
+      if (payload._tag === "CompactionCreated") return;
+      if ("runId" in payload && typeof payload.runId === "string") {
+        if (!firstSequenceByRun.has(payload.runId)) {
+          firstSequenceByRun.set(payload.runId, envelope.sequence);
+        }
       }
-    }
-    if (payload._tag === "ModelResponseRecorded") {
-      lastResponseSequenceByRun.set(payload.runId, envelope.sequence);
-    } else if (payload._tag === "ToolCallSettled") {
-      const from = lastResponseSequenceByRun.get(payload.runId);
+      if (payload._tag === "ModelResponseRecorded") {
+        lastResponseSequenceByRun.set(payload.runId, envelope.sequence);
+      } else if (payload._tag === "ToolCallSettled") {
+        settledToolCallRecordIds.add(envelope.record.recordId);
+        if (payload.runId === ownerRunId)
+          settledById.set(envelope.record.recordId, {
+            isFailure: payload.isFailure,
+            ...(payload.budgetRejected === undefined
+              ? {}
+              : { budgetRejected: payload.budgetRejected }),
+          });
+        const from = lastResponseSequenceByRun.get(payload.runId);
 
-      if (from !== undefined && from < envelope.sequence) {
-        settledSpans.push({ from, to: envelope.sequence });
+        if (from !== undefined && from < envelope.sequence) {
+          settledSpans.push({ from, to: envelope.sequence });
+        }
       }
-    }
-  }
+    }),
+  );
 
   const boundIsValid = (runId: string, coversThrough: number, ownSequence: number): boolean => {
     if (coversThrough >= ownSequence) return false;
@@ -565,25 +596,27 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
   let summarizeSequence = -1;
   let clearBound = 0;
 
-  for (const envelope of records) {
-    const payload = envelope.record.payload;
+  yield* Stream.runForEach(records, (envelope) =>
+    Effect.sync(() => {
+      const payload = envelope.record.payload;
 
-    if (payload._tag !== "CompactionCreated") continue;
-    if (!boundIsValid(payload.runId, payload.coversThrough, envelope.sequence)) continue;
-    if (payload.kind === "summarize") {
-      if (payload.summary === undefined) continue;
-      if (
-        payload.coversThrough > summarizeBound ||
-        (payload.coversThrough === summarizeBound && envelope.sequence > summarizeSequence)
-      ) {
-        summarizeBound = payload.coversThrough;
-        summarizeSummary = payload.summary;
-        summarizeSequence = envelope.sequence;
+      if (payload._tag !== "CompactionCreated") return;
+      if (!boundIsValid(payload.runId, payload.coversThrough, envelope.sequence)) return;
+      if (payload.kind === "summarize") {
+        if (payload.summary === undefined) return;
+        if (
+          payload.coversThrough > summarizeBound ||
+          (payload.coversThrough === summarizeBound && envelope.sequence > summarizeSequence)
+        ) {
+          summarizeBound = payload.coversThrough;
+          summarizeSummary = payload.summary;
+          summarizeSequence = envelope.sequence;
+        }
+      } else if (payload.coversThrough > clearBound) {
+        clearBound = payload.coversThrough;
       }
-    } else if (payload.coversThrough > clearBound) {
-      clearBound = payload.coversThrough;
-    }
-  }
+    }),
+  );
   let summaryEmitted = false;
 
   const emitSummary = () => {
@@ -599,7 +632,8 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     // Covered records always precede the owner Run's records (the append
     // side never covers the appending Run), so the summary belongs to both
     // the full projection and the prior-Run history.
-    state = { ...state, all: [...state.all, message], before: [...state.before, message] };
+    state.all.push(message);
+    state.before.push(message);
   };
 
   const modelUsage: Array<ModelCallUsage> = [];
@@ -616,42 +650,8 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
 
   let usageTurn = 0;
 
-  const settledToolCallRecordIds = new Set<string>();
-
-  for (const envelope of records) {
-    const payload = envelope.record.payload;
-
-    if (payload._tag !== "ToolCallSettled") continue;
-    settledToolCallRecordIds.add(envelope.record.recordId);
-  }
-
-  const decodedResponses = new Map<string, Prompt.Prompt>();
   const incompleteToolTurns = new Set<string>();
   const incompleteToolCalls = new Set<string>();
-
-  for (const envelope of records) {
-    const payload = envelope.record.payload;
-
-    if (payload._tag !== "ModelResponseRecorded") continue;
-    const messages = yield* decodePromptMessages(payload.messages);
-
-    decodedResponses.set(envelope.record.recordId, messages);
-    const declared = declaredApplicationToolCallIds(messages);
-    const declaredRecordIds: Array<RecordId> = [];
-
-    for (const id of declared) {
-      const toolCallId = yield* Effect.try({
-        try: () => decodeToolCallId(id),
-        catch: (cause) => journalError("Failed to decode a declared Tool Call ID", cause),
-      });
-
-      declaredRecordIds.push(toolCallSettledRecordId(payload.runId, payload.turn, toolCallId));
-    }
-    if (declaredRecordIds.some((recordId) => !settledToolCallRecordIds.has(recordId))) {
-      incompleteToolTurns.add(envelope.record.recordId);
-      for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
-    }
-  }
 
   const policyUsage = {
     committedTurns: 0,
@@ -661,56 +661,70 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     finalizationUsed: false,
   };
 
-  const settledById = new Map<string, ToolCallSettled>();
+  yield* Stream.runForEach(records, (envelope) =>
+    Effect.gen(function* () {
+      const record = envelope.record;
+      const payload = envelope.record.payload;
 
-  for (const { record } of records) {
-    if (record.payload._tag === "ToolCallSettled") settledById.set(record.recordId, record.payload);
-  }
-  for (const { record } of records) {
-    const payload = record.payload;
-
-    if (!("runId" in payload) || payload.runId !== ownerRunId) continue;
-    if (payload._tag === "RunPolicyUsageReserved") {
-      if (
-        payload.programmaticToolCalls < policyUsage.programmaticToolCalls ||
-        (policyUsage.finalizationUsed && !payload.finalizationUsed)
-      ) {
-        return yield* journalError("Run policy reservations must be monotonic");
+      if (payload._tag === "RunPolicyUsageReserved" && payload.runId === ownerRunId) {
+        if (
+          payload.programmaticToolCalls < policyUsage.programmaticToolCalls ||
+          (policyUsage.finalizationUsed && !payload.finalizationUsed)
+        ) {
+          return yield* journalError("Run policy reservations must be monotonic");
+        }
+        policyUsage.programmaticToolCalls = payload.programmaticToolCalls;
+        policyUsage.finalizationUsed = payload.finalizationUsed;
       }
-      policyUsage.programmaticToolCalls = payload.programmaticToolCalls;
-      policyUsage.finalizationUsed = payload.finalizationUsed;
-    }
-    if (payload._tag !== "ModelResponseRecorded") continue;
-    const messages = decodedResponses.get(record.recordId);
+      if (payload._tag !== "ModelResponseRecorded") return;
+      if (envelope.sequence <= summarizeBound && payload.runId !== ownerRunId) return;
+      const messages = yield* decodePromptMessages(payload.messages);
 
-    if (messages === undefined) return yield* journalError("Missing decoded policy response");
-    policyUsage.committedTurns = Math.max(policyUsage.committedTurns, payload.turn);
+      const declared = declaredApplicationToolCallIds(messages);
+      const declaredRecordIds: Array<RecordId> = [];
 
-    const calls = messages.content.flatMap((message) =>
-      message.role === "assistant"
-        ? message.content.filter((part) => part.type === "tool-call")
-        : [],
-    );
+      for (const id of declared) {
+        const toolCallId = yield* Effect.try({
+          try: () => decodeToolCallId(id),
+          catch: (cause) => journalError("Failed to decode a declared Tool Call ID", cause),
+        });
 
-    policyUsage.toolCalls += calls.length;
-    if (incompleteToolTurns.has(record.recordId)) continue;
-    for (const call of calls) {
-      const result = call.providerExecuted
-        ? messages.content
-            .flatMap((message) => (message.role === "assistant" ? message.content : []))
-            .find(
-              (part) => part.type === "tool-result" && part.providerExecuted && part.id === call.id,
-            )
-        : settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${call.id}`);
+        declaredRecordIds.push(toolCallSettledRecordId(payload.runId, payload.turn, toolCallId));
+      }
+      if (declaredRecordIds.some((recordId) => !settledToolCallRecordIds.has(recordId))) {
+        incompleteToolTurns.add(envelope.record.recordId);
+        for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
+      }
+      if (payload.runId !== ownerRunId) return;
+      policyUsage.committedTurns = Math.max(policyUsage.committedTurns, payload.turn);
 
-      if (result === undefined || ("budgetRejected" in result && result.budgetRejected === true))
-        continue;
-      if (!("isFailure" in result)) continue;
-      policyUsage.consecutiveToolFailures = result.isFailure
-        ? policyUsage.consecutiveToolFailures + 1
-        : 0;
-    }
-  }
+      const calls = messages.content.flatMap((message) =>
+        message.role === "assistant"
+          ? message.content.filter((part) => part.type === "tool-call")
+          : [],
+      );
+
+      policyUsage.toolCalls += calls.length;
+      if (incompleteToolTurns.has(record.recordId)) return;
+      for (const call of calls) {
+        const result = call.providerExecuted
+          ? messages.content
+              .flatMap((message) => (message.role === "assistant" ? message.content : []))
+              .find(
+                (part) =>
+                  part.type === "tool-result" && part.providerExecuted && part.id === call.id,
+              )
+          : settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${call.id}`);
+
+        if (result === undefined || ("budgetRejected" in result && result.budgetRejected === true))
+          continue;
+        if (!("isFailure" in result)) continue;
+        policyUsage.consecutiveToolFailures = result.isFailure
+          ? policyUsage.consecutiveToolFailures + 1
+          : 0;
+      }
+    }),
+  );
 
   const validatedPolicyUsage = yield* Schema.decodeUnknownEffect(RunPolicyUsage)(policyUsage).pipe(
     Effect.mapError((cause) =>
@@ -724,28 +738,115 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     if (current.pendingTools.length === 0) return current;
     const toolMessage = yield* toolMessageFromSettled(current.pendingTools);
 
+    current.all.push(toolMessage);
+    if (!current.pendingToolsForRun) current.before.push(toolMessage);
+
     return {
       ...current,
-      all: [...current.all, toolMessage],
-      before: current.pendingToolsForRun ? current.before : [...current.before, toolMessage],
       pendingTools: [],
       pendingToolsForRun: false,
     };
   });
 
-  for (const envelope of records) {
-    const payload = envelope.record.payload;
+  yield* Stream.runForEach(records, (envelope) =>
+    Effect.gen(function* () {
+      const payload = envelope.record.payload;
 
-    if (PROMPT_TRANSPARENT_TAGS.has(payload._tag)) continue;
-    // The compaction record governs the fold (pre-scan) and contributes no
-    // message of its own; records at or below the summarize bound render as
-    // the one summary message emitted at the covered/kept transition.
-    if (payload._tag === "CompactionCreated") continue;
-    if (envelope.sequence <= summarizeBound) {
-      // Owner-Run usage still counts even when the message content is folded
-      // into the summary (the append side never covers the owner, but stay
-      // fail-safe if it ever did).
-      if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
+      if (PROMPT_TRANSPARENT_TAGS.has(payload._tag)) return;
+      // The compaction record governs the fold (pre-scan) and contributes no
+      // message of its own; records at or below the summarize bound render as
+      // the one summary message emitted at the covered/kept transition.
+      if (payload._tag === "CompactionCreated") return;
+      if (envelope.sequence <= summarizeBound) {
+        // Owner-Run usage still counts even when the message content is folded
+        // into the summary (the append side never covers the owner, but stay
+        // fail-safe if it ever did).
+        if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
+          const responseUsage = yield* projectedResponseUsage(payload);
+
+          usage.modelCalls = yield* addProjectedUsage(
+            "modelCalls",
+            usage.modelCalls,
+            responseUsage.modelCalls,
+          );
+          usage.inputTokens = yield* addProjectedUsage(
+            "inputTokens",
+            usage.inputTokens,
+            responseUsage.inputTokens,
+          );
+          usage.outputTokens = yield* addProjectedUsage(
+            "outputTokens",
+            usage.outputTokens,
+            responseUsage.outputTokens,
+          );
+          usage.costMicrousd = yield* addProjectedUsage(
+            "costMicrousd",
+            usage.costMicrousd,
+            responseUsage.costMicrousd,
+          );
+          usage.modelUsage.push(...responseUsage.modelUsage);
+          if (payload.turn > usageTurn) {
+            usageTurn = payload.turn;
+            usage.lastInputTokens = responseUsage.inputTokens;
+            usage.lastOutputTokens = responseUsage.outputTokens;
+          }
+        }
+        if (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled") {
+          onBoundary?.({
+            sequence: envelope.sequence,
+            tag: payload._tag,
+            promptLength: summarizeSummary === undefined ? 0 : 1,
+          });
+        }
+
+        return;
+      }
+      emitSummary();
+      if (payload._tag === "ToolCallSettled") {
+        if (payload.runId !== ownerRunId && incompleteToolCalls.has(envelope.record.recordId)) {
+          onBoundary?.({
+            sequence: envelope.sequence,
+            tag: payload._tag,
+            promptLength: state.all.length + (state.pendingTools.length === 0 ? 0 : 1),
+          });
+
+          return;
+        }
+        if (
+          state.pendingTools.length > 0 &&
+          state.pendingToolsForRun !== (payload.runId === ownerRunId)
+        ) {
+          state = yield* flushTools(state);
+        }
+        state.pendingTools.push({ record: payload, cleared: envelope.sequence <= clearBound });
+        state = {
+          ...state,
+          pendingToolsForRun: payload.runId === ownerRunId,
+        };
+        onBoundary?.({
+          sequence: envelope.sequence,
+          tag: payload._tag,
+          promptLength: state.all.length + 1,
+        });
+
+        return;
+      }
+      state = yield* flushTools(state);
+      if (payload._tag === "ModelCompleted" && payload.messages !== undefined) {
+        const messages = yield* decodePromptMessages(payload.messages);
+
+        for (const message of messages.content) {
+          state.all.push(message);
+          if (payload.runId !== ownerRunId) state.before.push(message);
+        }
+
+        return;
+      }
+      if (payload._tag !== "ModelResponseRecorded") return;
+      const messages = yield* decodePromptMessages(payload.messages);
+      const forRun = payload.runId === ownerRunId;
+
+      if (forRun) {
         const responseUsage = yield* projectedResponseUsage(payload);
 
         usage.modelCalls = yield* addProjectedUsage(
@@ -775,97 +876,34 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
           usage.lastOutputTokens = responseUsage.outputTokens;
         }
       }
-      continue;
-    }
-    emitSummary();
-    if (payload._tag === "ToolCallSettled") {
-      if (payload.runId !== ownerRunId && incompleteToolCalls.has(envelope.record.recordId)) {
-        continue;
-      }
-      if (
-        state.pendingTools.length > 0 &&
-        state.pendingToolsForRun !== (payload.runId === ownerRunId)
-      ) {
-        state = yield* flushTools(state);
+
+      const modelVisible =
+        !forRun && payload.runScopedPrefixLength !== undefined
+          ? Prompt.fromMessages(messages.content.slice(payload.runScopedPrefixLength))
+          : messages;
+
+      const visibleMessages =
+        !forRun && incompleteToolTurns.has(envelope.record.recordId)
+          ? withoutApplicationToolCallMessages(modelVisible)
+          : modelVisible.content;
+
+      for (const message of visibleMessages) {
+        state.all.push(message);
+        if (!forRun) state.before.push(message);
       }
       state = {
         ...state,
-        pendingTools: [
-          ...state.pendingTools,
-          { record: payload, cleared: envelope.sequence <= clearBound },
-        ],
-        pendingToolsForRun: payload.runId === ownerRunId,
+        committedTurns: forRun
+          ? Math.max(state.committedTurns, payload.turn)
+          : state.committedTurns,
       };
-      continue;
-    }
-    state = yield* flushTools(state);
-    if (payload._tag === "ModelCompleted" && payload.messages !== undefined) {
-      const messages = yield* decodePromptMessages(payload.messages);
-
-      state = {
-        ...state,
-        all: [...state.all, ...messages.content],
-        before:
-          payload.runId === ownerRunId ? state.before : [...state.before, ...messages.content],
-      };
-      continue;
-    }
-    if (payload._tag !== "ModelResponseRecorded") continue;
-    const messages = decodedResponses.get(envelope.record.recordId);
-
-    if (messages === undefined) {
-      return yield* journalError("A canonical ModelResponseRecorded was not decoded");
-    }
-    const forRun = payload.runId === ownerRunId;
-
-    if (forRun) {
-      const responseUsage = yield* projectedResponseUsage(payload);
-
-      usage.modelCalls = yield* addProjectedUsage(
-        "modelCalls",
-        usage.modelCalls,
-        responseUsage.modelCalls,
-      );
-      usage.inputTokens = yield* addProjectedUsage(
-        "inputTokens",
-        usage.inputTokens,
-        responseUsage.inputTokens,
-      );
-      usage.outputTokens = yield* addProjectedUsage(
-        "outputTokens",
-        usage.outputTokens,
-        responseUsage.outputTokens,
-      );
-      usage.costMicrousd = yield* addProjectedUsage(
-        "costMicrousd",
-        usage.costMicrousd,
-        responseUsage.costMicrousd,
-      );
-      usage.modelUsage.push(...responseUsage.modelUsage);
-      if (payload.turn > usageTurn) {
-        usageTurn = payload.turn;
-        usage.lastInputTokens = responseUsage.inputTokens;
-        usage.lastOutputTokens = responseUsage.outputTokens;
-      }
-    }
-
-    const modelVisible =
-      !forRun && payload.runScopedPrefixLength !== undefined
-        ? Prompt.fromMessages(messages.content.slice(payload.runScopedPrefixLength))
-        : messages;
-
-    const visibleMessages =
-      !forRun && incompleteToolTurns.has(envelope.record.recordId)
-        ? withoutApplicationToolCallMessages(modelVisible)
-        : modelVisible.content;
-
-    state = {
-      ...state,
-      all: [...state.all, ...visibleMessages],
-      before: forRun ? state.before : [...state.before, ...visibleMessages],
-      committedTurns: forRun ? Math.max(state.committedTurns, payload.turn) : state.committedTurns,
-    };
-  }
+      onBoundary?.({
+        sequence: envelope.sequence,
+        tag: payload._tag,
+        promptLength: state.all.length,
+      });
+    }),
+  );
   emitSummary();
   state = yield* flushTools(state);
 
@@ -884,7 +922,7 @@ export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     runId: RunId,
   ): Effect.Effect<RunJournalProjection, RunJournalError> =>
-    projectRunJournalForOwner(records, runId),
+    projectRunJournalStream(Stream.fromIterable(records), runId),
 );
 
 /**
@@ -896,7 +934,7 @@ export const promptFromCanonicalRecords = Effect.fn("RunJournal.promptFromCanoni
   (
     records: ReadonlyArray<CanonicalRecordEnvelope>,
   ): Effect.Effect<Prompt.Prompt, RunJournalError> =>
-    projectRunJournalForOwner(records, undefined).pipe(
+    projectRunJournalStream(Stream.fromIterable(records), undefined).pipe(
       Effect.map((projection) => projection.prompt),
     ),
 );

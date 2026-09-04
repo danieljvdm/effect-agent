@@ -69,6 +69,7 @@ import {
   Context,
   Crypto,
   DateTime,
+  Deferred,
   Duration,
   Effect,
   Equal,
@@ -184,7 +185,8 @@ import {
   modelResponseInterruptedBatchId,
   modelResponseInterruptedRecordId,
   modelResponseRecordId,
-  projectRunJournal,
+  projectRunJournalStream,
+  type JournalBoundary,
   runCompletedRecordId,
   runIdForSubmission,
   runStartedBatchId,
@@ -717,6 +719,7 @@ type AttemptOutcome =
  */
 type RunPhaseOutcome =
   | AttemptOutcome
+  | { readonly _tag: "yielded" }
   | { readonly _tag: "suspended"; readonly toolCallId: ToolCallId }
   | { readonly _tag: "suspendedChild"; readonly children: AgentChildPending["children"] };
 
@@ -1037,36 +1040,118 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     });
   };
 
-  const readAll = Effect.fn("DurableAgentRuntime.readAll")(function* (
+  /** Re-readable, contiguous canonical prefix. Each traversal retains only the adapter's chunk. */
+  const canonicalRange = (
     threadId: ThreadId,
-  ): Effect.fn.Return<Array<CanonicalRecordEnvelope>, ThreadStoreError | ThreadNotMaterialized> {
-    const collected: Array<CanonicalRecordEnvelope> = [];
-    let after: CanonicalSequence | undefined = undefined;
+    throughSequence: CanonicalSequence,
+    afterSequence: CanonicalSequence = ZERO_SEQUENCE,
+  ): Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized> =>
+    Stream.suspend(() => {
+      let expected = afterSequence + 1;
+      let after = afterSequence;
 
-    while (true) {
-      const request: ThreadRead =
-        after === undefined
-          ? ThreadRead.make({ threadId, limit: READ_PAGE })
-          : ThreadRead.make({ threadId, limit: READ_PAGE, afterSequence: after });
+      const next = (): Stream.Stream<
+        CanonicalRecordEnvelope,
+        ThreadStoreError | ThreadNotMaterialized
+      > =>
+        Stream.suspend(() => {
+          if (expected > throughSequence) return Stream.empty;
+          const start = expected;
+          const limit = Math.min(READ_PAGE, throughSequence - start + 1);
 
-      const page: Array<CanonicalRecordEnvelope> = yield* Stream.runCollect(store.read(request));
+          const page = store
+            .read(
+              ThreadRead.make({
+                threadId,
+                limit,
+                ...(after === 0 ? {} : { afterSequence: after }),
+              }),
+            )
+            .pipe(
+              Stream.mapEffect((envelope) => {
+                if (envelope.sequence !== expected || expected >= start + limit) {
+                  return Effect.fail(
+                    ThreadStoreError.make({
+                      operation: "read recovery history",
+                      message: `Canonical history for ${threadId} is not contiguous: expected sequence ${expected}, received ${envelope.sequence}`,
+                    }),
+                  );
+                }
+                expected += 1;
+                after = envelope.sequence;
 
-      collected.push(...page);
-      const last = page.at(-1);
+                return Effect.succeed(envelope);
+              }),
+            );
 
-      if (page.length < READ_PAGE || last === undefined) return collected;
-      after = last.sequence;
-    }
+          return Stream.concat(
+            page,
+            Stream.suspend(() =>
+              expected === start + limit
+                ? next()
+                : Stream.fail(
+                    ThreadStoreError.make({
+                      operation: "read recovery history",
+                      message: `Canonical history for ${threadId} ended at ${after}; expected ${limit} records through sequence ${throughSequence}, received ${expected - start}`,
+                    }),
+                  ),
+            ),
+          );
+        });
+
+      return next();
+    });
+
+  /**
+   * Retain addressed runs and their deterministic identities independently of payload claims.
+   * Marker matching deliberately errs toward retaining malformed/conflicting identity evidence.
+   */
+  const controlRecords = (submissionIds: ReadonlyArray<SubmissionId>) => {
+    const runIds = new Set(submissionIds.map(runIdForSubmission));
+    const runMarkers = [...runIds].map((runId) => `:${runId}:`);
+
+    const recordIds = new Set(
+      submissionIds.flatMap((id) => [
+        submissionInputRecordId(id),
+        submissionAbortRecordId(id),
+        submissionSettlementRecordId(id),
+        runStartedRecordId(runIdForSubmission(id)),
+        runCompletedRecordId(runIdForSubmission(id)),
+      ]),
+    );
+
+    return ({ record }: CanonicalRecordEnvelope): boolean =>
+      recordIds.has(record.recordId) ||
+      runMarkers.some((marker) => record.recordId.includes(marker)) ||
+      record.recordId.startsWith("subagent-lineage:") ||
+      record.payload._tag === "SubagentLineageRecorded" ||
+      ("runId" in record.payload &&
+        record.payload.runId !== undefined &&
+        runIds.has(record.payload.runId));
+  };
+
+  const readControl = Effect.fn("DurableAgentRuntime.readControl")(function* (
+    threadId: ThreadId,
+    submissionIds: ReadonlyArray<SubmissionId>,
+  ) {
+    const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
+    return yield* Stream.runCollect(
+      canonicalRange(threadId, tail.tailSequence).pipe(
+        Stream.filter(controlRecords(submissionIds)),
+      ),
+    );
   });
 
   const readAllTolerant = Effect.fn("DurableAgentRuntime.readAllTolerant")(
     (
       threadId: ThreadId,
+      submissionIds: ReadonlyArray<SubmissionId>,
     ): Effect.Effect<
       { readonly records: ReadonlyArray<CanonicalRecordEnvelope>; readonly materialized: boolean },
       ThreadStoreError
     > =>
-      readAll(threadId).pipe(
+      readControl(threadId, submissionIds).pipe(
         Effect.map((records) => ({ records, materialized: true })),
         Effect.catchTag("ThreadNotMaterialized", () =>
           Effect.succeed({ records: [], materialized: false }),
@@ -1077,6 +1162,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   interface RecoveryHistorySnapshot {
     readonly records: ReadonlyArray<CanonicalRecordEnvelope>;
     readonly materialized: boolean;
+    readonly throughSequence: CanonicalSequence;
+    readonly submissionIds: ReadonlyArray<SubmissionId>;
   }
 
   /**
@@ -1089,64 +1176,36 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     afterSequence: CanonicalSequence,
     throughSequence: CanonicalSequence,
+    retain: (record: CanonicalRecordEnvelope) => boolean,
   ): Effect.fn.Return<Array<CanonicalRecordEnvelope>, ThreadStoreError | ThreadNotMaterialized> {
-    const collected: Array<CanonicalRecordEnvelope> = [];
-    let after = afterSequence;
-    let expected = afterSequence + 1;
-
-    while (expected <= throughSequence) {
-      const limit = Math.min(READ_PAGE, throughSequence - expected + 1);
-
-      const request = ThreadRead.make({
-        threadId,
-        limit,
-        ...(after === 0 ? {} : { afterSequence: after }),
-      });
-
-      const page: Array<CanonicalRecordEnvelope> = yield* Stream.runCollect(store.read(request));
-
-      if (page.length !== limit) {
-        return yield* ThreadStoreError.make({
-          operation: "read recovery history",
-          message: `Canonical history for ${threadId} ended at ${after}; expected ${limit} records through sequence ${throughSequence}, received ${page.length}`,
-        });
-      }
-      for (const envelope of page) {
-        if (envelope.sequence !== expected) {
-          return yield* ThreadStoreError.make({
-            operation: "read recovery history",
-            message: `Canonical history for ${threadId} is not contiguous: expected sequence ${expected}, received ${envelope.sequence}`,
-          });
-        }
-        expected += 1;
-        after = envelope.sequence;
-        collected.push(envelope);
-      }
-    }
-
-    return collected;
+    return yield* Stream.runCollect(
+      canonicalRange(threadId, throughSequence, afterSequence).pipe(Stream.filter(retain)),
+    );
   });
 
   /**
    * Capture one strongly-consistent pass-start tail and read exactly that prefix. This snapshot
    * is disposable: `runRecovery` retains it only while processing the scan's contiguous group
-   * for this Thread, so resident canonical history is bounded to one Thread prefix
+   * for this Thread, retaining only the addressed runs' control evidence
    * and never survives the pass or an interruption/restart.
    */
   const readRecoveryHistory = Effect.fn("DurableAgentRuntime.readRecoveryHistory")(function* (
     threadId: ThreadId,
+    submissionIds: ReadonlyArray<SubmissionId>,
   ): Effect.fn.Return<RecoveryHistorySnapshot, ThreadStoreError> {
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId })).pipe(
       Effect.map(Option.some),
       Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(Option.none())),
     );
 
-    if (Option.isNone(tail)) return { records: [], materialized: false };
+    if (Option.isNone(tail))
+      return { records: [], materialized: false, throughSequence: ZERO_SEQUENCE, submissionIds };
 
     const records = yield* readCanonicalRange(
       threadId,
       ZERO_SEQUENCE,
       tail.value.tailSequence,
+      controlRecords(submissionIds),
     ).pipe(
       Effect.catchTag("ThreadNotMaterialized", (error) =>
         ThreadStoreError.make({
@@ -1157,7 +1216,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       ),
     );
 
-    return { records, materialized: true };
+    return { records, materialized: true, throughSequence: tail.value.tailSequence, submissionIds };
   });
 
   /**
@@ -1168,13 +1227,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const refreshRecoveryHistory = Effect.fn("DurableAgentRuntime.refreshRecoveryHistory")(function* (
     threadId: ThreadId,
     records: ReadonlyArray<CanonicalRecordEnvelope>,
+    after: CanonicalSequence,
+    submissionIds: ReadonlyArray<SubmissionId>,
   ): Effect.fn.Return<ReadonlyArray<CanonicalRecordEnvelope>, DurableWorkerFailure> {
-    const after = records.at(-1)?.sequence ?? ZERO_SEQUENCE;
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
 
     if (tail.tailSequence <= after) return records;
 
-    const suffix = yield* readCanonicalRange(threadId, after, tail.tailSequence).pipe(
+    const suffix = yield* readCanonicalRange(
+      threadId,
+      after,
+      tail.tailSequence,
+      controlRecords(submissionIds),
+    ).pipe(
       Effect.catchTag("ThreadNotMaterialized", (error) =>
         ThreadStoreError.make({
           operation: "read recovery history",
@@ -1595,20 +1660,22 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * history through the engine's batch-resume continuation.
    */
   const withoutPendingBatch = (
-    records: ReadonlyArray<CanonicalRecordEnvelope>,
+    records: Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>,
     pending: PendingToolBatch,
     runId: ReturnType<typeof runIdForSubmission>,
-  ): ReadonlyArray<CanonicalRecordEnvelope> =>
-    records.filter((envelope) => {
-      if (envelope.record.recordId === pending.responseRecordId) return false;
-      const payload = envelope.record.payload;
+  ): Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized> =>
+    records.pipe(
+      Stream.filter((envelope) => {
+        if (envelope.record.recordId === pending.responseRecordId) return false;
+        const payload = envelope.record.payload;
 
-      return !(
-        payload._tag === "ToolCallSettled" &&
-        payload.runId === runId &&
-        pending.declaredIds.has(payload.toolCallId)
-      );
-    });
+        return !(
+          payload._tag === "ToolCallSettled" &&
+          payload.runId === runId &&
+          pending.declaredIds.has(payload.toolCallId)
+        );
+      }),
+    );
 
   /** Materialize without regressing a fence someone else already advanced. */
   const materializeAtLeast = (
@@ -2210,7 +2277,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   ) {
     const runId = runIdForSubmission(submission.submissionId);
     const recordId = runStartedRecordId(runId);
-    const records = yield* readAll(submission.threadId);
+    const records = yield* readControl(submission.threadId, [submission.submissionId]);
     const existing = yield* canonicalRunStartFromRecords(records, runId);
     let start: RecordEnvelope;
 
@@ -2682,7 +2749,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             ? // A racing establishment pass (or the child's own claimed worker) advanced the
               // log; the deterministic identity means the record either exists or the next
               // pass re-proves it — verify instead of trusting the race blindly.
-              readAll(request.childThreadId).pipe(
+              readControl(request.childThreadId, []).pipe(
                 Effect.flatMap((current) =>
                   current.some((candidate) => candidate.record.recordId === recordId)
                     ? Effect.void
@@ -2805,7 +2872,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         request.targetAgentId,
         request.targetDigests,
       );
-      const childRead = yield* readAllTolerant(request.childThreadId);
+      const childRead = yield* readAllTolerant(request.childThreadId, []);
 
       yield* ensureChildLineage(parent, request, childRead.records);
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: childSubmissionId }));
@@ -2920,7 +2987,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     ) {
       return mismatch("The child admission linkage does not name this parent Tool Call");
     }
-    const childRecords = yield* readAll(request.childThreadId);
+    const childRecords = yield* readControl(request.childThreadId, [child.submissionId]);
 
     const lineageEnvelope = childRecords.find(
       (envelope) => envelope.record.recordId === subagentLineageRecordId(request.childThreadId),
@@ -3166,7 +3233,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
 
     if (snapshot.childReservations.length === 0) return false;
-    const records = yield* readAll(submission.threadId);
+    const records = yield* readControl(submission.threadId, [submission.submissionId]);
     const subagent = subagentRecordsOf(records, runIdForSubmission(submission.submissionId));
     let open = false;
 
@@ -3199,7 +3266,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
       );
 
-      const records = yield* readAll(parent.threadId);
+      const records = yield* readControl(parent.threadId, [parent.submissionId]);
       const runId = runIdForSubmission(parent.submissionId);
       const pending = yield* pendingToolBatchFor(records, runId);
       const knownIds = knownRecordIdsOf(records);
@@ -3362,7 +3429,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       );
 
       if (snapshot.childReservations.length === 0) return "clear";
-      const records = yield* readAll(parent.threadId);
+      const records = yield* readControl(parent.threadId, [parent.submissionId]);
 
       for (const envelope of records) knownIds.add(envelope.record.recordId);
       const subagent = subagentRecordsOf(records, runId);
@@ -3589,14 +3656,20 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     submission: SubmissionSnapshot,
     tokenRef: Ref.Ref<OwnershipToken>,
     records: ReadonlyArray<CanonicalRecordEnvelope>,
+    canonical: Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
     runTiming: { readonly startedAt: DateTime.Utc; readonly deadline: DateTime.Utc },
+    yieldAfter?: DateTime.Utc,
   ) =>
     Effect.gen(function* () {
       const submissionId = submission.submissionId;
       const runId = runIdForSubmission(submissionId);
-      const journal = yield* projectRunJournal(records, runId);
+      const boundaries: Array<JournalBoundary> = [];
+
+      const journal = yield* projectRunJournalStream(canonical, runId, (boundary) =>
+        boundaries.push(boundary),
+      );
 
       const childLineage = records.find(
         ({ record }) => record.recordId === subagentLineageRecordId(submission.threadId),
@@ -3619,7 +3692,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const resumeProjection =
         pending === undefined
           ? journal
-          : yield* projectRunJournal(withoutPendingBatch(records, pending, runId), runId);
+          : yield* projectRunJournalStream(withoutPendingBatch(canonical, pending, runId), runId);
 
       const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
 
@@ -4148,6 +4221,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       // handler channel; this side channel preserves the original failure so the Attempt aborts
       // (obligation still owed) instead of settling the Run `failed` on an infrastructure fault.
       const haltRef = yield* Ref.make<DurableWorkerFailure | undefined>(undefined);
+      const yieldSignal = yield* Deferred.make<void>();
 
       const recordHalt = <A, R>(
         effect: Effect.Effect<A, DurableWorkerFailure, R>,
@@ -4463,40 +4537,58 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 message: "Compaction is already committed for this Turn and kind",
               });
             }
+
             // Coverage selection walks the attempt-start snapshot: records
             // appended by THIS Attempt are all owner-Run and excluded by the
             // prior-Runs-only rule regardless.
-            const coverable: Array<CanonicalRecordEnvelope> = [];
+            const coverable = boundaries.filter(
+              (boundary) =>
+                ownerFirstSequence === undefined || boundary.sequence < ownerFirstSequence,
+            );
 
-            for (const envelope of records) {
-              if (ownerFirstSequence !== undefined && envelope.sequence >= ownerFirstSequence) {
-                break;
-              }
-              const tag = envelope.record.payload._tag;
-
-              if (tag === "ModelResponseRecorded" || tag === "ToolCallSettled") {
-                coverable.push(envelope);
-              }
-            }
             if (coverable.length === 0) {
               return yield* CompactionError.make({
                 message: "Durable compaction requires eligible prior-Run records",
               });
             }
 
-            // Map only a prefix the strategy actually covered. Reprojection retains prior
-            // compaction records, so indices remain correct after earlier summaries. A host
-            // prompt transform that breaks this correspondence cannot authorize deletion.
-            const encodedSource = yield* Schema.encodeEffect(Prompt.Prompt)(commit.source).pipe(
-              Effect.mapError((cause) =>
-                CompactionError.make({
-                  message: "Could not encode the compaction source",
-                  cause,
-                }),
-              ),
-            );
+            // Compare each visible message once. A transformed source can authorize only its
+            // exact canonical prefix; no per-candidate rereads or full encoded Prompt copies.
+            let matchingPrefix = 0;
+            let requiredThrough = 0;
+            const comparisonLimit = Math.min(journal.prompt.content.length, commit.through);
 
-            let lastCovered: CanonicalRecordEnvelope | undefined;
+            for (let index = 0; index < commit.through; index += 1) {
+              const message = commit.source.content[index];
+
+              if (
+                message !== undefined &&
+                (commit.kind === "summarize" ? message.role !== "system" : message.role === "tool")
+              )
+                requiredThrough = index + 1;
+              if (index >= comparisonLimit || index !== matchingPrefix || message === undefined)
+                continue;
+              const canonicalMessage = journal.prompt.content[index];
+
+              if (canonicalMessage === undefined) continue;
+
+              const encode = (entry: Prompt.Message) =>
+                Schema.encodeEffect(Prompt.Message)(entry).pipe(
+                  Effect.mapError((cause) =>
+                    CompactionError.make({
+                      message: "Could not encode the canonical compaction prefix",
+                      cause,
+                    }),
+                  ),
+                );
+
+              const left = yield* encode(canonicalMessage);
+              const right = yield* encode(message);
+
+              if (JSON.stringify(left) === JSON.stringify(right)) matchingPrefix += 1;
+            }
+
+            let lastCovered: JournalBoundary | undefined;
 
             for (let index = 0; index < coverable.length; index += 1) {
               const candidate = coverable[index];
@@ -4504,53 +4596,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               if (candidate === undefined) continue;
               const following = coverable[index + 1];
 
-              if (
-                following !== undefined &&
-                following.record.payload._tag !== "ModelResponseRecorded"
-              )
-                continue;
+              if (following !== undefined && following.tag !== "ModelResponseRecorded") continue;
 
-              const prefix = yield* recordHalt(
-                projectRunJournal(
-                  records.filter(
-                    (entry) =>
-                      entry.sequence <= candidate.sequence ||
-                      entry.record.payload._tag === "CompactionCreated",
-                  ),
-                  runId,
-                ),
-              );
-
-              const length = prefix.prompt.content.length;
+              const length = candidate.promptLength;
 
               if (length === 0 || length > commit.through) continue;
-              // A shorter canonical prefix is sufficient only if the remaining source
-              // messages would not change. Never acknowledge partial persistence.
-              if (
-                commit.source.content
-                  .slice(length, commit.through)
-                  .some((message) =>
-                    commit.kind === "summarize"
-                      ? message.role !== "system"
-                      : message.role === "tool",
-                  )
-              )
-                continue;
-
-              const encodedPrefix = yield* Schema.encodeEffect(Prompt.Prompt)(prefix.prompt).pipe(
-                Effect.mapError((cause) =>
-                  CompactionError.make({
-                    message: "Could not encode the canonical compaction prefix",
-                    cause,
-                  }),
-                ),
-              );
-
-              if (
-                JSON.stringify(encodedPrefix.content) !==
-                JSON.stringify(encodedSource.content.slice(0, length))
-              )
-                continue;
+              if (length < requiredThrough || length > matchingPrefix) continue;
               lastCovered = candidate;
             }
             if (lastCovered === undefined) {
@@ -5518,6 +5569,23 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               },
             }),
         ...(preparedContext === undefined ? {} : { context: preparedContext }),
+        ...(yieldAfter === undefined
+          ? {}
+          : {
+              beforeTurn: () =>
+                Effect.gen(function* () {
+                  // The engine chooses the next Turn only after completing Tools and advancing
+                  // history. Stop before context preparation can invoke a compaction Model.
+                  if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(yieldAfter)) {
+                    yield* recordHalt(commitPendingTurn);
+                    yield* Deferred.succeed(yieldSignal, undefined);
+
+                    // The successful signal wins the outer race and closes the stream Scope;
+                    // no synthetic engine RunFailed event or terminal Settlement is produced.
+                    return yield* Effect.never;
+                  }
+                }),
+            }),
         ...(runContextPreparation.transientContext === undefined
           ? {}
           : { transientContext: runContextPreparation.transientContext }),
@@ -5913,9 +5981,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         ).pipe(Effect.andThen(Effect.never)),
       );
 
-      const raced = Effect.raceFirst(consume, Effect.raceFirst(abortWatcher, renewal)).pipe(
-        Effect.provideService(IdGenerator, idGenerator),
-      );
+      const execution = Effect.raceFirst(consume, Effect.raceFirst(abortWatcher, renewal));
+
+      const raced = (
+        yieldAfter === undefined
+          ? execution
+          : Effect.raceFirst(
+              execution,
+              Deferred.await(yieldSignal).pipe(Effect.as({ _tag: "yielded" as const })),
+            )
+      ).pipe(Effect.provideService(IdGenerator, idGenerator));
 
       const result = yield* raced.pipe(
         Effect.catch(
@@ -5978,6 +6053,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         ),
       );
 
+      if (result._tag === "yielded") return result;
       if (result._tag === "suspendedRun") return approvalSuspension(result.toolCallId);
       if (result._tag === "suspendedChildRun") return childSuspension(result.children);
       if (result._tag === "aborted") {
@@ -6057,6 +6133,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     claim: Claim,
     tokenRef: Ref.Ref<OwnershipToken>,
+    yieldAfter?: DateTime.Utc,
   ) =>
     Effect.gen(function* () {
       const submissionId = claim.submissionId;
@@ -6084,7 +6161,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId }));
       }
       const ctx = yield* attemptContextFor(threadId, claim.producerEpoch);
-      const records = yield* readAll(threadId);
+      const records = yield* readControl(threadId, [submissionId]);
 
       const childPolicy =
         submission.parentLinkage === undefined
@@ -6159,7 +6236,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       // Recheck after duration interruption too: that Attempt may have prepared new ordinary calls.
       const ordinaryCallsResolved = Effect.gen(function* () {
-        const reconciliationRecords = yield* readAll(threadId);
+        const reconciliationRecords = yield* readControl(threadId, [submissionId]);
 
         const reconciliationSnapshot = yield* ledger.loadRecoverySnapshot(
           RecoverySnapshotRequest.make({ submissionId }),
@@ -6226,7 +6303,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       let approvalDecisionIntents = snapshot.approvalDecisions;
 
       while (true) {
-        const currentRecords = yield* readAll(threadId);
+        const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+        const canonical = canonicalRange(threadId, tail.tailSequence);
+
+        const currentRecords = yield* Stream.runCollect(
+          canonical.pipe(Stream.filter(controlRecords([submissionId]))),
+        );
 
         const outcome = yield* runModel(
           agent,
@@ -6234,11 +6316,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           submission,
           tokenRef,
           currentRecords,
+          canonical,
           lineage,
           approvalDecisionIntents,
           runTiming,
+          yieldAfter,
         );
 
+        if (outcome._tag === "yielded") return Option.none();
         if (outcome._tag === "suspendedChild") {
           // Durable waitingForChild suspension (spec §12 step 10, SUB-030): the sibling
           // late-settles are already canonical; the ledger transition ends the ownership
@@ -6387,7 +6472,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       yield* ensureThreadCreated(submission.threadId, submission.agentId, submission.agentDigests);
       const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
       const tokenRef = yield* Ref.make(claim.ownershipToken);
-      const records = yield* readAll(submission.threadId);
+      const records = yield* readControl(submission.threadId, [submission.submissionId]);
 
       const recorded = records.some(
         (envelope) =>
@@ -6458,6 +6543,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       submission: SubmissionSnapshot,
     ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure>,
     threadId: ThreadId,
+    options?: { readonly yieldAfter?: DateTime.Utc },
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -6495,7 +6581,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         // readiness, SUB-016).
         // Release the claim, nudge the parent lane, and leave the child to establishment.
         if (submission.parentLinkage !== undefined && submission.state === "admitted") {
-          const read = yield* readAllTolerant(threadId);
+          const read = yield* readAllTolerant(threadId, []);
 
           const lineageRecorded = read.records.some(
             (envelope) => envelope.record.payload._tag === "SubagentLineageRecorded",
@@ -6548,7 +6634,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
         return yield* resolution.binding.attempt(
           (agent, attemptThreadId, attemptClaim) =>
-            runAttempt(agent, attemptThreadId, attemptClaim, tokenRef),
+            runAttempt(agent, attemptThreadId, attemptClaim, tokenRef, options?.yieldAfter),
           threadId,
           claim,
         );
@@ -6639,11 +6725,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
   const processThreadHeadImpl = (
     threadId: ThreadId,
+    options?: { readonly yieldAfter?: DateTime.Utc },
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     processThreadHead(
       (submission) =>
         resolveWorkerBinding(registeredBindings, submission.agentId, submission.agentDigests),
       threadId,
+      options,
     );
 
   const claimFor = Effect.fn("DurableAgentRuntime.claimFor")(function* (
@@ -7061,6 +7149,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       evidence: RecoveryEvidence,
       decision: RecoveryDecision,
       records: ReadonlyArray<CanonicalRecordEnvelope>,
+      history: RecoveryHistorySnapshot,
     ): Effect.fn.Return<
       "repaired" | "deferred" | "none" | "unknown",
       DurableWorkerFailure,
@@ -7269,7 +7358,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           );
           const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
           const tokenRef = yield* Ref.make(claim.ownershipToken);
-          const currentRecords = yield* refreshRecoveryHistory(submission.threadId, records);
+
+          const currentRecords = yield* refreshRecoveryHistory(
+            submission.threadId,
+            records,
+            history.throughSequence,
+            history.submissionIds,
+          );
 
           yield* applyCanonicalInput(
             ctx,
@@ -7640,6 +7735,29 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
 
+    // A racing steering link can name a host outside the pass's nonterminal group. Read that
+    // host from the same verified prefix, without changing this snapshot's visibility.
+    if (
+      snapshot.hostSubmissionId !== undefined &&
+      !history.submissionIds.includes(snapshot.hostSubmissionId)
+    ) {
+      const hostRecords = yield* readCanonicalRange(
+        submission.threadId,
+        ZERO_SEQUENCE,
+        history.throughSequence,
+        controlRecords([snapshot.hostSubmissionId]),
+      );
+
+      const merged = new Map(history.records.map((entry) => [entry.sequence, entry]));
+
+      for (const entry of hostRecords) merged.set(entry.sequence, entry);
+      history = {
+        ...history,
+        records: [...merged.values()].sort((left, right) => left.sequence - right.sequence),
+        submissionIds: [...history.submissionIds, snapshot.hostSubmissionId],
+      };
+    }
+
     const evidence = yield* evidenceFor(
       history.records,
       submission.submissionId,
@@ -7650,7 +7768,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const decision = classifyRecovery(snapshot, evidence);
 
     const disposition = yield* Effect.scoped(
-      executeRecoveryDecision(snapshot, evidence, decision, history.records),
+      executeRecoveryDecision(snapshot, evidence, decision, history.records, history),
     );
 
     if (disposition === "repaired") {
@@ -7677,7 +7795,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       });
     }
 
-    return yield* recoverSnapshot(found.value, yield* readRecoveryHistory(found.value.threadId));
+    return yield* recoverSnapshot(
+      found.value,
+      yield* readRecoveryHistory(found.value.threadId, [submissionId]),
+    );
   });
 
   const runRecoveryImpl = Effect.fn("DurableAgentRuntime.runRecovery")(
@@ -7695,7 +7816,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         const first = nonterminal[index];
 
         if (first === undefined) break;
-        const history = yield* readRecoveryHistory(first.threadId);
+        const submissionIds: Array<SubmissionId> = [];
+
+        for (let offset = index; offset < nonterminal.length; offset += 1) {
+          const entry = nonterminal[offset];
+
+          if (entry === undefined || entry.threadId !== first.threadId) break;
+          submissionIds.push(entry.submissionId);
+        }
+        const history = yield* readRecoveryHistory(first.threadId, submissionIds);
 
         while (index < nonterminal.length) {
           const submission = nonterminal[index];
@@ -8115,7 +8244,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
 
-    const read = yield* readAllTolerant(submission.threadId);
+    const read = yield* readRecoveryHistory(submission.threadId, [
+      submission.submissionId,
+      ...(snapshot.hostSubmissionId === undefined ? [] : [snapshot.hostSubmissionId]),
+    ]);
 
     const evidence = yield* evidenceFor(
       read.records,
@@ -8330,7 +8462,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       RecoverySnapshotRequest.make({ submissionId: command.submissionId }),
     );
 
-    const read = yield* readAllTolerant(submission.threadId);
+    const read = yield* readRecoveryHistory(submission.threadId, [
+      submission.submissionId,
+      ...(snapshot.hostSubmissionId === undefined ? [] : [snapshot.hostSubmissionId]),
+    ]);
 
     const evidence = yield* evidenceFor(
       read.records,
@@ -8378,7 +8513,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     );
 
     const disposition = yield* Effect.scoped(
-      executeRecoveryDecision(snapshot, evidence, decision, read.records),
+      executeRecoveryDecision(snapshot, evidence, decision, read.records, read),
     );
 
     if (disposition === "repaired") {
@@ -8419,7 +8554,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
     const nowMillis = yield* Clock.currentTimeMillis;
     const generatedAt = yield* nowUtc;
-    const recordsCache = new Map<ThreadId, ReadonlyArray<CanonicalRecordEnvelope>>();
     const entries: Array<ObligationEntry> = [];
 
     for (const submission of nonterminal) {
@@ -8433,12 +8567,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       switch (submission.state) {
         case "unknown": {
           blockedOn = "unknown";
-          let records = recordsCache.get(submission.threadId);
 
-          if (records === undefined) {
-            records = (yield* readAllTolerant(submission.threadId)).records;
-            recordsCache.set(submission.threadId, records);
-          }
+          const records = (yield* readAllTolerant(submission.threadId, [submission.submissionId]))
+            .records;
 
           const resolvedIds = new Set(
             snapshot.unknownResolutions.map((intent) => intent.toolCallId),
@@ -8800,9 +8931,13 @@ export class DurableAgentRuntime extends Context.Service<
      * owned, unknown, or suspended head returns None and leaves accepted work pending.
      * Ready input may join this Run through the existing Turn seams and settle with its head.
      * Interruption ends only this Attempt; ownership cleanup uses its latest renewed token.
+     * A trusted host may supply `yieldAfter` to return None before the next Turn's context
+     * preparation, committing any completed Turn first. This releases ownership without settling or resetting the durable
+     * Run deadline. It is a cooperative scheduling deadline, not a hard interruption timeout.
      */
     readonly processThreadHead: (
       threadId: ThreadId,
+      options?: { readonly yieldAfter?: DateTime.Utc },
     ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
     readonly runWorker: <
       InputSchema extends Schema.Top,

@@ -752,6 +752,13 @@ export interface RunBufferLimits {
  * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
+  /**
+   * Host preparation boundary before each new model Turn, including its context preparation
+   * and compaction calls. The preceding Tool batch and history advance have finished. A resumed
+   * canonical Tool batch bypasses this hook until it continues to a new Turn. This hook does not
+   * reset the Run deadline or change prompt protection, and is not automatically inherited by spawned children.
+   */
+  readonly beforeTurn?: (() => Effect.Effect<void, HookError, HookRequirements>) | undefined;
   /** Reuse a Thread identity, including retained history, instead of allocating one. */
   readonly threadId?: ThreadId | undefined;
   /**

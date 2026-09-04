@@ -1313,7 +1313,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         const rejected = yield* Effect.exit(hostileRuntime.processThreadResolved(parent.threadId));
 
         expect(failureTag(rejected)).toBe(
-          corrupt === "missing" ? "RunJournalError" : "LedgerError",
+          corrupt === "missing" ? "ThreadStoreError" : "LedgerError",
         );
         expect(payloadsOf(yield* readLog(parent.threadId), "SubagentJoined")).toHaveLength(0);
         expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([

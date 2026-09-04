@@ -113,7 +113,7 @@ export {
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Thread is the serialized owner (durability §6); the
  * Object never runs `runResolvedWorker`'s infinite loop — each ingress event or alarm runs
- * ONE bounded `runRecovery` + `processThreadResolved` pass, and the persisted alarm
+ * ONE bounded `runRecovery` + `processThreadHead` pass, and the persisted alarm
  * (the single multiplexed slot, D-P6-2) finishes accepted work across evictions WITHOUT any
  * incoming request.
  *

@@ -224,6 +224,9 @@ describe("thread canonical contracts", () => {
         const umlautLast = yield* digestJson({ z: 2, "\u00e4": 1 });
 
         expect(umlautLast).toBe(umlautFirst);
+        expect(yield* digestJson({ z: "\ud800", value: "😀é" })).toBe(
+          "a2ae949a2f22f7fc31138231e3db19f57f017e0d8a09f7b2b049398f9346f57c",
+        );
       }),
     );
   });
@@ -260,6 +263,11 @@ describe("thread canonical contracts", () => {
     expect(
       Schema.decodeUnknownExit(PersistedJson)("x".repeat(MAX_PERSISTED_JSON_BYTES + 1))._tag,
     ).toBe("Failure");
+    // JSON quotes consume two bytes; astral code points consume four rather than UTF-16's two.
+    const utf8Boundary = "😀".repeat(Math.floor((MAX_PERSISTED_JSON_BYTES - 2) / 4));
+
+    expect(Schema.decodeUnknownExit(PersistedJson)(utf8Boundary)._tag).toBe("Success");
+    expect(Schema.decodeUnknownExit(PersistedJson)(`${utf8Boundary}😀`)._tag).toBe("Failure");
 
     const cyclic: Record<string, unknown> = {};
 

@@ -28,7 +28,7 @@ import {
   revalidateSemanticMemoryCandidates,
 } from "@effect-agent/core/SemanticMemoryRevalidation";
 import { Principal } from "@effect-agent/thread/SubmissionLedger";
-import { Clock, Context, Effect, Encoding, Schema } from "effect";
+import { Clock, Context, Effect, Schema } from "effect";
 
 export class MemoryRpcError extends Schema.TaggedError<MemoryRpcError>()("MemoryRpcError", {
   reason: Schema.Literals(["denied", "protocol", "budget", "timeout", "unavailable"]),
@@ -127,7 +127,7 @@ export class MemoryOwnerIdentity extends Context.Service<
   }
 >()("@effect-agent/storage-cloudflare/MemoryOwnerIdentity") {}
 
-export const memoryWireBytes = (text: string): number => Encoding.encodeHex(text).length / 2;
+export const memoryWireBytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
 export const decodeMemoryWire = Effect.fn("decodeMemoryWire")(function* <A, I>(
   schema: Schema.Codec<A, I, never>,

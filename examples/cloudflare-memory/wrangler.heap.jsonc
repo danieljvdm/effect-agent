@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "effect-agent-heap-benchmark",
+  "main": "src/heap-worker.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "HEAP_THREADS", "class_name": "HeapThread" }],
+  },
+  "exports": { "HeapThread": { "type": "durable-object", "storage": "sqlite" } },
+}

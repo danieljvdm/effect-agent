@@ -552,7 +552,8 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
   return yield* encodeScheduleOwnerResponse(response).pipe(Effect.orDie);
 });
 
-const scheduleAlarmHandler = (limits: SchedulingLimits) =>
+/** @internal The complete native alarm operation, including its event deadline. */
+export const scheduleAlarmHandler = (limits: SchedulingLimits) =>
   DurableObjectAlarm.processDue(
     (event) =>
       Effect.gen(function* () {
@@ -583,7 +584,12 @@ const scheduleAlarmHandler = (limits: SchedulingLimits) =>
         }
       }),
     { mode: "ordered" },
-  ).pipe(Effect.asVoid);
+  ).pipe(
+    // Bound due acquisition and acknowledgement as well as admission. Prepared occurrences
+    // and their replacement alarm survive interruption and retain their idempotency keys.
+    Effect.timeout("14 minutes"),
+    Effect.asVoid,
+  );
 
 export interface ScheduleOwnerObjectInstance extends InstanceType<
   EffectCfDurableObject.DurableObjectClass<Record<never, never>, ScheduleRuntimeServices>
