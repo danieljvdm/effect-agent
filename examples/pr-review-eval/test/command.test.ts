@@ -6,7 +6,7 @@ import {
 } from "@effect-agent/pr-review/Review";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { ConfigProvider, Effect, FileSystem, Path, Schema, Sink, Stream } from "effect";
+import { ConfigProvider, Console, Effect, FileSystem, Path, Schema, Sink, Stream } from "effect";
 import { Command } from "effect/unstable/cli";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -22,6 +22,7 @@ import {
   runEvalSuite,
   writeObservations,
 } from "../src/index.ts";
+import { PrecisionResult } from "../src/precision.ts";
 
 // Only Git identity is substituted. The real CLI parses flags, reads/writes the suite,
 // rebuilds variants and checks their identity. An empty API-key configuration stops before HTTP.
@@ -62,6 +63,115 @@ const cleanCheckout = ChildProcessSpawner.make((command) =>
 const run = Command.runWith(command, { version: "test", renderErrors: false });
 
 describe("PR-review eval command", () => {
+  it.effect("calculates precision without reading configuration, suites or provider state", () =>
+    Effect.gen(function* () {
+      const console = yield* Console.Console;
+      const logged: Array<unknown> = [];
+      const accessed: Array<string> = [];
+
+      const forbidden = Effect.fn("PrecisionTest.forbidden")(function* (name: string) {
+        accessed.push(name);
+
+        return yield* Effect.die(`Unexpected precision access: ${name}`);
+      });
+
+      yield* run(["precision", "--samples", "3", "--max-harm-rate", "0.05", "--json"]).pipe(
+        Effect.provideService(Console.Console, {
+          ...console,
+          log: (...values) => {
+            logged.push(...values);
+          },
+        }),
+        Effect.provideService(
+          FileSystem.FileSystem,
+          FileSystem.makeNoop({
+            readFile: () => forbidden("readFile"),
+            readFileString: () => forbidden("readFileString"),
+            stat: () => forbidden("stat"),
+          }),
+        ),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.make(() => forbidden("configuration")))),
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => forbidden("child process")),
+        ),
+      );
+
+      expect(accessed).toEqual([]);
+      expect(logged).toHaveLength(1);
+
+      const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(PrecisionResult))(
+        logged[0],
+      );
+
+      expect(result.input).toEqual({ samples: 3, confidence: 0.95, maxHarmRate: 0.05 });
+      expect(result.median.minimumIndependentSamples).toBe(6);
+      expect(result.zeroHarms.minimumIndependentSamples).toBe(59);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    ["precision", "--max-harm-rate", "0.05"],
+    ["precision", "--samples", "3"],
+    ["precision", "--samples", "0", "--max-harm-rate", "0.05"],
+    ["precision", "--samples", "3.5", "--max-harm-rate", "0.05"],
+    ["precision", "--samples", "3", "--max-harm-rate", "0"],
+    ["precision", "--samples", "3", "--max-harm-rate", "0.05", "--confidence", "1"],
+  ])("rejects missing or invalid precision flags %#", (args) =>
+    Effect.gen(function* () {
+      const failure = yield* run(args).pipe(Effect.flip);
+
+      expect(failure._tag).toBe("ShowHelp");
+      if (failure._tag === "ShowHelp") expect(failure.errors.length).toBeGreaterThan(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    ["validate"],
+    ["freeze", "--output", "unused.json"],
+    ["freeze-run", "--output", "unused.json"],
+    ["run", "--output", "unused.jsonl"],
+    ["report", "--observations", "unused.jsonl", "--output", "unused.json"],
+    [
+      "rescore",
+      "--previous-cases",
+      "unused.json",
+      "--observations",
+      "unused.jsonl",
+      "--output",
+      "unused.jsonl",
+      "--frozen-output",
+      "unused.json",
+      "--correction-id",
+      "correction",
+    ],
+  ])("still requires --cases for suite command %#", (args) =>
+    Effect.gen(function* () {
+      const failure = yield* run(args).pipe(Effect.flip);
+
+      expect(failure).toMatchObject({
+        _tag: "EvalConfigurationError",
+        message: "--cases is required for this command",
+      });
+    }).pipe(
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ EFFECT_AGENT_LIVE: "1" }))),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("accepts the shared cases flag after the subcommand", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+
+      const cases = yield* path.fromFileUrl(
+        new URL("../fixtures/verification-corpus.json", import.meta.url),
+      );
+
+      yield* run(["validate", "--cases", cases]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect(
     "reports the frozen two-trial grid without a trials flag and rejects an explicit mismatch",
     () =>

@@ -15,6 +15,46 @@ vp run pr-review-eval -- --cases fixtures/verification-corpus.json validate
 vp run pr-review-eval -- --help
 ```
 
+## Sample-count precision before collecting observations
+
+`precision` performs provider-free planning arithmetic. It reads no suite, model configuration,
+credentials, observations or judgments, and changes no report or rollout decision. Both required
+inputs are explicit; confidence defaults to 0.95. Add `--json` for one schema-encoded result.
+
+```sh
+vp run pr-review-eval -- precision --samples 3 --max-harm-rate 0.05
+vp run pr-review-eval -- precision --samples 59 --max-harm-rate 0.05 --confidence 0.95 --json
+```
+
+For N independent, identically distributed continuous observations, the two-sided median interval
+from sample minimum to maximum has confidence `1 - 2^(1-N)`. This is the maximum confidence of a
+finite interval using those sample order statistics; ties can make coverage conservative. At N=3
+it is 75%, and N=6 is the minimum for at least 95%. That says nothing about the interval's width.
+
+If exactly zero events occurred in a prespecified N of independent Bernoulli trials with a common
+event probability, the exact one-sided upper rate bound is `1 - (1-confidence)^(1/N)`. At N=3 and
+95% confidence it is approximately 0.6316; a prespecified 5% maximum requires at least 59 independent
+trials with zero events. This command assumes zero events for the calculation; it does not assert
+that any were observed. These formulas follow the binomial order-statistic argument in
+[NIST's median confidence reference](https://itl.nist.gov/div898/software/dataplot/refman1/auxillar/mediancl.htm)
+and the one-sided special case of
+[NIST's exact binomial limits](https://itl.nist.gov/div898/software/dataplot/refman2/auxillar/exacbino.htm).
+
+Count independent units, not findings: related cases, multiple findings within one review and
+repeated reviews of the same case do not automatically give independent population samples.
+Sample size alone cannot determine interval width or statistical power. These calculations do not
+establish eligibility, an observed improvement, speedup or population performance. They do not
+account for repeated selection, optional stopping or multiple comparisons.
+
+Samples must be integers from 1 through 1,000,000. Confidence and maximum harm rate are proportions
+from 0.000001 through 0.999999. Calculated minimum counts are not clamped to the input limit.
+Numeric probabilities are floating-point approximations. JSON retains median log-noncoverage;
+text displays `<100%` and the exact tail expression when confidence rounds to one. Minimum counts
+use logarithms only as initial estimates. The event-count minimum is certified against the exact
+represented numeric inputs using directed 256/512-bit interval arithmetic; an unresolved numeric
+ambiguity fails explicitly. Median minima use exactly representable dyadic coverage. Every other
+command still requires `--cases`.
+
 ## Freeze before paid execution
 
 `fixtures/verification-corpus.json` contains seven adjudicated cases and an immutable operational

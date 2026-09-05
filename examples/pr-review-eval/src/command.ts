@@ -21,12 +21,21 @@ import {
 } from "./contracts.ts";
 import { loadEvalSuite, writeObservations } from "./corpus.ts";
 import { makeCurrentOpenAiVariant, openAiClientLayer } from "./openai-variant.ts";
+import {
+  calculatePrecision,
+  PrecisionError,
+  PrecisionProbability,
+  PrecisionResult,
+  PrecisionSampleCount,
+  renderPrecision,
+} from "./precision.ts";
 import { loadJudgmentSet, loadObservationFiles, writeQualityReport } from "./report-files.ts";
 import { makeQualityReport, renderQualityReport, rescoreEvalObservations } from "./report.ts";
 import { runEvalSuite, selectEvalCases } from "./runner.ts";
 
 const casesFile = Flag.file("cases").pipe(
-  Flag.withDescription("Path to one schema-encoded eval suite JSON file."),
+  Flag.withDescription("Schema-encoded eval suite; required except for precision and help."),
+  Flag.optional,
 );
 
 const selectedCases = Flag.string("case").pipe(
@@ -37,6 +46,58 @@ const selectedCases = Flag.string("case").pipe(
 const root = Command.make("pr-review-eval").pipe(
   Command.withSharedFlags({ casesFile }),
   Command.withDescription("Validate and run the opt-in PR-review model evaluation bench."),
+);
+
+const requireCasesFile = Effect.fn("PrReviewEval.requireCasesFile")(function* () {
+  const shared = yield* root;
+
+  if (Option.isNone(shared.casesFile))
+    return yield* EvalConfigurationError.make({
+      message: "--cases is required for this command",
+    });
+
+  return shared.casesFile.value;
+});
+
+const precisionCommand = Command.make(
+  "precision",
+  {
+    samples: Flag.integer("samples").pipe(
+      Flag.withSchema(PrecisionSampleCount),
+      Flag.withDescription("Number of genuinely independent units, from 1 to 1,000,000."),
+    ),
+    maxHarmRate: Flag.float("max-harm-rate").pipe(
+      Flag.withSchema(PrecisionProbability),
+      Flag.withDescription("Prespecified maximum event rate, 0.000001 through 0.999999."),
+    ),
+    confidence: Flag.float("confidence").pipe(
+      Flag.withSchema(PrecisionProbability),
+      Flag.withDefault(0.95),
+      Flag.withDescription("Confidence as a proportion, 0.000001 through 0.999999."),
+    ),
+    json: Flag.boolean("json").pipe(Flag.withDescription("Print one schema-encoded JSON result.")),
+  },
+  Effect.fn("PrReviewEval.precisionCommand")(function* ({ json, ...input }) {
+    const result = yield* calculatePrecision(input);
+
+    const rendered = json
+      ? yield* Schema.encodeEffect(Schema.fromJsonString(PrecisionResult))(result).pipe(
+          Effect.mapError((cause) => PrecisionError.make({ message: cause.message })),
+        )
+      : renderPrecision(result);
+
+    yield* Console.log(rendered);
+  }),
+).pipe(
+  Command.withDescription(
+    "Calculate sample-count confidence limits without reading suites, configuration or providers; not power or an observed result.",
+  ),
+  Command.withExamples([
+    {
+      command: "pr-review-eval precision --samples 3 --max-harm-rate 0.05",
+      description: "Plan median coverage and a zero-harm event-rate bound at 95% confidence.",
+    },
+  ]),
 );
 
 const SelectedCaseIds = Schema.Array(EvalCaseId).check(
@@ -59,8 +120,7 @@ const validateCommand = Command.make(
   "validate",
   { selectedCases },
   Effect.fn("PrReviewEval.validateCommand")(function* (options) {
-    const shared = yield* root;
-    const suite = yield* loadEvalSuite(shared.casesFile);
+    const suite = yield* loadEvalSuite(yield* requireCasesFile());
     const selected = yield* decodeSelectedCases(options.selectedCases);
     const cases = yield* selectEvalCases(suite, selected);
 
@@ -225,8 +285,7 @@ const freezeCommand = Command.make(
     reasoningEffort,
   },
   Effect.fn("PrReviewEval.freezeCommand")(function* (options) {
-    const shared = yield* root;
-    const suite = yield* loadEvalSuite(shared.casesFile);
+    const suite = yield* loadEvalSuite(yield* requireCasesFile());
     const text = yield* readGuidance(options.guidance);
     const revision = yield* reviewerRevision();
 
@@ -275,8 +334,7 @@ const freezeRunCommand = Command.make(
     trials: trials.pipe(Flag.withDefault(3)),
   },
   Effect.fn("PrReviewEval.freezeRunCommand")(function* (options) {
-    const shared = yield* root;
-    const suite = yield* loadEvalSuite(shared.casesFile);
+    const suite = yield* loadEvalSuite(yield* requireCasesFile());
     const text = yield* readGuidance(options.guidance);
     const revision = yield* reviewerRevision();
 
@@ -318,8 +376,7 @@ const runCommand = Command.make(
         message: "Set EFFECT_AGENT_LIVE=1 to authorize live model evaluation",
       });
     }
-    const shared = yield* root;
-    const suite = yield* loadEvalSuite(shared.casesFile);
+    const suite = yield* loadEvalSuite(yield* requireCasesFile());
 
     const frozen =
       suite.frozenRun === undefined
@@ -433,9 +490,9 @@ const rescoreCommand = Command.make(
     ),
   },
   Effect.fn("PrReviewEval.rescoreCommand")(function* (options) {
-    const shared = yield* root;
+    const casesFile = yield* requireCasesFile();
     const previous = yield* loadEvalSuite(options.previousCases);
-    const corrected = yield* loadEvalSuite(shared.casesFile);
+    const corrected = yield* loadEvalSuite(casesFile);
     const observations = yield* loadObservationFiles(options.observationFiles);
 
     const rebound = yield* rescoreEvalObservations(
@@ -498,8 +555,7 @@ const reportCommand = Command.make(
   "report",
   { judgmentsFile, observationFiles, reportOutput, reportTrials, selectedCases },
   Effect.fn("PrReviewEval.reportCommand")(function* (options) {
-    const shared = yield* root;
-    const suite = yield* loadEvalSuite(shared.casesFile);
+    const suite = yield* loadEvalSuite(yield* requireCasesFile());
     const caseIds = yield* decodeSelectedCases(options.selectedCases);
 
     const selectedSuite = EvalSuite.make({
@@ -538,6 +594,7 @@ const reportCommand = Command.make(
 
 export const command = root.pipe(
   Command.withSubcommands([
+    precisionCommand,
     validateCommand,
     freezeCommand,
     freezeRunCommand,
