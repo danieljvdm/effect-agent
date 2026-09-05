@@ -1,5 +1,24 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.50
+
+### Minor Changes
+
+- [#333](https://github.com/danieljvdm/effect-agent/pull/333) [`43a159b`](https://github.com/danieljvdm/effect-agent/commit/43a159b2f800c06863ff5c009151e2f241d2d3c2) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Remove the unused Travel Planner phase-profile schemas and metadata constants.
+
+  BEHAVIOR CHANGE: Remove imports of `TravelPlanner*Profile`, `phase3TravelPlannerProfile` through
+  `phase7TravelPlannerProfile`, and `s2TravelPlannerProfile` from `@effect-agent/testing/TravelPlanner`;
+  the executable fixtures and live-test gate remain available.
+
+### Patch Changes
+
+- Updated dependencies [[`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf), [`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf)]:
+  - @effect-agent/engine@0.1.0-beta.50
+  - @effect-agent/capabilities@0.1.0-beta.50
+  - @effect-agent/thread@0.1.0-beta.50
+  - @effect-agent/core@0.1.0-beta.50
+  - @effect-agent/sandbox@0.1.0-beta.50
+
 ## 0.1.0-beta.49
 
 ### Patch Changes
