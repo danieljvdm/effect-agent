@@ -39,3 +39,7 @@ export * as ToolBroker from "./ToolBroker.ts";
 export * as ToolResult from "./ToolResult.ts";
 export * as Usage from "./Usage.ts";
 export * as WebCapture from "./WebCapture.ts";
+export * as ContextWindow from "./ContextWindow.ts";
+export * as ContextHistory from "./ContextHistory.ts";
+export * as ContextTools from "./ContextTools.ts";
+export * as MemoryNotes from "./MemoryNotes.ts";

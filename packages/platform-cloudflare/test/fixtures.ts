@@ -1,4 +1,3 @@
-import { contextCompactorRunContextLayer } from "@effect-agent/capabilities/RunHooks";
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
@@ -654,7 +653,7 @@ export const contextCompactorProbe = (threadId: string): ContextCompactorProbe =
     sourceMessageCounts: [],
   };
 
-const contextCompactorLayer = (threadId: string) =>
+export const makeContextCompactorLayer = (threadId: string) =>
   Layer.effect(
     ContextCompactor,
     Effect.acquireRelease(
@@ -714,10 +713,6 @@ const contextCompactorLayer = (threadId: string) =>
         ),
     ),
   );
-
-/** A closed generic run-context Layer; BrowserCrypto remains owned by the platform assembly. */
-export const makeContextCompactorRunContextLayer = (threadId: string) =>
-  contextCompactorRunContextLayer.pipe(Layer.provide(contextCompactorLayer(threadId)));
 
 const contextAuthorizationProbes = new Map<string, { acquisitions: number; calls: number }>();
 

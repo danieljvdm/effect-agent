@@ -1,6 +1,4 @@
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
 import {
-  RunContextPreparation,
   type PreparedRunContext,
   type RunApprovalDecision,
   type RunApprovalHook,
@@ -12,7 +10,7 @@ import {
   type RunOptions,
   type RunSchedulingHook,
 } from "@effect-agent/engine/RunOptions";
-import { Clock, DateTime, Effect, Layer, Schema } from "effect";
+import { Clock, DateTime, Effect, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
 import {
@@ -262,20 +260,6 @@ export const toRunContextHook = <Error, Requirements>(
   prepare: (request): Effect.Effect<PreparedRunContext, Error, Requirements> =>
     transform.prepare(request.source, request).pipe(Effect.map((prompt) => ({ prompt }))),
 });
-
-/**
- * Install the inward-owned compactor in ephemeral or durable assemblies. It runs at the native compaction
- * seam, after canonical reconstruction, with the same metering and commits as ephemeral Runs.
- * It provides only `RunContextPreparation`; compose `RunToolAuthorization` independently.
- */
-export const contextCompactorRunContextLayer: Layer.Layer<
-  RunContextPreparation,
-  never,
-  ContextCompactor
-> = Layer.effect(
-  RunContextPreparation,
-  Effect.map(ContextCompactor, (compactor) => RunContextPreparation.of({ compactor })),
-);
 
 /** Scheduling values are structurally aligned and only reduce finite concurrency. */
 export const toRunSchedulingHook = (

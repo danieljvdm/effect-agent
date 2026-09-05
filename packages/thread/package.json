@@ -53,7 +53,8 @@
     "./ThreadProjection": "./src/ThreadProjection.ts",
     "./ThreadStore": "./src/ThreadStore.ts",
     "./ToolReconciler": "./src/ToolReconciler.ts",
-    "./WakeScheduler": "./src/WakeScheduler.ts"
+    "./WakeScheduler": "./src/WakeScheduler.ts",
+    "./ThreadContextHistory": "./src/ThreadContextHistory.ts"
   },
   "publishConfig": {
     "access": "public"

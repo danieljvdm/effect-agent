@@ -175,6 +175,7 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   // none of the six scenario shapes carries; pinned in-process by the
   // RUN-026 rows in `packages/testing/test/durable-runtime.test.ts`
   // (compaction failpoint idempotence across re-drive).
+  "compaction:before-canonical-append",
   "compaction:after-canonical-append",
   // These shapes use neither programmatic Tools nor grace finalization. Their reservations
   // are exercised before/after append in the public durable-runtime regression suite.

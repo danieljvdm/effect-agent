@@ -1,4 +1,5 @@
 import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { contextWindowId, contextWindowMessage } from "@effect-agent/engine/Compaction";
 import {
   BatchId,
   CanonicalRecordEnvelope,
@@ -837,9 +838,12 @@ describe("engine compaction records and projection (RUN-026)", () => {
     );
 
   interface CompactionOverrides {
-    readonly kind?: "clear-tool-results" | "summarize";
+    readonly kind?: "clear-tool-results" | "summarize" | "rollover";
     readonly coversThrough?: number;
     readonly summary?: string | undefined;
+    readonly handoff?: string | undefined;
+    readonly runId?: string;
+    readonly turn?: number;
   }
 
   const compactionPayload = (
@@ -849,12 +853,13 @@ describe("engine compaction records and projection (RUN-026)", () => {
 
     return {
       _tag: "CompactionCreated",
-      runId: `${LATER_RUN_ID}`,
-      turn: 1,
+      runId: overrides.runId ?? `${LATER_RUN_ID}`,
+      turn: overrides.turn ?? 1,
       kind: overrides.kind ?? "summarize",
       coversThrough: overrides.coversThrough ?? 3,
       // `optionalKey` fields must be ABSENT, not undefined.
       ...(summary === undefined ? {} : { summary }),
+      ...(overrides.handoff === undefined ? {} : { handoff: overrides.handoff }),
     };
   };
 
@@ -918,6 +923,216 @@ describe("engine compaction records and projection (RUN-026)", () => {
   });
 
   layer(NodeCrypto.layer)((it) => {
+    it.effect(
+      "only the current Run's last successful uncovered singleton Tool is a pending context candidate",
+      () =>
+        Effect.gen(function* () {
+          const batch = yield* turnCanonicalBatch(turnInput(secondToolTurn));
+          const records = envelopesOf([batch]);
+
+          expect((yield* projectRunJournal(records, RUN_ID)).pendingContextToolCallId).toBe(
+            "call-2",
+          );
+          expect(
+            (yield* projectRunJournal(records, LATER_RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+          expect(
+            (yield* projectRunJournal(records.slice(0, 1), RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+
+          const next = yield* turnCanonicalBatch(turnInput(finalTurnAppended, 2));
+
+          expect(
+            (yield* projectRunJournal(envelopesOf([batch, next]), RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+
+          const terminal = envelopeAt(
+            records.length + 1,
+            auditRecord("terminal-context-candidate", {
+              _tag: "RunCompleted",
+              runId: RUN_ID,
+              output: { answer: "done" },
+            }),
+          );
+
+          expect(
+            (yield* projectRunJournal([...records, terminal], RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+
+          const rollover = envelopeAt(
+            records.length + 1,
+            auditRecord(
+              "covered-context-candidate",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 2,
+                summary: undefined,
+                coversThrough: records.length,
+              }),
+            ),
+          );
+
+          expect(
+            (yield* projectRunJournal([...records, rollover], RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+          const multiple = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+
+          expect(
+            (yield* projectRunJournal(envelopesOf([multiple]), RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+        }),
+    );
+
+    it.effect(
+      "rollover preserves the canonical request and Run accounting while replacing current-Run history",
+      () =>
+        Effect.gen(function* () {
+          const first = yield* turnCanonicalBatch({
+            ...turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 12, outputTokens: 3 }),
+            runScopedPrefixLength: 2,
+          });
+
+          const second = yield* turnCanonicalBatch(
+            turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 8, outputTokens: 2 }),
+          );
+
+          const records = envelopesOf([first, second]);
+          const original = yield* projectRunJournal(records, RUN_ID);
+
+          const rollover = envelopeAt(
+            records.length + 1,
+            auditRecord(
+              "current-run-rollover",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 3,
+                coversThrough: first.records.length,
+                summary: undefined,
+                handoff: "The flight is booked; finish lodging.",
+              }),
+            ),
+          );
+
+          const projection = yield* projectRunJournal([...records, rollover], RUN_ID);
+
+          expect(projection.prompt.content).toEqual([
+            ...toolTurnAppended.slice(0, 2),
+            contextWindowMessage(
+              contextWindowId(RUN_ID, 3),
+              "The flight is booked; finish lodging.",
+            ),
+            ...secondToolTurn,
+          ]);
+          expect(projection.protectedContext?.content).toEqual(toolTurnAppended.slice(0, 2));
+          expect(projection.contextWindowId).toBe(contextWindowId(RUN_ID, 3));
+          expect(projection.historyBefore.content).toEqual([]);
+          expect(projection.committedTurns).toBe(2);
+          expect(projection.policyUsage).toEqual(original.policyUsage);
+          expect(projection.usage).toEqual(original.usage);
+
+          const later = yield* projectRunJournal([...records, rollover], LATER_RUN_ID);
+
+          expect(promptText(later.prompt)).not.toContain('"question":"book?"');
+          expect(later.prompt.content[0]).toEqual(
+            contextWindowMessage(
+              contextWindowId(RUN_ID, 3),
+              "The flight is booked; finish lodging.",
+            ),
+          );
+        }),
+    );
+
+    it.effect(
+      "repeated rollovers can cover the complete settled source without losing the original request",
+      () =>
+        Effect.gen(function* () {
+          const first = yield* turnCanonicalBatch({
+            ...turnInput(toolTurnAppended),
+            runScopedPrefixLength: 2,
+          });
+
+          const records = envelopesOf([first]);
+
+          const earlier = envelopeAt(
+            records.length + 1,
+            auditRecord(
+              "first-rollover",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 2,
+                summary: undefined,
+                coversThrough: records.length,
+                handoff: "Earlier handoff",
+              }),
+            ),
+          );
+
+          const latest = envelopeAt(
+            records.length + 2,
+            auditRecord(
+              "replacement-rollover",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 3,
+                summary: undefined,
+                coversThrough: records.length,
+                handoff: "Updated handoff",
+              }),
+            ),
+          );
+
+          const projection = yield* projectRunJournal([...records, earlier, latest], RUN_ID);
+
+          expect(projection.prompt.content).toEqual([
+            ...toolTurnAppended.slice(0, 2),
+            contextWindowMessage(contextWindowId(RUN_ID, 3), "Updated handoff"),
+          ]);
+          expect(projection.committedTurns).toBe(1);
+          expect(projection.contextWindowId).toBe(contextWindowId(RUN_ID, 3));
+          expect(projection.policyUsage.toolCalls).toBe(2);
+          expect(records).toHaveLength(3);
+        }),
+    );
+
+    it.effect(
+      "rollover cannot cover an incomplete Tool batch even when its available results are below the cutoff",
+      () =>
+        Effect.gen(function* () {
+          const batch = yield* turnCanonicalBatch({
+            ...turnInput(toolTurnAppended),
+            runScopedPrefixLength: 2,
+          });
+
+          const records = envelopesOf([batch]).slice(0, 2);
+
+          const rollover = envelopeAt(
+            3,
+            auditRecord(
+              "incomplete-rollover",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 2,
+                summary: undefined,
+                coversThrough: 2,
+                handoff: "Uncommitted handoff",
+              }),
+            ),
+          );
+
+          const projection = yield* projectRunJournal([...records, rollover], RUN_ID);
+
+          expect(projection.contextWindowId).toBeUndefined();
+          expect(promptText(projection.prompt)).not.toContain("Uncommitted handoff");
+          expect(projection.prompt.content.slice(0, 2)).toEqual(toolTurnAppended.slice(0, 2));
+          expect(toolResults(projection.prompt)).toEqual([{ bookingRef: "flight-42" }]);
+        }),
+    );
+
     it.effect("preserves an earlier Run's policy usage under a later Run's summary", () =>
       Effect.gen(function* () {
         const failedTurn = secondToolTurn.map((message) =>

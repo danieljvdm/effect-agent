@@ -4,6 +4,8 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/ContextTools.ts",
+      "src/MemoryNotes.ts",
       "src/Remembering.ts",
       "src/Approval.ts",
       "src/Budget.ts",

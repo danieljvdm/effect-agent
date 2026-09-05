@@ -8,7 +8,12 @@ import {
 import { type ExhaustedLimit } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
 import { ModelCallUsage, summarizeModelUsage } from "@effect-agent/core/Usage";
-import { CLEARED_TOOL_RESULT, COMPACTION_SUMMARY_PREFIX } from "@effect-agent/engine/Compaction";
+import {
+  CLEARED_TOOL_RESULT,
+  COMPACTION_SUMMARY_PREFIX,
+  contextWindowId,
+  contextWindowMessage,
+} from "@effect-agent/engine/Compaction";
 import { type Crypto, Effect, Schema, Stream, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -107,14 +112,14 @@ export const turnPreparedBatchId = (runId: RunId, turn: number): BatchId =>
 export const compactionRecordId = (
   runId: RunId,
   turn: number,
-  kind: "clear-tool-results" | "summarize",
+  kind: "clear-tool-results" | "summarize" | "rollover",
 ): RecordId => decodeRecordId(`compaction:${runId}:${turn}:${kind}`);
 
 /** Deterministic batch identity of one compaction append (same string as its record id). */
 export const compactionBatchId = (
   runId: RunId,
   turn: number,
-  kind: "clear-tool-results" | "summarize",
+  kind: "clear-tool-results" | "summarize" | "rollover",
 ): BatchId => decodeBatchId(`compaction:${runId}:${turn}:${kind}`);
 
 /** Deterministic canonical record identity of one Turn's `ModelResponseRecorded` record. */
@@ -363,6 +368,12 @@ export interface RunJournalProjection {
   readonly committedTurns: number;
   /** Summed per-call usage of the projected Run's committed responses; zeros for records predating usage capture. */
   readonly usage: RunJournalUsage;
+  /** Latest committed context window identity, retained across ownership changes. */
+  readonly contextWindowId?: string | undefined;
+  /** Canonical evaluated instructions and initial input for this Run, independent of the view. */
+  readonly protectedContext?: Prompt.Prompt | undefined;
+  /** Last successful singleton Tool awaiting possible context-control interpretation by the engine. */
+  readonly pendingContextToolCallId?: string | undefined;
 }
 
 interface ProjectedResponseUsage {
@@ -506,12 +517,14 @@ export interface JournalBoundary {
   readonly sequence: CanonicalSequence;
   readonly tag: "ModelResponseRecorded" | "ToolCallSettled";
   readonly promptLength: number;
+  /** A canonical declaration without all of its settled results cannot be covered by rollover. */
+  readonly incomplete?: true | undefined;
 }
 
 /**
  * Reconstruct a fixed canonical prefix from a re-readable stream. The caller must keep the same
- * records visible on both traversals. The first collects compaction and settlement metadata; the
- * second decodes each uncovered response once while rebuilding Prompt and usage. Metadata and the
+ * records visible on every traversal. The first collects compaction and settlement metadata;
+ * rollovers additionally validate covered Tool batches before rebuilding Prompt and usage. Metadata and the
  * live Prompt remain resident; covered historical message/tool payloads do not. An uncompacted Prompt still grows
  * with its conversation, so hosts must configure an appropriate context compaction policy.
  * @internal
@@ -533,9 +546,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   };
 
   // RUN-026 pre-scan: the widest VALID compaction bounds govern the fold. A
-  // valid record covers strictly below its own sequence, never reaches into
-  // its owner Run's records, and never splits a response from its settled
-  // tool results; a summarize record must carry its summary. Invalid records
+  // valid record covers strictly below its own sequence and never splits a response from its
+  // settled tool results. Only rollovers may cover their owner Run's records;
+  // a summarize record must carry its summary. Invalid records
   // are ignored fail-safe — the full history stays authoritative. Ties on
   // coversThrough resolve to the record appended later (higher sequence),
   // matching at-most-once replay intent.
@@ -586,11 +599,69 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     }),
   );
 
-  const boundIsValid = (runId: string, coversThrough: number, ownSequence: number): boolean => {
-    if (coversThrough >= ownSequence) return false;
+  const rolloverCoverage = compactions.reduce(
+    (through, { payload }) =>
+      payload.kind === "rollover" ? Math.max(through, payload.coversThrough) : through,
+    0,
+  );
+
+  const incompleteResponseSequences: Array<number> = [];
+  let ownerPrefixSequence = Number.POSITIVE_INFINITY;
+  let protectedContext: Prompt.Prompt | undefined;
+
+  if (rolloverCoverage > 0) {
+    yield* Stream.runForEach(records, (envelope) =>
+      Effect.gen(function* () {
+        const payload = envelope.record.payload;
+
+        if (payload._tag !== "ModelResponseRecorded" || envelope.sequence > rolloverCoverage)
+          return;
+        const messages = yield* decodePromptMessages(payload.messages);
+        const declared = declaredApplicationToolCallIds(messages);
+
+        for (const id of declared) {
+          const callId = yield* Schema.decodeUnknownEffect(ToolCallId)(id).pipe(
+            Effect.mapError((cause) =>
+              journalError("Failed to decode a declared Tool Call ID", cause),
+            ),
+          );
+
+          if (
+            !settledToolCallRecordIds.has(
+              toolCallSettledRecordId(payload.runId, payload.turn, callId),
+            )
+          ) {
+            incompleteResponseSequences.push(envelope.sequence);
+            break;
+          }
+        }
+        if (
+          payload.runId === ownerRunId &&
+          payload.turn === 1 &&
+          payload.runScopedPrefixLength !== undefined
+        ) {
+          ownerPrefixSequence = envelope.sequence;
+          protectedContext = Prompt.fromMessages(
+            messages.content.slice(0, payload.runScopedPrefixLength),
+          );
+        }
+      }),
+    );
+  }
+
+  const boundIsValid = (payload: CompactionCreated, ownSequence: number): boolean => {
+    const { runId, coversThrough } = payload;
+
+    if (coversThrough <= 0 || coversThrough >= ownSequence) return false;
     const ownerFirst = firstSequenceByRun.get(runId);
 
-    if (ownerFirst !== undefined && coversThrough >= ownerFirst) return false;
+    if (payload.kind !== "rollover" && ownerFirst !== undefined && coversThrough >= ownerFirst)
+      return false;
+    if (
+      payload.kind === "rollover" &&
+      incompleteResponseSequences.some((sequence) => sequence <= coversThrough)
+    )
+      return false;
     for (const span of settledSpans) {
       if (span.from <= coversThrough && coversThrough < span.to) return false;
     }
@@ -599,21 +670,30 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   };
 
   let summarizeBound = 0;
-  let summarizeSummary: string | undefined;
+  let replacement: CompactionCreated | undefined;
   let summarizeSequence = -1;
   let clearBound = 0;
+  let latestWindowId: string | undefined;
+  let latestWindowSequence = -1;
+  let rolloverCoveredThrough = 0;
 
   for (const { payload, sequence } of compactions) {
-    if (!boundIsValid(payload.runId, payload.coversThrough, sequence)) continue;
-    if (payload.kind === "summarize") {
-      if (payload.summary === undefined) continue;
+    if (!boundIsValid(payload, sequence)) continue;
+    if (payload.kind === "rollover" && sequence > latestWindowSequence) {
+      latestWindowId = contextWindowId(payload.runId, payload.turn);
+      latestWindowSequence = sequence;
+    }
+    if (payload.kind === "rollover")
+      rolloverCoveredThrough = Math.max(rolloverCoveredThrough, payload.coversThrough);
+    if (payload.kind === "summarize" || payload.kind === "rollover") {
+      if (payload.kind === "summarize" && payload.summary === undefined) continue;
       if (
         payload.coversThrough > summarizeBound ||
         (payload.coversThrough === summarizeBound && sequence > summarizeSequence)
       ) {
         summarizeBound = payload.coversThrough;
-        summarizeSummary = payload.summary;
         summarizeSequence = sequence;
+        replacement = payload;
       }
     } else if (payload.coversThrough > clearBound) {
       clearBound = payload.coversThrough;
@@ -621,21 +701,36 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   }
   let summaryEmitted = false;
 
+  const retainedPrefix =
+    replacement?.kind === "rollover" &&
+    replacement.runId === ownerRunId &&
+    ownerPrefixSequence <= summarizeBound
+      ? (protectedContext?.content ?? [])
+      : [];
+
+  const replacementLength = replacement === undefined ? 0 : retainedPrefix.length + 1;
+
   const emitSummary = () => {
-    if (summaryEmitted || summarizeSummary === undefined) return;
+    if (summaryEmitted || replacement === undefined) return;
     summaryEmitted = true;
 
-    const message = Prompt.makeMessage("user", {
-      content: [
-        Prompt.makePart("text", { text: `${COMPACTION_SUMMARY_PREFIX}${summarizeSummary}` }),
-      ],
-    });
+    const message =
+      replacement.kind === "rollover"
+        ? contextWindowMessage(
+            contextWindowId(replacement.runId, replacement.turn),
+            replacement.handoff,
+          )
+        : Prompt.makeMessage("user", {
+            content: [
+              Prompt.makePart("text", {
+                text: `${COMPACTION_SUMMARY_PREFIX}${replacement.summary}`,
+              }),
+            ],
+          });
 
-    // Covered records always precede the owner Run's records (the append
-    // side never covers the appending Run), so the summary belongs to both
-    // the full projection and the prior-Run history.
-    state.all.push(message);
-    state.before.push(message);
+    state.all.push(...retainedPrefix, message);
+    if (replacement.kind !== "rollover" || replacement.runId !== ownerRunId)
+      state.before.push(message);
   };
 
   const modelUsage: Array<ModelCallUsage> = [];
@@ -654,6 +749,8 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
   const incompleteToolTurns = new Set<string>();
   const incompleteToolCalls = new Set<string>();
+  let pendingContextToolCallId: string | undefined;
+  let ownerTerminated = false;
 
   const policyUsage = {
     committedTurns: 0,
@@ -686,6 +783,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
     }
     if (payload.runId !== ownerRunId) return;
+    if (payload.turn === 1 && payload.runScopedPrefixLength !== undefined) {
+      protectedContext = Prompt.fromMessages(
+        messages.content.slice(0, payload.runScopedPrefixLength),
+      );
+    }
 
     const responseUsage = yield* projectedResponseUsage(payload);
 
@@ -723,6 +825,22 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         ? message.content.filter((part) => part.type === "tool-call")
         : [],
     );
+
+    const candidate = calls.length === 1 ? calls[0] : undefined;
+
+    const candidateResult =
+      candidate === undefined
+        ? undefined
+        : settledById.get(`tool-settled:${ownerRunId}:${payload.turn}:${candidate.id}`);
+
+    pendingContextToolCallId =
+      candidate !== undefined &&
+      !candidate.providerExecuted &&
+      candidateResult?.isFailure === false &&
+      candidateResult.budgetRejected !== true &&
+      envelope.sequence > rolloverCoveredThrough
+        ? candidate.id
+        : undefined;
 
     policyUsage.toolCalls += calls.length;
     if (incompleteToolTurns.has(record.recordId)) return;
@@ -764,6 +882,14 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     Effect.gen(function* () {
       const payload = envelope.record.payload;
 
+      if (
+        ((payload._tag === "RunCompleted" || payload._tag === "RunFailed") &&
+          payload.runId === ownerRunId) ||
+        (payload._tag === "SubmissionSettled" &&
+          runIdForSubmission(payload.submissionId) === ownerRunId)
+      )
+        ownerTerminated = true;
+
       if (payload._tag === "RunPolicyUsageReserved" && payload.runId === ownerRunId) {
         if (
           payload.programmaticToolCalls < policyUsage.programmaticToolCalls ||
@@ -785,12 +911,17 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
           const messages = yield* decodePromptMessages(payload.messages);
 
           yield* accountResponse(envelope, payload, messages);
+          state = { ...state, committedTurns: Math.max(state.committedTurns, payload.turn) };
         }
         if (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled") {
           onBoundary?.({
             sequence: envelope.sequence,
             tag: payload._tag,
-            promptLength: summarizeSummary === undefined ? 0 : 1,
+            promptLength: replacementLength,
+            ...(incompleteToolTurns.has(envelope.record.recordId) ||
+            incompleteToolCalls.has(envelope.record.recordId)
+              ? { incomplete: true }
+              : {}),
           });
         }
 
@@ -803,6 +934,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
             sequence: envelope.sequence,
             tag: payload._tag,
             promptLength: state.all.length + (state.pendingTools.length === 0 ? 0 : 1),
+            incomplete: true,
           });
 
           return;
@@ -822,6 +954,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
           sequence: envelope.sequence,
           tag: payload._tag,
           promptLength: state.all.length + 1,
+          ...(incompleteToolCalls.has(envelope.record.recordId) ? { incomplete: true } : {}),
         });
 
         return;
@@ -867,6 +1000,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         sequence: envelope.sequence,
         tag: payload._tag,
         promptLength: state.all.length,
+        ...(incompleteToolTurns.has(envelope.record.recordId) ? { incomplete: true } : {}),
       });
     }),
   );
@@ -885,6 +1019,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     historyBefore: Prompt.fromMessages(state.before),
     committedTurns: state.committedTurns,
     usage,
+    ...(latestWindowId === undefined ? {} : { contextWindowId: latestWindowId }),
+    ...(protectedContext === undefined ? {} : { protectedContext }),
+    ...(ownerTerminated || pendingContextToolCallId === undefined
+      ? {}
+      : { pendingContextToolCallId }),
   };
 });
 

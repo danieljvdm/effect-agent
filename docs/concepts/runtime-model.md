@@ -42,8 +42,11 @@ input, and tool call/result pairing survive compaction. The summary call consume
 
 Compaction changes what the model sees. The canonical thread log retains its evidence.
 Durable hosts record each applied compaction as `CompactionCreated` before using the new view, so
-recovery restores the same summary and coverage. Durable compaction can cover complete prior-run
-records; it cannot summarize away the current run's canonical records.
+recovery restores the same replacement and coverage. Pruning and summarization cover complete
+prior-run records. The optional rollover strategy also covers settled batches inside the current
+run, retaining its original instructions and input. A fresh context window preserves the run identity
+and cumulative budgets. Native context tools let the model request a rollover and retrieve retained
+evidence; an application-owned notes document can carry working state between windows.
 
 See [Context management](../guide/context-management) for prompt transforms, compaction strategies,
 context overflow recovery, and model-visible budget status.

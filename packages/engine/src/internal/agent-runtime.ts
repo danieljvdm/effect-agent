@@ -231,6 +231,12 @@ import {
   type CompactionModelLayer,
 } from "../ContextCompactor.ts";
 import {
+  ContextRolloverRequest,
+  ContextRolloverTool,
+  ContextWindow,
+  ContextWindowStatus,
+} from "../ContextWindow.ts";
+import {
   DurableStep,
   DurableStepError,
   getToolExecutionClass,
@@ -281,6 +287,7 @@ import {
 } from "../ToolBroker.ts";
 import {
   buildCompactedView,
+  contextWindowId,
   collectCoveredMessages,
   initialCompactionState,
   isContextOverflowMessage,
@@ -353,7 +360,8 @@ export type EngineProvidedToolServices =
   | DurableStep
   | SubagentDurability
   | ToolBroker
-  | ToolSpanTelemetry;
+  | ToolSpanTelemetry
+  | ContextWindow;
 
 /** Schema services needed to reconstruct a completion Tool's canonical Agent output. */
 export type AgentCompletionProjectionRequirements<
@@ -443,6 +451,9 @@ interface RunContext {
       }
     | undefined;
   readonly compactor: ContextCompactor["Service"];
+  windowId: string;
+  windowTokens: number;
+  pendingContextToolCallId: string | undefined;
   /** One allowance shared by threshold compaction and the same Turn's overflow retry. */
   readonly compactionTurn: {
     turn: number;
@@ -2070,6 +2081,14 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         prepareToolCall(toolkit, call, declarationIndex),
       );
 
+      if (
+        prepared.some((call) => Context.get(call.tool.annotations, ContextRolloverTool)) &&
+        trace.toolCalls.size !== 1
+      ) {
+        return yield* ModelProtocolError.make({
+          message: "A context rollover Tool must be the only Tool Call in its batch",
+        });
+      }
       const semaphore = yield* Semaphore.make(concurrency);
 
       const approvalPreflight = prepared.reduce<
@@ -3246,8 +3265,9 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   turn: number,
   options: RunOptions<HookError, HookRequirements>,
   targetTokens: number | undefined,
-  forceSummarize: boolean,
-  allowSummarize = true,
+  trigger: "pressure" | "overflow" | "requested",
+  modelCallAllowed = true,
+  requested?: ContextRolloverRequest & { readonly through: number },
 ): Effect.Effect<
   CompactionOutcome,
   AgentPolicyError | ModelProtocolError | AiError.AiError | CompactionError | HookError,
@@ -3325,14 +3345,13 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         start = originalPositions[0] ?? -1;
         end = (originalPositions.at(-1) ?? -1) + 1;
       }
-      if (!mapped && options.durability === undefined) {
+      if (!mapped) {
         return yield* CompactionError.make({
           message:
             "Prepared context cannot map the protected instructions and input for compaction",
         });
       }
-      // Durable reconstruction can replace this Attempt's evaluated block. Its
-      // commit hook remains responsible for rejecting coverage of the owner Run.
+      // Durable callers supply the original canonical instructions/input block.
       state.protectedStart = mapped ? start : -1;
       state.protectedEnd = mapped ? end : -1;
       state.protectSystemMessages = true;
@@ -3343,16 +3362,16 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       allowance.summaryCalls = 0;
       allowance.applied.clear();
     }
-    if (allowance.applied.has("summarize")) {
+    if (allowance.applied.has("summarize") || allowance.applied.has("rollover")) {
       return yield* CompactionError.make({
-        message: "Compaction already summarized this Turn",
+        message: "Compaction already replaced this Turn's context",
       });
     }
     const before = yield* estimateContextTokens(context, buildCompactedView(messages, state));
 
     const summarize = (summarizerPrompt: Prompt.Prompt, model?: CompactionModelLayer) => {
       const generate = Effect.gen(function* () {
-        if (allowance.summaryCalls++ > 0 || (!allowSummarize && !forceSummarize)) {
+        if (allowance.summaryCalls++ > 0 || !modelCallAllowed) {
           return yield* CompactionError.make({
             message: "Compaction exceeded its summary-call allowance",
           });
@@ -3494,11 +3513,19 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     yield* context.compactor
       .compact({
         source,
-        state: Object.freeze({ ...state }),
+        state: Object.freeze({
+          ...state,
+          replacement:
+            state.replacement === undefined ? undefined : Object.freeze({ ...state.replacement }),
+        }),
         policy: agent.definition.policy.compaction,
         targetTokens,
-        forceSummarize,
-        allowSummarize,
+        threadId: context.threadId,
+        runId: context.runId,
+        turn,
+        trigger,
+        modelCallAllowed,
+        ...(requested === undefined ? {} : { requested }),
         summarize,
       })
       .pipe(
@@ -3510,21 +3537,47 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
               ),
             );
 
-            if (applied.has(decision.kind) || applied.has("summarize")) {
+            if (applied.has(decision.kind) || applied.has("summarize") || applied.has("rollover")) {
               return yield* CompactionError.make({
                 message: "Compaction exceeded its decision allowance",
               });
             }
             const next = { ...state, lastViewLength: -1 };
 
-            if (decision.kind === "summarize") {
+            if (
+              requested !== undefined &&
+              (decision.kind !== "rollover" || decision.through !== requested.through)
+            ) {
+              return yield* CompactionError.make({
+                message: "Requested rollover must cover exactly its settled Tool batch",
+              });
+            }
+            if (decision.kind === "rollover") {
+              if (
+                decision.through <= (state.replacement?.through ?? 0) ||
+                decision.through > messages.length ||
+                messages[decision.through]?.role === "tool" ||
+                collectCoveredMessages(messages, state, decision.through).length === 0
+              ) {
+                return yield* CompactionError.make({
+                  message:
+                    "Rollover must advance coverage without splitting Tool pairs or discarding protected input",
+                });
+              }
+              next.replacement = {
+                kind: "rollover",
+                through: decision.through,
+                windowId: contextWindowId(context.runId, turn),
+                ...(decision.handoff === undefined ? {} : { handoff: decision.handoff }),
+              };
+            } else if (decision.kind === "summarize") {
               if (utf8ByteLength(decision.summary) > context.bufferLimits.maxModelResponseBytes) {
                 return yield* CompactionError.make({
                   message: "Compaction summary exceeded the response-buffer limit",
                 });
               }
               if (
-                decision.through <= state.summarizedThrough ||
+                decision.through <= (state.replacement?.through ?? 0) ||
                 decision.through >= messages.length ||
                 messages[decision.through]?.role === "tool" ||
                 collectCoveredMessages(messages, state, decision.through).length === 0
@@ -3534,8 +3587,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
                     "Compaction must advance coverage without splitting Tool pairs or removing the recent tail",
                 });
               }
-              next.summary = decision.summary;
-              next.summarizedThrough = decision.through;
+              next.replacement = {
+                kind: "summarize",
+                through: decision.through,
+                summary: decision.summary,
+              };
             } else {
               const newestTool = messages.findLastIndex((message) => message.role === "tool");
 
@@ -3548,12 +3604,21 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
             }
             const after = yield* estimateContextTokens(context, buildCompactedView(messages, next));
 
+            if (decision.kind === "rollover" && trigger !== "requested" && after >= before) {
+              return yield* CompactionError.make({
+                message: "Automatic rollover did not reduce context",
+              });
+            }
+
             const commit: RunCompactionCommit = {
               turn,
               source,
               through: decision.through,
               kind: decision.kind,
               ...(decision.kind === "summarize" ? { summary: decision.summary } : {}),
+              ...(decision.kind === "rollover" && decision.handoff !== undefined
+                ? { handoff: decision.handoff }
+                : {}),
               tokensBeforeEstimate: before,
               tokensAfterEstimate: after,
             };
@@ -3561,10 +3626,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
             if (options.durability !== undefined)
               yield* options.durability.commitCompaction(commit);
             Object.assign(state, next);
+            if (next.replacement?.kind === "rollover") context.windowId = next.replacement.windowId;
             if (preparedSource !== undefined && preparedSnapshot !== undefined) {
               preparedSource.prefix = preparedSnapshot.slice(
                 0,
-                Math.max(next.clearedThrough, next.summarizedThrough),
+                Math.max(next.clearedThrough, next.replacement?.through ?? 0),
               );
             }
             applied.add(decision.kind);
@@ -3580,6 +3646,12 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
           }),
         ),
       );
+
+    if (requested !== undefined && !applied.has("rollover")) {
+      return yield* CompactionError.make({
+        message: "Compaction strategy did not honor the requested rollover",
+      });
+    }
 
     return { events };
   });
@@ -4672,6 +4744,73 @@ const makeTurn = <
 
       let preEvents: ReadonlyArray<RunEvent> = [];
 
+      const lastToolIndex =
+        context.pendingContextToolCallId === undefined
+          ? -1
+          : modelContext.prompt.content.findLastIndex(
+              (message) =>
+                message.role === "tool" &&
+                message.content.some(
+                  (part) =>
+                    part.type === "tool-result" && part.id === context.pendingContextToolCallId,
+                ),
+            );
+
+      if (context.pendingContextToolCallId !== undefined && lastToolIndex < 0) {
+        return yield* CompactionError.make({
+          message: "Prepared context omitted the pending context Tool result",
+        });
+      }
+      const lastTool = modelContext.prompt.content[lastToolIndex];
+
+      if (
+        context.pendingContextToolCallId !== undefined &&
+        (lastTool?.role !== "tool" || lastTool.content.length !== 1)
+      ) {
+        return yield* CompactionError.make({
+          message: "Prepared context changed the pending context Tool batch",
+        });
+      }
+      if (lastTool?.role === "tool" && lastTool.content.length === 1) {
+        const result = lastTool.content[0];
+
+        if (
+          result?.type === "tool-result" &&
+          !result.isFailure &&
+          result.providerExecuted !== true &&
+          result.id === context.pendingContextToolCallId &&
+          hasTool(agent.definition.toolkit.tools, result.name) &&
+          Context.get(agent.definition.toolkit.tools[result.name].annotations, ContextRolloverTool)
+        ) {
+          const request = yield* Schema.decodeUnknownEffect(ContextRolloverRequest, {
+            onExcessProperty: "error",
+          })(result.result).pipe(
+            Effect.mapError((cause) =>
+              CompactionError.make({ message: "Invalid context rollover Tool result", cause }),
+            ),
+          );
+
+          const outcome = yield* compactContext(
+            agent,
+            context,
+            modelContext.prompt,
+            turn,
+            options,
+            policy.contextTokenLimit === undefined
+              ? undefined
+              : Math.max(0, policy.contextTokenLimit - canonicalDecorationTokens),
+            "requested",
+            false,
+            { ...request, through: lastToolIndex + 1 },
+          );
+
+          context.compaction.lastCompactionTurn = turn;
+          preEvents = outcome.events;
+          refreshPrepared();
+        }
+      }
+
+      context.pendingContextToolCallId = undefined;
       if (!context.finalizing && admissionRequired) {
         const consumedTokens = context.inputTokens + context.outputTokens;
 
@@ -4716,11 +4855,11 @@ const makeTurn = <
             turn,
             options,
             sourceTarget,
-            false,
+            "pressure",
             !tokenPressure,
           );
 
-          preEvents = outcome.events;
+          preEvents = [...preEvents, ...outcome.events];
           if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
             refreshPrepared();
         }
@@ -4817,7 +4956,9 @@ const makeTurn = <
         const currentCompactionAllowance = context.compactionTurn.turn === turn;
 
         const summarizedThisTurn =
-          currentCompactionAllowance && context.compactionTurn.applied.has("summarize");
+          currentCompactionAllowance &&
+          (context.compactionTurn.applied.has("summarize") ||
+            context.compactionTurn.applied.has("rollover"));
 
         const prunedThisTurn =
           currentCompactionAllowance && context.compactionTurn.applied.has("clear-tool-results");
@@ -4841,7 +4982,7 @@ const makeTurn = <
             turn,
             options,
             sourceTarget,
-            prunedThisTurn,
+            "pressure",
             !tokenPressure,
           );
 
@@ -4953,6 +5094,12 @@ const makeTurn = <
                     );
 
               return admission.pipe(
+                Effect.andThen(estimateContextTokens(context, providerPrompt.content)),
+                Effect.tap((tokens) =>
+                  Effect.sync(() => {
+                    context.windowTokens = tokens;
+                  }),
+                ),
                 Effect.as(
                   guardBudgetStream(
                     LanguageModel.streamText({
@@ -5055,7 +5202,7 @@ const makeTurn = <
                   turn,
                   options,
                   Math.max(0, contextTokenLimit - derivedPromptTokens),
-                  true,
+                  "overflow",
                 ).pipe(
                   Effect.mapError(
                     (inner): AgentRuntimeFailure<typeof agent, HookError, InstructionError> =>
@@ -5141,6 +5288,24 @@ const makeTurn = <
           const declaresCompletion =
             completionTool !== undefined &&
             trace.applicationToolCalls.some((call) => call.name === completionTool);
+
+          const declaresRollover = trace.applicationToolCalls.some(
+            (call) =>
+              hasTool(agent.definition.toolkit.tools, call.name) &&
+              Context.get(
+                agent.definition.toolkit.tools[call.name].annotations,
+                ContextRolloverTool,
+              ),
+          );
+
+          if (declaresRollover && (trace.toolCalls.size !== 1 || declaresCompletion)) {
+            return failRunEventStream(
+              ModelProtocolError.make({
+                message:
+                  "A context rollover Tool must be the only Tool Call and cannot complete the Run",
+              }),
+            );
+          }
 
           if (declaresCompletion && trace.toolCalls.size !== 1) {
             return failRunEventStream(
@@ -5718,6 +5883,20 @@ const toolBatchContinuation = <
         toolMessage,
       ]);
 
+      const rolloverResult = orderedResults.length === 1 ? orderedResults[0] : undefined;
+
+      if (
+        rolloverResult !== undefined &&
+        !rolloverResult.isFailure &&
+        hasTool(agent.definition.toolkit.tools, rolloverResult.name) &&
+        Context.get(
+          agent.definition.toolkit.tools[rolloverResult.name].annotations,
+          ContextRolloverTool,
+        )
+      ) {
+        context.pendingContextToolCallId = rolloverResult.id;
+      }
+
       const completion = agent.definition.completion;
 
       const completionResult =
@@ -5951,6 +6130,16 @@ const makeResumeTurn = <
         completionTool !== undefined &&
         trace.toolCalls.size === 1 &&
         trace.applicationToolCalls[0]?.name === completionTool;
+
+      if (
+        completionBatch &&
+        completionTool !== undefined &&
+        Context.get(tools[completionTool].annotations, ContextRolloverTool)
+      ) {
+        return failRunEventStream(
+          ModelProtocolError.make({ message: "A context rollover Tool cannot complete the Run" }),
+        );
+      }
 
       if (context.finalizationUsed && !completionBatch) {
         return failRunEventStream(
@@ -6389,16 +6578,14 @@ function streamWithCompletion<
               ? attemptStartedAtMillis
               : DateTime.toEpochMillis(options.runStartedAt);
 
-          const compactor =
-            preparation.compactor ??
-            (yield* Effect.serviceOption(ContextCompactor).pipe(
-              Effect.flatMap(
-                Option.match({
-                  onSome: Effect.succeed,
-                  onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
-                }),
-              ),
-            ));
+          const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
+              }),
+            ),
+          );
 
           const context: RunContext = {
             agentId: agent.definition.id,
@@ -6429,6 +6616,9 @@ function streamWithCompletion<
             preparedCompactionSource: undefined,
             compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
             compactor,
+            windowId: options.initialContextWindowId ?? contextWindowId(runId, 0),
+            windowTokens: resumeUsage?.lastInputTokens ?? 0,
+            pendingContextToolCallId: options.pendingContextToolCallId,
             bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
             sequence: 0,
             toolProgressBytes: 0,
@@ -6551,14 +6741,12 @@ function streamWithCompletion<
               if (options.context === undefined) {
                 context.compaction.protectedStart = priorHistoryLength;
                 context.compaction.protectedEnd = prompt.content.length;
-              } else if (
-                agent.definition.policy.contextTokenLimit !== undefined ||
-                agent.definition.policy.tokenBudget !== undefined
-              ) {
+              } else {
                 context.preparedCompactionSource = {
-                  protectedReferences: prompt.content.slice(priorHistoryLength),
+                  protectedReferences:
+                    options.protectedContext?.content ?? prompt.content.slice(priorHistoryLength),
                   protectedMessages: yield* snapshotCompactionMessages(
-                    prompt.content.slice(priorHistoryLength),
+                    options.protectedContext?.content ?? prompt.content.slice(priorHistoryLength),
                   ),
                   prefix: [],
                 };
@@ -6670,6 +6858,28 @@ function streamWithCompletion<
               agent.definition.policy,
             ),
           ).pipe(
+            Context.add(ContextWindow, {
+              status: Effect.sync(() => {
+                const estimatedTokens = Math.min(
+                  Number.MAX_SAFE_INTEGER,
+                  context.windowTokens + context.lastOutputTokens,
+                );
+
+                const contextTokenLimit = agent.definition.policy.contextTokenLimit ?? null;
+
+                return ContextWindowStatus.make({
+                  threadId: context.threadId,
+                  runId: context.runId,
+                  windowId: context.windowId,
+                  estimatedTokens,
+                  contextTokenLimit,
+                  remainingTokens:
+                    contextTokenLimit === null
+                      ? null
+                      : Math.max(0, contextTokenLimit - estimatedTokens),
+                });
+              }),
+            }),
             Context.add(RunEventSink, closedRunEventSink),
             Context.add(DurableStep, closedDurableStep),
             Context.add(SubagentDurability, closedSubagentDurability),
@@ -7363,6 +7573,15 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
               );
             }
             const tool = toolkit.tools[input.toolName] as Tool.Any;
+
+            if (Context.get(tool.annotations, ContextRolloverTool)) {
+              return yield* preflightFailure(
+                input,
+                "infrastructure",
+                "ProgrammaticContextRolloverUnsupportedError",
+                "Context rollover requires a direct, singleton model Tool Call",
+              );
+            }
             const approval = tool.needsApproval;
 
             if (approval !== undefined && approval !== false) {

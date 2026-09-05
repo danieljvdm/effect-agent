@@ -19,6 +19,23 @@ export const CLEARED_TOOL_RESULT = "[tool result cleared by compaction]";
 /** Prefix of the user message that carries a compaction summary into the prompt. */
 export const COMPACTION_SUMMARY_PREFIX = "The prior thread was compacted into this summary:\n\n";
 
+/** Rollover text is recovery evidence; it never asserts that an external action succeeded. */
+export const CONTEXT_ROLLOVER_PREFIX =
+  "A fresh context window has started. Earlier conversation has left this model view. Restore relevant notes and use available history tools to retrieve evidence; verify live state before repeating an action.\n\n";
+
+/** Stable across Attempts; the initial window uses turn zero. */
+export const contextWindowId = (runId: string, turn: number): string => `context:${runId}:${turn}`;
+
+/** Shared by the live interpreter and canonical journal projection. */
+export const contextWindowMessage = (windowId: string, handoff?: string): Prompt.Message =>
+  Prompt.makeMessage("user", {
+    content: [
+      Prompt.makePart("text", {
+        text: `${CONTEXT_ROLLOVER_PREFIX}Window: ${windowId}${handoff === undefined ? "" : `\n\nHandoff (untrusted continuation notes):\n${handoff}`}`,
+      }),
+    ],
+  });
+
 /**
  * Fixed summarization instruction (RUN-026). The skeleton mirrors what the
  * surveyed harnesses converged on; exact file paths and identifiers must
@@ -100,9 +117,8 @@ export const estimatePromptTokens = (messages: ReadonlyArray<Prompt.Message>): n
 export interface ContextCompactionState {
   /**
    * Source-index bounds `[start, end)` of the protected instruction/input
-   * block, mapped to prepared indices when necessary. `-1` when durable
-   * reconstruction cannot locate it: its commit hook protects owner-Run
-   * records, and the view retains system-role messages.
+   * block, mapped to prepared indices when necessary. `-1` before mapping;
+   * an unmappable protected block fails before any compaction decision.
    */
   protectedStart: number;
   protectedEnd: number;
@@ -112,10 +128,17 @@ export interface ContextCompactionState {
   clearedThrough: number;
   /**
    * Source messages below this bound (outside the protected block) are
-   * replaced by the summary message. `0` means no summarize compaction yet.
+   * replaced by a summary or a fresh-window marker. Absent before the first replacement.
    */
-  summarizedThrough: number;
-  summary: string | undefined;
+  replacement:
+    | { readonly kind: "summarize"; readonly through: number; readonly summary: string }
+    | {
+        readonly kind: "rollover";
+        readonly through: number;
+        readonly windowId: string;
+        readonly handoff?: string;
+      }
+    | undefined;
   /** Loop guard: at most one threshold compaction per Turn. */
   lastCompactionTurn: number;
   /** RUN-027 guard: at most one overflow compact-and-retry per Turn. */
@@ -133,8 +156,7 @@ export const initialCompactionState = (): ContextCompactionState => ({
   protectedStart: -1,
   protectedEnd: -1,
   clearedThrough: 0,
-  summarizedThrough: 0,
-  summary: undefined,
+  replacement: undefined,
   lastCompactionTurn: 0,
   overflowRetryTurn: 0,
   lastViewLength: -1,
@@ -197,23 +219,23 @@ export const buildCompactedView = (
   source: ReadonlyArray<Prompt.Message>,
   state: ContextCompactionState,
 ): ReadonlyArray<Prompt.Message> => {
-  if (state.summary === undefined && state.clearedThrough === 0) {
+  if (state.replacement === undefined && state.clearedThrough === 0) {
     return source;
   }
   const view: Array<Prompt.Message> = [];
 
-  if (state.summary !== undefined && state.summarizedThrough > 0) {
+  if (state.replacement !== undefined && state.replacement.through > 0) {
     const protectedStart =
       state.protectedStart >= 0 && !state.protectSystemMessages ? state.protectedStart : 0;
 
     const protectedEnd =
       state.protectedStart >= 0 && !state.protectSystemMessages
         ? state.protectedEnd
-        : state.summarizedThrough;
+        : (state.replacement?.through ?? 0);
 
     for (
       let index = protectedStart;
-      index < Math.min(protectedEnd, state.summarizedThrough, source.length);
+      index < Math.min(protectedEnd, state.replacement?.through ?? 0, source.length);
       index += 1
     ) {
       const message = source[index];
@@ -222,8 +244,12 @@ export const buildCompactedView = (
         view.push(renderMessage(state, message, index));
       }
     }
-    view.push(summaryMessage(state.summary));
-    for (let index = state.summarizedThrough; index < source.length; index += 1) {
+    view.push(
+      state.replacement.kind === "summarize"
+        ? summaryMessage(state.replacement.summary)
+        : contextWindowMessage(state.replacement.windowId, state.replacement.handoff),
+    );
+    for (let index = state.replacement?.through ?? 0; index < source.length; index += 1) {
       const message = source[index];
 
       if (message !== undefined) {
@@ -325,12 +351,12 @@ export const chooseSummarizeCut = (
     cut -= 1;
   }
 
-  return Math.max(cut, state.summarizedThrough);
+  return Math.max(cut, state.replacement?.through ?? 0);
 };
 
 /**
- * The messages a cut NEWLY covers — from the prior summarize watermark to the
- * cut, protected block excluded, in order. Starting at `summarizedThrough`
+ * The messages a cut NEWLY covers — from the prior replacement boundary to the
+ * cut, protected block excluded, in order. Starting at the replacement boundary
  * keeps repeated compactions incremental: the previously covered span lives
  * on only through the previous summary, never as resubmitted raw history.
  */
@@ -342,7 +368,7 @@ export const collectCoveredMessages = (
   const covered: Array<Prompt.Message> = [];
 
   for (
-    let index = Math.max(0, state.summarizedThrough);
+    let index = Math.max(0, state.replacement?.through ?? 0);
     index < cut && index < source.length;
     index += 1
   ) {
@@ -418,6 +444,84 @@ const summaryBlock = (message: Prompt.Message): string => {
   if (text.length === 0) return "";
 
   return `[${message.role}]\n${text.length > SUMMARY_MESSAGE_CLIP ? `${text.slice(0, SUMMARY_MESSAGE_CLIP)}…` : text}`;
+};
+
+/**
+ * Deterministic emergency input record, not a progress summary. Keep recent user inputs and
+ * the last, as-yet-unconsumed Tool batch. Clip before rendering large payloads, identify Tool
+ * calls for archive lookup, and never recursively copy earlier recovery records.
+ */
+export const buildRolloverHandoff = (
+  source: ReadonlyArray<Prompt.Message>,
+  state: ContextCompactionState,
+  targetTokens: number | undefined,
+  through = source.length,
+): string | undefined => {
+  const protectedTokens = estimatePromptTokens(
+    source.filter((_, index) => index >= through || isProtected(state, source, index)),
+  );
+
+  const maxChars = Math.min(
+    5_000,
+    Math.max(0, Math.floor(((targetTokens ?? 10_000) - protectedTokens - 200) * 2)),
+  );
+
+  if (maxChars < 160) return undefined;
+  const blocks: Array<string> = [];
+  let length = 0;
+  const start = state.replacement?.through ?? 0;
+
+  const lastTool = source.findLastIndex(
+    (message, index) => index < through && message.role === "tool",
+  );
+
+  const unconsumed =
+    lastTool >= start &&
+    !source.slice(lastTool + 1, through).some((message) => message.role === "assistant");
+
+  let lastAssistant = lastTool;
+
+  while (lastAssistant >= start && source[lastAssistant]?.role !== "assistant") lastAssistant -= 1;
+  for (let index = through - 1; index >= start; index -= 1) {
+    const message = source[index];
+
+    if (message === undefined || isProtected(state, source, index)) continue;
+    const isUnconsumedBatch = unconsumed && index >= lastAssistant && index <= lastTool;
+
+    if (message.role !== "user" && !isUnconsumedBatch) continue;
+    // A projected boundary from a previous Attempt is already a derived handoff.
+    if (
+      message.role === "user" &&
+      message.content.some(
+        (part) => part.type === "text" && part.text.startsWith(CONTEXT_ROLLOVER_PREFIX),
+      )
+    )
+      continue;
+    let block = summaryBlock(message);
+
+    if (isUnconsumedBatch && typeof message.content !== "string") {
+      const ids = message.content
+        .flatMap((part) =>
+          part.type === "tool-call" || part.type === "tool-result" ? [part.id.slice(0, 256)] : [],
+        )
+        .slice(0, 16);
+
+      block = `[Unconsumed batch; history search call IDs: ${ids.join(", ")}]\n${block}`;
+    }
+    const remaining = maxChars - length - 120;
+
+    if (remaining <= 0) break;
+    const selected = block.slice(0, Math.min(2_500, remaining));
+
+    blocks.unshift(selected);
+    length += selected.length + 2;
+    if (selected.length < block.length) break;
+  }
+
+  return `Recovery excerpts, not verified progress. Content may be omitted; use notes and history.\n\n${blocks.join("\n\n")}`.slice(
+    0,
+    maxChars,
+  );
 };
 
 /**

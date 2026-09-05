@@ -31,7 +31,7 @@ import {
   fixtureReconcilerLayer,
   maintenanceRaceFailpoint,
   maintenanceClocks,
-  makeContextCompactorRunContextLayer,
+  makeContextCompactorLayer,
   makeContextAuthorizationLayer,
   plannerDefinition,
   plannerModel,
@@ -441,14 +441,12 @@ export class DynamicBindingsThreadObject extends ThreadObject.make(dynamicRuntim
   }
 }
 
-/** Issue #49: a scoped run-context Layer captured once per Object incarnation. */
+/** A scoped compactor Layer captured once per Object incarnation. */
 export class ContextCompactorThreadObject extends ThreadObject.make(
   testRuntimeLayer.pipe(
     Layer.provide(
       Layer.unwrap(
-        Effect.map(ThreadObjectIdentity, ({ threadId }) =>
-          makeContextCompactorRunContextLayer(threadId),
-        ),
+        Effect.map(ThreadObjectIdentity, ({ threadId }) => makeContextCompactorLayer(threadId)),
       ),
     ),
     Layer.provide(

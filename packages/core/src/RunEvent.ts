@@ -130,7 +130,7 @@ export class CompactionPerformed extends Schema.TaggedClass<CompactionPerformed>
   {
     ...RunEventBase,
     turn: Schema.Int.check(Schema.isGreaterThan(0)),
-    kind: Schema.Literals(["clear-tool-results", "summarize"]),
+    kind: Schema.Literals(["clear-tool-results", "summarize", "rollover"]),
     tokensBeforeEstimate: Schema.Natural,
     tokensAfterEstimate: Schema.Natural,
   },

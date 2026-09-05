@@ -1027,27 +1027,31 @@ The summary model's Layer requirements stay visible. Its usage is charged under 
 provider and name.
 
 A custom `compact` implementation emits `CompactionDecision` values. Each decision covers an
-exclusive source prefix and either clears old tool results or supplies a summary. The interpreter
-rejects cuts through tool pairs, changes to protected instructions or input, decisions that make no
-progress, and more than one prune plus one summary in a turn. Summary calls must use
+exclusive source prefix and clears old tool results, supplies a summary, or starts a fresh context
+window. The interpreter rejects cuts through tool pairs, changes to protected instructions or input,
+decisions that make no progress, and more than one prune followed by one replacement in a turn.
+`request.trigger` distinguishes `pressure`, `overflow`, and an explicit `requested` rollover;
+`request.modelCallAllowed` tells the strategy whether a separate summary call is admitted.
+Summary calls must use
 `request.summarize` so metering, response limits, and the run deadline still apply.
 
 `estimate` must return a non-negative finite integer. Strategy failures use `CompactionError`.
 Defects and interruption retain their Effect meaning.
 
-Durable coordinators map the covered prefix to complete prior-run records before committing a
-decision. A transform or decision that cannot map cleanly fails before the view changes. Decisions
-cannot cover the current run. The canonical log remains append-only.
+Durable coordinators map the covered prefix to complete canonical records before committing a
+decision. Pruning and summarization cover prior-run records. Rollover can also cover settled batches
+inside the current run, preserving its original instructions and input. A transform or decision that
+cannot map cleanly fails before the view changes. The canonical log remains append-only.
 
 <a id="composing-preparation-and-tool-authorization"></a>
 <a id="supplying-a-cloudflare-compactor"></a>
 
 ### Install a compactor for durable runs
 
-`contextCompactorRunContextLayer` provides a `RunContextPreparation` service using your compactor:
+Provide `ContextCompactor` directly to the durable host Layer. In this example, `HostLive` is your
+application's assembled host Layer:
 
 ```ts
-import { contextCompactorRunContextLayer } from "@effect-agent/capabilities/RunHooks";
 import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer } from "effect";
@@ -1056,15 +1060,87 @@ export const CompactorLive = ContextCompactor.layerWithModel(
   OpenAiLanguageModel.model("gpt-4.1-mini"),
 );
 
-export const RunContextLive = contextCompactorRunContextLayer.pipe(Layer.provide(CompactorLive));
+export const RuntimeLive = HostLive.pipe(Layer.provide(CompactorLive));
 ```
 
-Provide the summary model's client to `RunContextLive`, then install it through the
-[Node host options](../platforms/node#configure-runtime-services),
+Provide the summary model's client to `CompactorLive`. The same composition works with the
+[Node host Layer](../platforms/node#configure-runtime-services),
 [Cloudflare application layer](../platforms/cloudflare#configure-runtime-services), or
 [custom runtime assembly](./run-agents#assemble-a-custom-durable-runtime).
-To use a prompt transform and a custom compactor together, provide one `RunContextPreparation`
-value with both `hook` and `compactor` fields.
+To use a prompt transform and a custom compactor together, provide `RunContextPreparation` and
+`ContextCompactor` independently. The runtime captures both when its Layer is acquired and retains
+them across replacement attempts. Providing a different compactor around a worker call does not
+replace the host's choice.
+
+### Start fresh context windows {#context-windows}
+
+`ContextCompactor.layerRollover` starts a fresh window under context pressure or on the one allowed
+provider-overflow retry. It makes no summary-model call. The engine retains the original instructions
+and input, inserts a window marker and bounded recovery excerpts, and keeps trailing user steering
+verbatim. A rollover changes the prompt within the same run; turn, tool, duration, and spending limits
+continue accumulating. An automatic rollover that cannot reduce the prompt or fit its handoff fails
+with `CompactionError`; admission still checks the final prompt against `contextTokenLimit`.
+
+For model-directed control, include the native `ContextTools.toolkit` and its handlers:
+
+```ts
+import * as ContextTools from "@effect-agent/capabilities/ContextTools";
+import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import * as ThreadContextHistory from "@effect-agent/thread/ThreadContextHistory";
+import { Layer } from "effect";
+
+const tools = ContextTools.toolkit;
+const toolHandlers = ContextTools.layer;
+const compactor = ContextCompactor.layerRollover;
+const history = ThreadContextHistory.layer({ maxRecords: 16_384 });
+
+// Supply your authorized ThreadStore to history, then provide it at the Run boundary.
+const contextServices = Layer.merge(compactor, history);
+```
+
+Merge `tools` into the Agent's toolkit and provide `toolHandlers` when building the Agent. Install
+`compactor` directly to the durable host Layer, as shown above. Supply `history`
+where the registered Agent's tool services are provided. It depends on the host's `ThreadStore`;
+an ephemeral application can implement the `ContextHistory` port over its retained transcript.
+
+| Tool                                                    | Behavior                                                                                 |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `new_context({ handoff? })`                             | Requests a rollover before the next turn. Call it alone, after saving notes.             |
+| `get_context_remaining({})`                             | Returns window identity and estimated live tokens. Unconfigured capacity is `null`.      |
+| `search_context_windows({ query, limit? })`             | Searches retained evidence in the current thread; returns at most three record snippets. |
+| `read_context_window({ recordId, offset?, maxChars? })` | Reads up to 5,000 characters; use `nextOffset` to continue.                              |
+
+Both the default compactor and `layerRollover` honor an explicit `new_context` request. Custom
+strategies must emit its requested rollover and cutoff. The engine recognizes the trusted Tool
+annotation, never the tool's name. Mixed batches and programmatic broker calls are rejected before
+handlers start. Failed tool results do not trigger rollover. A successful request is recovered from
+its canonical result if ownership is lost before the boundary is written; after the boundary is
+written, recovery uses the saved window without replaying covered tools.
+
+The optional handoff is limited to 20,000 characters and 32 KiB of JSON-encoded UTF-8. Automatic
+handoffs are smaller deterministic excerpts of covered user messages and the last tool batch; they
+may omit older progress and do not claim that external actions succeeded. Notes and history are
+untrusted working evidence. Verify live state before repeating an action.
+
+`MemoryNotes.toolkit` supplies `read_notes` and `write_notes`. Bind `MemoryNotes.layer` to one
+host-selected `MemoryKey`, locator, attributions, and scopes, then supply your existing `MemoryReader`,
+`MemoryWriter`, and Effect AI `IdGenerator.IdGenerator`. For default operation identities, provide
+`Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator)` from `effect/unstable/ai`.
+Notes are a full document replacement with `expectedRevision`; conflicts require
+reading and merging again. Durable Steps retain the exact write command and operation identity for
+recovery. Notes survive a process restart only when the selected Memory store does. The model cannot
+choose a filesystem path, another memory key, or another thread through these tools.
+
+Tell the Agent to save important state before `new_context`, read its notes after rollover, and use
+history to verify details. Notes are independent of window transitions; the framework does not
+synthesize or overwrite them automatically. This works with any model that can use the native tools.
+
+The canonical history adapter scans a fixed tail in bounded pages, with a default 10-second deadline.
+It fails explicitly when the configured scan limit is exceeded. It exposes model-visible text, tool
+calls, and retained tool results, excluding system instructions and operational records. It can
+retrieve evidence removed by compaction, but cannot recover tool bytes discarded by result bounds,
+transient references, or records removed by a separate retention policy. Tightening Tool result
+bounds below these tools' maximum payloads may truncate their results too.
 
 ### Manage summaries yourself {#explicit-compaction-artifacts}
 

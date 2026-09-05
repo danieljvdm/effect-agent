@@ -60,7 +60,7 @@ import {
   renderForSummary,
   SUMMARY_INPUT_BUDGET,
 } from "../src/internal/compaction.ts";
-import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
 import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -536,8 +536,11 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             state: initialCompactionState(),
             policy: CompactionPolicy.make({ keepRecentTokens: 1, mode: "summarize" }),
             targetTokens: 10,
-            forceSummarize: false,
-            allowSummarize: true,
+            threadId: ThreadId.make("thread-compact"),
+            runId: RunId.make("run-compact"),
+            turn: 1,
+            trigger: "pressure",
+            modelCallAllowed: true,
             summarize: (prompt) =>
               Effect.sync(() => {
                 prompts.push(prompt);
@@ -578,7 +581,11 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
         for (const length of [65_536, 65_537, 100_000]) {
           const prompts: Array<Prompt.Prompt> = [];
-          const state = { ...initialCompactionState(), summary: "s".repeat(length) };
+
+          const state = {
+            ...initialCompactionState(),
+            replacement: { kind: "summarize" as const, through: 0, summary: "s".repeat(length) },
+          };
 
           const exit = yield* compactor
             .compact({
@@ -586,8 +593,11 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
               state,
               policy: CompactionPolicy.make({ keepRecentTokens: 1, mode: "summarize" }),
               targetTokens: 10,
-              forceSummarize: false,
-              allowSummarize: true,
+              threadId: ThreadId.make("thread-compact"),
+              runId: RunId.make("run-compact"),
+              turn: 1,
+              trigger: "pressure",
+              modelCallAllowed: true,
               summarize: (prompt) =>
                 Effect.sync(() => {
                   prompts.push(prompt);
@@ -602,15 +612,15 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             expect(promptText(prompts[0] ?? Prompt.empty).length).toBeLessThanOrEqual(
               SUMMARY_INPUT_BUDGET,
             );
-            expect(promptText(prompts[0] ?? Prompt.empty)).toContain(state.summary);
+            expect(promptText(prompts[0] ?? Prompt.empty)).toContain(state.replacement.summary);
             expect(promptText(prompts[0] ?? Prompt.empty)).toContain("entry-0 ");
             expect(promptText(prompts[0] ?? Prompt.empty)).toContain("entry-99 ");
           } else {
             expect(failureFrom(exit)).toBeInstanceOf(CompactionError);
             expect(prompts).toEqual([]);
-            expect(renderForSummary([], state.summary)).toBeUndefined();
+            expect(renderForSummary([], state.replacement.summary)).toBeUndefined();
           }
-          expect(state.summary.length).toBe(length);
+          expect(state.replacement.summary.length).toBe(length);
         }
       }),
   );
@@ -719,14 +729,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             Effect.sync(() => {
               usage.push(delta);
             }),
-        }).pipe(
-          Effect.provide(
-            Layer.effect(
-              RunContextPreparation,
-              Effect.map(ContextCompactor, (compactor) => ({ compactor })),
-            ).pipe(Layer.provide(compactor)),
-          ),
-        );
+        }).pipe(Effect.provide(compactor));
 
         expect(Exit.isSuccess(result.exit)).toBe(true);
         expect(result.requests).toHaveLength(3);
@@ -800,8 +803,11 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             state: initialCompactionState(),
             policy: CompactionPolicy.make({ keepRecentTokens: 1, mode: "summarize" }),
             targetTokens: 10,
-            forceSummarize: false,
-            allowSummarize: true,
+            threadId: ThreadId.make("thread-compact"),
+            runId: RunId.make("run-compact"),
+            turn: 1,
+            trigger: "pressure",
+            modelCallAllowed: true,
             summarize,
           })
           .pipe(Stream.runCollect);
@@ -1539,9 +1545,9 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                   ).length,
                 compact: (request) =>
                   Stream.suspend(() => {
-                    passes.push(request.forceSummarize);
-                    const kind = request.forceSummarize ? scenario.retry : scenario.first;
-                    const through = request.forceSummarize ? 6 : 4;
+                    passes.push(request.trigger === "overflow");
+                    const kind = request.trigger === "overflow" ? scenario.retry : scenario.first;
+                    const through = request.trigger === "overflow" ? 6 : 4;
 
                     if (kind === "clear-tool-results") return Stream.succeed({ kind, through });
 

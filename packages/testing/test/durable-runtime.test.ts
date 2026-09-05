@@ -2,8 +2,18 @@ import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
 import { type IdGenerator } from "@effect-agent/core/IdGenerator";
-import { COMPACTION_SUMMARY_PREFIX, estimatePromptTokens } from "@effect-agent/engine/Compaction";
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  CONTEXT_ROLLOVER_PREFIX,
+  contextWindowId,
+  estimatePromptTokens,
+} from "@effect-agent/engine/Compaction";
 import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import {
+  ContextRolloverRequest,
+  ContextRolloverTool,
+  ContextWindow,
+} from "@effect-agent/engine/ContextWindow";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { RunContextPreparation, RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import { ToolBroker } from "@effect-agent/engine/ToolBroker";
@@ -3514,6 +3524,379 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       )
       .join("\n");
 
+  const rolloverTools = Toolkit.make(
+    Tool.make("new_context", {
+      parameters: ContextRolloverRequest,
+      success: ContextRolloverRequest,
+    })
+      .annotate(ToolExecutionClass, "readonly")
+      .annotate(ContextRolloverTool, true),
+  );
+
+  const rolloverParts = (
+    id: string,
+    handoff: string,
+  ): ReadonlyArray<Response.StreamPartEncoded> => [
+    { type: "tool-call", id, name: "new_context", params: { handoff }, providerExecuted: false },
+    { type: "finish", reason: "tool-calls", usage: usageOf(100, 10) },
+  ];
+
+  for (const barrier of [
+    "compaction:before-canonical-append",
+    "compaction:after-canonical-append",
+  ] as const) {
+    it.effect(
+      `explicit rollover survives ${barrier} with canonical instructions, input, and cumulative usage`,
+      () =>
+        Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+          const instructionCalls = yield* Ref.make(0);
+          const executions = yield* Ref.make(0);
+
+          const definition = Agent.make("durable-window-recovery", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: () =>
+              Ref.updateAndGet(instructionCalls, (count) => count + 1).pipe(
+                Effect.map((count) => `Canonical instructions ${count}`),
+              ),
+            toolkit: rolloverTools,
+            policy: AgentPolicy.make({
+              maxTurns: 3,
+              maxToolCalls: 2,
+              maxDuration: "30 seconds",
+              toolConcurrency: 1,
+            }),
+          });
+
+          const scripted = yield* makeScriptedModel((call) =>
+            call === 0
+              ? rolloverParts("window-request", "Continue the saved plan.")
+              : finalPartsWithUsage('"done"', usageOf(50, 5)),
+          );
+
+          const agent = Agent.withModel(definition, scripted.model);
+
+          const handlers = rolloverTools.toLayer({
+            new_context: (request) =>
+              Ref.update(executions, (count) => count + 1).pipe(Effect.as(request)),
+          });
+
+          const receipt = yield* runtime.submit(
+            agent,
+            "Keep the original request",
+            submitOptions(`window-${barrier}`, "first"),
+          );
+
+          const process = runtime
+            .processThread(agent, receipt.threadId)
+            .pipe(Effect.provide(handlers));
+
+          yield* armFailpoint(barrier);
+          const interrupted = yield* process.pipe(Effect.exit, Effect.ensuring(clearFailpoint));
+
+          expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
+          expect(scripted.prompts).toHaveLength(1);
+          const partial = yield* readLog(receipt.threadId);
+
+          expect(
+            partial.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
+          ).toHaveLength(1);
+          expect(
+            partial.filter(({ record }) => record.payload._tag === "CompactionCreated"),
+          ).toHaveLength(barrier === "compaction:after-canonical-append" ? 1 : 0);
+
+          const settlements = yield* process;
+
+          expect(settlements[0]?.outcome).toBe("completed");
+          expect(settlements[0]?.usageSummary).toMatchObject({
+            modelCalls: 2,
+            inputTokens: { total: 150 },
+            outputTokens: { total: 15 },
+          });
+          expect(yield* Ref.get(executions)).toBe(1);
+          expect(scripted.prompts).toHaveLength(2);
+          const continued = promptTexts(scripted.prompts[1] ?? Prompt.empty);
+
+          expect(continued).toContain("Canonical instructions 1");
+          expect(continued).not.toContain("Canonical instructions 2");
+          expect(continued).toContain("Keep the original request");
+          expect(continued).toContain(CONTEXT_ROLLOVER_PREFIX);
+          expect(continued).toContain("Continue the saved plan.");
+          const records = yield* readLog(receipt.threadId);
+
+          const windows = records.flatMap(({ record }) =>
+            record.payload._tag === "CompactionCreated" ? [record.payload] : [],
+          );
+
+          expect(windows).toHaveLength(1);
+          expect(windows[0]?.kind).toBe("rollover");
+          expect(windows[0]?.coversThrough).toBeGreaterThan(
+            partial.find(({ record }) => record.payload._tag === "ModelResponseRecorded")
+              ?.sequence ?? 0,
+          );
+
+          const projection = yield* projectRunJournal(
+            records,
+            runIdForSubmission(receipt.submissionId),
+          );
+
+          expect(projection.committedTurns).toBe(2);
+          expect(projection.policyUsage.toolCalls).toBe(1);
+          expect(projection.contextWindowId).toBe(
+            contextWindowId(runIdForSubmission(receipt.submissionId), 2),
+          );
+        }),
+    );
+  }
+
+  it.effect(
+    "repeated explicit rollovers map newly committed current-Run batches without retaining older windows",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+
+        const definition = Agent.make("durable-repeated-windows", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Retain the original objective.",
+          toolkit: rolloverTools,
+          policy: AgentPolicy.make({
+            maxTurns: 4,
+            maxToolCalls: 3,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call < 2
+            ? rolloverParts(
+                `request-${call}`,
+                call === 0 ? "FIRST-WINDOW-NOTES" : "SECOND-WINDOW-NOTES",
+              )
+            : finalPartsWithUsage('"done"', usageOf(50, 5)),
+        );
+
+        const agent = Agent.withModel(definition, scripted.model);
+        const handlers = rolloverTools.toLayer({ new_context: Effect.succeed });
+
+        const receipt = yield* runtime.submit(
+          agent,
+          "Complete this objective",
+          submitOptions("repeated-windows", "first"),
+        );
+
+        const settled = yield* runtime
+          .processThread(agent, receipt.threadId)
+          .pipe(Effect.provide(handlers));
+
+        expect(settled[0]?.outcome).toBe("completed");
+        expect(settled[0]?.usageSummary).toMatchObject({
+          modelCalls: 3,
+          inputTokens: { total: 250 },
+          outputTokens: { total: 25 },
+        });
+        expect(scripted.prompts).toHaveLength(3);
+        expect(promptTexts(scripted.prompts[1] ?? Prompt.empty)).toContain("FIRST-WINDOW-NOTES");
+        expect(promptTexts(scripted.prompts[2] ?? Prompt.empty)).toContain("SECOND-WINDOW-NOTES");
+        expect(promptTexts(scripted.prompts[2] ?? Prompt.empty)).not.toContain(
+          "FIRST-WINDOW-NOTES",
+        );
+        const records = yield* readLog(receipt.threadId);
+
+        const windows = records.flatMap(({ record }) =>
+          record.payload._tag === "CompactionCreated" ? [record.payload] : [],
+        );
+
+        expect(windows).toHaveLength(2);
+        expect(windows[1]?.coversThrough).toBeGreaterThan(windows[0]?.coversThrough ?? 0);
+        expect(JSON.stringify(records)).toContain("FIRST-WINDOW-NOTES");
+
+        const projection = yield* projectRunJournal(
+          records,
+          runIdForSubmission(receipt.submissionId),
+        );
+
+        expect(projection.committedTurns).toBe(3);
+        expect(projection.policyUsage.toolCalls).toBe(2);
+        expect(projection.contextWindowId).toBe(
+          contextWindowId(runIdForSubmission(receipt.submissionId), 3),
+        );
+        expect(projection.protectedContext?.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+        ]);
+        expect(promptTexts(projection.protectedContext ?? Prompt.empty)).toBe(
+          'Retain the original objective.\n"Complete this objective"',
+        );
+      }),
+  );
+
+  it.effect(
+    "automatic rollover commits complete first-Run Tool results before recovery and preserves their original evidence",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+
+        const toolkit = Toolkit.make(
+          Tool.make("large_result", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+            dependencies: [ContextWindow],
+          }).annotate(ToolExecutionClass, "readonly"),
+        );
+
+        const definition = Agent.make("durable-automatic-window", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Complete the original objective.",
+          toolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 1_500,
+          }),
+        });
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? [
+                {
+                  type: "tool-call",
+                  id: "large-result-call",
+                  name: "large_result",
+                  params: {},
+                  providerExecuted: false,
+                },
+                { type: "finish", reason: "tool-calls", usage: usageOf(100, 10) },
+              ]
+            : finalPartsWithUsage('"done"', usageOf(50, 5)),
+        );
+
+        const agent = Agent.withModel(definition, scripted.model);
+        const evidence = `ORIGINAL-LARGE-EVIDENCE ${"x".repeat(24_000)}`;
+        const executions = yield* Ref.make(0);
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        const windowEstimates: Array<number> = [];
+
+        const handlers = toolkit.toLayer({
+          large_result: () =>
+            Effect.gen(function* () {
+              yield* Ref.update(executions, (count) => count + 1);
+              const window = yield* ContextWindow;
+
+              windowEstimates.push((yield* window.status).estimatedTokens);
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(released);
+
+              return evidence;
+            }),
+        });
+
+        const receipt = yield* runtime.submit(
+          agent,
+          "Finish this exact request",
+          submitOptions("automatic-window", "first"),
+        );
+
+        const process = runtime.processThread(agent, receipt.threadId).pipe(
+          Effect.provide(handlers),
+          Effect.provideService(ContextCompactor, {
+            estimate: estimatePromptTokens,
+            compact: () => Stream.die("Worker compactor must not replace the host strategy"),
+          }),
+          Effect.provideService(RunContextPreparation, {
+            hook: {
+              prepare: () => Effect.die("Worker preparation must not replace the host hook"),
+            },
+          }),
+        );
+
+        yield* armFailpoint("turn:after-response-append");
+        const declared = yield* process.pipe(Effect.exit, Effect.ensuring(clearFailpoint));
+
+        expect(failureTag(declared)).toBe("DurableRuntimeFailpointError");
+        expect(yield* Ref.get(executions)).toBe(0);
+        yield* armFailpoint("compaction:after-canonical-append");
+
+        const running = yield* process.pipe(
+          Effect.exit,
+          Effect.ensuring(clearFailpoint),
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(entered);
+        expect(windowEstimates).toEqual([110]);
+        yield* runtime.submit(
+          agent,
+          "STEERING-MUST-SURVIVE: include the latest correction exactly.",
+          submitOptions("automatic-window", "steering"),
+        );
+        yield* Deferred.succeed(released, undefined);
+        const interrupted = yield* Fiber.join(running);
+
+        expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
+        expect(scripted.prompts).toHaveLength(1);
+        const before = yield* readLog(receipt.threadId);
+        const rollover = before.find(({ record }) => record.payload._tag === "CompactionCreated");
+        const result = before.find(({ record }) => record.payload._tag === "ToolCallSettled");
+
+        expect(rollover?.record.payload).toMatchObject({
+          kind: "rollover",
+          coversThrough: result?.sequence,
+        });
+        expect(result?.record.payload).toMatchObject({ result: evidence });
+
+        const settlements = yield* process;
+
+        expect(settlements[0]?.outcome).toBe("completed");
+        expect(settlements[0]?.usageSummary).toMatchObject({
+          modelCalls: 2,
+          inputTokens: { total: 150 },
+          outputTokens: { total: 15 },
+        });
+        expect(yield* Ref.get(executions)).toBe(1);
+        expect(scripted.prompts).toHaveLength(2);
+        expect(
+          scripted.prompts.every((prompt) => promptTexts(prompt).includes("HOST-REFERENCE")),
+        ).toBe(true);
+        expect(promptTexts(scripted.prompts[1] ?? Prompt.empty)).toContain(
+          "Finish this exact request",
+        );
+        expect(promptTexts(scripted.prompts[1] ?? Prompt.empty)).toContain(CONTEXT_ROLLOVER_PREFIX);
+        expect(promptTexts(scripted.prompts[1] ?? Prompt.empty)).toContain(
+          "STEERING-MUST-SURVIVE: include the latest correction exactly.",
+        );
+        expect(
+          estimatePromptTokens((scripted.prompts[1] ?? Prompt.empty).content),
+        ).toBeLessThanOrEqual(1_500);
+        const records = yield* readLog(receipt.threadId);
+
+        expect(
+          records.filter(({ record }) => record.payload._tag === "CompactionCreated"),
+        ).toHaveLength(1);
+        expect(JSON.stringify(records)).toContain(evidence);
+        expect(JSON.stringify(records)).not.toContain("HOST-REFERENCE");
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
+            Layer.provide(ContextCompactor.layerRollover),
+            Layer.provide(
+              Layer.succeed(RunContextPreparation, {
+                hook: { prepare: ({ source }) => Effect.succeed({ prompt: source }) },
+                transientContext: { load: () => Effect.succeed(Prompt.make("HOST-REFERENCE")) },
+              }),
+            ),
+            Layer.provideMerge(baseLayer),
+          ),
+        ),
+      ),
+  );
+
   it.effect(
     "RUN-026: compaction commits one canonical record across a failpoint re-drive and later Runs fold it",
     () =>
@@ -3625,16 +4008,20 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       let reference = "EXTERNAL-REVISION-ONE";
       let reads = 0;
 
-      const preparation = Layer.succeed(RunContextPreparation, {
-        transientContext: {
-          load: () =>
-            Effect.sync(() => {
-              reads += 1;
+      const preparation = Layer.merge(
+        Layer.succeed(RunContextPreparation, {
+          transientContext: {
+            load: () =>
+              Effect.sync(() => {
+                reads += 1;
 
-              return Prompt.make([{ role: "user", content: `Untrusted reference: ${reference}` }]);
-            }),
-        },
-        compactor: ContextCompactor.of({
+                return Prompt.make([
+                  { role: "user", content: `Untrusted reference: ${reference}` },
+                ]);
+              }),
+          },
+        }),
+        Layer.succeed(ContextCompactor, {
           estimate: estimatePromptTokens,
           compact: ({ source }) => {
             expect(promptTexts(source)).not.toContain("EXTERNAL-REVISION");
@@ -3646,7 +4033,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             });
           },
         }),
-      });
+      );
 
       return Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -3801,16 +4188,14 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         Effect.provide(
           Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
             Layer.provide(
-              Layer.succeed(RunContextPreparation, {
-                compactor: ContextCompactor.of({
-                  estimate: estimatePromptTokens,
-                  compact: () =>
-                    Stream.succeed({
-                      kind: "summarize",
-                      through: 1,
-                      summary: "custom first-only summary",
-                    }),
-                }),
+              Layer.succeed(ContextCompactor, {
+                estimate: estimatePromptTokens,
+                compact: () =>
+                  Stream.succeed({
+                    kind: "summarize",
+                    through: 1,
+                    summary: "custom first-only summary",
+                  }),
               }),
             ),
             Layer.provideMerge(baseLayer),
@@ -3886,31 +4271,32 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         }).pipe(
           Effect.provide(
             Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
-              Layer.provide(
-                Layer.succeed(RunContextPreparation, {
-                  compactor: ContextCompactor.of({
-                    estimate: (messages) =>
-                      (scenario === "replacement after recovery" &&
-                        promptTexts(Prompt.fromMessages(messages)).includes(
-                          COMPACTION_SUMMARY_PREFIX,
-                        )) ||
-                      messages.some((message) => message.role === "assistant")
-                        ? 1_000
-                        : 10,
-                    compact: ({ source }) =>
-                      Stream.succeed({
-                        kind: "summarize",
-                        through: scenario === "partially mapped prefix" ? 2 : 1,
-                        summary:
-                          scenario === "replacement after recovery" &&
-                          promptTexts(source).includes(COMPACTION_SUMMARY_PREFIX)
-                            ? "uncommitted replacement"
-                            : summary,
-                      }),
-                  }),
-                  ...(scenario === "no prior records" ||
-                  scenario === "transformed prefix" ||
-                  scenario === "partially mapped prefix"
+              Layer.provide([
+                Layer.succeed(ContextCompactor, {
+                  estimate: (messages) =>
+                    (scenario === "replacement after recovery" &&
+                      promptTexts(Prompt.fromMessages(messages)).includes(
+                        COMPACTION_SUMMARY_PREFIX,
+                      )) ||
+                    messages.some((message) => message.role === "assistant")
+                      ? 1_000
+                      : 10,
+                  compact: ({ source }) =>
+                    Stream.succeed({
+                      kind: "summarize",
+                      through: scenario === "partially mapped prefix" ? 2 : 1,
+                      summary:
+                        scenario === "replacement after recovery" &&
+                        promptTexts(source).includes(COMPACTION_SUMMARY_PREFIX)
+                          ? "uncommitted replacement"
+                          : summary,
+                    }),
+                }),
+                Layer.succeed(
+                  RunContextPreparation,
+                  scenario === "no prior records" ||
+                    scenario === "transformed prefix" ||
+                    scenario === "partially mapped prefix"
                     ? {
                         hook: {
                           prepare: ({ source }) =>
@@ -3934,9 +4320,9 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
                             }),
                         },
                       }
-                    : {}),
-                }),
-              ),
+                    : {},
+                ),
+              ]),
               Layer.provideMerge(baseLayer),
             ),
           ),
