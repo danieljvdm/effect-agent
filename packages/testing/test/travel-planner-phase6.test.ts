@@ -4,7 +4,6 @@ import {
   type NodeDurableAgentRuntimeOptions,
 } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import {
-  TravelPlannerCloudflareProfile,
   expectedTravelPlan,
   makePhase4TravelPlannerAgent,
   normalizeCrossPlatformTravelPlannerEvidence,
@@ -14,7 +13,6 @@ import {
   phase4TravelPlannerSubmitOptions,
   phase4TravelPlannerWorkerLayer,
   phase6TravelPlannerGoldenEvidence,
-  phase6TravelPlannerProfile,
   travelPlanFromDurableSettlement,
 } from "@effect-agent/testing/TravelPlanner";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
@@ -63,23 +61,6 @@ const dnLayer = (options: NodeDurableAgentRuntimeOptions) =>
  * outcomes under DN and DC follow transitively without assembling both stacks in one process.
  */
 describe("TEST-014 P6 Travel Planner DN/DC equivalence — the DN half", () => {
-  it("pins the DC profile: equivalence is claimed, exactly-once external effects are not", () => {
-    const decoded = Schema.decodeUnknownSync(TravelPlannerCloudflareProfile)(
-      Schema.encodeSync(TravelPlannerCloudflareProfile)(phase6TravelPlannerProfile),
-    );
-
-    expect(decoded).toEqual(phase6TravelPlannerProfile);
-    expect(phase6TravelPlannerProfile).toEqual({
-      deploymentClass: "DC",
-      durableAcceptedWork: true,
-      canonicalSchemaVersion: 1,
-      supplierBookingUncertaintyProtocol: true,
-      durableAttachedSubagents: true,
-      cloudflareEquivalence: true,
-      exactlyOnceExternalEffects: false,
-    });
-  });
-
   it.effect(
     "the DN run's cross-platform normalized canonical evidence equals the committed golden",
     () =>

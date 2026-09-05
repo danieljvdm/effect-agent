@@ -1,47 +1,16 @@
-import * as Agent from "@effect-agent/core/Agent";
 import { type ThreadId } from "@effect-agent/core/Identifiers";
 import { type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
 import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
 import { Principal, type IdempotencyKey } from "@effect-agent/thread/SubmissionLedger";
-import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
-import { AUDIT_REPORT_PATH, EvidenceAuditor, EvidenceAuditReport } from "./evidence-auditor.ts";
+import { AUDIT_REPORT_PATH, EvidenceAuditReport } from "./evidence-auditor.ts";
 
 // ---------------------------------------------------------------------------
-// The evidence auditor's two profiles, mirroring the Travel Planner P7 shape:
-// a deterministic offline profile (scripted model + fixture tree in a temp
-// directory) that runs on every ordinary gate, and an opt-in live profile
-// (real model over the actual repository) behind the SAME
-// `phase7LiveProfileEnabled` environment gate from `@effect-agent/testing`.
+// Deterministic offline profile: a scripted model audits a fixture tree in a
+// temporary directory through the durable Node runtime.
 // ---------------------------------------------------------------------------
-
-/** The auditor's committed capability claim, schema-first like every profile. */
-export class EvidenceAuditorProfile extends Schema.Class<EvidenceAuditorProfile>(
-  "@effect-agent/example-repo-ops/EvidenceAuditorProfile",
-)({
-  deploymentClass: Schema.Literal("DN"),
-  /** Every audited document is one named Durable Step (`audit:{document}`). */
-  durableStepPerDocument: Schema.Literal(true),
-  /** The only mutating Tool suspends on a canonical approval request (CAP-006). */
-  approvalGatedReportWrite: Schema.Literal(true),
-  /** Local process execution is honestly labeled; never a security boundary (CAP-010). */
-  sandboxIsolation: Schema.Literal("unisolated"),
-  /** The live profile is env-gated out of every ordinary test gate. */
-  liveProfileOptIn: Schema.Literal(true),
-  /** Never claimed at any phase (DUR-003). */
-  exactlyOnceExternalEffects: Schema.Literal(false),
-}) {}
-
-export const evidenceAuditorProfile = EvidenceAuditorProfile.make({
-  deploymentClass: "DN",
-  durableStepPerDocument: true,
-  approvalGatedReportWrite: true,
-  sandboxIsolation: "unisolated",
-  liveProfileOptIn: true,
-  exactlyOnceExternalEffects: false,
-});
 
 export const repoOpsDeploymentId = Schema.decodeSync(DeploymentId)("repo-ops-p7-deployment");
 export const repoOpsProducerId = Schema.decodeSync(ProducerId)("repo-ops-p7-producer");
@@ -181,16 +150,3 @@ export const makeOfflineAuditorModel = (
 
     return { model, calls: Ref.get(calls), prompts: Ref.get(prompts) };
   });
-
-// ---------------------------------------------------------------------------
-// Live profile: the SAME Agent Definition bound to a real model. The consumer
-// supplies the upstream OpenAI client Layer (with its own redacted
-// OPENAI_API_KEY) and drives it over the actual repository — opt-in through
-// `phase7LiveProfileEnabled` exactly like the Travel Planner live smoke.
-// ---------------------------------------------------------------------------
-
-/** Explicit live binding for an application-supplied OpenAI client Layer. */
-export const OpenAiEvidenceAuditor = Agent.withModel(
-  EvidenceAuditor,
-  OpenAiLanguageModel.model("gpt-4.1-mini"),
-);

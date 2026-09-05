@@ -292,10 +292,6 @@ interface ReservationState {
   readonly observed: PartialAmounts;
   readonly covered: Amounts;
   readonly overrun: Amounts;
-  /** Frozen when settlement begins; zero before. */
-  readonly releasable: Amounts;
-  /** Applied exactly once at `released`; zero before. */
-  readonly released: Amounts;
 }
 
 interface ParentBudgetState {
@@ -361,6 +357,17 @@ const optionalAmounts = (partial: PartialAmounts): { [K in ReservableDimensionKe
   return out;
 };
 
+/** Covered usage freezes at settlement, so the unused allocation remains stable afterward. */
+const unusedAllocation = (reservation: ReservationState): Amounts => {
+  const unused = { ...zeroAmounts };
+
+  for (const spec of dimensionSpecs) {
+    unused[spec.key] = reservation.allocated[spec.key] - reservation.covered[spec.key];
+  }
+
+  return unused;
+};
+
 const reservationView = (
   reservationId: BudgetReservationId,
   state: ReservationState,
@@ -373,7 +380,9 @@ const reservationView = (
     allocated: SubagentReservationAmounts.make(state.allocated),
     observedConsumed: SubagentObservedUsage.make(optionalAmounts(state.observed)),
     coveredConsumed: SubagentReservationAmounts.make(state.covered),
-    released: SubagentReservationAmounts.make(state.released),
+    released: SubagentReservationAmounts.make(
+      state.status === "released" ? unusedAllocation(state) : zeroAmounts,
+    ),
     overrun: SubagentReservationAmounts.make(state.overrun),
   });
 
@@ -540,8 +549,6 @@ const reserveTransition = (
     observed: {},
     covered: zeroAmounts,
     overrun: zeroAmounts,
-    releasable: zeroAmounts,
-    released: zeroAmounts,
   };
 
   const next: ReservationLedger = {
@@ -620,17 +627,15 @@ const observeTransition = (
 const freezeSettlement = (reservation: ReservationState): ReservationState => {
   const observed: { [K in ReservableDimensionKey]?: number } = { ...reservation.observed };
   const covered: Record<ReservableDimensionKey, number> = { ...reservation.covered };
-  const releasable: Record<ReservableDimensionKey, number> = { ...zeroAmounts };
 
   for (const spec of dimensionSpecs) {
     if (observed[spec.key] === undefined) {
       observed[spec.key] = reservation.allocated[spec.key];
       covered[spec.key] = reservation.allocated[spec.key];
     }
-    releasable[spec.key] = reservation.allocated[spec.key] - covered[spec.key];
   }
 
-  return { ...reservation, status: "releasePending", observed, covered, releasable };
+  return { ...reservation, status: "releasePending", observed, covered };
 };
 
 const beginReleaseTransition = (
@@ -679,16 +684,17 @@ const releaseTransition = (
     return [corruptParent(reservation.parentRunId), ledger];
   }
   const frozen = reservation.status === "reserved" ? freezeSettlement(reservation) : reservation;
+  const unused = unusedAllocation(frozen);
   const nextAvailable: { [K in ReservableDimensionKey]?: number } = { ...parent.available };
 
   for (const spec of dimensionSpecs) {
     const available = parent.available[spec.key];
 
     if (available !== undefined) {
-      nextAvailable[spec.key] = available + frozen.releasable[spec.key];
+      nextAvailable[spec.key] = available + unused[spec.key];
     }
   }
-  const settled: ReservationState = { ...frozen, status: "released", released: frozen.releasable };
+  const settled: ReservationState = { ...frozen, status: "released" };
 
   const next: ReservationLedger = {
     parents: new Map(ledger.parents).set(parent.parentRunId, {

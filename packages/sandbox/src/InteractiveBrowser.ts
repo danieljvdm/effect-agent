@@ -1,4 +1,4 @@
-import { Context, Schema, type Effect, type Scope } from "effect";
+import { Context, Option, Schema, type Effect, type Scope } from "effect";
 
 import type { PageScreenshotResult } from "./PageScreenshot.ts";
 import { SandboxImplementation } from "./Sandbox.ts";
@@ -9,28 +9,24 @@ const BoundedMessage = Schema.String.check(Schema.isMaxLength(8 * 1024));
 const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const FieldValue = Schema.String.check(Schema.isMaxLength(64 * 1024));
 const ScrollDelta = Schema.Int.check(Schema.isBetween({ minimum: -100_000, maximum: 100_000 }));
-const browserUrl = Reflect.get(globalThis, "URL");
+const decodeUrl = Schema.decodeUnknownOption(Schema.URLFromString);
 
 /** Absolute, bounded HTTP(S) navigation URL without embedded credentials. */
 export const InteractiveBrowserTargetUrl = Schema.NonEmptyString.check(
   Schema.isMaxLength(8 * 1024),
   Schema.makeFilter(
     (value) => {
-      if (typeof browserUrl !== "function") return false;
-      try {
-        const url: unknown = Reflect.construct(browserUrl, [value]);
+      const parsed = decodeUrl(value);
 
-        return (
-          typeof url === "object" &&
-          url !== null &&
-          (Reflect.get(url, "protocol") === "http:" || Reflect.get(url, "protocol") === "https:") &&
-          Reflect.get(url, "hostname") !== "" &&
-          Reflect.get(url, "username") === "" &&
-          Reflect.get(url, "password") === ""
-        );
-      } catch {
-        return false;
-      }
+      if (Option.isNone(parsed)) return false;
+      const url = parsed.value;
+
+      return (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        url.hostname !== "" &&
+        url.username === "" &&
+        url.password === ""
+      );
     },
     { title: "an absolute HTTP or HTTPS URL without embedded credentials" },
   ),
@@ -43,21 +39,18 @@ export const InteractiveBrowserHost = Schema.NonEmptyString.check(
   Schema.isMaxLength(255),
   Schema.makeFilter(
     (value) => {
-      if (typeof browserUrl !== "function" || value.includes("*")) return false;
-      try {
-        const url: unknown = Reflect.construct(browserUrl, [`https://${value}/`]);
+      if (value.includes("*")) return false;
+      const parsed = decodeUrl(`https://${value}/`);
 
-        return (
-          typeof url === "object" &&
-          url !== null &&
-          Reflect.get(url, "protocol") === "https:" &&
-          Reflect.get(url, "username") === "" &&
-          Reflect.get(url, "password") === "" &&
-          Reflect.get(url, "host") === value
-        );
-      } catch {
-        return false;
-      }
+      if (Option.isNone(parsed)) return false;
+      const url = parsed.value;
+
+      return (
+        url.protocol === "https:" &&
+        url.username === "" &&
+        url.password === "" &&
+        url.host === value
+      );
     },
     { title: "a canonical credential-free HTTPS host authority" },
   ),

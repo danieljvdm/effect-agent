@@ -114,7 +114,6 @@ import {
   DemoBudgetChanged,
   DemoBudgetRejected,
   DemoCommandStateChanged,
-  type DemoCommandKind,
   DemoContextPrepared,
   DemoControlAccepted,
   DemoControlFailure,
@@ -461,22 +460,20 @@ export class DemoInteractiveRuntime extends Context.Service<
 >()("@effect-agent/example-demo/DemoInteractiveRuntime") {}
 
 const findActive = (
-  activeRuns: Ref.Ref<ReadonlyMap<DemoRunHandle, ActiveRun>>,
+  activeRun: Ref.Ref<ActiveRun | undefined>,
   handle: DemoRunHandle,
 ): Effect.Effect<ActiveRun, DemoControlFailure> =>
-  Ref.get(activeRuns).pipe(
-    Effect.flatMap((runs) => {
-      const active = runs.get(handle);
-
-      return active === undefined
+  Ref.get(activeRun).pipe(
+    Effect.flatMap((active) =>
+      active?.handle !== handle
         ? Effect.fail(
             DemoControlFailure.make({
               reason: "run-not-found",
               message: "The ephemeral Run is no longer active.",
             }),
           )
-        : Effect.succeed(active);
-    }),
+        : Effect.succeed(active),
+    ),
   );
 
 const makeGates = Effect.fn("Demo.makeGates")(function* (): Effect.fn.Return<SearchGates> {
@@ -574,13 +571,13 @@ const InteractiveRuntimeLive = Layer.effect(
     const sandbox = yield* Sandbox;
     const connector = yield* McpConnector;
     const crypto = yield* Crypto.Crypto;
-    const activeRuns = yield* Ref.make<ReadonlyMap<DemoRunHandle, ActiveRun>>(new Map());
+    const activeRun = yield* Ref.make<ActiveRun | undefined>(undefined);
     const identityCounter = yield* Ref.make(0);
 
     const queueCommand = Effect.fn("Demo.queueCommand")(function* (
       request: QueueRunCommandRequest,
     ) {
-      const active = yield* findActive(activeRuns, request.handle);
+      const active = yield* findActive(activeRun, request.handle);
 
       return yield* active.commandGate.withPermit(
         Effect.gen(function* () {
@@ -642,7 +639,7 @@ const InteractiveRuntimeLive = Layer.effect(
     const resolveApproval = Effect.fn("Demo.resolveApproval")(function* (
       request: ResolveRunApprovalRequest,
     ) {
-      const active = yield* findActive(activeRuns, request.handle);
+      const active = yield* findActive(activeRun, request.handle);
 
       const pending = yield* Ref.modify(active.pendingApprovals, (approvals) => {
         const current = approvals.get(request.requestId);
@@ -749,8 +746,8 @@ const InteractiveRuntimeLive = Layer.effect(
             commandGate,
           };
 
-          const registered = yield* Ref.modify(activeRuns, (current) =>
-            current.size > 0 ? [false, current] : [true, new Map(current).set(handle, active)],
+          const registered = yield* Ref.modify(activeRun, (current) =>
+            current === undefined ? [true, active] : [false, current],
           );
 
           if (!registered) {
@@ -769,13 +766,9 @@ const InteractiveRuntimeLive = Layer.effect(
               return;
             }
             yield* Ref.set(acceptingCommands, false);
-            yield* Ref.update(activeRuns, (current) => {
-              const next = new Map(current);
-
-              next.delete(handle);
-
-              return next;
-            });
+            yield* Ref.update(activeRun, (current) =>
+              current?.handle === handle ? undefined : current,
+            );
             const approvals = yield* Ref.getAndSet(pendingApprovals, new Map());
 
             yield* Effect.forEach(approvals.values(), (pending) =>
@@ -852,71 +845,37 @@ const InteractiveRuntimeLive = Layer.effect(
               ),
           };
 
-          const claimedCommands = new Map<string, DemoCommandKind>();
-
           const inputHook: RunInputHook = {
             drain: (policy) =>
               commandGate.withPermit(
-                commandQueue.drain(policy).pipe(
-                  Effect.tap((commands) =>
-                    Effect.forEach(commands, (command) => {
+                Effect.gen(function* () {
+                  const commands = yield* commandQueue.drain(policy);
+
+                  for (const status of ["claimed", "delivered"] as const) {
+                    for (const command of commands) {
                       const kind = command._tag === "SteeringCommand" ? "steering" : "follow-up";
 
-                      claimedCommands.set(command.id, kind);
-
-                      return eventBase.pipe(
-                        Effect.flatMap((base) =>
-                          emit(
-                            DemoCommandStateChanged.make({
-                              ...base,
-                              commandId: command.id,
-                              kind,
-                              content: command.content,
-                              status: "claimed",
-                              deliverySeam:
-                                kind === "steering" ? "after-tool-batch" : "otherwise-stop",
-                            }),
-                          ),
-                        ),
+                      yield* emit(
+                        DemoCommandStateChanged.make({
+                          ...(yield* eventBase),
+                          commandId: command.id,
+                          kind,
+                          content: command.content,
+                          status,
+                          deliverySeam: kind === "steering" ? "after-tool-batch" : "otherwise-stop",
+                        }),
                       );
-                    }),
-                  ),
-                  Effect.map((commands) =>
-                    commands.map((command) => ({
-                      kind:
-                        command._tag === "SteeringCommand"
-                          ? ("steering" as const)
-                          : ("follow-up" as const),
-                      input: command.content,
-                    })),
-                  ),
-                  Effect.tap((commands) =>
-                    Effect.forEach(commands, (command) => {
-                      const source = [...claimedCommands.entries()].find(
-                        ([, kind]) => kind === command.kind,
-                      );
+                    }
+                  }
 
-                      if (source === undefined) return Effect.void;
-                      claimedCommands.delete(source[0]);
-
-                      return eventBase.pipe(
-                        Effect.flatMap((base) =>
-                          emit(
-                            DemoCommandStateChanged.make({
-                              ...base,
-                              commandId: source[0],
-                              kind: command.kind,
-                              content: command.input,
-                              status: "delivered",
-                              deliverySeam:
-                                command.kind === "steering" ? "after-tool-batch" : "otherwise-stop",
-                            }),
-                          ),
-                        ),
-                      );
-                    }),
-                  ),
-                ),
+                  return commands.map((command) => ({
+                    kind:
+                      command._tag === "SteeringCommand"
+                        ? ("steering" as const)
+                        : ("follow-up" as const),
+                    input: command.content,
+                  }));
+                }),
               ),
             end: () => commandQueue.shutdown,
           };

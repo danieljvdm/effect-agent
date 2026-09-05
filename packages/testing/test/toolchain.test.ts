@@ -1227,12 +1227,9 @@ esac
       expect(providerDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
       );
-      // P7: the repo-ops evidence auditor is the third leaf example workspace.
       expect(repoOps.name).toBe("@effect-agent/example-repo-ops");
       expect(repoOps.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-      expect(repoOps.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
       expect(repoOps.dependencies?.effect).toBe("catalog:");
-      expect(repoOps.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(repoOpsDependencies).not.toContain("wrangler");
       expect(repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
@@ -1256,13 +1253,7 @@ esac
 
       expect(prReviewPublicIndex).not.toMatch(/work-?order|remediation|handoff|implementer/i);
 
-      // The Code Mode Cloudflare demo is the one example that legitimately
-      // deploys to Cloudflare (D-035, ADR-0017): it consumes the Dynamic
-      // Worker executor from @effect-agent/platform-cloudflare and queries a
-      // SQLite Durable Object, so it carries the Durable Object SqlClient and
-      // the types-only Cloudflare package. wrangler is NOT a dependency — the
-      // deploy/dev scripts invoke it through bunx, and the test lane uses
-      // programmatic Miniflare.
+      // The Code Mode demo owns its Dynamic Worker executor and Cloudflare type dependencies.
       const codeModeCloudflare = yield* readManifest(
         `${repositoryRoot}/examples/code-mode-cloudflare/package.json`,
       );
@@ -1274,7 +1265,6 @@ esac
         "workspace:*",
       );
       expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
-      expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
       expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
       expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");

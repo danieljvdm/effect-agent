@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
-import { AiError, LanguageModel, Response } from "effect/unstable/ai";
+import { AiError, LanguageModel, Response, Toolkit } from "effect/unstable/ai";
 
 const ScriptedPartMetadata = Schema.Record(Schema.String, Schema.NullOr(Schema.Json));
 
@@ -34,18 +34,12 @@ const ScriptedToolResultPart = Schema.Struct({
  * performs the toolkit-specific decode when the scripted response is consumed.
  */
 export const ScriptedGeneratePart = Schema.Union([
-  Schema.toEncoded(Response.TextPart),
-  Schema.toEncoded(Response.ReasoningPart),
+  Schema.toEncoded(Response.Part(Toolkit.empty)),
+  // PartEncoded also admits these reasoning markers, which the Part schema omits.
   Schema.toEncoded(Response.ReasoningDeltaPart),
   Schema.toEncoded(Response.ReasoningEndPart),
   ScriptedToolCallPart,
   ScriptedToolResultPart,
-  Schema.toEncoded(Response.ToolApprovalRequestPart),
-  Schema.toEncoded(Response.FilePart),
-  Schema.toEncoded(Response.DocumentSourcePart),
-  Schema.toEncoded(Response.UrlSourcePart),
-  Schema.toEncoded(Response.ResponseMetadataPart),
-  Schema.toEncoded(Response.FinishPart),
 ]).annotate({ identifier: "ScriptedGeneratePart" });
 
 export type ScriptedGeneratePart = typeof ScriptedGeneratePart.Type;
@@ -54,24 +48,9 @@ export type ScriptedGeneratePart = typeof ScriptedGeneratePart.Type;
  * Schema for encoded Effect AI streaming response parts.
  */
 export const ScriptedStreamPart = Schema.Union([
-  Schema.toEncoded(Response.TextStartPart),
-  Schema.toEncoded(Response.TextDeltaPart),
-  Schema.toEncoded(Response.TextEndPart),
-  Schema.toEncoded(Response.ReasoningStartPart),
-  Schema.toEncoded(Response.ReasoningDeltaPart),
-  Schema.toEncoded(Response.ReasoningEndPart),
-  Schema.toEncoded(Response.ToolParamsStartPart),
-  Schema.toEncoded(Response.ToolParamsDeltaPart),
-  Schema.toEncoded(Response.ToolParamsEndPart),
+  Schema.toEncoded(Response.StreamPart(Toolkit.empty)),
   ScriptedToolCallPart,
   ScriptedToolResultPart,
-  Schema.toEncoded(Response.ToolApprovalRequestPart),
-  Schema.toEncoded(Response.FilePart),
-  Schema.toEncoded(Response.DocumentSourcePart),
-  Schema.toEncoded(Response.UrlSourcePart),
-  Schema.toEncoded(Response.ResponseMetadataPart),
-  Schema.toEncoded(Response.FinishPart),
-  Schema.toEncoded(Response.ErrorPart),
 ]).annotate({ identifier: "ScriptedStreamPart" });
 
 export type ScriptedStreamPart = typeof ScriptedStreamPart.Type;

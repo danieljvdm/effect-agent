@@ -230,10 +230,6 @@ const HarnessCompleted = Schema.TaggedStruct("completed", {
   resultBytes: Schema.Natural,
 });
 
-const HarnessSourceInvalid = Schema.TaggedStruct("source-invalid", {
-  message: Schema.String,
-});
-
 const HarnessNotAFunction = Schema.TaggedStruct("source-not-a-function", {
   actual: Schema.String,
 });
@@ -270,7 +266,6 @@ const HarnessProtocol = Schema.TaggedStruct("protocol", {
 
 const HarnessOutcome = Schema.Union([
   HarnessCompleted,
-  HarnessSourceInvalid,
   HarnessNotAFunction,
   HarnessProgramFailed,
   HarnessLogLimit,
@@ -733,13 +728,6 @@ const makeExecute = (
             logBytes: outcome.value.logBytes,
             resultBytes: outcome.value.resultBytes,
           }),
-        });
-      }
-      case "source-invalid": {
-        return yield* CodeSourceError.make({
-          implementation: dynamicWorkerImplementation,
-          reason: "invalid",
-          message: outcome.value.message.slice(0, 8_000),
         });
       }
       case "source-not-a-function": {

@@ -49,36 +49,6 @@ import {
 } from "./deterministic-layers.ts";
 import { DurableSearchActivities, DurableSearchFlights, DurableSearchLodging } from "./phase4.ts";
 
-/**
- * The Phase 5 profile extends the P4 `DN` claim to consequential supplier mutation: booking
- * Tools enter the prepared/settled uncertainty protocol, unresolved external effects stop at
- * Unknown Outcomes instead of replaying, Durable Steps replay recorded results, and queued
- * traveler input joins the active Run. Exactly-once EXTERNAL execution is still — deliberately —
- * not claimed (DUR-003): the supplier's own idempotency keys are what dedupe repeats.
- */
-export class TravelPlannerBookingProfile extends Schema.Class<TravelPlannerBookingProfile>(
-  "@effect-agent/testing/travel-planner/TravelPlannerBookingProfile",
-)({
-  deploymentClass: Schema.Literal("DN"),
-  durableAcceptedWork: Schema.Literal(true),
-  canonicalSchemaVersion: Schema.Literal(1),
-  /** P5: supplier mutations get prepared/settled records, Unknown Outcomes, and reconciliation. */
-  supplierBookingUncertaintyProtocol: Schema.Literal(true),
-  /** P5: Durable Steps are exactly-once-RECORDED; their side effects stay at-least-once. */
-  durableStepsRecorded: Schema.Literal(true),
-  /** Never claimed at any phase (DUR-003). */
-  exactlyOnceExternalEffects: Schema.Literal(false),
-}) {}
-
-export const phase5TravelPlannerProfile = TravelPlannerBookingProfile.make({
-  deploymentClass: "DN",
-  durableAcceptedWork: true,
-  canonicalSchemaVersion: 1,
-  supplierBookingUncertaintyProtocol: true,
-  durableStepsRecorded: true,
-  exactlyOnceExternalEffects: false,
-});
-
 export const phase5TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-p5-deployment",
 );

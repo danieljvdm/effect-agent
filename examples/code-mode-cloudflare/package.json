@@ -15,7 +15,6 @@
     "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
     "@effect/ai-openai": "catalog:",
-    "@effect/sql-sqlite-do": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

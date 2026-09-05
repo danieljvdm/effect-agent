@@ -36,40 +36,7 @@ import {
   TravelCoordinator,
 } from "./subagents.ts";
 
-// ---------------------------------------------------------------------------
-// S2 durability profile: the S1 coordinator →
-// destination-researcher delegation re-run as ACCEPTED WORK on the Node/SQLite
-// runtime. The claim is `DN` durable attached Subagents only: establishment
-// and join are replay-safe by construction (SUB-016/SUB-019), a completed
-// child is never re-executed on a lost join acknowledgment, and NO claim of
-// exactly-once child external effects is made (rule 8; an unresolved ordinary
-// child Tool blocks as an Unknown Outcome instead, SUB-021). Cloudflare
-// equivalence is P6 scope and explicitly not claimed here.
-// ---------------------------------------------------------------------------
-
-export class TravelPlannerSubagentDurabilityProfile extends Schema.Class<TravelPlannerSubagentDurabilityProfile>(
-  "@effect-agent/testing/travel-planner/TravelPlannerSubagentDurabilityProfile",
-)({
-  deploymentClass: Schema.Literal("DN"),
-  durableAttachedSubagents: Schema.Literal(true),
-  canonicalSchemaVersion: Schema.Literal(1),
-  /** Establishment/join replay converges on one child Receipt, Thread, and join batch. */
-  subagentReplaySafe: Schema.Literal(true),
-  /** Never claimed (rule 8): child ordinary Tools stop at Unknown Outcomes, they do not replay. */
-  childExternalEffectsExactlyOnce: Schema.Literal(false),
-  /** The same conformance suite under DO eviction/alarms is P6 scope (spec §17 `DC`). */
-  cloudflareEquivalence: Schema.Literal(false),
-}) {}
-
-export const s2TravelPlannerProfile = TravelPlannerSubagentDurabilityProfile.make({
-  deploymentClass: "DN",
-  durableAttachedSubagents: true,
-  canonicalSchemaVersion: 1,
-  subagentReplaySafe: true,
-  childExternalEffectsExactlyOnce: false,
-  cloudflareEquivalence: false,
-});
-
+/** Registered coordinator and researcher bindings for durable delegation tests. */
 export const s2TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-s2-deployment",
 );

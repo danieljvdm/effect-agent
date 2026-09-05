@@ -306,47 +306,7 @@ const failure = (errorTag: string, message: string, retryAfterMillis?: number): 
     ...(retryAfterMillis === undefined ? {} : { retryAfterMillis }),
   });
 
-interface ParsedTargetUrl {
-  readonly protocol: string;
-  readonly hostname: string;
-  readonly username: string;
-  readonly password: string;
-}
-
-// The framework's TypeScript lib is bare ES2023 while every supported runtime
-// ships the WHATWG URL constructor, so it is read off globalThis the same way
-// the engine's bounded-value internals do. A runtime without it denies every
-// target rather than guessing at URL syntax.
-const urlConstructor = Reflect.get(globalThis, "URL");
-
-const parseTargetUrl = (raw: string): ParsedTargetUrl | undefined => {
-  if (typeof urlConstructor !== "function") return undefined;
-  try {
-    const parsed: unknown = Reflect.construct(urlConstructor, [raw]);
-
-    if (parsed === null || typeof parsed !== "object") return undefined;
-
-    const read = (key: string): string | undefined => {
-      const value: unknown = Reflect.get(parsed, key);
-
-      return typeof value === "string" ? value : undefined;
-    };
-
-    const protocol = read("protocol");
-    const hostname = read("hostname");
-    const username = read("username");
-    const password = read("password");
-
-    return protocol === undefined ||
-      hostname === undefined ||
-      username === undefined ||
-      password === undefined
-      ? undefined
-      : { protocol, hostname, username, password };
-  } catch {
-    return undefined;
-  }
-};
+const decodeUrl = Schema.decodeUnknownOption(Schema.URLFromString);
 
 /**
  * Fail-closed target validation over untrusted model output: absolute https
@@ -354,18 +314,20 @@ const parseTargetUrl = (raw: string): ParsedTargetUrl | undefined => {
  * allowlist. Returns the denial, or `undefined` for an allowed target.
  */
 const deniedUrl = (raw: string, patterns: ReadonlyArray<string>): WebCaptureFailure | undefined => {
-  const parsed = parseTargetUrl(raw);
+  const parsed = decodeUrl(raw);
 
-  if (parsed === undefined) {
+  if (Option.isNone(parsed)) {
     return failure("WebCaptureInvalidUrl", `${raw.slice(0, 256)} is not an absolute URL`);
   }
-  if (parsed.protocol !== "https:") {
+  const url = parsed.value;
+
+  if (url.protocol !== "https:") {
     return failure("WebCaptureUrlDenied", "Only https:// targets are allowed");
   }
-  if (parsed.username !== "" || parsed.password !== "") {
+  if (url.username !== "" || url.password !== "") {
     return failure("WebCaptureUrlDenied", "URLs carrying credentials are not allowed");
   }
-  const host = parsed.hostname.toLowerCase();
+  const host = url.hostname.toLowerCase();
 
   if (!patterns.some((pattern) => hostMatches(host, pattern))) {
     return failure(

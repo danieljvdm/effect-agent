@@ -206,7 +206,8 @@ This includes `admin:durable` and the Node crash/soak workers.
 
 `vp install` runs `vp config --no-agent --hooks-dir .vite-hooks` through `prepare`.
 Apply the compiler patch separately with `vp run patch:tsgo`.
-It checks the installed TypeScript and `@effect/tsgo` versions before patching.
+The pinned upstream command selects a replacement for the installed TypeScript version and
+fails if that replacement is unavailable. Dependency versions live in the root catalog.
 
 CI suppresses lifecycle scripts, then explicitly patches the compiler in jobs that check, test,
 or build TypeScript. Read installed Effect sources in `node_modules/effect`.

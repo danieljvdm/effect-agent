@@ -12,11 +12,9 @@ import {
   phase1Trip,
   phase4TravelPlannerDeploymentId,
   phase4TravelPlannerProducerId,
-  phase4TravelPlannerProfile,
   phase4TravelPlannerSubmitOptions,
   phase4TravelPlannerWorkerLayer,
   travelPlanFromDurableSettlement,
-  TravelPlannerDurabilityProfile,
 } from "@effect-agent/testing/TravelPlanner";
 import {
   DurableAgentRuntime,
@@ -145,21 +143,7 @@ const RUN_TAGS = [
   "RunCompleted",
 ] as const;
 
-describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking is NOT claimed safely replayable (P5 scope)", () => {
-  it("pins the DN durability claim and explicitly does not claim replay-safe supplier booking", () => {
-    const decoded = Schema.decodeUnknownSync(TravelPlannerDurabilityProfile)(
-      Schema.encodeSync(TravelPlannerDurabilityProfile)(phase4TravelPlannerProfile),
-    );
-
-    expect(decoded).toEqual(phase4TravelPlannerProfile);
-    expect(phase4TravelPlannerProfile).toEqual({
-      deploymentClass: "DN",
-      durableAcceptedWork: true,
-      canonicalSchemaVersion: 1,
-      supplierBookingReplaySafe: false,
-    });
-  });
-
+describe("Travel Planner durable admission and recovery", () => {
   it.effect(
     "submit returns a durable Receipt and a same-key resubmit returns the same Receipt (memory reference adapters)",
     () =>

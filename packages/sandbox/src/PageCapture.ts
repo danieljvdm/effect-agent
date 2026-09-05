@@ -1,4 +1,4 @@
-import { Context, Encoding, Predicate, Schema, type Effect } from "effect";
+import { Context, Encoding, Option, Predicate, Schema, type Effect } from "effect";
 
 import { SANDBOX_DIAGNOSTIC_MAX_LENGTH, SandboxImplementation } from "./Sandbox.ts";
 
@@ -48,34 +48,20 @@ const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 /** Bounded by the platform's 60-second browser inactivity ceiling. */
 const BoundedTimeoutMillis = PositiveInt.check(Schema.isLessThanOrEqualTo(60_000));
 
-// The platform-neutral package targets bare ES2023, while supported runtimes
-// provide the WHATWG URL constructor. Missing or malformed runtime support
-// denies URLs instead of guessing at web syntax or importing a Node builtin.
-const pageUrlConstructor = Reflect.get(globalThis, "URL");
+const decodeUrl = Schema.decodeUnknownOption(Schema.URLFromString);
 
 const isCredentialFreeWebUrl = (value: string, allowHttp: boolean): boolean => {
-  if (typeof pageUrlConstructor !== "function") return false;
+  const parsed = decodeUrl(value);
 
-  try {
-    const parsed: unknown = Reflect.construct(pageUrlConstructor, [value]);
+  if (Option.isNone(parsed)) return false;
+  const url = parsed.value;
 
-    if (!Predicate.isObject(parsed)) return false;
-
-    const protocol: unknown = Reflect.get(parsed, "protocol");
-    const hostname: unknown = Reflect.get(parsed, "hostname");
-    const username: unknown = Reflect.get(parsed, "username");
-    const password: unknown = Reflect.get(parsed, "password");
-
-    return (
-      (protocol === "https:" || (allowHttp && protocol === "http:")) &&
-      typeof hostname === "string" &&
-      hostname.length > 0 &&
-      username === "" &&
-      password === ""
-    );
-  } catch {
-    return false;
-  }
+  return (
+    (url.protocol === "https:" || (allowHttp && url.protocol === "http:")) &&
+    url.hostname.length > 0 &&
+    url.username === "" &&
+    url.password === ""
+  );
 };
 
 /** Absolute, bounded HTTPS navigation URL that never carries embedded credentials. */

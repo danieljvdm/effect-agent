@@ -24,6 +24,7 @@ export default defineConfig({
       "src/ScheduleTransition.ts",
       "src/Scheduling.ts",
       "src/SqlMemoryStore.ts",
+      "src/SqlSubscriptionStore.ts",
       "src/SubmissionLedger.ts",
       "src/SubmissionStatus.ts",
       "src/Subscription.ts",

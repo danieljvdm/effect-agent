@@ -35,6 +35,7 @@
     "./ScheduleTransition": "./src/ScheduleTransition.ts",
     "./Scheduling": "./src/Scheduling.ts",
     "./SqlMemoryStore": "./src/SqlMemoryStore.ts",
+    "./SqlSubscriptionStore": "./src/SqlSubscriptionStore.ts",
     "./SubmissionLedger": "./src/SubmissionLedger.ts",
     "./SubmissionStatus": "./src/SubmissionStatus.ts",
     "./Subscription": "./src/Subscription.ts",

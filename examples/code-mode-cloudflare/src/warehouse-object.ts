@@ -1,7 +1,5 @@
-import { SqliteClient } from "@effect/sql-sqlite-do";
 import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 /**
  * The warehouse Durable Object: a SQLite-backed store of curated invoice data
@@ -190,54 +188,37 @@ const runQuery = (
   });
 
 export class WarehouseObject extends DurableObject {
-  #ready = false;
+  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+    super(ctx, env);
+    ctx.storage.transactionSync(() => {
+      const sql = ctx.storage.sql;
 
-  async #ensureSeeded(): Promise<void> {
-    if (this.#ready) return;
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-
-        yield* sql`CREATE TABLE IF NOT EXISTS invoice_summary (
+      sql.exec(`CREATE TABLE IF NOT EXISTS invoice_summary (
           customer TEXT NOT NULL,
           region TEXT NOT NULL,
           revenue INTEGER NOT NULL,
           created_at TEXT NOT NULL
-        )`;
+        )`);
 
-        const existing = yield* sql`SELECT COUNT(*) AS n FROM invoice_summary`.pipe(
-          Effect.map((rows) => Number((rows[0] as { n?: unknown }).n ?? 0)),
+      if (sql.exec("SELECT 1 FROM invoice_summary LIMIT 1").toArray().length > 0) return;
+
+      for (const row of seedRows) {
+        sql.exec(
+          "INSERT INTO invoice_summary (customer, region, revenue, created_at) VALUES (?, ?, ?, ?)",
+          row.customer,
+          row.region,
+          row.revenue,
+          row.createdAt,
         );
-
-        if (existing === 0) {
-          for (const row of seedRows) {
-            yield* sql`INSERT INTO invoice_summary ${sql.insert({
-              customer: row.customer,
-              region: row.region,
-              revenue: row.revenue,
-              created_at: row.createdAt,
-            })}`;
-          }
-        }
-      }).pipe(
-        Effect.provide(SqliteClient.layer({ storage: this.ctx.storage })),
-        Effect.orDie,
-      ) as Effect.Effect<void>,
-    );
-    // On Durable Object SQLite the `PRAGMA query_only` lock is authorizer-
-    // blocked (SQLITE_AUTH), so the read-only guarantee here is the
-    // leading-keyword scan in `scanReadOnly`; the Node reference fixture in
-    // `@effect-agent/testing` proves the stronger database-authority path.
-    this.#ready = true;
+      }
+    });
   }
 
   /** The read-only query RPC the warehouse Tool calls (Workers RPC returns JSON). */
-  async query(
+  query(
     sql: string,
     parameters: ReadonlyArray<string | number | boolean | null>,
   ): Promise<WarehouseQueryOutcome> {
-    await this.#ensureSeeded();
-
     return Effect.runPromise(runQuery(this.ctx.storage, sql, parameters));
   }
 }

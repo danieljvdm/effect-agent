@@ -1,32 +1,19 @@
 # Repo-ops: the evidence auditor
 
-This leaf workspace is P7 internal agent #2 (plan §6): a genuinely useful
-repository agent that reads evidence documents, extracts the test titles they
-cite (the repository convention cites executable tests as curly-quoted titles
-next to a test-file path), and verifies each citation against the tree.
+A deterministic integration example that checks quoted test titles in fixture
+documents against a repository tree and writes an audit report after approval.
+Run it with `vp run -F @effect-agent/example-repo-ops test`.
 
-What it exercises, deliberately:
+The test supplies a scripted model, a temporary fixture tree, and a SQLite-backed
+`NodeDurableAgentRuntime`. Reads use structured `SandboxRequest` values for
+`/bin/ls`, `/bin/cat`, and `/usr/bin/grep` through `@effect-agent/sandbox-local`.
+Model-supplied paths are validated, output and execution time are bounded, and
+the local sandbox explicitly reports that it is unisolated.
 
-- **Sandbox capability.** Every read is a structural `SandboxRequest`
-  (`/bin/ls`, `/bin/cat`, `/usr/bin/grep`) through `@effect-agent/sandbox-local`,
-  which labels itself `unisolated`. This is development tooling, not a security
-  boundary (CAP-010). Network is disabled, no environment crosses, output is
-  bounded, and model-supplied paths are normalized and fail closed.
-- **`ToolExecutionClass` annotations.** `list_repository_path` declares
-  `readonly`; `audit_evidence` stays unannotated (fail-closed `uncertain`) and
-  instead proves re-entry with one named Durable Step per document
-  called `audit:{document}`. The step records once, while the read-only body may execute again.
-  `write_audit_report` declares `idempotent` and is the only mutating Tool.
-- **Approval gating on the DN runtime.** The report write suspends on the
-  canonical `ToolApprovalRequested` record until `resolveApproval`; the file
-  exists only after the approved decision is canonical.
-- **DN assembly and CLI Tool use.** The deterministic offline profile
-  drives the agent as accepted work on `NodeDurableAgentRuntime` over a SQLite file
-  and a fixture repository tree in a temp directory; the opt-in live profile
-  (`EFFECT_AGENT_LIVE=1` + `OPENAI_API_KEY`, the shared P7 gate from
-  `@effect-agent/testing`) runs a real model over the actual repository.
+Each document is audited inside a named Durable Step, `audit:{document}`. A
+resumed attempt reuses committed rows; an uncommitted read-only step may execute
+again. The report Tool declares an idempotent write and suspends until an
+approval decision is recorded. The test verifies the durable records, absence
+of the report before approval, and the final file and settlement after approval.
 
-The ordinary test suite makes no network request and requires no credentials.
-
-See `FRICTION.md` for the authoring-friction notes this agent feeds into the
-P7 API-simplification work package.
+The suite requires no credentials or network access.

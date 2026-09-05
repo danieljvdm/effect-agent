@@ -5,7 +5,7 @@ import {
   type ReviewReport,
   type ReviewSeverity,
 } from "@effect-agent/pr-review/Review";
-import { Context, Schema } from "effect";
+import { Schema } from "effect";
 
 import { reviewMarker, reviewPauseMarker } from "./selection.ts";
 
@@ -368,36 +368,17 @@ export const renderReviewPauseBody = (input: ReviewPausePresentationInput): stri
   ].join("\n\n");
 };
 
-export interface ReviewPresentation {
-  readonly renderFinding: (finding: ReviewFinding, headRevision: string) => string;
-  readonly renderReview: (input: ReviewPresentationInput) => string;
-  readonly renderFailure: (input: ReviewFailurePresentationInput) => string;
-  readonly renderPause: (input: ReviewPausePresentationInput) => string;
-}
-
-export const defaultReviewPresentation: ReviewPresentation = {
-  renderFinding: renderFindingBody,
-  renderReview: renderReviewBody,
-  renderFailure: renderReviewFailureBody,
-  renderPause: renderReviewPauseBody,
-};
-
-export const ReviewPresentation: Context.Reference<ReviewPresentation> =
-  Context.Reference<ReviewPresentation>("@effect-agent/pr-review-action/ReviewPresentation", {
-    defaultValue: () => defaultReviewPresentation,
-  });
-
 const withTerminalMarker = (body: string, marker: string): string => {
   const visibleBody = body.trimEnd();
 
   return visibleBody.length === 0 ? marker : `${visibleBody}\n\n${marker}`;
 };
 
-/** Keep the trusted attempt marker outside host-replaceable presentation. */
+/** Append the trusted attempt marker after the visible review body. */
 export const withReviewMarker = (body: string, automatic: boolean, completed = true): string => {
   return withTerminalMarker(body, reviewMarker(automatic, completed));
 };
 
-/** Keep the trusted one-time pause marker outside host-replaceable presentation. */
+/** Append the trusted one-time pause marker after the visible review body. */
 export const withReviewPauseMarker = (body: string, automaticReviewLimit: number): string =>
   withTerminalMarker(body, reviewPauseMarker(automaticReviewLimit));
