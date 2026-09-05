@@ -959,16 +959,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
   const runToolAuthorization = yield* RunToolAuthorization;
 
-  const compactor =
-    runContextPreparation.compactor ??
-    (yield* Effect.serviceOption(ContextCompactor).pipe(
-      Effect.flatMap(
-        Option.match({
-          onSome: Effect.succeed,
-          onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
-        }),
-      ),
-    ));
+  const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: Effect.succeed,
+        onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
+      }),
+    ),
+  );
 
   // Possession-default authorization reference (P7 WP1): the default allows everything —
   // exactly the pre-P7 service-possession boundary — and a host-supplied non-default Layer is
@@ -5987,7 +5985,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           Stream.provide(ThreadHistory.layerTransient),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),
-          Stream.provideService(RunContextPreparation, { ...runContextPreparation, compactor }),
+          Stream.provideService(RunContextPreparation, runContextPreparation),
         ),
         (event) =>
           halt(

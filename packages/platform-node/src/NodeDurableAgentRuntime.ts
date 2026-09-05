@@ -151,7 +151,7 @@ export interface NodeDurableAgentRuntimeOptions<
    * DUR-017 resolution path.
    */
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
-  /** Host prompt preparation/compaction, acquired once with the runtime; default pass-through. */
+  /** Host prompt preparation, acquired once with the runtime; default pass-through. */
   readonly runContext?:
     | Layer.Layer<RunContextPreparation, ContextError, ContextRequirements | Crypto.Crypto>
     | undefined;

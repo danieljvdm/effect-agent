@@ -1048,10 +1048,10 @@ cannot map cleanly fails before the view changes. The canonical log remains appe
 
 ### Install a compactor for durable runs
 
-`contextCompactorRunContextLayer` provides a `RunContextPreparation` service using your compactor:
+Provide `ContextCompactor` directly to the durable host Layer. In this example, `HostLive` is your
+application's assembled host Layer:
 
 ```ts
-import { contextCompactorRunContextLayer } from "@effect-agent/capabilities/RunHooks";
 import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer } from "effect";
@@ -1060,15 +1060,17 @@ export const CompactorLive = ContextCompactor.layerWithModel(
   OpenAiLanguageModel.model("gpt-4.1-mini"),
 );
 
-export const RunContextLive = contextCompactorRunContextLayer.pipe(Layer.provide(CompactorLive));
+export const RuntimeLive = HostLive.pipe(Layer.provide(CompactorLive));
 ```
 
-Provide the summary model's client to `RunContextLive`, then install it through the
-[Node host options](../platforms/node#configure-runtime-services),
+Provide the summary model's client to `CompactorLive`. The same composition works with the
+[Node host Layer](../platforms/node#configure-runtime-services),
 [Cloudflare application layer](../platforms/cloudflare#configure-runtime-services), or
 [custom runtime assembly](./run-agents#assemble-a-custom-durable-runtime).
-To use a prompt transform and a custom compactor together, provide one `RunContextPreparation`
-value with both `hook` and `compactor` fields.
+To use a prompt transform and a custom compactor together, provide `RunContextPreparation` and
+`ContextCompactor` independently. The runtime captures both when its Layer is acquired and retains
+them across replacement attempts. Providing a different compactor around a worker call does not
+replace the host's choice.
 
 ### Start fresh context windows {#context-windows}
 
@@ -1097,7 +1099,7 @@ const contextServices = Layer.merge(compactor, history);
 ```
 
 Merge `tools` into the Agent's toolkit and provide `toolHandlers` when building the Agent. Install
-`compactor` through `RunContextPreparation` for a durable host, as shown above. Supply `history`
+`compactor` directly to the durable host Layer, as shown above. Supply `history`
 where the registered Agent's tool services are provided. It depends on the host's `ThreadStore`;
 an ephemeral application can implement the `ContextHistory` port over its retained transcript.
 
@@ -1121,8 +1123,10 @@ may omit older progress and do not claim that external actions succeeded. Notes 
 untrusted working evidence. Verify live state before repeating an action.
 
 `MemoryNotes.toolkit` supplies `read_notes` and `write_notes`. Bind `MemoryNotes.layer` to one
-host-selected `MemoryKey`, locator, attributions, and scopes, then supply your existing `MemoryReader`
-and `MemoryWriter`. Notes are a full document replacement with `expectedRevision`; conflicts require
+host-selected `MemoryKey`, locator, attributions, and scopes, then supply your existing `MemoryReader`,
+`MemoryWriter`, and Effect AI `IdGenerator.IdGenerator`. For default operation identities, provide
+`Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator)` from `effect/unstable/ai`.
+Notes are a full document replacement with `expectedRevision`; conflicts require
 reading and merging again. Durable Steps retain the exact write command and operation identity for
 recovery. Notes survive a process restart only when the selected Memory store does. The model cannot
 choose a filesystem path, another memory key, or another thread through these tools.

@@ -14,6 +14,7 @@ import {
   type ContextWindowStatus,
 } from "@effect-agent/engine/ContextWindow";
 import {
+  RunContextPreparation,
   RunContextPreparationPassthrough,
   type RunInputHook,
   type RunUsageDelta,
@@ -412,7 +413,7 @@ layer(testLayer)("native context windows", (it) => {
   );
 
   it.effect(
-    "rolls over under pressure and carries bounded evidence from the unseen Tool result",
+    "composes host preparation with injected rollover and carries bounded unseen Tool evidence",
     () =>
       Effect.gen(function* () {
         const largeResult = `The timeout is a connection-pool limit. ${"diagnostic detail ".repeat(1_000)}`;
@@ -421,7 +422,15 @@ layer(testLayer)("native context windows", (it) => {
           policy: AgentPolicy.make({ ...basePolicy, contextTokenLimit: 2_000 }),
           script: [call("unseen-evidence", "search"), done],
           searchResults: [largeResult],
-        }).pipe(Effect.provide(ContextCompactor.layerRollover));
+        }).pipe(
+          Effect.provide(ContextCompactor.layerRollover),
+          Effect.provideService(RunContextPreparation, {
+            hook: { prepare: ({ source }) => Effect.succeed({ prompt: source }) },
+            transientContext: {
+              load: () => Effect.succeed("Host reference: verify the active pool configuration."),
+            },
+          }),
+        );
 
         expect(Exit.isSuccess(result.exit)).toBe(true);
         expect(result.requests).toHaveLength(2);
@@ -435,6 +444,13 @@ layer(testLayer)("native context windows", (it) => {
         expect(promptText(fresh.prompt)).not.toContain(largeResult);
         expect(toolResults(fresh.prompt)).toEqual([]);
         expect(result.requests.every((request) => request.toolCount === 2)).toBe(true);
+        expect(
+          result.requests.every((request) =>
+            promptText(request.prompt).includes(
+              "Host reference: verify the active pool configuration.",
+            ),
+          ),
+        ).toBe(true);
         expect(result.statuses[0]?.status.contextTokenLimit).toBe(2_000);
         expect(result.statuses[0]?.status.remainingTokens).toBeGreaterThan(0);
       }),

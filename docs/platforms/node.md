@@ -85,15 +85,19 @@ until their work settles. `digestDefinitions` computes the digests for explicit 
 
 Pass service layers in the options to `NodeDurableHost.layer` or `NodeDurableAgentRuntime.layer`:
 
-| Option              | Service                 | Default                                                     |
-| ------------------- | ----------------------- | ----------------------------------------------------------- |
-| `runContext`        | `RunContextPreparation` | No prompt transform; use the available or default compactor |
-| `toolAuthorization` | `RunToolAuthorization`  | Allow all tool calls                                        |
+| Option              | Service                 | Default                                            |
+| ------------------- | ----------------------- | -------------------------------------------------- |
+| `runContext`        | `RunContextPreparation` | No prompt transform or transient reference context |
+| `toolAuthorization` | `RunToolAuthorization`  | Allow all tool calls                               |
 
 Add these options to the host assembly above. Use
-`{ runContext: RunContextLive }` for [prompt preparation or compaction](../guide/context-management),
+`{ runContext: RunContextLive }` for [prompt preparation](../guide/context-management),
 or `{ toolAuthorization: SearchOnlyLive }` for a [tool policy](../guide/tools#authorize-tool-calls).
 Pass both properties when configuring both services.
+
+Select [native compaction](../guide/context-management#replacing-compaction) by providing its Layer
+directly to the host, for example `HostLive.pipe(Layer.provide(ContextCompactor.layerRollover))`.
+Without an injected `ContextCompactor`, the host uses the default pruning and summarization strategy.
 
 The assembled layer retains each extension's construction errors and application dependencies
 in its error and requirement types. The host supplies `Crypto.Crypto`. Provide the remaining

@@ -15,7 +15,12 @@ import type { ContextWindow } from "@effect-agent/engine/ContextWindow";
 import type { DurableStep, DurableStepError } from "@effect-agent/engine/DurableStep";
 import type { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { Effect, type Layer, Schema } from "effect";
-import type { LanguageModel, Model, Tool } from "effect/unstable/ai";
+import type {
+  IdGenerator as EffectAiIdGenerator,
+  LanguageModel,
+  Model,
+  Tool,
+} from "effect/unstable/ai";
 import { expectTypeOf, it } from "vite-plus/test";
 
 import * as ContextTools from "../src/ContextTools.ts";
@@ -84,7 +89,9 @@ it("keeps history and storage dependencies visible while the engine owns its loc
     Tool.HandlerError<typeof ContextTools.SearchContextWindows>
   >().toEqualTypeOf<never>();
   expectTypeOf<Tool.HandlerServices<typeof MemoryNotes.WriteNotes>>().toEqualTypeOf<DurableStep>();
-  expectTypeOf<Layer.Services<typeof notesLayer>>().toEqualTypeOf<MemoryReader | MemoryWriter>();
+  expectTypeOf<Layer.Services<typeof notesLayer>>().toEqualTypeOf<
+    MemoryReader | MemoryWriter | EffectAiIdGenerator.IdGenerator
+  >();
 
   const contextRun = AgentRuntime.run(contextAgent, "continue").pipe(
     Effect.provide(ContextTools.layer),
@@ -100,7 +107,7 @@ it("keeps history and storage dependencies visible while the engine owns its loc
   const notesRun = AgentRuntime.run(notesAgent, "continue").pipe(Effect.provide(notesLayer));
 
   expectTypeOf<Effect.Services<typeof notesRun>>().toEqualTypeOf<
-    NativeRuntimeServices | MemoryReader | MemoryWriter
+    NativeRuntimeServices | MemoryReader | MemoryWriter | EffectAiIdGenerator.IdGenerator
   >();
   expectTypeOf<
     Extract<Effect.Error<typeof notesRun>, MemoryConflict | MemoryStorageError | DurableStepError>

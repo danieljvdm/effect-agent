@@ -22,7 +22,7 @@ import { type ModelCallUsage } from "@effect-agent/core/Usage";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
-import type { CompactionError, ContextCompactor } from "./ContextCompactor.ts";
+import type { CompactionError } from "./ContextCompactor.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
@@ -362,8 +362,8 @@ export interface RunToolAuthorizationHook<Error = never, Requirements = never> {
  * Runs use this service when provided; durable coordinators capture it while their runtime
  * Layer is acquired. Implementations acquire dependencies in their Layer and preserve the
  * declared error tags. Layer acquisition failures belong to the providing Effect, not this union.
- * Without this service, Runs apply no host context loading. Installing a compactor cannot
- * replace `RunToolAuthorization`.
+ * Without this service, Runs apply no host context loading. Provide `ContextCompactor`
+ * separately to select native compaction; neither service replaces `RunToolAuthorization`.
  */
 export class RunContextPreparation extends Context.Service<
   RunContextPreparation,
@@ -374,8 +374,6 @@ export class RunContextPreparation extends Context.Service<
     readonly transientContext?:
       | RunTransientContextHook<RunContextPreparationError, never>
       | undefined;
-    /** Replaces native compaction after prompt reconstruction; acquired with the host Layer. */
-    readonly compactor?: ContextCompactor["Service"] | undefined;
   }
 >()("@effect-agent/engine/RunContextPreparation") {}
 

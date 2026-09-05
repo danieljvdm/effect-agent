@@ -252,7 +252,7 @@ each compaction in the DN and DC assemblies as a canonical `CompactionCreated` r
 projections fold
 (RUN-026). The engine-owned `ContextCompactor` service selects the strategy, token estimator,
 summary prompt, and Model. `ContextCompactor.layer` supplies the bounded default. Cloudflare
-Thread Objects install the same service through a scoped `RunContextPreparation` Layer,
+Thread Objects install the same service through a scoped `ContextCompactor` Layer,
 rebuilt after eviction. The interpreter owns metering, protected messages, events, and commits;
 the durable coordinator maps actual covered messages to complete canonical records. Pruning and
 summarization cover prior-Run records; rollover can cover settled batches in the current Run.

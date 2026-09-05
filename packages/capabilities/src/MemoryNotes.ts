@@ -110,6 +110,7 @@ const snapshot = Effect.fn("MemoryNotes.snapshot")(function* (document: MemoryDo
  * A Durable Step saves the exact command, including operation identity and timestamp, before
  * dispatch; retries reuse it and the writer's existing idempotency receipt. Ephemeral Runs
  * retain the Memory store's semantics but do not acquire durable Tool recovery.
+ * Supply Effect AI's IdGenerator service to select operation identities.
  */
 export const layer = (options: Options) => {
   const config = Schema.decodeUnknownSync(OptionsSchema)(options);
@@ -118,6 +119,7 @@ export const layer = (options: Options) => {
     Effect.gen(function* () {
       const reader = yield* MemoryReader;
       const writer = yield* MemoryWriter;
+      const ids = yield* IdGenerator.IdGenerator;
 
       return toolkit.of({
         read_notes: () => reader.get(config.key).pipe(Effect.flatMap(snapshot)),
@@ -129,7 +131,7 @@ export const layer = (options: Options) => {
               "prepare-notes",
               MemoryWrite.Wire,
               Effect.gen(function* () {
-                const operationId = yield* IdGenerator.defaultIdGenerator.generateId();
+                const operationId = yield* ids.generateId();
                 const recordedAt = yield* Clock.currentTimeMillis;
 
                 return MemoryWrite.make({

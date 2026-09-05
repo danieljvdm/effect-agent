@@ -3803,9 +3803,18 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           submitOptions("automatic-window", "first"),
         );
 
-        const process = runtime
-          .processThread(agent, receipt.threadId)
-          .pipe(Effect.provide(handlers));
+        const process = runtime.processThread(agent, receipt.threadId).pipe(
+          Effect.provide(handlers),
+          Effect.provideService(ContextCompactor, {
+            estimate: estimatePromptTokens,
+            compact: () => Stream.die("Worker compactor must not replace the host strategy"),
+          }),
+          Effect.provideService(RunContextPreparation, {
+            hook: {
+              prepare: () => Effect.die("Worker preparation must not replace the host hook"),
+            },
+          }),
+        );
 
         yield* armFailpoint("turn:after-response-append");
         const declared = yield* process.pipe(Effect.exit, Effect.ensuring(clearFailpoint));
@@ -3852,6 +3861,9 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         });
         expect(yield* Ref.get(executions)).toBe(1);
         expect(scripted.prompts).toHaveLength(2);
+        expect(
+          scripted.prompts.every((prompt) => promptTexts(prompt).includes("HOST-REFERENCE")),
+        ).toBe(true);
         expect(promptTexts(scripted.prompts[1] ?? Prompt.empty)).toContain(
           "Finish this exact request",
         );
@@ -3868,14 +3880,16 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           records.filter(({ record }) => record.payload._tag === "CompactionCreated"),
         ).toHaveLength(1);
         expect(JSON.stringify(records)).toContain(evidence);
+        expect(JSON.stringify(records)).not.toContain("HOST-REFERENCE");
       }).pipe(
         Effect.provide(
           Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
+            Layer.provide(ContextCompactor.layerRollover),
             Layer.provide(
-              Layer.effect(
-                RunContextPreparation,
-                Effect.map(ContextCompactor, (compactor) => ({ compactor })),
-              ).pipe(Layer.provide(ContextCompactor.layerRollover)),
+              Layer.succeed(RunContextPreparation, {
+                hook: { prepare: ({ source }) => Effect.succeed({ prompt: source }) },
+                transientContext: { load: () => Effect.succeed(Prompt.make("HOST-REFERENCE")) },
+              }),
             ),
             Layer.provideMerge(baseLayer),
           ),
@@ -3994,16 +4008,20 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       let reference = "EXTERNAL-REVISION-ONE";
       let reads = 0;
 
-      const preparation = Layer.succeed(RunContextPreparation, {
-        transientContext: {
-          load: () =>
-            Effect.sync(() => {
-              reads += 1;
+      const preparation = Layer.merge(
+        Layer.succeed(RunContextPreparation, {
+          transientContext: {
+            load: () =>
+              Effect.sync(() => {
+                reads += 1;
 
-              return Prompt.make([{ role: "user", content: `Untrusted reference: ${reference}` }]);
-            }),
-        },
-        compactor: ContextCompactor.of({
+                return Prompt.make([
+                  { role: "user", content: `Untrusted reference: ${reference}` },
+                ]);
+              }),
+          },
+        }),
+        Layer.succeed(ContextCompactor, {
           estimate: estimatePromptTokens,
           compact: ({ source }) => {
             expect(promptTexts(source)).not.toContain("EXTERNAL-REVISION");
@@ -4015,7 +4033,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             });
           },
         }),
-      });
+      );
 
       return Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -4170,16 +4188,14 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         Effect.provide(
           Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
             Layer.provide(
-              Layer.succeed(RunContextPreparation, {
-                compactor: ContextCompactor.of({
-                  estimate: estimatePromptTokens,
-                  compact: () =>
-                    Stream.succeed({
-                      kind: "summarize",
-                      through: 1,
-                      summary: "custom first-only summary",
-                    }),
-                }),
+              Layer.succeed(ContextCompactor, {
+                estimate: estimatePromptTokens,
+                compact: () =>
+                  Stream.succeed({
+                    kind: "summarize",
+                    through: 1,
+                    summary: "custom first-only summary",
+                  }),
               }),
             ),
             Layer.provideMerge(baseLayer),
@@ -4255,31 +4271,32 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         }).pipe(
           Effect.provide(
             Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
-              Layer.provide(
-                Layer.succeed(RunContextPreparation, {
-                  compactor: ContextCompactor.of({
-                    estimate: (messages) =>
-                      (scenario === "replacement after recovery" &&
-                        promptTexts(Prompt.fromMessages(messages)).includes(
-                          COMPACTION_SUMMARY_PREFIX,
-                        )) ||
-                      messages.some((message) => message.role === "assistant")
-                        ? 1_000
-                        : 10,
-                    compact: ({ source }) =>
-                      Stream.succeed({
-                        kind: "summarize",
-                        through: scenario === "partially mapped prefix" ? 2 : 1,
-                        summary:
-                          scenario === "replacement after recovery" &&
-                          promptTexts(source).includes(COMPACTION_SUMMARY_PREFIX)
-                            ? "uncommitted replacement"
-                            : summary,
-                      }),
-                  }),
-                  ...(scenario === "no prior records" ||
-                  scenario === "transformed prefix" ||
-                  scenario === "partially mapped prefix"
+              Layer.provide([
+                Layer.succeed(ContextCompactor, {
+                  estimate: (messages) =>
+                    (scenario === "replacement after recovery" &&
+                      promptTexts(Prompt.fromMessages(messages)).includes(
+                        COMPACTION_SUMMARY_PREFIX,
+                      )) ||
+                    messages.some((message) => message.role === "assistant")
+                      ? 1_000
+                      : 10,
+                  compact: ({ source }) =>
+                    Stream.succeed({
+                      kind: "summarize",
+                      through: scenario === "partially mapped prefix" ? 2 : 1,
+                      summary:
+                        scenario === "replacement after recovery" &&
+                        promptTexts(source).includes(COMPACTION_SUMMARY_PREFIX)
+                          ? "uncommitted replacement"
+                          : summary,
+                    }),
+                }),
+                Layer.succeed(
+                  RunContextPreparation,
+                  scenario === "no prior records" ||
+                    scenario === "transformed prefix" ||
+                    scenario === "partially mapped prefix"
                     ? {
                         hook: {
                           prepare: ({ source }) =>
@@ -4303,9 +4320,9 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
                             }),
                         },
                       }
-                    : {}),
-                }),
-              ),
+                    : {},
+                ),
+              ]),
               Layer.provideMerge(baseLayer),
             ),
           ),

@@ -6578,16 +6578,14 @@ function streamWithCompletion<
               ? attemptStartedAtMillis
               : DateTime.toEpochMillis(options.runStartedAt);
 
-          const compactor =
-            preparation.compactor ??
-            (yield* Effect.serviceOption(ContextCompactor).pipe(
-              Effect.flatMap(
-                Option.match({
-                  onSome: Effect.succeed,
-                  onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
-                }),
-              ),
-            ));
+          const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () => Effect.provide(ContextCompactor, ContextCompactor.layer),
+              }),
+            ),
+          );
 
           const context: RunContext = {
             agentId: agent.definition.id,

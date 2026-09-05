@@ -60,7 +60,7 @@ import {
   renderForSummary,
   SUMMARY_INPUT_BUDGET,
 } from "../src/internal/compaction.ts";
-import { RunContextPreparation, RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
 import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -729,14 +729,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             Effect.sync(() => {
               usage.push(delta);
             }),
-        }).pipe(
-          Effect.provide(
-            Layer.effect(
-              RunContextPreparation,
-              Effect.map(ContextCompactor, (compactor) => ({ compactor })),
-            ).pipe(Layer.provide(compactor)),
-          ),
-        );
+        }).pipe(Effect.provide(compactor));
 
         expect(Exit.isSuccess(result.exit)).toBe(true);
         expect(result.requests).toHaveLength(3);

@@ -15,8 +15,11 @@ import { DurableStep, DurableStepError } from "@effect-agent/engine/DurableStep"
 import { describe, expect, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { IdGenerator } from "effect/unstable/ai";
 
 import * as MemoryNotes from "../src/MemoryNotes.ts";
+
+const identifiers = Layer.succeed(IdGenerator.IdGenerator, IdGenerator.defaultIdGenerator);
 
 const NotesNamespace = MemoryNamespace.define({
   name: "test/notes",
@@ -179,6 +182,7 @@ describe("durable working notes", () => {
           MemoryNotes.layer(options).pipe(
             Layer.provide(
               Layer.mergeAll(
+                identifiers,
                 Layer.succeed(MemoryReader, memory.reader),
                 Layer.succeed(MemoryWriter, memory.writer),
               ),
@@ -236,6 +240,7 @@ describe("durable working notes", () => {
           MemoryNotes.layer(options).pipe(
             Layer.provide(
               Layer.mergeAll(
+                identifiers,
                 Layer.succeed(MemoryReader, memory.reader),
                 Layer.succeed(MemoryWriter, memory.writer),
               ),
@@ -258,6 +263,7 @@ describe("durable working notes", () => {
       Effect.gen(function* () {
         const memory = yield* makeMemory(true);
         const savedSteps = new Map<string, unknown>();
+        const generatedIds = yield* Ref.make(0);
 
         const exercise = Effect.gen(function* () {
           const tools = yield* MemoryNotes.toolkit;
@@ -305,6 +311,12 @@ describe("durable working notes", () => {
             MemoryNotes.layer(options).pipe(
               Layer.provide(
                 Layer.mergeAll(
+                  Layer.succeed(IdGenerator.IdGenerator, {
+                    generateId: () =>
+                      Ref.updateAndGet(generatedIds, (count) => count + 1).pipe(
+                        Effect.map((count) => `notes-operation:${count}`),
+                      ),
+                  }),
                   Layer.succeed(MemoryReader, memory.reader),
                   Layer.succeed(MemoryWriter, memory.writer),
                 ),
@@ -313,7 +325,9 @@ describe("durable working notes", () => {
           ),
         );
         expect(memory.commands).toHaveLength(2);
+        expect(memory.commands[0]?.operationId).toBe("notes-operation:1");
         expect(memory.commands[1]).toEqual(memory.commands[0]);
+        expect(yield* Ref.get(generatedIds)).toBe(1);
         expect(yield* Ref.get(memory.commits)).toBe(1);
       }),
   );
@@ -355,6 +369,7 @@ describe("durable working notes", () => {
           MemoryNotes.layer(options).pipe(
             Layer.provide(
               Layer.mergeAll(
+                identifiers,
                 Layer.succeed(MemoryReader, memory.reader),
                 Layer.succeed(MemoryWriter, writer),
               ),
@@ -386,6 +401,7 @@ describe("durable working notes", () => {
           MemoryNotes.layer(options).pipe(
             Layer.provide(
               Layer.mergeAll(
+                identifiers,
                 Layer.succeed(
                   MemoryReader,
                   MemoryReader.fromAdapter({ get: () => Effect.die("reader defect") }),
