@@ -243,7 +243,7 @@ The bounded rules governing maximum turns, tool calls, duration, usage, cost, re
 and acceptable final output.
 
 **Compaction**  
-Creation of a model-context summary or branch that reduces future prompt size without erasing
+A reduction of the model-visible prompt by pruning, summarizing, or starting a fresh context window without erasing
 canonical evidence. Physical record deletion is a separate retention operation. The engine
 compacts natively at the pre-Turn seam when the estimated next context exceeds the Context Token
 Limit or would consume the Completion Reserve. It prunes old Tool results, summarizes through one
@@ -254,7 +254,16 @@ projections fold
 summary prompt, and Model. `ContextCompactor.layer` supplies the bounded default. Cloudflare
 Thread Objects install the same service through a scoped `RunContextPreparation` Layer,
 rebuilt after eviction. The interpreter owns metering, protected messages, events, and commits;
-the durable coordinator maps actual covered messages to complete prior-Run records.
+the durable coordinator maps actual covered messages to complete canonical records. Pruning and
+summarization cover prior-Run records; rollover can cover settled batches in the current Run.
+
+**Context Window**
+
+The current model-visible working context within a Run. A rollover retains the original instructions
+and input, carries optional untrusted continuation notes, and removes covered conversation from the
+view. Its canonical boundary survives recovery. It does not reset the Run or its cumulative budgets.
+`ContextTools` exposes model-directed rollover, estimated capacity, and retained history lookup;
+`MemoryNotes` binds optional working notes to an application-owned Memory document.
 
 **Context Token Limit**  
 The optional `AgentPolicy.contextTokenLimit` bound on one model call's live context, supplied by

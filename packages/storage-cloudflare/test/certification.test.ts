@@ -10,6 +10,7 @@ import {
   certifyDurableAdapters,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/Certification";
+import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
 import { CertificationReport } from "@effect-agent/thread/testing/Certification";
 import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
 import { threadStoreConformanceCases } from "@effect-agent/thread/testing/ThreadStoreConformance";
@@ -107,7 +108,9 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
     async () => {
       const report = await certified();
 
-      expect(report.tier2).toHaveLength(34 * CERTIFICATION_SCENARIOS.length);
+      expect(report.tier2).toHaveLength(
+        DurableRuntimeFailpointLocation.literals.length * CERTIFICATION_SCENARIOS.length,
+      );
       expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
       expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);
       for (const scenario of CERTIFICATION_SCENARIOS) {

@@ -538,7 +538,7 @@ layer(testLayer)("transient model context", (it) => {
       const compactionPasses: Array<{
         readonly sourceLength: number;
         readonly targetTokens: number | undefined;
-        readonly forceSummarize: boolean;
+        readonly trigger: string;
       }> = [];
 
       const toolCalls = yield* Ref.make(0);
@@ -574,7 +574,7 @@ layer(testLayer)("transient model context", (it) => {
             compactionPasses.push({
               sourceLength: request.source.content.length,
               targetTokens: request.targetTokens,
-              forceSummarize: request.forceSummarize,
+              trigger: request.trigger,
             });
 
             return request.source.content.length === 6
@@ -599,8 +599,8 @@ layer(testLayer)("transient model context", (it) => {
       expect(result.output).toBe("done");
       expect(yield* Ref.get(loads)).toBe(4);
       expect(compactionPasses).toEqual([
-        { sourceLength: 6, targetTokens: 1_450, forceSummarize: false },
-        { sourceLength: 8, targetTokens: 1_450, forceSummarize: false },
+        { sourceLength: 6, targetTokens: 1_450, trigger: "pressure" },
+        { sourceLength: 8, targetTokens: 1_450, trigger: "pressure" },
       ]);
       expect(requests).toHaveLength(4);
       expect(JSON.stringify(requests[3]?.content)).toContain("first search summarized");

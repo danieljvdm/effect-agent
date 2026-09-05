@@ -7,6 +7,8 @@ export default defineConfig({
       "src/AgentRuntime.ts",
       "src/Compaction.ts",
       "src/ContextCompactor.ts",
+      "src/ContextWindow.ts",
+      "src/ContextHistory.ts",
       "src/DurableStep.ts",
       "src/RunEventSink.ts",
       "src/RunOptions.ts",

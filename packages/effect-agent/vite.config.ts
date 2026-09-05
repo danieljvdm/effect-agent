@@ -4,6 +4,10 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/ContextWindow.ts",
+      "src/ContextHistory.ts",
+      "src/ContextTools.ts",
+      "src/MemoryNotes.ts",
       "src/Agent.ts",
       "src/AgentError.ts",
       "src/AgentPolicy.ts",

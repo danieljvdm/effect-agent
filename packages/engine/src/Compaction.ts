@@ -2,6 +2,9 @@
 export {
   CLEARED_TOOL_RESULT,
   COMPACTION_SUMMARY_PREFIX,
+  CONTEXT_ROLLOVER_PREFIX,
+  contextWindowId,
+  contextWindowMessage,
   estimateMessageTokens,
   estimatePromptTokens,
   type ContextCompactionState,

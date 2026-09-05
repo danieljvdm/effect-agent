@@ -23,7 +23,9 @@
     "./RunEventSink": "./src/RunEventSink.ts",
     "./RunOptions": "./src/RunOptions.ts",
     "./ThreadHistory": "./src/ThreadHistory.ts",
-    "./ToolBroker": "./src/ToolBroker.ts"
+    "./ToolBroker": "./src/ToolBroker.ts",
+    "./ContextWindow": "./src/ContextWindow.ts",
+    "./ContextHistory": "./src/ContextHistory.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -5,6 +5,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/ThreadContextHistory.ts",
       "src/ActivityStore.ts",
       "src/Admin.ts",
       "src/AgentRegistration.ts",

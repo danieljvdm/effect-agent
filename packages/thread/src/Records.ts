@@ -20,6 +20,7 @@ import {
   ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
 import { ModelCallUsage, RunUsageSummary } from "@effect-agent/core/Usage";
+import { ContextHandoff } from "@effect-agent/engine/ContextWindow";
 import { Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -447,7 +448,7 @@ export class ModelResponseInterrupted extends Schema.TaggedClass<ModelResponseIn
 /**
  * One engine-native compaction committed before the pre-Turn view changes (RUN-026).
  * `coversThrough` is a Thread record sequence: the projection
- * renders records at or below it as the summary (kind `summarize`) or with
+ * renders records at or below it as a summary (`summarize`), a fresh window (`rollover`), or with
  * cleared tool results (kind `clear-tool-results`), never erasing source
  * history. The record carries no digest by decision: it is appended by the
  * fenced owner into the very log it covers, and re-verifying a digest would
@@ -462,9 +463,10 @@ export class CompactionCreated extends Schema.TaggedClass<CompactionCreated>(
 )("CompactionCreated", {
   runId: RunId,
   turn: TurnNumber,
-  kind: Schema.Literals(["clear-tool-results", "summarize"]),
+  kind: Schema.Literals(["clear-tool-results", "summarize", "rollover"]),
   coversThrough: CanonicalSequence,
   summary: Schema.optionalKey(BoundedText),
+  handoff: Schema.optionalKey(ContextHandoff),
 }) {}
 
 export class RunFailed extends Schema.TaggedClass<RunFailed>("@effect-agent/thread/RunFailed")(

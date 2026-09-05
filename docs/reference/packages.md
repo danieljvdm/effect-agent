@@ -87,7 +87,9 @@ implementations.
 | Retain completed threads                | [History](../guide/threads#retain-completed-runs)                 | Store and thread IDs                                         |
 | Recover work after a crash              | [Durability](../concepts/durability)                              | Registered agents, workers, storage, authorization           |
 | Drive durable work with Effect Workflow | [Effect Workflows](../guide/workflows)                            | Workflow engine, dispatch store, repair trigger              |
-| Prune or summarize context              | [Context management](../guide/context-management)                 | Context limits and compaction policy                         |
+| Prune, summarize, or roll over context  | [Context management](../guide/context-management)                 | Context limits and compaction policy                         |
+| Search prior context windows            | [Context windows](../guide/context-management#context-windows)    | Authorized ThreadStore or ContextHistory adapter             |
+| Keep working notes across windows       | [Context windows](../guide/context-management#context-windows)    | Memory document identity, reader, writer                     |
 | Recall application-owned sources        | [Context management](../guide/context-management#recall-memory)   | Readable passages, provenance, query policy                  |
 | Remember in the background              | [Remembering](../guide/context-management#background-remembering) | Durable jobs, source policy, extraction, merging and cleanup |
 | Require approval or limit spending      | [Run hooks](../guide/run-agents#operational-hooks)                | Approval policy, budget hooks, cost estimates                |
@@ -105,7 +107,7 @@ implementations.
 `connectMcp` bounds discovery and returns dynamic tools. Server-initiated sampling, elicitation,
 resources, and prompts are not served.
 
-Nested delegation, handoff, detached subagents, runtime Skills, a framework-owned memory
+Nested delegation, subagent handoff, detached subagents, runtime Skills, a framework-owned memory
 extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
 Applications own domain state. `Memory.recall` reads bounded passages from sources they select; it
 does not store them. Thread history and compaction summaries do not replace application state.

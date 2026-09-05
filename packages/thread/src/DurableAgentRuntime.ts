@@ -3658,6 +3658,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     tokenRef: Ref.Ref<OwnershipToken>,
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     canonical: Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>,
+    canonicalThrough: CanonicalSequence,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
     runTiming: { readonly startedAt: DateTime.Utc; readonly deadline: DateTime.Utc },
@@ -4136,11 +4137,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           usageSummary: yield* currentUsageSummary(),
         };
       }
-      // RUN-026: durable compaction covers only records of PRIOR Runs — never
-      // the appending Run's own records — so the owner's instruction/input
-      // messages survive every projection and the resume-splice arithmetic
-      // stays untouched. The in-memory view may cover more; the record is
-      // canonical (RUN-026).
+      // Summaries and pruning cover only prior Runs. A rollover separately maps fully settled
+      // current-Run records and preserves the canonical instruction/input block during replay.
       let ownerFirstSequence: CanonicalSequence | undefined;
 
       for (const envelope of records) {
@@ -4539,17 +4537,47 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               });
             }
 
-            // Coverage selection walks the attempt-start snapshot: records
-            // appended by THIS Attempt are all owner-Run and excluded by the
-            // prior-Runs-only rule regardless.
-            const coverable = boundaries.filter(
+            let sourceJournal = journal;
+            let sourceBoundaries = boundaries;
+
+            if (commit.kind === "rollover") {
+              // Results must be canonical before a rollover can cover them. Newly committed
+              // compactions remain overlays on this Attempt's append-only source, so omit those
+              // overlays while reconstructing the exact source-to-record mapping.
+              yield* recordHalt(commitPendingTurn);
+              const tail = yield* Ref.get(ctx.tailRef);
+
+              sourceBoundaries = [];
+              sourceJournal = yield* recordHalt(
+                projectRunJournalStream(
+                  canonicalRange(ctx.threadId, tail.sequence).pipe(
+                    Stream.filter(
+                      (envelope) =>
+                        envelope.record.payload._tag !== "CompactionCreated" ||
+                        envelope.sequence <= canonicalThrough,
+                    ),
+                  ),
+                  runId,
+                  (boundary) => sourceBoundaries.push(boundary),
+                ),
+              );
+            }
+
+            // Summaries/pruning use the initial prior-Run boundaries; rollovers also admit
+            // complete current-Run boundaries from the fresh canonical source above.
+            const coverable = sourceBoundaries.filter(
               (boundary) =>
-                ownerFirstSequence === undefined || boundary.sequence < ownerFirstSequence,
+                commit.kind === "rollover" ||
+                ownerFirstSequence === undefined ||
+                boundary.sequence < ownerFirstSequence,
             );
 
             if (coverable.length === 0) {
               return yield* CompactionError.make({
-                message: "Durable compaction requires eligible prior-Run records",
+                message:
+                  commit.kind === "rollover"
+                    ? "Durable rollover requires complete canonical records"
+                    : "Durable compaction requires eligible prior-Run records",
               });
             }
 
@@ -4557,19 +4585,21 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             // exact canonical prefix; no per-candidate rereads or full encoded Prompt copies.
             let matchingPrefix = 0;
             let requiredThrough = 0;
-            const comparisonLimit = Math.min(journal.prompt.content.length, commit.through);
+            const comparisonLimit = Math.min(sourceJournal.prompt.content.length, commit.through);
 
             for (let index = 0; index < commit.through; index += 1) {
               const message = commit.source.content[index];
 
               if (
                 message !== undefined &&
-                (commit.kind === "summarize" ? message.role !== "system" : message.role === "tool")
+                (commit.kind === "clear-tool-results"
+                  ? message.role === "tool"
+                  : message.role !== "system")
               )
                 requiredThrough = index + 1;
               if (index >= comparisonLimit || index !== matchingPrefix || message === undefined)
                 continue;
-              const canonicalMessage = journal.prompt.content[index];
+              const canonicalMessage = sourceJournal.prompt.content[index];
 
               if (canonicalMessage === undefined) continue;
 
@@ -4607,7 +4637,22 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             }
             if (lastCovered === undefined) {
               return yield* CompactionError.make({
-                message: "Compaction coverage cannot be mapped to complete prior-Run records",
+                message:
+                  commit.kind === "rollover"
+                    ? "Rollover coverage cannot be mapped to complete canonical records"
+                    : "Compaction coverage cannot be mapped to complete prior-Run records",
+              });
+            }
+            const coveredSequence = lastCovered.sequence;
+
+            if (
+              commit.kind === "rollover" &&
+              sourceBoundaries.some(
+                (boundary) => boundary.incomplete === true && boundary.sequence <= coveredSequence,
+              )
+            ) {
+              return yield* CompactionError.make({
+                message: "Rollover cannot cover an incomplete Tool batch",
               });
             }
             if (commit.kind === "summarize" && (commit.summary ?? "").trim().length === 0) {
@@ -4623,6 +4668,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               kind: commit.kind,
               coversThrough: lastCovered.sequence,
               ...(commit.kind === "summarize" ? { summary: commit.summary } : {}),
+              ...(commit.kind === "rollover" && commit.handoff !== undefined
+                ? { handoff: commit.handoff }
+                : {}),
             }).pipe(
               Effect.mapError((cause) =>
                 CompactionError.make({
@@ -4634,6 +4682,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
             const envelope = yield* recordHalt(makeEnvelope(recordId, payload));
 
+            yield* recordHalt(hit("compaction:before-canonical-append"));
             yield* recordHalt(
               appendBatch(
                 ctx,
@@ -5594,6 +5643,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ? {}
           : { estimateCostMicrousd: config.estimateCostMicrousd }),
         resumeUsage: { ...journal.usage, ...journal.policyUsage },
+        ...(journal.contextWindowId === undefined
+          ? {}
+          : { initialContextWindowId: journal.contextWindowId }),
+        ...(journal.protectedContext === undefined
+          ? {}
+          : { protectedContext: journal.protectedContext }),
+        ...(journal.pendingContextToolCallId === undefined
+          ? {}
+          : { pendingContextToolCallId: journal.pendingContextToolCallId }),
       };
 
       const commitPendingTurn: Effect.Effect<void, DurableWorkerFailure> = Effect.gen(function* () {
@@ -6346,6 +6404,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           tokenRef,
           currentRecords,
           canonical,
+          tail.tailSequence,
           lineage,
           approvalDecisionIntents,
           runTiming,

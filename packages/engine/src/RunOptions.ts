@@ -418,17 +418,20 @@ export interface RunTurnResponseCommit {
 
 /**
  * One compaction decision the engine applied to its model-visible view
- * (RUN-026). The durable coordinator maps the covered source prefix to complete prior-Run
- * records. It must never infer a wider cutoff from policy or token estimates.
+ * (RUN-026). The durable coordinator maps the covered source prefix to complete canonical
+ * records, including settled current-Run batches for rollover. It must never infer a wider cutoff
+ * from policy or token estimates.
  */
 export interface RunCompactionCommit {
   readonly turn: number;
   /** Exact pre-compaction source and exclusive message bound; live values, never persisted. */
   readonly source: Prompt.Prompt;
   readonly through: number;
-  readonly kind: "clear-tool-results" | "summarize";
+  readonly kind: "clear-tool-results" | "summarize" | "rollover";
   /** Present exactly when `kind` is `"summarize"`. */
   readonly summary?: string | undefined;
+  /** Optional continuation state for a rollover; never a generated summary. */
+  readonly handoff?: string | undefined;
   readonly tokensBeforeEstimate: number;
   readonly tokensAfterEstimate: number;
 }
@@ -480,7 +483,7 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
    * projection. Required by the durability protocol: a coordinator that
    * silently dropped the record would let the engine use a compacted prompt
    * that recovery cannot reproduce. Reject unpersistable decisions in the typed
-   * error channel; success means the same summary and coverage are durable.
+   * error channel; success means the same replacement and coverage are durable.
    */
   readonly commitCompaction: (
     commit: RunCompactionCommit,
@@ -783,6 +786,12 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * so `SubagentRequested` can carry the intended child identity.
    */
   readonly runId?: RunId | undefined;
+  /** Canonically reconstructed window identity for a resumed durable Run. */
+  readonly initialContextWindowId?: string | undefined;
+  /** Last unconsumed, settled singleton application Tool in this Run; the engine verifies its control annotation. */
+  readonly pendingContextToolCallId?: string | undefined;
+  /** Canonical instruction/input block for durable recovery; not re-evaluated Attempt input. */
+  readonly protectedContext?: Prompt.Prompt | undefined;
   /**
    * Non-model-visible Parent Link for a delegated child Run (S1 seam). It
    * never enters the model prompt or the Run's event payloads directly; the

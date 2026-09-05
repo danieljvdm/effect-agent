@@ -13,3 +13,5 @@ export * as Subagent from "./Subagent.ts";
 export * as SubagentReservations from "./SubagentReservations.ts";
 export * as WebCapture from "./WebCapture.ts";
 export * as Remembering from "./Remembering.ts";
+export * as ContextTools from "./ContextTools.ts";
+export * as MemoryNotes from "./MemoryNotes.ts";

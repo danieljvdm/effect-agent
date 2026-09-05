@@ -56,7 +56,11 @@
     "./ToolBroker": "./src/ToolBroker.ts",
     "./ToolResult": "./src/ToolResult.ts",
     "./Usage": "./src/Usage.ts",
-    "./WebCapture": "./src/WebCapture.ts"
+    "./WebCapture": "./src/WebCapture.ts",
+    "./ContextWindow": "./src/ContextWindow.ts",
+    "./ContextHistory": "./src/ContextHistory.ts",
+    "./ContextTools": "./src/ContextTools.ts",
+    "./MemoryNotes": "./src/MemoryNotes.ts"
   },
   "publishConfig": {
     "access": "public"
