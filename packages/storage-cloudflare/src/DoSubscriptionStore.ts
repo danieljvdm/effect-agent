@@ -1,4 +1,7 @@
-import { makeSqlSubscriptionStore } from "@effect-agent/thread/SqlSubscriptionStore";
+import {
+  makeSqlSubscriptionStore,
+  SqlSubscriptionTransaction,
+} from "@effect-agent/thread/SqlSubscriptionStore";
 import {
   SourcePartition,
   SubscriptionError,
@@ -252,8 +255,7 @@ const makeSubscriptionStore = Effect.fn("DoSubscriptionStore.make")(function* (
 
   const store = yield* makeSqlSubscriptionStore(partition, {
     maxStoredJsonLength: 1_900_000,
-    transaction: transact,
-  });
+  }).pipe(Effect.provide(Layer.succeed(SqlSubscriptionTransaction)({ run: transact })));
 
   const prearm = Effect.fn("DoSubscriptionStore.prearm")(function* (deadlineAtMillis: number) {
     yield* transactions.run((replace) => replaceAlarm(replace, deadlineAtMillis));

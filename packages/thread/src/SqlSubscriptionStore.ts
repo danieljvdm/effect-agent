@@ -1,4 +1,4 @@
-import { Clock, Effect, Result, Schema } from "effect";
+import { Clock, Context, Effect, Result, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
@@ -70,33 +70,43 @@ const sameDeliveryIdentity = (left: SubscriptionDelivery, right: SubscriptionDel
   left.subscriptionFingerprint === right.subscriptionFingerprint &&
   left.eventDigest === right.eventDigest;
 
-/** Adapter construction inputs; the caller supplies its native atomic transaction. */
+/** Adapter-specific storage limits. */
 export interface SqlSubscriptionStoreOptions {
   /** Stored JSON decoder ceiling in UTF-16 code units; admission byte limits remain separate. */
   readonly maxStoredJsonLength: number;
-  /**
-   * Run the body atomically on the same SqlClient, including any native alarm update, and return
-   * after commit. Before-mutation failpoints are inside the body; after-mutation failpoints run
-   * after this operation returns. A failed body must leave its writes uncommitted.
-   */
-  readonly transaction: <A>(
-    body: Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>,
-  ) => Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>;
 }
 
 /**
+ * Adapter-owned atomic transaction on the store's SqlClient, including any native alarm update.
+ * Return only after commit; a failed body must leave its writes uncommitted. Before-mutation
+ * failpoints run inside the body, and after-mutation failpoints run after this operation returns.
+ */
+export class SqlSubscriptionTransaction extends Context.Service<
+  SqlSubscriptionTransaction,
+  {
+    readonly run: <A>(
+      body: Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>,
+    ) => Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>;
+  }
+>()("@effect-agent/thread/SqlSubscriptionTransaction") {}
+
+/**
  * Shared SQLite subscription operations over an existing SqlClient. The adapter validates the
- * partition and initializes its tables before construction, and owns native transaction semantics.
- * The returned methods capture this SQL client and failpoint handler. Cloudflare's transaction also
- * updates its native alarm before committing; no host-specific service enters this implementation.
+ * partition, initializes its tables, and provides SqlSubscriptionTransaction at construction.
+ * The returned methods capture the SQL client, transaction service, and failpoint handler.
+ * Cloudflare's transaction also updates its native alarm before committing.
  */
 export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(function* (
   partition: SourcePartition,
   options: SqlSubscriptionStoreOptions,
-): Effect.fn.Return<SubscriptionStore["Service"], SubscriptionError, SqlClientService.SqlClient> {
+): Effect.fn.Return<
+  SubscriptionStore["Service"],
+  SubscriptionError,
+  SqlClientService.SqlClient | SqlSubscriptionTransaction
+> {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* SubscriptionFailpoint;
-  const transact = options.transaction;
+  const transactions = yield* SqlSubscriptionTransaction;
   const StoredJson = Schema.String.check(Schema.isMaxLength(options.maxStoredJsonLength));
 
   const JsonRow = Schema.Struct({ record_json: StoredJson });
@@ -361,7 +371,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
     yield* requirePartition(record.key.partition, "register-partition");
 
-    const result = yield* transact(
+    const result = yield* transactions.run(
       Effect.gen(function* () {
         const existing = yield* readRegistration(record.key, "register-existing");
 
@@ -469,7 +479,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     function* (input) {
       const key = yield* requireKey(input, "cancel-key");
 
-      const result = yield* transact(
+      const result = yield* transactions.run(
         Effect.gen(function* () {
           const current = yield* readRegistration(key, "cancel subscription");
 
@@ -497,7 +507,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
       yield* requirePartition(event.partition, "accept-partition");
 
-      const result = yield* transact(
+      const result = yield* transactions.run(
         Effect.gen(function* () {
           const existing = yield* readEvent(event.eventId, "accept event");
 
@@ -650,7 +660,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       for (const candidate of deliveries)
         yield* requirePartition(candidate.key.subscription.partition, "select-delivery-partition");
 
-      const changed = yield* transact(
+      const changed = yield* transactions.run(
         Effect.gen(function* () {
           const accepted = yield* readEvent(supplied.eventId, "select event");
 
@@ -746,7 +756,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     yield* requirePartition(supplied.partition, "catch-up-partition");
     yield* requirePartition(delivery.key.subscription.partition, "catch-up-delivery-partition");
 
-    const changed = yield* transact(
+    const changed = yield* transactions.run(
       Effect.gen(function* () {
         const accepted = yield* readEvent(supplied.eventId, "catch-up event");
         const record = yield* readRegistration(delivery.key.subscription, "catch-up subscription");
@@ -811,7 +821,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         ? "routing-failed"
         : yield* validate(SubscriptionName, code, "routing-failure");
 
-    yield* transact(
+    yield* transactions.run(
       Effect.gen(function* () {
         const accepted = yield* readEvent(eventId, "defer event");
 
@@ -890,7 +900,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
     yield* requirePartition(key.subscription.partition, "change-delivery-partition");
 
-    const result = yield* transact(
+    const result = yield* transactions.run(
       Effect.gen(function* () {
         const existing = yield* readDelivery(key, "change delivery");
         const record = yield* readRegistration(key.subscription, "change delivery subscription");
@@ -959,7 +969,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   )(function* (input, recovery) {
     const key = yield* requireKey(input, "defer-recovery-key");
 
-    yield* transact(
+    yield* transactions.run(
       Effect.gen(function* () {
         const record = yield* readRegistration(key, "defer recovery");
 
@@ -1000,7 +1010,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   )(function* (input) {
     const cursors = yield* validate(SubscriptionScanCursors, input, "scan-cursors");
 
-    yield* transact(
+    yield* transactions.run(
       Effect.gen(function* () {
         yield* failpoint.hit("subscription:advance-scan-cursors:before");
         yield* query(
