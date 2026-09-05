@@ -41,29 +41,6 @@ import {
 } from "./deterministic-layers.ts";
 import { phase1HappyPathTurns } from "./scenarios.ts";
 
-/**
- * The Phase 4 profile claims durable accepted work on the Node/SQLite runtime (deployment class
- * DN): once `submit` returns a Receipt, the Submission settles exactly once even across process
- * loss. The claim is limited to safe-to-repeat toolkits (D6): supplier booking is explicitly NOT
- * claimed safely replayable — replay-safe external mutation is P5 (Durable Tools) scope.
- */
-export class TravelPlannerDurabilityProfile extends Schema.Class<TravelPlannerDurabilityProfile>(
-  "@effect-agent/testing/travel-planner/TravelPlannerDurabilityProfile",
-)({
-  deploymentClass: Schema.Literal("DN"),
-  durableAcceptedWork: Schema.Literal(true),
-  canonicalSchemaVersion: Schema.Literal(1),
-  /** Supplier booking replay safety is P5 (Durable Tools) scope; DN does not claim it. */
-  supplierBookingReplaySafe: Schema.Literal(false),
-}) {}
-
-export const phase4TravelPlannerProfile = TravelPlannerDurabilityProfile.make({
-  deploymentClass: "DN",
-  durableAcceptedWork: true,
-  canonicalSchemaVersion: 1,
-  supplierBookingReplaySafe: false,
-});
-
 export const phase4TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-p4-deployment",
 );

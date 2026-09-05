@@ -69,16 +69,7 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       throw new Error("esbuild produced no worker bundle");
     }
 
-    // A transitive dependency ships a dead-code `import(<computed>)` that
-    // single-script Miniflare's static module locator rejects even though it
-    // never runs on the demo's path. Neutralize the dynamic-import
-    // expressions in the HOST bundle (the fixed dynamic-worker harness uses a
-    // static program import, so it carries none), mirroring the repository's
-    // Miniflare restart lane.
-    const disabled =
-      'const __disabledDynamicImport = () => Promise.reject(new Error("dynamic import is disabled in the demo bundle"));\n';
-
-    workerScript = `${disabled}${output.text.replaceAll(/\bimport\s*\(/g, "__disabledDynamicImport(")}`;
+    workerScript = output.text;
     runtime = openRuntime();
     cleanups.push(() => runtime.dispose());
   }, 120_000);
@@ -143,13 +134,13 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     expect(result.codeMode.result?.writeDenied).toBe(true);
   });
 
-  it("rejects a CTE-prefixed write that a leading-keyword denylist would miss", async () => {
+  it("seeds concurrent first queries once and rejects a CTE-prefixed write", async () => {
     // Direct-to-DO evidence that the allowlist is not bypassable by a
     // statement that merely does not START with a write keyword. The row
     // count is unchanged afterward.
     const warehouse = await runtime.getDurableObjectNamespace("WAREHOUSE");
 
-    const stub = warehouse.get(warehouse.idFromName("acme")) as unknown as {
+    const stub = warehouse.get(warehouse.idFromName("concurrent-seeding")) as unknown as {
       query: (
         sql: string,
         parameters: ReadonlyArray<string | number | boolean | null>,
@@ -160,11 +151,14 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       }>;
     };
 
-    // Seed and confirm the baseline read works.
-    const before = await stub.query("SELECT COUNT(*) AS n FROM invoice_summary", []);
+    const firstQueries = await Promise.all(
+      Array.from({ length: 3 }, () => stub.query("SELECT COUNT(*) AS n FROM invoice_summary", [])),
+    );
 
-    expect(before.ok).toBe(true);
-    expect(before.rows[0]?.n).toBe(5);
+    for (const before of firstQueries) {
+      expect(before.ok).toBe(true);
+      expect(before.rows[0]?.n).toBe(5);
+    }
 
     // A denylist keyed on the leading token would let this through; the
     // allowlist rejects it because DELETE appears anywhere in the statement.

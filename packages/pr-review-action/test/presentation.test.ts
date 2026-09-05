@@ -2,7 +2,6 @@ import { ReviewFinding, ReviewReport } from "@effect-agent/pr-review/Review";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
-  defaultReviewPresentation,
   renderFindingBody,
   renderReviewPauseBody,
   renderReviewBody,
@@ -100,7 +99,7 @@ The new route accepts requests without checking the caller.
 
   it("renders a clean review as a compact receipt", () => {
     const body = withReviewMarker(
-      defaultReviewPresentation.renderReview({
+      renderReviewBody({
         report: ReviewReport.make({
           summary: "No actionable defects found in the supplied diff.",
           findings: [],
@@ -152,7 +151,7 @@ The new route accepts requests without checking the caller.
     `);
   });
 
-  it("keeps attempt accounting outside replaceable presentation", () => {
+  it("appends attempt accounting after the visible review body", () => {
     expect(withReviewMarker("Custom presentation", false, false)).toBe(
       "Custom presentation\n\n<!-- effect-agent-review:v3 automatic=false completed=false -->",
     );

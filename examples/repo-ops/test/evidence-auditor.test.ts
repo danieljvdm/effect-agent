@@ -1,5 +1,3 @@
-import * as path from "node:path";
-
 import * as Agent from "@effect-agent/core/Agent";
 import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
@@ -7,7 +5,6 @@ import {
   type NodeDurableAgentRuntimeOptions,
 } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import { layer as LocalSandboxLayer } from "@effect-agent/sandbox-local/LocalSandbox";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing/TravelPlanner";
 import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
 import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import { runIdForSubmission, toolStepSettledRecordId } from "@effect-agent/thread/RunJournal";
@@ -18,12 +15,10 @@ import {
   SubmissionLookupById,
 } from "@effect-agent/thread/SubmissionLedger";
 import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { OpenAiClient } from "@effect/ai-openai";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
-import { Config, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
 import {
   AUDIT_REPORT_PATH,
@@ -31,9 +26,7 @@ import {
   AuditReportSink,
   EvidenceAuditor,
   EvidenceAuditReport,
-  EvidenceAuditorProfile,
   EvidenceAuditorToolkitLayer,
-  evidenceAuditorProfile,
   expectedOfflineReport,
   extractCitedTestTitles,
   makeOfflineAuditorModel,
@@ -41,7 +34,6 @@ import {
   OFFLINE_AUDIT_CALL_ID,
   OFFLINE_WRITE_CALL_ID,
   offlineReportSummary,
-  OpenAiEvidenceAuditor,
   RepoOpsWorkspace,
   repoOpsDeploymentId,
   repoOpsProducerId,
@@ -173,22 +165,6 @@ const settledReport = (records: ReadonlyArray<CanonicalRecordEnvelope>) =>
   });
 
 describe("CAP-010 evidence auditor offline profile (DN)", () => {
-  it("pins the profile claim and its schema round-trip", () => {
-    const decoded = Schema.decodeUnknownSync(EvidenceAuditorProfile)(
-      Schema.encodeSync(EvidenceAuditorProfile)(evidenceAuditorProfile),
-    );
-
-    expect(decoded).toEqual(evidenceAuditorProfile);
-    expect(evidenceAuditorProfile).toEqual({
-      deploymentClass: "DN",
-      durableStepPerDocument: true,
-      approvalGatedReportWrite: true,
-      sandboxIsolation: "unisolated",
-      liveProfileOptIn: true,
-      exactlyOnceExternalEffects: false,
-    });
-  });
-
   it.effect("normalizes model-supplied paths fail-closed (SEC-007)", () =>
     Effect.gen(function* () {
       expect(yield* normalizeRepoRelativePath("docs/EVIDENCE-A.md")).toBe("docs/EVIDENCE-A.md");
@@ -355,84 +331,5 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
           );
         }),
       ),
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Opt-in live profile: the SAME agent over the ACTUAL repository with a real
-// model, behind the shared P7 environment gate. One mission, bounded drives.
-// ---------------------------------------------------------------------------
-
-const liveEnabled = phase7LiveProfileEnabled(process.env);
-
-const OpenAiClientLayer = OpenAiClient.layerConfig({
-  apiKey: Config.redacted("OPENAI_API_KEY"),
-}).pipe(Layer.provide(FetchHttpClient.layer));
-
-describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", () => {
-  it.live(
-    "audits one real evidence document over the actual repository with a live model",
-    () =>
-      withTemporaryDirectory((directory) =>
-        Effect.gen(function* () {
-          const repoRoot = path.resolve(process.cwd(), "..", "..");
-
-          const workerLayer = workerLayerFor({
-            root: repoRoot,
-            searchRoots: ["packages"],
-            reportRoot: directory,
-          }).pipe(Layer.provideMerge(OpenAiClientLayer));
-
-          yield* Effect.gen(function* () {
-            const runtime = yield* DurableAgentRuntime;
-            const thread = decodeThreadId("repo-ops-audit-live");
-
-            const receipt = yield* runtime.submit(
-              OpenAiEvidenceAuditor,
-              AuditMission.make({ evidenceDocuments: ["docs/S2-EVIDENCE.md"] }),
-              repoOpsSubmitOptions(thread, decodeIdempotencyKey("repo-ops-live-1")),
-            );
-
-            // Bounded drive loop: resolve any pending approval between drives.
-            let outcome: string | undefined;
-
-            for (let drive = 0; drive < 4 && outcome === undefined; drive += 1) {
-              const settlements = yield* runtime
-                .processThread(OpenAiEvidenceAuditor, thread)
-                .pipe(Effect.provide(workerLayer));
-
-              outcome = settlements[0]?.outcome;
-              if (outcome !== undefined) break;
-              const state = yield* submissionState(receipt.submissionId);
-
-              if (state.state === "suspended") {
-                const log = yield* readLog(thread);
-                const request = payloadsOf(log, "ToolApprovalRequested").at(-1)?.record.payload;
-
-                if (request?._tag === "ToolApprovalRequested") {
-                  yield* runtime.resolveApproval(
-                    ApprovalDecisionCommand.make({
-                      submissionId: receipt.submissionId,
-                      toolCallId: request.toolCallId,
-                      decision: "approved",
-                      resolver: "repo-ops-operator",
-                      reason: "Live smoke: report write approved.",
-                    }),
-                  );
-                }
-              }
-            }
-            expect(outcome).toBe("completed");
-            const report = yield* settledReport(yield* readLog(thread));
-
-            expect(report.documentsAudited).toBe(1);
-          }).pipe(
-            Effect.provide(
-              NodeDurableAgentRuntime.layer(runtimeOptions(`${directory}/live.sqlite`)),
-            ),
-          );
-        }),
-      ),
-    300_000,
   );
 });

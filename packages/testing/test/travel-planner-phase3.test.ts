@@ -6,7 +6,6 @@ import {
   phase3TravelPlannerBatches,
   phase3TravelPlannerThreadId,
   phase3TravelPlannerEncodedFixture,
-  phase3TravelPlannerProfile,
   travelPlanFromProjection,
 } from "@effect-agent/testing/TravelPlanner";
 import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
@@ -175,11 +174,6 @@ describe("TEST-014 P3 persistent Travel Planner profile (P)", () => {
     );
 
     expect(decoded).toEqual(phase3TravelPlannerBatches);
-    expect(phase3TravelPlannerProfile).toEqual({
-      deploymentClass: "P",
-      durableAcceptedWork: false,
-      canonicalSchemaVersion: 1,
-    });
     const fixtureText = JSON.stringify(phase3TravelPlannerEncodedFixture);
 
     expect(fixtureText).not.toContain("credential");

@@ -5,7 +5,7 @@ import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { makeGitHubClient, type RepositorySnapshot } from "../src/github.ts";
-import { defaultReviewPresentation } from "../src/presentation.ts";
+import { renderFindingBody, renderReviewBody } from "../src/presentation.ts";
 import { reviewMarker, type ReviewHistoryItem } from "../src/selection.ts";
 
 const repository = "reve-ai/example";
@@ -370,7 +370,7 @@ it.effect("PRR-009 publishes twenty-four blocking findings at the review field b
       apiUrl: "https://api.github.test",
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-    const reviewBody = defaultReviewPresentation.renderReview({
+    const reviewBody = renderReviewBody({
       report: ReviewReport.make({ summary: "Blocking defects were found.", findings }),
       automaticReviewsRemaining: 1,
       scope: "full",
@@ -395,7 +395,7 @@ it.effect("PRR-009 publishes twenty-four blocking findings at the review field b
       comments: findings.map((finding) => ({
         path: finding.path,
         line: 1,
-        body: defaultReviewPresentation.renderFinding(finding, headRevision),
+        body: renderFindingBody(finding),
       })),
     });
 

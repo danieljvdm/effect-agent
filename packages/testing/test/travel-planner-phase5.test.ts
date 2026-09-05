@@ -19,13 +19,11 @@ import {
   phase1Trip,
   phase5TravelPlannerDeploymentId,
   phase5TravelPlannerProducerId,
-  phase5TravelPlannerProfile,
   phase5TravelPlannerSubmitOptions,
   phase5TravelPlannerWorkerLayer,
   SupplierBookingConfirmation,
   SupplierBookingDesk,
   supplierBookingRefFor,
-  TravelPlannerBookingProfile,
   TravelPlannerPhase5,
   TravelSupplierReconcilerLayer,
   TripRequest,
@@ -321,24 +319,6 @@ const interruptAtSupplierWrite = <A, E, R>(
     yield* held;
     yield* Fiber.interrupt(fiber);
   });
-
-describe("TEST-014 P5 Travel Planner booking profile", () => {
-  it("pins the P5 booking claim: uncertainty protocol and recorded Steps, never exactly-once external effects", () => {
-    const decoded = Schema.decodeUnknownSync(TravelPlannerBookingProfile)(
-      Schema.encodeSync(TravelPlannerBookingProfile)(phase5TravelPlannerProfile),
-    );
-
-    expect(decoded).toEqual(phase5TravelPlannerProfile);
-    expect(phase5TravelPlannerProfile).toEqual({
-      deploymentClass: "DN",
-      durableAcceptedWork: true,
-      canonicalSchemaVersion: 1,
-      supplierBookingUncertaintyProtocol: true,
-      durableStepsRecorded: true,
-      exactlyOnceExternalEffects: false,
-    });
-  });
-});
 
 layer(reconciledTestLayer)(
   "P5 Travel Planner bookings under the supplier reconciler (plan §7)",

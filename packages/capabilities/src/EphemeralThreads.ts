@@ -1,5 +1,5 @@
 import { ThreadId, RunId } from "@effect-agent/core/Identifiers";
-import { Clock, Context, DateTime, Effect, Encoding, Layer, Ref, Schema } from "effect";
+import { Clock, Context, DateTime, Effect, Encoding, Layer, Schema, SynchronizedRef } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 /** Bound applied to one text projection before it can enter a model context. */
@@ -120,24 +120,6 @@ export class EphemeralThreads extends Context.Service<
   }
 >()("@effect-agent/capabilities/EphemeralThreads") {}
 
-type AppendResult =
-  | { readonly _tag: "not-found" }
-  | {
-      readonly _tag: "failure";
-      readonly error: ThreadNotFound | ThreadLimitExceeded | ThreadEncodingError;
-    }
-  | { readonly _tag: "success"; readonly value: ThreadSnapshot };
-type CreateResult =
-  | { readonly _tag: "failure"; readonly error: ThreadLimitExceeded }
-  | { readonly _tag: "success"; readonly value: ThreadSnapshot };
-type RecordHistoryResult =
-  | { readonly _tag: "stale" }
-  | {
-      readonly _tag: "failure";
-      readonly error: ThreadNotFound | ThreadLimitExceeded | ThreadEncodingError;
-    }
-  | { readonly _tag: "success"; readonly value: ThreadSnapshot };
-
 const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 2;
 
 const encodeMessage = (
@@ -173,62 +155,43 @@ const totalStoreBytes = (threads: ReadonlyMap<ThreadId, ThreadSnapshot>): number
   return total;
 };
 
-const appendEncoded = (
+const appendEncoded = Effect.fn("EphemeralThreads.appendEncoded")(function* (
   threads: ReadonlyMap<ThreadId, ThreadSnapshot>,
-  threadId: ThreadId,
+  current: ThreadSnapshot,
   append: ThreadAppend,
   encoded: string,
   timestamp: DateTime.Utc,
-): readonly [AppendResult, ReadonlyMap<ThreadId, ThreadSnapshot>] => {
-  const current = threads.get(threadId);
+) {
+  const threadId = current.threadId;
 
-  if (current === undefined) return [{ _tag: "not-found" }, threads];
   if (current.messages.length >= MAX_THREAD_MESSAGES) {
-    return [
-      {
-        _tag: "failure",
-        error: ThreadLimitExceeded.make({
-          threadId,
-          limit: "messages",
-          limitValue: MAX_THREAD_MESSAGES,
-          observedValue: current.messages.length + 1,
-        }),
-      },
-      threads,
-    ];
+    return yield* ThreadLimitExceeded.make({
+      threadId,
+      limit: "messages",
+      limitValue: MAX_THREAD_MESSAGES,
+      observedValue: current.messages.length + 1,
+    });
   }
   const messageBytes = utf8Bytes(encoded);
   const contentBytes = current.contentBytes + messageBytes;
 
   if (contentBytes > MAX_THREAD_CONTENT_BYTES) {
-    return [
-      {
-        _tag: "failure",
-        error: ThreadLimitExceeded.make({
-          threadId,
-          limit: "content-bytes",
-          limitValue: MAX_THREAD_CONTENT_BYTES,
-          observedValue: contentBytes,
-        }),
-      },
-      threads,
-    ];
+    return yield* ThreadLimitExceeded.make({
+      threadId,
+      limit: "content-bytes",
+      limitValue: MAX_THREAD_CONTENT_BYTES,
+      observedValue: contentBytes,
+    });
   }
   const storeBytes = totalStoreBytes(threads) + messageBytes;
 
   if (storeBytes > MAX_EPHEMERAL_CONTENT_BYTES) {
-    return [
-      {
-        _tag: "failure",
-        error: ThreadLimitExceeded.make({
-          threadId,
-          limit: "store-content-bytes",
-          limitValue: MAX_EPHEMERAL_CONTENT_BYTES,
-          observedValue: storeBytes,
-        }),
-      },
-      threads,
-    ];
+    return yield* ThreadLimitExceeded.make({
+      threadId,
+      limit: "store-content-bytes",
+      limitValue: MAX_EPHEMERAL_CONTENT_BYTES,
+      observedValue: storeBytes,
+    });
   }
 
   const message = ThreadMessage.make({
@@ -248,168 +211,106 @@ const appendEncoded = (
     messages: [...current.messages, message],
   });
 
-  return [{ _tag: "success", value: next }, new Map(threads).set(threadId, next)];
-};
-
-/**
- * Commit a verified engine suffix in one transaction: either every suffix
- * message extends official history or nothing is recorded. Snapshots are
- * immutable and replaced wholesale, so identity against the verified base
- * detects any concurrent commit before a single message can interleave.
- */
-const commitHistorySuffix = (
-  threads: ReadonlyMap<ThreadId, ThreadSnapshot>,
-  threadId: ThreadId,
-  base: ThreadSnapshot,
-  suffix: ReadonlyArray<{ readonly append: ThreadAppend; readonly encoded: string }>,
-  timestamp: DateTime.Utc,
-): readonly [RecordHistoryResult, ReadonlyMap<ThreadId, ThreadSnapshot>] => {
-  const current = threads.get(threadId);
-
-  if (current === undefined) {
-    return [{ _tag: "failure", error: ThreadNotFound.make({ threadId }) }, threads];
-  }
-  if (current !== base) return [{ _tag: "stale" }, threads];
-  let next = threads;
-  let snapshot = current;
-
-  for (const entry of suffix) {
-    const [result, updated] = appendEncoded(next, threadId, entry.append, entry.encoded, timestamp);
-
-    if (result._tag === "not-found") {
-      return [{ _tag: "failure", error: ThreadNotFound.make({ threadId }) }, threads];
-    }
-    if (result._tag === "failure") {
-      return [{ _tag: "failure", error: result.error }, threads];
-    }
-    snapshot = result.value;
-    next = updated;
-  }
-
-  return [{ _tag: "success", value: snapshot }, next];
-};
+  return [next, new Map(threads).set(threadId, next)] as const;
+});
 
 /** Layer whose state is scoped to the consumer; it intentionally has no persistence semantics. */
 export const EphemeralThreadsLive = Layer.effect(
   EphemeralThreads,
   Effect.gen(function* () {
-    const state = yield* Ref.make<ReadonlyMap<ThreadId, ThreadSnapshot>>(new Map());
-
-    const append = (
-      threadId: ThreadId,
-      message: ThreadAppend,
-    ): Effect.Effect<ThreadSnapshot, ThreadNotFound | ThreadLimitExceeded | ThreadEncodingError> =>
-      Effect.gen(function* () {
-        const encoded = yield* encodeMessage(threadId, message.message);
-        const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-
-        const result = yield* Ref.modify(state, (threads) =>
-          appendEncoded(threads, threadId, message, encoded, timestamp),
-        );
-
-        if (result._tag === "not-found") {
-          return yield* ThreadNotFound.make({ threadId });
-        }
-        if (result._tag === "failure") return yield* result.error;
-
-        return result.value;
-      });
+    const state = yield* SynchronizedRef.make<ReadonlyMap<ThreadId, ThreadSnapshot>>(new Map());
 
     return EphemeralThreads.of({
       create: (threadId) =>
-        Effect.gen(function* () {
-          const result = yield* Ref.modify(
-            state,
-            (threads): readonly [CreateResult, ReadonlyMap<ThreadId, ThreadSnapshot>] => {
-              const existing = threads.get(threadId);
+        SynchronizedRef.modifyEffect(
+          state,
+          Effect.fn(function* (threads) {
+            const existing = threads.get(threadId);
 
-              if (existing !== undefined) {
-                return [{ _tag: "success" as const, value: existing }, threads] as const;
-              }
-              if (threads.size >= MAX_EPHEMERAL_THREADS) {
-                return [
-                  {
-                    _tag: "failure" as const,
-                    error: ThreadLimitExceeded.make({
-                      threadId,
-                      limit: "threads",
-                      limitValue: MAX_EPHEMERAL_THREADS,
-                      observedValue: threads.size + 1,
-                    }),
-                  },
-                  threads,
-                ] as const;
-              }
-
-              const created = ThreadSnapshot.make({
-                version: 1,
+            if (existing !== undefined) return [existing, threads] as const;
+            if (threads.size >= MAX_EPHEMERAL_THREADS) {
+              return yield* ThreadLimitExceeded.make({
                 threadId,
-                nextSequence: 0,
-                contentBytes: 0,
-                messages: [],
+                limit: "threads",
+                limitValue: MAX_EPHEMERAL_THREADS,
+                observedValue: threads.size + 1,
               });
+            }
 
-              return [
-                { _tag: "success" as const, value: created },
-                new Map(threads).set(threadId, created),
-              ] as const;
-            },
-          );
+            const created = ThreadSnapshot.make({
+              version: 1,
+              threadId,
+              nextSequence: 0,
+              contentBytes: 0,
+              messages: [],
+            });
 
-          if (result._tag === "failure") return yield* result.error;
+            return [created, new Map(threads).set(threadId, created)] as const;
+          }),
+        ),
+      append: Effect.fn("EphemeralThreads.append")(function* (threadId, message) {
+        const encoded = yield* encodeMessage(threadId, message.message);
+        const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
 
-          return result.value;
-        }),
-      append,
-      recordHistory: (threadId, historyRunId, history) =>
-        Effect.gen(function* () {
+        return yield* SynchronizedRef.modifyEffect(
+          state,
+          Effect.fn(function* (threads) {
+            const current = yield* findSnapshot(threads, threadId);
+
+            return yield* appendEncoded(threads, current, message, encoded, timestamp);
+          }),
+        );
+      }),
+      recordHistory: Effect.fn("EphemeralThreads.recordHistory")(
+        function* (threadId, historyRunId, history) {
           const incoming = yield* Effect.forEach(history.content, (message) =>
             encodeMessage(threadId, message).pipe(Effect.map((encoded) => ({ message, encoded }))),
           );
 
-          const attempt: Effect.Effect<ThreadSnapshot, ThreadError> = Effect.gen(function* () {
-            const current = yield* Ref.get(state).pipe(
-              Effect.flatMap((all) => findSnapshot(all, threadId)),
-            );
+          // Publish the complete suffix only after verification and every bounded append succeed.
+          return yield* SynchronizedRef.modifyEffect(
+            state,
+            Effect.fn(function* (threads) {
+              const current = yield* findSnapshot(threads, threadId);
 
-            const currentEncoded = yield* Effect.forEach(current.messages, (entry) =>
-              encodeMessage(threadId, entry.message),
-            );
+              const currentEncoded = yield* Effect.forEach(current.messages, (entry) =>
+                encodeMessage(threadId, entry.message),
+              );
 
-            if (
-              incoming.length < currentEncoded.length ||
-              currentEncoded.some((encoded, index) => encoded !== incoming[index]?.encoded)
-            ) {
-              return yield* ThreadHistoryDiverged.make({
-                threadId,
-                message: "Engine history is not an append-only extension of official history",
-              });
-            }
-            const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+              if (
+                incoming.length < currentEncoded.length ||
+                currentEncoded.some((encoded, index) => encoded !== incoming[index]?.encoded)
+              ) {
+                return yield* ThreadHistoryDiverged.make({
+                  threadId,
+                  message: "Engine history is not an append-only extension of official history",
+                });
+              }
+              const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
 
-            const suffix = incoming.slice(currentEncoded.length).map((entry) => ({
-              append: ThreadAppend.make({ runId: historyRunId, message: entry.message }),
-              encoded: entry.encoded,
-            }));
+              let snapshot = current;
+              let next = threads;
 
-            const result = yield* Ref.modify(state, (threads) =>
-              commitHistorySuffix(threads, threadId, current, suffix, timestamp),
-            );
+              for (const entry of incoming.slice(currentEncoded.length)) {
+                [snapshot, next] = yield* appendEncoded(
+                  next,
+                  snapshot,
+                  ThreadAppend.make({ runId: historyRunId, message: entry.message }),
+                  entry.encoded,
+                  timestamp,
+                );
+              }
 
-            // Another writer committed after verification: re-verify against the new base.
-            if (result._tag === "stale") return yield* attempt;
-            if (result._tag === "failure") return yield* result.error;
-
-            return result.value;
-          });
-
-          return yield* attempt;
-        }),
+              return [snapshot, next] as const;
+            }),
+          );
+        },
+      ),
       snapshot: (threadId) =>
-        Ref.get(state).pipe(Effect.flatMap((all) => findSnapshot(all, threadId))),
+        SynchronizedRef.get(state).pipe(Effect.flatMap((all) => findSnapshot(all, threadId))),
       export: (threadId) =>
         Effect.gen(function* () {
-          const snapshot = yield* findSnapshot(yield* Ref.get(state), threadId);
+          const snapshot = yield* findSnapshot(yield* SynchronizedRef.get(state), threadId);
 
           return ThreadExport.make({
             format: "effect-agent/ephemeral-thread@1",

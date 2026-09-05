@@ -42,8 +42,11 @@ import {
 } from "./github.ts";
 import {
   type ReviewCostEstimate,
+  renderFindingBody,
+  renderReviewBody,
+  renderReviewFailureBody,
+  renderReviewPauseBody,
   ReviewExclusion,
-  ReviewPresentation,
   withReviewMarker,
   withReviewPauseMarker,
 } from "./presentation.ts";
@@ -621,7 +624,6 @@ const reanchorToFullPullRequest = (
 };
 
 export const reviewActionProgram = Effect.gen(function* () {
-  const presentation = yield* ReviewPresentation;
   const repository = yield* Config.nonEmptyString("GITHUB_REPOSITORY");
 
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
@@ -735,7 +737,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       commitId: pull.headRevision,
       event: "COMMENT",
       body: withReviewPauseMarker(
-        presentation.renderPause({
+        renderReviewPauseBody({
           automaticReviewLimit: selection.automaticReviewLimit,
           automaticAttempts: selection.automaticAttempts,
           lastCompletedRevision: selection.lastCompletedRevision,
@@ -975,7 +977,7 @@ export const reviewActionProgram = Effect.gen(function* () {
         commitId: pull.headRevision,
         event: "COMMENT",
         body: withReviewMarker(
-          presentation.renderFailure({
+          renderReviewFailureBody({
             automaticReviewsRemaining: selection.automaticReviewsRemaining,
             failureSummary,
           }),
@@ -1070,7 +1072,7 @@ export const reviewActionProgram = Effect.gen(function* () {
           github.publishAttemptMarker({
             commitId: pull.headRevision,
             body: withReviewMarker(
-              presentation.renderFailure({
+              renderReviewFailureBody({
                 automaticReviewsRemaining: selection.automaticReviewsRemaining,
                 failureSummary:
                   "GitHub could not confirm dismissal of the verified reviews. Check the review timeline and request a full review to retry.",
@@ -1086,7 +1088,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   }
 
   const body = withReviewMarker(
-    presentation.renderReview({
+    renderReviewBody({
       report,
       automaticReviewsRemaining: selection.automaticReviewsRemaining,
       scope,
@@ -1124,7 +1126,7 @@ export const reviewActionProgram = Effect.gen(function* () {
               {
                 path: finding.path,
                 line: finding.line,
-                body: presentation.renderFinding(finding, pull.headRevision),
+                body: renderFindingBody(finding),
               },
             ],
       ),

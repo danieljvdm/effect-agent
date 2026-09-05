@@ -1990,11 +1990,6 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
 
         return Stream.empty;
       }
-      if (terminal) {
-        // The provisional value never became append-only state. Replace it with one failed
-        // terminal event, then preserve the handler Cause outside the span-facing marker.
-        return failTerminalResult(toolCause);
-      }
 
       return failTerminalResult(toolCause);
     }),
@@ -2155,36 +2150,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? passthroughDurableStep()
           : makeDurableStepService(call.toolCallId, durability.step, hookServices);
 
-      // One live broker per executable outer call: construction resolves its
-      // telemetry requirement from Context at this engine-owned operation
-      // edge, and provision plus the settling closer share one lifecycle.
-      const liveBrokers = new Map<string, LiveToolBroker>();
-
-      for (const call of executable) {
-        const broker = yield* makeToolBrokerService({
-          context,
-          turnId,
-          outerToolCallId: call.toolCallId,
-          maxToolCalls: brokerAccounting.maxToolCalls,
-          declaredToolCalls: brokerAccounting.declaredToolCalls,
-          budget: options.budget,
-          reservePolicyUsage: options.durability?.reservePolicyUsage,
-          hookServices,
-        });
-
-        liveBrokers.set(call.call.id, broker);
-      }
-
-      const brokerFor = (call: PreparedToolCall<Tools>): LiveToolBroker => {
-        const broker = liveBrokers.get(call.call.id);
-
-        if (broker === undefined) {
-          throw new Error(`Missing live Tool broker for executable call ${call.call.id}`);
-        }
-
-        return broker;
-      };
-
       // This batch's live `SubagentDurability` service: durable over the
       // coordinator's subagent hook, the explicit ephemeral-mode default
       // otherwise. Absence of the hook means the Run is not under a durable
@@ -2231,25 +2196,38 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           (call) =>
             withSemaphorePermit(
               semaphore,
-              executePreparedToolCall(
-                context,
-                turnId,
-                toolkit,
-                call,
-                trace,
-                resultBounds,
-                (waiting) => {
-                  waitingByDeclaration.set(call.declarationIndex, waiting);
-                },
-              ).pipe(
-                Stream.provideService(DurableStep, stepServiceFor(call)),
-                // The live broker executes under this call's already-held
-                // permit: invocations run inside the handler's own fiber and
-                // never touch the batch semaphore (RUN-016). Its lifecycle
-                // closes with this call's stream so no retained pass can
-                // outlive the batch's scheduling authority.
-                Stream.provideService(ToolBroker, brokerFor(call).service),
-                Stream.ensuring(Effect.sync(() => brokerFor(call).close())),
+              Stream.unwrap(
+                Effect.gen(function* () {
+                  const broker = yield* makeToolBrokerService({
+                    context,
+                    turnId,
+                    outerToolCallId: call.toolCallId,
+                    maxToolCalls: brokerAccounting.maxToolCalls,
+                    declaredToolCalls: brokerAccounting.declaredToolCalls,
+                    budget: options.budget,
+                    reservePolicyUsage: options.durability?.reservePolicyUsage,
+                    hookServices,
+                  });
+
+                  return executePreparedToolCall(
+                    context,
+                    turnId,
+                    toolkit,
+                    call,
+                    trace,
+                    resultBounds,
+                    (waiting) => {
+                      waitingByDeclaration.set(call.declarationIndex, waiting);
+                    },
+                  ).pipe(
+                    Stream.provideService(DurableStep, stepServiceFor(call)),
+                    // Construct and close the broker within this call's permit. Inner
+                    // invocations use the handler's fiber and acquire no batch permit;
+                    // retained passes cannot outlive the call's scheduling authority.
+                    Stream.provideService(ToolBroker, broker.service),
+                    Stream.ensuring(Effect.sync(() => broker.close())),
+                  );
+                }),
               ),
             ).channel,
         );

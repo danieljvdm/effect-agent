@@ -8,7 +8,6 @@ import {
 import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
 import {
   DestinationShortlist,
-  TravelPlannerSubagentDurabilityProfile,
   coordinatorConfidentialMarker,
   durableChildLookupCallId,
   durableResearchAllocation,
@@ -23,7 +22,6 @@ import {
   s2TravelPlannerDeploymentId,
   s2TravelPlannerPrincipal,
   s2TravelPlannerProducerId,
-  s2TravelPlannerProfile,
   s2TravelPlannerSubmitOptions,
 } from "@effect-agent/testing/TravelPlanner";
 import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
@@ -258,22 +256,6 @@ const shortlistFromSettlement = (records: ReadonlyArray<CanonicalRecordEnvelope>
   });
 
 describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
-  it("pins the DN durable attached Subagent claim and never claims exactly-once child effects", () => {
-    const decoded = Schema.decodeUnknownSync(TravelPlannerSubagentDurabilityProfile)(
-      Schema.encodeSync(TravelPlannerSubagentDurabilityProfile)(s2TravelPlannerProfile),
-    );
-
-    expect(decoded).toEqual(s2TravelPlannerProfile);
-    expect(s2TravelPlannerProfile).toEqual({
-      deploymentClass: "DN",
-      durableAttachedSubagents: true,
-      canonicalSchemaVersion: 1,
-      subagentReplaySafe: true,
-      childExternalEffectsExactlyOnce: false,
-      cloudflareEquivalence: false,
-    });
-  });
-
   it.effect(
     "re-runs the S1 delegation as accepted work on SQLite: establish, waitingForChild without a permit, durable wake, verified join, conserved reservation",
     () =>

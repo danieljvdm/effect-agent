@@ -686,6 +686,36 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
     }
     if (payload.runId !== ownerRunId) return;
+
+    const responseUsage = yield* projectedResponseUsage(payload);
+
+    usage.modelCalls = yield* addProjectedUsage(
+      "modelCalls",
+      usage.modelCalls,
+      responseUsage.modelCalls,
+    );
+    usage.inputTokens = yield* addProjectedUsage(
+      "inputTokens",
+      usage.inputTokens,
+      responseUsage.inputTokens,
+    );
+    usage.outputTokens = yield* addProjectedUsage(
+      "outputTokens",
+      usage.outputTokens,
+      responseUsage.outputTokens,
+    );
+    usage.costMicrousd = yield* addProjectedUsage(
+      "costMicrousd",
+      usage.costMicrousd,
+      responseUsage.costMicrousd,
+    );
+    usage.modelUsage.push(...responseUsage.modelUsage);
+    if (payload.turn > usageTurn) {
+      usageTurn = payload.turn;
+      usage.lastInputTokens = responseUsage.inputTokens;
+      usage.lastOutputTokens = responseUsage.outputTokens;
+    }
+
     policyUsage.committedTurns = Math.max(policyUsage.committedTurns, payload.turn);
 
     const calls = messages.content.flatMap((message) =>
@@ -750,41 +780,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       // the one summary message emitted at the covered/kept transition.
       if (payload._tag === "CompactionCreated") return;
       if (envelope.sequence <= summarizeBound) {
-        // Owner-Run usage still counts even when the message content is folded
-        // into the summary (the append side never covers the owner, but stay
-        // fail-safe if it ever did).
+        // Projecting an earlier Run after a later summary still accounts for its covered responses.
         if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
           const messages = yield* decodePromptMessages(payload.messages);
 
           yield* accountResponse(envelope, payload, messages);
-          const responseUsage = yield* projectedResponseUsage(payload);
-
-          usage.modelCalls = yield* addProjectedUsage(
-            "modelCalls",
-            usage.modelCalls,
-            responseUsage.modelCalls,
-          );
-          usage.inputTokens = yield* addProjectedUsage(
-            "inputTokens",
-            usage.inputTokens,
-            responseUsage.inputTokens,
-          );
-          usage.outputTokens = yield* addProjectedUsage(
-            "outputTokens",
-            usage.outputTokens,
-            responseUsage.outputTokens,
-          );
-          usage.costMicrousd = yield* addProjectedUsage(
-            "costMicrousd",
-            usage.costMicrousd,
-            responseUsage.costMicrousd,
-          );
-          usage.modelUsage.push(...responseUsage.modelUsage);
-          if (payload.turn > usageTurn) {
-            usageTurn = payload.turn;
-            usage.lastInputTokens = responseUsage.inputTokens;
-            usage.lastOutputTokens = responseUsage.outputTokens;
-          }
         }
         if (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled") {
           onBoundary?.({
@@ -842,36 +842,6 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       const forRun = payload.runId === ownerRunId;
 
       yield* accountResponse(envelope, payload, messages);
-      if (forRun) {
-        const responseUsage = yield* projectedResponseUsage(payload);
-
-        usage.modelCalls = yield* addProjectedUsage(
-          "modelCalls",
-          usage.modelCalls,
-          responseUsage.modelCalls,
-        );
-        usage.inputTokens = yield* addProjectedUsage(
-          "inputTokens",
-          usage.inputTokens,
-          responseUsage.inputTokens,
-        );
-        usage.outputTokens = yield* addProjectedUsage(
-          "outputTokens",
-          usage.outputTokens,
-          responseUsage.outputTokens,
-        );
-        usage.costMicrousd = yield* addProjectedUsage(
-          "costMicrousd",
-          usage.costMicrousd,
-          responseUsage.costMicrousd,
-        );
-        usage.modelUsage.push(...responseUsage.modelUsage);
-        if (payload.turn > usageTurn) {
-          usageTurn = payload.turn;
-          usage.lastInputTokens = responseUsage.inputTokens;
-          usage.lastOutputTokens = responseUsage.outputTokens;
-        }
-      }
 
       const modelVisible =
         !forRun && payload.runScopedPrefixLength !== undefined

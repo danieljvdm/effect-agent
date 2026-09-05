@@ -61,8 +61,6 @@ export {
 } from "./fixtures/travel-planner/phase2.ts";
 
 export {
-  TravelPlannerPersistenceProfile,
-  phase3TravelPlannerProfile,
   phase3TravelPlannerThreadId,
   phase3TravelPlannerProducerId,
   phase3TravelPlannerRunId,
@@ -77,8 +75,6 @@ export {
 } from "./fixtures/travel-planner/phase3.ts";
 
 export {
-  TravelPlannerDurabilityProfile,
-  phase4TravelPlannerProfile,
   phase4TravelPlannerDeploymentId,
   phase4TravelPlannerProducerId,
   phase4TravelPlannerPrincipal,
@@ -98,8 +94,6 @@ export {
 } from "./fixtures/travel-planner/phase4.ts";
 
 export {
-  TravelPlannerBookingProfile,
-  phase5TravelPlannerProfile,
   phase5TravelPlannerDeploymentId,
   phase5TravelPlannerProducerId,
   phase5TravelPlannerPrincipal,
@@ -128,8 +122,6 @@ export {
 } from "./fixtures/travel-planner/phase5.ts";
 
 export {
-  TravelPlannerCloudflareProfile,
-  phase6TravelPlannerProfile,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
   phase6TravelPlannerProducerId,
@@ -164,8 +156,6 @@ export {
 } from "./fixtures/travel-planner/phase6.ts";
 
 export {
-  TravelPlannerPhase7Profile,
-  phase7TravelPlannerProfile,
   PHASE7_LIVE_GATE_ENV,
   PHASE7_LIVE_CREDENTIAL_ENV,
   type Phase7LiveGateEnvironment,
@@ -220,8 +210,6 @@ export {
 } from "./fixtures/travel-planner/subagents.ts";
 
 export {
-  TravelPlannerSubagentDurabilityProfile,
-  s2TravelPlannerProfile,
   s2TravelPlannerDeploymentId,
   s2TravelPlannerProducerId,
   s2TravelPlannerPrincipal,

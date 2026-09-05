@@ -53,50 +53,7 @@ import {
   encodedDestinationReport,
 } from "./subagents.ts";
 
-// ---------------------------------------------------------------------------
-// Phase 6 (P6): the SAME cumulative Travel Planner on the Cloudflare Durable
-// Object runtime, deployment class DC. This module is deliberately
-// platform-neutral (it imports no Cloudflare types): the worker Bindings it
-// builds are plain `ResolvedBinding` values a Thread Object registers,
-// and the cross-platform evidence normal form is shared by the DN and DC
-// halves of the equivalence suite (plan §1.8, D-P6-6).
-// ---------------------------------------------------------------------------
-
-/**
- * The Phase 6 profile: the P4/P5/S2 Travel Planner claims re-earned on the Cloudflare Durable
- * Object runtime (deployment class `DC`), where eviction and alarm redelivery replace process
- * kill and restart as the exercised recovery path. `cloudflareEquivalence` is the claim the S2
- * fixture explicitly deferred to P6 (`TravelPlannerSubagentDurabilityProfile` pins it `false`
- * for `DN`): it flips to `true` here ONLY because the phase-6 suites assert byte-equal
- * cross-platform normalized canonical evidence against one committed golden. Exactly-once
- * EXTERNAL effects remain — deliberately — unclaimed on every platform (DUR-003).
- */
-export class TravelPlannerCloudflareProfile extends Schema.Class<TravelPlannerCloudflareProfile>(
-  "@effect-agent/testing/travel-planner/TravelPlannerCloudflareProfile",
-)({
-  deploymentClass: Schema.Literal("DC"),
-  durableAcceptedWork: Schema.Literal(true),
-  canonicalSchemaVersion: Schema.Literal(1),
-  /** P5 semantics under DC recovery: prepared/settled records, Unknown Outcomes, approvals. */
-  supplierBookingUncertaintyProtocol: Schema.Literal(true),
-  /** S2 semantics under DC recovery: cross-Object establishment/join, completed child never re-runs. */
-  durableAttachedSubagents: Schema.Literal(true),
-  /** DN and DC produce byte-equal cross-platform normalized canonical evidence (one golden). */
-  cloudflareEquivalence: Schema.Literal(true),
-  /** Never claimed at any phase on any platform (DUR-003). */
-  exactlyOnceExternalEffects: Schema.Literal(false),
-}) {}
-
-export const phase6TravelPlannerProfile = TravelPlannerCloudflareProfile.make({
-  deploymentClass: "DC",
-  durableAcceptedWork: true,
-  canonicalSchemaVersion: 1,
-  supplierBookingUncertaintyProtocol: true,
-  durableAttachedSubagents: true,
-  cloudflareEquivalence: true,
-  exactlyOnceExternalEffects: false,
-});
-
+/** Platform-neutral bindings and canonical evidence shared by Node and Cloudflare tests. */
 export const phase6TravelPlannerDeploymentId = Schema.decodeSync(DeploymentId)(
   "travel-planner-p6-deployment",
 );

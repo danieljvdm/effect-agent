@@ -16,24 +16,6 @@ import { Effect, Schema } from "effect";
 import { TravelPlan, TripRequest } from "./definition.ts";
 import { expectedTravelPlan, phase1Trip } from "./scenarios.ts";
 
-/**
- * The Phase 3 profile persists Thread history but deliberately does not
- * claim durable admission or recovery of accepted work.
- */
-export class TravelPlannerPersistenceProfile extends Schema.Class<TravelPlannerPersistenceProfile>(
-  "@effect-agent/testing/travel-planner/TravelPlannerPersistenceProfile",
-)({
-  deploymentClass: Schema.Literal("P"),
-  durableAcceptedWork: Schema.Literal(false),
-  canonicalSchemaVersion: Schema.Literal(1),
-}) {}
-
-export const phase3TravelPlannerProfile = TravelPlannerPersistenceProfile.make({
-  deploymentClass: "P",
-  durableAcceptedWork: false,
-  canonicalSchemaVersion: 1,
-});
-
 export const phase3TravelPlannerThreadId = Schema.decodeSync(ThreadId)("travel-planner-p3-thread");
 
 export const phase3TravelPlannerProducerId = Schema.decodeSync(ProducerId)(

@@ -9,7 +9,7 @@
   "type": "module",
   "scripts": {
     "prepare": "vp config --no-agent --hooks-dir .vite-hooks",
-    "patch:tsgo": "bun scripts/patch-effect-tsgo.ts",
+    "patch:tsgo": "effect-tsgo patch --typescript",
     "changeset": "bun x changeset",
     "changeset:version": "bun x changeset version",
     "ci:version": "bun x changeset version && bun install",

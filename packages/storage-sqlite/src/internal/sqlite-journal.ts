@@ -120,8 +120,6 @@ export class RawCheckpoint extends Schema.Class<RawCheckpoint>(
 export class RawThreadExport extends Schema.Class<RawThreadExport>(
   "@effect-agent/storage-sqlite/RawThreadExport",
 )({
-  batches: Schema.Array(BatchRow),
-  checkpoints: Schema.Array(CheckpointRow),
   thread: ThreadRow,
   records: Schema.Array(RecordRow),
 }) {}
@@ -800,20 +798,6 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
 
         yield* failpoint("export:after-thread-read");
 
-        const batchRows = yield* sql<Record<string, unknown>>`
-            SELECT
-              thread_id,
-              batch_id,
-              first_sequence,
-              last_sequence,
-              batch_digest,
-              tail_digest,
-              batch_json
-            FROM effect_agent_canonical_batches
-            WHERE thread_id = ${threadId}
-            ORDER BY first_sequence
-          `.pipe(Effect.mapError(storageError("export canonical batches")));
-
         const recordRows = yield* sql<Record<string, unknown>>`
             SELECT
               thread_id,
@@ -826,36 +810,13 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("export canonical records")));
 
-        const checkpointRows = yield* sql<Record<string, unknown>>`
-            SELECT
-              thread_id,
-              through_sequence,
-              tail_digest,
-              checkpoint_json
-            FROM effect_agent_checkpoints
-            WHERE thread_id = ${threadId}
-            ORDER BY through_sequence
-          `.pipe(Effect.mapError(storageError("export checkpoints")));
-
         return RawThreadExport.make({
           thread,
-          batches: yield* decodeRows(
-            Schema.Array(BatchRow),
-            "effect_agent_canonical_batches",
-            threadId,
-            batchRows,
-          ),
           records: yield* decodeRows(
             Schema.Array(RecordRow),
             "effect_agent_canonical_records",
             threadId,
             recordRows,
-          ),
-          checkpoints: yield* decodeRows(
-            Schema.Array(CheckpointRow),
-            "effect_agent_checkpoints",
-            threadId,
-            checkpointRows,
           ),
         });
       }),
