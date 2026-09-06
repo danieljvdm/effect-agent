@@ -38,14 +38,12 @@ import {
   type ThreadNotMaterialized,
   type ThreadStoreError,
 } from "@effect-agent/thread/ThreadStore";
-import { type Stream, Context, type Crypto, Effect, Fiber, Layer, Ref, Schema } from "effect";
+import { type Stream, Context, Effect, Fiber, Layer, Ref, Schema } from "effect";
 
 import {
   NodeDurableAgentRuntime,
   NodeDurableAgentRuntimeConfig,
-  type NodeDurableAgentRuntimeInitializationError,
   type NodeDurableAgentRuntimeOptions,
-  type NodeDurableAgentRuntimeServices,
 } from "./NodeDurableAgentRuntime.ts";
 
 /**
@@ -227,13 +225,17 @@ export class NodeDurableHost extends Context.Service<
     ContextRequirements = never,
     AuthorizationError = never,
     AuthorizationRequirements = never,
+    ReconcilerError = never,
+    ReconcilerRequirements = never,
   >(
     registrations: Entries,
     options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
-      AuthorizationRequirements
+      AuthorizationRequirements,
+      ReconcilerError,
+      ReconcilerRequirements
     >,
   ) {
     return NodeDurableHost.layer.pipe(
@@ -257,21 +259,18 @@ export class NodeDurableHost extends Context.Service<
     ContextRequirements = never,
     AuthorizationError = never,
     AuthorizationRequirements = never,
+    ReconcilerError = never,
+    ReconcilerRequirements = never,
   >(
     options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
-      AuthorizationRequirements
+      AuthorizationRequirements,
+      ReconcilerError,
+      ReconcilerRequirements
     > & { readonly bindings?: ReadonlyArray<ResolvedBinding> },
-  ): Layer.Layer<
-    NodeDurableHost | NodeDurableAgentRuntimeServices,
-    | DurableWorkerFailure
-    | NodeDurableAgentRuntimeInitializationError
-    | ContextError
-    | AuthorizationError,
-    Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
-  > {
+  ) {
     const { bindings = [], ...runtimeOptions } = options;
 
     return NodeDurableHost.layer.pipe(
@@ -292,13 +291,17 @@ export const layer = <
   ContextRequirements = never,
   AuthorizationError = never,
   AuthorizationRequirements = never,
+  ReconcilerError = never,
+  ReconcilerRequirements = never,
 >(
   registrations: Entries,
   options: NodeDurableAgentRuntimeOptions<
     ContextError,
     ContextRequirements,
     AuthorizationError,
-    AuthorizationRequirements
+    AuthorizationRequirements,
+    ReconcilerError,
+    ReconcilerRequirements
   >,
 ) =>
   Layer.effect(NodeDurableHost)(makeHost(true)).pipe(

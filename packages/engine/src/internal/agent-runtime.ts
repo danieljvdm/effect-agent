@@ -263,6 +263,7 @@ import {
   type RunDurabilityHook,
   RunResumeUsageSchema,
   RunContextPreparation,
+  RunToolAuthorization,
   type RunContextPreparationError,
   type RunOptions,
   type RunSchedulingHook,
@@ -405,6 +406,7 @@ type InterpreterRequirements<
   | Agent.Requirements<AgentValue>
   | IdGenerator
   | ThreadHistory
+  | ContextCompactor
   | HookRequirements
   | InstructionRequirements;
 
@@ -450,7 +452,6 @@ interface RunContext {
         prefix: ReadonlyArray<Schema.Json>;
       }
     | undefined;
-  readonly compactor: ContextCompactor["Service"];
   windowId: string;
   windowTokens: number;
   pendingContextToolCallId: string | undefined;
@@ -3197,12 +3198,11 @@ const stampProviderResultEvent = (
  * chars/4 estimate.
  */
 const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(function* (
-  context: RunContext,
   messages: ReadonlyArray<Prompt.Message>,
 ) {
-  return yield* Schema.decodeUnknownEffect(Schema.Natural)(
-    context.compactor.estimate(messages),
-  ).pipe(
+  const compactor = yield* ContextCompactor;
+
+  return yield* Schema.decodeUnknownEffect(Schema.Natural)(compactor.estimate(messages)).pipe(
     Effect.mapError((cause) =>
       CompactionError.make({ message: "Compactor returned an invalid token estimate", cause }),
     ),
@@ -3223,11 +3223,11 @@ const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(functi
     return (
       context.lastInputTokens +
       context.lastOutputTokens +
-      (yield* estimateContextTokens(context, view.slice(state.lastViewLength)))
+      (yield* estimateContextTokens(view.slice(state.lastViewLength)))
     );
   }
 
-  return yield* estimateContextTokens(context, view);
+  return yield* estimateContextTokens(view);
 });
 
 const snapshotCompactionMessages = Effect.fnUntraced(function* (
@@ -3271,7 +3271,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
 ): Effect.Effect<
   CompactionOutcome,
   AgentPolicyError | ModelProtocolError | AiError.AiError | CompactionError | HookError,
-  HookRequirements | LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
+  | HookRequirements
+  | ContextCompactor
+  | LanguageModel.LanguageModel
+  | Model.ProviderName
+  | Model.ModelName
 > =>
   Effect.gen(function* () {
     const state = context.compaction;
@@ -3367,7 +3371,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         message: "Compaction already replaced this Turn's context",
       });
     }
-    const before = yield* estimateContextTokens(context, buildCompactedView(messages, state));
+    const before = yield* estimateContextTokens(buildCompactedView(messages, state));
 
     const summarize = (summarizerPrompt: Prompt.Prompt, model?: CompactionModelLayer) => {
       const generate = Effect.gen(function* () {
@@ -3510,7 +3514,9 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
 
     const applied = allowance.applied;
 
-    yield* context.compactor
+    const compactor = yield* ContextCompactor;
+
+    yield* compactor
       .compact({
         source,
         state: Object.freeze({
@@ -3602,7 +3608,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
               }
               next.clearedThrough = decision.through;
             }
-            const after = yield* estimateContextTokens(context, buildCompactedView(messages, next));
+            const after = yield* estimateContextTokens(buildCompactedView(messages, next));
 
             if (decision.kind === "rollover" && trigger !== "requested" && after >= before) {
               return yield* CompactionError.make({
@@ -4701,7 +4707,7 @@ const makeTurn = <
       const outputContractTokens =
         !admissionRequired || outputContractMessage === undefined
           ? 0
-          : yield* estimateContextTokens(context, [
+          : yield* estimateContextTokens([
               Prompt.makeMessage("system", { content: outputContractMessage }),
             ]);
 
@@ -4711,8 +4717,7 @@ const makeTurn = <
 
       const canonicalDecorationTokens = !admissionRequired
         ? 0
-        : outputContractTokens +
-          (yield* estimateContextTokens(context, canonicalDecoration.content));
+        : outputContractTokens + (yield* estimateContextTokens(canonicalDecoration.content));
 
       // Preparation may replace an existing prefix, and transient context may
       // change independently of history. Only ordinary append-only history can
@@ -4720,7 +4725,7 @@ const makeTurn = <
       const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
         options.context === undefined && options.transientContext === undefined
           ? nextContextEstimate(context, view)
-          : estimateContextTokens(context, view);
+          : estimateContextTokens(view);
 
       let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
       let sourceTokens: number | undefined;
@@ -4922,7 +4927,7 @@ const makeTurn = <
         ? 0
         : options.transientContext === undefined
           ? canonicalDecorationTokens
-          : outputContractTokens + (yield* estimateContextTokens(context, derivedPrompt.content));
+          : outputContractTokens + (yield* estimateContextTokens(derivedPrompt.content));
 
       if (!context.finalizing && admissionRequired && options.transientContext !== undefined) {
         const contextTokenLimit = policy.contextTokenLimit;
@@ -5080,7 +5085,7 @@ const makeTurn = <
                 (options.context === undefined && options.transientContext === undefined) ||
                 contextTokenLimit === undefined
                   ? Effect.void
-                  : estimateContextTokens(context, providerPrompt.content).pipe(
+                  : estimateContextTokens(providerPrompt.content).pipe(
                       Effect.flatMap((estimatedTokens) =>
                         estimatedTokens <= contextTokenLimit
                           ? Effect.void
@@ -5094,7 +5099,7 @@ const makeTurn = <
                     );
 
               return admission.pipe(
-                Effect.andThen(estimateContextTokens(context, providerPrompt.content)),
+                Effect.andThen(estimateContextTokens(providerPrompt.content)),
                 Effect.tap((tokens) =>
                   Effect.sync(() => {
                     context.windowTokens = tokens;
@@ -6494,6 +6499,10 @@ function streamWithCompletion<
         Effect.map(Option.getOrElse(() => RunContextPreparation.of({}))),
       );
 
+      const authorization = yield* Effect.serviceOption(RunToolAuthorization).pipe(
+        Effect.map(Option.getOrUndefined),
+      );
+
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);
@@ -6524,6 +6533,7 @@ function streamWithCompletion<
         ...runOptions,
         context: runOptions.context ?? preparation.hook,
         transientContext: runOptions.transientContext ?? preparation.transientContext,
+        toolAuthorization: runOptions.toolAuthorization ?? authorization,
         threadId,
         runId,
         ...(retained === undefined
@@ -6615,7 +6625,6 @@ function streamWithCompletion<
             compaction: initialCompactionState(),
             preparedCompactionSource: undefined,
             compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
-            compactor,
             windowId: options.initialContextWindowId ?? contextWindowId(runId, 0),
             windowTokens: resumeUsage?.lastInputTokens ?? 0,
             pendingContextToolCallId: options.pendingContextToolCallId,
@@ -6915,6 +6924,7 @@ function streamWithCompletion<
               },
             }),
             Stream.provide(engineToolServices),
+            Stream.provideService(ContextCompactor, compactor),
           );
         }),
       );

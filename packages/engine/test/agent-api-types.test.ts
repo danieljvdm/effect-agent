@@ -124,6 +124,19 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
     Stream.Error<typeof stream> | TurnHostError
   >();
 
+  const authorized = AgentRuntime.run(planner, input, {
+    toolAuthorization: {
+      authorize: () => TurnHost.pipe(Effect.andThen(Effect.fail(new TurnHostError()))),
+    },
+  });
+
+  expectTypeOf<Effect.Services<typeof authorized>>().toEqualTypeOf<
+    Effect.Services<typeof run> | TurnHost
+  >();
+  expectTypeOf<Effect.Error<typeof authorized>>().toEqualTypeOf<
+    Effect.Error<typeof run> | TurnHostError
+  >();
+
   expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<
     DefinitionServices | NativeServices | IdGenerator
   >();

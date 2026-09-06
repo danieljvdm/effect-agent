@@ -48,6 +48,7 @@ import {
   type SubmissionState,
 } from "@effect-agent/thread/SubmissionLedger";
 import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ReconciliationUncertain, ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
@@ -95,6 +96,10 @@ class AuthorizationSetupError extends Schema.TaggedError<AuthorizationSetupError
   "AuthorizationSetupError",
   {},
 ) {}
+class ReconcilerSetupError extends Schema.TaggedError<ReconcilerSetupError>()(
+  "ReconcilerSetupError",
+  {},
+) {}
 class ContextConfig extends Context.Service<ContextConfig, { readonly fail: boolean }>()(
   "test/ContextConfig",
 ) {}
@@ -102,6 +107,9 @@ class AuthorizationConfig extends Context.Service<
   AuthorizationConfig,
   { readonly fail: boolean }
 >()("test/AuthorizationConfig") {}
+class ReconcilerConfig extends Context.Service<ReconcilerConfig, { readonly fail: boolean }>()(
+  "test/ReconcilerConfig",
+) {}
 
 const configuredContext = Layer.effect(
   RunContextPreparation,
@@ -125,6 +133,21 @@ const configuredAuthorization = Layer.effect(
 
     return RunToolAuthorization.of({
       authorize: () => Effect.succeed({ _tag: "denied", reason: "test policy" }),
+    });
+  }),
+);
+
+const configuredReconciler = Layer.effect(
+  ToolReconciler,
+  Effect.gen(function* () {
+    yield* Crypto.Crypto;
+    const config = yield* ReconcilerConfig;
+
+    if (config.fail) return yield* new ReconcilerSetupError();
+
+    return ToolReconciler.of({
+      reconcile: () =>
+        Effect.succeed(ReconciliationUncertain.make({ reason: "No supplier proof in this test" })),
     });
   }),
 );
@@ -703,10 +726,11 @@ describe("NodeDurableAgentRuntime", () => {
       toolAuthorization: configuredAuthorization,
     });
 
-    const both = NodeHost.layer([], {
+    const combined = NodeHost.layer([], {
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
       toolAuthorization: configuredAuthorization,
+      toolReconciler: configuredReconciler,
     });
 
     const contextErrors: Assert<
@@ -731,17 +755,18 @@ describe("NodeDurableAgentRuntime", () => {
 
     const hostErrors: Assert<
       Equal<
-        Layer.Error<typeof both>,
+        Layer.Error<typeof combined>,
         | DigestError
         | NodeDurableAgentRuntimeInitializationError
         | DurableWorkerFailure
         | ContextSetupError
         | AuthorizationSetupError
+        | ReconcilerSetupError
       >
     > = true;
 
     const hostNeeds: Assert<
-      Equal<Layer.Services<typeof both>, ContextConfig | AuthorizationConfig>
+      Equal<Layer.Services<typeof combined>, ContextConfig | AuthorizationConfig | ReconcilerConfig>
     > = true;
 
     expect([

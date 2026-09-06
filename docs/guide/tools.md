@@ -93,8 +93,9 @@ export const searchOnly = RunToolAuthorization.of({
 export const SearchOnlyLive = Layer.succeed(RunToolAuthorization, searchOnly);
 ```
 
-Pass `searchOnly` as the `toolAuthorization` option to `AgentRuntime.run`, `stream`, or `start`.
-For durable execution, install `SearchOnlyLive` in the
+Provide `SearchOnlyLive` to `AgentRuntime.run`, `stream`, or `start`. A per-run
+`toolAuthorization` option overrides the provided policy and retains its own typed failures
+and service requirements. For durable execution, install `SearchOnlyLive` in the
 [Node host](../platforms/node#configure-runtime-services),
 [Cloudflare application](../platforms/cloudflare#configure-runtime-services), or
 [custom runtime](./run-agents#assemble-a-custom-durable-runtime).
@@ -107,7 +108,7 @@ The runtime checks each executable model-declared call after approval and before
 the batch starts. A denial fails with `AgentToolAuthorizationDenied`. Recovery checks calls that still need
 execution; it reuses recorded results without executing or authorizing them again.
 
-Omitting the hook allows calls without this additional host check. Durable hosts use
+Omitting both the service and per-run hook allows calls without this additional host check. Durable hosts use
 `RunToolAuthorization.allowAll` by default. Install a policy before granting tools access to
 protected resources. Authenticate callers and authorize runtime operations as described in
 [operations](./operations#authorization-and-isolation).

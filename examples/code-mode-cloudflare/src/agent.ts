@@ -6,6 +6,7 @@ import type { Layer } from "effect";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import { WarehouseQueryResult } from "./warehouse-contract.ts";
 import { Warehouse } from "./warehouse-object.ts";
 
 /**
@@ -24,12 +25,7 @@ export const warehouseQueryTool = Tool.make("query_warehouse", {
       ),
     ),
   }),
-  success: Schema.Struct({
-    columns: Schema.Array(Schema.String),
-    rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-    rowCount: Schema.Natural,
-    truncated: Schema.Boolean,
-  }),
+  success: WarehouseQueryResult,
   failure: Schema.Struct({
     _tag: Schema.Literal("WarehouseQueryDenied"),
     reason: Schema.String,
@@ -60,13 +56,13 @@ export const warehouseHandlersLayer: Layer.Layer<
             outcome.ok
               ? Effect.succeed({
                   columns: outcome.columns,
-                  rows: outcome.rows as ReadonlyArray<Record<string, Schema.Json>>,
+                  rows: outcome.rows,
                   rowCount: outcome.rowCount,
                   truncated: outcome.truncated,
                 })
               : Effect.fail({
                   _tag: "WarehouseQueryDenied" as const,
-                  reason: outcome.reason ?? "denied",
+                  reason: outcome.reason,
                 }),
           ),
         ),

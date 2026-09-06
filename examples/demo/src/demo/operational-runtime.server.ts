@@ -882,7 +882,9 @@ const InteractiveRuntimeLive = Layer.effect(
 
           // Interactive snapshots include incremental updates even if execution later fails.
           // Successful-run retention through ThreadHistory would change that behavior.
-          const threadOptions = yield* toRunThreadOptions(threads, threadId, runId);
+          const threadOptions = yield* toRunThreadOptions(threadId, runId).pipe(
+            Effect.provideService(EphemeralThreads, threads),
+          );
 
           const contextHook = {
             prepare: ({

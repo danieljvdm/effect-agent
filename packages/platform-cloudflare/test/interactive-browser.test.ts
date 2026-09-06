@@ -29,7 +29,18 @@ import {
   type InteractiveBrowserNetworkPolicy,
 } from "@effect-agent/sandbox/InteractiveBrowser";
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Fiber, Layer, Logger, Redacted, Schema, type Scope } from "effect";
+import {
+  Clock,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Redacted,
+  Schema,
+  type Scope,
+} from "effect";
 import { TestClock } from "effect/testing";
 
 type Equal<Left, Right> =
@@ -1068,6 +1079,52 @@ describe("Browser Run interactive browser adapter", () => {
         );
         expectResourcesClosedOnce(fixture);
       }),
+  );
+
+  it.effect("retains the pass clock when browser acquisition finishes after interruption", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(123_456);
+
+      const browserGate = makeGate<BrowserRunInteractiveBrowser>();
+      const cleanupGate = makeGate<void>();
+      const cleanupTimes: Array<number> = [];
+
+      const base = makeFixture({
+        launch: async () => {
+          browserGate.markStarted();
+
+          return browserGate.promise;
+        },
+        remoteClose: async (target) => {
+          if (target === "browser") cleanupGate.resolve(undefined);
+        },
+      });
+
+      const fixture: Fixture = {
+        ...base,
+        binding: {
+          ...base.binding,
+          closeSession: (sessionId) =>
+            Effect.gen(function* () {
+              cleanupTimes.push(yield* Clock.currentTimeMillis);
+              yield* base.binding.closeSession(sessionId);
+            }),
+        },
+      };
+
+      const opening = yield* withBrowser(fixture, () => Effect.void).pipe(Effect.forkChild);
+
+      yield* awaitPromise(browserGate.started);
+      yield* Fiber.interrupt(opening);
+      browserGate.resolve(fixture.browser);
+      yield* awaitPromise(cleanupGate.promise);
+
+      expect(cleanupTimes).toEqual([123_456]);
+      expect(fixture.calls.filter((call) => call === "binding.terminate:session-id")).toHaveLength(
+        1,
+      );
+      expect(closedResources(fixture)).toEqual(["browser.close"]);
+    }),
   );
 
   it.effect("closes every remote resource that arrives after acquisition has timed out", () =>

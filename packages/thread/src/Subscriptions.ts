@@ -193,7 +193,38 @@ const dependencies = Effect.gen(function* () {
     return decoded;
   });
 
-  return { store, authorizer, source, digest, scope };
+  const acceptNormalized = Effect.fn("Subscriptions.acceptNormalized")(function* (
+    version: EventSourceVersion,
+    event: NormalizedEvent,
+    limits: SubscriptionLimits,
+  ) {
+    const time = yield* now;
+
+    const record = yield* validate(AcceptedEvent, {
+      schemaVersion: 1,
+      partition: store.partition,
+      eventId: event.eventId,
+      source: version,
+      matchingKey: event.matchingKey,
+      payload: event.payload,
+      payloadDigest: yield* digest(event.payload),
+      acceptedAtMillis: time,
+      cutoff: 0,
+      cursor: 0,
+      routingComplete: false,
+      routingFailure: null,
+      nextAttemptAtMillis: time,
+    });
+
+    const retained = yield* store.accept(record, limits);
+
+    if ((yield* digest(retained.payload)) !== retained.payloadDigest)
+      return yield* failure("corrupt", "event-digest");
+
+    return retained;
+  });
+
+  return { store, authorizer, source, digest, scope, acceptNormalized };
 });
 
 const pageLimit = (value: number) =>
@@ -364,51 +395,16 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
   return Subscriptions.of({ subscribe, listSubscriptions, cancelSubscription, listDeliveries });
 });
 
-const acceptNormalized = Effect.fn("Subscriptions.acceptNormalized")(function* (
-  store: SubscriptionStore["Service"],
-  digest: (
-    value: PersistedJson,
-  ) => Effect.Effect<AcceptedEvent["payloadDigest"], SubscriptionError>,
-  source: EventSourceVersion,
-  event: NormalizedEvent,
-  limits: SubscriptionLimits,
-) {
-  const time = yield* now;
-
-  const record = yield* validate(AcceptedEvent, {
-    schemaVersion: 1,
-    partition: store.partition,
-    eventId: event.eventId,
-    source,
-    matchingKey: event.matchingKey,
-    payload: event.payload,
-    payloadDigest: yield* digest(event.payload),
-    acceptedAtMillis: time,
-    cutoff: 0,
-    cursor: 0,
-    routingComplete: false,
-    routingFailure: null,
-    nextAttemptAtMillis: time,
-  });
-
-  const retained = yield* store.accept(record, limits);
-
-  if ((yield* digest(retained.payload)) !== retained.payloadDigest)
-    return yield* failure("corrupt", "event-digest");
-
-  return retained;
-});
-
 const makeIntake = Effect.fn("SubscriptionIntake.make")(function* (requested: SubscriptionLimits) {
   const limits = yield* validate(SubscriptionLimits, requested);
-  const { store, authorizer, source, digest } = yield* dependencies;
+  const { store, authorizer, source, acceptNormalized } = yield* dependencies;
 
   const accept: SubscriptionIntake["Service"]["accept"] = Effect.fn("SubscriptionIntake.accept")(
     function* (principal, version, payload) {
       yield* authorizer.intake(store.partition, version, principal);
       const behavior = yield* source(version);
       const event = yield* behavior.normalize(payload);
-      const accepted = yield* acceptNormalized(store, digest, version, event, limits);
+      const accepted = yield* acceptNormalized(version, event, limits);
 
       return {
         partition: accepted.partition,
@@ -443,7 +439,7 @@ const makeIntake = Effect.fn("SubscriptionIntake.make")(function* (requested: Su
 const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: SubscriptionLimits) {
   const limits = yield* validate(SubscriptionLimits, requested);
   const { bindings } = yield* SubscriptionInputBindings;
-  const { store, authorizer, source, digest } = yield* dependencies;
+  const { store, authorizer, source, digest, acceptNormalized } = yield* dependencies;
   const admission = yield* PreparedInputAdmission;
   const failpoint = yield* SubscriptionFailpoint;
   const semaphore = yield* Semaphore.make(limits.concurrency);
@@ -784,7 +780,7 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
     const observed = observation.event;
 
     if (observed !== null) {
-      const event = yield* acceptNormalized(store, digest, behavior.source, observed, limits);
+      const event = yield* acceptNormalized(behavior.source, observed, limits);
 
       if (
         event.matchingKey !== subscription.configuration.matchingKey ||

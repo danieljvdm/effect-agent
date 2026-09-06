@@ -169,6 +169,9 @@ The default executor limits include 30 seconds and 64 host calls. Supply a `Code
 value through `limits` when constructing Code Mode to change them; `maxWallTime` takes an Effect
 `Duration`. An agent's smaller remaining budget still applies. `redactEgress` can transform the
 result and logs before the aggregate model-visible byte limit.
+Its required services remain in the Code Mode handler Layer's requirements and are captured when
+that Layer is built. Temporary redactor resources close with each invocation. The redactor must
+be total: defects and interruption retain their Effect semantics.
 
 ## Run generated code on Cloudflare
 

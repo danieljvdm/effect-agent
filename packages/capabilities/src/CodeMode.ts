@@ -19,8 +19,7 @@ import {
   type CodeHostCallResult,
 } from "@effect-agent/sandbox/CodeExecutor";
 import { NetworkDisabled } from "@effect-agent/sandbox/Sandbox";
-import type { Layer } from "effect";
-import { Duration, Effect, Option, Schema } from "effect";
+import { type Layer, Context, Duration, Effect, Option, Schema, type Scope } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 /**
@@ -113,7 +112,7 @@ export type CodeModeSelectedRecord<Namespaces extends CodeModeNamespaces> = {
 /**
  * The native Effect AI Tool created by `CodeMode.make` (CAP-014). Its only
  * per-call dependency is the engine-provided `ToolBroker`; the `CodeExecutor`
- * and every selected handler are construction requirements of the handler
+ * and every selected handler and redaction service are construction requirements of the handler
  * Layer instead, so they stay visible in the composed `R`.
  */
 export type CodeModeTool<Name extends string> = Tool.Tool<
@@ -133,12 +132,19 @@ export type CodeModeTools<Name extends string> = {
 };
 
 /** Construction requirements of the Code Mode handler Layer. */
-export type CodeModeLayerRequirements<Namespaces extends CodeModeNamespaces> =
+export type CodeModeLayerRequirements<
+  Namespaces extends CodeModeNamespaces,
+  RedactionRequirements = never,
+> =
   | CodeExecutor
+  | Exclude<RedactionRequirements, Scope.Scope>
   | Tool.HandlersFor<CodeModeSelectedRecord<Namespaces>>
   | Tool.HandlerServices<CodeModeSelectedTool<Namespaces>>;
 
-export interface CodeModeOptions<Namespaces extends CodeModeNamespaces> {
+export interface CodeModeOptions<
+  Namespaces extends CodeModeNamespaces,
+  RedactionRequirements = never,
+> {
   /** Model-visible description; the builder appends the sandbox contract and declarations. */
   readonly description: string;
   /**
@@ -156,16 +162,22 @@ export interface CodeModeOptions<Namespaces extends CodeModeNamespaces> {
   readonly maxEgressBytes?: number | undefined;
   /**
    * Optional aggregate redaction pass applied to the model-visible egress
-   * before the byte budget. It must be total; a defect stays a defect.
+   * before the byte budget. Its services are acquired with the handler Layer;
+   * temporary resources close with each redaction invocation.
+   * It must be total; a defect stays a defect.
    */
   readonly redactEgress?:
     | ((egress: {
         readonly result: Schema.Json;
         readonly logs: ReadonlyArray<string>;
-      }) => Effect.Effect<{
-        readonly result: Schema.Json;
-        readonly logs: ReadonlyArray<string>;
-      }>)
+      }) => Effect.Effect<
+        {
+          readonly result: Schema.Json;
+          readonly logs: ReadonlyArray<string>;
+        },
+        never,
+        RedactionRequirements
+      >)
     | undefined;
 }
 
@@ -175,7 +187,11 @@ export interface CodeModeOptions<Namespaces extends CodeModeNamespaces> {
  * `CodeExecutor` port and the engine-owned broker. It owns no acquired
  * resources.
  */
-export interface CodeModeDefinition<Name extends string, Namespaces extends CodeModeNamespaces> {
+export interface CodeModeDefinition<
+  Name extends string,
+  Namespaces extends CodeModeNamespaces,
+  RedactionRequirements = never,
+> {
   readonly name: Name;
   /** The assembled model-facing description including the TypeScript declarations. */
   readonly description: string;
@@ -191,7 +207,7 @@ export interface CodeModeDefinition<Name extends string, Namespaces extends Code
   readonly handlers: Layer.Layer<
     Tool.HandlersFor<CodeModeTools<Name>>,
     never,
-    CodeModeLayerRequirements<Namespaces>
+    CodeModeLayerRequirements<Namespaces, RedactionRequirements>
   >;
 }
 
@@ -473,79 +489,22 @@ const truncateToUtf8Bytes = (value: string, maxBytes: number): string => {
   return `${output}…`;
 };
 
-type EgressRedactor = NonNullable<CodeModeOptions<CodeModeNamespaces>["redactEgress"]>;
-
-/**
- * The failure half of the aggregate egress policy (CAP-016): the configured
- * redaction pass covers failure logs and thrown values exactly like success
- * egress — a program cannot leak by logging and then throwing — and the
- * message itself is bounded by the budget, not only by its own schema cap.
- */
-const failureEgress = (
-  error: CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError,
-  maxEgressBytes: number,
-  redact: EgressRedactor | undefined,
-): Effect.Effect<CodeModeFailure> =>
-  Effect.gen(function* () {
-    if (
-      error._tag === "ToolBrokerUnavailableError" ||
-      error._tag === "ToolBrokerConfigurationError"
-    ) {
-      return CodeModeFailure.make({
-        errorTag: error._tag,
-        message: truncateToUtf8Bytes(boundedMessage(error.message), maxEgressBytes),
-        logs: [],
-      });
-    }
-    let logs: ReadonlyArray<string> = "logs" in error ? error.logs : [];
-    let candidateThrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
-
-    if (redact !== undefined) {
-      const redacted = yield* redact({ result: candidateThrown ?? null, logs });
-
-      logs = redacted.logs;
-      candidateThrown = candidateThrown === undefined ? undefined : redacted.result;
-    }
-
-    const message = truncateToUtf8Bytes(
-      boundedMessage(executionFailureMessage(error)),
-      maxEgressBytes,
-    );
-
-    const messageBytes = utf8ByteLength(message);
-
-    // `thrown` is included only when it fits TOGETHER with the message inside
-    // the aggregate budget, and it reduces the log allowance only when it is
-    // actually included.
-    const candidateBytes =
-      candidateThrown === undefined ? undefined : encodedJsonByteLength(candidateThrown);
-
-    const includeThrown =
-      candidateThrown !== undefined &&
-      candidateBytes !== undefined &&
-      messageBytes + candidateBytes <= maxEgressBytes;
-
-    const remaining = Math.max(
-      0,
-      maxEgressBytes - messageBytes - (includeThrown ? (candidateBytes ?? 0) : 0),
-    );
-
-    return CodeModeFailure.make({
-      errorTag: error._tag,
-      message,
-      logs: budgetedLogs(logs, remaining),
-      ...(includeThrown ? { thrown: candidateThrown } : {}),
-    });
-  });
+type EgressRedactor<Requirements = never> = NonNullable<
+  CodeModeOptions<CodeModeNamespaces, Requirements>["redactEgress"]
+>;
 
 // ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
-const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
+const make = <
+  const Name extends string,
+  Namespaces extends CodeModeNamespaces,
+  RedactionRequirements = never,
+>(
   name: Name,
-  options: CodeModeOptions<Namespaces>,
-): CodeModeDefinition<Name, Namespaces> => {
+  options: CodeModeOptions<Namespaces, RedactionRequirements>,
+): CodeModeDefinition<Name, Namespaces, RedactionRequirements> => {
   const limits = options.limits ?? defaultLimits;
   const maxEgressBytes = options.maxEgressBytes ?? defaultMaxEgressBytes;
 
@@ -715,38 +674,114 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
       }
     });
 
-  const successEgress = (
-    execution: CodeExecutionResult,
-  ): Effect.Effect<CodeModeSuccess, CodeModeFailure> =>
-    Effect.gen(function* () {
-      let egress: { readonly result: Schema.Json; readonly logs: ReadonlyArray<string> } = {
-        result: execution.value,
-        logs: execution.logs,
-      };
-
-      if (options.redactEgress !== undefined) {
-        egress = yield* options.redactEgress(egress);
-      }
-      const resultBytes = encodedJsonByteLength(egress.result);
-
-      if (resultBytes === undefined || resultBytes > maxEgressBytes) {
-        return yield* CodeModeFailure.make({
-          errorTag: "CodeModeEgressExceeded",
-          message: `The program result of ${resultBytes ?? "unencodable"} bytes exceeds the ${maxEgressBytes}-byte model-visible egress budget; return a smaller value`,
-          logs: budgetedLogs(egress.logs, Math.max(0, maxEgressBytes - 256)),
-        });
-      }
-
-      return CodeModeSuccess.make({
-        result: egress.result,
-        logs: budgetedLogs(egress.logs, maxEgressBytes - resultBytes),
-      });
-    });
-
   const build = Effect.gen(function* () {
     const captured = yield* Effect.context<never>();
+    const redactionServices = yield* Effect.context<Exclude<RedactionRequirements, Scope.Scope>>();
+    const configuredRedactor = options.redactEgress;
+
+    const redact: EgressRedactor | undefined =
+      configuredRedactor === undefined
+        ? undefined
+        : (egress) =>
+            Effect.scoped(configuredRedactor(egress)).pipe(
+              // Merge invocation-local services before opening the redaction Scope.
+              // The inner Scope shadows any Scope retained in the construction context.
+              Effect.updateContext((current: Context.Context<never>) =>
+                Context.merge(current, redactionServices),
+              ),
+            );
+
     const withHandler = yield* selectedToolkit;
     const executor = yield* CodeExecutor;
+
+    const successEgress = (
+      execution: CodeExecutionResult,
+    ): Effect.Effect<CodeModeSuccess, CodeModeFailure> =>
+      Effect.gen(function* () {
+        let egress: { readonly result: Schema.Json; readonly logs: ReadonlyArray<string> } = {
+          result: execution.value,
+          logs: execution.logs,
+        };
+
+        if (redact !== undefined) {
+          egress = yield* redact(egress);
+        }
+        const resultBytes = encodedJsonByteLength(egress.result);
+
+        if (resultBytes === undefined || resultBytes > maxEgressBytes) {
+          return yield* CodeModeFailure.make({
+            errorTag: "CodeModeEgressExceeded",
+            message: `The program result of ${resultBytes ?? "unencodable"} bytes exceeds the ${maxEgressBytes}-byte model-visible egress budget; return a smaller value`,
+            logs: budgetedLogs(egress.logs, Math.max(0, maxEgressBytes - 256)),
+          });
+        }
+
+        return CodeModeSuccess.make({
+          result: egress.result,
+          logs: budgetedLogs(egress.logs, maxEgressBytes - resultBytes),
+        });
+      });
+
+    /**
+     * The failure half of the aggregate egress policy (CAP-016): the configured
+     * redaction pass covers failure logs and thrown values exactly like success
+     * egress — a program cannot leak by logging and then throwing — and the
+     * message itself is bounded by the budget, not only by its own schema cap.
+     */
+    const failureEgress = (
+      error: CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError,
+    ): Effect.Effect<CodeModeFailure> =>
+      Effect.gen(function* () {
+        if (
+          error._tag === "ToolBrokerUnavailableError" ||
+          error._tag === "ToolBrokerConfigurationError"
+        ) {
+          return CodeModeFailure.make({
+            errorTag: error._tag,
+            message: truncateToUtf8Bytes(boundedMessage(error.message), maxEgressBytes),
+            logs: [],
+          });
+        }
+        let logs: ReadonlyArray<string> = "logs" in error ? error.logs : [];
+        let candidateThrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
+
+        if (redact !== undefined) {
+          const redacted = yield* redact({ result: candidateThrown ?? null, logs });
+
+          logs = redacted.logs;
+          candidateThrown = candidateThrown === undefined ? undefined : redacted.result;
+        }
+
+        const message = truncateToUtf8Bytes(
+          boundedMessage(executionFailureMessage(error)),
+          maxEgressBytes,
+        );
+
+        const messageBytes = utf8ByteLength(message);
+
+        // `thrown` is included only when it fits TOGETHER with the message inside
+        // the aggregate budget, and it reduces the log allowance only when it is
+        // actually included.
+        const candidateBytes =
+          candidateThrown === undefined ? undefined : encodedJsonByteLength(candidateThrown);
+
+        const includeThrown =
+          candidateThrown !== undefined &&
+          candidateBytes !== undefined &&
+          messageBytes + candidateBytes <= maxEgressBytes;
+
+        const remaining = Math.max(
+          0,
+          maxEgressBytes - messageBytes - (includeThrown ? (candidateBytes ?? 0) : 0),
+        );
+
+        return CodeModeFailure.make({
+          errorTag: error._tag,
+          message,
+          logs: budgetedLogs(logs, remaining),
+          ...(includeThrown ? { thrown: candidateThrown } : {}),
+        });
+      });
 
     const invoke = Effect.fn(`CodeMode.${name}`)(function* (parameters: { readonly code: string }) {
       const broker = yield* ToolBroker;
@@ -782,9 +817,7 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
 
       const result = yield* execution.pipe(
         Effect.catch((error) =>
-          failureEgress(error, maxEgressBytes, options.redactEgress).pipe(
-            Effect.flatMap((failure) => Effect.fail(failure)),
-          ),
+          failureEgress(error).pipe(Effect.flatMap((failure) => Effect.fail(failure))),
         ),
       );
 
@@ -805,12 +838,14 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
     build as unknown as Effect.Effect<
       Toolkit.HandlersFrom<Toolkit.ToolsByName<readonly [CodeModeTool<Name>]>>,
       never,
-      CodeExecutor | Tool.HandlersFor<CodeModeSelectedRecord<Namespaces>>
+      | CodeExecutor
+      | Tool.HandlersFor<CodeModeSelectedRecord<Namespaces>>
+      | Exclude<RedactionRequirements, Scope.Scope>
     >,
   ) as unknown as Layer.Layer<
     Tool.HandlersFor<CodeModeTools<Name>>,
     never,
-    CodeModeLayerRequirements<Namespaces>
+    CodeModeLayerRequirements<Namespaces, RedactionRequirements>
   >;
 
   return Object.freeze({

@@ -7,7 +7,7 @@ import {
 import type { OpenAiSchema } from "@effect/ai-openai";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import {
   Cause,
   ConfigProvider,
@@ -32,6 +32,10 @@ import {
   reviewCostEstimator,
 } from "../src/review-openai.ts";
 import { reviewMarker, reviewPauseMarker } from "../src/selection.ts";
+
+expectTypeOf<
+  Effect.Services<ReturnType<typeof makeReviewOpenAi>>
+>().toEqualTypeOf<OpenAiClient.OpenAiClient>();
 
 const WireRequest = Schema.Struct({
   model: Schema.String,
@@ -256,10 +260,9 @@ describe("review provider boundary", () => {
       );
 
       const provider = yield* makeReviewOpenAi({
-        client: native,
         model: "gpt-5.6-sol",
         cacheKey: "pr-291-turns",
-      });
+      }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
       const result = yield* makeReviewer({ model, costControl: provider.costControl })
         .review(request)
@@ -320,10 +323,9 @@ describe("review provider boundary", () => {
       );
 
       const provider = yield* makeReviewOpenAi({
-        client: native,
         model: "gpt-5.6-sol",
         cacheKey: "affordable-research",
-      });
+      }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
       const result = yield* makeReviewer({ model, costControl: provider.costControl })
         .review(request)
@@ -404,10 +406,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "cached-research",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
@@ -476,10 +477,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "large-review",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(ReviewRequest.make({ ...request, changes }))
@@ -541,10 +541,9 @@ describe("review provider boundary", () => {
       );
 
       const provider = yield* makeReviewOpenAi({
-        client: native,
         model: "gpt-5.6-sol",
         cacheKey: "completion-prefix",
-      });
+      }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
       const result = yield* makeReviewer({ model, costControl: provider.costControl })
         .review(request)
@@ -1092,10 +1091,9 @@ describe("review provider boundary", () => {
           );
 
           const provider = yield* makeReviewOpenAi({
-            client: native,
             model: "gpt-5.6-sol",
             cacheKey: "review-fixture",
-          });
+          }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
           const result = yield* makeReviewer({
             model,
@@ -1206,10 +1204,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "misses",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
@@ -1267,10 +1264,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "final",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         let reads = 0;
 
@@ -1336,10 +1332,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6",
           cacheKey: "alias",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const aliasPayload = { ...payload, model: "gpt-5.6" };
 
@@ -1405,10 +1400,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "preflight-retry",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const exit = yield* provider.client
           .createResponse(payload)
@@ -1479,10 +1473,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "preflight-timeout",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const pending = yield* provider.client.createResponse(payload).pipe(Effect.forkChild);
 
@@ -1562,10 +1555,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "input-token-limit",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const result = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(input)
@@ -1631,10 +1623,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "unmetered-review",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         const pending = yield* makeReviewer({ model, costControl: provider.costControl })
           .review(request)
@@ -1711,10 +1702,9 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "failed",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         if (failure === "stream-eof") {
           const [, stream] = yield* provider.client.createResponseStream(payload);
@@ -1754,10 +1744,9 @@ describe("review provider boundary", () => {
       );
 
       const provider = yield* makeReviewOpenAi({
-        client: native,
         model: "gpt-5.6-sol",
         cacheKey: "concurrent",
-      });
+      }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
       const first = yield* Effect.forkChild(provider.client.createResponse(payload));
 
@@ -1789,7 +1778,8 @@ describe("review provider boundary", () => {
         );
 
         for (const name of ["custom-model", "toString", "__proto__"]) {
-          yield* makeReviewOpenAi({ client: native, model: name, cacheKey: "config" }).pipe(
+          yield* makeReviewOpenAi({ model: name, cacheKey: "config" }).pipe(
+            Effect.provideService(OpenAiClient.OpenAiClient, native),
             Effect.flip,
           );
         }
@@ -1800,20 +1790,18 @@ describe("review provider boundary", () => {
           { tools: [{ type: "web_search" as const }] },
         ]) {
           const provider = yield* makeReviewOpenAi({
-            client: native,
             model: "gpt-5.6-sol",
             cacheKey: "config",
-          });
+          }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
           yield* provider.client.createResponse({ ...payload, ...change }).pipe(Effect.flip);
         }
         yield* TestClock.setTime(1_795_305_600_000);
 
         const provider = yield* makeReviewOpenAi({
-          client: native,
           model: "gpt-5.6-sol",
           cacheKey: "expired",
-        });
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
         yield* provider.client.createResponse(payload).pipe(Effect.flip);
         expect(calls).toBe(0);

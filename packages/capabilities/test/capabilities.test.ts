@@ -29,6 +29,8 @@ import {
   ThreadExport,
   ThreadHistoryDiverged,
   ThreadLimitExceeded,
+  type ThreadNotFound,
+  ThreadSnapshot,
   EphemeralThreads,
   EphemeralThreadsLive,
   threadPrompt,
@@ -43,6 +45,8 @@ import {
 import {
   applyCompaction,
   CompactionArtifact,
+  type ContextTransformError,
+  type ContextTransform,
   digestCompactionSource,
   ModelContextMessage,
   prepareModelContext,
@@ -58,10 +62,11 @@ import { AgentId, ThreadId, RunId, ToolCallId, TurnId } from "@effect-agent/core
 import { RunStarted, TextDelta } from "@effect-agent/core/RunEvent";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { Clock, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
+import { expectTypeOf } from "vite-plus/test";
 
 const threadId = Schema.decodeSync(ThreadId)("trip-1");
 const runId = Schema.decodeSync(RunId)("run-1");
@@ -163,7 +168,12 @@ describe("capability contracts", () => {
 
       yield* threads.append(threadId, ThreadAppend.make({ runId, message: richAssistant }));
 
-      const options = yield* toRunThreadOptions(threads, threadId, runId);
+      const threadOptions = toRunThreadOptions(threadId, runId);
+
+      expectTypeOf<Effect.Services<typeof threadOptions>>().toEqualTypeOf<EphemeralThreads>();
+      expectTypeOf<Effect.Error<typeof threadOptions>>().toEqualTypeOf<ThreadNotFound>();
+
+      const options = yield* threadOptions;
 
       expect(yield* Schema.encodeEffect(Prompt.Prompt)(options.history ?? Prompt.empty)).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(Prompt.fromMessages([richAssistant])),
@@ -1149,6 +1159,46 @@ describe("capability contracts", () => {
       }
     }),
   );
+
+  it("retains context-transform requirements in tuples and arrays", () => {
+    class Prefix extends Context.Service<Prefix, string>()("test/ContextPrefix") {}
+    class Suffix extends Context.Service<Suffix, string>()("test/ContextSuffix") {}
+
+    const snapshot = ThreadSnapshot.make({
+      version: 1,
+      threadId,
+      nextSequence: 0,
+      contentBytes: 0,
+      messages: [],
+    });
+
+    const prefix: ContextTransform<Prefix> = {
+      id: "prefix",
+      version: "1",
+      apply: (messages) => Effect.as(Prefix, messages),
+    };
+
+    const suffix: ContextTransform<Suffix> = {
+      id: "suffix",
+      version: "1",
+      apply: (messages) => Effect.as(Suffix, messages),
+    };
+
+    const fromTuple = prepareModelContext(snapshot, [prefix, suffix]);
+    const transforms = [prefix, suffix];
+    const fromArray = prepareModelContext(snapshot, transforms);
+    const homogeneous: ReadonlyArray<ContextTransform<Prefix>> = [prefix];
+    const fromHomogeneous = prepareModelContext(snapshot, homogeneous);
+    const fromEmpty = prepareModelContext(snapshot, []);
+    const fromDefault = prepareModelContext(snapshot);
+
+    expectTypeOf<Effect.Services<typeof fromTuple>>().toEqualTypeOf<Prefix | Suffix>();
+    expectTypeOf<Effect.Services<typeof fromArray>>().toEqualTypeOf<Prefix | Suffix>();
+    expectTypeOf<Effect.Services<typeof fromHomogeneous>>().toEqualTypeOf<Prefix>();
+    expectTypeOf<Effect.Services<typeof fromEmpty>>().toEqualTypeOf<never>();
+    expectTypeOf<Effect.Services<typeof fromDefault>>().toEqualTypeOf<never>();
+    expectTypeOf<Effect.Error<typeof fromTuple>>().toEqualTypeOf<ContextTransformError>();
+  });
 
   it.effect(
     "verifies exact compaction digests, preserves a nonzero uncovered prefix, and retains source",

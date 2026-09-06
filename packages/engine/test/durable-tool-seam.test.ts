@@ -180,7 +180,7 @@ const testLayer = Layer.mergeAll(
 
 layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
-    it.effect(`composes independent host services through ephemeral hooks: ${outcome}`, () => {
+    it.effect(`composes ambient host services: ${outcome}`, () => {
       const seen: Array<string> = [];
 
       const tools = Toolkit.make(
@@ -209,13 +209,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         model,
       );
 
-      const program = Effect.gen(function* () {
-        const authorization = yield* RunToolAuthorization;
-
-        return yield* AgentRuntime.run(agent, "book", {
-          toolAuthorization: authorization,
-        });
-      });
+      const program = AgentRuntime.run(agent, "book");
 
       const preparationRequired: RunContextPreparation extends Effect.Services<typeof program>
         ? true
@@ -223,7 +217,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
 
       const authorizationRequired: RunToolAuthorization extends Effect.Services<typeof program>
         ? true
-        : false = true;
+        : false = false;
 
       const preparationError: RunContextPreparationError extends Effect.Error<typeof program>
         ? true
@@ -248,7 +242,8 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           expect(seen).toEqual(outcome === "denied" ? ["prepare", "authorize"] : ["prepare"]);
         }
         expect(preparationRequired).toBe(false);
-        expect(authorizationRequired && preparationError).toBe(true);
+        expect(authorizationRequired).toBe(false);
+        expect(preparationError).toBe(true);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -293,6 +288,71 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       );
     });
   }
+
+  it.effect("an explicit per-Run authorization overrides the ambient policy", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = [];
+
+      const tools = Toolkit.make(
+        Tool.make("book", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }),
+      );
+
+      const agent = Agent.withModel(
+        Agent.make("authorization-override", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Book it.",
+          toolkit: tools,
+          policy: policy(),
+        }),
+        scriptedModel(
+          [
+            { type: "tool-call", id: "book-1", name: "book", params: {}, providerExecuted: false },
+            { type: "finish", reason: "tool-calls", usage },
+          ],
+          '"done"',
+        ),
+      );
+
+      const result = yield* AgentRuntime.run(agent, "book", {
+        toolAuthorization: {
+          authorize: () =>
+            Effect.sync(() => {
+              seen.push("override");
+
+              return { _tag: "allowed" as const };
+            }),
+        },
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(RunToolAuthorization, {
+              authorize: () =>
+                Effect.sync(() => {
+                  seen.push("ambient");
+
+                  return { _tag: "denied" as const, reason: "blocked" };
+                }),
+            }),
+            tools.toLayer({
+              book: () =>
+                Effect.sync(() => {
+                  seen.push("handler");
+
+                  return "booked";
+                }),
+            }),
+          ),
+        ),
+      );
+
+      expect(result.output).toBe("done");
+      expect(seen).toEqual(["override", "handler"]);
+    }),
+  );
 
   it.effect(
     "classifies fresh and resumed calls from definition annotations, never name prefixes",

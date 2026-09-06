@@ -386,8 +386,8 @@ export const RunContextPreparationPassthrough: Layer.Layer<RunContextPreparation
  * Host action-time authority for model-declared application Tools. Implementations close over
  * their dependencies at Layer construction and return a denial when execution is not authorized.
  * Durable coordinators capture this service once and retain it across replacement Attempts.
- * Ephemeral callers may pass the service as `RunOptions.toolAuthorization`; typed per-run hooks
- * remain available when the caller needs its own error or requirement channel.
+ * Ephemeral Runs also resolve this service at their Run boundary. A typed per-run
+ * `RunOptions.toolAuthorization` overrides it while retaining its own error and requirement channel.
  */
 export class RunToolAuthorization extends Context.Service<
   RunToolAuthorization,
@@ -823,7 +823,8 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly budget?: RunBudgetHook<HookError, HookRequirements> | undefined;
   /**
    * Host-owned action-time authorization for model-declared application Tool batches. The engine
-   * invokes it for every still-executable call after complete-batch validation and approval, but
+   * uses this per-Run override when present, otherwise the provided RunToolAuthorization service.
+   * It invokes the policy for every still-executable call after complete-batch validation and approval, but
    * before durable preparation or any Handler permit. A resumed durable batch invokes it again
    * with the same canonical Run/Turn/input authority and Tool Call identity. Programmatic
    * `ToolBroker` calls are outside this hook.
