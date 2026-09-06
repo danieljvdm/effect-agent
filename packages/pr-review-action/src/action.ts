@@ -56,6 +56,7 @@ import {
 } from "./presentation.ts";
 import {
   makeReviewOpenAi,
+  reviewBaseCostUsd,
   reviewCostLimitMicrousd,
   reviewPriority,
   reviewMaxCostUsd,
@@ -87,6 +88,7 @@ const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   PR_REVIEW_EFFORT: "INPUT_EFFORT",
   PR_REVIEW_PRIORITY: "INPUT_PRIORITY",
   PR_REVIEW_MAX_COST_USD: "INPUT_MAX-COST-USD",
+  PR_REVIEW_BASE_COST_USD: "INPUT_BASE-COST-USD",
   PR_REVIEW_GUIDANCE_FILE: "INPUT_GUIDANCE-FILE",
   PR_REVIEW_IGNORE: "INPUT_IGNORE",
 };
@@ -754,6 +756,7 @@ export const reviewActionProgram = Effect.gen(function* () {
   const priority = yield* reviewPriority;
 
   const maxCostUsd = yield* reviewMaxCostUsd;
+  const baseCostUsd = yield* reviewBaseCostUsd;
 
   const guidanceFile = yield* Config.string("PR_REVIEW_GUIDANCE_FILE").pipe(Config.withDefault(""));
 
@@ -946,7 +949,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       followUps,
     });
 
-    const costLimitMicrousd = reviewCostLimitMicrousd(request, maxCostUsd);
+    const costLimitMicrousd = reviewCostLimitMicrousd(request, maxCostUsd, baseCostUsd);
 
     const provider = yield* makeReviewOpenAi({
       model: modelName,

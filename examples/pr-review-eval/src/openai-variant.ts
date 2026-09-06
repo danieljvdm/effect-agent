@@ -1,6 +1,7 @@
 import {
   makeReviewOpenAi,
   reviewCostLimitMicrousd,
+  reviewBaseCostUsd,
   reviewMaxCostUsd,
   reviewModel,
   reviewReasoningEffort,
@@ -59,6 +60,7 @@ export interface CurrentOpenAiVariantOptions {
 export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenAiVariant")(
   function* (options: CurrentOpenAiVariantOptions) {
     const maxCostUsd = yield* reviewMaxCostUsd;
+    const baseCostUsd = yield* reviewBaseCostUsd;
     const model = yield* reviewModel;
     const reasoningEffort = yield* reviewReasoningEffort;
 
@@ -117,7 +119,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
         const provider = yield* makeReviewOpenAi({
           model: configuration.model,
           cacheKey: `pr-review:${request.headRevision}`,
-          costLimitMicrousd: reviewCostLimitMicrousd(request, maxCostUsd),
+          costLimitMicrousd: reviewCostLimitMicrousd(request, maxCostUsd, baseCostUsd),
         }).pipe(Effect.mapError((error) => reviewerFailure(error)));
 
         const reviewer = makeReviewer({

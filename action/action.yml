@@ -44,9 +44,13 @@ inputs:
     required: false
     default: "medium"
   max-cost-usd:
-    description: "Maximum model spend per attempt in USD (0.01–100). Allowance is $1 plus $1 per 100,000 patch/feedback characters, capped at this value."
+    description: "Maximum model spend per attempt in USD (0.01–100). Allowance is base-cost-usd plus $1 per 100,000 patch/feedback characters, capped at this value."
     required: false
     default: "2.50"
+  base-cost-usd:
+    description: "Base model spend allowance per nonempty attempt in USD (0.01–100), before adding $1 per 100,000 patch/feedback characters. The total never exceeds max-cost-usd."
+    required: false
+    default: "1.00"
   priority:
     description: 'Processing priority: omit to use the OpenAI project setting, "default" to force Standard, or "fast" for Fast mode within the same spending cap.'
     required: false
