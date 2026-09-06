@@ -126,7 +126,7 @@ generated-file exclusion.
 
 ## Spending and prompt caching
 
-Every review attempt has a configurable **$2.50 maximum**. Set the Action's `max-cost-usd`
+Review attempts default to a configurable **$2.50 maximum**. Set the Action's `max-cost-usd`
 input or local `PR_REVIEW_MAX_COST_USD` environment variable to a value from $0.01 to $100.
 The allowance is **$1 plus $1 per 100,000 characters** in admitted patches and selected prior
 feedback, capped at that maximum. For example, 10,000 characters allow $1.10, 50,000 allow
@@ -142,7 +142,8 @@ It explicitly requests the standard `default` service tier unless `fast: "true"`
 `PR_REVIEW_FAST=true`) selects [OpenAI Fast mode](https://developers.openai.com/api/docs/guides/fast-mode).
 Fast mode costs twice the standard token rates for the supported models and uses the same
 size-scaled spending cap, so the allowance buys fewer tokens. The effect-agent repository's
-workflow opts into Fast mode; other consumers remain on Standard unless they opt in.
+workflow opts into Fast mode with `max-cost-usd: "10.00"`; its allowance still scales with PR size.
+Other consumers retain the defaults unless they override them.
 Requests reserve at the selected tier's rates, and settlement uses the tier reported by OpenAI,
 including standard-rate fallback from Fast mode. Both `fast` and `priority` response tags identify
 Fast pricing.
