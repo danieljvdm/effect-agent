@@ -1,5 +1,20 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.50
+
+### Patch Changes
+
+- [#336](https://github.com/danieljvdm/effect-agent/pull/336) [`0438a7b`](https://github.com/danieljvdm/effect-agent/commit/0438a7b9c58869a91870d3df44dc163ec790a929) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Compose service-backed callbacks and reconciler Layers through Effect requirements, and finalize subscription and redaction resources per invocation. Preserve the caller's clock during late browser cleanup.
+
+  BEHAVIOR CHANGE: call `toRunThreadOptions(threadId, runId)` with `EphemeralThreads` provided; ephemeral runs now honor a provided `RunToolAuthorization` unless a per-run hook overrides it.
+
+- Updated dependencies [[`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf), [`0438a7b`](https://github.com/danieljvdm/effect-agent/commit/0438a7b9c58869a91870d3df44dc163ec790a929), [`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf)]:
+  - @effect-agent/engine@0.1.0-beta.50
+  - @effect-agent/thread@0.1.0-beta.50
+  - @effect-agent/core@0.1.0-beta.50
+  - @effect-agent/workflow@0.1.0-beta.50
+  - @effect-agent/storage-sqlite@0.1.0-beta.50
+
 ## 0.1.0-beta.49
 
 ### Patch Changes

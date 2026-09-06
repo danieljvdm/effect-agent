@@ -1,5 +1,19 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.50
+
+### Patch Changes
+
+- [#337](https://github.com/danieljvdm/effect-agent/pull/337) [`38bc340`](https://github.com/danieljvdm/effect-agent/commit/38bc3406b4ae6f1d97bf4c497bd97ca60c51e593) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Review large changes with a complete change index, paged diffs, caller search, and explicit unread coverage while retaining higher-priority findings when the report fills.
+  Check counterevidence before recording findings, and continue unread coverage with native context rollover under the same review budget while preserving specific missing-evidence reasons.
+
+  BEHAVIOR CHANGE: Implement `searchCode` on custom `ReviewRepository` services, and treat `pendingPaths` as including partially read files.
+
+- Updated dependencies [[`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf), [`0438a7b`](https://github.com/danieljvdm/effect-agent/commit/0438a7b9c58869a91870d3df44dc163ec790a929), [`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf)]:
+  - @effect-agent/engine@0.1.0-beta.50
+  - effect-agent@0.1.0-beta.50
+  - @effect-agent/core@0.1.0-beta.50
+
 ## 0.1.0-beta.49
 
 ### Patch Changes

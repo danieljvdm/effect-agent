@@ -1,5 +1,24 @@
 # effect-agent
 
+## 0.1.0-beta.50
+
+### Minor Changes
+
+- [#335](https://github.com/danieljvdm/effect-agent/pull/335) [`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Inject compaction strategies directly through `ContextCompactor`, and supply Effect AI's `IdGenerator` when constructing `MemoryNotes.layer`. BEHAVIOR CHANGE: Replace `RunContextPreparation.compactor` and `contextCompactorRunContextLayer` with `Layer.provide(CompactorLive)` at the runtime Layer.
+
+- [#336](https://github.com/danieljvdm/effect-agent/pull/336) [`0438a7b`](https://github.com/danieljvdm/effect-agent/commit/0438a7b9c58869a91870d3df44dc163ec790a929) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Compose service-backed callbacks and reconciler Layers through Effect requirements, and finalize subscription and redaction resources per invocation. Preserve the caller's clock during late browser cleanup.
+
+  BEHAVIOR CHANGE: call `toRunThreadOptions(threadId, runId)` with `EphemeralThreads` provided; ephemeral runs now honor a provided `RunToolAuthorization` unless a per-run hook overrides it.
+
+- [#335](https://github.com/danieljvdm/effect-agent/pull/335) [`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add native context-window rollover with durable recovery, model-directed context tools, retained transcript lookup, and revision-checked working notes. BEHAVIOR CHANGE: Update custom compactors to use `trigger`, `modelCallAllowed`, and `state.replacement` instead of the summary-specific flags and state fields.
+
+### Patch Changes
+
+- Updated dependencies [[`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf), [`0438a7b`](https://github.com/danieljvdm/effect-agent/commit/0438a7b9c58869a91870d3df44dc163ec790a929), [`207e910`](https://github.com/danieljvdm/effect-agent/commit/207e9108d25f25a204324b0f6217fea89de569cf)]:
+  - @effect-agent/engine@0.1.0-beta.50
+  - @effect-agent/capabilities@0.1.0-beta.50
+  - @effect-agent/core@0.1.0-beta.50
+
 ## 0.1.0-beta.49
 
 ### Patch Changes
