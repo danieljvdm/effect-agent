@@ -57,7 +57,7 @@ import {
 import {
   makeReviewOpenAi,
   reviewCostLimitMicrousd,
-  reviewFast,
+  reviewPriority,
   reviewMaxCostUsd,
   reviewModel,
   reviewModelPricing,
@@ -85,7 +85,7 @@ const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   PR_REVIEW_EXPECTED_HEAD: "INPUT_EXPECTED-HEAD",
   PR_REVIEW_MODEL: "INPUT_MODEL",
   PR_REVIEW_EFFORT: "INPUT_EFFORT",
-  PR_REVIEW_FAST: "INPUT_FAST",
+  PR_REVIEW_PRIORITY: "INPUT_PRIORITY",
   PR_REVIEW_MAX_COST_USD: "INPUT_MAX-COST-USD",
   PR_REVIEW_GUIDANCE_FILE: "INPUT_GUIDANCE-FILE",
   PR_REVIEW_IGNORE: "INPUT_IGNORE",
@@ -751,7 +751,7 @@ export const reviewActionProgram = Effect.gen(function* () {
 
   const modelName = yield* reviewModel;
   const effort = yield* reviewReasoningEffort;
-  const fast = yield* reviewFast;
+  const priority = yield* reviewPriority;
 
   const maxCostUsd = yield* reviewMaxCostUsd;
 
@@ -950,7 +950,7 @@ export const reviewActionProgram = Effect.gen(function* () {
 
     const provider = yield* makeReviewOpenAi({
       model: modelName,
-      fast,
+      serviceTier: priority === "" ? "auto" : priority,
       cacheKey: `pr-review:${pull.headRevision}`,
       costLimitMicrousd,
     }).pipe(
@@ -964,7 +964,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       model: OpenAiLanguageModel.model(modelName, {
         max_output_tokens: 32_000,
         store: false,
-        service_tier: fast ? "fast" : "default",
+        ...(priority === "" ? {} : { service_tier: priority }),
         strictJsonSchema: true,
         reasoning: { effort },
       }),
@@ -1099,7 +1099,7 @@ export const reviewActionProgram = Effect.gen(function* () {
 
   const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
 
-  const pricing = reviewModelPricing(modelName, fast);
+  const pricing = reviewModelPricing(modelName);
 
   const estimatedCost: ReviewCostEstimate | undefined =
     estimatedCostMicrousd === undefined || pricing === undefined
@@ -1107,7 +1107,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       : {
           microusd: estimatedCostMicrousd,
           label: pricing.label,
-          url: pricing.url,
+          url: "https://developers.openai.com/api/docs/pricing",
         };
 
   const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
