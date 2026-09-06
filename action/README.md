@@ -128,13 +128,18 @@ generated-file exclusion.
 
 Review attempts default to a configurable **$2.50 maximum**. Set the Action's `max-cost-usd`
 input or local `PR_REVIEW_MAX_COST_USD` environment variable to a value from $0.01 to $100.
-The allowance is **$1 plus $1 per 100,000 characters** in admitted patches and selected prior
-feedback, capped at that maximum. For example, 10,000 characters allow $1.10, 50,000 allow
+The base defaults to **$1**. Set `base-cost-usd` or local `PR_REVIEW_BASE_COST_USD` to a value
+from $0.01 to $100. The allowance is **base plus $1 per 100,000 characters** in admitted patches
+and selected prior feedback, capped at the maximum even when the base exceeds it.
+For example, 10,000 characters allow $1.10, 50,000 allow
 $1.50, and 150,000 or more allow $2.50 with the default configuration. Ignored and excluded
 files do not increase the allowance. Empty or skipped reviews have a zero allowance.
 The footer, logs, and `cost-limit-usd` output show the actual scaled allowance, including
 both settled charges and outstanding reservations. The same policy applies to full reviews,
 incremental reviews, and eval trials; a retry gets a new allowance.
+
+With `base-cost-usd: "4.00"` and `max-cost-usd: "20.00"`, 10,000 characters allow $4.10
+and 1,600,000 or more allow $20. These are per-attempt allowances, not a cumulative PR limit.
 
 Every consumer must specify `model` (or local `PR_REVIEW_MODEL`); there is no fallback.
 Missing, blank, and unpriced models fail before paid inference. Reasoning effort defaults to

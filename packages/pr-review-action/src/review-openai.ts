@@ -21,10 +21,14 @@ export const reviewPriority = Config.literals(["", "default", "fast"], "PR_REVIE
   Config.withDefault(""),
 );
 
-/** Maximum per attempt; the actual allowance scales with the admitted review input. */
-const ReviewMaxCostUsd = Schema.Number.check(Schema.isBetween({ minimum: 0.01, maximum: 100 }));
+const ReviewCostUsd = Schema.Number.check(Schema.isBetween({ minimum: 0.01, maximum: 100 }));
 
-export const reviewMaxCostUsd = Config.schema(ReviewMaxCostUsd, "PR_REVIEW_MAX_COST_USD").pipe(
+export const reviewBaseCostUsd = Config.schema(ReviewCostUsd, "PR_REVIEW_BASE_COST_USD").pipe(
+  Config.withDefault(1),
+);
+
+/** Maximum per attempt; the actual allowance scales with the admitted review input. */
+export const reviewMaxCostUsd = Config.schema(ReviewCostUsd, "PR_REVIEW_MAX_COST_USD").pipe(
   Config.withDefault(2.5),
 );
 
@@ -32,10 +36,11 @@ const ReviewCostLimitMicrousd = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 100_000_000 }),
 );
 
-/** $1 for investigation, plus $1 per 100,000 patch/feedback characters, up to the configured cap. */
+/** Configured base plus $1 per 100,000 patch/feedback characters, up to the configured cap. */
 export const reviewCostLimitMicrousd = (
   request: Pick<ReviewRequest, "changes" | "followUps">,
   maxCostUsd: number,
+  baseCostUsd = 1,
 ): number => {
   const characters =
     request.changes.reduce((total, change) => total + change.patch.length, 0) +
@@ -43,7 +48,10 @@ export const reviewCostLimitMicrousd = (
 
   return characters === 0
     ? 0
-    : Math.min(Math.floor(maxCostUsd * 1_000_000), 1_000_000 + characters * 10);
+    : Math.min(
+        Math.floor(maxCostUsd * 1_000_000),
+        Math.floor(baseCostUsd * 1_000_000) + characters * 10,
+      );
 };
 
 const MAX_INPUT_TOKENS = 128_000;
