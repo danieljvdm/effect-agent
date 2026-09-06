@@ -1,21 +1,52 @@
-import { type RunCostEstimator } from "@effect-agent/engine/RunOptions";
 import {
   type ReviewCostControl,
   ReviewCostSnapshot,
+  type ReviewRequest,
   ReviewUsage,
 } from "@effect-agent/pr-review/Review";
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
-import { Clock, Effect, Exit, Ref, Schema, Semaphore, Stream } from "effect";
-import { AiError, type Response } from "effect/unstable/ai";
+import { Clock, Config, Effect, Exit, Ref, Schema, Semaphore, Stream } from "effect";
+import { AiError } from "effect/unstable/ai";
 import { HttpBody, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
-/** Strictly below one dollar, including outstanding reservations. Not configurable upward. */
-export const REVIEW_COST_LIMIT_MICROUSD = 999_999;
+export const reviewModel = Config.nonEmptyString("PR_REVIEW_MODEL").pipe(
+  Config.withDefault("gpt-6-astra"),
+);
+
+export const ReviewReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
+
+export const reviewReasoningEffort = Config.schema(ReviewReasoningEffort, "PR_REVIEW_EFFORT").pipe(
+  Config.withDefault("medium"),
+);
+
+/** Maximum per attempt; the actual allowance scales with the admitted review input. */
+const ReviewMaxCostUsd = Schema.Number.check(Schema.isBetween({ minimum: 0.01, maximum: 100 }));
+
+export const reviewMaxCostUsd = Config.schema(ReviewMaxCostUsd, "PR_REVIEW_MAX_COST_USD").pipe(
+  Config.withDefault(2.5),
+);
+
+const ReviewCostLimitMicrousd = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 100_000_000 }),
+);
+
+/** $1 for investigation, plus $1 per 100,000 patch/feedback characters, up to the configured cap. */
+export const reviewCostLimitMicrousd = (
+  request: Pick<ReviewRequest, "changes" | "followUps">,
+  maxCostUsd: number,
+): number => {
+  const characters =
+    request.changes.reduce((total, change) => total + change.patch.length, 0) +
+    (request.followUps ?? []).reduce((total, followUp) => total + followUp.description.length, 0);
+
+  return characters === 0
+    ? 0
+    : Math.min(Math.floor(maxCostUsd * 1_000_000), 1_000_000 + characters * 10);
+};
+
 const MAX_INPUT_TOKENS = 128_000;
 const MAX_OUTPUT_TOKENS = 32_000;
-const PRICING_VERSION = "openai-standard-2026-08-30";
-// Refresh the rate card before Sol's guaranteed promotional window ends.
-const PRICING_VALID_UNTIL = 1_795_305_600_000; // 2026-11-22T00:00:00Z
+const PRICING_VERSION = "openai-standard-2026-09-05";
 
 interface Pricing {
   readonly label: string;
@@ -24,6 +55,7 @@ interface Pricing {
   readonly read: number;
   readonly write: number;
   readonly output: number;
+  readonly validUntil?: number;
 }
 
 // Hundredths of a microdollar per token. Direct OpenAI, standard tier, <=128k input.
@@ -35,9 +67,19 @@ const sol: Pricing = {
   read: 40,
   write: 500,
   output: 2_000,
+  // Refresh Sol's card before its guaranteed promotional window ends.
+  validUntil: 1_795_305_600_000, // 2026-11-22T00:00:00Z
 };
 
 const modelPricing: Readonly<Record<string, Pricing>> = {
+  "gpt-6-astra": {
+    label: "GPT-6 Astra",
+    url: "https://developers.openai.com/api/docs/models/gpt-6-astra",
+    input: 1_000,
+    read: 100,
+    write: 1_250,
+    output: 5_000,
+  },
   "gpt-5.6": sol,
   "gpt-5.6-sol": sol,
   "gpt-5.6-terra": {
@@ -60,37 +102,6 @@ const modelPricing: Readonly<Record<string, Pricing>> = {
 
 export const reviewModelPricing = (model: string): Pricing | undefined =>
   Object.hasOwn(modelPricing, model) ? modelPricing[model] : undefined;
-
-/** Raw Effect OpenAI usage includes cache writes in uncached; charge each token once. */
-export const estimateGpt56CostMicrousd = (
-  model: string,
-  usage: Response.Usage,
-): number | undefined => {
-  const pricing = reviewModelPricing(model);
-
-  if (pricing === undefined) return undefined;
-  const read = usage.inputTokens.cacheRead ?? 0;
-  const total = usage.inputTokens.total ?? (usage.inputTokens.uncached ?? 0) + read;
-  const uncached = Math.max(0, total - read);
-  const write = Math.min(uncached, usage.inputTokens.cacheWrite ?? 0);
-
-  return Math.ceil(
-    ((uncached - write) * pricing.input +
-      read * pricing.read +
-      write * pricing.write +
-      (usage.outputTokens.total ?? 0) * pricing.output) /
-      100,
-  );
-};
-
-export const reviewCostEstimator =
-  (model: string): RunCostEstimator =>
-  (usage) =>
-    Effect.succeed({
-      costMicrousd: estimateGpt56CostMicrousd(model, usage) ?? 0,
-      serviceTier: "default",
-      pricingVersion: PRICING_VERSION,
-    });
 
 const CacheBreakpoint = Schema.Struct({ mode: Schema.Literal("explicit") });
 
@@ -135,7 +146,7 @@ const cacheContent = (content: string | ReadonlyArray<OpenAiSchema.InputContent>
 };
 
 /**
- * rc.111's native client serializes its payload without stripping extra fields.
+ * The native client serializes its payload without stripping extra fields.
  * Decorate that supported boundary; keep upstream message/tool encoding and SSE decoding.
  * Breakpoints stay on earlier messages as history grows. Status is outgoing-only.
  */
@@ -209,8 +220,20 @@ const reservedCost = (state: Spending) =>
 export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options: {
   readonly model: string;
   readonly cacheKey: string;
+  readonly costLimitMicrousd: number;
 }) {
   const native = yield* OpenAiClient.OpenAiClient;
+
+  const costLimitMicrousd = yield* Schema.decodeUnknownEffect(ReviewCostLimitMicrousd)(
+    options.costLimitMicrousd,
+  ).pipe(
+    Effect.mapError(() =>
+      admissionError(
+        "The review spending limit must be a positive integer of at most 100,000,000 microdollars.",
+      ),
+    ),
+  );
+
   const pricing = reviewModelPricing(options.model);
 
   if (pricing === undefined) {
@@ -287,7 +310,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const now = yield* Clock.currentTimeMillis;
 
     if (
-      now >= PRICING_VALID_UNTIL ||
+      (pricing.validUntil !== undefined && now >= pricing.validUntil) ||
       original.model !== options.model ||
       original.service_tier !== "default" ||
       original.store !== false ||
@@ -305,7 +328,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const before = yield* Ref.get(state);
 
     if (before.closed) return yield* refuse("Review spending admission has already stopped.");
-    const balance = REVIEW_COST_LIMIT_MICROUSD - before.cost - reservedCost(before);
+    const balance = costLimitMicrousd - before.cost - reservedCost(before);
 
     // Outgoing-only host feedback. Count these exact bytes before reserving or
     // dispatching; withReviewPromptCache leaves run-status outside the cache.
@@ -313,7 +336,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     // a token allowance calculated for an earlier or smaller prompt.
     const spendingStatus = [
       "<run-status>",
-      `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
+      `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(costLimitMicrousd / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
       `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(2)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
       "</run-status>",
     ].join("\n");
@@ -362,7 +385,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         minimumRequestCostMicrousd: Math.ceil(
           (inputTokens * pricing.write + 16 * pricing.output) / 100,
         ),
-        costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+        costLimitMicrousd,
       });
 
       return yield* refuse("No paid request fits; deliver recorded findings without inference.");
@@ -382,10 +405,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 
     const current = yield* Ref.get(state);
 
-    if (
-      current.closed ||
-      current.cost + reservedCost(current) + microusd > REVIEW_COST_LIMIT_MICROUSD
-    ) {
+    if (current.closed || current.cost + reservedCost(current) + microusd > costLimitMicrousd) {
       return yield* refuse("The review's remaining spending allowance changed before dispatch.");
     }
     yield* Ref.update(state, (current) => ({
@@ -402,7 +422,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       outputLimitedByCost,
       reservedCostMicrousd: microusd,
       remainingCostMicrousd: balance - microusd,
-      costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+      costLimitMicrousd,
       cacheMode: "explicit",
       serviceTier: "default",
       pricingVersion: PRICING_VERSION,
@@ -427,7 +447,8 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       !(
         response.model === options.model ||
         response.model === canonicalModel ||
-        response.model.startsWith(`${canonicalModel}-`)
+        // Astra currently documents only its canonical identifier.
+        (canonicalModel !== "gpt-6-astra" && response.model.startsWith(`${canonicalModel}-`))
       ) ||
       response.service_tier !== "default" ||
       usage.input_tokens > reservation.inputTokens ||
@@ -492,7 +513,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       estimatedCostMicrousd: cost,
       cumulativeCostMicrousd: totals.cost,
       reservedCostMicrousd: reservedCost(totals),
-      remainingCostMicrousd: REVIEW_COST_LIMIT_MICROUSD - totals.cost - reservedCost(totals),
+      remainingCostMicrousd: costLimitMicrousd - totals.cost - reservedCost(totals),
     });
   });
 

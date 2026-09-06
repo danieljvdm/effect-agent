@@ -1,7 +1,9 @@
 import {
   isCommentableLine,
   makeReviewer,
+  MAX_REVIEW_FILES,
   MAX_REVIEW_PATCH_CHARS,
+  MAX_REVIEW_TOTAL_PATCH_CHARS,
   ReviewChange,
   ReviewFinding,
   type ReviewOutcome,
@@ -13,6 +15,8 @@ import {
   ReviewContextError,
   ReviewFileList,
   ReviewRepository,
+  ReviewSearchMatch,
+  ReviewSearchResult,
   ReviewSource,
 } from "@effect-agent/pr-review/ReviewRepository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -52,9 +56,11 @@ import {
 } from "./presentation.ts";
 import {
   makeReviewOpenAi,
-  REVIEW_COST_LIMIT_MICROUSD,
-  reviewCostEstimator,
+  reviewCostLimitMicrousd,
+  reviewMaxCostUsd,
+  reviewModel,
   reviewModelPricing,
+  reviewReasoningEffort,
 } from "./review-openai.ts";
 import {
   reviewModeFromCommand,
@@ -63,9 +69,6 @@ import {
   unresolvedChangeRequests as selectUnresolvedChangeRequests,
 } from "./selection.ts";
 
-export { estimateGpt56CostMicrousd } from "./review-openai.ts";
-
-const MAX_REVIEW_FILES = 100;
 const MAX_GENERATED_CLASSIFICATIONS = 100;
 const MAX_HYDRATED_SOURCE_BYTES = 8_000_000;
 
@@ -81,6 +84,7 @@ const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   PR_REVIEW_EXPECTED_HEAD: "INPUT_EXPECTED-HEAD",
   PR_REVIEW_MODEL: "INPUT_MODEL",
   PR_REVIEW_EFFORT: "INPUT_EFFORT",
+  PR_REVIEW_MAX_COST_USD: "INPUT_MAX-COST-USD",
   PR_REVIEW_GUIDANCE_FILE: "INPUT_GUIDANCE-FILE",
   PR_REVIEW_IGNORE: "INPUT_IGNORE",
 };
@@ -231,7 +235,7 @@ const skip = Effect.fn("skipReview")(function* (
     ["output-tokens", 0],
     ["estimated-cost-usd", "0.000000"],
     ["reserved-cost-usd", "0.000000"],
-    ["cost-limit-usd", (REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)],
+    ["cost-limit-usd", "0.000000"],
     ["blocking-findings", 0],
     ["unresolved-change-requests", unresolvedChangeRequests],
     ...(reviewUrl === undefined ? [] : [["review-url", reviewUrl] as const]),
@@ -270,7 +274,7 @@ export class GeneratedFileClassification extends Context.Service<
   { readonly isGenerated: (path: string) => Effect.Effect<boolean, GitHubApiFailure> }
 >()("@effect-agent/pr-review-action/GeneratedFileClassification") {}
 
-/** Hydrate exact patches in implementation-first order; the reviewer batches large input. */
+/** Hydrate exact patches in implementation-first order for one navigable review. */
 export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (input: {
   readonly files: ReadonlyArray<ChangedFile>;
   readonly changedPaths: ReadonlyArray<string>;
@@ -347,6 +351,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   let admittedPaths = 0;
   let classificationAttempts = 0;
   let hydratedSourceBytes = 0;
+  let patchCharacters = 0;
 
   for (const { file, basePath } of [...candidates.values()].sort(
     (left, right) =>
@@ -379,7 +384,6 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
         (beforeEntry.type !== "blob" || beforeEntry.mode === "120000")) ||
       (afterEntry !== undefined && (afterEntry.type !== "blob" || afterEntry.mode === "120000"))
     ) {
-      admittedPaths += 1;
       exclude(unreviewedPaths, file, basePath, "unsupported-entry");
       continue;
     }
@@ -395,7 +399,6 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
         continue;
       }
     }
-    admittedPaths += 1;
 
     const sourceSizesKnown =
       (beforeEntry === undefined || beforeEntry.size !== undefined) &&
@@ -513,7 +516,13 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       );
       continue;
     }
+    if (patchCharacters + exactPatch.length > MAX_REVIEW_TOTAL_PATCH_CHARS) {
+      exclude(unreviewedPaths, file, basePath, "patch-total-limit");
+      continue;
+    }
     changes.push(ReviewChange.make({ path, patch: exactPatch }));
+    admittedPaths += 1;
+    patchCharacters += exactPatch.length;
   }
 
   return { changes, unreviewedPaths, ignoredPaths, unavailablePaths, exclusions };
@@ -524,6 +533,7 @@ const reviewContextFailure = (message: string): ReviewContextError =>
 
 type ReviewReadFileInput = Parameters<ReviewRepository["Service"]["readFile"]>[0];
 type ReviewFindFilesInput = Parameters<ReviewRepository["Service"]["findFiles"]>[0];
+type ReviewSearchCodeInput = Parameters<ReviewRepository["Service"]["searchCode"]>[0];
 
 /** Bind model context reads to the exact verified base and head trees. */
 export const makeReviewRepository = (input: {
@@ -587,7 +597,72 @@ export const makeReviewRepository = (input: {
     );
   };
 
-  return ReviewRepository.of({ readFile, findFiles });
+  const searchCode = Effect.fn("ReviewRepository.searchCode")(function* (
+    request: ReviewSearchCodeInput,
+  ) {
+    const selected = snapshot(request.revision);
+
+    const paths = selected.paths
+      .filter(
+        (path) =>
+          path.length <= 512 &&
+          !outsideScope(path) &&
+          isReadableEntry(selected.entry(path)) &&
+          path.includes(request.path),
+      )
+      .sort();
+
+    const page = paths.slice(request.cursor, request.cursor + 20);
+
+    const sources = yield* Effect.forEach(
+      page,
+      (path) => selected.readTextFile(path).pipe(Effect.result),
+      { concurrency: 4 },
+    );
+
+    const matches: Array<ReviewSearchMatch> = [];
+    const unreadablePaths: Array<string> = [];
+    let truncated = false;
+
+    for (const [index, path] of page.entries()) {
+      const source = sources[index];
+
+      if (source === undefined || Result.isFailure(source)) {
+        unreadablePaths.push(path);
+        continue;
+      }
+      let matchedLines = 0;
+
+      for (const [lineIndex, line] of source.success.split("\n").entries()) {
+        const position = line.indexOf(request.query);
+
+        if (position < 0) continue;
+        if (matchedLines === 5) {
+          truncated = true;
+          break;
+        }
+        matches.push(
+          ReviewSearchMatch.make({
+            path,
+            line: lineIndex + 1,
+            content: line.slice(position, position + 200),
+          }),
+        );
+        matchedLines += 1;
+      }
+    }
+
+    const nextCursor = request.cursor + page.length;
+
+    return ReviewSearchResult.make({
+      matches,
+      ...(nextCursor < paths.length ? { nextCursor } : {}),
+      truncated,
+      unreadablePaths,
+    });
+  });
+
+  return ReviewRepository.of({ readFile, findFiles, searchCode });
 };
 
 export const reviewEventFor = (blockingFindings: number): "COMMENT" | "REQUEST_CHANGES" =>
@@ -672,14 +747,10 @@ export const reviewActionProgram = Effect.gen(function* () {
 
   const expectedHead = yield* Config.string("PR_REVIEW_EXPECTED_HEAD").pipe(Config.withDefault(""));
 
-  const modelName = yield* Config.nonEmptyString("PR_REVIEW_MODEL").pipe(
-    Config.withDefault("gpt-5.6-sol"),
-  );
+  const modelName = yield* reviewModel;
+  const effort = yield* reviewReasoningEffort;
 
-  const effort = yield* Config.literals(
-    ["low", "medium", "high", "xhigh"],
-    "PR_REVIEW_EFFORT",
-  ).pipe(Config.withDefault("xhigh"));
+  const maxCostUsd = yield* reviewMaxCostUsd;
 
   const guidanceFile = yield* Config.string("PR_REVIEW_GUIDANCE_FILE").pipe(Config.withDefault(""));
 
@@ -839,6 +910,7 @@ export const reviewActionProgram = Effect.gen(function* () {
         outputTokens: 0,
         estimatedCostMicrousd: undefined,
         reservedCostMicrousd: 0,
+        costLimitMicrousd: 0,
         report: ReviewReport.make({
           summary:
             scope === "incremental" &&
@@ -860,9 +932,23 @@ export const reviewActionProgram = Effect.gen(function* () {
       changedPaths: new Set(surface.changes.map(({ path }) => path)),
     });
 
+    const request = ReviewRequest.make({
+      title: pull.title.slice(0, 1_000),
+      description: pull.description.slice(0, 20_000),
+      baseRevision: reviewBase,
+      headRevision: pull.headRevision,
+      scope,
+      changes: surface.changes,
+      unreviewedPaths: surface.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300),
+      followUps,
+    });
+
+    const costLimitMicrousd = reviewCostLimitMicrousd(request, maxCostUsd);
+
     const provider = yield* makeReviewOpenAi({
       model: modelName,
-      cacheKey: `pr-review-v2:${pull.headRevision}`,
+      cacheKey: `pr-review:${pull.headRevision}`,
+      costLimitMicrousd,
     }).pipe(
       Effect.provideServiceEffect(
         OpenAiClient.OpenAiClient,
@@ -878,43 +964,27 @@ export const reviewActionProgram = Effect.gen(function* () {
         strictJsonSchema: true,
         reasoning: { effort },
       }),
-      estimateCostMicrousd: reviewCostEstimator(modelName),
       costControl: provider.costControl,
       ...(guidance === undefined ? {} : { guidance }),
     });
 
-    const result = yield* reviewer
-      .review(
-        ReviewRequest.make({
-          title: pull.title.slice(0, 1_000),
-          description: pull.description.slice(0, 20_000),
-          baseRevision: reviewBase,
-          headRevision: pull.headRevision,
-          scope,
-          changes: surface.changes,
-          unreviewedPaths: surface.unreviewedPaths
-            .filter((path) => path.length <= 512)
-            .slice(0, 300),
-          followUps,
-        }),
-      )
-      .pipe(
-        Effect.provideService(ReviewRepository, reviewRepository),
-        Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
-        Effect.onExit(() =>
-          provider.costControl.snapshot.pipe(
-            Effect.flatMap((snapshot) =>
-              Effect.logInfo("Review accounting totals", {
-                modelCalls: snapshot.modelCalls,
-                costLimited: snapshot.stopped,
-                inputLimited: snapshot.inputLimitExceeded === true,
-                ...snapshot.usage,
-                costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
-              }),
-            ),
+    const result = yield* reviewer.review(request).pipe(
+      Effect.provideService(ReviewRepository, reviewRepository),
+      Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+      Effect.onExit(() =>
+        provider.costControl.snapshot.pipe(
+          Effect.flatMap((snapshot) =>
+            Effect.logInfo("Review accounting totals", {
+              modelCalls: snapshot.modelCalls,
+              costLimited: snapshot.stopped,
+              inputLimited: snapshot.inputLimitExceeded === true,
+              ...snapshot.usage,
+              costLimitMicrousd,
+            }),
           ),
         ),
-      );
+      ),
+    );
 
     const pending = new Set(result.pendingPaths ?? []);
 
@@ -940,6 +1010,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       outputTokens: result.usage.outputTokens,
       estimatedCostMicrousd: result.usage.estimatedCostMicrousd,
       reservedCostMicrousd: result.usage.reservedCostMicrousd ?? 0,
+      costLimitMicrousd,
       report: reanchorToFullPullRequest(fullFiles, result.report),
     };
   }).pipe(Effect.exit);
@@ -1014,6 +1085,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     outputTokens,
     estimatedCostMicrousd,
     reservedCostMicrousd,
+    costLimitMicrousd,
     report,
     exhausted,
     incomplete,
@@ -1111,7 +1183,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       outputTokens,
       estimatedCost,
       reservedCostMicrousd,
-      costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+      costLimitMicrousd,
       headRevision: pull.headRevision,
     }),
     selection.automatic,
@@ -1152,7 +1224,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     ["cache-write-input-tokens", cacheWriteInputTokens],
     ["output-tokens", outputTokens],
     ["reserved-cost-usd", (reservedCostMicrousd / 1_000_000).toFixed(6)],
-    ["cost-limit-usd", (REVIEW_COST_LIMIT_MICROUSD / 1_000_000).toFixed(6)],
+    ["cost-limit-usd", (costLimitMicrousd / 1_000_000).toFixed(6)],
     [
       "estimated-cost-usd",
       estimatedCost === undefined ? "" : (estimatedCost.microusd / 1_000_000).toFixed(6),

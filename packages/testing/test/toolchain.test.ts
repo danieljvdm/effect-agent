@@ -1241,8 +1241,7 @@ esac
       expect(prReviewAction.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
       expect(prReviewAction.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(prReviewAction.dependencies?.["@effect/platform-node"]).toBe("catalog:");
-      expect(prReviewAction.devDependencies?.["@effect-agent/engine"]).toBe("workspace:*");
-      expect(prReviewAction.dependencies?.["@effect-agent/engine"]).toBeUndefined();
+      expect(prReviewDependencies).not.toContain("@effect-agent/engine");
       expect(prReviewAction.dependencies?.["effect-agent"]).toBeUndefined();
       expect(prReviewAction.dependencies?.effect).toBe("catalog:");
       expect(prReviewDependencies).not.toContain("wrangler");

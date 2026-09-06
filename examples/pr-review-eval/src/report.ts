@@ -131,6 +131,17 @@ const ResourceSummaryFields = Schema.Struct({
   uncostedIncompleteTrials: Schema.Natural,
   estimatedCostMicrousd: Schema.Natural,
   elapsedMillis: Schema.Natural,
+  measuredCompactionTrials: Schema.Natural,
+  pruneCompactions: Schema.Natural,
+  rolloverCompactions: Schema.Natural,
+  summaryCompactions: Schema.Natural,
+  measuredResearchTrials: Schema.Natural,
+  researchDelegations: Schema.Natural,
+  researchStarted: Schema.Natural,
+  researchCompleted: Schema.Natural,
+  researchFailed: Schema.Natural,
+  researchInterrupted: Schema.Natural,
+  researchIncomplete: Schema.Natural,
 }).check(
   Schema.makeFilter(
     (resources) => {
@@ -150,7 +161,10 @@ const ResourceSummaryFields = Schema.Struct({
           resources.costedSucceededTrials + resources.uncostedSucceededTrials &&
         resources.incompleteTrials ===
           resources.costedIncompleteTrials + resources.uncostedIncompleteTrials &&
-        resources.costedFailedTrials <= resources.failedTrials
+        resources.costedFailedTrials <= resources.failedTrials &&
+        resources.measuredCompactionTrials <=
+          resources.succeededTrials + resources.incompleteTrials &&
+        resources.measuredResearchTrials <= resources.succeededTrials + resources.incompleteTrials
       );
     },
     { title: "Resource summary counts and token classes are consistent" },
@@ -197,6 +211,9 @@ export class EvalCaseQualityReport extends Schema.Class<EvalCaseQualityReport>(
   caseVersion: Schema.Literal(1),
   inputDigest: EvalInputDigest,
   kind: EvalCaseKind,
+  /** First-trial detection of every adjudicated defect, irrespective of emitted severity. */
+  defectRecall: EvalRate,
+  defectStatus: EvalBlockerCaseStatus,
   blockerDetection: EvalRate,
   blockerRecall: EvalRate,
   blockerStatus: EvalBlockerCaseStatus,
@@ -242,6 +259,8 @@ export class EvalVariantQualityReport extends Schema.Class<EvalVariantQualityRep
   "@effect-agent/example-pr-review-eval/EvalVariantQualityReport",
 )({
   configuration: EvalVariantConfiguration,
+  defectRecall: EvalRate,
+  defectCases: EvalCaseCompletionSummary,
   blockerDetection: EvalRate,
   blockerRecall: EvalRate,
   blockerCases: EvalCaseCompletionSummary,
@@ -267,7 +286,7 @@ export class EvalCaseIdentity extends Schema.Class<EvalCaseIdentity>(
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   "@effect-agent/example-pr-review-eval/EvalQualityReport",
 )({
-  version: Schema.Literal(3),
+  version: Schema.Literal(5),
   observationSetDigest: EvalObservationSetDigest,
   runnerVersion: EvalRunnerVersion,
   trialCount: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -426,6 +445,17 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
   let costedFailedTrials = 0;
   let estimatedCostMicrousd = 0;
   let elapsedMillis = 0;
+  let measuredCompactionTrials = 0;
+  let pruneCompactions = 0;
+  let rolloverCompactions = 0;
+  let summaryCompactions = 0;
+  let measuredResearchTrials = 0;
+  let researchDelegations = 0;
+  let researchStarted = 0;
+  let researchCompleted = 0;
+  let researchFailed = 0;
+  let researchInterrupted = 0;
+  let researchIncomplete = 0;
   const failureCounts = new Map<string, number>();
 
   for (const observation of observations) {
@@ -446,7 +476,26 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
 
     if (incomplete) incompleteTrials += 1;
     else succeededTrials += 1;
-    const { usage } = observation.result.outcome;
+    const { usage, compactions, research } = observation.result.outcome;
+
+    if (compactions !== undefined) {
+      measuredCompactionTrials += 1;
+      for (const compaction of compactions) {
+        if (compaction.kind === "rollover") rolloverCompactions += 1;
+        else if (compaction.kind === "summarize") summaryCompactions += 1;
+        else pruneCompactions += 1;
+      }
+    }
+
+    if (research !== undefined) {
+      measuredResearchTrials += 1;
+      researchDelegations += research.delegations;
+      researchStarted += research.started;
+      researchCompleted += research.completed;
+      researchFailed += research.failed;
+      researchInterrupted += research.interrupted;
+      researchIncomplete += research.incomplete;
+    }
 
     turns += observation.result.outcome.turns;
     inputTokens += usage.inputTokens;
@@ -482,6 +531,17 @@ const resourceSummary = (observations: ReadonlyArray<EvalObservation>): EvalReso
     uncostedIncompleteTrials: incompleteTrials - costedIncompleteTrials,
     estimatedCostMicrousd,
     elapsedMillis,
+    measuredCompactionTrials,
+    pruneCompactions,
+    rolloverCompactions,
+    summaryCompactions,
+    measuredResearchTrials,
+    researchDelegations,
+    researchStarted,
+    researchCompleted,
+    researchFailed,
+    researchInterrupted,
+    researchIncomplete,
   });
 };
 
@@ -683,16 +743,12 @@ const indexFindings = (
   });
 };
 
-const matchedBlockingDefects = (
+const matchedDefects = (
   findings: ReadonlyArray<IndexedFinding>,
-  evalCase: EvalCase,
+  expectedDefects: EvalCase["expectedDefects"],
   requireBlockingSeverity: boolean,
 ): ReadonlySet<EvalDefectId> => {
-  const blockers = new Set(
-    evalCase.expectedDefects
-      .filter((defect) => defect.severity === "blocking")
-      .map((defect) => defect.id),
-  );
+  const expectedIds = new Set(expectedDefects.map((defect) => defect.id));
 
   const matched = new Set<EvalDefectId>();
 
@@ -704,7 +760,7 @@ const matchedBlockingDefects = (
       continue;
     }
     for (const defectId of indexed.judgment.matchedDefectIds) {
-      if (blockers.has(defectId)) matched.add(defectId);
+      if (expectedIds.has(defectId)) matched.add(defectId);
     }
   }
 
@@ -719,12 +775,14 @@ const caseReport = (
 ): EvalCaseQualityReport => {
   const indexed = observations.flatMap((observation) => indexFindings(observation, judgments));
   const firstFindings = indexed.filter((finding) => finding.reference.trial === 1);
-  const firstDetected = matchedBlockingDefects(firstFindings, evalCase, false);
-  const firstMatched = matchedBlockingDefects(firstFindings, evalCase, true);
 
   const expectedBlockers = evalCase.expectedDefects.filter(
     (defect) => defect.severity === "blocking",
   );
+
+  const firstFound = matchedDefects(firstFindings, evalCase.expectedDefects, false);
+  const firstDetected = matchedDefects(firstFindings, expectedBlockers, false);
+  const firstMatched = matchedDefects(firstFindings, expectedBlockers, true);
 
   const firstQuality = findingQuality(firstFindings);
 
@@ -748,6 +806,11 @@ const caseReport = (
     firstObservation.result._tag === "Succeeded" &&
     unresolvedDetectionFindings.length > 0;
 
+  const firstDefectsUnresolved =
+    firstFound.size < evalCase.expectedDefects.length &&
+    firstObservation.result._tag === "Succeeded" &&
+    unresolvedDetectionFindings.length > 0;
+
   const firstIncomplete =
     firstObservation.result._tag === "Succeeded" &&
     isIncompleteReview(firstObservation.result.outcome);
@@ -763,6 +826,17 @@ const caseReport = (
             ? "unresolved"
             : "incomplete";
 
+  const defectStatus: EvalBlockerCaseStatus =
+    evalCase.expectedDefects.length === 0
+      ? "not-applicable"
+      : firstObservation.result._tag === "Failed" || firstIncomplete
+        ? "incomplete"
+        : firstFound.size === evalCase.expectedDefects.length
+          ? "complete"
+          : firstDefectsUnresolved
+            ? "unresolved"
+            : "incomplete";
+
   const laterOnlyBlockingDefects: Array<EvalLaterBlocker> = [];
 
   const firstTrialIsResolved =
@@ -774,9 +848,9 @@ const caseReport = (
     for (const defect of expectedBlockers) {
       if (firstMatched.has(defect.id)) continue;
       for (let trial = 2; trial <= observations.length; trial += 1) {
-        const trialMatched = matchedBlockingDefects(
+        const trialMatched = matchedDefects(
           indexed.filter((finding) => finding.reference.trial === trial),
-          evalCase,
+          expectedBlockers,
           true,
         );
 
@@ -799,6 +873,12 @@ const caseReport = (
     caseVersion: evalCase.version,
     inputDigest: evalCase.inputDigest,
     kind: evalCase.kind,
+    defectRecall: makeRate(
+      firstFound.size,
+      evalCase.expectedDefects.length,
+      firstDefectsUnresolved,
+    ),
+    defectStatus,
     blockerDetection: makeRate(
       firstDetected.size,
       expectedBlockers.length,
@@ -910,6 +990,15 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
       cases.push(caseReport(evalCase, firstObservation, caseObservations, validated.judgments));
     }
 
+    const defectsFound = cases.reduce((total, report) => total + report.defectRecall.numerator, 0);
+
+    const defectsTotal = cases.reduce(
+      (total, report) => total + report.defectRecall.denominator,
+      0,
+    );
+
+    const defectsUnresolved = cases.some((report) => report.defectRecall.status === "unresolved");
+
     const blockerDetected = cases.reduce(
       (total, report) => total + report.blockerDetection.numerator,
       0,
@@ -929,11 +1018,19 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
     );
 
     const eligibleCases = cases.filter((report) => report.blockerStatus !== "not-applicable");
+    const defectCases = cases.filter((report) => report.defectStatus !== "not-applicable");
     const cleanControls = cases.filter((report) => report.kind === "clean-control");
 
     variants.push(
       EvalVariantQualityReport.make({
         configuration,
+        defectRecall: makeRate(defectsFound, defectsTotal, defectsUnresolved),
+        defectCases: EvalCaseCompletionSummary.make({
+          complete: defectCases.filter((report) => report.defectStatus === "complete").length,
+          incomplete: defectCases.filter((report) => report.defectStatus === "incomplete").length,
+          unresolved: defectCases.filter((report) => report.defectStatus === "unresolved").length,
+          total: defectCases.length,
+        }),
         blockerDetection: makeRate(blockerDetected, blockerTotal, detectionUnresolved),
         blockerRecall: makeRate(blockerFound, blockerTotal, blockerUnresolved),
         blockerCases: EvalCaseCompletionSummary.make({
@@ -961,7 +1058,7 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
   }
 
   return EvalQualityReport.make({
-    version: 3,
+    version: 5,
     observationSetDigest: validated.observationSetDigest,
     runnerVersion: validated.runnerVersion,
     trialCount: validated.trialCount,
@@ -993,7 +1090,9 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
       const blockingQuality = variant.firstTrialBlockingFindings;
 
       return [
-        `${variant.configuration.id}: blocking-recall ${renderRate(variant.blockerRecall)}`,
+        `${variant.configuration.id}: defect-recall ${renderRate(variant.defectRecall)}`,
+        `defect-cases ${variant.defectCases.complete}/${variant.defectCases.total}`,
+        `blocking-recall ${renderRate(variant.blockerRecall)}`,
         `detected ${renderRate(variant.blockerDetection)}`,
         `complete ${variant.blockerCases.complete}/${variant.blockerCases.total}`,
         `precision ${renderRate(quality.precision)}`,
@@ -1013,6 +1112,8 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
           ? "cost unavailable"
           : `cost ${variant.resources.estimatedCostMicrousd}µUSD (${variant.resources.costedSucceededTrials} succeeded + ${variant.resources.costedIncompleteTrials} incomplete + ${variant.resources.costedFailedTrials} failed costed)`,
         `elapsed ${variant.resources.elapsedMillis}ms`,
+        `compactions ${variant.resources.pruneCompactions} prune/${variant.resources.rolloverCompactions} rollover/${variant.resources.summaryCompactions} summary (${variant.resources.measuredCompactionTrials} trials measured)`,
+        `research ${variant.resources.researchDelegations} delegated/${variant.resources.researchStarted} started/${variant.resources.researchCompleted} completed/${variant.resources.researchFailed} failed/${variant.resources.researchInterrupted} interrupted/${variant.resources.researchIncomplete} incomplete (${variant.resources.measuredResearchTrials} trials measured)`,
       ].join("; ");
     })
     .join("\n");

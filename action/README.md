@@ -26,11 +26,6 @@ tag and advances `action-v1` atomically. Failed or superseded runs leave the
 previous release available. Publication installs no dependencies and runs no
 project code with repository write permission. Package releases remain separate.
 
-For the initial cutover, seed `action-v1` with the last validated source commit
-that still contains the bundle before switching workflows. Subsequent main CI
-runs advance that tag automatically. When rebasing an older feature branch,
-keep the deletion of `action/dist/index.mjs`.
-
 ## Review behavior
 
 The reviewer automatically ignores known binary asset formats, including raster images,
@@ -44,9 +39,11 @@ When a rename or content replacement crosses between binary and text, the textua
 is still reviewed as an addition or deletion. Explicit ignore rules continue to exclude
 an entire rename when either path matches.
 
-One bounded review run assesses every admitted patch before using immutable base and head source
-to resolve specific questions about plausible defects. Straightforward changes can finish from
-the diff; source tools are not an exhaustive repository audit. The host validates paths and
+One bounded review run sees every admitted changed path, reads complete diffs, and follows affected
+callers, contracts, and cleanup paths through immutable base and head source. Small diffs are supplied
+directly; larger diffs are available through bounded `read_diff` pages in the same conversation.
+Literal code search locates relevant source without requiring the reviewer to guess filenames.
+The host tracks unread diff ranges, validates finding paths and
 RIGHT-side anchors and publishes against the inspected head. A stopped run preserves findings
 recorded before research ended. Preparation failures publish a failure marker. Blocking findings
 request changes and fail the Action after publication; other outcomes remain comments.
@@ -67,7 +64,7 @@ They verify those specific blockers without expanding new-defect discovery beyon
 Use `@effect-agent review full` for body-only findings, fixes in other paths, or a same-head retry.
 At most eight prior reviews are considered, each with its complete review body and bot comments
 within 32,000 characters. Oversized feedback stays blocking; it is never truncated for verification.
-Follow-up verification runs in the final patch batch under the existing spending and execution
+Follow-up verification shares the same conversation and spending and execution
 limits. Incomplete, exhausted, excluded-path, or newly blocking results dismiss nothing.
 The Action rechecks review ownership, feedback, and head before each dismissal. GitHub does not
 support a conditional dismissal, so a push can still race the final API request. Dismissals happen
@@ -100,12 +97,21 @@ research, the Action publishes established findings with an incomplete-coverage 
 the check, including when no defects were found. Such an attempt cannot become
 an incremental baseline or clear an earlier change request. This preserves useful findings without
 claiming the full change was reviewed.
-The model's `incomplete` flag describes unfinished assessment of supplied patches. The Action
+The reviewer refuses early completion while admitted diffs remain unread. A model-reported
+`blockedOn` reason names specific unavailable evidence and is retained in an incomplete result.
+The Action
 separately lists excluded paths and their reasons, including input limits, unreadable source, and
-batches that never started. Excluded paths prevent a complete review even when assessment of the
+diffs that were not read completely. Excluded paths prevent a complete review even when assessment of the
 supplied patches completes. The comment shows up to 30 exclusions; the Action log includes all of
 them. Paths excluded only by input capacity remain available to bounded source tools, while ignore
 rules and unsupported or unreadable entries continue to block access.
+
+Source search uses a case-sensitive literal query and a path substring at either exact revision.
+Each page scans up to 20 authorized regular files, with four concurrent reads, and returns at most
+five matching lines per file. Snippets retain the complete query within 200 characters. A next
+cursor identifies more files; `truncated` identifies omitted matching lines, and unreadable paths
+are listed separately. A partial search cannot establish that no callers exist. Ignore rules,
+binary exclusions, and symlink restrictions apply equally to reads, filename search, and code search.
 
 ### Generated files
 
@@ -120,11 +126,23 @@ generated-file exclusion.
 
 ## Spending and prompt caching
 
-Every review attempt has a fixed **$0.999999 admission ceiling**. The Action keeps the configured
-model and reasoning effort, defaulting to `gpt-5.6-sol` and `xhigh`, and explicitly requests the
-standard `default` service tier. It accepts only the priced GPT-5.6 family IDs and alias listed in
-`action.yml`. The rate card was verified on 2026-08-30 and expires after 2026-11-21; refresh it before
-then or later reviews fail closed. See [OpenAI pricing](https://developers.openai.com/api/docs/pricing).
+Every review attempt has a configurable **$2.50 maximum**. Set the Action's `max-cost-usd`
+input or local `PR_REVIEW_MAX_COST_USD` environment variable to a value from $0.01 to $100.
+The allowance is **$1 plus $1 per 100,000 characters** in admitted patches and selected prior
+feedback, capped at that maximum. For example, 10,000 characters allow $1.10, 50,000 allow
+$1.50, and 150,000 or more allow $2.50 with the default configuration. Ignored and excluded
+files do not increase the allowance. Empty or skipped reviews have a zero allowance.
+The footer, logs, and `cost-limit-usd` output show the actual scaled allowance, including
+both settled charges and outstanding reservations. The same policy applies to full reviews,
+incremental reviews, and eval trials; a retry gets a new allowance.
+
+The Action keeps the configured model and reasoning effort, defaulting to `gpt-6-astra` and
+`medium`, and explicitly requests the standard `default` service tier. Effort accepts `low`,
+`medium`, `high`, `xhigh`, or `max`.
+It accepts only the priced model IDs listed in `action.yml`. The rate card was verified on
+2026-09-05. Sol and its `gpt-5.6` alias refuse new paid requests on or after 2026-11-22 UTC
+until their promotional rate card is refreshed. This deadline does not apply to Astra, Terra,
+or Luna. See [OpenAI pricing](https://developers.openai.com/api/docs/pricing).
 
 Before each research, compaction, or completion request, the Action uses OpenAI's
 [input-token counting endpoint](https://developers.openai.com/api/docs/guides/token-counting) on the
@@ -136,7 +154,7 @@ requests retain their possible charge; the transport does not automatically retr
 
 Character admission does not guarantee a token fit. If the engine's context estimate or the
 provider's exact count exceeds the input limit, the Action publishes an incomplete token-budget
-result, preserves earlier findings, and lists batches that never started as unreviewed. A refusal
+result, preserves earlier findings, and lists unread diffs as unreviewed. A refusal
 before the first model call reports zero spend and reserves nothing. The attempt stops without
 truncating patches or retrying paid inference.
 
@@ -171,33 +189,39 @@ repository source are excluded from the Action's diagnostics. Logs also count su
 definitions, returned function calls, and completion calls to diagnose protocol failures.
 
 The Action admits implementation and configuration changes before documentation paths and prose,
-with alphabetical order within each group. The reviewer divides admitted patches into sequential
-batches of at most 256,000 patch characters, with a fresh model context for each batch. Each patch
-belongs to one batch and remains complete. Every batch can read the same authorized base/head source
-to investigate interactions with other files. One spending ledger, 64-turn allowance, 64-tool-call
-allowance, 5-minute deadline, and 24-finding capacity cover the entire attempt. Findings survive a
-later batch's expected failure; stopping leaves the remaining batches explicitly unreviewed.
+with alphabetical order within each group. One review conversation retains the complete changed-path
+manifest and established findings, so related changes stay visible across the investigation. Diffs
+up to 32,000 total characters appear directly in the initial prompt; larger changes use `read_diff`
+pages of up to 32,000 characters. Pages can cross file boundaries, so reviewing many small files does
+not require a separate call for each file. Every admitted patch remains available in full. One spending ledger,
+128-turn allowance, 512-tool-call allowance, 5-minute deadline, and 24-finding capacity cover the entire
+attempt. Findings survive an expected execution failure. Unread diff ranges prevent complete coverage;
+reading every range is necessary but does not prove the model finished assessing the change.
 
 The native Agent input projection uses literal unified diff text, avoiding JSON-escaped source and
 duplicated old/new context. A large remaining input can still prevent another call before the observed spend reaches
-$1, because admission must cover a cache miss. Refusal logs report the counted input, remaining
+the allowance, because admission must cover a cache miss. Refusal logs report the counted input, remaining
 balance, and minimum possible request reservation. The Action's spending admission replaces the
 reviewer's cumulative token quota, so reusing cached context does not force early finalization.
-The 64-turn safety bound matches the tool-call allowance, so an eight-turn cutoff no longer ends
-affordable serial research. The 64 tool calls, 5 minutes, and 128,000-token context bounds still apply.
+The 128-turn and 512-tool-call bounds accommodate diff navigation and research within the shared
+spending cap. The five-minute deadline and native rollover at a 48,000-token working context
+still apply; the provider's separate exact-input admission boundary remains 128,000 tokens.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
 message, retaining earlier boundaries as history grows. Cache fields are added only at the native
 Effect OpenAI client boundary; canonical history and provider encoding remain unchanged. This works
-with the pinned Effect `4.0.0-rc.111` client, which serializes the additional request fields unchanged.
+with the pinned Effect `4.0.0-rc.112` client, which serializes the additional request fields unchanged.
 Required finalization selects `submit_review` through the native exact-tool choice, preserving
 the research tool definitions and their order in the encoded request.
 Compaction can change prefixes, and routing and cache availability still affect hits. See
 [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 
-Input admission allows at most 100 candidate files, 256,000 characters per patch, and 8 MB of hydrated
-base/head source. A complete patch may occupy an entire batch; there is no smaller per-file cap.
-The batch size does not exclude later patches. A file that exceeds the remaining
-source allowance is excluded without preventing smaller later files from fitting. These bounds
+Input admission allows at most 1,000 usable files, 2,000,000 characters per patch, 8,000,000 patch
+characters in total, and 8 MB of hydrated base/head source. Failed, unsupported, and oversized
+candidates do not consume usable file slots. A file that exceeds the remaining source or patch
+allowance is excluded without preventing smaller later files from fitting. These bounds
 limit input preparation independently of the shared inference spending ceiling.
+
+The source cache retains at most sixteen verified blobs, each bounded to 2 MB. Evicted source is
+read again by its immutable blob SHA, so repository-wide searches do not retain the entire tree.
