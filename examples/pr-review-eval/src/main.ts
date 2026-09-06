@@ -1,5 +1,5 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { ConfigProvider, Console, Effect, FileSystem, Path } from "effect";
+import { ConfigProvider, Console, Effect, FileSystem, Layer, Path } from "effect";
 import { Command } from "effect/unstable/cli";
 
 import { command } from "./command.ts";
@@ -20,8 +20,7 @@ const localConfig = ConfigProvider.layerAdd(
 const program = Command.run(command, { version: CURRENT_RUNNER_VERSION }).pipe(
   Effect.tapError((error) => Console.error(String(error))),
   Effect.scoped,
-  Effect.provide(localConfig),
-  Effect.provide(NodeServices.layer),
+  Effect.provide(localConfig.pipe(Layer.provideMerge(NodeServices.layer))),
 );
 
 NodeRuntime.runMain(program, { disableErrorReporting: true });
