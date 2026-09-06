@@ -1,15 +1,19 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Option, Ref } from "effect";
+import { assert, describe, expectTypeOf, it } from "@effect/vitest";
+import { Deferred, Effect, Fiber, Option, Ref, type Crypto } from "effect";
 import { TestClock } from "effect/testing";
 
 import { BrowserRunWorkerProofResult } from "../src/contract.ts";
 import {
-  runWorkerProofWith,
+  runWorkerProof,
   temporaryWorker,
-  type WorkerDeploymentOperations,
+  WorkerDeploymentOperations,
   type WorkerProofError,
 } from "../src/workflow.ts";
+
+expectTypeOf<Effect.Services<typeof runWorkerProof>>().toEqualTypeOf<
+  WorkerDeploymentOperations | Crypto.Crypto
+>();
 
 const proofResult = () =>
   BrowserRunWorkerProofResult.make({
@@ -47,7 +51,7 @@ describe("Browser Run Worker proof deployment resource", () => {
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<string>>([]);
 
-      const operations: WorkerDeploymentOperations = {
+      const operations: WorkerDeploymentOperations["Service"] = {
         nameExists: () => Effect.succeed(false),
         deploy: (name) => Ref.update(events, (current) => [...current, `deploy:${name}`]),
         invoke: () => Effect.succeed(proofResult()),
@@ -59,7 +63,9 @@ describe("Browser Run Worker proof deployment resource", () => {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* temporaryWorker(operations, name, deletionFailure);
+          yield* temporaryWorker(name, deletionFailure).pipe(
+            Effect.provideService(WorkerDeploymentOperations, operations),
+          );
           assert.deepStrictEqual(yield* Ref.get(events), [`deploy:${name}`]);
         }),
       );
@@ -73,7 +79,7 @@ describe("Browser Run Worker proof deployment resource", () => {
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<string>>([]);
 
-      const operations: WorkerDeploymentOperations = {
+      const operations: WorkerDeploymentOperations["Service"] = {
         nameExists: () => Effect.succeed(false),
         deploy: (name) => Ref.update(events, (current) => [...current, `deploy:${name}`]),
         invoke: (name) =>
@@ -83,7 +89,10 @@ describe("Browser Run Worker proof deployment resource", () => {
         delete: (name) => Ref.update(events, (current) => [...current, `delete:${name}`]),
       };
 
-      const proof = yield* runWorkerProofWith(operations).pipe(Effect.provide(NodeCrypto.layer));
+      const proof = yield* runWorkerProof.pipe(
+        Effect.provideService(WorkerDeploymentOperations, operations),
+        Effect.provide(NodeCrypto.layer),
+      );
 
       assert.strictEqual(proof.result.interactive.finalUrl, "https://example.com/");
       assert.strictEqual(proof.result.interactive.readFact, "Example Domain");
@@ -112,7 +121,7 @@ describe("Browser Run Worker proof deployment resource", () => {
         const events = yield* Ref.make<ReadonlyArray<string>>([]);
         const invoked = yield* Deferred.make<void>();
 
-        const operations: WorkerDeploymentOperations = {
+        const operations: WorkerDeploymentOperations["Service"] = {
           nameExists: () => Effect.succeed(false),
           deploy: (name) => Ref.update(events, (current) => [...current, `deploy:${name}`]),
           invoke: (name) =>
@@ -123,7 +132,8 @@ describe("Browser Run Worker proof deployment resource", () => {
           delete: (name) => Ref.update(events, (current) => [...current, `delete:${name}`]),
         };
 
-        const fiber = yield* runWorkerProofWith(operations).pipe(
+        const fiber = yield* runWorkerProof.pipe(
+          Effect.provideService(WorkerDeploymentOperations, operations),
           Effect.provide(NodeCrypto.layer),
           Effect.forkChild,
         );

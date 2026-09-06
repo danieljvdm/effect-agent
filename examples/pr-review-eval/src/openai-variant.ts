@@ -75,7 +75,6 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
       review: Effect.fn("PrReviewEval.review")(function* (request: ReviewRequest) {
         // Allocate the shipping ledger per invocation, including concurrent/repeated trials.
         const provider = yield* makeReviewOpenAi({
-          client: yield* OpenAiClient.OpenAiClient,
           model: configuration.model,
           cacheKey: `pr-review-v2:${request.headRevision}`,
         }).pipe(Effect.mapError((error) => reviewerFailure(error)));

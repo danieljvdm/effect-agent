@@ -113,13 +113,15 @@ export class ContextLimitExceeded extends Schema.TaggedError<ContextLimitExceede
 /**
  * Ordered context transform. It receives and returns only the model-visible
  * message view, making replacement of the authoritative source impossible.
+ * Required services remain visible in prepareModelContext; expected failures
+ * are translated by the transform into ContextTransformError.
  */
-export interface ContextTransform {
+export interface ContextTransform<Requirements = never> {
   readonly id: string;
   readonly version: string;
   readonly apply: (
     messages: ReadonlyArray<ModelContextMessage>,
-  ) => Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError>;
+  ) => Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError, Requirements>;
 }
 
 const messageText = (message: Prompt.Message): string => {
@@ -170,12 +172,16 @@ const validateModelView = (
 };
 
 /** Apply transforms in declaration order, always restoring the original source snapshot. */
-export const prepareModelContext = (
+export const prepareModelContext = <
+  const Requirements extends ReadonlyArray<unknown> = readonly [],
+>(
   snapshot: ThreadSnapshot,
-  transforms: ReadonlyArray<ContextTransform> = [],
-): Effect.Effect<PreparedModelContext, ContextTransformError> =>
-  transforms
-    .reduce<Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError>>(
+  transforms?: { readonly [Index in keyof Requirements]: ContextTransform<Requirements[Index]> },
+): Effect.Effect<PreparedModelContext, ContextTransformError, Requirements[number]> =>
+  (transforms ?? [])
+    .reduce<
+      Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError, Requirements[number]>
+    >(
       (messages, transform) =>
         messages.pipe(
           Effect.flatMap(transform.apply),

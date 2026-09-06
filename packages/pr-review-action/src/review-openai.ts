@@ -205,12 +205,12 @@ interface Spending {
 const reservedCost = (state: Spending) =>
   [...state.pending.values()].reduce((total, item) => total + item.microusd, 0);
 
-/** One ephemeral review's client and spending ledger. Never share it between review attempts. */
+/** Capture the provided client for one review's spending ledger. Never share it between attempts. */
 export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options: {
-  readonly client: OpenAiClient.Service;
   readonly model: string;
   readonly cacheKey: string;
 }) {
+  const native = yield* OpenAiClient.OpenAiClient;
   const pricing = reviewModelPricing(options.model);
 
   if (pricing === undefined) {
@@ -239,7 +239,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   const countAttempt = Effect.fn("ReviewOpenAi.countAttempt")(function* (payload: Payload) {
     // This endpoint does no inference. Count the exact outgoing token-affecting
     // fields, without truncation or mutable server-side conversation.
-    const response = yield* options.client.client.post("/responses/input_tokens", {
+    const response = yield* native.client.post("/responses/input_tokens", {
       body: HttpBody.jsonUnsafe({
         model: payload.model,
         input: payload.input,
@@ -516,12 +516,12 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   };
 
   const client = OpenAiClient.OpenAiClient.of({
-    ...options.client,
+    ...native,
     createResponse: Effect.fn("ReviewOpenAi.createResponse")(
       function* (original) {
         const { payload, reservation } = yield* admit(original);
 
-        const result = yield* options.client
+        const result = yield* native
           .createResponse(payload)
           .pipe(Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")));
 
@@ -535,7 +535,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       function* (original) {
         const { payload, reservation } = yield* admit(original);
 
-        const [response, stream] = yield* options.client
+        const [response, stream] = yield* native
           .createResponseStream(payload)
           .pipe(Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")));
 

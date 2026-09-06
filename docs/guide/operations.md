@@ -265,7 +265,9 @@ cross-partition transaction or global subscription directory.
 
 Use `makeEventSource` and `EventSources` for versioned event schemas, identity, matching, and
 optional reconciliation. Use `makeSubscriptionInputBinding` and `SubscriptionInputBindings` for
-destination preparation. Keep old source versions and bindings installed while retained work
+destination preparation. Their callbacks and Schema codecs receive a fresh Scope per operation,
+so acquired resources finalize when that operation completes, fails, or is interrupted. Other
+service dependencies are captured at host assembly. Keep old source versions and bindings installed while retained work
 needs them. Missing or ambiguous bindings leave selected delivery pending as
 `unsupported-binding`. Persisted records contain no callbacks, Schemas, Effects, credentials, or
 captured services.

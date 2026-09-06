@@ -16,7 +16,7 @@ import {
 } from "@effect-agent/sandbox/CodeExecutor";
 import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
-import { Context, Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Context, Duration, Effect, Layer, Ref, Schema, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const Query = Tool.make("query_warehouse", {
@@ -239,12 +239,23 @@ interface ScenarioOutcome {
   readonly queryCalls: number;
 }
 
-const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number }) =>
+const runWithCode = <R = never>(
+  code: string,
+  options?: {
+    readonly maxEgressBytes?: number;
+    readonly onModelTurn?: Effect.Effect<void>;
+    readonly redactEgress?: CodeMode.CodeModeOptions<
+      CodeMode.CodeModeNamespaces,
+      R
+    >["redactEgress"];
+  },
+) =>
   Effect.gen(function* () {
     const definition = CodeMode.make("run_javascript", {
       description: "Run JavaScript over the warehouse",
       tools: { warehouse: { query: Query } },
       ...(options?.maxEgressBytes === undefined ? {} : { maxEgressBytes: options.maxEgressBytes }),
+      ...(options?.redactEgress === undefined ? {} : { redactEgress: options.redactEgress }),
     });
 
     const agent = Agent.make("code-mode-host", {
@@ -277,6 +288,7 @@ const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number 
             streamText: ({ prompt }) =>
               Stream.unwrap(
                 Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                  Effect.tap(() => options?.onModelTurn ?? Effect.void),
                   Effect.tap(() =>
                     Ref.update(toolResults, (all) => [
                       ...all,
@@ -352,6 +364,51 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) => {
+  it.effect("captures redaction services for success and program-failure egress", () =>
+    Effect.gen(function* () {
+      class EgressPolicy extends Context.Service<EgressPolicy, string>()("test/EgressPolicy") {}
+
+      const finalized: Array<string> = [];
+
+      const redactEgress: CodeMode.CodeModeOptions<
+        CodeMode.CodeModeNamespaces,
+        EgressPolicy | Scope.Scope
+      >["redactEgress"] = () =>
+        Effect.gen(function* () {
+          const replacement = yield* EgressPolicy;
+
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              finalized.push(replacement);
+            }),
+          );
+
+          return { result: replacement, logs: [replacement] };
+        });
+
+      for (const code of ['RESULT "secret"', "THROW"]) {
+        const atTurnStart: Array<number> = [];
+        const before = finalized.length;
+
+        const outcome = yield* runWithCode(code, {
+          redactEgress,
+          onModelTurn: Effect.sync(() => {
+            atTurnStart.push(finalized.length - before);
+          }),
+        }).pipe(Effect.provideService(EgressPolicy, "redacted"));
+
+        expect(outcome.toolResults).toHaveLength(1);
+        expect(outcome.toolResults[0].isFailure).toBe(code === "THROW");
+        expect(atTurnStart).toEqual([0, 1]);
+        expect(outcome.toolResults[0].result).toMatchObject(
+          code === "THROW"
+            ? { thrown: "redacted", logs: ["redacted"] }
+            : { result: "redacted", logs: ["redacted"] },
+        );
+      }
+    }),
+  );
+
   it.effect(
     "CAP-014 routes host calls to the allowlisted Tool and returns the budgeted egress",
     () =>
@@ -443,6 +500,23 @@ const typedDefinition = CodeMode.make("typed_code_mode", {
   tools: { warehouse: { query: Query } },
 });
 
+class RedactionPolicy extends Context.Service<RedactionPolicy, string>()(
+  "code-mode-types/RedactionPolicy",
+) {}
+
+const redactedDefinition = CodeMode.make("redacted_code_mode", {
+  description: "redacted",
+  tools: { warehouse: { query: Query } },
+  redactEgress: (egress) =>
+    Effect.gen(function* () {
+      const result = yield* RedactionPolicy;
+
+      yield* Effect.addFinalizer(() => Effect.void);
+
+      return { ...egress, result };
+    }),
+});
+
 // With `failureMode: "return"` the envelope is encoded into the failed Tool
 // result rather than escaping into the handler `E`, so the proof pins the
 // declared failure Schema and the empty handler error surface.
@@ -480,6 +554,21 @@ type SuccessIsBudgeted =
   Tool.Success<typeof typedDefinition.tool> extends CodeModeSuccess ? true : false;
 
 describe("Code Mode type proofs", () => {
+  it("captures redaction requirements in the handler Layer with no new Tool requirements or failures", () => {
+    const requirements: Equal<
+      LayerContext<typeof redactedDefinition.handlers>,
+      LayerRequirements | RedactionPolicy
+    > = true;
+
+    const toolRequirements: Equal<
+      Tool.HandlerServices<typeof redactedDefinition.tool>,
+      Tool.HandlerServices<typeof typedDefinition.tool>
+    > = true;
+
+    const errors: Equal<Layer.Error<typeof redactedDefinition.handlers>, never> = true;
+
+    expect(requirements && toolRequirements && errors).toBe(true);
+  });
   it("pins the envelope failure, executor requirement, and budgeted success", () => {
     const failureProof: HandlerFailureIsEnvelope = true;
     const executorProof: RequiresExecutor = true;

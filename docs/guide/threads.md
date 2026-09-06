@@ -101,13 +101,16 @@ history with steering and follow-up queues:
 
 ```ts
 const program = Effect.gen(function* () {
-  const runOptions = yield* toRunThreadOptions(threads, threadId, runId);
+  const runOptions = yield* toRunThreadOptions(threadId, runId);
   return yield* AgentRuntime.run(agent, input, {
     ...runOptions,
     input: toRunInputHook(commands),
   }).pipe(Effect.provide(ThreadHistory.layerTransient));
 });
 ```
+
+Provide an `EphemeralThreads` Layer to this program. `toRunThreadOptions` acquires the owner
+while constructing its hooks, so subsequent history callbacks retain that same owner.
 
 Snapshot updates append only their new suffix. A stale or rewritten prefix fails with
 `ThreadHistoryDiverged`. A limit error records none of that update, while earlier updates

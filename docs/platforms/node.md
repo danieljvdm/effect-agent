@@ -89,11 +89,13 @@ Pass service layers in the options to `NodeDurableHost.layer` or `NodeDurableAge
 | ------------------- | ----------------------- | -------------------------------------------------- |
 | `runContext`        | `RunContextPreparation` | No prompt transform or transient reference context |
 | `toolAuthorization` | `RunToolAuthorization`  | Allow all tool calls                               |
+| `toolReconciler`    | `ToolReconciler`        | Keep unconfirmed tool outcomes unknown             |
 
 Add these options to the host assembly above. Use
 `{ runContext: RunContextLive }` for [prompt preparation](../guide/context-management),
 or `{ toolAuthorization: SearchOnlyLive }` for a [tool policy](../guide/tools#authorize-tool-calls).
-Pass both properties when configuring both services.
+Use `{ toolReconciler: SupplierReconcilerLive }` for supplier-backed recovery of unconfirmed tool
+outcomes. Configure these services independently or together.
 
 Select [native compaction](../guide/context-management#replacing-compaction) by providing its Layer
 directly to the host, for example `HostLive.pipe(Layer.provide(ContextCompactor.layerRollover))`.
@@ -102,11 +104,10 @@ Without an injected `ContextCompactor`, the host uses the default pruning and su
 The assembled layer retains each extension's construction errors and application dependencies
 in its error and requirement types. The host supplies `Crypto.Crypto`. Provide the remaining
 dependencies through ordinary `Layer.provide` composition before running the application.
-Context preparation and authorization can each be configured independently.
 
 Let `layer` or `layerStack` infer the types from your options. When annotating reusable options,
-`NodeDurableAgentRuntimeOptions<ContextError, ContextRequirements, AuthorizationError, AuthorizationRequirements>`
-preserves the two layers' construction contracts.
+`NodeDurableAgentRuntimeOptions<ContextError, ContextRequirements, AuthorizationError, AuthorizationRequirements, ReconcilerError, ReconcilerRequirements>`
+preserves all three layers' construction contracts.
 
 The runtime captures services when the host layer is acquired. Keep their resources alive for
 its Scope. Providing replacements around a later worker call does not change the captured services.

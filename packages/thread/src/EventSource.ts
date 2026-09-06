@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect";
+import { Context, Effect, Schema, type Scope } from "effect";
 
 import { PersistedJson } from "./Records.ts";
 import {
@@ -47,6 +47,8 @@ const invalid = () => SubscriptionSourceError.make({ code: "source-schema", retr
  * Capture the source's explicit Effect dependencies at host assembly. Matching and key functions
  * must be pure and bounded under this exact semantic version.
  * The returned source accepts Schema-encoded values at intake and management boundaries.
+ * Each operation owns a fresh Scope for its callbacks and codecs; captured host services
+ * retain their host lifetime. Operation resources finalize on success, failure, or interruption.
  */
 export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
   Event extends Schema.Top,
@@ -67,19 +69,26 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
 }): Effect.fn.Return<
   EventSource,
   never,
-  | R
-  | Event["DecodingServices"]
-  | Event["EncodingServices"]
-  | Parameters["DecodingServices"]
-  | Parameters["EncodingServices"]
-> {
-  const services = yield* Effect.context<
+  Exclude<
     | R
     | Event["DecodingServices"]
     | Event["EncodingServices"]
     | Parameters["DecodingServices"]
-    | Parameters["EncodingServices"]
-  >();
+    | Parameters["EncodingServices"],
+    Scope.Scope
+  >
+> {
+  const services =
+    yield* Effect.context<
+      Exclude<
+        | R
+        | Event["DecodingServices"]
+        | Event["EncodingServices"]
+        | Parameters["DecodingServices"]
+        | Parameters["EncodingServices"],
+        Scope.Scope
+      >
+    >();
 
   const encode = <S extends Schema.Top>(schema: S, value: S["Type"]) =>
     Schema.encodeEffect(schema)(value).pipe(
@@ -100,6 +109,7 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
       Effect.flatMap(Schema.decodeUnknownEffect(options.event)),
       Effect.mapError(invalid),
       Effect.flatMap(normalized),
+      Effect.scoped,
       Effect.provideContext(services),
     );
 
@@ -115,7 +125,7 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
         parameters: yield* encode(options.parameters, decoded),
         matchingKey: options.parameterKey(decoded),
       };
-    }).pipe(Effect.provideContext(services));
+    }).pipe(Effect.scoped, Effect.provideContext(services));
 
   const matches: EventSource["matches"] = (event, subscription) =>
     Effect.gen(function* () {
@@ -128,7 +138,7 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
       ).pipe(Effect.mapError(invalid));
 
       return options.matches(e, p);
-    }).pipe(Effect.provideContext(services));
+    }).pipe(Effect.scoped, Effect.provideContext(services));
 
   const reconcile = options.reconcile;
 
@@ -150,7 +160,7 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
               const event = yield* reconcile(p);
 
               return event === null ? null : yield* normalized(event);
-            }).pipe(Effect.provideContext(services)),
+            }).pipe(Effect.scoped, Effect.provideContext(services)),
         }),
   };
 });

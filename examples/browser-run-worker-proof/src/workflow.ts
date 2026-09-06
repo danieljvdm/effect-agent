@@ -1,10 +1,12 @@
 import {
   Cause,
   Config,
+  Context,
   Crypto,
   Duration,
   Effect,
   Exit,
+  Layer,
   Option,
   Path,
   Redacted,
@@ -59,12 +61,15 @@ export class WorkerProofError extends Schema.TaggedError<WorkerProofError>()("Wo
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
-export interface WorkerDeploymentOperations {
-  readonly nameExists: (name: string) => Effect.Effect<boolean, WorkerProofError>;
-  readonly deploy: (name: string) => Effect.Effect<void, WorkerProofError>;
-  readonly invoke: (name: string) => Effect.Effect<BrowserRunWorkerProofResult, WorkerProofError>;
-  readonly delete: (name: string) => Effect.Effect<void, WorkerProofError>;
-}
+export class WorkerDeploymentOperations extends Context.Service<
+  WorkerDeploymentOperations,
+  {
+    readonly nameExists: (name: string) => Effect.Effect<boolean, WorkerProofError>;
+    readonly deploy: (name: string) => Effect.Effect<void, WorkerProofError>;
+    readonly invoke: (name: string) => Effect.Effect<BrowserRunWorkerProofResult, WorkerProofError>;
+    readonly delete: (name: string) => Effect.Effect<void, WorkerProofError>;
+  }
+>()("@effect-agent/example-browser-run-worker-proof/WorkerDeploymentOperations") {}
 
 const proofConfig = Config.all({
   accountId: Config.schema(AccountId, CLOUDFLARE_ACCOUNT_ID),
@@ -101,16 +106,17 @@ const workerProofError = (
   });
 
 const runProcess = Effect.fn("BrowserRunWorkerProof.runProcess")(function* (input: {
-  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly executable: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd: string;
   readonly env: Readonly<Record<string, string>>;
   readonly operation: "deployment" | "deletion";
 }) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
   const process = Effect.scoped(
     Effect.gen(function* () {
-      const handle = yield* input.spawner.spawn(
+      const handle = yield* spawner.spawn(
         ChildProcess.make(input.executable, input.args, {
           cwd: input.cwd,
           env: input.env,
@@ -177,7 +183,7 @@ const runProcess = Effect.fn("BrowserRunWorkerProof.runProcess")(function* (inpu
 
 export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOperations")(
   function* (): Effect.fn.Return<
-    WorkerDeploymentOperations,
+    WorkerDeploymentOperations["Service"],
     WorkerProofError,
     HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner | Path.Path
   > {
@@ -237,7 +243,6 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
 
     const deploy = (name: string) =>
       runProcess({
-        spawner,
         executable: wranglerExecutable,
         args: [
           "deploy",
@@ -251,7 +256,7 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
         cwd: repositoryRoot,
         env: subprocessEnv,
         operation: "deployment",
-      });
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
     const invoke = Effect.fn("BrowserRunWorkerProof.invoke")(function* (name: string) {
       // The deployment finalizer is registered before provisioning its secret.
@@ -339,23 +344,23 @@ export const makeLiveOperations = Effect.fn("BrowserRunWorkerProof.makeLiveOpera
 
     const deleteWorker = (name: string) =>
       runProcess({
-        spawner,
         executable: wranglerExecutable,
         args: ["delete", name, "--config", wranglerConfig, "--force"],
         cwd: repositoryRoot,
         env: subprocessEnv,
         operation: "deletion",
-      });
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
     return { nameExists, deploy, invoke, delete: deleteWorker };
   },
 );
 
 export const temporaryWorker = Effect.fn("BrowserRunWorkerProof.temporaryWorker")(function* (
-  operations: WorkerDeploymentOperations,
   name: string,
   deletionFailure: Ref.Ref<Option.Option<WorkerProofError>>,
 ) {
+  const operations = yield* WorkerDeploymentOperations;
+
   return yield* Effect.acquireRelease(
     Effect.gen(function* () {
       if (yield* operations.nameExists(name)) {
@@ -405,15 +410,14 @@ const makeWorkerName = Effect.fn("BrowserRunWorkerProof.makeWorkerName")(functio
   );
 });
 
-export const runWorkerProofWith = Effect.fn("BrowserRunWorkerProof.runWorkerProofWith")(function* (
-  operations: WorkerDeploymentOperations,
-) {
+export const runWorkerProof = Effect.gen(function* () {
+  const operations = yield* WorkerDeploymentOperations;
   const name = yield* makeWorkerName();
   const deletionFailure = yield* Ref.make<Option.Option<WorkerProofError>>(Option.none());
 
   const proofExit = yield* Effect.scoped(
     Effect.gen(function* () {
-      const deployedName = yield* temporaryWorker(operations, name, deletionFailure);
+      const deployedName = yield* temporaryWorker(name, deletionFailure);
 
       const result = yield* operations.invoke(deployedName).pipe(
         Effect.timeoutOrElse({
@@ -444,8 +448,4 @@ export const runWorkerProofWith = Effect.fn("BrowserRunWorkerProof.runWorkerProo
   return yield* proofExit;
 });
 
-export const liveWorkerProof = Effect.gen(function* () {
-  const operations = yield* makeLiveOperations();
-
-  return yield* runWorkerProofWith(operations);
-}).pipe(Effect.provide(FetchHttpClient.layer));
+export const workerDeploymentLayer = Layer.effect(WorkerDeploymentOperations, makeLiveOperations());

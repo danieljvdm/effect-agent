@@ -29,6 +29,7 @@ import {
   ThreadExport,
   ThreadHistoryDiverged,
   ThreadLimitExceeded,
+  type ThreadNotFound,
   EphemeralThreads,
   EphemeralThreadsLive,
   threadPrompt,
@@ -43,6 +44,8 @@ import {
 import {
   applyCompaction,
   CompactionArtifact,
+  ContextTransformError,
+  type ContextTransform,
   digestCompactionSource,
   ModelContextMessage,
   prepareModelContext,
@@ -58,10 +61,11 @@ import { AgentId, ThreadId, RunId, ToolCallId, TurnId } from "@effect-agent/core
 import { RunStarted, TextDelta } from "@effect-agent/core/RunEvent";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { Clock, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
+import { expectTypeOf } from "vite-plus/test";
 
 const threadId = Schema.decodeSync(ThreadId)("trip-1");
 const runId = Schema.decodeSync(RunId)("run-1");
@@ -163,7 +167,17 @@ describe("capability contracts", () => {
 
       yield* threads.append(threadId, ThreadAppend.make({ runId, message: richAssistant }));
 
-      const options = yield* toRunThreadOptions(threads, threadId, runId);
+      const threadOptions = toRunThreadOptions(threadId, runId);
+
+      const ownerRequired: EphemeralThreads extends Effect.Services<typeof threadOptions>
+        ? true
+        : false = true;
+
+      const lookupError: Effect.Error<typeof threadOptions> extends ThreadNotFound ? true : false =
+        true;
+
+      expect(ownerRequired && lookupError).toBe(true);
+      const options = yield* threadOptions;
 
       expect(yield* Schema.encodeEffect(Prompt.Prompt)(options.history ?? Prompt.empty)).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(Prompt.fromMessages([richAssistant])),
@@ -1148,6 +1162,95 @@ describe("capability contracts", () => {
         });
       }
     }),
+  );
+
+  it.effect("retains context-transform requirements and translates expected failures", () =>
+    Effect.gen(function* () {
+      class Prefix extends Context.Service<Prefix, string>()("test/ContextPrefix") {}
+      class Suffix extends Context.Service<Suffix, string>()("test/ContextSuffix") {}
+      const threads = yield* EphemeralThreads;
+
+      yield* threads.create(threadId);
+      yield* threads.append(
+        threadId,
+        ThreadAppend.make({ message: textMessage("user", "source") }),
+      );
+      const snapshot = yield* threads.snapshot(threadId);
+
+      const prepared = prepareModelContext(snapshot, [
+        {
+          id: "prefix",
+          version: "1",
+          apply: (messages) =>
+            Effect.gen(function* () {
+              const prefix = yield* Prefix;
+
+              if (prefix === "")
+                return yield* ContextTransformError.make({
+                  transformId: "prefix",
+                  message: "Missing prefix",
+                });
+
+              return messages.map((message) =>
+                ModelContextMessage.make({ ...message, content: `${prefix}${message.content}` }),
+              );
+            }),
+        },
+        {
+          id: "suffix",
+          version: "1",
+          apply: (messages) =>
+            Effect.map(Suffix, (suffix) =>
+              messages.map((message) =>
+                ModelContextMessage.make({ ...message, content: `${message.content}${suffix}` }),
+              ),
+            ),
+        },
+      ]);
+
+      expectTypeOf<Effect.Services<typeof prepared>>().toEqualTypeOf<Prefix | Suffix>();
+      expectTypeOf<Effect.Error<typeof prepared>>().toEqualTypeOf<ContextTransformError>();
+
+      const prefix: ContextTransform<Prefix> = {
+        id: "prefix",
+        version: "1",
+        apply: (messages) => Effect.as(Prefix, messages),
+      };
+
+      const suffix: ContextTransform<Suffix> = {
+        id: "suffix",
+        version: "1",
+        apply: (messages) => Effect.as(Suffix, messages),
+      };
+
+      const transforms = [prefix, suffix];
+      const fromArray = prepareModelContext(snapshot, transforms);
+      const homogeneous: ReadonlyArray<ContextTransform<Prefix>> = [prefix];
+      const fromHomogeneous = prepareModelContext(snapshot, homogeneous);
+      const fromEmpty = prepareModelContext(snapshot, []);
+      const fromDefault = prepareModelContext(snapshot);
+
+      expectTypeOf<Effect.Services<typeof fromArray>>().toEqualTypeOf<Prefix | Suffix>();
+      expectTypeOf<Effect.Services<typeof fromHomogeneous>>().toEqualTypeOf<Prefix>();
+      expectTypeOf<Effect.Services<typeof fromEmpty>>().toEqualTypeOf<never>();
+      expectTypeOf<Effect.Services<typeof fromDefault>>().toEqualTypeOf<never>();
+
+      const result = yield* prepared.pipe(
+        Effect.provideContext(Context.make(Prefix, "before:").pipe(Context.add(Suffix, ":after"))),
+      );
+
+      expect(result.messages.map((message) => message.content)).toEqual(["before:source:after"]);
+      expect(result.source).toEqual(snapshot);
+
+      const failure = yield* prepared.pipe(
+        Effect.provideContext(Context.make(Prefix, "").pipe(Context.add(Suffix, ":after"))),
+        Effect.flip,
+      );
+
+      expect(failure).toEqual(
+        ContextTransformError.make({ transformId: "prefix", message: "Missing prefix" }),
+      );
+    }).pipe(Effect.provide(EphemeralThreadsLive)),
   );
 
   it.effect(

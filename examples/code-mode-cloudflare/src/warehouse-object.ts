@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 
+import { WarehouseQueryOutcome } from "./warehouse-contract.ts";
+
 /**
  * The warehouse Durable Object: a SQLite-backed store of curated invoice data
  * that generated Code Mode programs query through a read-only SQL Tool. Only a
@@ -18,17 +20,6 @@ import { Context, Effect, Layer, Option, Schema } from "effect";
 
 const MAX_ROWS = 200;
 const MAX_RESULT_BYTES = 256 * 1024;
-
-/** A read-only query outcome returned across the DO RPC boundary as plain JSON. */
-export interface WarehouseQueryOutcome {
-  readonly ok: boolean;
-  readonly columns: ReadonlyArray<string>;
-  readonly rows: ReadonlyArray<Record<string, unknown>>;
-  readonly rowCount: number;
-  readonly truncated: boolean;
-  /** Present when `ok` is false: a stable denial/failure reason. */
-  readonly reason?: string;
-}
 
 const seedRows: ReadonlyArray<{
   readonly customer: string;
@@ -127,7 +118,7 @@ const runQuery = (
   sql: string,
   parameters: ReadonlyArray<string | number | boolean | null>,
 ): Effect.Effect<WarehouseQueryOutcome> =>
-  Effect.sync(() => {
+  Effect.sync<WarehouseQueryOutcome>(() => {
     const denied = scanReadOnly(sql);
 
     if (denied !== undefined) {
@@ -147,7 +138,7 @@ const runQuery = (
         reason: `query failed: ${(cause instanceof Error ? cause.message : String(cause)).slice(0, 500)}`,
       };
     }
-    const rows: Array<Record<string, unknown>> = [];
+    const rows: Array<Record<string, Schema.Json>> = [];
     let truncated = false;
     let usedBytes = 0;
 
@@ -156,7 +147,7 @@ const runQuery = (
         truncated = true;
         break;
       }
-      const decoded = decodeRow(raw as Record<string, unknown>);
+      const decoded = decodeRow(raw);
 
       if (Option.isNone(decoded)) {
         return {
@@ -247,10 +238,10 @@ export const warehouseLayer = (
       // A Durable Object RPC failure (transport, DO exception) is an EXPECTED
       // outcome the tool handler branches on, not a defect — surface it as a
       // typed denied outcome rather than dying the pass.
-      Effect.tryPromise((): Promise<WarehouseQueryOutcome> => {
+      Effect.tryPromise(async () => {
         const stub = namespace.get(namespace.idFromName(tenant));
 
-        return stub.query(sql, [...parameters]) as Promise<WarehouseQueryOutcome>;
+        return await stub.query(sql, [...parameters]);
       }).pipe(
         Effect.catch((error) =>
           Effect.succeed<WarehouseQueryOutcome>({
@@ -263,6 +254,17 @@ export const warehouseLayer = (
               ? error.cause.message
               : String(error.cause)
             ).slice(0, 300)}`,
+          }),
+        ),
+        Effect.flatMap(Schema.decodeUnknownEffect(WarehouseQueryOutcome)),
+        Effect.catchTag("SchemaError", () =>
+          Effect.succeed<WarehouseQueryOutcome>({
+            ok: false,
+            columns: [],
+            rows: [],
+            rowCount: 0,
+            truncated: false,
+            reason: "warehouse returned a malformed query outcome",
           }),
         ),
       ),

@@ -31,6 +31,10 @@ warehouse only through the brokered `warehouse.query` method, which runs one
 **E**: the Agent runs ephemerally; the Durable Object is the warehouse data
 store, not a Thread store.
 
+The warehouse RPC and Tool share Schema-defined JSON query results. The host
+validates every RPC outcome before exposing it to the Tool; malformed responses
+and transport failures become denied queries.
+
 The response includes the Tool, isolated executor, generated JavaScript, and result:
 
 ```jsonc

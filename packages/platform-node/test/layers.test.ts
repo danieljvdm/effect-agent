@@ -12,6 +12,7 @@ import {
 import {
   NodeDurableAgentRuntime,
   NodeDurableAgentRuntimeConfig,
+  type NodePlatformConfigError,
   type NodeDurableAgentRuntimeInitializationError,
   type NodeDurableAgentRuntimeOptions,
   type NodeDurableAgentRuntimeServices,
@@ -48,6 +49,7 @@ import {
   type SubmissionState,
 } from "@effect-agent/thread/SubmissionLedger";
 import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { ReconciliationUncertain, ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
@@ -95,6 +97,10 @@ class AuthorizationSetupError extends Schema.TaggedError<AuthorizationSetupError
   "AuthorizationSetupError",
   {},
 ) {}
+class ReconcilerSetupError extends Schema.TaggedError<ReconcilerSetupError>()(
+  "ReconcilerSetupError",
+  {},
+) {}
 class ContextConfig extends Context.Service<ContextConfig, { readonly fail: boolean }>()(
   "test/ContextConfig",
 ) {}
@@ -102,6 +108,9 @@ class AuthorizationConfig extends Context.Service<
   AuthorizationConfig,
   { readonly fail: boolean }
 >()("test/AuthorizationConfig") {}
+class ReconcilerConfig extends Context.Service<ReconcilerConfig, { readonly fail: boolean }>()(
+  "test/ReconcilerConfig",
+) {}
 
 const configuredContext = Layer.effect(
   RunContextPreparation,
@@ -125,6 +134,21 @@ const configuredAuthorization = Layer.effect(
 
     return RunToolAuthorization.of({
       authorize: () => Effect.succeed({ _tag: "denied", reason: "test policy" }),
+    });
+  }),
+);
+
+const configuredReconciler = Layer.effect(
+  ToolReconciler,
+  Effect.gen(function* () {
+    yield* Crypto.Crypto;
+    const config = yield* ReconcilerConfig;
+
+    if (config.fail) return yield* new ReconcilerSetupError();
+
+    return ToolReconciler.of({
+      reconcile: () =>
+        Effect.succeed(ReconciliationUncertain.make({ reason: "No supplier proof in this test" })),
     });
   }),
 );
@@ -703,10 +727,11 @@ describe("NodeDurableAgentRuntime", () => {
       toolAuthorization: configuredAuthorization,
     });
 
-    const both = NodeHost.layer([], {
+    const combined = NodeHost.layer([], {
       ...runtimeOptions("unused.sqlite"),
       runContext: configuredContext,
       toolAuthorization: configuredAuthorization,
+      toolReconciler: configuredReconciler,
     });
 
     const contextErrors: Assert<
@@ -731,17 +756,18 @@ describe("NodeDurableAgentRuntime", () => {
 
     const hostErrors: Assert<
       Equal<
-        Layer.Error<typeof both>,
+        Layer.Error<typeof combined>,
         | DigestError
         | NodeDurableAgentRuntimeInitializationError
         | DurableWorkerFailure
         | ContextSetupError
         | AuthorizationSetupError
+        | ReconcilerSetupError
       >
     > = true;
 
     const hostNeeds: Assert<
-      Equal<Layer.Services<typeof both>, ContextConfig | AuthorizationConfig>
+      Equal<Layer.Services<typeof combined>, ContextConfig | AuthorizationConfig | ReconcilerConfig>
     > = true;
 
     expect([
@@ -753,6 +779,147 @@ describe("NodeDurableAgentRuntime", () => {
       hostNeeds,
     ]).not.toContain(false);
   });
+
+  it("preserves reconciler construction contracts through every Node constructor", () => {
+    const options: NodeDurableAgentRuntimeOptions<
+      never,
+      never,
+      never,
+      never,
+      ReconcilerSetupError,
+      ReconcilerConfig
+    > = { ...runtimeOptions("unused.sqlite"), toolReconciler: configuredReconciler };
+
+    const config = NodeDurableAgentRuntime.configLayer(options);
+    const runtime = NodeDurableAgentRuntime.layer(options);
+    const bindings = NodeDurableAgentRuntime.layerWithBindings([], options);
+    const registered = NodeDurableAgentRuntime.layerRegistered([], options);
+    const host = NodeDurableHost.layerStack(options);
+    const registeredHost = NodeDurableHost.layerRegistered([], options);
+    const managedHost = NodeHost.layer([], options);
+
+    const requirements: Assert<
+      Equal<
+        [
+          Layer.Services<typeof config>,
+          Layer.Services<typeof runtime>,
+          Layer.Services<typeof bindings>,
+          Layer.Services<typeof registered>,
+          Layer.Services<typeof host>,
+          Layer.Services<typeof registeredHost>,
+          Layer.Services<typeof managedHost>,
+        ],
+        [
+          never,
+          ReconcilerConfig,
+          ReconcilerConfig,
+          ReconcilerConfig,
+          ReconcilerConfig,
+          ReconcilerConfig,
+          ReconcilerConfig,
+        ]
+      >
+    > = true;
+
+    type RuntimeError = NodeDurableAgentRuntimeInitializationError | ReconcilerSetupError;
+    type HostError = RuntimeError | DurableWorkerFailure;
+
+    const errors: Assert<
+      Equal<
+        [
+          Layer.Error<typeof config>,
+          Layer.Error<typeof runtime>,
+          Layer.Error<typeof bindings>,
+          Layer.Error<typeof registered>,
+          Layer.Error<typeof host>,
+          Layer.Error<typeof registeredHost>,
+          Layer.Error<typeof managedHost>,
+        ],
+        [
+          NodePlatformConfigError,
+          RuntimeError,
+          RuntimeError,
+          RuntimeError | DigestError,
+          HostError,
+          HostError | DigestError,
+          HostError | DigestError,
+        ]
+      >
+    > = true;
+
+    expect([requirements, errors]).toEqual([true, true]);
+  });
+
+  it.effect.each(["success", "failure", "defect", "timeout", "interruption"] as const)(
+    "owns reconciler dependencies until host setup ends in %s",
+    (mode) =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          class Supplier extends Context.Service<Supplier, {}>()("test/ReconcilerSupplier") {}
+          const active = yield* Ref.make(false);
+          const finalizations = yield* Ref.make(0);
+          const started = yield* Deferred.make<void>();
+
+          const supplier = Layer.effect(
+            Supplier,
+            Effect.acquireRelease(Ref.set(active, true).pipe(Effect.as({})), () =>
+              Ref.set(active, false).pipe(Effect.andThen(Ref.update(finalizations, (n) => n + 1))),
+            ),
+          );
+
+          const reconciler = Layer.effect(
+            ToolReconciler,
+            Effect.gen(function* () {
+              yield* Crypto.Crypto;
+              yield* Supplier;
+              expect(yield* Ref.get(active)).toBe(true);
+              yield* Deferred.succeed(started, undefined);
+
+              if (mode === "failure") return yield* new ReconcilerSetupError();
+              if (mode === "defect") return yield* Effect.die("reconciler setup defect");
+              if (mode !== "success") return yield* Effect.never;
+
+              return ToolReconciler.of({
+                reconcile: () =>
+                  Effect.succeed(ReconciliationUncertain.make({ reason: "No supplier proof" })),
+              });
+            }),
+          );
+
+          const live = NodeDurableHost.layerStack({
+            ...runtimeOptions(filename),
+            toolReconciler: reconciler,
+          }).pipe(Layer.provide(supplier));
+
+          const build = Effect.gen(function* () {
+            const host = yield* NodeDurableHost;
+
+            expect(yield* host.admissionOpen).toBe(true);
+            expect(yield* Ref.get(active)).toBe(true);
+          }).pipe(Effect.provide(live));
+
+          const fiber = yield* (
+            mode === "timeout" ? build.pipe(Effect.timeout("1 second")) : build
+          ).pipe(Effect.forkChild);
+
+          yield* Deferred.await(started);
+          if (mode === "timeout") yield* TestClock.adjust("1 second");
+          if (mode === "interruption") yield* Fiber.interrupt(fiber);
+          const exit = yield* Fiber.await(fiber);
+
+          expect(Exit.isSuccess(exit)).toBe(mode === "success");
+          expect(yield* Ref.get(active)).toBe(false);
+          expect(yield* Ref.get(finalizations)).toBe(1);
+          if (mode === "failure" && Exit.isFailure(exit))
+            expect(Cause.findErrorOption(exit.cause)).toEqual(
+              Option.some(new ReconcilerSetupError()),
+            );
+          if (mode === "defect") expect(failureOf(exit)).toBe("reconciler setup defect");
+          if (mode === "timeout") expect(failureOf(exit)).toMatchObject({ _tag: "TimeoutError" });
+          if (mode === "interruption") expect(Exit.hasInterrupts(exit)).toBe(true);
+        }),
+      ),
+  );
 
   it.effect("returns service initialization failures without converting them to defects", () =>
     withTemporaryDatabase((filename) =>

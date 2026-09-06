@@ -1949,6 +1949,8 @@ const makeHostService = (
   ): Effect.fn.Return<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope> {
     const fixedPolicy = yield* snapshotPolicy(policy);
     const startedAt = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+    // Late SDK replies outlive the opening fiber; cleanup retains this pass's clock.
+    const runCleanup = Effect.runPromiseWith(Context.make(Clock.Clock, yield* Clock.Clock));
 
     const state: HandleState = {
       closed: { value: false },
@@ -1978,7 +1980,7 @@ const makeHostService = (
             closeLateAcquisition(
               signal,
               () => binding.launch(keepAliveMillis(fixedPolicy)),
-              (acquired) => Effect.runPromise(closeAcquired(acquired)),
+              (acquired) => runCleanup(closeAcquired(acquired)),
             ),
           catch: (cause) =>
             isCapacityRefusal(cause)

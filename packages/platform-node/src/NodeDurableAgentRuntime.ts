@@ -114,6 +114,8 @@ export interface NodeDurableAgentRuntimeOptions<
   ContextRequirements = never,
   AuthorizationError = never,
   AuthorizationRequirements = never,
+  ReconcilerError = never,
+  ReconcilerRequirements = never,
 > {
   readonly filename: string;
   readonly deploymentId: string;
@@ -148,9 +150,12 @@ export interface NodeDurableAgentRuntimeOptions<
    * Reconciliation policy consulted for open ordinary Tool Calls before an Unknown Outcome is
    * recorded (durability §10, DUR-009). Defaults to the fail-closed `ToolReconciler.uncertain`:
    * with no registered policy, every open call stays Unknown and routes to the authorized
-   * DUR-017 resolution path.
+   * DUR-017 resolution path. Construction errors and application dependencies remain in the
+   * assembled Layer's E and R; the platform supplies Crypto.
    */
-  readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
+  readonly toolReconciler?:
+    | Layer.Layer<ToolReconciler, ReconcilerError, ReconcilerRequirements | Crypto.Crypto>
+    | undefined;
   /** Host prompt preparation, acquired once with the runtime; default pass-through. */
   readonly runContext?:
     | Layer.Layer<RunContextPreparation, ContextError, ContextRequirements | Crypto.Crypto>
@@ -158,7 +163,7 @@ export interface NodeDurableAgentRuntimeOptions<
   /**
    * Independent action-time Tool authority, acquired once with the runtime; default allow-all.
    * Construction errors and application dependencies remain in the assembled Layer's E and R.
-   * The platform supplies Crypto to both extension Layers.
+   * The platform supplies Crypto to these extension Layers.
    */
   readonly toolAuthorization?:
     | Layer.Layer<
@@ -187,7 +192,10 @@ export type NodeDurableAgentRuntimeServices =
 const decodeConfigValue = Schema.decodeUnknownEffect(NodeDurableAgentRuntimeConfigValue);
 
 const configFromOptions = (
-  options: Omit<NodeDurableAgentRuntimeOptions, "runContext" | "toolAuthorization">,
+  options: Omit<
+    NodeDurableAgentRuntimeOptions,
+    "runContext" | "toolAuthorization" | "toolReconciler"
+  >,
 ): Effect.Effect<NodeDurableAgentRuntimeConfigValue, NodePlatformConfigError> =>
   decodeConfigValue({
     filename: options.filename,
@@ -393,12 +401,16 @@ export class NodeDurableAgentRuntime {
     ContextRequirements = never,
     AuthorizationError = never,
     AuthorizationRequirements = never,
+    ReconcilerError = never,
+    ReconcilerRequirements = never,
   >(
     options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
-      AuthorizationRequirements
+      AuthorizationRequirements,
+      ReconcilerError,
+      ReconcilerRequirements
     >,
   ): Layer.Layer<NodeDurableAgentRuntimeConfig, NodePlatformConfigError> {
     return Layer.effect(NodeDurableAgentRuntimeConfig)(configFromOptions(options));
@@ -410,18 +422,18 @@ export class NodeDurableAgentRuntime {
     ContextRequirements = never,
     AuthorizationError = never,
     AuthorizationRequirements = never,
+    ReconcilerError = never,
+    ReconcilerRequirements = never,
   >(
     options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
-      AuthorizationRequirements
+      AuthorizationRequirements,
+      ReconcilerError,
+      ReconcilerRequirements
     >,
-  ): Layer.Layer<
-    NodeDurableAgentRuntimeServices,
-    NodeDurableAgentRuntimeInitializationError | ContextError | AuthorizationError,
-    Exclude<ContextRequirements | AuthorizationRequirements, Crypto.Crypto>
-  > {
+  ) {
     return NodeDurableAgentRuntime.assemble(DurableAgentRuntime.layerWithServices, options);
   }
 
@@ -432,13 +444,17 @@ export class NodeDurableAgentRuntime {
     ContextRequirements = never,
     AuthorizationError = never,
     AuthorizationRequirements = never,
+    ReconcilerError = never,
+    ReconcilerRequirements = never,
   >(
     registrations: Entries,
     options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
-      AuthorizationRequirements
+      AuthorizationRequirements,
+      ReconcilerError,
+      ReconcilerRequirements
     >,
   ) {
     return NodeDurableAgentRuntime.assemble(
@@ -453,13 +469,17 @@ export class NodeDurableAgentRuntime {
     ContextRequirements = never,
     AuthorizationError = never,
     AuthorizationRequirements = never,
+    ReconcilerError = never,
+    ReconcilerRequirements = never,
   >(
     bindings: ReadonlyArray<ResolvedBinding>,
     options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
-      AuthorizationRequirements
+      AuthorizationRequirements,
+      ReconcilerError,
+      ReconcilerRequirements
     >,
   ) {
     return NodeDurableAgentRuntime.assemble(
@@ -475,13 +495,17 @@ export class NodeDurableAgentRuntime {
     ContextRequirements,
     AuthorizationError,
     AuthorizationRequirements,
+    ReconcilerError,
+    ReconcilerRequirements,
   >(
     runtimeLayer: Layer.Layer<DurableAgentRuntime, RuntimeError, RuntimeRequirements>,
     options: NodeDurableAgentRuntimeOptions<
       ContextError,
       ContextRequirements,
       AuthorizationError,
-      AuthorizationRequirements
+      AuthorizationRequirements,
+      ReconcilerError,
+      ReconcilerRequirements
     >,
   ) {
     const assembled = Layer.unwrap(

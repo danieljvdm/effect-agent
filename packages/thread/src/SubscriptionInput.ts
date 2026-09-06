@@ -1,5 +1,5 @@
 import { type AgentId } from "@effect-agent/core/Identifiers";
-import { Context, Effect, Schema } from "effect";
+import { Context, Effect, Schema, type Scope } from "effect";
 
 import { definitionDigestsEqual } from "./internal/agent-registration.ts";
 import { type DefinitionDigests, PersistedJson } from "./Records.ts";
@@ -53,6 +53,8 @@ export const resolveSubscriptionInput = (
  * Capture explicit dependencies at host assembly. Pass the destination definition's input Schema.
  * Include the context Schema and mapper in its retained definition version; changing either
  * requires new definition digests. Preparation may repeat until its envelope is committed.
+ * Each operation owns a fresh Scope for its callbacks and codecs; captured host services
+ * retain their host lifetime. Operation resources finalize on success, failure, or interruption.
  */
 export const makeSubscriptionInputBinding = Effect.fn("Thread.makeSubscriptionInputBinding")(
   function* <
@@ -77,21 +79,28 @@ export const makeSubscriptionInputBinding = Effect.fn("Thread.makeSubscriptionIn
   }): Effect.fn.Return<
     SubscriptionInputBinding,
     never,
-    | R
-    | Event["DecodingServices"]
-    | Parameters["DecodingServices"]
-    | Continuation["DecodingServices"]
-    | Continuation["EncodingServices"]
-    | Input["EncodingServices"]
-  > {
-    const services = yield* Effect.context<
+    Exclude<
       | R
       | Event["DecodingServices"]
       | Parameters["DecodingServices"]
       | Continuation["DecodingServices"]
       | Continuation["EncodingServices"]
-      | Input["EncodingServices"]
-    >();
+      | Input["EncodingServices"],
+      Scope.Scope
+    >
+  > {
+    const services =
+      yield* Effect.context<
+        Exclude<
+          | R
+          | Event["DecodingServices"]
+          | Parameters["DecodingServices"]
+          | Continuation["DecodingServices"]
+          | Continuation["EncodingServices"]
+          | Input["EncodingServices"],
+          Scope.Scope
+        >
+      >();
 
     const invalid = () =>
       SubscriptionSourceError.make({ code: "input-binding-schema", retryable: false });
@@ -111,6 +120,7 @@ export const makeSubscriptionInputBinding = Effect.fn("Thread.makeSubscriptionIn
           Effect.flatMap(Schema.decodeUnknownEffect(options.context)),
           Effect.mapError(invalid),
           Effect.flatMap((decoded) => encode(options.context, decoded)),
+          Effect.scoped,
           Effect.provideContext(services),
         ),
       prepare: (event, subscription) =>
@@ -128,7 +138,7 @@ export const makeSubscriptionInputBinding = Effect.fn("Thread.makeSubscriptionIn
           ).pipe(Effect.mapError(invalid));
 
           return yield* encode(options.input, yield* options.prepare(e, p, c));
-        }).pipe(Effect.provideContext(services)),
+        }).pipe(Effect.scoped, Effect.provideContext(services)),
     };
   },
 );

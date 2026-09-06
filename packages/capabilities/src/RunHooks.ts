@@ -31,7 +31,7 @@ import {
   type ThreadLimitExceeded,
   type ThreadNotFound,
   threadPrompt,
-  type EphemeralThreads,
+  EphemeralThreads,
 } from "./EphemeralThreads.ts";
 import type { RedactionError, Redactor } from "./Redaction.ts";
 
@@ -229,13 +229,14 @@ export type ThreadAdapterError =
  * with a memory or SQLite store instead. This adapter does not provide durable recovery.
  */
 export const toRunThreadOptions = Effect.fn("toRunThreadOptions")(function* (
-  threads: EphemeralThreads["Service"],
   threadId: import("@effect-agent/core/Identifiers").ThreadId,
   runId: import("@effect-agent/core/Identifiers").RunId,
 ): Effect.fn.Return<
   Pick<RunOptions<ThreadAdapterError>, "threadId" | "history" | "onHistory">,
-  ThreadNotFound
+  ThreadNotFound,
+  EphemeralThreads
 > {
+  const threads = yield* EphemeralThreads;
   const snapshot = yield* threads.snapshot(threadId);
 
   return {

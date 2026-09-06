@@ -861,10 +861,14 @@ export const reviewActionProgram = Effect.gen(function* () {
     });
 
     const provider = yield* makeReviewOpenAi({
-      client: yield* OpenAiClient.make({ apiKey: yield* Config.redacted("OPENAI_API_KEY") }),
       model: modelName,
       cacheKey: `pr-review-v2:${pull.headRevision}`,
-    });
+    }).pipe(
+      Effect.provideServiceEffect(
+        OpenAiClient.OpenAiClient,
+        OpenAiClient.make({ apiKey: yield* Config.redacted("OPENAI_API_KEY") }),
+      ),
+    );
 
     const reviewer = makeReviewer({
       model: OpenAiLanguageModel.model(modelName, {
