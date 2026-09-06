@@ -126,12 +126,12 @@ const rawUsage = (input: number, output: number, read = 0, write = input - read)
   total_tokens: input + output,
 });
 
-const response = (usage: unknown, model = "gpt-5.6-sol") => ({
+const response = (usage: unknown, model = "gpt-5.6-sol", serviceTier = "default") => ({
   id: "resp_fixture",
   object: "response",
   model,
   created_at: 1_788_000_000,
-  service_tier: "default",
+  service_tier: serviceTier,
   output: [],
   usage,
 });
@@ -142,6 +142,7 @@ const sse = (
   calls: ReadonlyArray<{ readonly name: string; readonly parameters: Schema.Json }>,
   usage: unknown,
   finish: "completed" | "incomplete" = "completed",
+  serviceTier = "default",
 ) => {
   const model = decodeWire(httpRequest).model;
 
@@ -162,7 +163,7 @@ const sse = (
   }));
 
   const events = [
-    { type: "response.created", response: response(null, model) },
+    { type: "response.created", response: response(null, model, serviceTier) },
     { type: "response.output_item.added", output_index: 0, item: reasoning },
     { type: "response.output_item.done", output_index: 0, item: reasoning },
     ...output.flatMap((item, index) => [
@@ -178,7 +179,7 @@ const sse = (
     {
       type: `response.${finish}`,
       response: {
-        ...response(usage, model),
+        ...response(usage, model, serviceTier),
         output: [reasoning, ...output],
         ...(finish === "incomplete" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
       },
@@ -256,34 +257,146 @@ describe("review provider boundary", () => {
     }),
   );
 
-  it.effect.each([
-    { model: "gpt-6-astra", expected: 109_500 },
-    { model: "gpt-5.6-sol", expected: 43_800 },
-    { model: "gpt-5.6-terra", expected: 22_900 },
-    { model: "gpt-5.6-luna", expected: 2_290 },
-  ])("settles disjoint cache and output usage at $model rates", ({ model, expected }) =>
+  it.effect.each(
+    [
+      { model: "gpt-6-astra", expected: 109_500 },
+      { model: "gpt-5.6", expected: 43_800 },
+      { model: "gpt-5.6-sol", expected: 43_800 },
+      { model: "gpt-5.6-terra", expected: 22_900 },
+      { model: "gpt-5.6-luna", expected: 2_290 },
+    ].flatMap((entry) => [
+      { ...entry, fast: false },
+      { ...entry, fast: true, expected: entry.expected * 2 },
+    ]),
+  )(
+    "settles disjoint cache and output usage at $model rates (fast=$fast)",
+    ({ model, expected, fast }) =>
+      Effect.gen(function* () {
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.succeed(
+              url.pathname.endsWith("/input_tokens")
+                ? json(httpRequest, { object: "response.input_tokens", input_tokens: 10_000 })
+                : json(
+                    httpRequest,
+                    response(rawUsage(10_000, 500, 2_000, 1_000), model, fast ? "fast" : "default"),
+                  ),
+            ),
+          ),
+        );
+
+        const provider = yield* makeReviewOpenAi({
+          model,
+          fast,
+          cacheKey: "family-pricing",
+          costLimitMicrousd: 2_500_000,
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
+
+        yield* provider.client.createResponse({
+          ...payload,
+          model,
+          service_tier: fast ? "fast" : "default",
+        });
+        const snapshot = yield* provider.costControl.snapshot;
+
+        expect(snapshot.usage.estimatedCostMicrousd).toBe(expected);
+        expect(snapshot.usage.reservedCostMicrousd).toBe(0);
+      }),
+  );
+
+  it.effect.each(
+    ["fast", "priority", "default", "auto", "flex", "ultrafast"].flatMap((serviceTier) =>
+      [false, true].map((streaming) => ({ serviceTier, streaming })),
+    ),
+  )(
+    "settles Fast's reported $serviceTier tier (streaming=$streaming)",
+    ({ serviceTier, streaming }) =>
+      Effect.gen(function* () {
+        const sent: Array<WireRequest> = [];
+        const model = "gpt-6-astra";
+        const valid = ["fast", "priority", "default"].includes(serviceTier);
+
+        const native = yield* makeNative(
+          HttpClient.make((httpRequest, url) =>
+            Effect.sync(() => {
+              if (url.pathname.endsWith("/input_tokens"))
+                return json(httpRequest, { object: "response.input_tokens", input_tokens: 10_000 });
+              sent.push(decodeWire(httpRequest));
+              const usage = rawUsage(10_000, 500, 2_000, 1_000);
+
+              return streaming
+                ? sse(httpRequest, 1, [], usage, "completed", serviceTier)
+                : json(httpRequest, response(usage, model, serviceTier));
+            }),
+          ),
+        );
+
+        const provider = yield* makeReviewOpenAi({
+          model,
+          fast: true,
+          cacheKey: "fast-tier",
+          costLimitMicrousd: 2_500_000,
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
+
+        const input = { ...payload, model, service_tier: "fast" };
+
+        const result = yield* (
+          streaming
+            ? provider.client
+                .createResponseStream(input)
+                .pipe(Effect.flatMap(([, stream]) => Stream.runDrain(stream)))
+            : provider.client.createResponse(input)
+        ).pipe(Effect.exit);
+
+        expect(Exit.isSuccess(result)).toBe(valid);
+        // $0.25 worst-case input leaves $2.25 for at most 22,500 output tokens.
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toMatchObject({ model, service_tier: "fast", max_output_tokens: 22_500 });
+        expect(yield* provider.costControl.snapshot).toMatchObject({
+          modelCalls: 1,
+          usage: {
+            estimatedCostMicrousd: valid ? (serviceTier === "default" ? 109_500 : 219_000) : 0,
+            reservedCostMicrousd: valid ? 0 : 2_500_000,
+          },
+        });
+        if (!valid) {
+          yield* provider.client.createResponse(input).pipe(Effect.flip);
+          expect(sent).toHaveLength(1);
+        }
+      }),
+  );
+
+  it.effect("refuses Fast inference when its full input reservation exceeds the cap", () =>
     Effect.gen(function* () {
+      let sends = 0;
+
       const native = yield* makeNative(
         HttpClient.make((httpRequest, url) =>
-          Effect.succeed(
-            url.pathname.endsWith("/input_tokens")
-              ? json(httpRequest, { object: "response.input_tokens", input_tokens: 10_000 })
-              : json(httpRequest, { ...response(rawUsage(10_000, 500, 2_000, 1_000)), model }),
-          ),
+          Effect.sync(() => {
+            if (url.pathname.endsWith("/input_tokens"))
+              return json(httpRequest, { object: "response.input_tokens", input_tokens: 100_000 });
+            sends += 1;
+            throw new Error("No output fits after the $2.50 Fast input reservation");
+          }),
         ),
       );
 
       const provider = yield* makeReviewOpenAi({
-        model,
-        cacheKey: "family-pricing",
+        model: "gpt-6-astra",
+        fast: true,
+        cacheKey: "fast-input",
         costLimitMicrousd: 2_500_000,
       }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
-      yield* provider.client.createResponse({ ...payload, model });
-      const snapshot = yield* provider.costControl.snapshot;
-
-      expect(snapshot.usage.estimatedCostMicrousd).toBe(expected);
-      expect(snapshot.usage.reservedCostMicrousd).toBe(0);
+      yield* provider.client
+        .createResponse({ ...payload, model: "gpt-6-astra", service_tier: "fast" })
+        .pipe(Effect.flip);
+      expect(sends).toBe(0);
+      expect(yield* provider.costControl.snapshot).toMatchObject({
+        stopped: true,
+        modelCalls: 0,
+        usage: { estimatedCostMicrousd: 0, reservedCostMicrousd: 0 },
+      });
     }),
   );
 
@@ -1186,6 +1299,7 @@ describe("review provider boundary", () => {
 
   it.effect.each([
     "complete",
+    "complete-fast",
     "cost-empty",
     "cost-finding",
     "protocol-empty",
@@ -1194,7 +1308,9 @@ describe("review provider boundary", () => {
     "recovers an automatic review after a rebase with outcome %s under the same cap",
     (outcome) =>
       Effect.gen(function* () {
-        const complete = outcome === "complete";
+        const complete = outcome.startsWith("complete");
+        const fast = outcome === "complete-fast";
+        const inputTokens = fast ? 10_000 : 70_000;
         const protocolFailure = outcome.startsWith("protocol");
         const hasFinding = outcome.endsWith("finding");
         const logs: Array<unknown> = [];
@@ -1226,10 +1342,18 @@ describe("review provider boundary", () => {
             if (url.pathname === "/v1/responses/input_tokens")
               return json(httpRequest, {
                 object: "response.input_tokens",
-                input_tokens: protocolFailure ? protocolUsage[modelCalls]?.input_tokens : 70_000,
+                input_tokens: protocolFailure
+                  ? protocolUsage[modelCalls]?.input_tokens
+                  : inputTokens,
               });
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
+
+              expect(decodeWire(httpRequest)).toMatchObject({
+                model: fast ? "gpt-6-astra" : "gpt-5.6-sol",
+                reasoning: { effort: "medium" },
+                service_tier: fast ? "fast" : "default",
+              });
 
               const input = Schema.decodeUnknownSync(
                 Schema.Struct({ content: Schema.Array(Schema.Struct({ text: Schema.String })) }),
@@ -1252,7 +1376,9 @@ describe("review provider boundary", () => {
                       : [read],
                 protocolFailure
                   ? protocolUsage[modelCalls - 1]
-                  : rawUsage(70_000, complete ? 100 : 32_000),
+                  : rawUsage(inputTokens, complete ? 100 : 32_000),
+                "completed",
+                fast ? "fast" : "default",
               );
             }
             if (httpRequest.method === "GET" && url.pathname.endsWith("/pulls/12"))
@@ -1376,7 +1502,8 @@ describe("review provider boundary", () => {
                 OPENAI_API_KEY: "openai-fixture",
                 PR_REVIEW_PULL_REQUEST: "12",
                 PR_REVIEW_MAX_COST_USD: "0.99",
-                PR_REVIEW_MODEL: "gpt-5.6-sol",
+                PR_REVIEW_MODEL: fast ? "gpt-6-astra" : "gpt-5.6-sol",
+                PR_REVIEW_FAST: String(fast),
               },
             }),
           ),
@@ -1413,6 +1540,7 @@ describe("review provider boundary", () => {
           expect(published[0]?.body).toContain("1 supplied");
         }
         expect(published[0]?.body).toContain("$0.990000 spending ceiling");
+        if (fast) expect(published[0]?.body).toContain("$0.2600");
         if (protocolFailure) {
           expect(published[0]?.body).toContain("model protocol error");
           expect(published[0]?.body).toContain("4 model calls");

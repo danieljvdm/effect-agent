@@ -137,8 +137,15 @@ both settled charges and outstanding reservations. The same policy applies to fu
 incremental reviews, and eval trials; a retry gets a new allowance.
 
 The Action keeps the configured model and reasoning effort, defaulting to `gpt-6-astra` and
-`medium`, and explicitly requests the standard `default` service tier. Effort accepts `low`,
-`medium`, `high`, `xhigh`, or `max`.
+`medium`. Effort accepts `low`, `medium`, `high`, `xhigh`, or `max`.
+It explicitly requests the standard `default` service tier unless `fast: "true"` (or local
+`PR_REVIEW_FAST=true`) selects [OpenAI Fast mode](https://developers.openai.com/api/docs/guides/fast-mode).
+Fast mode costs twice the standard token rates for the supported models and uses the same
+size-scaled spending cap, so the allowance buys fewer tokens. The effect-agent repository's
+workflow opts into Fast mode; other consumers remain on Standard unless they opt in.
+Requests reserve at the selected tier's rates, and settlement uses the tier reported by OpenAI,
+including standard-rate fallback from Fast mode. Both `fast` and `priority` response tags identify
+Fast pricing.
 It accepts only the priced model IDs listed in `action.yml`. The rate card was verified on
 2026-09-05. Sol and its `gpt-5.6` alias refuse new paid requests on or after 2026-11-22 UTC
 until their promotional rate card is refreshed. This deadline does not apply to Astra, Terra,

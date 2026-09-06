@@ -19,6 +19,8 @@ export const reviewReasoningEffort = Config.schema(ReviewReasoningEffort, "PR_RE
   Config.withDefault("medium"),
 );
 
+export const reviewFast = Config.boolean("PR_REVIEW_FAST").pipe(Config.withDefault(false));
+
 /** Maximum per attempt; the actual allowance scales with the admitted review input. */
 const ReviewMaxCostUsd = Schema.Number.check(Schema.isBetween({ minimum: 0.01, maximum: 100 }));
 
@@ -46,7 +48,7 @@ export const reviewCostLimitMicrousd = (
 
 const MAX_INPUT_TOKENS = 128_000;
 const MAX_OUTPUT_TOKENS = 32_000;
-const PRICING_VERSION = "openai-standard-2026-09-05";
+const PRICING_VERSION = "openai-2026-09-05";
 
 interface Pricing {
   readonly label: string;
@@ -100,8 +102,20 @@ const modelPricing: Readonly<Record<string, Pricing>> = {
   },
 };
 
-export const reviewModelPricing = (model: string): Pricing | undefined =>
-  Object.hasOwn(modelPricing, model) ? modelPricing[model] : undefined;
+export const reviewModelPricing = (model: string, fast = false): Pricing | undefined => {
+  const standard = Object.hasOwn(modelPricing, model) ? modelPricing[model] : undefined;
+
+  if (standard === undefined || !fast) return standard;
+
+  // Every model in this pinned card has Fast rates exactly twice its Standard rates.
+  return {
+    ...standard,
+    input: standard.input * 2,
+    read: standard.read * 2,
+    write: standard.write * 2,
+    output: standard.output * 2,
+  };
+};
 
 const CacheBreakpoint = Schema.Struct({ mode: Schema.Literal("explicit") });
 
@@ -219,6 +233,7 @@ const reservedCost = (state: Spending) =>
 /** Capture the provided client for one review's spending ledger. Never share it between attempts. */
 export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options: {
   readonly model: string;
+  readonly fast?: boolean;
   readonly cacheKey: string;
   readonly costLimitMicrousd: number;
 }) {
@@ -234,10 +249,12 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     ),
   );
 
-  const pricing = reviewModelPricing(options.model);
+  const serviceTier = options.fast ? "fast" : "default";
+  const standardPricing = reviewModelPricing(options.model);
+  const pricing = reviewModelPricing(options.model, options.fast);
 
-  if (pricing === undefined) {
-    return yield* admissionError("The review model has no verified standard-tier price.");
+  if (pricing === undefined || standardPricing === undefined) {
+    return yield* admissionError("The review model has no verified price for the selected tier.");
   }
 
   const state = yield* Ref.make<Spending>({
@@ -312,7 +329,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     if (
       (pricing.validUntil !== undefined && now >= pricing.validUntil) ||
       original.model !== options.model ||
-      original.service_tier !== "default" ||
+      original.service_tier !== serviceTier ||
       original.store !== false ||
       original.conversation !== undefined ||
       original.previous_response_id !== undefined ||
@@ -424,7 +441,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       remainingCostMicrousd: balance - microusd,
       costLimitMicrousd,
       cacheMode: "explicit",
-      serviceTier: "default",
+      serviceTier,
       pricingVersion: PRICING_VERSION,
     });
 
@@ -443,6 +460,15 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 
     const canonicalModel = options.model === "gpt-5.6" ? "gpt-5.6-sol" : options.model;
 
+    // Fast can return its priority alias or fall back to Standard processing.
+    // Settle at the reported tier; keep the more expensive pre-dispatch reservation.
+    const chargedPricing =
+      response.service_tier === "default"
+        ? standardPricing
+        : options.fast && (response.service_tier === "fast" || response.service_tier === "priority")
+          ? pricing
+          : undefined;
+
     if (
       !(
         response.model === options.model ||
@@ -450,21 +476,21 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
         // Astra currently documents only its canonical identifier.
         (canonicalModel !== "gpt-6-astra" && response.model.startsWith(`${canonicalModel}-`))
       ) ||
-      response.service_tier !== "default" ||
+      chargedPricing === undefined ||
       usage.input_tokens > reservation.inputTokens ||
       usage.output_tokens > reservation.outputTokens
     ) {
-      return yield* refuse("Provider response violated the counted standard-tier price contract.");
+      return yield* refuse("Provider response violated the counted model and tier price contract.");
     }
     const read = usage.input_tokens_details.cached_tokens;
     const write = usage.input_tokens_details.cache_write_tokens;
     const ordinary = usage.input_tokens - read - write;
 
     const cost = Math.ceil(
-      (ordinary * pricing.input +
-        read * pricing.read +
-        write * pricing.write +
-        usage.output_tokens * pricing.output) /
+      (ordinary * chargedPricing.input +
+        read * chargedPricing.read +
+        write * chargedPricing.write +
+        usage.output_tokens * chargedPricing.output) /
         100,
     );
 
@@ -499,6 +525,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 
     yield* Effect.logInfo("Review model usage", {
       modelCall: reservation.id,
+      serviceTier: response.service_tier,
       functionCalls: response.output.filter((item) => item.type === "function_call").length,
       completionCalls: response.output.filter(
         (item) => item.type === "function_call" && item.name === "submit_review",

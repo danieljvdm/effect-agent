@@ -33,7 +33,7 @@ import {
   GitHubApiFailure,
   type RepositorySnapshot,
 } from "../src/github.ts";
-import { reviewMaxCostUsd } from "../src/review-openai.ts";
+import { reviewFast, reviewMaxCostUsd } from "../src/review-openai.ts";
 import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
@@ -411,6 +411,23 @@ describe("immutable review source", () => {
 });
 
 describe("Action configuration", () => {
+  it.effect("opts into Fast through the Action input with an explicit environment override", () =>
+    Effect.gen(function* () {
+      for (const { env, expected } of [
+        { env: {}, expected: false },
+        { env: { INPUT_FAST: "true" }, expected: true },
+        { env: { INPUT_FAST: "true", PR_REVIEW_FAST: "false" }, expected: false },
+      ]) {
+        expect(yield* reviewFast.parse(withActionInputs(ConfigProvider.fromEnv({ env })))).toBe(
+          expected,
+        );
+      }
+      yield* reviewFast
+        .parse(withActionInputs(ConfigProvider.fromEnv({ env: { INPUT_FAST: "typo" } })))
+        .pipe(Effect.flip);
+    }),
+  );
+
   it.effect("defaults to $2.50 and lets environment configuration override the Action cap", () =>
     Effect.gen(function* () {
       expect(yield* reviewMaxCostUsd.parse(ConfigProvider.fromEnv({ env: {} }))).toBe(2.5);

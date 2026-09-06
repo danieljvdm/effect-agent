@@ -48,6 +48,10 @@ inputs:
     description: "Maximum model spend per attempt in USD (0.01–100). Allowance is $1 plus $1 per 100,000 patch/feedback characters, capped at this value."
     required: false
     default: "2.50"
+  fast:
+    description: "Use OpenAI Fast mode at twice the standard token rates, within the same spending cap."
+    required: false
+    default: "false"
   guidance-file:
     description: "Optional committed repository guidance file."
     required: false
@@ -70,7 +74,7 @@ outputs:
   output-tokens:
     description: "Observed model output tokens."
   estimated-cost-usd:
-    description: "Estimated model cost in US dollars from reported usage at the pinned standard-tier rates. Excludes unsettled reservations."
+    description: "Estimated model cost in US dollars from reported usage at the pinned rates for the actual service tier. Excludes unsettled reservations."
   reserved-cost-usd:
     description: "Maximum additional charge in US dollars for dispatched requests whose usage is still unknown."
   cost-limit-usd:
