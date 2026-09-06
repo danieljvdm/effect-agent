@@ -578,7 +578,14 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       catch: (cause) => failure("decode Git blob", cause),
     });
 
+    // Source search can visit the whole tree. Retain at most 16 verified blobs
+    // (each bounded to 2 MB) instead of accumulating every file for the run.
     textBlobs.set(sha, content);
+    if (textBlobs.size > 16) {
+      const oldest = textBlobs.keys().next().value;
+
+      if (oldest !== undefined) textBlobs.delete(oldest);
+    }
 
     return content;
   });

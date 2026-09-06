@@ -11,6 +11,7 @@ import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import {
+  ConfigProvider,
   Deferred,
   Effect,
   Fiber,
@@ -66,8 +67,10 @@ const request = ReviewRequest.make({
 const caseId = Schema.decodeSync(EvalCaseId)("optional-read");
 const defectId = Schema.decodeSync(EvalDefectId)("undefined-dereference");
 
-const makeSuite = Effect.fn("PrReviewEvalTest.makeSuite")(function* () {
-  const inputDigest = yield* digestReviewRequest(request);
+const makeSuite = Effect.fn("PrReviewEvalTest.makeSuite")(function* (
+  input: ReviewRequest = request,
+) {
+  const inputDigest = yield* digestReviewRequest(input);
 
   return EvalSuite.make({
     version: 1,
@@ -78,7 +81,7 @@ const makeSuite = Effect.fn("PrReviewEvalTest.makeSuite")(function* () {
         kind: "known-defects",
         provenance: "Synthetic fixture for the eval runner contract.",
         inputDigest,
-        request,
+        request: input,
         expectedDefects: [
           EvalExpectedDefect.make({
             id: defectId,
@@ -105,9 +108,13 @@ const configuration = (id: string) =>
     provider: "openai",
     model: "scripted-eval",
     reasoningEffort: "medium",
+    compaction: "prune",
+    contextTokenLimit: 128_000,
     maxOutputTokens: 8_000,
     strictJsonSchema: true,
     store: false,
+    maxCostMicrousd: 2_500_000,
+    budgetPolicy: "input-size-v1",
   });
 
 const successfulOutcome = ReviewOutcome.make({
@@ -136,7 +143,7 @@ describe("PR-review model eval", () => {
                 type: "tool-call",
                 id: "review",
                 name: "submit_review",
-                params: { findings: [] },
+                params: {},
               },
               {
                 type: "finish",
@@ -175,7 +182,7 @@ describe("PR-review model eval", () => {
       }).pipe(Stream.runCollect);
 
       expect(observations).toHaveLength(1);
-      expect(observations[0]?.runnerVersion).toBe("0.1.1");
+      expect(observations[0]?.runnerVersion).toBe("0.1.6");
       expect(observations[0]?.result._tag).toBe("Succeeded");
       if (observations[0]?.result._tag === "Succeeded") {
         expect(observations[0].result.outcome.report.findings).toEqual([]);
@@ -189,13 +196,6 @@ describe("PR-review model eval", () => {
       const decoded = yield* decodeObservationLines(yield* fs.readFileString(output));
 
       expect(decoded).toEqual(observations);
-
-      const historical = (yield* fs.readFileString(output)).replace(
-        '"runnerVersion":"0.1.1"',
-        '"runnerVersion":"0.0.9"',
-      );
-
-      expect((yield* decodeObservationLines(historical))[0]?.runnerVersion).toBe("0.0.9");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -294,7 +294,9 @@ describe("PR-review model eval", () => {
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         guidance: "  Keep the public error channel typed.  ",
-      });
+      }).pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env: {} })),
+      );
 
       type Review = ReturnType<typeof variant.review>;
       expectTypeOf<Effect.Error<Review>>().toEqualTypeOf<EvalReviewerFailure>();
@@ -302,8 +304,14 @@ describe("PR-review model eval", () => {
         OpenAiClient.OpenAiClient | ReviewRepository
       >();
       expect(variant.configuration.id).toBe("candidate-guidance-v1");
-      expect(variant.configuration.reviewerProfile).toBe("diff-review-v5-capped");
-      expect(variant.configuration.costLimitMicrousd).toBe(999_999);
+      expect(variant.configuration.reviewerProfile).toBe("repository-review");
+      expect(variant.configuration.model).toBe("gpt-6-astra");
+      expect(variant.configuration.reasoningEffort).toBe("medium");
+      expect(variant.configuration.compaction).toBe("rollover");
+      expect(variant.configuration.contextTokenLimit).toBe(48_000);
+      expect(variant.configuration.research).toBeUndefined();
+      expect(variant.configuration.maxCostMicrousd).toBe(2_500_000);
+      expect(variant.configuration.budgetPolicy).toBe("input-size-v1");
       expect(variant.configuration.guidanceDigest).toBe(
         yield* digestText("Keep the public error channel typed."),
       );
@@ -357,11 +365,78 @@ describe("PR-review model eval", () => {
   );
 
   it.effect(
-    "caps each live-variant trial independently through the Action's cached wire path",
+    "records compaction settings and rejects unsupported experiments before inference",
     () =>
       Effect.gen(function* () {
-        const suite = yield* makeSuite();
-        const variant = yield* makeCurrentOpenAiVariant({ id: "capped-wire" });
+        const variant = yield* makeCurrentOpenAiVariant({ id: "rollover-pressure" }).pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({
+              env: {
+                PR_REVIEW_COMPACTION: "rollover",
+                PR_REVIEW_CONTEXT_TOKENS: "32000",
+                PR_REVIEW_RESEARCH_CONCURRENCY: "2",
+              },
+            }),
+          ),
+        );
+
+        expect(variant.configuration.compaction).toBe("rollover");
+        expect(variant.configuration.contextTokenLimit).toBe(32_000);
+        expect(variant.configuration.research).toEqual({ concurrency: 2, maxOutputTokens: 4_000 });
+
+        const invalidEnvironments: ReadonlyArray<Record<string, string>> = [
+          { PR_REVIEW_COMPACTION: "unknown" },
+          { PR_REVIEW_CONTEXT_TOKENS: "15999" },
+          { PR_REVIEW_CONTEXT_TOKENS: "128001" },
+          { PR_REVIEW_RESEARCH_CONCURRENCY: "3" },
+        ];
+
+        for (const env of invalidEnvironments) {
+          const error = yield* makeCurrentOpenAiVariant({ id: "invalid-context" }).pipe(
+            Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env })),
+            Effect.flip,
+          );
+
+          expect(error._tag).toBe("ConfigError");
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    { patchCharacters: 10_000, allowance: "1.100000", maxOutputTokens: 12_000 },
+    { patchCharacters: 30_000, allowance: "1.200000", maxOutputTokens: 14_000 },
+  ])(
+    "scales each trial's provider allowance up to the configured maximum: $patchCharacters characters",
+    ({ patchCharacters, allowance, maxOutputTokens }) =>
+      Effect.gen(function* () {
+        const suite = yield* makeSuite(
+          ReviewRequest.make({
+            ...request,
+            changes: [
+              ReviewChange.make({ path: "src/read.ts", patch: patch.padEnd(patchCharacters, " ") }),
+            ],
+          }),
+        );
+
+        const variant = yield* makeCurrentOpenAiVariant({ id: "capped-wire" }).pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({
+              env: {
+                PR_REVIEW_MAX_COST_USD: "1.2",
+                PR_REVIEW_EFFORT: "max",
+                // Isolate provider admission from the separate working-context boundary.
+                PR_REVIEW_COMPACTION: "prune",
+                PR_REVIEW_CONTEXT_TOKENS: "128000",
+              },
+            }),
+          ),
+        );
+
+        expect(variant.configuration.maxCostMicrousd).toBe(1_200_000);
+        expect(variant.configuration.reasoningEffort).toBe("max");
+        expect(variant.configuration.budgetPolicy).toBe("input-size-v1");
         const sent: Array<Schema.Json> = [];
         let counts = 0;
 
@@ -373,7 +448,7 @@ describe("PR-review model eval", () => {
               HttpClientResponse.fromWeb(
                 httpRequest,
                 new Response(
-                  JSON.stringify({ object: "response.input_tokens", input_tokens: 100_000 }),
+                  JSON.stringify({ object: "response.input_tokens", input_tokens: 40_000 }),
                   { headers: { "content-type": "application/json" } },
                 ),
               ),
@@ -414,15 +489,15 @@ describe("PR-review model eval", () => {
               response: {
                 id: "resp_fixture",
                 object: "response",
-                model: "gpt-5.6-sol",
+                model: "gpt-6-astra",
                 created_at: 1_788_000_000,
                 service_tier: "default",
                 output: [item],
                 usage: {
-                  input_tokens: 100_000,
+                  input_tokens: 40_000,
                   output_tokens: 12_000,
-                  total_tokens: 112_000,
-                  input_tokens_details: { cached_tokens: 0, cache_write_tokens: 100_000 },
+                  total_tokens: 52_000,
+                  input_tokens_details: { cached_tokens: 0, cache_write_tokens: 40_000 },
                   output_tokens_details: { reasoning_tokens: 11_900 },
                 },
               },
@@ -462,12 +537,12 @@ describe("PR-review model eval", () => {
         expect(sent).toHaveLength(2);
         for (const payload of sent) {
           expect(payload).toMatchObject({
-            model: "gpt-5.6-sol",
-            reasoning: { effort: "xhigh" },
+            model: "gpt-6-astra",
+            reasoning: { effort: "max" },
             store: false,
             service_tier: "default",
-            max_output_tokens: 24_999,
-            prompt_cache_key: "pr-review-v2:head",
+            max_output_tokens: maxOutputTokens,
+            prompt_cache_key: "pr-review:head",
             prompt_cache_options: { mode: "explicit", ttl: "30m" },
             tools: expect.arrayContaining([
               expect.objectContaining({ name: "read_file", strict: true }),
@@ -477,6 +552,7 @@ describe("PR-review model eval", () => {
           expect(JSON.stringify(payload)).toContain(
             '"prompt_cache_breakpoint":{"mode":"explicit"}',
           );
+          expect(JSON.stringify(payload)).toContain(`of the $${allowance} ceiling`);
         }
         for (const observation of observations) {
           expect(observation.result).toMatchObject({
@@ -486,10 +562,10 @@ describe("PR-review model eval", () => {
               incomplete: true,
               turns: 1,
               usage: {
-                estimatedCostMicrousd: 740_000,
+                estimatedCostMicrousd: 1_100_000,
                 reservedCostMicrousd: 0,
                 cachedInputTokens: 0,
-                cacheWriteInputTokens: 100_000,
+                cacheWriteInputTokens: 40_000,
               },
             },
           });
@@ -818,6 +894,36 @@ describe("PR-review model eval", () => {
         cases: [{ ...encoded.cases[0], kind: "clean-control" }],
       };
 
+      const emptyCase = {
+        ...encoded,
+        cases: [
+          {
+            ...encoded.cases[0],
+            kind: "unadjudicated",
+            expectedDefects: [],
+            request: { ...request, changes: [], followUps: [] },
+          },
+        ],
+      };
+
+      expect(
+        Option.isSome(
+          Schema.decodeUnknownOption(EvalSuite)({
+            ...emptyCase,
+            cases: [
+              {
+                ...emptyCase.cases[0],
+                request: {
+                  ...request,
+                  changes: [],
+                  followUps: [{ id: "prior-review", description: "Verify the previous blocker." }],
+                },
+              },
+            ],
+          }),
+        ),
+      ).toBe(true);
+
       const unknownEvidencePath = {
         ...encoded,
         cases: [
@@ -852,6 +958,7 @@ describe("PR-review model eval", () => {
         duplicateCases,
         duplicateDefects,
         cleanWithDefect,
+        emptyCase,
         unknownEvidencePath,
         malformedRevision,
       ]) {

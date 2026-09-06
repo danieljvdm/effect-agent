@@ -2,6 +2,8 @@ import {
   ReviewContextError,
   ReviewFileList,
   ReviewRepository,
+  ReviewSearchMatch,
+  ReviewSearchResult,
   ReviewSource,
 } from "@effect-agent/pr-review/ReviewRepository";
 import { Effect, Layer } from "effect";
@@ -42,5 +44,58 @@ export const repositoryLayer = (snapshot: EvalRepositorySnapshot | undefined) =>
           ReviewFileList.make({ paths: paths.slice(0, 100), truncated: paths.length > 100 }),
         );
       },
+      searchCode: Effect.fn("EvalRepository.searchCode")(function* (
+        input: Parameters<ReviewRepository["Service"]["searchCode"]>[0],
+      ) {
+        if (snapshot === undefined) {
+          return yield* ReviewContextError.make({
+            message: "No frozen repository snapshot is available for this case.",
+          });
+        }
+
+        const files = snapshot.files
+          .filter(
+            (file) =>
+              file.revision === input.revision &&
+              file.path.length <= 512 &&
+              file.path.includes(input.path),
+          )
+          .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+
+        const page = files.slice(input.cursor, input.cursor + 20);
+        const matches: Array<ReviewSearchMatch> = [];
+        let truncated = false;
+
+        for (const file of page) {
+          let matchedLines = 0;
+
+          for (const [lineIndex, line] of file.content.split("\n").entries()) {
+            const position = line.indexOf(input.query);
+
+            if (position < 0) continue;
+            if (matchedLines === 5) {
+              truncated = true;
+              break;
+            }
+            matches.push(
+              ReviewSearchMatch.make({
+                path: file.path,
+                line: lineIndex + 1,
+                content: line.slice(position, position + 200),
+              }),
+            );
+            matchedLines += 1;
+          }
+        }
+        const nextCursor = input.cursor + page.length;
+
+        return ReviewSearchResult.make({
+          matches,
+          ...(nextCursor < files.length ? { nextCursor } : {}),
+          truncated,
+          // Every authorized frozen entry already contains its complete decoded source.
+          unreadablePaths: [],
+        });
+      }),
     }),
   );

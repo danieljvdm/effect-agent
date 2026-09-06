@@ -46,9 +46,13 @@ const configuration = (id: string, model = "scripted-eval") =>
     provider: "openai",
     model,
     reasoningEffort: "medium",
+    compaction: "prune",
+    contextTokenLimit: 128_000,
     maxOutputTokens: 8_000,
     strictJsonSchema: true,
     store: false,
+    maxCostMicrousd: 2_500_000,
+    budgetPolicy: "input-size-v1",
   });
 
 const finding = (title: string, severity: ReviewSeverity = "blocking"): ReviewFinding =>
@@ -64,7 +68,7 @@ const finding = (title: string, severity: ReviewSeverity = "blocking"): ReviewFi
 const succeeded = (
   findings: ReadonlyArray<ReviewFinding>,
   cost?: number,
-  coverage: Pick<ReviewOutcome, "incomplete" | "exhausted"> = {},
+  coverage: Pick<ReviewOutcome, "incomplete" | "exhausted" | "compactions" | "research"> = {},
 ) =>
   EvalTrialSucceeded.make({
     outcome: ReviewOutcome.make({
@@ -246,6 +250,23 @@ describe("PR-review eval quality report", () => {
       expect(candidateReport).toBeDefined();
       if (currentReport === undefined || candidateReport === undefined) return;
 
+      expect(currentReport.defectRecall).toEqual({
+        numerator: 0,
+        denominator: 2,
+        status: "unresolved",
+      });
+      expect(currentReport.defectCases).toEqual({
+        complete: 0,
+        incomplete: 0,
+        unresolved: 1,
+        total: 1,
+      });
+      expect(candidateReport.defectRecall).toEqual({
+        numerator: 2,
+        denominator: 2,
+        status: "measured",
+      });
+      expect(candidateReport.defectCases.complete).toBe(1);
       expect(currentReport.blockerRecall).toMatchObject({
         numerator: 0,
         denominator: 1,
@@ -376,9 +397,48 @@ describe("PR-review eval quality report", () => {
             known,
             variant,
             1,
-            succeeded([finding("Recorded blocker")], 5, { incomplete: true }),
+            succeeded([finding("Recorded blocker")], 5, {
+              incomplete: true,
+              research: {
+                delegations: 3,
+                started: 2,
+                completed: 1,
+                failed: 1,
+                interrupted: 0,
+                incomplete: 1,
+              },
+              compactions: [
+                {
+                  kind: "clear-tool-results",
+                  turn: 1,
+                  tokensBeforeEstimate: 36_000,
+                  tokensAfterEstimate: 33_000,
+                },
+                {
+                  kind: "rollover",
+                  turn: 1,
+                  tokensBeforeEstimate: 33_000,
+                  tokensAfterEstimate: 10_000,
+                },
+              ],
+            }),
           ),
-          observation(known, variant, 2, succeeded([], 3)),
+          observation(
+            known,
+            variant,
+            2,
+            succeeded([], 3, {
+              compactions: [],
+              research: {
+                delegations: 0,
+                started: 0,
+                completed: 0,
+                failed: 0,
+                interrupted: 0,
+                incomplete: 0,
+              },
+            }),
+          ),
           observation(clean, variant, 1, succeeded([], undefined, { exhausted: "cost" })),
           observation(
             clean,
@@ -411,6 +471,17 @@ describe("PR-review eval quality report", () => {
           estimatedCostMicrousd: 9,
           inputTokens: 30,
           outputTokens: 9,
+          measuredCompactionTrials: 2,
+          pruneCompactions: 1,
+          rolloverCompactions: 1,
+          summaryCompactions: 0,
+          measuredResearchTrials: 2,
+          researchDelegations: 3,
+          researchStarted: 2,
+          researchCompleted: 1,
+          researchFailed: 1,
+          researchInterrupted: 0,
+          researchIncomplete: 1,
         });
         expect(result?.blockerRecall).toMatchObject({
           numerator: 1,
@@ -433,11 +504,76 @@ describe("PR-review eval quality report", () => {
         expect(renderQualityReport(report)).toContain(
           "cost 9µUSD (1 succeeded + 1 incomplete + 1 failed costed)",
         );
-        expect(report.version).toBe(3);
+        expect(result?.defectCases).toMatchObject({ complete: 0, incomplete: 1, total: 1 });
+        expect(report.version).toBe(5);
+        expect(renderQualityReport(report)).toContain(
+          "compactions 1 prune/1 rollover/0 summary (2 trials measured)",
+        );
+        expect(renderQualityReport(report)).toContain(
+          "research 3 delegated/2 started/1 completed/1 failed/0 interrupted/1 incomplete (2 trials measured)",
+        );
         expect(
           Schema.decodeSync(EvalQualityReport)(Schema.encodeSync(EvalQualityReport)(report)),
         ).toEqual(report);
       }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("counts missed important defects even when a later trial finds them all", () =>
+    Effect.gen(function* () {
+      const loaded = yield* loadEvalSuite(fixturePath);
+      const original = loaded.cases.find((evalCase) => evalCase.kind === "known-defects");
+
+      expect(original).toBeDefined();
+      if (original === undefined) return;
+      const first = original.expectedDefects[0];
+
+      expect(first).toBeDefined();
+      if (first === undefined) return;
+
+      const known = EvalCase.make({
+        ...original,
+        expectedDefects: [
+          EvalExpectedDefect.make({ ...first, severity: "important" }),
+          EvalExpectedDefect.make({
+            ...first,
+            id: Schema.decodeSync(EvalDefectId)("second-important-defect"),
+            severity: "important",
+            invariant: "A second independent supported operation returns the wrong result.",
+          }),
+        ],
+      });
+
+      const suite = EvalSuite.make({ version: 1, cases: [known] });
+      const variant = configuration("misses-important");
+
+      const observations = [
+        observation(known, variant, 1, succeeded([])),
+        observation(
+          known,
+          variant,
+          2,
+          succeeded([finding("First defect", "important"), finding("Second defect", "important")]),
+        ),
+      ];
+
+      const judgments = judgmentSet(
+        yield* digestObservationSet(observations),
+        known.expectedDefects.map((defect, index) =>
+          judgment(known, variant, 2, index, "matches-expected", [defect.id]),
+        ),
+      );
+
+      const report = yield* makeQualityReport(suite, observations, 2, judgments);
+      const result = report.variants[0];
+
+      expect(result?.defectRecall).toEqual({ numerator: 0, denominator: 2, status: "measured" });
+      expect(result?.defectCases).toEqual({ complete: 0, incomplete: 1, unresolved: 0, total: 1 });
+      expect(result?.cases[0]?.defectStatus).toBe("incomplete");
+      expect(result?.blockerRecall.status).toBe("not-applicable");
+      expect(result?.blockerCases.total).toBe(0);
+      expect(result?.allTrialFindings.valid).toBe(2);
+      expect(renderQualityReport(report)).toContain("defect-recall 0/2; defect-cases 0/1");
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("separates blocker detection from merge-gating severity", () =>
@@ -478,6 +614,11 @@ describe("PR-review eval quality report", () => {
 
       const variantReport = report.variants[0];
 
+      expect(variantReport?.defectRecall).toEqual({
+        numerator: 1,
+        denominator: 1,
+        status: "measured",
+      });
       expect(variantReport?.blockerDetection).toMatchObject({
         numerator: 1,
         denominator: 1,

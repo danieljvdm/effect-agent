@@ -1,12 +1,22 @@
 import { ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, expectTypeOf, it, layer } from "@effect/vitest";
-import { Cause, Config, ConfigProvider, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
-import { Response } from "effect/unstable/ai";
+import {
+  Cause,
+  Config,
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+} from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
-  estimateGpt56CostMicrousd,
   GeneratedFileClassification,
   hydrateExactChanges,
   IncrementalScopeUnavailable,
@@ -23,6 +33,7 @@ import {
   GitHubApiFailure,
   type RepositorySnapshot,
 } from "../src/github.ts";
+import { reviewFast, reviewMaxCostUsd } from "../src/review-openai.ts";
 import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
@@ -222,9 +233,239 @@ describe("immutable review source", () => {
       expect(wide.message).toContain("request fewer lines");
     }),
   );
+
+  it.effect("searches literal source at the exact revision within authorized regular files", () =>
+    Effect.gen(function* () {
+      const repository = makeReviewRepository({
+        base: snapshot("base", { "src/caller.ts": "handler[old]\n" }),
+        head: snapshot(
+          "head",
+          {
+            "src/caller.ts": "unchanged\nhandler[new]\nHandler[other]\n",
+            "src/ignored.ts": "handler[ignored]",
+            "src/unavailable.ts": "handler[unavailable]",
+            "src/image.png": "handler[binary]",
+            "other/caller.ts": "handler[other]",
+          },
+          new Set(["src/link.ts"]),
+        ),
+        ignore: ["src/ignored.ts"],
+        unavailablePaths: new Set(["src/unavailable.ts"]),
+      });
+
+      const base = yield* repository.searchCode({
+        query: "handler[",
+        path: "src/",
+        revision: "base",
+        cursor: 0,
+      });
+
+      const head = yield* repository.searchCode({
+        query: "handler[",
+        path: "src/",
+        revision: "head",
+        cursor: 0,
+      });
+
+      expect(base.matches).toEqual([{ path: "src/caller.ts", line: 1, content: "handler[old]" }]);
+      expect(head).toEqual({
+        matches: [{ path: "src/caller.ts", line: 2, content: "handler[new]" }],
+        truncated: false,
+        unreadablePaths: [],
+      });
+    }),
+  );
+
+  it.effect("paginates source search and discloses bounded matches and unreadable files", () =>
+    Effect.gen(function* () {
+      const query = "needle";
+
+      const paths = Array.from(
+        { length: 22 },
+        (_, index) => `src/${String(index).padStart(2, "0")}.ts`,
+      );
+
+      const selected = snapshot("head", Object.fromEntries(paths.map((path) => [path, query])));
+
+      const repository = makeReviewRepository({
+        base: snapshot("base", {}),
+        head: {
+          ...selected,
+          readTextFile: (path) =>
+            path === "src/00.ts"
+              ? Effect.succeed(`${"x".repeat(300)}${query}${"x".repeat(300)}\n`.repeat(6))
+              : path === "src/01.ts"
+                ? Effect.fail(GitHubApiFailure.make({ operation: "read", reason: "missing" }))
+                : path === "src/02.ts"
+                  ? Effect.fail(BinaryBlob.make({ sha: "binary-blob" }))
+                  : selected.readTextFile(path),
+        },
+        ignore: [],
+        unavailablePaths: new Set(),
+      });
+
+      const first = yield* repository.searchCode({
+        query,
+        path: "src/",
+        revision: "head",
+        cursor: 0,
+      });
+
+      expect(first.nextCursor).toBe(20);
+      expect(first.truncated).toBe(true);
+      expect(first.unreadablePaths).toEqual(["src/01.ts", "src/02.ts"]);
+      expect(first.matches.filter(({ path }) => path === "src/00.ts")).toHaveLength(5);
+      expect(
+        first.matches.every(({ content }) => content.includes(query) && content.length <= 200),
+      ).toBe(true);
+      expect(first.matches.at(-1)?.path).toBe("src/19.ts");
+
+      const last = yield* repository.searchCode({
+        query,
+        path: "src/",
+        revision: "head",
+        cursor: 20,
+      });
+
+      expect(last.matches.map(({ path }) => path)).toEqual(["src/20.ts", "src/21.ts"]);
+      expect(last.nextCursor).toBeUndefined();
+      expect(last.truncated).toBe(false);
+      expect(last.unreadablePaths).toEqual([]);
+    }),
+  );
+
+  it.effect("retains complete search terms at the Unicode path and query bounds", () =>
+    Effect.gen(function* () {
+      const query = "界".repeat(200);
+
+      const contents = Object.fromEntries(
+        Array.from({ length: 20 }, (_, index) => [
+          `src/${"界".repeat(490)}-${String(index).padStart(2, "0")}.ts`,
+          `${query}\n`.repeat(5),
+        ]),
+      );
+
+      const repository = makeReviewRepository({
+        base: snapshot("base", {}),
+        head: snapshot("head", contents),
+        ignore: [],
+        unavailablePaths: new Set(),
+      });
+
+      const result = yield* repository.searchCode({ query, path: "", revision: "head", cursor: 0 });
+
+      expect(result.truncated).toBe(false);
+      expect(result.matches).toHaveLength(100);
+      expect(result.matches.every(({ content }) => content === query)).toBe(true);
+      expect(new TextEncoder().encode(JSON.stringify(result)).length).toBeLessThan(512 * 1_024);
+    }),
+  );
+
+  it.effect(
+    "interrupts every active source search read within the four-read concurrency bound",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Ref.make(0);
+        const finalized = yield* Ref.make(0);
+        const ready = yield* Deferred.make<void>();
+
+        const head = snapshot(
+          "head",
+          Object.fromEntries(
+            Array.from({ length: 20 }, (_, index) => [`src/${String(index)}.ts`, "source"]),
+          ),
+        );
+
+        const repository = makeReviewRepository({
+          base: snapshot("base", {}),
+          head: {
+            ...head,
+            readTextFile: () =>
+              Effect.gen(function* () {
+                const count = yield* Ref.updateAndGet(started, (value) => value + 1);
+
+                if (count === 4) yield* Deferred.succeed(ready, undefined);
+
+                return yield* Effect.never;
+              }).pipe(Effect.ensuring(Ref.update(finalized, (value) => value + 1))),
+          },
+          ignore: [],
+          unavailablePaths: new Set(),
+        });
+
+        const fiber = yield* Effect.forkChild(
+          repository.searchCode({
+            query: "source",
+            path: "",
+            revision: "head",
+            cursor: 0,
+          }),
+        );
+
+        yield* Deferred.await(ready);
+        yield* Fiber.interrupt(fiber);
+        expect(yield* Ref.get(started)).toBe(4);
+        expect(yield* Ref.get(finalized)).toBe(4);
+      }),
+  );
 });
 
 describe("Action configuration", () => {
+  it.effect("opts into Fast through the Action input with an explicit environment override", () =>
+    Effect.gen(function* () {
+      for (const { env, expected } of [
+        { env: {}, expected: false },
+        { env: { INPUT_FAST: "true" }, expected: true },
+        { env: { INPUT_FAST: "true", PR_REVIEW_FAST: "false" }, expected: false },
+      ]) {
+        expect(yield* reviewFast.parse(withActionInputs(ConfigProvider.fromEnv({ env })))).toBe(
+          expected,
+        );
+      }
+      yield* reviewFast
+        .parse(withActionInputs(ConfigProvider.fromEnv({ env: { INPUT_FAST: "typo" } })))
+        .pipe(Effect.flip);
+    }),
+  );
+
+  it.effect("defaults to $2.50 and lets environment configuration override the Action cap", () =>
+    Effect.gen(function* () {
+      expect(yield* reviewMaxCostUsd.parse(ConfigProvider.fromEnv({ env: {} }))).toBe(2.5);
+      const inputs = { "INPUT_MAX-COST-USD": "4.25" };
+
+      expect(
+        yield* reviewMaxCostUsd.parse(withActionInputs(ConfigProvider.fromEnv({ env: inputs }))),
+      ).toBe(4.25);
+      expect(
+        yield* reviewMaxCostUsd.parse(
+          withActionInputs(
+            ConfigProvider.fromEnv({
+              env: {
+                ...inputs,
+                PR_REVIEW_MAX_COST_USD: "0.75",
+              },
+            }),
+          ),
+        ),
+      ).toBe(0.75);
+      for (const invalid of ["0", "-1", "NaN", "Infinity", "101", "oops"]) {
+        const exit = yield* reviewMaxCostUsd
+          .parse(
+            withActionInputs(
+              ConfigProvider.fromEnv({
+                env: {
+                  "INPUT_MAX-COST-USD": invalid,
+                },
+              }),
+            ),
+          )
+          .pipe(Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+      }
+    }),
+  );
+
   it.effect("reads a GitHub Action input without mutating the environment", () =>
     Effect.gen(function* () {
       const provider = withActionInputs(
@@ -1050,20 +1291,6 @@ describe("Incremental review scope", () => {
   );
 });
 
-describe("GPT-5.6 cost estimation", () => {
-  it("prices uncached, cached, cache-write, and output tokens at current family rates", () => {
-    const usage = Response.Usage.make({
-      inputTokens: { total: 10_000, uncached: 8_000, cacheRead: 2_000, cacheWrite: 1_000 },
-      outputTokens: { total: 500, text: 400, reasoning: 100 },
-    });
-
-    expect(estimateGpt56CostMicrousd("gpt-5.6-sol", usage)).toBe(43_800);
-    expect(estimateGpt56CostMicrousd("gpt-5.6-terra", usage)).toBe(22_900);
-    expect(estimateGpt56CostMicrousd("gpt-5.6-luna", usage)).toBe(2_290);
-    expect(estimateGpt56CostMicrousd("custom-model", usage)).toBeUndefined();
-  });
-});
-
 const noGeneratedFiles = Layer.succeed(GeneratedFileClassification, {
   isGenerated: () => Effect.succeed(false),
 });
@@ -1146,9 +1373,9 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
 
       expect(classified).toEqual(generated);
       expect(surface.ignoredPaths).toEqual(generated);
-      expect(surface.changes.map((change) => change.path)).toEqual(source.slice(0, 100));
-      expect(surface.unreviewedPaths).toEqual(["src/100.ts"]);
-      expect(surface.exclusions).toEqual([{ path: "src/100.ts", reason: "file-limit" }]);
+      expect(surface.changes.map((change) => change.path)).toEqual(source);
+      expect(surface.unreviewedPaths).toEqual([]);
+      expect(surface.exclusions).toEqual([]);
     }),
   );
 
@@ -1555,11 +1782,11 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
     }),
   );
 
-  it.effect("does not read ignored paths or candidates beyond the 100-file admission bound", () =>
+  it.effect("does not read ignored paths or candidates beyond the 1,000-file admission bound", () =>
     Effect.gen(function* () {
       const paths = Array.from(
-        { length: 102 },
-        (_, index) => `src/file-${String(index).padStart(3, "0")}.ts`,
+        { length: 1_002 },
+        (_, index) => `src/file-${String(index).padStart(4, "0")}.ts`,
       );
 
       const ignored = paths[0] ?? "";
@@ -1577,10 +1804,64 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
         ignore: [ignored],
       });
 
-      expect(surface.changes).toHaveLength(100);
+      expect(surface.changes).toHaveLength(1_000);
       expect(surface.ignoredPaths).toEqual([ignored]);
       expect(surface.unreviewedPaths).toEqual([afterCap]);
       expect(surface.exclusions).toEqual([{ path: afterCap, reason: "file-limit" }]);
+    }),
+  );
+
+  it.effect("keeps usable file slots after unsupported candidates", () =>
+    Effect.gen(function* () {
+      const unsupported = Array.from({ length: 1_000 }, (_, index) => `links/${String(index)}.ts`);
+      const path = "src/valid.ts";
+      const head = treeSnapshot("head", { [path]: "export const valid = true;\n" });
+
+      const surface = yield* hydrateExactChanges({
+        files: [file(path, undefined)],
+        changedPaths: [...unsupported, path],
+        base: treeSnapshot("base", {}),
+        head: {
+          ...head,
+          entry: (candidate) =>
+            candidate.startsWith("links/")
+              ? { sha: candidate, mode: "120000", type: "blob", size: 0 }
+              : head.entry(candidate),
+        },
+        ignore: [],
+      });
+
+      expect(surface.changes.map((change) => change.path)).toEqual([path]);
+      expect(surface.exclusions).toHaveLength(1_000);
+      expect(surface.exclusions.every(({ reason }) => reason === "unsupported-entry")).toBe(true);
+    }),
+  );
+
+  it.effect("bounds expanded patch text while retaining smaller later changes", () =>
+    Effect.gen(function* () {
+      const largePaths = Array.from({ length: 5 }, (_, index) => `src/large-${String(index)}.ts`);
+      const smallPath = "src/z-small.ts";
+      const source = `${"x".repeat(39)}\n`.repeat(39_500);
+
+      const contents = Object.fromEntries([
+        ...largePaths.map((path) => [path, source]),
+        [smallPath, "export const valid = true;\n"],
+      ]);
+
+      const surface = yield* hydrateExactChanges({
+        files: [...largePaths, smallPath].map((path) => file(path, undefined)),
+        changedPaths: [...largePaths, smallPath],
+        base: treeSnapshot("base", {}),
+        head: treeSnapshot("head", contents),
+        ignore: [],
+      });
+
+      expect(surface.changes.map((change) => change.path)).toEqual([
+        ...largePaths.slice(0, 4),
+        smallPath,
+      ]);
+      expect(surface.exclusions).toEqual([{ path: "src/large-4.ts", reason: "patch-total-limit" }]);
+      expect(surface.unavailablePaths.has("src/large-4.ts")).toBe(false);
     }),
   );
 
@@ -1617,15 +1898,15 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
   );
 
   it.effect.each(["added", "removed"] as const)(
-    "admits complete large %s files that fit a review batch",
+    "admits complete large %s files beyond the former batch size",
     (status) =>
       Effect.gen(function* () {
         const contents: Record<string, string> = {
           "formal/DurableSubmission.tla": "state transition and invariant definition\n".repeat(
-            2_700,
+            7_000,
           ),
           "formal/SubagentEstablishment.tla":
-            "child establishment and ownership invariant\n".repeat(2_100),
+            "child establishment and ownership invariant\n".repeat(6_000),
         };
 
         const paths = Object.keys(contents);
@@ -1645,7 +1926,7 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
           const source = contents[change.path] ?? "";
           const prefix = status === "added" ? "+" : "-";
 
-          expect(change.patch.length).toBeGreaterThan(80_000);
+          expect(change.patch.length).toBeGreaterThan(256_000);
           expect(change.patch).toContain(
             source
               .trimEnd()
@@ -1661,7 +1942,10 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
     Effect.gen(function* () {
       const path = "src/large.ts";
       const base = treeSnapshot("base", {});
-      const head = treeSnapshot("head", { [path]: "export const large = true;\n".repeat(10_000) });
+
+      const head = treeSnapshot("head", {
+        [path]: `export const large = true;\n${"x".repeat(1_999_960)}`,
+      });
 
       const surface = yield* hydrateExactChanges({
         files: [file(path, undefined)],

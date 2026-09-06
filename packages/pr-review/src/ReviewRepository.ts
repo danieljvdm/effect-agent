@@ -3,5 +3,7 @@ export {
   ReviewContextError,
   ReviewFileList,
   ReviewRepository,
+  ReviewSearchMatch,
+  ReviewSearchResult,
   ReviewSource,
 } from "./internal/repository.ts";

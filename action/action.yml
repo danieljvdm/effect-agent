@@ -37,13 +37,21 @@ inputs:
     description: "Webhook head SHA; a stale event exits before model execution."
     required: false
   model:
-    description: "Priced OpenAI model id: gpt-5.6-sol, gpt-5.6, gpt-5.6-terra, or gpt-5.6-luna. Every review has a fixed spending ceiling below $1."
+    description: "Priced OpenAI model id: gpt-6-astra, gpt-5.6-sol, gpt-5.6, gpt-5.6-terra, or gpt-5.6-luna."
     required: false
-    default: "gpt-5.6-sol"
+    default: "gpt-6-astra"
   effort:
-    description: 'Reasoning effort: "low", "medium", "high", or "xhigh".'
+    description: 'Reasoning effort: "low", "medium", "high", "xhigh", or "max".'
     required: false
-    default: "xhigh"
+    default: "medium"
+  max-cost-usd:
+    description: "Maximum model spend per attempt in USD (0.01–100). Allowance is $1 plus $1 per 100,000 patch/feedback characters, capped at this value."
+    required: false
+    default: "2.50"
+  fast:
+    description: "Use OpenAI Fast mode at twice the standard token rates, within the same spending cap."
+    required: false
+    default: "false"
   guidance-file:
     description: "Optional committed repository guidance file."
     required: false
@@ -66,11 +74,11 @@ outputs:
   output-tokens:
     description: "Observed model output tokens."
   estimated-cost-usd:
-    description: "Estimated model cost in US dollars from reported usage at the pinned standard-tier rates. Excludes unsettled reservations."
+    description: "Estimated model cost in US dollars from reported usage at the pinned rates for the actual service tier. Excludes unsettled reservations."
   reserved-cost-usd:
     description: "Maximum additional charge in US dollars for dispatched requests whose usage is still unknown."
   cost-limit-usd:
-    description: "Fixed per-review spending admission ceiling in US dollars, strictly below $1."
+    description: "Size-scaled spending admission ceiling for this attempt in US dollars. Zero when no model review runs."
   blocking-findings:
     description: "Number of published blocking findings."
   unresolved-change-requests:

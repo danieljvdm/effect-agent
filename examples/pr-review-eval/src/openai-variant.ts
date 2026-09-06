@@ -1,9 +1,16 @@
 import {
   makeReviewOpenAi,
-  REVIEW_COST_LIMIT_MICROUSD,
-  reviewCostEstimator,
+  reviewCostLimitMicrousd,
+  reviewMaxCostUsd,
+  reviewModel,
+  reviewReasoningEffort,
 } from "@effect-agent/pr-review-action/review-openai";
-import { makeReviewer, type ReviewRequest } from "@effect-agent/pr-review/Review";
+import {
+  makeReviewer,
+  ReviewCompaction,
+  ReviewContextTokenLimit,
+  type ReviewRequest,
+} from "@effect-agent/pr-review/Review";
 import { type ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Option, Schema } from "effect";
@@ -51,6 +58,24 @@ export interface CurrentOpenAiVariantOptions {
 
 export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenAiVariant")(
   function* (options: CurrentOpenAiVariantOptions) {
+    const maxCostUsd = yield* reviewMaxCostUsd;
+    const model = yield* reviewModel;
+    const reasoningEffort = yield* reviewReasoningEffort;
+
+    const compaction = yield* Config.schema(ReviewCompaction, "PR_REVIEW_COMPACTION").pipe(
+      Config.withDefault("rollover"),
+    );
+
+    const contextTokenLimit = yield* Config.schema(
+      ReviewContextTokenLimit,
+      "PR_REVIEW_CONTEXT_TOKENS",
+    ).pipe(Config.withDefault(48_000));
+
+    const researchConcurrency = yield* Config.schema(
+      Schema.Literals([0, 1, 2]),
+      "PR_REVIEW_RESEARCH_CONCURRENCY",
+    ).pipe(Config.withDefault(0));
+
     const trimmedGuidance = options.guidance?.trim();
     const effectiveGuidance = trimmedGuidance === "" ? undefined : trimmedGuidance;
 
@@ -59,16 +84,31 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
 
     const configuration = EvalVariantConfiguration.make({
       id: options.id,
-      reviewerProfile: "diff-review-v5-capped",
+      reviewerProfile: "repository-review",
       provider: "openai",
-      model: "gpt-5.6-sol",
-      reasoningEffort: "xhigh",
+      model,
+      reasoningEffort,
+      compaction,
+      contextTokenLimit,
+      ...(researchConcurrency === 0
+        ? {}
+        : { research: { concurrency: researchConcurrency, maxOutputTokens: 4_000 } }),
       maxOutputTokens: 32_000,
       strictJsonSchema: true,
       store: false,
-      costLimitMicrousd: REVIEW_COST_LIMIT_MICROUSD,
+      maxCostMicrousd: Math.floor(maxCostUsd * 1_000_000),
+      budgetPolicy: "input-size-v1",
       ...(guidanceDigest === undefined ? {} : { guidanceDigest }),
     });
+
+    const modelLayer = (maxOutputTokens: number) =>
+      OpenAiLanguageModel.model(configuration.model, {
+        max_output_tokens: maxOutputTokens,
+        reasoning: { effort: configuration.reasoningEffort },
+        store: configuration.store,
+        service_tier: "default",
+        strictJsonSchema: configuration.strictJsonSchema,
+      });
 
     return {
       configuration,
@@ -76,19 +116,23 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
         // Allocate the shipping ledger per invocation, including concurrent/repeated trials.
         const provider = yield* makeReviewOpenAi({
           model: configuration.model,
-          cacheKey: `pr-review-v2:${request.headRevision}`,
+          cacheKey: `pr-review:${request.headRevision}`,
+          costLimitMicrousd: reviewCostLimitMicrousd(request, maxCostUsd),
         }).pipe(Effect.mapError((error) => reviewerFailure(error)));
 
         const reviewer = makeReviewer({
-          model: OpenAiLanguageModel.model(configuration.model, {
-            max_output_tokens: configuration.maxOutputTokens,
-            reasoning: { effort: configuration.reasoningEffort },
-            store: configuration.store,
-            service_tier: "default",
-            strictJsonSchema: configuration.strictJsonSchema,
-          }),
-          estimateCostMicrousd: reviewCostEstimator(configuration.model),
+          model: modelLayer(configuration.maxOutputTokens),
           costControl: provider.costControl,
+          compaction: configuration.compaction,
+          contextTokenLimit: configuration.contextTokenLimit,
+          ...(configuration.research === undefined
+            ? {}
+            : {
+                research: {
+                  model: modelLayer(configuration.research.maxOutputTokens),
+                  concurrency: configuration.research.concurrency,
+                },
+              }),
           ...(effectiveGuidance === undefined ? {} : { guidance: effectiveGuidance }),
         });
 

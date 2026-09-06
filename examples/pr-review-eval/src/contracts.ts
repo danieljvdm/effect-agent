@@ -1,4 +1,11 @@
-import { ReviewOutcome, ReviewRequest, ReviewSeverity } from "@effect-agent/pr-review/Review";
+import { ReviewReasoningEffort } from "@effect-agent/pr-review-action/review-openai";
+import {
+  ReviewCompaction,
+  ReviewContextTokenLimit,
+  ReviewOutcome,
+  ReviewRequest,
+  ReviewSeverity,
+} from "@effect-agent/pr-review/Review";
 import { Schema } from "effect";
 
 const BoundedIdentifier = Schema.NonEmptyString.check(
@@ -16,7 +23,7 @@ export const EvalRunnerVersion = Schema.String.check(
 
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
-export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.1");
+export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.6");
 
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
@@ -69,7 +76,7 @@ export class EvalRepositoryFile extends Schema.Class<EvalRepositoryFile>(
 )({
   path: BoundedPath,
   revision: Schema.Literals(["base", "head"]),
-  content: Schema.String.check(Schema.isMaxLength(200_000)),
+  content: Schema.String.check(Schema.isMaxLength(1_000_000)),
 }) {}
 
 const EvalRepositorySnapshotUnsigned = Schema.Struct({
@@ -94,7 +101,12 @@ const EvalCaseFields = Schema.Struct({
   provenance: BoundedText,
   sourceUrl: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_048))),
   inputDigest: EvalInputDigest,
-  request: ReviewRequest,
+  request: ReviewRequest.check(
+    Schema.makeFilter(
+      (request) => request.changes.length > 0 || (request.followUps?.length ?? 0) > 0,
+      { title: "An eval case contains at least one patch or follow-up" },
+    ),
+  ),
   repository: Schema.optionalKey(EvalRepositorySnapshot),
   expectedDefects: Schema.Array(EvalExpectedDefect).check(Schema.isMaxLength(12)),
 }).check(
@@ -144,7 +156,7 @@ export class EvalSuite extends Schema.Class<EvalSuite>(
   "@effect-agent/example-pr-review-eval/EvalSuite",
 )(EvalSuiteFields) {}
 
-export const EvalReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh"]);
+export const EvalReasoningEffort = ReviewReasoningEffort;
 export type EvalReasoningEffort = typeof EvalReasoningEffort.Type;
 
 export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfiguration>(
@@ -155,10 +167,19 @@ export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfigurat
   provider: Schema.Literal("openai"),
   model: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   reasoningEffort: EvalReasoningEffort,
+  compaction: ReviewCompaction,
+  contextTokenLimit: ReviewContextTokenLimit,
+  research: Schema.optionalKey(
+    Schema.Struct({
+      concurrency: Schema.Literals([1, 2]),
+      maxOutputTokens: Schema.Literal(4_000),
+    }),
+  ),
   maxOutputTokens: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100_000 })),
   strictJsonSchema: Schema.Literal(true),
   store: Schema.Literal(false),
-  costLimitMicrousd: Schema.optionalKey(Schema.Natural),
+  maxCostMicrousd: Schema.Int.check(Schema.isBetween({ minimum: 10_000, maximum: 100_000_000 })),
+  budgetPolicy: Schema.Literal("input-size-v1"),
   guidanceDigest: Schema.optionalKey(EvalInputDigest),
 }) {}
 

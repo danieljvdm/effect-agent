@@ -1,5 +1,7 @@
 import {
+  MAX_REVIEW_FILES,
   MAX_REVIEW_PATCH_CHARS,
+  MAX_REVIEW_TOTAL_PATCH_CHARS,
   type ReviewFinding,
   type ReviewOutcome,
   type ReviewReport,
@@ -119,19 +121,21 @@ export class ReviewExclusion extends Schema.Class<ReviewExclusion>("ReviewExclus
     "source-read-failed",
     "patch-unavailable",
     "patch-limit",
+    "patch-total-limit",
     "review-stopped",
   ]),
 }) {}
 
 const exclusionReason: Record<ReviewExclusion["reason"], string> = {
   "path-limit": "Path exceeds 512 characters",
-  "file-limit": "100-file input limit",
+  "file-limit": `${formatNumber(MAX_REVIEW_FILES)}-file input limit`,
   "source-limit": "8 MB source hydration limit",
   "unsupported-entry": "Not a regular file",
   "source-read-failed": "Source could not be read as bounded UTF-8 text",
   "patch-unavailable": "Exact patch could not be generated within the diff bounds",
   "patch-limit": `Patch exceeds ${formatNumber(MAX_REVIEW_PATCH_CHARS)} characters`,
-  "review-stopped": "Review stopped before this batch started",
+  "patch-total-limit": `Combined patches exceed ${formatNumber(MAX_REVIEW_TOTAL_PATCH_CHARS)} characters`,
+  "review-stopped": "Complete diff was not read before the review stopped",
 };
 
 export interface ReviewPresentationInput {
