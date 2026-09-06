@@ -9,9 +9,7 @@ import { Clock, Config, Effect, Exit, Ref, Schema, Semaphore, Stream } from "eff
 import { AiError } from "effect/unstable/ai";
 import { HttpBody, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
-export const reviewModel = Config.nonEmptyString("PR_REVIEW_MODEL").pipe(
-  Config.withDefault("gpt-6-astra"),
-);
+export const reviewModel = Config.schema(Schema.Trim.check(Schema.isNonEmpty()), "PR_REVIEW_MODEL");
 
 export const ReviewReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
 
@@ -19,7 +17,9 @@ export const reviewReasoningEffort = Config.schema(ReviewReasoningEffort, "PR_RE
   Config.withDefault("medium"),
 );
 
-export const reviewFast = Config.boolean("PR_REVIEW_FAST").pipe(Config.withDefault(false));
+export const reviewPriority = Config.literals(["", "default", "fast"], "PR_REVIEW_PRIORITY").pipe(
+  Config.withDefault(""),
+);
 
 /** Maximum per attempt; the actual allowance scales with the admitted review input. */
 const ReviewMaxCostUsd = Schema.Number.check(Schema.isBetween({ minimum: 0.01, maximum: 100 }));
@@ -233,7 +233,7 @@ const reservedCost = (state: Spending) =>
 /** Capture the provided client for one review's spending ledger. Never share it between attempts. */
 export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options: {
   readonly model: string;
-  readonly fast?: boolean;
+  readonly serviceTier?: "default" | "fast" | "auto";
   readonly cacheKey: string;
   readonly costLimitMicrousd: number;
 }) {
@@ -249,9 +249,13 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     ),
   );
 
-  const serviceTier = options.fast ? "fast" : "default";
+  const serviceTier =
+    options.serviceTier === "auto" ? undefined : (options.serviceTier ?? "default");
+
+  // Omitted API tiers inherit project settings, which may enable Fast mode.
+  const reserveFast = serviceTier !== "default";
   const standardPricing = reviewModelPricing(options.model);
-  const pricing = reviewModelPricing(options.model, options.fast);
+  const pricing = reviewModelPricing(options.model, reserveFast);
 
   if (pricing === undefined || standardPricing === undefined) {
     return yield* admissionError("The review model has no verified price for the selected tier.");
@@ -441,7 +445,8 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       remainingCostMicrousd: balance - microusd,
       costLimitMicrousd,
       cacheMode: "explicit",
-      serviceTier,
+      serviceTier: serviceTier ?? "auto",
+      reservedServiceTier: reserveFast ? "fast" : "default",
       pricingVersion: PRICING_VERSION,
     });
 
@@ -465,7 +470,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const chargedPricing =
       response.service_tier === "default"
         ? standardPricing
-        : options.fast && (response.service_tier === "fast" || response.service_tier === "priority")
+        : reserveFast && (response.service_tier === "fast" || response.service_tier === "priority")
           ? pricing
           : undefined;
 

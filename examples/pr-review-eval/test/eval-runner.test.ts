@@ -295,7 +295,10 @@ describe("PR-review model eval", () => {
         id: Schema.decodeSync(EvalVariantId)("candidate-guidance-v1"),
         guidance: "  Keep the public error channel typed.  ",
       }).pipe(
-        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env: {} })),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ env: { PR_REVIEW_MODEL: "gpt-6-astra" } }),
+        ),
       );
 
       type Review = ReturnType<typeof variant.review>;
@@ -324,7 +327,12 @@ describe("PR-review model eval", () => {
 
       const variant = yield* makeCurrentOpenAiVariant({
         id: Schema.decodeSync(EvalVariantId)("provider-failure"),
-      });
+      }).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ env: { PR_REVIEW_MODEL: "gpt-6-astra" } }),
+        ),
+      );
 
       const privateText = "private-source-and-provider-payload";
 
@@ -373,6 +381,7 @@ describe("PR-review model eval", () => {
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnv({
               env: {
+                PR_REVIEW_MODEL: "gpt-6-astra",
                 PR_REVIEW_COMPACTION: "rollover",
                 PR_REVIEW_CONTEXT_TOKENS: "32000",
                 PR_REVIEW_RESEARCH_CONCURRENCY: "2",
@@ -394,7 +403,10 @@ describe("PR-review model eval", () => {
 
         for (const env of invalidEnvironments) {
           const error = yield* makeCurrentOpenAiVariant({ id: "invalid-context" }).pipe(
-            Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env })),
+            Effect.provideService(
+              ConfigProvider.ConfigProvider,
+              ConfigProvider.fromEnv({ env: { PR_REVIEW_MODEL: "gpt-6-astra", ...env } }),
+            ),
             Effect.flip,
           );
 
@@ -424,6 +436,7 @@ describe("PR-review model eval", () => {
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnv({
               env: {
+                PR_REVIEW_MODEL: "gpt-6-astra",
                 PR_REVIEW_MAX_COST_USD: "1.2",
                 PR_REVIEW_EFFORT: "max",
                 // Isolate provider admission from the separate working-context boundary.

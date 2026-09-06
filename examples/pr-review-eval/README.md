@@ -5,7 +5,7 @@ Replay saved PRs through the reviewer and score findings against adjudicated def
 - Validate offline: `vp run pr-review-eval -- --cases fixtures/smoke-suite.json validate`.
 - Validate the source-backed historical corpus:
   `vp run pr-review-eval -- --cases fixtures/public-effect-agent-v2.json validate`.
-- Live runs require `EFFECT_AGENT_LIVE=1` and `OPENAI_API_KEY`.
+- Live runs require `EFFECT_AGENT_LIVE=1`, `OPENAI_API_KEY`, and `PR_REVIEW_MODEL`.
 - The CLI reads the optional, git-ignored root `.env.local` as a fallback; exported environment
   variables take precedence. Keep credentials there rather than in fixtures or results.
 - The current variant reuses the Action's explicit cache and input-sized trial allowance, with a
@@ -15,9 +15,10 @@ Replay saved PRs through the reviewer and score findings against adjudicated def
 
 ## Review variant
 
-The current OpenAI variant uses the Action's `makeReviewOpenAi` adapter, with `gpt-6-astra`,
-`medium` reasoning, explicit prompt caching, and a separate spending ledger for each trial.
-Set `PR_REVIEW_MODEL` and `PR_REVIEW_EFFORT` to compare configurations. Effort accepts
+The current OpenAI variant uses the Action's `makeReviewOpenAi` adapter with an explicitly selected
+model, `medium` reasoning by default, explicit prompt caching, and a separate spending ledger for
+each trial. Set `PR_REVIEW_MODEL` (for example, `gpt-6-astra`); there is no model fallback.
+Set `PR_REVIEW_EFFORT` to compare reasoning configurations. Effort accepts
 `low`, `medium`, `high`, `xhigh`, or `max`; model IDs must have a supported rate card.
 Each observation records the effective settings. Use distinct variant IDs for comparisons.
 Set `PR_REVIEW_COMPACTION` to `rollover` (default) or `prune`, and

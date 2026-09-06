@@ -33,7 +33,7 @@ import {
   GitHubApiFailure,
   type RepositorySnapshot,
 } from "../src/github.ts";
-import { reviewFast, reviewMaxCostUsd } from "../src/review-openai.ts";
+import { reviewPriority, reviewMaxCostUsd } from "../src/review-openai.ts";
 import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
@@ -69,7 +69,7 @@ const decodePublishedReview = (request: TestHttpRequest) => {
   return Schema.decodeUnknownSync(PublishedReviewBody)(JSON.parse(encoded));
 };
 
-const actionConfig = (overrides: Record<string, string> = {}) =>
+const actionConfig = (overrides: Record<string, string | undefined> = {}) =>
   ConfigProvider.fromEnv({
     env: {
       GITHUB_REPOSITORY: "reve-ai/example",
@@ -77,11 +77,15 @@ const actionConfig = (overrides: Record<string, string> = {}) =>
       GITHUB_API_URL: "https://api.github.test",
       PR_REVIEW_PULL_REQUEST: "12",
       PR_REVIEW_AUTHOR: "effect-agent[bot]",
+      PR_REVIEW_MODEL: "gpt-6-astra",
       ...overrides,
     },
   });
 
-const runReviewAction = (client: HttpClient.HttpClient, overrides?: Record<string, string>) =>
+const runReviewAction = (
+  client: HttpClient.HttpClient,
+  overrides?: Record<string, string | undefined>,
+) =>
   reviewActionProgram.pipe(
     Effect.provideService(ConfigProvider.ConfigProvider, actionConfig(overrides)),
     Effect.provideService(HttpClient.HttpClient, client),
@@ -411,19 +415,48 @@ describe("immutable review source", () => {
 });
 
 describe("Action configuration", () => {
+  it.effect.each([undefined, "", "   "])("requires an explicit nonblank model: %s", (model) =>
+    Effect.gen(function* () {
+      const client = HttpClient.make(() => Effect.die("Missing model must fail before HTTP"));
+      const exit = yield* runReviewAction(client, { PR_REVIEW_MODEL: model }).pipe(Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(false);
+        expect(Cause.pretty(exit.cause)).toContain("PR_REVIEW_MODEL");
+      }
+    }),
+  );
+
+  it.effect("rejects an unsupported priority before HTTP", () =>
+    Effect.gen(function* () {
+      const client = HttpClient.make(() => Effect.die("Invalid priority must fail before HTTP"));
+
+      const exit = yield* runReviewAction(client, { PR_REVIEW_PRIORITY: "ultrafast" }).pipe(
+        Effect.exit,
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(false);
+        expect(Cause.pretty(exit.cause)).toContain("PR_REVIEW_PRIORITY");
+      }
+    }),
+  );
+
   it.effect("opts into Fast through the Action input with an explicit environment override", () =>
     Effect.gen(function* () {
       for (const { env, expected } of [
-        { env: {}, expected: false },
-        { env: { INPUT_FAST: "true" }, expected: true },
-        { env: { INPUT_FAST: "true", PR_REVIEW_FAST: "false" }, expected: false },
+        { env: {}, expected: "" },
+        { env: { INPUT_PRIORITY: "fast" }, expected: "fast" },
+        { env: { INPUT_PRIORITY: "fast", PR_REVIEW_PRIORITY: "default" }, expected: "default" },
       ]) {
-        expect(yield* reviewFast.parse(withActionInputs(ConfigProvider.fromEnv({ env })))).toBe(
+        expect(yield* reviewPriority.parse(withActionInputs(ConfigProvider.fromEnv({ env })))).toBe(
           expected,
         );
       }
-      yield* reviewFast
-        .parse(withActionInputs(ConfigProvider.fromEnv({ env: { INPUT_FAST: "typo" } })))
+      yield* reviewPriority
+        .parse(withActionInputs(ConfigProvider.fromEnv({ env: { INPUT_PRIORITY: "typo" } })))
         .pipe(Effect.flip);
     }),
   );

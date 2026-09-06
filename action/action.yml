@@ -37,9 +37,8 @@ inputs:
     description: "Webhook head SHA; a stale event exits before model execution."
     required: false
   model:
-    description: "Priced OpenAI model id: gpt-6-astra, gpt-5.6-sol, gpt-5.6, gpt-5.6-terra, or gpt-5.6-luna."
-    required: false
-    default: "gpt-6-astra"
+    description: "Required OpenAI model id: gpt-6-astra, gpt-5.6-sol, gpt-5.6, gpt-5.6-terra, or gpt-5.6-luna."
+    required: true
   effort:
     description: 'Reasoning effort: "low", "medium", "high", "xhigh", or "max".'
     required: false
@@ -48,10 +47,9 @@ inputs:
     description: "Maximum model spend per attempt in USD (0.01–100). Allowance is $1 plus $1 per 100,000 patch/feedback characters, capped at this value."
     required: false
     default: "2.50"
-  fast:
-    description: "Use OpenAI Fast mode at twice the standard token rates, within the same spending cap."
+  priority:
+    description: 'Processing priority: omit to use the OpenAI project setting, "default" to force Standard, or "fast" for Fast mode within the same spending cap.'
     required: false
-    default: "false"
   guidance-file:
     description: "Optional committed repository guidance file."
     required: false

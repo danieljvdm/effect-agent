@@ -136,17 +136,36 @@ The footer, logs, and `cost-limit-usd` output show the actual scaled allowance, 
 both settled charges and outstanding reservations. The same policy applies to full reviews,
 incremental reviews, and eval trials; a retry gets a new allowance.
 
-The Action keeps the configured model and reasoning effort, defaulting to `gpt-6-astra` and
-`medium`. Effort accepts `low`, `medium`, `high`, `xhigh`, or `max`.
-It explicitly requests the standard `default` service tier unless `fast: "true"` (or local
-`PR_REVIEW_FAST=true`) selects [OpenAI Fast mode](https://developers.openai.com/api/docs/guides/fast-mode).
+Every consumer must specify `model` (or local `PR_REVIEW_MODEL`); there is no fallback.
+Missing, blank, and unpriced models fail before paid inference. Reasoning effort defaults to
+`medium` and accepts `low`, `medium`, `high`, `xhigh`, or `max`.
+Omit `priority` to omit the API's `service_tier` parameter and inherit the OpenAI project setting.
+Set `priority: default` to force Standard processing, or `priority: fast` (local
+`PR_REVIEW_PRIORITY=fast`) to request [OpenAI Fast mode](https://developers.openai.com/api/docs/guides/fast-mode).
+Fast is supported for the listed models, subject to account and regional availability.
 Fast mode costs twice the standard token rates for the supported models and uses the same
 size-scaled spending cap, so the allowance buys fewer tokens. The effect-agent repository's
 workflow opts into Fast mode with `max-cost-usd: "10.00"`; its allowance still scales with PR size.
-Other consumers retain the defaults unless they override them.
-Requests reserve at the selected tier's rates, and settlement uses the tier reported by OpenAI,
+Requests with omitted priority reserve at Fast rates because the project setting can enable Fast.
+Explicit priorities reserve at the selected tier's rates, and settlement uses the tier reported by OpenAI,
 including standard-rate fallback from Fast mode. Both `fast` and `priority` response tags identify
-Fast pricing.
+Fast pricing. Unknown response tiers retain their reservation and stop the attempt. Rejected
+requests are not retried at another tier; the selected model and effort stay unchanged.
+
+```yaml
+- uses: danieljvdm/effect-agent/action@action-v1
+  with:
+    openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    pull-request: ${{ github.event.pull_request.number }}
+    model: gpt-6-astra
+    effort: medium # Optional; this is the default.
+    priority: fast
+```
+
+**BEHAVIOR CHANGE:** Add an explicit `model`. Replace `fast: "true"` with `priority: fast`;
+use `priority: default` to retain explicitly Standard processing.
+
 It accepts only the priced model IDs listed in `action.yml`. The rate card was verified on
 2026-09-05. Sol and its `gpt-5.6` alias refuse new paid requests on or after 2026-11-22 UTC
 until their promotional rate card is refreshed. This deadline does not apply to Astra, Terra,

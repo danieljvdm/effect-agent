@@ -24,9 +24,10 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
+import type { AiError } from "effect/unstable/ai";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
-import { reviewActionProgram, reviewPublicationFailure } from "../src/action.ts";
+import { reviewActionProgram, reviewPublicationFailure, withActionInputs } from "../src/action.ts";
 import {
   makeReviewOpenAi,
   reviewCostLimitMicrousd,
@@ -41,6 +42,7 @@ const tightCostLimitMicrousd = 999_999;
 expectTypeOf<
   Effect.Services<ReturnType<typeof makeReviewOpenAi>>
 >().toEqualTypeOf<OpenAiClient.OpenAiClient>();
+expectTypeOf<Effect.Error<ReturnType<typeof makeReviewOpenAi>>>().toEqualTypeOf<AiError.AiError>();
 
 const WireRequest = Schema.Struct({
   model: Schema.String,
@@ -221,40 +223,45 @@ const payload: OpenAiSchema.CreateResponse = {
 };
 
 describe("review provider boundary", () => {
-  it.effect("defaults to Astra and accepts only supported reasoning efforts", () =>
-    Effect.gen(function* () {
-      const configuration = Effect.gen(function* () {
-        return { model: yield* reviewModel, effort: yield* reviewReasoningEffort };
-      });
+  it.effect(
+    "defaults to medium effort with an explicit model and accepts only supported reasoning efforts",
+    () =>
+      Effect.gen(function* () {
+        const configuration = Effect.gen(function* () {
+          return { model: yield* reviewModel, effort: yield* reviewReasoningEffort };
+        });
 
-      expect(
-        yield* configuration.pipe(
-          Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env: {} })),
-        ),
-      ).toEqual({ model: "gpt-6-astra", effort: "medium" });
-
-      for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
         expect(
           yield* configuration.pipe(
             Effect.provideService(
               ConfigProvider.ConfigProvider,
-              ConfigProvider.fromEnv({
-                env: { PR_REVIEW_MODEL: "gpt-5.6-terra", PR_REVIEW_EFFORT: effort },
-              }),
+              ConfigProvider.fromEnv({ env: { PR_REVIEW_MODEL: "gpt-6-astra" } }),
             ),
           ),
-        ).toEqual({ model: "gpt-5.6-terra", effort });
-      }
-      for (const effort of ["none", "minimal", "ultra"]) {
-        yield* reviewReasoningEffort.pipe(
-          Effect.provideService(
-            ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnv({ env: { PR_REVIEW_EFFORT: effort } }),
-          ),
-          Effect.flip,
-        );
-      }
-    }),
+        ).toEqual({ model: "gpt-6-astra", effort: "medium" });
+
+        for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+          expect(
+            yield* configuration.pipe(
+              Effect.provideService(
+                ConfigProvider.ConfigProvider,
+                ConfigProvider.fromEnv({
+                  env: { PR_REVIEW_MODEL: "gpt-5.6-terra", PR_REVIEW_EFFORT: effort },
+                }),
+              ),
+            ),
+          ).toEqual({ model: "gpt-5.6-terra", effort });
+        }
+        for (const effort of ["none", "minimal", "ultra"]) {
+          yield* reviewReasoningEffort.pipe(
+            Effect.provideService(
+              ConfigProvider.ConfigProvider,
+              ConfigProvider.fromEnv({ env: { PR_REVIEW_EFFORT: effort } }),
+            ),
+            Effect.flip,
+          );
+        }
+      }),
   );
 
   it.effect.each(
@@ -287,7 +294,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           model,
-          fast,
+          serviceTier: fast ? "fast" : "default",
           cacheKey: "family-pricing",
           costLimitMicrousd: 2_500_000,
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
@@ -306,11 +313,13 @@ describe("review provider boundary", () => {
 
   it.effect.each(
     ["fast", "priority", "default", "auto", "flex", "ultrafast"].flatMap((serviceTier) =>
-      [false, true].map((streaming) => ({ serviceTier, streaming })),
+      [false, true].flatMap((streaming) =>
+        (["auto", "fast"] as const).map((requested) => ({ serviceTier, streaming, requested })),
+      ),
     ),
   )(
-    "settles Fast's reported $serviceTier tier (streaming=$streaming)",
-    ({ serviceTier, streaming }) =>
+    "settles $requested requests at the reported $serviceTier tier (streaming=$streaming)",
+    ({ serviceTier, streaming, requested }) =>
       Effect.gen(function* () {
         const sent: Array<WireRequest> = [];
         const model = "gpt-6-astra";
@@ -333,12 +342,16 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           model,
-          fast: true,
+          serviceTier: requested,
           cacheKey: "fast-tier",
           costLimitMicrousd: 2_500_000,
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
-        const input = { ...payload, model, service_tier: "fast" };
+        const input = {
+          ...payload,
+          model,
+          service_tier: requested === "auto" ? undefined : "fast",
+        };
 
         const result = yield* (
           streaming
@@ -351,7 +364,9 @@ describe("review provider boundary", () => {
         expect(Exit.isSuccess(result)).toBe(valid);
         // $0.25 worst-case input leaves $2.25 for at most 22,500 output tokens.
         expect(sent).toHaveLength(1);
-        expect(sent[0]).toMatchObject({ model, service_tier: "fast", max_output_tokens: 22_500 });
+        expect(sent[0]).toMatchObject({ model, max_output_tokens: 22_500 });
+        if (requested === "auto") expect(sent[0]).not.toHaveProperty("service_tier");
+        else expect(sent[0]?.service_tier).toBe("fast");
         expect(yield* provider.costControl.snapshot).toMatchObject({
           modelCalls: 1,
           usage: {
@@ -383,7 +398,7 @@ describe("review provider boundary", () => {
 
       const provider = yield* makeReviewOpenAi({
         model: "gpt-6-astra",
-        fast: true,
+        serviceTier: "fast",
         cacheKey: "fast-input",
         costLimitMicrousd: 2_500_000,
       }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
@@ -1098,6 +1113,7 @@ describe("review provider boundary", () => {
               return json(httpRequest, { object: "response.input_tokens", input_tokens: 1_000 });
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
+              expect(decodeWire(httpRequest)).not.toHaveProperty("service_tier");
               const input = JSON.stringify(decodeWire(httpRequest).input);
 
               expect(input).toContain("reviewed-head");
@@ -1264,16 +1280,19 @@ describe("review provider boundary", () => {
         const exit = yield* reviewActionProgram.pipe(
           Effect.provideService(
             ConfigProvider.ConfigProvider,
-            ConfigProvider.fromEnv({
-              env: {
-                GITHUB_REPOSITORY: "fixtures/example",
-                GITHUB_TOKEN: "github-fixture",
-                GITHUB_API_URL: "https://api.github.test",
-                OPENAI_API_KEY: "openai-fixture",
-                PR_REVIEW_PULL_REQUEST: "12",
-                PR_REVIEW_AUTOMATIC_LIMIT: "5",
-              },
-            }),
+            withActionInputs(
+              ConfigProvider.fromEnv({
+                env: {
+                  GITHUB_REPOSITORY: "fixtures/example",
+                  GITHUB_TOKEN: "github-fixture",
+                  GITHUB_API_URL: "https://api.github.test",
+                  OPENAI_API_KEY: "openai-fixture",
+                  PR_REVIEW_PULL_REQUEST: "12",
+                  PR_REVIEW_AUTOMATIC_LIMIT: "5",
+                  INPUT_MODEL: "gpt-6-astra",
+                },
+              }),
+            ),
           ),
           Effect.provideService(HttpClient.HttpClient, client),
           Effect.provide(NodeServices.layer),
@@ -1503,7 +1522,7 @@ describe("review provider boundary", () => {
                 PR_REVIEW_PULL_REQUEST: "12",
                 PR_REVIEW_MAX_COST_USD: "0.99",
                 PR_REVIEW_MODEL: fast ? "gpt-6-astra" : "gpt-5.6-sol",
-                PR_REVIEW_FAST: String(fast),
+                PR_REVIEW_PRIORITY: fast ? "fast" : "default",
               },
             }),
           ),
