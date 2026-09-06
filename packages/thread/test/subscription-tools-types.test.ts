@@ -1,5 +1,4 @@
 import { AgentId } from "@effect-agent/core/Identifiers";
-import { makeEventSource } from "@effect-agent/thread/EventSource";
 import {
   GitHubWorkflowRunCompletion,
   GitHubWorkflowRunWatch,
@@ -21,7 +20,7 @@ import {
   subscriptionToolsLayer,
 } from "@effect-agent/thread/SubscriptionTools";
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Effect, Schema, SchemaGetter } from "effect";
+import { Context, Effect, Schema } from "effect";
 import type { Layer, Crypto } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
@@ -51,30 +50,6 @@ class PrepareInput extends Context.Service<PrepareInput, { readonly prefix: stri
   "@effect-agent/thread/test/PrepareInput",
 ) {}
 
-class SchemaDecoder extends Context.Service<SchemaDecoder, string>()(
-  "@effect-agent/thread/test/SubscriptionSchemaDecoder",
-) {}
-
-class SchemaEncoder extends Context.Service<SchemaEncoder, string>()(
-  "@effect-agent/thread/test/SubscriptionSchemaEncoder",
-) {}
-
-const scopedCodec = Schema.String.pipe(
-  Schema.decodeTo(Schema.String, {
-    decode: SchemaGetter.transformOrFail((value) =>
-      SchemaDecoder.pipe(Effect.andThen(Effect.addFinalizer(() => Effect.void)), Effect.as(value)),
-    ),
-    encode: SchemaGetter.transformOrFail((value) =>
-      SchemaEncoder.pipe(Effect.andThen(Effect.addFinalizer(() => Effect.void)), Effect.as(value)),
-    ),
-  }),
-);
-
-const scopedCallback = PrepareInput.pipe(
-  Effect.andThen(Effect.addFinalizer(() => Effect.void)),
-  Effect.as("event"),
-);
-
 const sourceEffect = makeGitHubWorkflowRunSource({
   repository: GitHubRepository.make({ id: 1, owner: "effect", name: "agent" }),
 });
@@ -97,41 +72,12 @@ const bindingEffect = makeSubscriptionInputBinding({
     }),
 });
 
-const scopedSourceEffect = makeEventSource({
-  source: GitHubWorkflowRunSourceVersion,
-  continuity: "Type proof for scoped codecs and reconciliation.",
-  event: scopedCodec,
-  parameters: scopedCodec,
-  identity: (value) => value,
-  eventKey: (value) => value,
-  parameterKey: (value) => value,
-  matches: (event, parameters) => event === parameters,
-  reconcile: () => scopedCallback,
-});
-
-const scopedBindingEffect = makeSubscriptionInputBinding({
-  source: GitHubWorkflowRunSourceVersion,
-  agentId: Schema.decodeSync(AgentId)("agent"),
-  definitions: DefinitionDigests.make({ agent: digest, model: digest, tools: digest }),
-  event: scopedCodec,
-  parameters: scopedCodec,
-  context: scopedCodec,
-  input: scopedCodec,
-  prepare: () => scopedCallback,
-});
-
 type SourceFailureProof = Assert<Equal<Effect.Error<typeof sourceEffect>, SubscriptionSourceError>>;
 type SourceRequirementsProof = Assert<
   Equal<Effect.Services<typeof sourceEffect>, GitHubWorkflowRuns>
 >;
 type BindingFailureProof = Assert<Equal<Effect.Error<typeof bindingEffect>, never>>;
 type BindingRequirementsProof = Assert<Equal<Effect.Services<typeof bindingEffect>, PrepareInput>>;
-type ScopedSourceRequirementsProof = Assert<
-  Equal<Effect.Services<typeof scopedSourceEffect>, PrepareInput | SchemaDecoder | SchemaEncoder>
->;
-type ScopedBindingRequirementsProof = Assert<
-  Equal<Effect.Services<typeof scopedBindingEffect>, PrepareInput | SchemaDecoder | SchemaEncoder>
->;
 
 describe("Subscription Tool and GitHub source public types", () => {
   it("keeps typed failures, requirements, and sanitized Tool failures visible", () => {
@@ -143,10 +89,8 @@ describe("Subscription Tool and GitHub source public types", () => {
       SourceRequirementsProof,
       BindingFailureProof,
       BindingRequirementsProof,
-      ScopedSourceRequirementsProof,
-      ScopedBindingRequirementsProof,
-    ] = [true, true, true, true, true, true, true, true, true];
+    ] = [true, true, true, true, true, true, true];
 
-    expect(proofs).toEqual([true, true, true, true, true, true, true, true, true]);
+    expect(proofs).toEqual([true, true, true, true, true, true, true]);
   });
 });

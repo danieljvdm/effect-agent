@@ -180,116 +180,113 @@ const testLayer = Layer.mergeAll(
 
 layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
   for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
-    it.effect(
-      `composes independent host services at the ephemeral Run boundary: ${outcome}`,
-      () => {
-        const seen: Array<string> = [];
+    it.effect(`composes ambient host services: ${outcome}`, () => {
+      const seen: Array<string> = [];
 
-        const tools = Toolkit.make(
-          Tool.make("book", {
-            parameters: Schema.Struct({}),
-            success: Schema.String,
-          }),
-        );
+      const tools = Toolkit.make(
+        Tool.make("book", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }),
+      );
 
-        const model = scriptedModel(
-          [
-            { type: "tool-call", id: "book-1", name: "book", params: {}, providerExecuted: false },
-            { type: "finish", reason: "tool-calls", usage },
-          ],
-          '"done"',
-        );
+      const model = scriptedModel(
+        [
+          { type: "tool-call", id: "book-1", name: "book", params: {}, providerExecuted: false },
+          { type: "finish", reason: "tool-calls", usage },
+        ],
+        '"done"',
+      );
 
-        const agent = Agent.withModel(
-          Agent.make("independent-services", {
-            input: Schema.String,
-            output: Schema.String,
-            instructions: "Book it.",
-            toolkit: tools,
-            policy: policy(),
-          }),
-          model,
-        );
+      const agent = Agent.withModel(
+        Agent.make("independent-services", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Book it.",
+          toolkit: tools,
+          policy: policy(),
+        }),
+        model,
+      );
 
-        const program = AgentRuntime.run(agent, "book");
+      const program = AgentRuntime.run(agent, "book");
 
-        const preparationRequired: RunContextPreparation extends Effect.Services<typeof program>
-          ? true
-          : false = false;
+      const preparationRequired: RunContextPreparation extends Effect.Services<typeof program>
+        ? true
+        : false = false;
 
-        const authorizationRequired: RunToolAuthorization extends Effect.Services<typeof program>
-          ? true
-          : false = false;
+      const authorizationRequired: RunToolAuthorization extends Effect.Services<typeof program>
+        ? true
+        : false = false;
 
-        const preparationError: RunContextPreparationError extends Effect.Error<typeof program>
-          ? true
-          : false = true;
+      const preparationError: RunContextPreparationError extends Effect.Error<typeof program>
+        ? true
+        : false = true;
 
-        return Effect.gen(function* () {
-          const result = yield* program.pipe(Effect.exit);
+      return Effect.gen(function* () {
+        const result = yield* program.pipe(Effect.exit);
 
-          if (outcome === "allowed") {
-            expect(Exit.isSuccess(result)).toBe(true);
-            expect(seen).toEqual(["prepare", "authorize", "handler", "prepare"]);
-          } else {
-            expect(Exit.isFailure(result)).toBe(true);
-            if (Exit.isFailure(result)) {
-              expect(Cause.findErrorOption(result.cause)).toMatchObject({
-                _tag: "Some",
-                value: {
-                  _tag: outcome === "denied" ? "AgentToolAuthorizationDenied" : "MemoryRecallError",
-                },
-              });
-            }
-            expect(seen).toEqual(outcome === "denied" ? ["prepare", "authorize"] : ["prepare"]);
+        if (outcome === "allowed") {
+          expect(Exit.isSuccess(result)).toBe(true);
+          expect(seen).toEqual(["prepare", "authorize", "handler", "prepare"]);
+        } else {
+          expect(Exit.isFailure(result)).toBe(true);
+          if (Exit.isFailure(result)) {
+            expect(Cause.findErrorOption(result.cause)).toMatchObject({
+              _tag: "Some",
+              value: {
+                _tag: outcome === "denied" ? "AgentToolAuthorizationDenied" : "MemoryRecallError",
+              },
+            });
           }
-          expect(preparationRequired).toBe(false);
-          expect(authorizationRequired).toBe(false);
-          expect(preparationError).toBe(true);
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              Layer.succeed(RunContextPreparation, {
-                hook: {
-                  prepare: ({ source }) =>
-                    Effect.gen(function* () {
-                      seen.push("prepare");
-                      if (outcome === "preparation-failed") {
-                        return yield* MemoryRecallError.make({
-                          reason: "unavailable",
-                          sourceId: "host",
-                          message: "unavailable",
-                        });
-                      }
+          expect(seen).toEqual(outcome === "denied" ? ["prepare", "authorize"] : ["prepare"]);
+        }
+        expect(preparationRequired).toBe(false);
+        expect(authorizationRequired).toBe(false);
+        expect(preparationError).toBe(true);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(RunContextPreparation, {
+              hook: {
+                prepare: ({ source }) =>
+                  Effect.gen(function* () {
+                    seen.push("prepare");
+                    if (outcome === "preparation-failed") {
+                      return yield* MemoryRecallError.make({
+                        reason: "unavailable",
+                        sourceId: "host",
+                        message: "unavailable",
+                      });
+                    }
 
-                      return { prompt: Prompt.fromMessages(source.content) };
-                    }),
-                },
-              }),
-              Layer.succeed(RunToolAuthorization, {
-                authorize: () =>
-                  Effect.sync(() => {
-                    seen.push("authorize");
-
-                    return outcome === "denied"
-                      ? { _tag: "denied" as const, reason: "revoked" }
-                      : { _tag: "allowed" as const };
+                    return { prompt: Prompt.fromMessages(source.content) };
                   }),
-              }),
-              tools.toLayer({
-                book: () =>
-                  Effect.sync(() => {
-                    seen.push("handler");
+              },
+            }),
+            Layer.succeed(RunToolAuthorization, {
+              authorize: () =>
+                Effect.sync(() => {
+                  seen.push("authorize");
 
-                    return "booked";
-                  }),
-              }),
-            ),
+                  return outcome === "denied"
+                    ? { _tag: "denied" as const, reason: "revoked" }
+                    : { _tag: "allowed" as const };
+                }),
+            }),
+            tools.toLayer({
+              book: () =>
+                Effect.sync(() => {
+                  seen.push("handler");
+
+                  return "booked";
+                }),
+            }),
           ),
-          Effect.scoped,
-        );
-      },
-    );
+        ),
+        Effect.scoped,
+      );
+    });
   }
 
   it.effect("an explicit per-Run authorization overrides the ambient policy", () =>
