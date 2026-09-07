@@ -799,7 +799,20 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
           message: `Expected at most one checkpoint row but found ${rows.length}.`,
         });
       }
-      const checkpoint = yield* decodeCheckpoint(rows[0].checkpoint_json);
+      const row = rows[0];
+      const checkpoint = yield* decodeCheckpoint(row.checkpoint_json);
+
+      if (
+        row.thread_id !== validated.threadId ||
+        checkpoint.threadId !== row.thread_id ||
+        checkpoint.throughSequence !== row.through_sequence ||
+        checkpoint.tailDigest !== row.tail_digest
+      ) {
+        return yield* ThreadStoreError.make({
+          operation: "load checkpoint",
+          message: "Stored checkpoint metadata does not match its canonical row.",
+        });
+      }
 
       const canonicalDigest = yield* tailDigestAt(
         journal,

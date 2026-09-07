@@ -1,5 +1,6 @@
-import { Effect, Encoding, Schema } from "effect";
+import { Effect, Schema } from "effect";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
 import type * as MemoryNamespace from "./MemoryNamespace.ts";
 import {
   MemoryLookup,
@@ -132,7 +133,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
     )
       continue;
     if (decodedLimits.maxSourceBytes !== undefined) {
-      sourceBytes += Encoding.encodeHex(JSON.stringify(document)).length / 2;
+      sourceBytes += utf8ByteLength(JSON.stringify(document));
       if (sourceBytes > decodedLimits.maxSourceBytes)
         return yield* MemoryRecallError.make({
           reason: "budget",
@@ -159,8 +160,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       const encoded = JSON.stringify(passage);
       const remaining = maxInputBytes - inputBytes;
 
-      const encodedBytes =
-        encoded.length <= remaining ? Encoding.encodeHex(encoded).length / 2 : undefined;
+      const encodedBytes = encoded.length <= remaining ? utf8ByteLength(encoded) : undefined;
 
       if (encodedBytes === undefined || encodedBytes > remaining) {
         return yield* MemoryRecallError.make({

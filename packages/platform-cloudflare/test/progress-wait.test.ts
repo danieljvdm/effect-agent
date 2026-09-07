@@ -124,6 +124,9 @@ describe("#94 Cloudflare durable progress wait", () => {
 
           yield* registry.cancel("duplicate-attempt");
           yield* Effect.all([first, second], { concurrency: "unbounded" });
+          const retriedAfterCancel = yield* registry.subscribe("duplicate-attempt");
+
+          yield* retriedAfterCancel;
 
           yield* registry.cancel("late-attempt");
           const lateFirst = yield* registry.subscribe("late-attempt");
@@ -138,6 +141,63 @@ describe("#94 Cloudflare durable progress wait", () => {
 
     expect(completed).toBe(true);
   });
+
+  it("keeps cancellation tombstones after old attempt scopes close and removes only their waiters", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* ProgressWaitRegistry;
+          const closed = yield* Effect.scoped(registry.subscribe("reused-id"));
+          const live = yield* registry.subscribe("reused-id");
+
+          yield* registry.cancel("reused-id");
+          yield* live;
+          const detached = yield* Effect.forkChild(closed, { startImmediately: true });
+
+          expect(detached.pollUnsafe()).toBeUndefined();
+          yield* Fiber.interrupt(detached);
+
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const active = yield* registry.subscribe("cancelled-before-close");
+
+              yield* registry.cancel("cancelled-before-close");
+              yield* active;
+            }),
+          );
+          yield* yield* registry.subscribe("cancelled-before-close");
+        }),
+      ).pipe(Effect.provide(ProgressWaitRegistry.layer)),
+    ));
+
+  it("bounds cancellation history by evicting oldest tombstones without removing active waiters", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* ProgressWaitRegistry;
+          const active = yield* registry.subscribe("active-during-eviction");
+
+          for (let index = 0; index <= 1_024; index++) {
+            const id = `cancel-${index}`;
+            const cancelled = index % 2 === 0 ? yield* registry.subscribe(id) : Effect.void;
+
+            yield* registry.cancel(id);
+            yield* cancelled;
+          }
+          for (let index = 1; index <= 1_024; index++) {
+            yield* yield* registry.subscribe(`cancel-${index}`);
+          }
+          const evicted = yield* registry.subscribe("cancel-0");
+          const waiting = yield* Effect.forkChild(evicted, { startImmediately: true });
+
+          expect(waiting.pollUnsafe()).toBeUndefined();
+          yield* registry.cancel("active-during-eviction");
+          yield* active;
+          yield* registry.cancel("cancel-0");
+          yield* Fiber.join(waiting);
+        }),
+      ).pipe(Effect.provide(ProgressWaitRegistry.layer)),
+    ));
 
   it("returns for committed history and wakes promptly after a canonical append", async () => {
     const thread = lane("append");

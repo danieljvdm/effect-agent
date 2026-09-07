@@ -172,19 +172,21 @@ export const toolCallResolvedRecordId = (
  * Deterministic identity of one accepted Durable Step result. The one-record batch reuses the
  * SAME string, so batch idempotency plus the epoch fence realize the durability §11
  * racing-writers rule: only the fenced winner's record commits; the loser replays it.
+ * A versioned JSON tuple keeps separator characters in each identity component distinct.
+ * Replay derives this key from the structured payload, including records with legacy IDs.
  */
 export const toolStepSettledRecordId = (
   runId: RunId,
   toolCallId: ToolCallId,
   stepName: string,
-): RecordId => decodeRecordId(`step:${runId}:${toolCallId}:${stepName}`);
+): RecordId => decodeRecordId(JSON.stringify(["step@2", runId, toolCallId, stepName]));
 
 /** Deterministic batch identity of one Durable Step commit (same string as its record id). */
 export const toolStepSettledBatchId = (
   runId: RunId,
   toolCallId: ToolCallId,
   stepName: string,
-): BatchId => decodeBatchId(`step:${runId}:${toolCallId}:${stepName}`);
+): BatchId => decodeBatchId(toolStepSettledRecordId(runId, toolCallId, stepName));
 
 /** Deterministic batch identity of one Turn's canonical approval-request append (plan §2.6). */
 export const turnApprovalsBatchId = (runId: RunId, turn: number): BatchId =>

@@ -11,6 +11,8 @@ import {
 import * as Protocol from "@effect-agent/core/RememberingStore";
 import { Effect, Encoding, Schema } from "effect";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
+
 export class Limits extends Schema.Class<Limits>("@effect-agent/remembering/Limits")({
   maxSourceBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4_194_304 })),
   maxProposalBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_048_576 })),
@@ -64,7 +66,6 @@ const sameKey = (left: MemoryKey, right: MemoryKey): boolean =>
   left.id === right.id && left.namespace.address === right.namespace.address;
 
 const encodeIntent = Schema.encodeSync(Protocol.Intent.Wire);
-const byteLength = (text: string): number => Encoding.encodeHex(text).length / 2;
 
 const validateSource = Effect.fn("Remembering.validateSource")(function* (
   intent: Protocol.Intent,
@@ -80,7 +81,7 @@ const validateSource = Effect.fn("Remembering.validateSource")(function* (
 
   if (!equal(actual, expected))
     return yield* Protocol.ProcessingError.make({ reason: "source-changed" });
-  if (byteLength(source.text) > limits.maxSourceBytes)
+  if (utf8ByteLength(source.text) > limits.maxSourceBytes)
     return yield* Protocol.ProcessingError.make({ reason: "budget" });
 
   return source;
@@ -319,7 +320,7 @@ export const make = <
       if (
         progress._tag === "Proposed" &&
         suppression === null &&
-        byteLength(JSON.stringify(progress.proposal)) > limits.maxProposalBytes
+        utf8ByteLength(JSON.stringify(progress.proposal)) > limits.maxProposalBytes
       )
         return yield* Protocol.ProcessingError.make({ reason: "budget" });
       const failpoint = yield* Protocol.MutationFailpoint;
@@ -397,7 +398,7 @@ export const make = <
           evidence: extracted.evidence,
         });
 
-        if (byteLength(JSON.stringify(proposal)) > limits.maxProposalBytes)
+        if (utf8ByteLength(JSON.stringify(proposal)) > limits.maxProposalBytes)
           return yield* Protocol.ProcessingError.make({ reason: "budget" });
         yield* validateEvidence(source, proposal);
 

@@ -1,5 +1,5 @@
 import type { PlatformError } from "effect";
-import { Crypto, Effect, Encoding, Schema } from "effect";
+import { Array, Crypto, Effect, Encoding, Schema } from "effect";
 
 import type { DefinitionDigestInput } from "./Records.ts";
 import { CanonicalBatch, DefinitionDigests, Digest } from "./Records.ts";
@@ -9,8 +9,6 @@ export class DigestError extends Schema.TaggedError<DigestError>()("DigestError"
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
-const JsonArray = Schema.Array(Schema.Json);
-const isJsonArray = Schema.is(JsonArray);
 const utf8 = new TextEncoder();
 
 const canonicalJson = (value: Schema.Json): string => {
@@ -22,7 +20,7 @@ const canonicalJson = (value: Schema.Json): string => {
   ) {
     return JSON.stringify(value);
   }
-  if (isJsonArray(value)) {
+  if (Array.isArray<Schema.Json>(value)) {
     return `[${value.map(canonicalJson).join(",")}]`;
   }
 

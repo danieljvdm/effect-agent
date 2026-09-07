@@ -19,7 +19,7 @@ export class ProgressWaitRegistry extends Context.Service<
     readonly subscribe: (
       waiterId: string,
     ) => Effect.Effect<Effect.Effect<void>, never, Scope.Scope>;
-    /** Cancel a registered waiter, or remember a bounded early cancellation. */
+    /** Cancel every attempt and retain a bounded tombstone for later transport attempts. */
     readonly cancel: (waiterId: string) => Effect.Effect<void>;
   }
 >()("@effect-agent/platform-cloudflare/ProgressWaitRegistry") {
@@ -78,12 +78,20 @@ export class ProgressWaitRegistry extends Context.Service<
           ),
       );
 
+      // Updating the registry and completing captured signals form one nonblocking operation;
+      // interruption between them must not strand attempts removed from the active registry.
       const cancel = Effect.fn("ProgressWaitRegistry.cancel")(function* (waiterId: string) {
-        const waiters = yield* Ref.modify(registrations, (current) => {
-          const existing = current.get(waiterId);
-          const next = new Map(current);
+        const waiters = yield* Ref.modify(
+          registrations,
+          (current): readonly [ReadonlyArray<Deferred.Deferred<void>>, Registrations] => {
+            const existing = current.get(waiterId);
 
-          if (existing === undefined) {
+            if (existing === "cancelled") return [[], current] as const;
+            const next = new Map(current);
+
+            // A retry may arrive after an active attempt was cancelled. Retain the same
+            // tombstone used for early cancellation, ordered by cancellation time.
+            next.delete(waiterId);
             next.set(waiterId, "cancelled");
             let tombstones = 0;
 
@@ -98,18 +106,14 @@ export class ProgressWaitRegistry extends Context.Service<
               }
             }
 
-            return [[], next] as const;
-          }
-          if (existing === "cancelled") return [[], current] as const;
-          next.delete(waiterId);
-
-          return [[...existing], next] as const;
-        });
+            return [existing === undefined ? [] : [...existing], next] as const;
+          },
+        );
 
         yield* Effect.forEach(waiters, (waiter) => Deferred.succeed(waiter, undefined), {
           discard: true,
         });
-      });
+      }, Effect.uninterruptible);
 
       return ProgressWaitRegistry.of({ subscribe, cancel });
     }),

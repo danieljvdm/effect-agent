@@ -116,9 +116,10 @@ process cleanup.
 
 ## Limits and local adapter boundaries
 
-The local adapter enforces its wall-clock limit and combined stdout and stderr byte limit. It does
-not enforce process isolation, mount access, CPU limits, memory limits, secret-handle resolution,
-or artifact collection. Requests that ask for those features fail as
+The local adapter enforces one wall-clock limit across environment loading, process startup, and
+stream consumption. Output activity does not reset this deadline. It also enforces the combined
+stdout and stderr byte limit. It does not enforce process isolation, mount access, CPU limits,
+memory limits, secret-handle resolution, or artifact collection. Requests that ask for those features fail as
 `SandboxUnsupportedRequestError` before the process starts.
 
 `NetworkDisabled` is required by the local adapter because it rejects allowlists. It is only a

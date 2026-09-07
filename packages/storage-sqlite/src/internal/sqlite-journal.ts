@@ -1164,6 +1164,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     saveCheckpoint,
     scanStoredPayloads,
     withWriteTransaction,
+    withReadTransaction,
   } as const;
 });
 

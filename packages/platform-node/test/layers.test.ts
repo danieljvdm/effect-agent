@@ -56,6 +56,7 @@ import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import {
   Cause,
+  Clock,
   Context,
   Crypto,
   Deferred,
@@ -1554,48 +1555,60 @@ describe("NodeDurableAgentRuntime", () => {
 
   it.effect("wake-scan fallback claims ready work without any notify", () =>
     withTemporaryDatabase((filename) =>
-      withHost(
-        runtimeOptions(filename, { wakeScanInterval: 1_000 }),
-        Effect.gen(function* () {
-          const ledger = yield* SubmissionLedger;
-          const wake = yield* WakeScheduler;
-          const runtime = yield* DurableAgentRuntime;
-          const thread = decodeThreadId("thread-wake");
+      Effect.gen(function* () {
+        const clock = yield* Clock.Clock;
+        const sleeping = yield* Deferred.make<void>();
 
-          // Seed accepted work through the ledger alone: no `notify` is ever sent, exactly like
-          // an admission from another process that this worker never heard about.
-          const input: PersistedJson = { question: "wake?" };
-          const inputDigest = yield* digestJson(input).pipe(Effect.provide(NodeCrypto.layer));
+        return yield* withHost(
+          runtimeOptions(filename, { wakeScanInterval: 1_000 }),
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const wake = yield* WakeScheduler;
+            const runtime = yield* DurableAgentRuntime;
+            const thread = decodeThreadId("thread-wake");
 
-          const admitted = yield* ledger.admit(
-            AdmissionRequest.make({
-              threadId: thread,
-              principal: PRINCIPAL,
-              idempotencyKey: decodeIdempotencyKey("wake-1"),
-              agentId: decodeAgentId("platform-node-planner"),
-              agentDigests: DIGESTS,
-              deploymentId: decodeDeploymentId("deployment-platform-node"),
-              inputPayload: input,
-              inputDigest,
-            }),
-          );
+            // Seed accepted work through the ledger alone: no `notify` is ever sent, exactly like
+            // an admission from another process that this worker never heard about.
+            const input: PersistedJson = { question: "wake?" };
+            const inputDigest = yield* digestJson(input).pipe(Effect.provide(NodeCrypto.layer));
 
-          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+            const admitted = yield* ledger.admit(
+              AdmissionRequest.make({
+                threadId: thread,
+                principal: PRINCIPAL,
+                idempotencyKey: decodeIdempotencyKey("wake-1"),
+                agentId: decodeAgentId("platform-node-planner"),
+                agentDigests: DIGESTS,
+                deploymentId: decodeDeploymentId("deployment-platform-node"),
+                inputPayload: input,
+                inputDigest,
+              }),
+            );
 
-          const woken = yield* Effect.forkChild(Stream.runCollect(Stream.take(wake.wakes, 1)));
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
 
-          yield* TestClock.adjust(Duration.millis(1_000));
-          expect(yield* Fiber.join(woken)).toEqual([thread]);
+            const woken = yield* Effect.forkChild(Stream.runCollect(Stream.take(wake.wakes, 1)));
 
-          const model = yield* makeScriptedModel(() => finalParts('{"answer":"woken"}'));
-          const agent = Agent.withModel(plannerDefinition, model);
-          const settlements = yield* runtime.processThread(agent, thread);
+            yield* Deferred.await(sleeping);
+            yield* TestClock.adjust(Duration.millis(1_000));
+            expect(yield* Fiber.join(woken)).toEqual([thread]);
 
-          expect(settlements).toHaveLength(1);
-          expect(settlements[0]?.outcome).toBe("completed");
-          expect(yield* lookupState(admitted.submissionId)).toBe("settled");
-        }),
-      ),
+            const model = yield* makeScriptedModel(() => finalParts('{"answer":"woken"}'));
+            const agent = Agent.withModel(plannerDefinition, model);
+            const settlements = yield* runtime.processThread(agent, thread);
+
+            expect(settlements).toHaveLength(1);
+            expect(settlements[0]?.outcome).toBe("completed");
+            expect(yield* lookupState(admitted.submissionId)).toBe("settled");
+          }),
+        ).pipe(
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            sleep: (duration) =>
+              Deferred.succeed(sleeping, undefined).pipe(Effect.andThen(clock.sleep(duration))),
+          }),
+        );
+      }),
     ),
   );
 

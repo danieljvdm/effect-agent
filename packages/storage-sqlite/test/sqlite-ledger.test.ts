@@ -95,9 +95,11 @@ import type { Crypto, PlatformError } from "effect";
 import {
   Cause,
   DateTime,
+  Deferred,
   Effect,
   Exit,
   FileSystem,
+  Fiber,
   Layer,
   Option,
   Ref,
@@ -770,6 +772,110 @@ describe("SqliteSubmissionLedger", () => {
         expect(tail.tailDigest).toBe(EMPTY_TAIL_DIGEST);
       }).pipe(Effect.provide(combinedLayer(filename))),
     ),
+  );
+
+  it.effect("reads committed recovery state while a separate connection holds the write lock", () =>
+    withTemporaryDatabase((filename) =>
+      withLedger(
+        filename,
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const admitted = yield* ledger.admit(yield* admission("recovery-reader", "input", {}));
+          const request = RecoverySnapshotRequest.make({ submissionId: admitted.submissionId });
+
+          yield* withSql(
+            filename,
+            Effect.scoped(
+              Effect.gen(function* () {
+                const sql = yield* SqlClientService.SqlClient;
+
+                // Explicit SQL keeps the writer's transaction out of Effect's ambient
+                // transaction context: the ledger must reserve its own reader connection.
+                yield* Effect.acquireRelease(sql`BEGIN IMMEDIATE`, () =>
+                  sql`ROLLBACK`.pipe(Effect.orDie),
+                );
+                yield* sql`
+                  UPDATE effect_agent_submissions
+                  SET state = 'ready', ready_at = '1970-01-01T00:00:00.001Z'
+                  WHERE submission_id = ${admitted.submissionId}
+                `;
+
+                const snapshot = yield* ledger.loadRecoverySnapshot(request);
+
+                expect(snapshot.submission.state).toBe("admitted");
+                expect(snapshot.submission.readyAt).toBeUndefined();
+              }),
+            ),
+          );
+
+          // The completed read must release its transaction and connection reservation.
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+          expect((yield* ledger.loadRecoverySnapshot(request)).submission.state).toBe("ready");
+        }),
+      ),
+    ),
+  );
+
+  it.effect(
+    "releases recovery read transactions after typed failure, defect, and interruption",
+    () =>
+      withTemporaryDatabase((filename) =>
+        withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const admitted = yield* ledger.admit(yield* admission("recovery-cleanup", "input", {}));
+            const request = RecoverySnapshotRequest.make({ submissionId: admitted.submissionId });
+
+            const missing = yield* ledger
+              .loadRecoverySnapshot(
+                RecoverySnapshotRequest.make({
+                  submissionId: id(
+                    RecoverySnapshotRequest.fields.submissionId,
+                    "missing-submission",
+                  ),
+                }),
+              )
+              .pipe(Effect.exit);
+
+            expect(Exit.isFailure(missing)).toBe(true);
+            if (Exit.isFailure(missing))
+              expect(Cause.squash(missing.cause)).toBeInstanceOf(LedgerError);
+            expect((yield* ledger.loadRecoverySnapshot(request)).submission.state).toBe("admitted");
+
+            const defect = yield* ledger.loadRecoverySnapshot(request).pipe(
+              Effect.provideService(CurrentTransformer, () => Effect.die("recovery-read-defect")),
+              Effect.exit,
+            );
+
+            expect(Exit.isFailure(defect)).toBe(true);
+            if (Exit.isFailure(defect))
+              expect(Cause.squash(defect.cause)).toBe("recovery-read-defect");
+            expect((yield* ledger.loadRecoverySnapshot(request)).submission.state).toBe("admitted");
+
+            const paused = yield* Deferred.make<void>();
+            const queries = yield* Ref.make(0);
+
+            const reader = yield* ledger.loadRecoverySnapshot(request).pipe(
+              Effect.provideService(CurrentTransformer, (statement) =>
+                Ref.updateAndGet(queries, (count) => count + 1).pipe(
+                  Effect.flatMap((count) =>
+                    count === 2
+                      ? Deferred.succeed(paused, undefined).pipe(Effect.andThen(Effect.never))
+                      : Effect.succeed(statement),
+                  ),
+                ),
+              ),
+              Effect.forkChild,
+            );
+
+            yield* Deferred.await(paused);
+            yield* Fiber.interrupt(reader);
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+            expect((yield* ledger.loadRecoverySnapshot(request)).submission.state).toBe("ready");
+          }),
+        ),
+      ),
   );
 
   it.effect("classifies cross-connection write contention as retryable typed contention", () =>

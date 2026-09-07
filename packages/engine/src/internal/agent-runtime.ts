@@ -376,10 +376,11 @@ export type AgentCompletionProjectionRequirements<
 /**
  * Inferred agent services plus the runtime's identity and Thread history authorities.
  * Engine-provided Tool handler services are excluded because the interpreter
- * supplies them itself, bound to the current Run's identity. Output decoding
- * and completion-projection Schema services stay listed unexcluded:
- * `run`/`start` re-decode terminal output and durable recovery re-decodes
- * canonical completion Tool parameters/results outside the handler boundary.
+ * supplies them itself, bound to the current Run's identity. Tool parameter
+ * encoding, output decoding, and completion-projection Schema services stay
+ * listed unexcluded: the interpreter records canonical parameters before the
+ * handler boundary, `run`/`start` re-decode terminal output, and durable recovery
+ * re-decodes canonical completion Tool parameters/results.
  */
 export type AgentRuntimeRequirements<
   AgentValue extends Agent.AnyDefinition | Agent.Any,
@@ -387,6 +388,7 @@ export type AgentRuntimeRequirements<
   InstructionRequirements = never,
 > =
   | Exclude<Agent.Requirements<AgentValue>, EngineProvidedToolServices>
+  | Tool.ParametersSchema<Agent.ToolUnion<AgentValue>>["EncodingServices"]
   | AgentCompletionProjectionRequirements<AgentValue>
   | Agent.OutputSchema<AgentValue>["DecodingServices"]
   | IdGenerator
@@ -724,14 +726,6 @@ const inspectModelResponsePartCapacity = (
   knownSafePrototypes: ReadonlySet<object> = knownSafeModelResponsePrototypes,
 ): Effect.Effect<number, ModelProtocolError> =>
   Effect.suspend(() => {
-    if (usage.responsePartCount >= limits.maxModelResponseParts) {
-      return Effect.fail(
-        ModelProtocolError.make({
-          message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`,
-        }),
-      );
-    }
-
     const bytes = boundedValueFootprint(
       part,
       limits.maxModelResponseBytes - usage.responsePartBytes,
@@ -786,6 +780,12 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
   usage: ModelResponseBufferUsage,
   limits: EffectiveRunBufferLimits,
 ) {
+  if (usage.responsePartCount >= limits.maxModelResponseParts) {
+    return yield* ModelProtocolError.make({
+      message: `Model response exceeded the ${limits.maxModelResponseParts}-part response limit`,
+    });
+  }
+
   // Reject an oversized provider graph before schema encoding, structured cloning, or decoding
   // can allocate additional full copies. A decoded application Schema class is the sole exception:
   // preflight its enclosing response fields, then measure its complete canonical plain encoding
@@ -800,8 +800,6 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
     const preflight = schemaClassToolPartPreflight(part, toolkit);
 
     yield* inspectModelResponsePartCapacity(usage, preflight ?? part, limits);
-  } else {
-    yield* inspectModelResponsePartCapacity(usage, part, limits);
   }
   const codec = modelResponseCodecFor(toolkit);
 
@@ -878,7 +876,6 @@ interface PreparedToolCall<Tools extends Record<string, Tool.Any>> {
   readonly name: keyof Tools & string;
   readonly toolCallId: ToolCallId;
   readonly decodedParams: Tool.Parameters<ToolUnion<Tools>>;
-  readonly nativeHandlerParams: Tool.Parameters<ToolUnion<Tools>>;
   readonly tool: ToolUnion<Tools>;
   readonly declarationIndex: number;
 }
@@ -964,10 +961,18 @@ const encodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
   tool: ToolUnion<Tools>,
   toolName: string,
   decodedParams: Tool.Parameters<ToolUnion<Tools>>,
-): Effect.Effect<unknown, ModelProtocolError, Tool.HandlerServices<ToolUnion<Tools>>> => {
+): Effect.Effect<
+  unknown,
+  ModelProtocolError,
+  Tool.ParametersSchema<ToolUnion<Tools>>["EncodingServices"]
+> => {
   const encodeParameters = Schema.encodeUnknownEffect(tool.parametersSchema) as (
     input: Tool.Parameters<ToolUnion<Tools>>,
-  ) => Effect.Effect<unknown, Schema.SchemaError, Tool.HandlerServices<ToolUnion<Tools>>>;
+  ) => Effect.Effect<
+    unknown,
+    Schema.SchemaError,
+    Tool.ParametersSchema<ToolUnion<Tools>>["EncodingServices"]
+  >;
 
   return encodeParameters(decodedParams).pipe(
     Effect.mapError((cause) =>
@@ -1011,9 +1016,8 @@ const decodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
 };
 
 /**
- * The pinned `Toolkit.handle` implementation decodes internally despite its
- * decoded-parameter signature, so the native handler boundary receives the
- * canonical encoded parameters retained by the Turn trace.
+ * Decode canonical parameters for approval while retaining their encoded
+ * form for the native `Toolkit.handle` boundary.
  */
 const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
@@ -1041,7 +1045,6 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
           name,
           toolCallId,
           decodedParams,
-          nativeHandlerParams: call.params as Tool.Parameters<ToolUnion<Tools>>,
           tool,
           declarationIndex,
         })),
@@ -1807,13 +1810,21 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     }).pipe(Effect.withLogSpan("AgentRuntime.tool")),
   );
 
+  // Dynamic Tool lookup erases the name/ParametersEncoded correlation. The native handler
+  // decodes these already-preflighted canonical parameters; only its input signature is widened.
+  const handle = toolkit.handle as (
+    name: keyof Tools & string,
+    params: unknown,
+    toolCallId: string,
+  ) => ReturnType<typeof toolkit.handle>;
+
   const results: Stream.Stream<
     RunEvent,
     ToolExecutionError,
     ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
   > = Stream.unwrap(
     Effect.flatMap(ToolSpanTelemetry, ({ isolateToolkitHandle }) =>
-      isolateToolkitHandle(toolkit.handle(prepared.name, prepared.nativeHandlerParams, call.id)),
+      isolateToolkitHandle(handle.call(toolkit, prepared.name, call.params, call.id)),
     ),
   ).pipe(
     Stream.mapEffect((result): Effect.Effect<RunEvent | undefined, ModelProtocolError> =>
@@ -3941,7 +3952,8 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
 ): Effect.fn.Return<
   ReadonlyArray<RunEvent>,
   ModelProtocolError,
-  Tool.HandlerServices<ToolUnion<Tools>>
+  | Tool.HandlerServices<ToolUnion<Tools>>
+  | Tool.ParametersSchema<ToolUnion<Tools>>["EncodingServices"]
 > {
   yield* consumeModelResponsePart(trace, retainedBytes, context.bufferLimits);
   if (trace.finished) {
@@ -5081,25 +5093,19 @@ const makeTurn = <
               // provider-reported incremental estimate.
               const contextTokenLimit = policy.contextTokenLimit;
 
-              const admission =
-                (options.context === undefined && options.transientContext === undefined) ||
-                contextTokenLimit === undefined
-                  ? Effect.void
-                  : estimateContextTokens(providerPrompt.content).pipe(
-                      Effect.flatMap((estimatedTokens) =>
-                        estimatedTokens <= contextTokenLimit
-                          ? Effect.void
-                          : ContextBudgetError.make({
-                              message: `Prepared context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
-                              estimatedTokens,
-                              targetTokens: contextTokenLimit,
-                              completionReserveTokens: policy.completionReserveTokens,
-                            }),
-                      ),
-                    );
-
-              return admission.pipe(
-                Effect.andThen(estimateContextTokens(providerPrompt.content)),
+              return estimateContextTokens(providerPrompt.content).pipe(
+                Effect.tap((estimatedTokens) =>
+                  contextTokenLimit !== undefined &&
+                  (options.context !== undefined || options.transientContext !== undefined) &&
+                  estimatedTokens > contextTokenLimit
+                    ? ContextBudgetError.make({
+                        message: `Prepared context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+                        estimatedTokens,
+                        targetTokens: contextTokenLimit,
+                        completionReserveTokens: policy.completionReserveTokens,
+                      })
+                    : Effect.void,
+                ),
                 Effect.tap((tokens) =>
                   Effect.sync(() => {
                     context.windowTokens = tokens;

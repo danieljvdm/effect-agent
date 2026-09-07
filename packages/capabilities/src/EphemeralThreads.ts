@@ -1,6 +1,8 @@
 import { ThreadId, RunId } from "@effect-agent/core/Identifiers";
-import { Clock, Context, DateTime, Effect, Encoding, Layer, Schema, SynchronizedRef } from "effect";
+import { Clock, Context, DateTime, Effect, Layer, Schema, SynchronizedRef } from "effect";
 import { Prompt } from "effect/unstable/ai";
+
+import { utf8ByteLength } from "./internal/utf8.ts";
 
 /** Bound applied to one text projection before it can enter a model context. */
 export const ThreadText = Schema.String.check(Schema.isMaxLength(64 * 1024));
@@ -120,8 +122,6 @@ export class EphemeralThreads extends Context.Service<
   }
 >()("@effect-agent/capabilities/EphemeralThreads") {}
 
-const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 2;
-
 const encodeMessage = (
   threadId: ThreadId,
   message: Prompt.Message,
@@ -172,7 +172,7 @@ const appendEncoded = Effect.fn("EphemeralThreads.appendEncoded")(function* (
       observedValue: current.messages.length + 1,
     });
   }
-  const messageBytes = utf8Bytes(encoded);
+  const messageBytes = utf8ByteLength(encoded);
   const contentBytes = current.contentBytes + messageBytes;
 
   if (contentBytes > MAX_THREAD_CONTENT_BYTES) {

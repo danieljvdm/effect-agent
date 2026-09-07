@@ -17,12 +17,14 @@ import {
   DurableStepError,
   ToolExecutionClass,
 } from "@effect-agent/engine/DurableStep";
-import { Clock, Effect, Encoding, Schema } from "effect";
+import { Clock, Effect, Schema } from "effect";
 import { IdGenerator, Tool, Toolkit } from "effect/unstable/ai";
+
+import { utf8ByteLength } from "./internal/utf8.ts";
 
 const NotesText = Schema.String.check(
   Schema.isMaxLength(20_000),
-  Schema.makeFilter((text) => Encoding.encodeHex(JSON.stringify(text)).length / 2 <= 32_768, {
+  Schema.makeFilter((text) => utf8ByteLength(JSON.stringify(text)) <= 32_768, {
     expected: "notes totaling at most 32768 JSON-encoded UTF-8 bytes",
   }),
 );

@@ -19,12 +19,15 @@ import {
   threadCheckpointConformanceCases,
 } from "@effect-agent/thread/testing/ThreadStoreConformance";
 import {
+  ThreadCheckpoint,
   ThreadMaterialization,
   ThreadObservation,
   ThreadRead,
   ThreadStore,
   ThreadStoreError,
   FencedAppendRequest,
+  LoadCheckpointRequest,
+  SaveCheckpointRequest,
 } from "@effect-agent/thread/ThreadStore";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
@@ -93,6 +96,84 @@ const batch = (
   });
 
 describe("DoThreadStore", () => {
+  for (const corruption of ["thread", "sequence", "digest"] as const) {
+    it(`rejects checkpoint ${corruption} metadata that disagrees with its row`, () =>
+      withThreadStorage(`checkpoint-metadata:${corruption}`, (storage) =>
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const threadId = thread("checkpoint-metadata");
+
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+          );
+
+          const appended = yield* store.append(
+            FencedAppendRequest.make({
+              threadId,
+              batch: batch("checkpoint-metadata", [
+                inputRecord("checkpoint-metadata-input", "Kyoto"),
+              ]),
+              expectedTailSequence: sequence(0),
+              expectedTailDigest: EMPTY_TAIL_DIGEST,
+              producerEpoch: epoch(1),
+            }),
+          );
+
+          const checkpoint = ThreadCheckpoint.make({
+            schemaVersion: 1,
+            threadId,
+            throughSequence: sequence(0),
+            tailDigest: EMPTY_TAIL_DIGEST,
+            engineVersion: "checkpoint-metadata-test",
+            agentDefinitionDigest: EMPTY_TAIL_DIGEST,
+            modelDigest: EMPTY_TAIL_DIGEST,
+            toolDigest: EMPTY_TAIL_DIGEST,
+            state: {},
+            createdAt: at(2),
+          });
+
+          yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
+
+          const corrupted = ThreadCheckpoint.make({
+            ...checkpoint,
+            ...(corruption === "thread" ? { threadId: thread("other-checkpoint-thread") } : {}),
+            ...(corruption === "sequence"
+              ? { throughSequence: appended.lastSequence, tailDigest: appended.tailDigest }
+              : {}),
+          });
+
+          const corruptedJson = JSON.stringify(
+            yield* Schema.encodeEffect(ThreadCheckpoint)(corrupted),
+          );
+
+          const rowDigest = corruption === "digest" ? appended.tailDigest : EMPTY_TAIL_DIGEST;
+
+          yield* Effect.sync(() =>
+            storage.sql.exec(
+              "UPDATE effect_agent_checkpoints SET checkpoint_json = ?, tail_digest = ? WHERE thread_id = ? AND through_sequence = 0",
+              corruptedJson,
+              rowDigest,
+              threadId,
+            ),
+          );
+
+          const loaded = yield* store
+            .checkpoints!.load(
+              LoadCheckpointRequest.make({ threadId, atOrBeforeSequence: sequence(0) }),
+            )
+            .pipe(Effect.exit);
+
+          expect(Exit.isFailure(loaded)).toBe(true);
+          if (Exit.isFailure(loaded)) {
+            const error = Cause.squash(loaded.cause);
+
+            expect(error).toBeInstanceOf(ThreadStoreError);
+            if (isThreadStoreError(error)) expect(error.operation).toBe("load checkpoint");
+          }
+        }).pipe(Effect.provide(layer({ storage }))),
+      ));
+  }
+
   // The SAME adapter-neutral contract suite the Node/SQLite and in-memory adapters run,
   // executed in-workerd against a real SQLite-backed Durable Object's storage. One Durable
   // Object per case: the 0.21.x pool shares storage across tests within a run.

@@ -590,6 +590,36 @@ describe("core schemas", () => {
 });
 
 describe("context-economics policy", () => {
+  it("enforces completion reserve bounds through constructors and Schema codecs", () => {
+    const policy = AgentPolicy.make({
+      maxTurns: 2,
+      maxToolCalls: 1,
+      maxDuration: "30 seconds",
+      toolConcurrency: 1,
+      tokenBudget: 100,
+      completionReserveTokens: 100,
+    });
+
+    const invalid = { ...policy, completionReserveTokens: 101 };
+    const jsonCodec = Schema.toCodecJson(AgentPolicy);
+
+    const encoded = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))(
+      Schema.encodeSync(jsonCodec)(policy),
+    );
+
+    expect(Schema.decodeSync(jsonCodec)(encoded)).toEqual(policy);
+    expect(() => AgentPolicy.make(invalid)).toThrow("Schema validation failed");
+    expect(() => new AgentPolicy(invalid)).toThrow("Schema validation failed");
+    expect(Schema.decodeUnknownExit(AgentPolicy)(invalid)._tag).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(jsonCodec)({ ...encoded, completionReserveTokens: 101 })._tag,
+    ).toBe("Failure");
+
+    Reflect.set(policy, "completionReserveTokens", 101);
+    expect(Schema.encodeExit(AgentPolicy)(policy)._tag).toBe("Failure");
+    expect(Schema.encodeExit(jsonCodec)(policy)._tag).toBe("Failure");
+  });
+
   it("fills context-economics defaults and accepts explicit overrides", () => {
     const policy = AgentPolicy.make({
       maxTurns: 2,
@@ -689,6 +719,19 @@ describe("tool result bounds", () => {
       for (const unit of [slice.charCodeAt(0), slice.charCodeAt(slice.length - 1)]) {
         expect(unit >= 0xdc00 && unit <= 0xdfff && slice.length === 1).toBe(false);
       }
+    }
+  });
+
+  it("RUN-022: counts lone surrogate replacement bytes while bounding raw JSON text", () => {
+    for (const surrogate of ["\ud800", "\udc00"]) {
+      const encoded = `"${surrogate.repeat(200)}"`;
+      const output = applyToolResultBounds(encoded, ToolResultBounds.make({ maxBytes: 256 }));
+      const envelope = Schema.decodeUnknownSync(TruncatedToolResult)(JSON.parse(output));
+
+      expect(envelope.originalBytes).toBe(602);
+      expect(utf8Bytes(output)).toBeLessThanOrEqual(256);
+      expect(encoded.startsWith(envelope.head)).toBe(true);
+      expect(encoded.endsWith(envelope.tail)).toBe(true);
     }
   });
 

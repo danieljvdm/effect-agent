@@ -1,4 +1,6 @@
-import { Encoding, Schema } from "effect";
+import { Schema } from "effect";
+
+import { utf8ByteLength } from "./internal/utf8.ts";
 
 const Identity = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 const Locator = Schema.NonEmptyString.check(Schema.isMaxLength(8_192));
@@ -11,8 +13,7 @@ export const MemoryMetadata = Schema.Record(
 ).check(
   Schema.makeFilter(
     (metadata) =>
-      Object.keys(metadata).length <= 64 &&
-      Encoding.encodeHex(JSON.stringify(metadata)).length / 2 <= 8_192,
+      Object.keys(metadata).length <= 64 && utf8ByteLength(JSON.stringify(metadata)) <= 8_192,
     { expected: "at most 64 metadata keys and 8192 UTF-8 bytes" },
   ),
 );

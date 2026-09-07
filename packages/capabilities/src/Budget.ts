@@ -221,6 +221,11 @@ const sameLimits = (a: UsageBudgetLimits, b: UsageBudgetLimits): boolean =>
   a.maxCostMicrousd === b.maxCostMicrousd &&
   a.maxDurationMillis === b.maxDurationMillis;
 
+// JSON escapes lone surrogates before URI encoding; every valid string stays distinct,
+// and an ID can never introduce the path separator used by retirement.
+const nodeKeyComponent = (config: UsageBudgetNodeConfig): string =>
+  `${config.level}:${encodeURIComponent(JSON.stringify(config.id))}`;
+
 const durationExceeded = (node: LedgerNode, now: number): BudgetExceeded => {
   const limitValue = node.config.limits.maxDurationMillis ?? 0;
 
@@ -356,7 +361,7 @@ const makeNode = (
     });
 
   const child = Effect.fn("UsageBudgetNode.child")(function* (childConfig: UsageBudgetNodeConfig) {
-    const childKey = `${key}/${childConfig.level}:${childConfig.id}`;
+    const childKey = `${key}/${nodeKeyComponent(childConfig)}`;
     const childHandleId = Symbol(`usage-budget:${childConfig.level}:${childConfig.id}`);
     const now = yield* Clock.currentTimeMillis;
 
@@ -500,7 +505,7 @@ export const makeUsageBudgetRoot = Effect.fn("makeUsageBudgetRoot")(function* (
   config: UsageBudgetNodeConfig,
 ) {
   const startedAt = yield* Clock.currentTimeMillis;
-  const key = `${config.level}:${config.id}`;
+  const key = nodeKeyComponent(config);
   const handleId = Symbol(`usage-budget:${config.level}:${config.id}`);
 
   const ledger = yield* Ref.make<BudgetLedger>({

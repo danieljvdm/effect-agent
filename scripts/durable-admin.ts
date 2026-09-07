@@ -125,13 +125,20 @@ const explainCommand = CliCommand.make(
           const threadId = yield* decodeThreadId(thread.value);
           const explanations = yield* runtime.explainThread(threadId);
 
+          if (asJson) {
+            const encoded = yield* Schema.encodeEffect(Schema.Array(RecoveryExplanation))(
+              explanations,
+            );
+
+            return yield* Console.log(JSON.stringify(encoded, null, 2));
+          }
           if (explanations.length === 0) {
             return yield* Console.log(`No nonterminal Submissions on thread ${threadId}.`);
           }
 
           return yield* Effect.forEach(
             explanations,
-            (explanation) => printExplanation(explanation, asJson),
+            (explanation) => printExplanation(explanation, false),
             { discard: true },
           );
         }

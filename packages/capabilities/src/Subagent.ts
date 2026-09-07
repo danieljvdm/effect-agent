@@ -49,6 +49,7 @@ import type { Layer } from "effect";
 import { Clock, Duration, Effect, Option, Ref, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
 import {
   type BudgetReservationId,
   makeBudgetReservationId,
@@ -1216,18 +1217,6 @@ const encodeExecutionFailure = Schema.encodeEffect(SubagentExecutionFailure);
 const encodeGrant = Schema.encodeEffect(SubagentGrant);
 const encodeAllocationAmounts = Schema.encodeEffect(SubagentReservationAmounts);
 
-const utf8ByteLength = (value: string): number => {
-  let total = 0;
-
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-
-    total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-  }
-
-  return total;
-};
-
 const toNatural = (value: number): number =>
   Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 
@@ -1540,7 +1529,11 @@ const layer = <
   const encodeChildInput = Schema.encodeEffect(delegation.target.input);
   const encodeSuccess = Schema.encodeEffect(delegation.success);
   const decodeChildOutput = Schema.decodeUnknownEffect(delegation.target.output);
-  const encodeDeclaredFailure = Schema.encodeEffect(delegation.failure);
+
+  const encodeResultProjectionFailure = Schema.encodeEffect(
+    Schema.Union([delegation.failure, SubagentProjectionFailure]),
+  );
+
   const childToolNames = Object.keys(delegation.target.toolkit.tools);
 
   const childToolCallAllowance = (
@@ -2154,7 +2147,7 @@ const layer = <
             )
             .pipe(
               Effect.catch((declared) =>
-                encodeDeclaredFailure(declared).pipe(
+                encodeResultProjectionFailure(declared).pipe(
                   Effect.orDie,
                   Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)),
                 ),

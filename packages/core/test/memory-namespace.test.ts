@@ -127,6 +127,17 @@ describe("memory namespace addresses", () => {
 
     expect(bounded.make("x".repeat(4084)).address.length).toBe(4096);
     for (const identity of [
+      "海".repeat(1361) + "a",
+      "🌊".repeat(1021),
+      "\ud800".repeat(680) + "aaaa",
+      "\udc00".repeat(680) + "aaaa",
+    ]) {
+      expect(Schema.is(MemoryNamespaceAddress)(bounded.make(identity).address)).toBe(true);
+      expect(
+        await Effect.runPromise(bounded.decode(identity + "a").pipe(Effect.flip)),
+      ).toMatchObject({ reason: "invalid-identity" });
+    }
+    for (const identity of [
       "x".repeat(4085),
       "海".repeat(1400),
       Array.from({ length: 129 }, () => 1),

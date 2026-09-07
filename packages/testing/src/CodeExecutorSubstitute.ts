@@ -166,6 +166,20 @@ const safeDecodeJson = (value: unknown): Option.Option<Schema.Json> => {
   }
 };
 
+const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+
+/** Own serialized result text before bounding and decoding its detached JSON snapshot. */
+const serializeJson = (value: unknown): Option.Option<string> => {
+  const decoded = safeDecodeJson(value);
+
+  if (Option.isNone(decoded)) return Option.none();
+  try {
+    return Option.fromUndefinedOr(JSON.stringify(decoded.value));
+  } catch {
+    return Option.none();
+  }
+};
+
 const boundedThrown = (value: unknown): Schema.Json => {
   const decoded = safeDecodeJson(value);
 
@@ -174,7 +188,9 @@ const boundedThrown = (value: unknown): Schema.Json => {
       const encoded = JSON.stringify(decoded.value);
 
       if (encoded !== undefined && encoded.length <= MAX_THROWN_CHARACTERS) {
-        return decoded.value;
+        const snapshot = decodeJsonText(encoded);
+
+        if (Option.isSome(snapshot)) return snapshot.value;
       }
     } catch {
       // fall through to the bounded string form
@@ -327,28 +343,36 @@ const classifyProgramFailure = (
   limits: CodeExecutionLimits,
   capture: LogCapture,
 ): CodeOutputLimitError | CodeSourceError | CodeProgramFailedError => {
-  const inner = thrown instanceof EvaluationThrew ? thrown.inner : thrown;
+  let inner = thrown;
+  let reason: "threw" | "rejected" = "rejected";
 
-  if (inner instanceof LogLimitSignal) {
-    return CodeOutputLimitError.make({
-      implementation: inProcessCodeExecutorImplementation,
-      surface: "logs",
-      limit: limits.maxLogBytes,
-      observed: inner.observed,
-      logs: [...capture.lines],
-    });
+  try {
+    const evaluationThrew = thrown instanceof EvaluationThrew;
+
+    inner = evaluationThrew ? thrown.inner : thrown;
+    if (inner instanceof LogLimitSignal) {
+      return CodeOutputLimitError.make({
+        implementation: inProcessCodeExecutorImplementation,
+        surface: "logs",
+        limit: limits.maxLogBytes,
+        observed: inner.observed,
+        logs: [...capture.lines],
+      });
+    }
+    if (inner instanceof NotAFunction) {
+      return CodeSourceError.make({
+        implementation: inProcessCodeExecutorImplementation,
+        reason: "not-a-function",
+        message: `The source expression evaluated to ${inner.actual}; it must evaluate to one async function`,
+      });
+    }
+    // Async body throws become rejections: exception-like values read as `threw`,
+    // while plain values such as uncaught host failure envelopes read as `rejected`.
+    reason = evaluationThrew || inner instanceof Error ? "threw" : "rejected";
+  } catch {
+    // A program-owned Proxy can throw from instanceof's prototype lookup. Keep
+    // that failure inside the same guarded diagnostic boundary as its value.
   }
-  if (inner instanceof NotAFunction) {
-    return CodeSourceError.make({
-      implementation: inProcessCodeExecutorImplementation,
-      reason: "not-a-function",
-      message: `The source expression evaluated to ${inner.actual}; it must evaluate to one async function`,
-    });
-  }
-  // An async function converts a body-level `throw` into a rejection, so the
-  // split is by value shape: exception-like values read as `threw`, plain
-  // rejection values (an uncaught host failure envelope) read as `rejected`.
-  const reason = thrown instanceof EvaluationThrew || inner instanceof Error ? "threw" : "rejected";
 
   return CodeProgramFailedError.make({
     implementation: inProcessCodeExecutorImplementation,
@@ -475,33 +499,36 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
       });
     }
 
-    const value = yield* Schema.decodeUnknownEffect(Schema.Json)(returned).pipe(
-      Effect.mapError(() =>
-        CodeProgramFailedError.make({
-          implementation: inProcessCodeExecutorImplementation,
-          reason: "non-json-result",
-          thrown: null,
-          message: "The program must return a JSON value",
-          logs: [...capture.lines],
-        }),
-      ),
-    );
+    const nonJsonResult = () =>
+      CodeProgramFailedError.make({
+        implementation: inProcessCodeExecutorImplementation,
+        reason: "non-json-result",
+        thrown: null,
+        message: "The program must return a JSON value",
+        logs: [...capture.lines],
+      });
 
-    const resultBytes = encodedJsonByteLength(value);
+    const encoded = serializeJson(returned);
 
-    if (resultBytes === undefined || resultBytes > request.limits.maxResultBytes) {
+    if (Option.isNone(encoded)) return yield* nonJsonResult();
+    const resultBytes = utf8ByteLength(encoded.value);
+
+    if (resultBytes > request.limits.maxResultBytes) {
       return yield* CodeOutputLimitError.make({
         implementation: inProcessCodeExecutorImplementation,
         surface: "result",
         limit: request.limits.maxResultBytes,
-        observed: resultBytes ?? 0,
+        observed: resultBytes,
         logs: [...capture.lines],
       });
     }
+    const decoded = decodeJsonText(encoded.value);
+
+    if (Option.isNone(decoded)) return yield* nonJsonResult();
 
     return CodeExecutionResult.make({
       implementation: inProcessCodeExecutorImplementation,
-      value,
+      value: decoded.value,
       logs: [...capture.lines],
       resourceUse: CodeExecutionResourceUse.make({
         wallTime: Duration.millis(Math.max(0, finishedAt - startedAt)),

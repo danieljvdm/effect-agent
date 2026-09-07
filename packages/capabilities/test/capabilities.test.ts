@@ -378,6 +378,36 @@ describe("capability contracts", () => {
   );
 
   it.effect(
+    "accounts exact encoded UTF-8 bytes for Unicode and lone-surrogate thread content",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+
+        yield* threads.create(threadId);
+        let expectedBytes = 0;
+
+        for (const content of [
+          "plain",
+          "\u007f\u0080\u07ff\u0800",
+          "🌊",
+          "\ud800",
+          "\udc00",
+          '"\\\n',
+        ]) {
+          const message = textMessage("user", content);
+          const encoded = yield* Schema.encodeEffect(Prompt.Message)(message);
+          const messageBytes = new TextEncoder().encode(JSON.stringify(encoded)).byteLength;
+
+          expectedBytes += messageBytes;
+          const snapshot = yield* threads.append(threadId, ThreadAppend.make({ message }));
+
+          expect(snapshot.messages.at(-1)?.encodedBytes).toBe(messageBytes);
+          expect(snapshot.contentBytes).toBe(expectedBytes);
+        }
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect(
     "structurally redacts decoded approval input and audits both timeout request and decision",
     () =>
       Effect.gen(function* () {
@@ -839,6 +869,68 @@ describe("capability contracts", () => {
         expect(decoded.scopeId).toBe("run-1");
       }
     }),
+  );
+
+  it.effect(
+    "keeps delimiter-bearing and Unicode budget identities independent through retirement",
+    () =>
+      Effect.gen(function* () {
+        const delta = UsageDelta.make({
+          modelCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          toolCalls: 1,
+          costMicrousd: 0,
+        });
+
+        for (const id of ["t", "t/tenant:q", 't%2F"x', "🌊", "\ud800", "\udc00"]) {
+          const config = (level: "global" | "tenant" | "run", value: string) =>
+            UsageBudgetNodeConfig.make({ level, id: value, limits: UsageBudgetLimits.make({}) });
+
+          const root = yield* makeUsageBudgetRoot(config("global", id));
+          const tenantConfig = config("tenant", id);
+          const runConfig = config("run", "r");
+          const otherConfig = config("tenant", `${id}/run:r`);
+          const other = yield* root.child(otherConfig);
+          const tenant = yield* root.child(tenantConfig);
+          const run = yield* tenant.child(runConfig);
+          const sameOther = yield* root.child(otherConfig);
+          const sameRun = yield* tenant.child(runConfig);
+
+          yield* other.consume(delta);
+          yield* sameOther.consume(delta);
+          yield* run.consume(delta);
+          expect((yield* sameOther.snapshot).toolCalls).toBe(2);
+          expect((yield* sameRun.snapshot).toolCalls).toBe(1);
+          expect((yield* tenant.snapshot).toolCalls).toBe(1);
+          expect((yield* root.snapshot).toolCalls).toBe(3);
+
+          yield* other.retire;
+          yield* sameOther.retire;
+          const freshOther = yield* root.child(otherConfig);
+
+          expect((yield* freshOther.snapshot).toolCalls).toBe(0);
+          yield* sameRun.consume(delta);
+          expect((yield* run.snapshot).toolCalls).toBe(2);
+          expect((yield* tenant.snapshot).toolCalls).toBe(2);
+
+          yield* run.retire;
+          yield* sameRun.retire;
+          yield* tenant.retire;
+          const freshTenant = yield* root.child(tenantConfig);
+          const freshRun = yield* freshTenant.child(runConfig);
+
+          expect((yield* freshTenant.snapshot).toolCalls).toBe(0);
+          expect((yield* freshRun.snapshot).toolCalls).toBe(0);
+          expect((yield* root.snapshot).toolCalls).toBe(4);
+          yield* freshRun.retire;
+          yield* freshTenant.retire;
+          yield* freshOther.retire;
+          yield* root.retire;
+        }
+      }),
   );
 
   it.effect(

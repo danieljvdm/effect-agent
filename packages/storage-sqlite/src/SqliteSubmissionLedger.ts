@@ -3053,8 +3053,8 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
-    return yield* sql
-      .withTransaction(
+    return yield* journal
+      .withReadTransaction(operation)(
         Effect.gen(function* () {
           const submissionRow = yield* requireSubmission(operation, validated.submissionId);
           const submission = yield* decodeSubmissionSnapshot(operation, submissionRow);
@@ -3263,7 +3263,11 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           });
         }),
       )
-      .pipe(Effect.catchTag("SqlError", (error) => Effect.fail(sqlFailure(operation)(error))));
+      .pipe(
+        Effect.catchTag("SqliteStorageError", (error) =>
+          Effect.fail(internalFailure(operation)(error)),
+        ),
+      );
   });
 
   return Context.make(

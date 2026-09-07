@@ -34,7 +34,7 @@ export const ApprovalRecord = Schema.Union([ToolApprovalRequested, ToolApprovalD
 export type ApprovalRecord = typeof ApprovalRecord.Type;
 
 /**
- * Parent-side view of one Subagent Invocation, keyed by the parent Tool Call: the canonical
+ * Parent-side view of one Subagent Invocation, keyed by the parent Run and Tool Call: the canonical
  * `SubagentRequested`/`SubagentStarted`/`SubagentJoined` payloads as they become canonical
  * in history. A disposable derived view — the canonical records and the child's
  * own Settlement remain the recovery truth (DUR-015).
@@ -42,6 +42,7 @@ export type ApprovalRecord = typeof ApprovalRecord.Type;
 export class SubagentInvocationState extends Schema.Class<SubagentInvocationState>(
   "@effect-agent/thread/SubagentInvocationState",
 )({
+  runId: RunId,
   toolCallId: ToolCallId,
   requested: Schema.optionalKey(SubagentRequested),
   started: Schema.optionalKey(SubagentStarted),
@@ -56,14 +57,17 @@ export class SubagentInvocationState extends Schema.Class<SubagentInvocationStat
  * prepared-minus-settled/resolved fold), `unknownToolCalls`, and `approvals`; S2 adds
  * `subagentInvocations` (the parent-side requested/started/joined fold) and `parentLink` (the
  * child-side immutable lineage). A checkpoint whose persisted state lacks these fields fails to
- * decode against this schema; the checkpoint is rejected and the projection is rebuilt from
+ * decode against this schema; callers must reject the checkpoint and rebuild the projection from
  * canonical records (documented disposable-checkpoint behavior, STORE-007/STORE-008).
+ * Version 2 scopes Tool identities by Run. Earlier projections must rebuild, including empty
+ * invocation views that may have already lost an earlier Run's unresolved Tool evidence.
  * `ModelResponseRecorded` advances `throughSequence` without dedicated projection state: Prompt
  * reconstruction reads canonical records directly.
  */
 export class ThreadProjection extends Schema.Class<ThreadProjection>(
   "@effect-agent/thread/ThreadProjection",
 )({
+  schemaVersion: Schema.Literal(2),
   threadId: ThreadId,
   throughSequence: CanonicalSequence,
   tailDigest: Digest,
@@ -82,6 +86,7 @@ export class ThreadProjection extends Schema.Class<ThreadProjection>(
 
 export const initialThreadProjection = (threadId: ThreadId): ThreadProjection =>
   ThreadProjection.make({
+    schemaVersion: 2,
     threadId,
     throughSequence: Schema.decodeSync(CanonicalSequence)(0),
     tailDigest: EMPTY_TAIL_DIGEST,
@@ -98,7 +103,7 @@ export const initialThreadProjection = (threadId: ThreadId): ThreadProjection =>
   });
 
 /**
- * Idempotent per-Tool-Call upsert of the parent-side Subagent fold. Deterministic record
+ * Idempotent per-Run-and-Tool-Call upsert of the parent-side Subagent fold. Deterministic record
  * identities make duplicates impossible in one canonical stream; the first canonical payload of
  * each stage wins so a replayed reduce is a no-op.
  */
@@ -106,7 +111,10 @@ const upsertSubagentInvocation = (
   invocations: ReadonlyArray<SubagentInvocationState>,
   payload: SubagentRequested | SubagentStarted | SubagentJoined,
 ): ReadonlyArray<SubagentInvocationState> => {
-  const existing = invocations.find((invocation) => invocation.toolCallId === payload.toolCallId);
+  const existing = invocations.find(
+    (invocation) =>
+      invocation.runId === payload.runId && invocation.toolCallId === payload.toolCallId,
+  );
 
   const requested =
     existing?.requested ?? (payload._tag === "SubagentRequested" ? payload : undefined);
@@ -115,6 +123,7 @@ const upsertSubagentInvocation = (
   const joined = existing?.joined ?? (payload._tag === "SubagentJoined" ? payload : undefined);
 
   const next = SubagentInvocationState.make({
+    runId: payload.runId,
     toolCallId: payload.toolCallId,
     ...(requested === undefined ? {} : { requested }),
     ...(started === undefined ? {} : { started }),
@@ -124,7 +133,9 @@ const upsertSubagentInvocation = (
   return existing === undefined
     ? [...invocations, next]
     : invocations.map((invocation) =>
-        invocation.toolCallId === payload.toolCallId ? next : invocation,
+        invocation.runId === payload.runId && invocation.toolCallId === payload.toolCallId
+          ? next
+          : invocation,
       );
 };
 
@@ -171,7 +182,9 @@ export const reduceThreadRecord = (
   // open until an authorized resolution or a recovered result arrives.
   const openToolCalls =
     payload._tag === "ToolCallPrepared"
-      ? projection.openToolCalls.some((call) => call.toolCallId === payload.toolCallId)
+      ? projection.openToolCalls.some(
+          (call) => call.runId === payload.runId && call.toolCallId === payload.toolCallId,
+        )
         ? projection.openToolCalls
         : [
             ...projection.openToolCalls,
@@ -183,7 +196,9 @@ export const reduceThreadRecord = (
             }),
           ]
       : payload._tag === "ToolCallSettled" || payload._tag === "ToolCallResolved"
-        ? projection.openToolCalls.filter((call) => call.toolCallId !== payload.toolCallId)
+        ? projection.openToolCalls.filter(
+            (call) => call.runId !== payload.runId || call.toolCallId !== payload.toolCallId,
+          )
         : projection.openToolCalls;
 
   const unknownToolCalls =
@@ -208,6 +223,7 @@ export const reduceThreadRecord = (
     projection.parentLink ?? (payload._tag === "SubagentLineageRecorded" ? payload : undefined);
 
   return ThreadProjection.make({
+    schemaVersion: 2,
     threadId: projection.threadId,
     throughSequence: envelope.sequence,
     tailDigest,
@@ -236,6 +252,7 @@ export const replayThread = (
 /**
  * Pure checkpoint replay. A validated checkpoint projection and its canonical tail produce the
  * same reducer path as full replay for every later record.
+ * Decode persisted state with `ThreadProjection` first; an incompatible state requires full replay.
  */
 export const replayThreadFromCheckpoint = (
   checkpoint: ThreadProjection,
