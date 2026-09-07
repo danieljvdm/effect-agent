@@ -42,6 +42,23 @@ const subscription = SubscriptionRecord.make({
   createdBy: principal,
   createdAtMillis: 0,
   ordinal: 1,
+  configurationRevision: 1,
+  configurationFingerprint: digest,
+  creationConfiguration: {
+    source: version,
+    matchingKey: "event",
+    parameters: "event",
+    context: "context",
+    mode: "once",
+    expiresAtMillis: 1_000,
+    destination: {
+      _tag: "ExistingThread",
+      threadId: Schema.decodeSync(ThreadId)("thread"),
+    },
+    deliveryPrincipal: principal,
+    agentId,
+    definitions,
+  },
   configuration: {
     source: version,
     matchingKey: "event",

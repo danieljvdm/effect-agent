@@ -22,9 +22,9 @@ export const SubscriptionToolRegistration = Schema.Struct({
   subscriptionId: SubscriptionName,
   source: Schema.Struct({ name: SubscriptionName, version: SubscriptionName }),
   mode: Schema.Literals(["once", "continuous"]),
-  state: Schema.Literals(["active", "consumed", "cancelled", "expired"]),
+  state: Schema.Literals(["active", "paused", "consumed", "cancelled", "expired"]),
   createdAtMillis: Schema.Int,
-  expiresAtMillis: Schema.Int,
+  expiresAtMillis: Schema.NullOr(Schema.Int),
   recovery: SubscriptionSnapshot.fields.recovery,
 });
 
@@ -34,9 +34,9 @@ export const SubscribeToEventParameters = Schema.Struct({
   source: Schema.Struct({ name: SubscriptionName, version: SubscriptionName }),
   parameters: Schema.Json,
   mode: Schema.Literals(["once", "continuous"]),
-  expiresAtMillis: Schema.Int.annotate({
+  expiresAtMillis: Schema.NullOr(Schema.Int).annotate({
     description:
-      "Absolute Unix epoch milliseconds; it must remain unchanged if this call is retried",
+      "Absolute Unix epoch milliseconds, or null to remain active until cancelled; retain the same value on retries",
   }),
   context: Schema.Json,
 });
@@ -227,7 +227,7 @@ export const subscriptionToolsLayer = (
       readonly source: EventSourceVersion;
       readonly parameters: PersistedJson;
       readonly mode: "once" | "continuous";
-      readonly expiresAtMillis: number;
+      readonly expiresAtMillis: number | null;
       readonly context: PersistedJson;
     }) {
       if (!permitted(parameters.source)) {

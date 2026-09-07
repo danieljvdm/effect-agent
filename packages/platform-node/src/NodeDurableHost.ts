@@ -119,6 +119,7 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
     admissionOpen: Ref.get(admission),
     submit,
     awaitSettlement: runtime.awaitSettlement,
+    submissionStatus: runtime.submissionStatus,
     observe: runtime.observe,
     abort: runtime.abort,
     explain: runtime.explain,
@@ -171,6 +172,7 @@ export class NodeDurableHost extends Context.Service<
       AdmissionClosed | DurableSubmitFailure,
       InputSchema["EncodingServices"]
     >;
+    readonly submissionStatus: DurableAgentRuntime["Service"]["submissionStatus"];
     readonly awaitSettlement: (receipt: Receipt) => Effect.Effect<Settlement, DurableAwaitFailure>;
     readonly observe: (
       receipt: Receipt,

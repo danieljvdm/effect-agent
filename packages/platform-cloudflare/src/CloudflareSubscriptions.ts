@@ -13,6 +13,7 @@ import {
   type SubscriptionAuthorizer,
   SubscriptionConfiguration,
   SubscriptionDeliverySnapshot,
+  SubscriptionDeliveryKey,
   SubscriptionError,
   SubscriptionFailpointError,
   SubscriptionKey,
@@ -30,7 +31,7 @@ import {
 } from "@effect-agent/thread/Subscriptions";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Cause, Clock, Context, DateTime, Effect, Layer, Schema } from "effect";
+import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectAlarm,
@@ -45,6 +46,8 @@ import { cloudflarePreparedInputAdmissionLayer } from "./internal/prepared-admis
 const SUBSCRIPTION_ALARM_TAG = "effect-agent/SubscriptionPartitionWake";
 const SUBSCRIPTION_ALARM_ID = "driver";
 const MAX_ALARM_WALL_MILLIS = 12 * 60_000;
+const MAX_ALARMS_PER_INVOCATION = 16;
+const MAX_ANCILLARY_ALARM_MILLIS = 30_000;
 
 const SubscriptionAlarmPayload = Schema.Struct({
   schemaVersion: Schema.Literal(1),
@@ -55,6 +58,86 @@ export class SubscriptionAlarmProtocolError extends Schema.TaggedError<Subscript
   "SubscriptionAlarmProtocolError",
   { message: Schema.String },
 ) {}
+
+/** Bounded host diagnostic; credentials and provider responses do not belong in alarm failures. */
+export class SubscriptionAlarmExtensionError extends Schema.TaggedError<SubscriptionAlarmExtensionError>()(
+  "SubscriptionAlarmExtensionError",
+  { code: Schema.NonEmptyString.check(Schema.isMaxLength(128)) },
+) {}
+
+export interface SubscriptionPartitionAlarmHandler {
+  readonly tag: string;
+  readonly handle: (
+    event: DurableObjectAlarm.DurableObjectAlarmEvent,
+  ) => Effect.Effect<void, SubscriptionAlarmProtocolError | SubscriptionAlarmExtensionError>;
+}
+
+/** Host-only handlers; the framework reserves its namespace and rejects every unknown tag. */
+export const SubscriptionPartitionAlarmExtension = Context.Reference<{
+  readonly handlers: ReadonlyArray<SubscriptionPartitionAlarmHandler>;
+}>("@effect-agent/platform-cloudflare/SubscriptionPartitionAlarmExtension", {
+  defaultValue: () => ({ handlers: [] }),
+});
+
+/** Capture host services once; each invocation owns its codec/handler Scope and timeout.
+ * Callback failures stay typed. Defects and interruption reach the native alarm multiplexer.
+ * The host owns durable idempotency, prearming and external-effect uncertainty.
+ */
+export const makeSubscriptionPartitionAlarmHandler = Effect.fn(
+  "makeSubscriptionPartitionAlarmHandler",
+)(function* <Payload extends Schema.Top, R>(options: {
+  readonly tag: string;
+  readonly payload: Payload;
+  readonly timeoutMillis: number;
+  readonly handle: (
+    event: Omit<DurableObjectAlarm.DurableObjectAlarmEvent, "payload"> & {
+      readonly payload: Payload["Type"];
+    },
+  ) => Effect.Effect<void, SubscriptionAlarmExtensionError, R>;
+}): Effect.fn.Return<
+  SubscriptionPartitionAlarmHandler,
+  SubscriptionAlarmProtocolError,
+  Exclude<R | Payload["DecodingServices"], Scope.Scope>
+> {
+  if (
+    options.tag.length === 0 ||
+    options.tag.length > 128 ||
+    options.tag.startsWith("effect-agent/") ||
+    !Number.isSafeInteger(options.timeoutMillis) ||
+    options.timeoutMillis < 1 ||
+    options.timeoutMillis > MAX_ANCILLARY_ALARM_MILLIS
+  )
+    return yield* SubscriptionAlarmProtocolError.make({
+      message: "Invalid ancillary alarm tag or timeout",
+    });
+  const services = yield* Effect.context<Exclude<R | Payload["DecodingServices"], Scope.Scope>>();
+
+  return {
+    tag: options.tag,
+    handle: (event) =>
+      Effect.gen(function* () {
+        if (event.tag !== options.tag)
+          return yield* SubscriptionAlarmProtocolError.make({
+            message: "Ancillary alarm tag mismatch",
+          });
+
+        const payload = yield* Schema.decodeUnknownEffect(options.payload)(event.payload).pipe(
+          Effect.mapError(() =>
+            SubscriptionAlarmProtocolError.make({ message: "Invalid ancillary alarm payload" }),
+          ),
+        );
+
+        yield* options.handle({ ...event, payload });
+      }).pipe(
+        Effect.scoped,
+        Effect.timeout(options.timeoutMillis),
+        Effect.catchTag("TimeoutError", () =>
+          SubscriptionAlarmExtensionError.make({ code: "timeout" }),
+        ),
+        Effect.provideContext(services),
+      ),
+  };
+});
 
 export class SubscriptionPartitionProtocolError extends Schema.TaggedError<SubscriptionPartitionProtocolError>()(
   "SubscriptionPartitionProtocolError",
@@ -69,9 +152,11 @@ export class CloudflareSubscriptionConfigError extends Schema.TaggedError<Cloudf
 /** Reject limits whose four bounded phases could exceed the safe Durable Object alarm budget. */
 export const validateCloudflareSubscriptionLimits = (
   limits: SubscriptionLimits,
+  options: { readonly ancillaryAlarms?: boolean } = {},
 ): Effect.Effect<void, CloudflareSubscriptionConfigError> => {
   const worstCaseMillis =
-    4 * Math.ceil(limits.batchSize / limits.concurrency) * limits.operationTimeoutMillis;
+    4 * Math.ceil(limits.batchSize / limits.concurrency) * limits.operationTimeoutMillis +
+    (options.ancillaryAlarms === true ? MAX_ALARMS_PER_INVOCATION * MAX_ANCILLARY_ALARM_MILLIS : 0);
 
   return worstCaseMillis <= MAX_ALARM_WALL_MILLIS
     ? Effect.void
@@ -96,12 +181,30 @@ const SubscribeRequest = Schema.TaggedStruct("Subscribe", {
     parameters: PersistedJson,
     context: PersistedJson,
     mode: Schema.Literals(["once", "continuous"]),
-    expiresAtMillis: Schema.Number,
+    expiresAtMillis: Schema.NullOr(Schema.Number),
     destination: SubscriptionConfiguration.fields.destination,
     deliveryPrincipal: SubscriptionConfiguration.fields.deliveryPrincipal,
+    admissionGroup: SubscriptionConfiguration.fields.admissionGroup,
+    admissionFence: SubscriptionConfiguration.fields.admissionFence,
     agentId: SubscriptionConfiguration.fields.agentId,
     definitions: SubscriptionConfiguration.fields.definitions,
   }),
+});
+
+const UpdateSubscriptionRequest = Schema.TaggedStruct("UpdateSubscription", {
+  schemaVersion: Schema.Literal(1),
+  scope: SubscribeRequest.fields.scope,
+  key: SubscriptionKey,
+  expectedRevision: Schema.Int.check(Schema.isGreaterThan(0)),
+  options: SubscribeRequest.fields.options.mapFields(({ subscriptionId: _, ...fields }) => fields),
+});
+
+const SubscriptionStateRequest = Schema.Struct({
+  _tag: Schema.Literals(["PauseSubscription", "ResumeSubscription", "RecoverSubscription"]),
+  schemaVersion: Schema.Literal(1),
+  scope: SubscribeRequest.fields.scope,
+  key: SubscriptionKey,
+  expectedRevision: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 
 const ListSubscriptionsRequest = Schema.TaggedStruct("ListSubscriptions", {
@@ -112,9 +215,23 @@ const ListSubscriptionsRequest = Schema.TaggedStruct("ListSubscriptions", {
 });
 
 const CancelSubscriptionRequest = Schema.TaggedStruct("CancelSubscription", {
+  expectedRevision: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   schemaVersion: Schema.Literal(1),
   scope: SubscribeRequest.fields.scope,
   key: SubscriptionKey,
+});
+
+const GetSubscriptionRequest = Schema.TaggedStruct("GetSubscription", {
+  schemaVersion: Schema.Literal(1),
+  scope: SubscriptionScope,
+  key: SubscriptionKey,
+});
+
+const RecoverDeliveryRequest = Schema.TaggedStruct("RecoverDelivery", {
+  expectedGeneration: Schema.Natural,
+  schemaVersion: Schema.Literal(1),
+  scope: SubscribeRequest.fields.scope,
+  key: SubscriptionDeliveryKey,
 });
 
 const ListDeliveriesRequest = Schema.TaggedStruct("ListDeliveries", {
@@ -143,9 +260,13 @@ const StatusRequest = Schema.TaggedStruct("Status", {
 
 const SubscriptionPartitionRequest = Schema.Union([
   SubscribeRequest,
+  GetSubscriptionRequest,
+  UpdateSubscriptionRequest,
+  SubscriptionStateRequest,
   ListSubscriptionsRequest,
   CancelSubscriptionRequest,
   ListDeliveriesRequest,
+  RecoverDeliveryRequest,
   AcceptRequest,
   StatusRequest,
 ]);
@@ -182,6 +303,7 @@ const SubscriptionPartitionResponse = Schema.Union([
   Schema.TaggedStruct("Snapshot", { value: SubscriptionSnapshot }),
   Schema.TaggedStruct("SubscriptionPage", { value: SubscriptionPage }),
   Schema.TaggedStruct("DeliveryPage", { value: DeliveryPage }),
+  Schema.TaggedStruct("DeliverySnapshot", { value: SubscriptionDeliverySnapshot }),
   Schema.TaggedStruct("Acknowledgement", { value: EventAcknowledgement }),
   Schema.TaggedStruct("Status", { value: IntakeStatus }),
   Schema.TaggedStruct("Failed", { failure: SubscriptionPartitionFailure }),
@@ -261,7 +383,88 @@ export class CloudflareSubscriptionsClient {
         const asProtocolError = (): SubscriptionError =>
           corruptFailure("subscription-partition-protocol");
 
+        const changeState = Effect.fn("CloudflareSubscriptions.changeState")(function* (
+          scope: typeof SubscriptionScope.Type,
+          key: typeof SubscriptionKey.Type,
+          expectedRevision: number,
+          _tag: "PauseSubscription" | "ResumeSubscription" | "RecoverSubscription",
+        ) {
+          const response = yield* call(scope.partition, {
+            _tag,
+            schemaVersion: 1,
+            scope,
+            key,
+            expectedRevision,
+          });
+
+          if (response._tag === "Snapshot") return response.value;
+          const failure = failed(response);
+
+          return yield* failure._tag === "SubscriptionError" ||
+          failure._tag === "SubscriptionFailpointError"
+            ? failure
+            : asProtocolError();
+        });
+
         const subscriptions = Subscriptions.of({
+          recoverSubscription: (scope, key, revision) =>
+            changeState(scope, key, revision, "RecoverSubscription"),
+          getSubscription: (scope, key) =>
+            Effect.gen(function* () {
+              const response = yield* call(scope.partition, {
+                _tag: "GetSubscription",
+                schemaVersion: 1,
+                scope,
+                key,
+              });
+
+              if (response._tag === "Snapshot") return response.value;
+              const failure = failed(response);
+
+              return yield* failure._tag === "SubscriptionError" ? failure : asProtocolError();
+            }),
+          recoverDelivery: (scope, key, expectedGeneration) =>
+            Effect.gen(function* () {
+              const response = yield* call(scope.partition, {
+                _tag: "RecoverDelivery",
+                expectedGeneration,
+                schemaVersion: 1,
+                scope,
+                key,
+              });
+
+              if (response._tag === "DeliverySnapshot") return response.value;
+              const failure = failed(response);
+
+              return yield* failure._tag === "SubscriptionError" ||
+              failure._tag === "SubscriptionFailpointError"
+                ? failure
+                : asProtocolError();
+            }),
+          updateSubscription: (scope, key, expectedRevision, options) =>
+            Effect.gen(function* () {
+              const response = yield* call(scope.partition, {
+                _tag: "UpdateSubscription",
+                schemaVersion: 1,
+                scope,
+                key,
+                expectedRevision,
+                options,
+              });
+
+              if (response._tag === "Snapshot") return response.value;
+              const failure = failed(response);
+
+              return yield* failure._tag === "SubscriptionError" ||
+              failure._tag === "SubscriptionFailpointError" ||
+              failure._tag === "SubscriptionSourceError"
+                ? failure
+                : asProtocolError();
+            }),
+          pauseSubscription: (scope, key, revision) =>
+            changeState(scope, key, revision, "PauseSubscription"),
+          resumeSubscription: (scope, key, revision) =>
+            changeState(scope, key, revision, "ResumeSubscription"),
           subscribe: (scope, options) =>
             Effect.gen(function* () {
               const response = yield* call(scope.partition, {
@@ -298,10 +501,11 @@ export class CloudflareSubscriptionsClient {
 
               return yield* failure._tag === "SubscriptionError" ? failure : asProtocolError();
             }),
-          cancelSubscription: (scope, key) =>
+          cancelSubscription: (scope, key, expectedRevision) =>
             Effect.gen(function* () {
               const response = yield* call(scope.partition, {
                 _tag: "CancelSubscription",
+                ...(expectedRevision === undefined ? {} : { expectedRevision }),
                 schemaVersion: 1,
                 scope,
                 key,
@@ -461,10 +665,52 @@ const handleRequest = Effect.fn("SubscriptionPartition.handleRequest")(function*
     SubscriptionPartitionFailure
   > {
     switch (request._tag) {
+      case "GetSubscription":
+        return {
+          _tag: "Snapshot",
+          value: yield* subscriptions.getSubscription(request.scope, request.key),
+        };
       case "Subscribe":
         return {
           _tag: "Snapshot",
           value: yield* subscriptions.subscribe(request.scope, request.options),
+        };
+      case "UpdateSubscription":
+        return {
+          _tag: "Snapshot",
+          value: yield* subscriptions.updateSubscription(
+            request.scope,
+            request.key,
+            request.expectedRevision,
+            request.options,
+          ),
+        };
+      case "RecoverSubscription":
+        return {
+          _tag: "Snapshot",
+          value: yield* subscriptions.recoverSubscription(
+            request.scope,
+            request.key,
+            request.expectedRevision,
+          ),
+        };
+      case "PauseSubscription":
+        return {
+          _tag: "Snapshot",
+          value: yield* subscriptions.pauseSubscription(
+            request.scope,
+            request.key,
+            request.expectedRevision,
+          ),
+        };
+      case "ResumeSubscription":
+        return {
+          _tag: "Snapshot",
+          value: yield* subscriptions.resumeSubscription(
+            request.scope,
+            request.key,
+            request.expectedRevision,
+          ),
         };
       case "ListSubscriptions":
         return {
@@ -478,7 +724,20 @@ const handleRequest = Effect.fn("SubscriptionPartition.handleRequest")(function*
       case "CancelSubscription":
         return {
           _tag: "Snapshot",
-          value: yield* subscriptions.cancelSubscription(request.scope, request.key),
+          value: yield* subscriptions.cancelSubscription(
+            request.scope,
+            request.key,
+            request.expectedRevision,
+          ),
+        };
+      case "RecoverDelivery":
+        return {
+          _tag: "DeliverySnapshot",
+          value: yield* subscriptions.recoverDelivery(
+            request.scope,
+            request.key,
+            request.expectedGeneration,
+          ),
         };
       case "ListDeliveries":
         return {
@@ -566,7 +825,29 @@ const alarmHandler = (limits: SubscriptionLimits) =>
   DurableObjectAlarm.processDue(
     (event) =>
       Effect.gen(function* () {
-        if (event.tag !== SUBSCRIPTION_ALARM_TAG || event.id !== SUBSCRIPTION_ALARM_ID) {
+        if (event.tag !== SUBSCRIPTION_ALARM_TAG) {
+          const { handlers } = yield* SubscriptionPartitionAlarmExtension;
+          const matches = handlers.filter((handler) => handler.tag === event.tag);
+          const handler = matches[0];
+
+          if (
+            event.tag.startsWith("effect-agent/") ||
+            matches.length !== 1 ||
+            handler === undefined
+          )
+            return yield* SubscriptionAlarmProtocolError.make({
+              message: "Unknown or ambiguous ancillary alarm tag",
+            });
+
+          return yield* handler.handle(event).pipe(
+            Effect.scoped,
+            Effect.timeout(MAX_ANCILLARY_ALARM_MILLIS),
+            Effect.catchTag("TimeoutError", () =>
+              SubscriptionAlarmExtensionError.make({ code: "timeout" }),
+            ),
+          );
+        }
+        if (event.id !== SUBSCRIPTION_ALARM_ID) {
           return yield* SubscriptionAlarmProtocolError.make({
             message: `Unsupported Subscription Partition alarm ${event.tag}/${event.id}`,
           });
@@ -600,7 +881,12 @@ const alarmHandler = (limits: SubscriptionLimits) =>
           yield* alarmControl.reconcile;
         }
       }),
-    { mode: "ordered" },
+    {
+      mode: "isolated",
+      limit: MAX_ALARMS_PER_INVOCATION,
+      retryFailedAfter: limits.retryMillis,
+      onFailure: () => Effect.logWarning("Subscription partition alarm retained for retry"),
+    },
   ).pipe(Effect.asVoid);
 
 type SubscriptionRuntimeServices =
@@ -669,6 +955,29 @@ export const makeSubscriptionPartitionObjectClass = <E>(
     SubscriptionIntake.layer(limits),
     SubscriptionDriver.layer(limits),
     cloudflareLimitsLayer,
+    // Capture the host reference before its scoped input Layer is hidden from the runtime.
+    Layer.effect(
+      SubscriptionPartitionAlarmExtension,
+      Effect.gen(function* () {
+        const extension = yield* SubscriptionPartitionAlarmExtension;
+        const tags = extension.handlers.map((handler) => handler.tag);
+
+        if (
+          tags.length > MAX_ALARMS_PER_INVOCATION ||
+          new Set(tags).size !== tags.length ||
+          tags.some(
+            (tag) => tag.length === 0 || tag.length > 128 || tag.startsWith("effect-agent/"),
+          )
+        )
+          return yield* SubscriptionAlarmProtocolError.make({
+            message: "Invalid ancillary alarm handler registry",
+          });
+
+        yield* validateCloudflareSubscriptionLimits(limits, { ancillaryAlarms: tags.length > 0 });
+
+        return extension;
+      }),
+    ),
   ).pipe(
     Layer.provideMerge(partitionStore),
     Layer.provide(
@@ -682,7 +991,11 @@ export const makeSubscriptionPartitionObjectClass = <E>(
 
   const runtime: Layer.Layer<
     SubscriptionRuntimeServices,
-    E | SubscriptionError | SubscriptionPartitionProtocolError | CloudflareSubscriptionConfigError,
+    | E
+    | SubscriptionError
+    | SubscriptionPartitionProtocolError
+    | CloudflareSubscriptionConfigError
+    | SubscriptionAlarmProtocolError,
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
   > = Layer.effectContext(
     Effect.gen(function* () {

@@ -7,7 +7,7 @@ import { utf8ByteLength } from "./internal/utf8.ts";
 import { admitPreparedInput, PreparedInputAdmission } from "./PreparedInputAdmission.ts";
 import { DefinitionDigests, type PersistedJson } from "./Records.ts";
 import { type ScheduleRetryReason } from "./Schedule.ts";
-import { IdempotencyKey, type Principal } from "./SubmissionLedger.ts";
+import { type AdmissionFence, IdempotencyKey, type Principal } from "./SubmissionLedger.ts";
 import {
   AcceptedEvent,
   type EventAcknowledgement,
@@ -23,6 +23,7 @@ import {
   SubscriptionKey,
   SubscriptionLimits,
   type SubscriptionRecord,
+  type SubscriptionChange,
   SubscriptionScope,
   type SubscriptionSnapshot,
   SubscriptionSourceError,
@@ -52,15 +53,40 @@ const validate = <S extends Schema.Top>(schema: S, value: unknown) =>
 
 const snapshot = (record: SubscriptionRecord, time: number): SubscriptionSnapshot => ({
   key: record.key,
+  configurationRevision: record.configurationRevision,
+  configurationFingerprint: record.configurationFingerprint,
+  ...(record.configuration.admissionGroup === undefined
+    ? {}
+    : { admissionGroup: record.configuration.admissionGroup }),
+  ...(record.configuration.admissionFence === undefined
+    ? {}
+    : { admissionFence: record.configuration.admissionFence }),
   source: record.configuration.source,
   mode: record.configuration.mode,
   state:
-    record.state === "active" && record.configuration.expiresAtMillis <= time
+    record.state === "active" &&
+    record.configuration.expiresAtMillis !== null &&
+    record.configuration.expiresAtMillis <= time
       ? "expired"
       : record.state,
   createdAtMillis: record.createdAtMillis,
   expiresAtMillis: record.configuration.expiresAtMillis,
   recovery: record.recovery,
+});
+
+const deliverySnapshot = (
+  record: SubscriptionDelivery,
+): typeof SubscriptionDeliverySnapshot.Type => ({
+  key: record.key,
+  state: record.state,
+  configurationRevision: record.configurationRevision,
+  ...(record.observeSettlement === undefined
+    ? {}
+    : { observeSettlement: record.observeSettlement }),
+  ...(record.settledAtMillis === undefined ? {} : { settledAtMillis: record.settledAtMillis }),
+  retry: record.retry,
+  receipt: record.receipt,
+  refusal: record.refusal,
 });
 
 export interface SubscribeOptions {
@@ -69,9 +95,11 @@ export interface SubscribeOptions {
   readonly parameters: PersistedJson;
   readonly context: PersistedJson;
   readonly mode: "once" | "continuous";
-  readonly expiresAtMillis: number;
+  readonly expiresAtMillis: number | null;
   readonly destination: SubscriptionConfiguration["destination"];
   readonly deliveryPrincipal: Principal;
+  readonly admissionGroup?: string;
+  readonly admissionFence?: AdmissionFence;
   readonly agentId: SubscriptionConfiguration["agentId"];
   readonly definitions: SubscriptionConfiguration["definitions"];
 }
@@ -82,10 +110,35 @@ export type SubscriptionFailure = SubscriptionStoreFailure | SubscriptionSourceE
 export class Subscriptions extends Context.Service<
   Subscriptions,
   {
+    readonly recoverSubscription: (
+      scope: SubscriptionScope,
+      key: SubscriptionKey,
+      expectedRevision: number,
+    ) => Effect.Effect<SubscriptionSnapshot, SubscriptionStoreFailure>;
+    readonly getSubscription: (
+      scope: SubscriptionScope,
+      key: SubscriptionKey,
+    ) => Effect.Effect<SubscriptionSnapshot, SubscriptionError>;
     readonly subscribe: (
       scope: SubscriptionScope,
       options: SubscribeOptions,
     ) => Effect.Effect<SubscriptionSnapshot, SubscriptionFailure>;
+    readonly updateSubscription: (
+      scope: SubscriptionScope,
+      key: SubscriptionKey,
+      expectedRevision: number,
+      options: Omit<SubscribeOptions, "subscriptionId">,
+    ) => Effect.Effect<SubscriptionSnapshot, SubscriptionFailure>;
+    readonly pauseSubscription: (
+      scope: SubscriptionScope,
+      key: SubscriptionKey,
+      expectedRevision: number,
+    ) => Effect.Effect<SubscriptionSnapshot, SubscriptionStoreFailure>;
+    readonly resumeSubscription: (
+      scope: SubscriptionScope,
+      key: SubscriptionKey,
+      expectedRevision: number,
+    ) => Effect.Effect<SubscriptionSnapshot, SubscriptionStoreFailure>;
     readonly listSubscriptions: (
       scope: SubscriptionScope,
       after?: number,
@@ -94,9 +147,15 @@ export class Subscriptions extends Context.Service<
       { readonly items: ReadonlyArray<SubscriptionSnapshot>; readonly next: number | null },
       SubscriptionError
     >;
+    readonly recoverDelivery: (
+      scope: SubscriptionScope,
+      key: SubscriptionDeliveryKey,
+      expectedGeneration: number,
+    ) => Effect.Effect<typeof SubscriptionDeliverySnapshot.Type, SubscriptionStoreFailure>;
     readonly cancelSubscription: (
       scope: SubscriptionScope,
       key: SubscriptionKey,
+      expectedRevision?: number,
     ) => Effect.Effect<SubscriptionSnapshot, SubscriptionStoreFailure>;
     readonly listDeliveries: (
       scope: SubscriptionScope,
@@ -209,6 +268,7 @@ const dependencies = Effect.gen(function* () {
       payload: event.payload,
       payloadDigest: yield* digest(event.payload),
       acceptedAtMillis: time,
+      ...(event.occurredAtMillis === undefined ? {} : { occurredAtMillis: event.occurredAtMillis }),
       cutoff: 0,
       cursor: 0,
       routingComplete: false,
@@ -218,7 +278,7 @@ const dependencies = Effect.gen(function* () {
 
     const retained = yield* store.accept(record, limits);
 
-    if ((yield* digest(retained.payload)) !== retained.payloadDigest)
+    if (retained.tombstone !== true && (yield* digest(retained.payload)) !== retained.payloadDigest)
       return yield* failure("corrupt", "event-digest");
 
     return retained;
@@ -274,7 +334,7 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
 
       if (existing !== null) {
         const retainedConfiguration = yield* Schema.encodeEffect(SubscriptionConfiguration)(
-          existing.configuration,
+          existing.creationConfiguration,
         ).pipe(Effect.mapError(() => failure("corrupt", "creation-configuration")));
 
         const retainedFingerprint = yield* digest({
@@ -284,6 +344,19 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
         });
 
         if (retainedFingerprint !== existing.creationFingerprint)
+          return yield* failure("corrupt", "creation-fingerprint");
+
+        const currentConfiguration = yield* Schema.encodeEffect(SubscriptionConfiguration)(
+          existing.configuration,
+        ).pipe(Effect.mapError(() => failure("corrupt", "configuration")));
+
+        if (
+          (yield* digest({
+            key: existing.key,
+            createdBy: existing.createdBy,
+            configuration: currentConfiguration,
+          })) !== existing.configurationFingerprint
+        )
           return yield* failure("corrupt", "creation-fingerprint");
         if (existing.creationFingerprint !== creationFingerprint)
           return yield* failure("conflict", "creation");
@@ -298,8 +371,9 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
       const time = yield* now;
 
       if (
-        configuration.expiresAtMillis <= time ||
-        configuration.expiresAtMillis - time > limits.maxLifetimeMillis
+        configuration.expiresAtMillis !== null &&
+        (configuration.expiresAtMillis <= time ||
+          configuration.expiresAtMillis - time > limits.maxLifetimeMillis)
       )
         return yield* failure("validation", "lifetime");
       if (behavior.reconcile !== undefined && configuration.mode !== "once")
@@ -310,6 +384,9 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
           schemaVersion: 1,
           key,
           creationFingerprint,
+          configurationRevision: 1,
+          configurationFingerprint: creationFingerprint,
+          creationConfiguration: configuration,
           createdBy: owner.principal,
           createdAtMillis: time,
           ordinal: 0,
@@ -356,13 +433,88 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
     return key;
   });
 
+  const updateSubscription: Subscriptions["Service"]["updateSubscription"] = Effect.fn(
+    "Subscriptions.updateSubscription",
+  )(function* (scopeValue, key, expectedRevision, options) {
+    const owner = yield* scope(scopeValue);
+
+    yield* authorizer.manage("update", owner);
+    yield* ownedKey(owner, key);
+    const behavior = yield* source(options.source);
+    const parameters = yield* behavior.parameters(options.parameters);
+    const binding = yield* resolveSubscriptionInput(bindings, options);
+    const context = yield* binding.context(options.context);
+
+    const configuration = yield* validate(SubscriptionConfiguration, {
+      ...options,
+      ...parameters,
+      context,
+    });
+
+    yield* authorizer.manage("update", owner, configuration);
+    const time = yield* now;
+
+    if (
+      bytes(parameters.parameters) > limits.maxPayloadBytes ||
+      bytes(context) > limits.maxContextBytes
+    )
+      return yield* failure("validation", "registration-bounds");
+    if (
+      configuration.expiresAtMillis !== null &&
+      (configuration.expiresAtMillis <= time ||
+        configuration.expiresAtMillis - time > limits.maxLifetimeMillis)
+    )
+      return yield* failure("validation", "lifetime");
+    if (behavior.reconcile !== undefined && configuration.mode !== "once")
+      return yield* failure("validation", "reconciliation-requires-once");
+    const existing = yield* store.get(key);
+
+    if (existing === null) return yield* failure("not-found", "subscription");
+
+    const encoded = yield* Schema.encodeEffect(SubscriptionConfiguration)(configuration).pipe(
+      Effect.mapError(() => failure("validation", "configuration")),
+    );
+
+    const configurationFingerprint = yield* digest({
+      key,
+      createdBy: existing.createdBy,
+      configuration: encoded,
+    });
+
+    const updated = yield* store.change(key, expectedRevision, {
+      _tag: "Update",
+      configuration,
+      configurationFingerprint,
+      recovery:
+        behavior.reconcile === undefined
+          ? null
+          : { attempts: 0, nextAttemptAtMillis: time, lastFailure: null },
+    });
+
+    return snapshot(updated, time);
+  });
+
+  const changeState = Effect.fn("Subscriptions.changeState")(function* (
+    scopeValue: SubscriptionScope,
+    key: SubscriptionKey,
+    expectedRevision: number,
+    change: Extract<SubscriptionChange, { readonly _tag: "Pause" | "Resume" }>,
+  ) {
+    const owner = yield* scope(scopeValue);
+
+    yield* authorizer.manage(change._tag === "Pause" ? "pause" : "resume", owner);
+    const updated = yield* store.change(yield* ownedKey(owner, key), expectedRevision, change);
+
+    return snapshot(updated, yield* now);
+  });
+
   const cancelSubscription: Subscriptions["Service"]["cancelSubscription"] = Effect.fn(
     "Subscriptions.cancelSubscription",
-  )(function* (scopeValue, key) {
+  )(function* (scopeValue, key, expectedRevision) {
     const owner = yield* scope(scopeValue);
 
     yield* authorizer.manage("cancel", owner);
-    const record = yield* store.cancel(yield* ownedKey(owner, key));
+    const record = yield* store.cancel(yield* ownedKey(owner, key), expectedRevision);
 
     return snapshot(record, yield* now);
   });
@@ -378,13 +530,7 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
     const last = records.at(-1);
 
     return {
-      items: records.map(({ key, state, retry, receipt, refusal }) => ({
-        key,
-        state,
-        retry,
-        receipt,
-        refusal,
-      })),
+      items: records.map(deliverySnapshot),
       next:
         records.length === limit && last !== undefined
           ? subscriptionDeliveryKeyString(last.key)
@@ -392,7 +538,66 @@ const makeManagement = Effect.fn("Subscriptions.make")(function* (requested: Sub
     };
   });
 
-  return Subscriptions.of({ subscribe, listSubscriptions, cancelSubscription, listDeliveries });
+  const recoverDelivery: Subscriptions["Service"]["recoverDelivery"] = Effect.fn(
+    "Subscriptions.recoverDelivery",
+  )(function* (scopeValue, key, expectedGeneration) {
+    const owner = yield* scope(scopeValue);
+
+    yield* authorizer.manage("recover", owner);
+    yield* ownedKey(owner, key.subscription);
+    const existing = yield* store.delivery(key);
+
+    if (existing === null) return yield* failure("not-found", "delivery");
+
+    const recovered = yield* store.changeDelivery(key, existing.deliveryId, {
+      _tag: "Recover",
+      expectedGeneration,
+      nowMillis: yield* now,
+    });
+
+    return deliverySnapshot(recovered);
+  });
+
+  const getSubscription: Subscriptions["Service"]["getSubscription"] = Effect.fn(
+    "Subscriptions.getSubscription",
+  )(function* (scopeValue, key) {
+    const owner = yield* scope(scopeValue);
+
+    yield* authorizer.manage("get", owner);
+    const record = yield* store.get(yield* ownedKey(owner, key));
+
+    if (record === null) return yield* failure("not-found", "subscription");
+
+    return snapshot(record, yield* now);
+  });
+
+  return Subscriptions.of({
+    getSubscription,
+    recoverSubscription: (scopeValue, key, expectedRevision) =>
+      Effect.gen(function* () {
+        const owner = yield* scope(scopeValue);
+
+        yield* authorizer.manage("recover", owner);
+
+        return snapshot(
+          yield* store.change(yield* ownedKey(owner, key), expectedRevision, {
+            _tag: "Recover",
+            nowMillis: yield* now,
+          }),
+          yield* now,
+        );
+      }),
+    recoverDelivery,
+    subscribe,
+    updateSubscription,
+    pauseSubscription: (scope, key, revision) =>
+      changeState(scope, key, revision, { _tag: "Pause" }),
+    resumeSubscription: (scope, key, revision) =>
+      changeState(scope, key, revision, { _tag: "Resume" }),
+    listSubscriptions,
+    cancelSubscription,
+    listDeliveries,
+  });
 });
 
 const makeIntake = Effect.fn("SubscriptionIntake.make")(function* (requested: SubscriptionLimits) {
@@ -441,6 +646,9 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
   const { bindings } = yield* SubscriptionInputBindings;
   const { store, authorizer, source, digest, acceptNormalized } = yield* dependencies;
   const admission = yield* PreparedInputAdmission;
+
+  if (limits.retention !== undefined && admission.submissionStatus === undefined)
+    return yield* failure("validation", "retention-requires-submission-status");
   const failpoint = yield* SubscriptionFailpoint;
   const semaphore = yield* Semaphore.make(limits.concurrency);
   const sweepSemaphore = yield* Semaphore.make(1);
@@ -463,7 +671,9 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
       schemaVersion: 1,
       key: { subscription: subscription.key, eventId: event.eventId },
       deliveryId,
-      subscriptionFingerprint: subscription.creationFingerprint,
+      subscriptionFingerprint: subscription.configurationFingerprint,
+      configurationRevision: subscription.configurationRevision,
+      configuration: subscription.configuration,
       eventDigest: event.payloadDigest,
       source: event.source,
       threadId:
@@ -472,11 +682,15 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
           : Schema.decodeSync(ThreadId)(`subscription:${deliveryId}`),
       admissionKey: Schema.decodeSync(IdempotencyKey)(`subscription:${deliveryId}`),
       selectedAtMillis: time,
+      ...(limits.retention === undefined ? {} : { observeSettlement: true }),
       state: "selected",
       envelope: null,
       envelopeDigest: null,
       retry: {
+        generation: 0,
         attempts: 0,
+        automaticAttempts: 0,
+        parked: false,
         nextAttemptAtMillis: time,
         lastAttemptAtMillis: null,
         lastFailure: null,
@@ -492,6 +706,7 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
 
     if (
       normalized.eventId !== event.eventId ||
+      normalized.occurredAtMillis !== event.occurredAtMillis ||
       normalized.matchingKey !== event.matchingKey ||
       (yield* digest(normalized.payload)) !== event.payloadDigest ||
       (yield* digest(event.payload)) !== event.payloadDigest
@@ -502,7 +717,12 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
     const time = yield* now;
 
     for (const candidate of candidates) {
-      if (candidate.state !== "active" || candidate.configuration.expiresAtMillis <= time) continue;
+      if (
+        candidate.state !== "active" ||
+        (candidate.configuration.expiresAtMillis !== null &&
+          candidate.configuration.expiresAtMillis <= time)
+      )
+        continue;
 
       const config = yield* Schema.encodeEffect(SubscriptionConfiguration)(
         candidate.configuration,
@@ -517,7 +737,7 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
       const parameters = yield* behavior.parameters(candidate.configuration.parameters);
 
       if (
-        fingerprint !== candidate.creationFingerprint ||
+        fingerprint !== candidate.configurationFingerprint ||
         parameters.matchingKey !== candidate.configuration.matchingKey
       )
         return yield* failure("corrupt", "registration-source-bindings");
@@ -543,7 +763,10 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
           _tag: "Retry",
           nowMillis: time,
           retry: {
+            generation: delivery.retry.generation,
             attempts: delivery.retry.attempts + 1,
+            automaticAttempts: delivery.retry.automaticAttempts + 1,
+            parked: delivery.retry.automaticAttempts + 1 >= (limits.maxAutomaticAttempts ?? 8),
             lastAttemptAtMillis: time,
             nextAttemptAtMillis: nextAttempt(time),
             lastFailure: reason,
@@ -572,7 +795,18 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
   const verifySelected = Effect.fn("Subscriptions.verifySelected")(function* (
     delivery: SubscriptionDelivery,
   ) {
-    const subscription = yield* store.get(delivery.key.subscription);
+    const current = yield* store.get(delivery.key.subscription);
+
+    const subscription =
+      current === null
+        ? null
+        : {
+            ...current,
+            configuration: delivery.configuration,
+            configurationRevision: delivery.configurationRevision,
+            configurationFingerprint: delivery.subscriptionFingerprint,
+          };
+
     const event = yield* store.event(delivery.key.eventId);
 
     if (
@@ -603,7 +837,6 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
 
     if (
       delivery.subscriptionFingerprint !== fingerprint ||
-      subscription.creationFingerprint !== fingerprint ||
       delivery.eventDigest !== event.payloadDigest ||
       (yield* digest(event.payload)) !== event.payloadDigest ||
       delivery.deliveryId !== expectedId ||
@@ -638,7 +871,11 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
     const { subscription, event } = yield* verifySelected(delivery);
     const time = yield* now;
 
-    if (subscription.state === "cancelled" || subscription.configuration.expiresAtMillis <= time) {
+    if (
+      subscription.state === "cancelled" ||
+      (subscription.configuration.expiresAtMillis !== null &&
+        subscription.configuration.expiresAtMillis <= time)
+    ) {
       yield* refuse(
         delivery,
         "preparation",
@@ -662,6 +899,12 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
       threadId: delivery.threadId,
       admissionKey: delivery.admissionKey,
       deliveryPrincipal: subscription.configuration.deliveryPrincipal,
+      ...(subscription.configuration.admissionGroup === undefined
+        ? {}
+        : { admissionGroup: subscription.configuration.admissionGroup }),
+      ...(subscription.configuration.admissionFence === undefined
+        ? {}
+        : { admissionFence: subscription.configuration.admissionFence }),
       agentId: subscription.configuration.agentId,
       definitions: subscription.configuration.definitions,
       input,
@@ -684,6 +927,37 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
 
     if (delivery === null) return yield* failure("not-found", "delivery");
     if (
+      delivery.state === "delivered" &&
+      delivery.observeSettlement === true &&
+      delivery.receipt !== null
+    ) {
+      const settled =
+        admission.submissionStatus === undefined
+          ? false
+          : yield* admission.submissionStatus(delivery.receipt).pipe(
+              Effect.timeout(limits.operationTimeoutMillis),
+              Effect.map((status) => status._tag === "settled"),
+              Effect.catch((error) =>
+                Effect.logWarning("Subscription settlement observation unavailable", {
+                  tag: error._tag,
+                }).pipe(Effect.as(false)),
+              ),
+            );
+
+      const time = yield* now;
+
+      yield* store.changeDelivery(delivery.key, delivery.deliveryId, {
+        _tag: "ObserveSettlement",
+        receipt: delivery.receipt,
+        settled,
+        nowMillis: time,
+        nextAttemptAtMillis: nextAttempt(time),
+      });
+
+      return;
+    }
+    if (
+      delivery.retry.parked === true ||
       delivery.retry.nextAttemptAtMillis > (yield* now) ||
       delivery.state === "delivered" ||
       delivery.state === "refused"
@@ -755,8 +1029,12 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
   ) {
     const time = yield* now;
 
-    if (subscription.state !== "active" || subscription.configuration.expiresAtMillis <= time)
-      return yield* store.deferRecovery(subscription.key, null);
+    if (
+      subscription.state !== "active" ||
+      (subscription.configuration.expiresAtMillis !== null &&
+        subscription.configuration.expiresAtMillis <= time)
+    )
+      return yield* store.deferRecovery(subscription.key, subscription.configurationRevision, null);
     const behavior = yield* source(subscription.configuration.source);
 
     if (behavior.reconcile === undefined)
@@ -772,7 +1050,7 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
     );
 
     if (observation._tag === "Failed")
-      return yield* store.deferRecovery(subscription.key, {
+      return yield* store.deferRecovery(subscription.key, subscription.configurationRevision, {
         attempts: (subscription.recovery?.attempts ?? 0) + 1,
         nextAttemptAtMillis: observation.error.retryable ? nextAttempt(time) : null,
         lastFailure: observation.error.code,
@@ -781,6 +1059,13 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
 
     if (observed !== null) {
       const event = yield* acceptNormalized(behavior.source, observed, limits);
+
+      if (event.tombstone === true)
+        return yield* store.deferRecovery(subscription.key, subscription.configurationRevision, {
+          attempts: (subscription.recovery?.attempts ?? 0) + 1,
+          nextAttemptAtMillis: null,
+          lastFailure: "event-reclaimed",
+        });
 
       if (
         event.matchingKey !== subscription.configuration.matchingKey ||
@@ -791,7 +1076,7 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
 
       return;
     }
-    yield* store.deferRecovery(subscription.key, {
+    yield* store.deferRecovery(subscription.key, subscription.configurationRevision, {
       attempts: (subscription.recovery?.attempts ?? 0) + 1,
       nextAttemptAtMillis: nextAttempt(time),
       lastFailure: null,
@@ -864,26 +1149,20 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
     yield* Effect.forEach(
       records,
       (cursor) =>
-        attempt(
-          store.get(cursor.key).pipe(
-            Effect.flatMap((record) =>
-              record === null ? failure("not-found", "recovery") : reconcile(record),
-            ),
-            Effect.timeout(limits.operationTimeoutMillis),
-          ),
-          (code) =>
-            store.get(cursor.key).pipe(
-              Effect.flatMap((record) =>
-                record === null
-                  ? Effect.void
-                  : store.deferRecovery(cursor.key, {
-                      attempts: (record.recovery?.attempts ?? 0) + 1,
-                      nextAttemptAtMillis: code === "unauthorized" ? null : nextAttempt(time),
-                      lastFailure: code,
-                    }),
-              ),
-            ),
-        ),
+        Effect.gen(function* () {
+          const record = yield* store.get(cursor.key);
+
+          if (record === null) return;
+          yield* attempt(
+            reconcile(record).pipe(Effect.timeout(limits.operationTimeoutMillis)),
+            (code) =>
+              store.deferRecovery(record.key, record.configurationRevision, {
+                attempts: (record.recovery?.attempts ?? 0) + 1,
+                nextAttemptAtMillis: code === "unauthorized" ? null : nextAttempt(time),
+                lastFailure: code,
+              }),
+          );
+        }),
       { concurrency: limits.concurrency },
     );
     yield* Effect.forEach(
@@ -914,6 +1193,9 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
         ),
       { concurrency: limits.concurrency },
     );
+
+    if (limits.retention !== undefined)
+      yield* store.compact(yield* now, limits.retention, limits.batchSize);
 
     return { processed, failed };
   });

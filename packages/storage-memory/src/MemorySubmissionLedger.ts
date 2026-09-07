@@ -22,9 +22,11 @@ import {
   AbortCommand,
   AdmissionAdmitted,
   AdmissionConflict,
+  AdmissionPolicyError,
   AdmissionIndeterminate,
   AdmissionNotAdmitted,
   AdmissionRequest,
+  SubmissionAdmissionFence,
   AdmissionResult,
   ApprovalConflict,
   ApprovalDecisionCommand,
@@ -90,7 +92,20 @@ import {
   type SuspensionOutcome,
   type SuspensionReason,
 } from "@effect-agent/thread/SubmissionLedger";
-import { Clock, DateTime, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Clock,
+  Cause,
+  Exit,
+  Fiber,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 const MAX_SUBMISSIONS = 65_536;
 
@@ -130,6 +145,8 @@ interface SubmissionRow {
   readonly readyAtMillis: number | undefined;
   /** Immutable child-side lineage recorded at admission (spec §12 step 5). */
   readonly parentLinkage: ParentLinkage | undefined;
+  readonly admissionGroup?: string;
+  readonly admissionFence?: AdmissionRequest["admissionFence"];
 }
 
 interface StoredOwnership {
@@ -271,6 +288,8 @@ const toSnapshot = (row: SubmissionRow): SubmissionSnapshot =>
     receiptId: row.receiptId,
     state: row.state,
     createdAt: utc(row.createdAtMillis),
+    ...(row.admissionGroup === undefined ? {} : { admissionGroup: row.admissionGroup }),
+    ...(row.admissionFence === undefined ? {} : { admissionFence: row.admissionFence }),
     ...(row.settledOutcome === undefined ? {} : { settledOutcome: row.settledOutcome }),
     ...(row.readyAtMillis === undefined ? {} : { readyAt: utc(row.readyAtMillis) }),
     ...(row.parentLinkage === undefined ? {} : { parentLinkage: row.parentLinkage }),
@@ -385,6 +404,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       mintCounter: 0,
     });
 
+    const admissionFence = yield* SubmissionAdmissionFence;
     const leaseMillis = Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION);
 
     const capabilities = Effect.succeed(LedgerCapabilities.make({ durability: "non-durable" }));
@@ -393,14 +413,19 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       (unvalidated) =>
         Effect.gen(function* () {
           const request = yield* validate(AdmissionRequest, "admit", unvalidated);
+
           const nowMillis = yield* Clock.currentTimeMillis;
+          const services = yield* Effect.context<never>();
 
           const decision = yield* Ref.modify(
             state,
             (
               current,
             ): readonly [
-              Decision<AdmissionResult, AdmissionConflict | LedgerError>,
+              (
+                | Decision<AdmissionResult, AdmissionConflict | AdmissionPolicyError | LedgerError>
+                | { readonly _tag: "cause"; readonly cause: Cause.Cause<AdmissionPolicyError> }
+              ),
               LedgerState,
             ] => {
               const key = admissionKey(request.threadId, request.principal, request.idempotencyKey);
@@ -421,7 +446,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 // (or its absence): linkage is immutable lineage (spec §12 step 5, SUB-016).
                 if (
                   existing.row.inputDigest !== request.inputDigest ||
-                  !sameParentLinkage(existing.row.parentLinkage, request.parentLinkage)
+                  !sameParentLinkage(existing.row.parentLinkage, request.parentLinkage) ||
+                  existing.row.admissionGroup !== request.admissionGroup ||
+                  !Schema.toEquivalence(Schema.optional(Schema.Json))(
+                    existing.row.admissionFence,
+                    request.admissionFence,
+                  )
                 ) {
                   return [
                     failure(
@@ -450,6 +480,28 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+              // A memory policy and the ledger mutation share one synchronous critical section.
+              // An asynchronous policy cannot fence this Ref and therefore fails closed.
+              const checked = Effect.runSyncExitWith(services)(admissionFence.check(request));
+
+              if (Exit.isFailure(checked)) {
+                return [{ _tag: "cause", cause: checked.cause }, current];
+              }
+              if (
+                request.admissionGroup !== undefined &&
+                [...current.submissions.values()].some(
+                  ({ row }) =>
+                    row.threadId === request.threadId &&
+                    row.admissionGroup === request.admissionGroup &&
+                    row.state !== "settled",
+                )
+              )
+                return [
+                  failure(
+                    AdmissionPolicyError.make({ reason: "occupied", code: "admission-group" }),
+                  ),
+                  current,
+                ];
               if (current.submissions.size >= MAX_SUBMISSIONS) {
                 return [
                   failure(
@@ -483,6 +535,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 createdAtMillis: nowMillis,
                 readyAtMillis: undefined,
                 parentLinkage: request.parentLinkage,
+                ...(request.admissionGroup === undefined
+                  ? {}
+                  : { admissionGroup: request.admissionGroup }),
+                ...(request.admissionFence === undefined
+                  ? {}
+                  : { admissionFence: request.admissionFence }),
               };
 
               const submissions = new Map(current.submissions).set(row.submissionId, {
@@ -521,9 +579,24 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           );
 
           if (decision._tag === "failure") return yield* decision.error;
+          if (decision._tag === "cause") {
+            for (const reason of decision.cause.reasons) {
+              if (Cause.isDieReason(reason) && Cause.isAsyncFiberError(reason.defect)) {
+                yield* Fiber.interrupt(reason.defect.fiber);
+
+                return yield* AdmissionPolicyError.make({
+                  reason: "unavailable",
+                  code: "synchronous-memory-policy-required",
+                });
+              }
+            }
+
+            return yield* Effect.failCause(decision.cause);
+          }
 
           return decision.value;
         }),
+      Effect.uninterruptible,
     );
 
     const markReady: SubmissionLedger["Service"]["markReady"] = Effect.fn(

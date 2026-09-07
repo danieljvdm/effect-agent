@@ -13,6 +13,7 @@ import {
 } from "@effect-agent/thread/Records";
 import {
   AdmissionRequest,
+  AdmissionPolicyError,
   ApprovalDecisionCommand,
   ApprovalPendingSuspension,
   AttachChildToReservationRequest,
@@ -38,6 +39,7 @@ import {
   RevertJoiningRequest,
   SettlementFinalization,
   SubmissionLedger,
+  SubmissionAdmissionFence,
   SubmissionLookupByKey,
   SuspendRequest,
   UnknownResolutionCommand,
@@ -97,6 +99,102 @@ const admissionRequest = (idempotencyKey: string, digestSeed: string): Admission
   });
 
 describe("MemorySubmissionLedger", () => {
+  it.effect("rejects asynchronous memory policy and closes its suspended resources", () => {
+    let finalized = false;
+
+    const fence = Layer.succeed(SubmissionAdmissionFence)({
+      check: () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                finalized = true;
+              }),
+            );
+            yield* Effect.never;
+          }),
+        ),
+    });
+
+    return Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+      const request = admissionRequest("async-policy", "ac");
+
+      expect(yield* ledger.admit(request).pipe(Effect.flip)).toMatchObject({
+        reason: "unavailable",
+        code: "synchronous-memory-policy-required",
+      });
+      expect(finalized).toBe(true);
+      expect((yield* ledger.resolveAdmission(SubmissionLookupByKey.make(request)))._tag).toBe(
+        "NotAdmitted",
+      );
+    }).pipe(Effect.provide(memorySubmissionLedgerLayer().pipe(Layer.provide(fence))));
+  });
+
+  it.effect(
+    "resolves exact structurally equivalent receipts before the current admission fence",
+    () => {
+      let allowed = true;
+      let checks = 0;
+
+      return Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+
+        const request = AdmissionRequest.make({
+          ...admissionRequest("fenced", "aa"),
+          admissionGroup: "watch",
+          admissionFence: { revision: "1", key: "task", policyId: "test" },
+        });
+
+        const first = yield* ledger.admit(request);
+
+        allowed = false;
+
+        const replay = yield* ledger.admit(
+          AdmissionRequest.make({
+            ...request,
+            admissionFence: { key: "task", policyId: "test", revision: "1" },
+          }),
+        );
+
+        expect(replay.submissionId).toBe(first.submissionId);
+        expect(checks).toBe(1);
+        expect(
+          yield* ledger
+            .admit(
+              AdmissionRequest.make({
+                ...admissionRequest("new-fenced", "ab"),
+                admissionGroup: "watch",
+                admissionFence: { key: "task", policyId: "test", revision: "1" },
+              }),
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "AdmissionPolicyError", reason: "refused" });
+        expect(checks).toBe(2);
+      }).pipe(
+        Effect.provide(
+          memorySubmissionLedgerLayer().pipe(
+            Layer.provide(
+              Layer.succeed(SubmissionAdmissionFence, {
+                check: () =>
+                  Effect.suspend(() => {
+                    checks++;
+
+                    return allowed
+                      ? Effect.void
+                      : AdmissionPolicyError.make({
+                          reason: "refused",
+                          code: "revision-changed",
+                        });
+                  }),
+              }),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
   describe("shared SubmissionLedger conformance", () => {
     for (const conformanceCase of submissionLedgerConformanceCases) {
       it.effect(conformanceCase.name, () => conformanceCase.run.pipe(Effect.provide(testLayer)));

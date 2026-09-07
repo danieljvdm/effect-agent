@@ -55,7 +55,7 @@ import {
   ScheduledInputAdmission,
   ScheduleWake,
 } from "./Schedule.ts";
-import { IdempotencyKey, type Principal } from "./SubmissionLedger.ts";
+import { type AdmissionFence, IdempotencyKey, type Principal } from "./SubmissionLedger.ts";
 
 export interface ScheduleCreateOptions {
   readonly scope: ScheduleScope;
@@ -63,6 +63,8 @@ export interface ScheduleCreateOptions {
   readonly timing: ScheduleTimingRequest;
   readonly destination: ScheduleDestination;
   readonly deliveryPrincipal: Principal;
+  readonly admissionGroup?: string;
+  readonly admissionFence?: AdmissionFence;
   readonly definitions: DefinitionDigests;
 }
 
@@ -108,6 +110,12 @@ const asSnapshot = (record: ScheduleRecord, observedAtMillis: number): ScheduleS
       timing: record.configuration.timing,
       destination: record.configuration.destination,
       deliveryPrincipal: record.configuration.deliveryPrincipal,
+      ...(record.configuration.admissionGroup === undefined
+        ? {}
+        : { admissionGroup: record.configuration.admissionGroup }),
+      ...(record.configuration.admissionFence === undefined
+        ? {}
+        : { admissionFence: record.configuration.admissionFence }),
       agentId: record.configuration.agentId,
     },
     state: record.state,
@@ -118,6 +126,7 @@ const asSnapshot = (record: ScheduleRecord, observedAtMillis: number): ScheduleS
         : {
             intendedAtMillis: record.pending.envelope.intendedAtMillis,
             preparedAtMillis: record.pending.envelope.preparedAtMillis,
+            configurationRevision: record.pending.envelope.configurationRevision,
             occurrenceId: record.pending.envelope.occurrenceId,
             retry: record.pending.retry,
           },
@@ -239,6 +248,12 @@ const makeManagement = (limits: SchedulingLimits) =>
           scheduleId: options.scheduleId,
           registeringPrincipal: options.scope.principal,
           deliveryPrincipal: options.deliveryPrincipal,
+          ...(options.admissionGroup === undefined
+            ? {}
+            : { admissionGroup: options.admissionGroup }),
+          ...(options.admissionFence === undefined
+            ? {}
+            : { admissionFence: options.admissionFence }),
           agentId,
           definitions,
           destination,
@@ -262,6 +277,8 @@ const makeManagement = (limits: SchedulingLimits) =>
       timing,
       destination: options.destination,
       deliveryPrincipal: options.deliveryPrincipal,
+      ...(options.admissionGroup === undefined ? {} : { admissionGroup: options.admissionGroup }),
+      ...(options.admissionFence === undefined ? {} : { admissionFence: options.admissionFence }),
       agentId,
       definitions: options.definitions,
       input: payload,
@@ -554,7 +571,38 @@ const makeManagement = (limits: SchedulingLimits) =>
       return asSnapshot(changed, yield* currentMillis);
     });
 
+    const recover = Effect.fn("Scheduling.recover")(function* (
+      scope: ScheduleScope,
+      scheduleId: ScheduleId,
+      expectedRevision: number,
+      expectedGeneration: number,
+    ) {
+      yield* authorizer.manage({ operation: "recover", scope, scheduleId });
+      const key = keyOf(scope, scheduleId);
+      const record = yield* store.get(key);
+
+      if (record === null) return yield* notFound(key);
+      if (record.configurationRevision !== expectedRevision)
+        return yield* ScheduleConflict.make({ reason: "revision", key });
+      const time = yield* currentMillis;
+
+      if (record.pending === null) return asSnapshot(record, time);
+
+      const recovered = yield* store.change(key, {
+        _tag: "Recover",
+        expectedGeneration,
+        expectedRevision,
+        occurrenceId: record.pending.envelope.occurrenceId,
+        nowMillis: time,
+      });
+
+      yield* wake.notify;
+
+      return asSnapshot(recovered, time);
+    });
+
     return Scheduling.of({
+      recover,
       create,
       update,
       get,
@@ -595,7 +643,10 @@ const makeDriver = (limits: SchedulingLimits) =>
         _tag: "Retry",
         occurrenceId: record.pending.envelope.occurrenceId,
         retry: {
+          generation: current.generation,
           attempts: current.attempts + 1,
+          automaticAttempts: current.automaticAttempts + 1,
+          parked: current.automaticAttempts + 1 >= (limits.maxAutomaticAttempts ?? 8),
           nextAttemptAtMillis: Math.min(nowMillis + delay, 8_640_000_000_000_000),
           lastAttemptAtMillis: nowMillis,
           lastFailure: reason,
@@ -666,7 +717,11 @@ const makeDriver = (limits: SchedulingLimits) =>
       record: ScheduleRecord,
       nowMillis: number,
     ) {
-      if (record.pending === null || record.pending.retry.nextAttemptAtMillis > nowMillis) {
+      if (
+        record.pending === null ||
+        record.pending.retry.parked === true ||
+        record.pending.retry.nextAttemptAtMillis > nowMillis
+      ) {
         return record;
       }
       yield* verifyPending(key, record);
@@ -821,6 +876,12 @@ const makeDriver = (limits: SchedulingLimits) =>
           occurrenceId,
           threadId,
           deliveryPrincipal: initial.configuration.deliveryPrincipal,
+          ...(initial.configuration.admissionGroup === undefined
+            ? {}
+            : { admissionGroup: initial.configuration.admissionGroup }),
+          ...(initial.configuration.admissionFence === undefined
+            ? {}
+            : { admissionFence: initial.configuration.admissionFence }),
           agentId: initial.configuration.agentId,
           definitions: initial.configuration.definitions,
           input: initial.configuration.input,
@@ -961,6 +1022,12 @@ export class Scheduling extends Context.Service<
       scope: ScheduleScope,
       scheduleId: ScheduleId,
       expectedRevision: number,
+    ) => Effect.Effect<ScheduleSnapshot, ScheduleManagementFailure>;
+    readonly recover: (
+      scope: ScheduleScope,
+      scheduleId: ScheduleId,
+      expectedRevision: number,
+      expectedGeneration: number,
     ) => Effect.Effect<ScheduleSnapshot, ScheduleManagementFailure>;
     readonly cancel: (
       scope: ScheduleScope,

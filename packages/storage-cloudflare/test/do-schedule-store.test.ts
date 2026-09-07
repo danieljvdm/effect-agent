@@ -98,7 +98,7 @@ describe("Durable Object ScheduleStore conformance", () => {
             _tag: "ScheduleStorageError",
             reason: "corrupt",
           });
-          expect(failure.operation).toContain("incompatible storage version 1; expected 2");
+          expect(failure.operation).toContain("incompatible storage version 1; expected 3");
 
           const state = yield* sql<Record<string, unknown>>`
             SELECT storage_version, alarm_generation

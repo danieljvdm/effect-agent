@@ -1,7 +1,7 @@
 import { type ReceiptId } from "@effect-agent/core/Identifiers";
 import { AgentId, ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
 import type { Crypto } from "effect";
-import { Clock, DateTime, Duration, Effect, Option, Schema, Stream } from "effect";
+import { Clock, DateTime, Duration, Effect, Option, Result, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
 import { digestJson, type DigestError } from "./Digest.ts";
@@ -22,6 +22,7 @@ import {
   AbortCommand,
   AbortIntentRequest,
   AdmissionConflict,
+  AdmissionPolicyError,
   AdmissionRequest,
   ApprovalConflict,
   ApprovalDecisionCommand,
@@ -338,6 +339,114 @@ const conformanceCase = (
           ),
   }).pipe(Effect.withSpan(`SubmissionLedgerConformance.${name}`)),
 });
+
+const admissionGroupRace = conformanceCase(
+  "admits only one concurrent group request and retains immutable constraints",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      const requests = yield* Effect.forEach(["first", "second"], (key) =>
+        admissionRequest(decodeThreadId("ledger-group-race"), key, {}).pipe(
+          Effect.map((request) => AdmissionRequest.make({ ...request, admissionGroup: "entity" })),
+        ),
+      );
+
+      const outcomes = yield* Effect.forEach(
+        requests,
+        (request) => ledger.admit(request).pipe(Effect.result),
+        { concurrency: 2 },
+      );
+
+      yield* ensure(
+        outcomes.filter(Result.isSuccess).length === 1,
+        "More than one unsettled group submission was admitted",
+      );
+      yield* ensure(
+        outcomes.some(
+          (outcome) =>
+            Result.isFailure(outcome) &&
+            Schema.is(AdmissionPolicyError)(outcome.failure) &&
+            outcome.failure.reason === "occupied",
+        ),
+        "Concurrent loser was not a typed capacity wait",
+      );
+      for (const [index, outcome] of outcomes.entries()) {
+        if (Result.isFailure(outcome)) continue;
+        const request = requests[index];
+
+        if (request === undefined) return yield* Effect.die("Missing group race request");
+
+        const snapshot = yield* expectSome(
+          "group snapshot",
+          yield* lookupById(outcome.success.submissionId),
+        );
+
+        yield* ensure(
+          snapshot.admissionGroup === "entity",
+          "Admission constraints disappeared from the durable snapshot",
+        );
+        yield* ensure(
+          isAdmissionConflict(
+            yield* expectFailure(
+              "changed retained group",
+              ledger.admit(AdmissionRequest.make({ ...request, admissionGroup: "other" })),
+            ),
+          ),
+          "Changed constraints did not produce an admission conflict",
+        );
+      }
+    }),
+);
+
+const admissionGroupSettlement = conformanceCase(
+  "retains group capacity through terminalizing and permits exact replay",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+      const threadId = decodeThreadId("ledger-conformance-group");
+
+      const original = AdmissionRequest.make({
+        ...(yield* admissionRequest(threadId, "group-first", { n: 1 })),
+        admissionGroup: "entity-work",
+      });
+
+      const successor = AdmissionRequest.make({
+        ...(yield* admissionRequest(threadId, "group-second", { n: 2 })),
+        admissionGroup: "entity-work",
+      });
+
+      const first = yield* ledger.admit(original);
+
+      yield* expectFailure("occupied group", ledger.admit(successor));
+      yield* ensure(
+        (yield* ledger.admit(original)).submissionId === first.submissionId,
+        "Exact retry must resolve before occupied group checks",
+      );
+      yield* ledger.markReady(MarkReadyRequest.make({ submissionId: first.submissionId }));
+      const claim = yield* expectSome("claimed group head", yield* claimLane(threadId, PRODUCER_A));
+
+      yield* ledger.reserveSettlement(
+        yield* settlementReservation({
+          submissionId: first.submissionId,
+          receiptId: first.receiptId,
+          ownershipToken: claim.ownershipToken,
+          outcome: "completed",
+        }),
+      );
+      yield* expectFailure("terminalizing group", ledger.admit(successor));
+      yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: first.submissionId,
+          settlementId: submissionSettlementId(first.submissionId),
+        }),
+      );
+      yield* ensure(
+        !(yield* ledger.admit(successor)).replayed,
+        "Only canonical settlement releases group capacity",
+      );
+    }),
+);
 
 const admissionIdempotency = conformanceCase(
   "replays identical admissions and rejects conflicting input digests",
@@ -3876,6 +3985,8 @@ const abortedSettledRowIsNotAJoiningGap = conformanceCase(
  */
 export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerConformanceCase> = [
   admissionIdempotency,
+  admissionGroupRace,
+  admissionGroupSettlement,
   crossPrincipalAdmissionScoping,
   concurrentAdmissionFifo,
   fifoHeadClaim,

@@ -126,6 +126,25 @@ export class ParentLinkage extends Schema.Class<ParentLinkage>(
   parentToolCallId: ToolCallId,
 }) {}
 
+/** Host-owned policy coordinates, interpreted only by the destination transaction owner. */
+export const AdmissionFence = Schema.Struct({
+  policyId: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+  key: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+  revision: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+});
+
+export type AdmissionFence = typeof AdmissionFence.Type;
+export const AdmissionGroup = Schema.NonEmptyString.check(Schema.isMaxLength(256));
+
+/** Fresh admission alone may be refused; unavailability never proves non-admission. */
+export class AdmissionPolicyError extends Schema.TaggedError<AdmissionPolicyError>()(
+  "AdmissionPolicyError",
+  {
+    reason: Schema.Literals(["refused", "unavailable", "occupied"]),
+    code: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+  },
+) {}
+
 /**
  * Durable admission input. `inputDigest` must be the digest of the canonical JSON encoding of
  * `inputPayload` (see `digestJson`); admission idempotency compares digests, never re-encodes.
@@ -146,6 +165,8 @@ export class AdmissionRequest extends Schema.Class<AdmissionRequest>(
   inputPayload: PersistedJson,
   inputDigest: Digest,
   parentLinkage: Schema.optionalKey(ParentLinkage),
+  admissionGroup: Schema.optionalKey(AdmissionGroup),
+  admissionFence: Schema.optionalKey(AdmissionFence),
 }) {}
 
 /**
@@ -206,6 +227,8 @@ export class SubmissionSnapshot extends Schema.Class<SubmissionSnapshot>(
   settledOutcome: Schema.optionalKey(SettlementOutcome),
   createdAt: Schema.DateTimeUtcFromString,
   readyAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+  admissionGroup: Schema.optionalKey(AdmissionGroup),
+  admissionFence: Schema.optionalKey(AdmissionFence),
   parentLinkage: Schema.optionalKey(ParentLinkage),
 }) {}
 
@@ -918,7 +941,8 @@ export type SubmissionLedgerFailure =
   | UnknownResolutionConflict
   | JoinedToHost
   | ChildReservationConflict
-  | LedgerError;
+  | LedgerError
+  | AdmissionPolicyError;
 
 /**
  * Operational durable state for accepted work: admission, FIFO readiness, ownership, leases,
@@ -1049,7 +1073,7 @@ export class SubmissionLedger extends Context.Service<
     readonly capabilities: Effect.Effect<LedgerCapabilities>;
     readonly admit: (
       request: AdmissionRequest,
-    ) => Effect.Effect<AdmissionResult, AdmissionConflict | LedgerError>;
+    ) => Effect.Effect<AdmissionResult, AdmissionConflict | AdmissionPolicyError | LedgerError>;
     readonly markReady: (request: MarkReadyRequest) => Effect.Effect<void, LedgerError>;
     readonly lookup: (
       request: SubmissionLookup,
@@ -1166,3 +1190,26 @@ export const submissionAbortBatchId = (submissionId: SubmissionId): BatchId =>
 /** Deterministic canonical record identity of one Submission's `AbortRequested` record. */
 export const submissionAbortRecordId = (submissionId: SubmissionId): RecordId =>
   decodeRecordId(`abort:${submissionId}`);
+
+/** Destination policy, captured when the ledger is acquired. It runs inside fresh admission's
+ * serialization after replay lookup. The host must keep it bounded and must not reenter admit.
+ * The callback must read authoritative policy in this SAME local transaction, through the
+ * acquired SqlClient. Memory evaluates the callback synchronously inside its atomic mutation;
+ * an async callback fails with `unavailable/synchronous-memory-policy-required`. Remote reads do not fence remote changes.
+ * All policy writers must use that transaction owner. Do not fork, reenter admission, or retain
+ * transaction resources. Failure/defect/interruption commits no fresh admission.
+ * Current policy never invalidates an exact retained receipt. A supplied fence fails closed
+ * unless the destination installed an interpreter for it. */
+export const SubmissionAdmissionFence = Context.Reference<{
+  readonly check: (request: AdmissionRequest) => Effect.Effect<void, AdmissionPolicyError>;
+}>("@effect-agent/thread/SubmissionAdmissionFence", {
+  defaultValue: () => ({
+    check: (request) =>
+      request.admissionFence === undefined
+        ? Effect.void
+        : AdmissionPolicyError.make({
+            reason: "refused",
+            code: "unsupported-policy",
+          }),
+  }),
+});

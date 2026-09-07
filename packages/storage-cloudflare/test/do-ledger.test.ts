@@ -15,6 +15,9 @@ import {
 import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting";
 import { digestJson } from "@effect-agent/thread/Digest";
 import {
+  AdmissionRequest,
+  AdmissionPolicyError,
+  SubmissionAdmissionFence,
   AbortCommand,
   AbortIntentRequest,
   BeginChildBudgetReleaseRequest,
@@ -72,6 +75,102 @@ const isDoStorageError = Schema.is(DoStorageError);
 const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 describe("DoSubmissionLedger", () => {
+  it("fences local policy in the admission transaction and replays before mutable checks", () =>
+    withThreadStorage("policy-transaction", (storage) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClientService.SqlClient;
+
+        yield* sql`CREATE TABLE host_admission_policy (revision TEXT NOT NULL, observations INTEGER NOT NULL)`;
+        yield* sql`INSERT INTO host_admission_policy VALUES ('1', 0)`;
+        let checks = 0;
+        let unavailable = false;
+
+        const fence = Layer.succeed(SubmissionAdmissionFence)({
+          check: (request) =>
+            Effect.gen(function* () {
+              checks++;
+              if (unavailable)
+                return yield* AdmissionPolicyError.make({
+                  reason: "unavailable",
+                  code: "host-policy",
+                });
+              yield* sql`UPDATE host_admission_policy SET observations=observations+1`.pipe(
+                Effect.mapError(() =>
+                  AdmissionPolicyError.make({ reason: "unavailable", code: "host-policy" }),
+                ),
+              );
+
+              const rows = yield* sql<{
+                revision: string;
+              }>`SELECT revision FROM host_admission_policy`.pipe(
+                Effect.mapError(() =>
+                  AdmissionPolicyError.make({ reason: "unavailable", code: "host-policy" }),
+                ),
+              );
+
+              if (request.admissionFence?.revision !== rows[0]?.revision)
+                return yield* AdmissionPolicyError.make({
+                  reason: "refused",
+                  code: "stale-revision",
+                });
+            }),
+        });
+
+        yield* Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+
+          const original = AdmissionRequest.make({
+            ...(yield* admission("policy-transaction", "first", {})),
+            admissionGroup: "entity",
+            admissionFence: { policyId: "host", key: "entity", revision: "1" },
+          });
+
+          const first = yield* ledger.admit(original);
+
+          yield* sql`UPDATE host_admission_policy SET revision='2'`;
+          expect((yield* ledger.admit(original)).submissionId).toBe(first.submissionId);
+          expect(checks).toBe(1);
+
+          const fresh = AdmissionRequest.make({
+            ...original,
+            idempotencyKey: id(IdempotencyKey, "fresh"),
+          });
+
+          expect(yield* ledger.admit(fresh).pipe(Effect.flip)).toMatchObject({
+            reason: "refused",
+            code: "stale-revision",
+          });
+          // The policy callback's SQL and the admission have one rollback boundary.
+          expect(yield* sql`SELECT observations FROM host_admission_policy`).toEqual([
+            { observations: 1 },
+          ]);
+          expect((yield* ledger.resolveAdmission(SubmissionLookupByKey.make(fresh)))._tag).toBe(
+            "NotAdmitted",
+          );
+          unavailable = true;
+          expect(yield* ledger.admit(fresh).pipe(Effect.flip)).toMatchObject({
+            reason: "unavailable",
+          });
+          expect((yield* ledger.admit(original)).replayed).toBe(true);
+          expect(checks).toBe(3);
+        }).pipe(
+          Effect.provide(
+            submissionLedgerLayer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  fence,
+                  Layer.succeed(SqlClientService.SqlClient)(sql),
+                  storageConfigLayer({ storage }),
+                  DoStorageFailpoint.layer,
+                  BrowserCrypto.layer,
+                ),
+              ),
+            ),
+          ),
+        );
+      }).pipe(Effect.provide([SqliteClient.layer({ storage }), BrowserCrypto.layer])),
+    ));
+
   it("reads an abort intent with one query regardless of other admitted inputs", () =>
     withThreadStorage("wp1-ledger-abort-poll", (storage) =>
       Effect.gen(function* () {

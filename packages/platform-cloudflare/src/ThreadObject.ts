@@ -28,6 +28,7 @@ import {
 import { PersistedJson } from "@effect-agent/thread/Records";
 import { RunJournalError } from "@effect-agent/thread/RunJournal";
 import {
+  AdmissionPolicyError,
   LedgerError,
   OwnershipLost,
   SettlementConflict,
@@ -73,6 +74,7 @@ import {
   ProgressObserved,
   ProgressCancelled,
   SettlementReached,
+  SubmissionStatusResponse,
   SubmitSucceeded,
   UnknownResolutionRecorded,
   boundHostDiagnostic,
@@ -308,11 +310,33 @@ const submitEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoin
             threadId: identity.threadId,
             principal: request.principal,
             idempotencyKey: request.idempotencyKey,
+            ...(request.admissionGroup === undefined
+              ? {}
+              : { admissionGroup: request.admissionGroup }),
+            ...(request.admissionFence === undefined
+              ? {}
+              : { admissionFence: request.admissionFence }),
             definitions: request.definitions,
           }),
         );
 
         return SubmitSucceeded.make({ receipt });
+      }),
+    ),
+    respond,
+    Effect.flatMap(encodeResponse),
+  );
+
+const submissionStatusEndpoint = (
+  encoded: unknown,
+): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeReceipt(encoded).pipe(
+    Effect.mapError(protocolFailure("The receipt could not be decoded")),
+    Effect.flatMap((receipt) =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+
+        return SubmissionStatusResponse.make({ status: yield* runtime.submissionStatus(receipt) });
       }),
     ),
     respond,
@@ -492,6 +516,7 @@ export class AdminVerifyRequest extends Schema.Class<AdminVerifyRequest>(
 
 /** Every typed failure of the four admin entry points, plus the protocol's own errors. */
 export const AdminFailure = Schema.Union([
+  AdmissionPolicyError,
   OperationDenied,
   RetryRefused,
   LedgerError,
@@ -781,6 +806,7 @@ export interface Instance<EventServices = never> extends InstanceType<
   EffectCfDurableObject.DurableObjectClass<Record<never, never>, RuntimeServices | EventServices>
 > {
   submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
+  submissionStatusEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   cancelProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
@@ -859,6 +885,7 @@ export const make = <
 
   const rpc = {
     submitEncoded: (encoded: unknown) => submitEndpoint(encoded),
+    submissionStatusEncoded: (encoded: unknown) => submissionStatusEndpoint(encoded),
     awaitSettlementEncoded: (encoded: unknown) => awaitSettlementEndpoint(encoded),
     awaitProgressEncoded: (encoded: unknown) => awaitProgressEndpoint(encoded),
     cancelProgressEncoded: (encoded: unknown) => cancelProgressEndpoint(encoded),

@@ -1,6 +1,7 @@
 import {
   AdmissionIndeterminate,
   AdmissionConflict,
+  AdmissionPolicyError,
   ChildAttachmentSnapshot,
   JoinedToHost,
   LedgerError,
@@ -482,7 +483,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             request.threadId,
             LedgerAdmitCall.make({ request }),
             LedgerAdmitResult,
-            AdmissionConflict,
+            Schema.Union([AdmissionConflict, AdmissionPolicyError]),
           ).pipe(Effect.map((reply) => reply.result)),
 
     markReady: (request) =>

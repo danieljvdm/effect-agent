@@ -1,4 +1,9 @@
 import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
+import {
+  makeSubscriptionPartitionAlarmHandler,
+  SubscriptionPartitionAlarmExtension,
+  SubscriptionAlarmExtensionError,
+} from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
 import { EventSources, makeEventSource } from "@effect-agent/thread/EventSource";
 import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import {
@@ -10,8 +15,8 @@ import {
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
 } from "@effect-agent/thread/SubscriptionInput";
-import { Effect, Layer, Schema } from "effect";
-import { DurableObjectState } from "effect-cf";
+import { DateTime, Effect, Layer, Schema } from "effect";
+import { DurableObjectAlarm, DurableObjectState } from "effect-cf";
 
 import { TEST_DIGESTS } from "./fixtures.ts";
 
@@ -110,3 +115,35 @@ export const subscriptionSourcesLayer = Layer.merge(
 
 export const subscriptionThreadId = (suffix: string) =>
   Schema.decodeSync(ThreadId)(`cf-subscription-${suffix}`);
+
+/** Host work shares the partition alarm queue, but owns its payload and retry behavior. */
+export const subscriptionAlarmExtensionLayer = Layer.effect(
+  SubscriptionPartitionAlarmExtension,
+  Effect.gen(function* () {
+    const alarms = yield* DurableObjectAlarm.DurableObjectAlarm;
+
+    const failing = yield* makeSubscriptionPartitionAlarmHandler({
+      tag: "test/failing",
+      payload: Schema.Null,
+      timeoutMillis: 100,
+      handle: () => SubscriptionAlarmExtensionError.make({ code: "unavailable" }),
+    });
+
+    const replacement = yield* makeSubscriptionPartitionAlarmHandler({
+      tag: "test/replacement",
+      payload: Schema.Number,
+      timeoutMillis: 100,
+      handle: (event) =>
+        alarms
+          .scheduleAlarm({
+            tag: event.tag,
+            id: event.id,
+            payload: event.payload + 1,
+            runAt: DateTime.makeUnsafe(Date.now() + 60_000),
+          })
+          .pipe(Effect.mapError(() => SubscriptionAlarmExtensionError.make({ code: "storage" }))),
+    });
+
+    return { handlers: [failing, replacement] };
+  }),
+).pipe(Layer.provide(DurableObjectAlarm.DurableObjectAlarm.layer));

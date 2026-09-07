@@ -8,6 +8,7 @@ import {
   type ScheduleOwner,
   type ScheduleRecord,
 } from "./Schedule.ts";
+import { AdmissionFence } from "./SubmissionLedger.ts";
 
 const equivalentDefinitions = Schema.toEquivalence(DefinitionDigests);
 const equivalentInput = Schema.toEquivalence(PersistedJson);
@@ -45,7 +46,8 @@ export const scheduleKeyOf = (record: ScheduleRecord): ScheduleKey => ({
 
 /** Pending recovery always outranks preparation, even after pause or cancellation. */
 export const scheduleDeadline = (record: ScheduleRecord): number | null => {
-  if (record.pending !== null) return record.pending.retry.nextAttemptAtMillis;
+  if (record.pending !== null)
+    return record.pending.retry.parked === true ? null : record.pending.retry.nextAttemptAtMillis;
 
   return record.state === "active" ? record.nextAtMillis : null;
 };
@@ -73,6 +75,28 @@ export const applyScheduleChange = (
   change: ScheduleChange,
 ): Result.Result<ScheduleRecord, ScheduleConflict> => {
   switch (change._tag) {
+    case "Recover":
+      if (record.configurationRevision !== change.expectedRevision)
+        return conflict(record, "revision");
+      if (record.pending?.envelope.occurrenceId !== change.occurrenceId)
+        return Result.succeed(record);
+
+      if (record.pending.retry.generation !== change.expectedGeneration)
+        return Result.succeed(record);
+
+      return changed(record, {
+        pending: {
+          ...record.pending,
+          retry: {
+            ...record.pending.retry,
+            generation: record.pending.retry.generation + 1,
+            automaticAttempts: 0,
+            parked: false,
+            nextAttemptAtMillis: change.nowMillis,
+          },
+        },
+        updatedAtMillis: change.nowMillis,
+      });
     case "Update": {
       if (record.state === "cancelled") return conflict(record, "cancelled");
       if (record.configurationRevision !== change.expectedRevision) {
@@ -142,6 +166,11 @@ export const applyScheduleChange = (
         envelope.intendedAtMillis > change.nowMillis ||
         envelope.deliveryPrincipal !== configuration.deliveryPrincipal ||
         envelope.agentId !== configuration.agentId ||
+        envelope.admissionGroup !== configuration.admissionGroup ||
+        !Schema.toEquivalence(Schema.optional(AdmissionFence))(
+          envelope.admissionFence,
+          configuration.admissionFence,
+        ) ||
         envelope.inputDigest !== configuration.inputDigest ||
         !equivalentDefinitions(envelope.definitions, configuration.definitions) ||
         !equivalentInput(envelope.input, configuration.input) ||
@@ -156,7 +185,10 @@ export const applyScheduleChange = (
         pending: {
           envelope: change.envelope,
           retry: {
+            generation: 0,
             attempts: 0,
+            automaticAttempts: 0,
+            parked: false,
             nextAttemptAtMillis: change.nowMillis,
             lastAttemptAtMillis: null,
             lastFailure: null,
@@ -205,6 +237,7 @@ export const applyScheduleChange = (
       const current = record.pending.retry;
 
       if (
+        change.retry.generation !== current.generation ||
         change.retry.attempts <= current.attempts ||
         change.retry.nextAttemptAtMillis < current.nextAttemptAtMillis
       ) {

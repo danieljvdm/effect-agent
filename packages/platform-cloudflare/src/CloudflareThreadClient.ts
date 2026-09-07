@@ -15,9 +15,12 @@ import {
   PersistedJson,
 } from "@effect-agent/thread/Records";
 import {
+  AdmissionFence,
+  AdmissionGroup,
   AbortCommand,
   AbortIntent,
   AdmissionConflict,
+  AdmissionPolicyError,
   ApprovalConflict,
   ApprovalDecisionCommand,
   ApprovalDecisionIntent,
@@ -31,6 +34,7 @@ import {
   UnknownResolutionConflict,
   UnknownResolutionIntent,
 } from "@effect-agent/thread/SubmissionLedger";
+import { SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
 import {
   AppendConflict,
   ThreadNotMaterialized,
@@ -107,6 +111,8 @@ export class SubmitRequest extends Schema.Class<SubmitRequest>(
   agentId: AgentId,
   principal: Principal,
   idempotencyKey: IdempotencyKey,
+  admissionGroup: Schema.optionalKey(AdmissionGroup),
+  admissionFence: Schema.optionalKey(AdmissionFence),
   definitions: DefinitionDigests,
   inputPayload: PersistedJson,
 }) {}
@@ -148,6 +154,7 @@ export const HostFailure = Schema.Union([
   AgentInputError,
   DigestError,
   AdmissionConflict,
+  AdmissionPolicyError,
   SettlementConflict,
   ApprovalConflict,
   UnknownResolutionConflict,
@@ -171,6 +178,10 @@ export class SubmitSucceeded extends Schema.TaggedClass<SubmitSucceeded>(
 )("SubmitSucceeded", {
   receipt: Receipt,
 }) {}
+
+export class SubmissionStatusResponse extends Schema.TaggedClass<SubmissionStatusResponse>(
+  "@effect-agent/platform-cloudflare/SubmissionStatusResponse",
+)("SubmissionStatusResponse", { status: SubmissionStatus }) {}
 
 export class SettlementReached extends Schema.TaggedClass<SettlementReached>(
   "@effect-agent/platform-cloudflare/SettlementReached",
@@ -222,6 +233,7 @@ export class HostFailed extends Schema.TaggedClass<HostFailed>(
 export const HostResponse = Schema.Union([
   SubmitSucceeded,
   SettlementReached,
+  SubmissionStatusResponse,
   ObservedPage,
   ProgressObserved,
   ProgressCancelled,
@@ -265,6 +277,7 @@ const ClientSubmitHostFailure = Schema.Union([
   AgentInputError,
   DigestError,
   AdmissionConflict,
+  AdmissionPolicyError,
   LedgerError,
   ThreadStoreError,
   ThreadNotMaterialized,
@@ -339,6 +352,7 @@ const outOfContract = (threadId: string, operation: string, observed: string): T
 const hostRpcMethods = {
   submit: "submitEncoded",
   awaitSettlement: "awaitSettlementEncoded",
+  submissionStatus: "submissionStatusEncoded",
   awaitProgress: "awaitProgressEncoded",
   cancelProgress: "cancelProgressEncoded",
   observePage: "observePage",
@@ -358,6 +372,9 @@ export class CloudflareThreadClient extends Context.Service<
       options: DurableSubmitOptions,
     ) => Effect.Effect<Receipt, ClientSubmitFailure, InputSchema["EncodingServices"]>;
     /** Wake-hinted, poll-guaranteed settlement wait executed inside the owning Object. */
+    readonly submissionStatus: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionStatus, ClientAwaitFailure>;
     readonly awaitSettlement: (receipt: Receipt) => Effect.Effect<Settlement, ClientAwaitFailure>;
     /**
      * Wait without polling until progress after `afterSequence` is already durable or hinted.
@@ -572,6 +589,12 @@ export class CloudflareThreadClient extends Context.Service<
               agentId: agent.definition.id,
               principal: options.principal,
               idempotencyKey: options.idempotencyKey,
+              ...(options.admissionGroup === undefined
+                ? {}
+                : { admissionGroup: options.admissionGroup }),
+              ...(options.admissionFence === undefined
+                ? {}
+                : { admissionFence: options.admissionFence }),
               definitions: options.definitions,
               inputPayload,
             });
@@ -596,6 +619,23 @@ export class CloudflareThreadClient extends Context.Service<
             return succeeded.receipt;
           }),
 
+        submissionStatus: (receipt) =>
+          Effect.gen(function* () {
+            const encoded = yield* encodeReceipt(receipt).pipe(
+              Effect.mapError(() => HostProtocolError.make({ message: "Invalid receipt" })),
+            );
+
+            const response = yield* call(receipt.threadId, "submissionStatus", encoded);
+
+            const result = yield* expect(
+              receipt.threadId,
+              "submissionStatus",
+              SubmissionStatusResponse,
+              ClientAwaitHostFailure,
+            )(response);
+
+            return result.status;
+          }),
         awaitSettlement: (receipt) =>
           Effect.gen(function* () {
             const encoded = yield* encodeReceipt(receipt).pipe(

@@ -227,12 +227,20 @@ the privileged host.
 
 Preparation freezes the authorized envelope and advances the cursor atomically. Recover pending
 delivery before preparing another occurrence. A lost admission reply retries the same envelope and
-idempotency key. Transient or ambiguous failure stays pending. Permanent refusal requires proof
+idempotency key. Transient or ambiguous failure stays pending. Automatic delivery retries stop after
+`maxAutomaticAttempts` (default 8); parked work retains its envelope and receipt uncertainty.
+`Scheduling.recover` re-arms that same identity, including after cancellation. Recovery advances an
+attempt generation (pass the observed `pending.retry.generation` to `recover`), so a stale failed attempt cannot spend the new retry allowance. A late valid
+Receipt can still complete the original obligation. Permanent refusal requires proof
 that admission did not occur and the unchanged request cannot succeed.
 
 Recurring downtime coalesces to the latest due firing. Pause and cancel stop new preparation while
 pending delivery continues. Cancel is irreversible. Revocation blocks future preparation but must
 finish already authorized envelopes. Resuming a paused schedule skips missed recurring times.
+
+Use `{ _tag: "Interval", everyMillis: 60_000 }` for an interval, or
+`{ _tag: "Cron", expression: "0 9 * * *", timeZone: "America/New_York" }` for an explicit IANA
+cron zone. Cron without a zone keeps its existing UTC default; no host-local zone is inferred.
 
 Quotas count pending delivery plus active or paused cursors. Terminal records retain replay
 evidence without using capacity when no delivery remains. Schedule IDs and creation evidence are
@@ -254,10 +262,36 @@ Subscriptions retain normalized events, select matching registrations, prepare a
 deliver through durable admission. `EventAcknowledgement` confirms retained intake. A `Receipt`
 confirms admission. No run or waiter stays open to watch the source.
 
-::: warning Beta retention limit
-Completed records consume quota for the partition's lifetime. There is no automatic pruning or
-identity recycling. Size capacity for all retained events, registrations, and deliveries.
-:::
+Set `expiresAtMillis: null` for no time-based expiry; a once subscription is still consumed by
+selection, and cancellation remains explicit. Finite deadlines keep their existing maximum-lifetime
+validation. Pausing does not erase selected delivery evidence.
+
+Without an explicit retention policy, records remain for the partition lifetime. Set
+`SubscriptionLimits.retention` to bound completed event payloads and deliveries. Intake then
+requires a stable authenticated `occurredAtMillis` from the source adapter and rejects fresh
+identities outside `replayHorizonMillis`. This horizon is fixed for the partition once used.
+Completed work becomes a compact deduplication tombstone until that horizon ends; duplicate intake
+cannot reopen routing. `completedRetentionMillis` controls completed payload retention and
+`maxTombstones` bounds deduplication storage. Backpressure remains explicit if live evidence or
+in-horizon tombstones fill capacity. Idle native maintenance expires old tombstones.
+
+Selected, prepared, parked, recovery-related and admitted-but-unsettled evidence is protected.
+Node and Cloudflare admission adapters use the runtime's canonical `submissionStatus`. Enabling
+retention with a custom `PreparedInputAdmission` requires that observation capability. An
+unavailable probe is logged and retried without releasing evidence. Reconciliation of a payload
+already reclaimed reports `event-reclaimed` rather than inventing a new delivery.
+
+Each maintenance pass examines at most `batchSize` event candidates and `batchSize` delivery
+candidates, plus one referenced event per delivery. Indexed relationship checks protect recovery
+and unsettled work. Independent durable cursors advance past corrupt or protected candidates;
+corrupt evidence is preserved and reported. Idle maintenance rearms while retained events remain.
+The in-memory adapter copies its bounded maps/indexes, but does not decode the whole partition.
+
+`EventSource.occurredAtMillis` must derive a stable timestamp from authenticated source facts.
+Do not substitute intake time or generate a new timestamp on replay. Exact retained identities
+replay before current horizon/capacity checks, including their timestamp and payload digest.
+Expired pruned identities are rejected by the fixed horizon. Omit retention when the source
+cannot supply trusted occurrence time; there is no undated-event pruning exception.
 
 Each event and registration belongs to one stable `SourcePartition` with a tenant ID and source
 address. Keep the address unchanged across deployments and source versions. There is no
@@ -277,9 +311,25 @@ its own `reconcile` decision. Keep stores, intake, and drivers out of model tool
 Restricted tools must bind owner, agent, principal, source catalog, and thread in the host.
 A host may also permit a deterministic fresh thread for each selected event.
 
-Registrations cannot be edited, paused, or resumed. Cancel and create a new identity to change
-configuration. Reusing a creation identity with the same fingerprint returns the retained
-registration; conflicting reuse fails. An uncertain ordinary tool is never replayed automatically.
+Use `getSubscription` to inspect the current revision, state, and configuration fingerprint.
+`updateSubscription`, `pauseSubscription`, `resumeSubscription`, and `recoverSubscription` require
+the expected `configurationRevision`. `cancelSubscription` also accepts an optional expected
+revision. Revision conflicts expose the current revision/state; inspect the fingerprint after a
+lost management reply to determine whether the intended configuration won. Creation replay always
+compares the original request fingerprint, even after edits.
+
+Every configuration/control revision advances the registration's eligibility ordinal. It can select
+only events accepted after that revision. Events accepted earlier but not yet selected do not gain
+eligibility under the new configuration, including changed matching keys. Selected deliveries retain
+their captured configuration; pausing stops new selection while selected delivery continues.
+Cancellation and captured expiry can refuse unprepared work. Prepared envelopes remain unchanged.
+An uncertain ordinary tool is never replayed automatically.
+
+Source recovery completions carry the captured registration revision. Pause preserves its recovery
+intent, resume restores polling, and callbacks from an older revision cannot overwrite a new one.
+`recoverSubscription` re-arms source reconciliation where the configured source supports it;
+`recoverDelivery(scope, key, expectedGeneration)` re-arms an individual parked delivery without
+changing its identity or envelope. Repeating the same recovery generation is an idempotent no-op.
 
 Intake deduplicates by tenant, source address, and logical event ID. Conflicting payload or source
 version fails. Each event records a registration cutoff. Duplicate intake cannot move that cutoff
@@ -291,10 +341,59 @@ Preparation rechecks authority, validates input, and freezes destination, princi
 authorization metadata, and admission key. Cancellation, expiry, or revocation blocks new
 preparation. Already prepared envelopes continue unchanged. Expiry never sends agent input.
 
-Lost admission replies retry the exact envelope and key. Execution remains at least once. Public
-status omits payloads, parameters, context, and credentials. Recovery uses bounded pages and
-durable cursors so one corrupt record does not block unrelated work. Provider failures never
-invent event completion.
+Lost admission replies retry the exact envelope and key. After `maxAutomaticAttempts` (default 8),
+delivery parks until `recoverDelivery` explicitly re-arms it. Cancellation never erases a prepared
+uncertain envelope. Capacity waits spend the same automatic retry allowance; hosts should size it
+for expected job duration and explicitly recover parked work. Event routing and source recovery
+use their existing bounded sweeps and retry deadlines; settlement probes retry conservatively.
+The delivery attempt cap does not cap all background maintenance.
+
+Optional `admissionGroup` permits one actually unsettled submission per group **in a destination
+thread**. Admission, suspension, unknown outcome and terminalization all retain occupancy until
+canonical settlement finalization. A lagging finalization conservatively holds capacity until repair.
+`FreshThread` per event does not provide exclusion across threads. Schedules retain one frozen
+pending occurrence and coalesce missed recurring times; distinct events keep separate durable
+obligations and produce explicit backpressure when backlog capacity is exhausted.
+
+`admissionFence` captures bounded `{ policyId, key, revision }` coordinates. Install
+`SubmissionAdmissionFence` when acquiring the destination ledger. Exact retained requests replay
+before policy and occupancy checks; changed input, group or fence conflicts. Fresh admission checks
+policy in the **same local transaction** as the ledger insert. SQL hosts must read policy through
+that transaction's SqlClient, and all policy writers must share its authority. Remote policy reads
+cannot fence remote mutations. Memory executes the bounded callback synchronously inside its
+atomic mutation; an asynchronous callback fails closed as unavailable and is interrupted. Do not
+fork, reenter admission, or retain transaction resources in the callback.
+
+`AdmissionPolicyError.reason` distinguishes `refused` (conclusive stale/unsupported policy),
+`unavailable` (retry without assuming nonadmission), and `occupied` (group capacity). Uninterpreted
+fences fail closed. Ingress authorization is still required for replays. Put no secrets in fence
+coordinates or error codes. Public status excludes payloads, parameters, context and credentials.
+Execution remains at least once; provider failures never invent event completion.
+
+### Partition-owned ancillary alarms
+
+Cloudflare hosts can install `SubscriptionPartitionAlarmExtension` with handlers built by
+`makeSubscriptionPartitionAlarmHandler`. Each handler owns one non-framework tag, a payload
+Schema and a bounded timeout (at most 30 seconds). The factory captures host services while each
+codec/callback invocation owns a fresh Scope. Invocation cleanup runs on success, typed failure,
+defect, timeout and interruption; captured host services keep their host lifetime.
+
+The native multiplexer processes at most 16 alarms per invocation and durably retries failed rows
+independently, so a failed or unknown extension cannot block the subscription driver. Installing
+handlers reserves eight minutes of the twelve-minute invocation budget for ancillary work; native
+driver limits must fit the remaining four minutes. Unknown,
+ambiguous, malformed and reserved `effect-agent/` tags fail closed and are reported. A replacement
+alarm survives acknowledgement of its earlier version. The host owns external-effect idempotency,
+uncertainty, payloads and transactional prearming; this extension defines no provider scheduler.
+
+### Adopting these contracts
+
+The new persisted registration, delivery and retry fields are required. SQLite storage version 8
+and Cloudflare Thread/Schedule/Subscription storage version 3 reject incompatible development
+stores clearly; use the repository's development reset procedure where appropriate. There is no
+in-place migration in this private-development schema policy. Custom stores must implement revision
+and retry-generation fencing, bounded retention cursors and the canonical observation contract.
+Existing finite lifetimes, UTC cron defaults and no-retention behavior remain available.
 
 Node uses a Scope-owned indexed polling driver. Cloudflare commits work and required alarms
 together and re-arms after failed passes. If storage prevents both mutation and alarm repair,

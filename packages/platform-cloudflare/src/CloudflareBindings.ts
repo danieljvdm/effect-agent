@@ -32,6 +32,7 @@ export interface ThreadObjectRpc extends Rpc.DurableObjectBranded {
   /** Admission-limits gate + `DurableAgentRuntime.submit`; answers a `SubmitResponse`. */
   submitEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Wake-hinted, poll-guaranteed settlement wait; answers an `AwaitSettlementResponse`. */
+  submissionStatusEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Event-driven durable progress wait; answers a `ProgressObserved` host response. */
   awaitProgressEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;

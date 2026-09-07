@@ -13,7 +13,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
-const CURRENT_SUBSCRIPTION_STORE_VERSION = 2;
+const CURRENT_SUBSCRIPTION_STORE_VERSION = 3;
 
 const ScanRow = Schema.Struct({
   event_scan_cursor: Schema.String,
@@ -108,7 +108,7 @@ const initializeDoSubscriptionStore = Effect.fn("DoSubscriptionStore.initialize"
           yield* sql`CREATE TABLE effect_agent_subscriptions (
         tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, owner_id TEXT NOT NULL, subscription_id TEXT NOT NULL,
         ordinal INTEGER NOT NULL, source_name TEXT NOT NULL, source_version TEXT NOT NULL, matching_key TEXT NOT NULL,
-        state TEXT NOT NULL, expires_at_millis INTEGER NOT NULL, recovery_at_millis INTEGER, record_json TEXT NOT NULL,
+        state TEXT NOT NULL, expires_at_millis INTEGER, recovery_at_millis INTEGER, recovery_present INTEGER NOT NULL DEFAULT 0, record_json TEXT NOT NULL,
         PRIMARY KEY (tenant_id, source_address, owner_id, subscription_id), UNIQUE (tenant_id, source_address, ordinal)
       )`.withoutTransform;
           yield* sql`CREATE INDEX effect_agent_subscriptions_owner ON effect_agent_subscriptions (tenant_id, source_address, owner_id, ordinal)`
@@ -120,7 +120,7 @@ const initializeDoSubscriptionStore = Effect.fn("DoSubscriptionStore.initialize"
           yield* sql`CREATE TABLE effect_agent_subscription_events (
         tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, event_id TEXT NOT NULL, source_name TEXT NOT NULL,
         source_version TEXT NOT NULL, matching_key TEXT NOT NULL, payload_digest TEXT NOT NULL, cutoff INTEGER NOT NULL,
-        cursor INTEGER NOT NULL, routing_complete INTEGER NOT NULL, next_attempt_at_millis INTEGER NOT NULL, record_json TEXT NOT NULL,
+        cursor INTEGER NOT NULL, routing_complete INTEGER NOT NULL, tombstone INTEGER NOT NULL DEFAULT 0, next_attempt_at_millis INTEGER NOT NULL, record_json TEXT NOT NULL,
         PRIMARY KEY (tenant_id, source_address, event_id)
       )`.withoutTransform;
           yield* sql`CREATE INDEX effect_agent_subscription_events_pending ON effect_agent_subscription_events (tenant_id, source_address, routing_complete, next_attempt_at_millis, event_id)`
@@ -202,7 +202,9 @@ const makeSubscriptionStore = Effect.fn("DoSubscriptionStore.make")(function* (
         SELECT next_attempt_at_millis AS deadline FROM effect_agent_subscription_events
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND routing_complete=0
         UNION ALL SELECT next_attempt_at_millis FROM effect_agent_subscription_deliveries
-          WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND state NOT IN ('delivered','refused')
+          WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+        UNION ALL SELECT next_maintenance_at_millis FROM effect_agent_event_retention
+          WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         UNION ALL SELECT recovery_at_millis FROM effect_agent_subscriptions
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND state='active' AND recovery_at_millis IS NOT NULL
       )

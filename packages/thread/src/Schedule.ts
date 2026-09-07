@@ -3,7 +3,7 @@ import { Context, Effect, Schema } from "effect";
 
 import { Receipt } from "./DurableAgentRuntime.ts";
 import { DefinitionDigests, Digest, PersistedJson } from "./Records.ts";
-import { IdempotencyKey, Principal } from "./SubmissionLedger.ts";
+import { AdmissionFence, AdmissionGroup, IdempotencyKey, Principal } from "./SubmissionLedger.ts";
 
 const Name = Schema.NonEmptyString.check(
   Schema.isMaxLength(128),
@@ -73,6 +73,8 @@ export const ScheduleConfiguration = Schema.Struct({
   timing: ScheduleTiming,
   destination: ScheduleDestination,
   deliveryPrincipal: Principal,
+  admissionGroup: Schema.optionalKey(AdmissionGroup),
+  admissionFence: Schema.optionalKey(AdmissionFence),
   agentId: AgentId,
   definitions: DefinitionDigests,
   input: PersistedJson,
@@ -99,6 +101,8 @@ export const ScheduledEnvelope = Schema.Struct({
   occurrenceId: Digest,
   threadId: ThreadId,
   deliveryPrincipal: Principal,
+  admissionGroup: Schema.optionalKey(AdmissionGroup),
+  admissionFence: Schema.optionalKey(AdmissionFence),
   agentId: AgentId,
   definitions: DefinitionDigests,
   input: PersistedJson,
@@ -122,6 +126,9 @@ export type ScheduleRetryReason = typeof ScheduleRetryReason.Type;
 
 export const ScheduleRetry = Schema.Struct({
   attempts: Schema.Natural,
+  generation: Schema.Natural,
+  automaticAttempts: Schema.Natural,
+  parked: Schema.Boolean,
   nextAttemptAtMillis: ScheduleInstant,
   lastAttemptAtMillis: Schema.NullOr(ScheduleInstant),
   lastFailure: Schema.NullOr(ScheduleRetryReason),
@@ -187,6 +194,8 @@ export const ScheduleSnapshot = Schema.Struct({
     timing: ScheduleTiming,
     destination: ScheduleDestination,
     deliveryPrincipal: Principal,
+    admissionGroup: Schema.optionalKey(AdmissionGroup),
+    admissionFence: Schema.optionalKey(AdmissionFence),
     agentId: AgentId,
   }),
   state: Schema.Literals(["active", "paused", "cancelled"]),
@@ -195,6 +204,7 @@ export const ScheduleSnapshot = Schema.Struct({
     Schema.Struct({
       intendedAtMillis: ScheduleInstant,
       preparedAtMillis: ScheduleInstant,
+      configurationRevision: Schema.optionalKey(Positive),
       occurrenceId: Digest,
       retry: ScheduleRetry,
     }),
@@ -286,7 +296,8 @@ export type ScheduleManagementOperation =
   | "update"
   | "pause"
   | "resume"
-  | "cancel";
+  | "cancel"
+  | "recover";
 
 export interface ScheduleManagementAuthorization {
   readonly operation: ScheduleManagementOperation;
@@ -329,6 +340,7 @@ export const SchedulingLimits = Schema.Struct({
   retryMaxMillis: Positive,
   admissionTimeoutMillis: Positive,
   recoveryPollMillis: Positive,
+  maxAutomaticAttempts: Schema.optionalKey(Positive),
 });
 
 export type SchedulingLimits = typeof SchedulingLimits.Type;
@@ -343,6 +355,7 @@ export const defaultSchedulingLimits: SchedulingLimits = {
   retryMaxMillis: 300_000,
   admissionTimeoutMillis: 30_000,
   recoveryPollMillis: 30_000,
+  maxAutomaticAttempts: 8,
 };
 
 export const SchedulePageRequest = Schema.Struct({
@@ -371,6 +384,13 @@ export type ScheduleDueCursor = typeof ScheduleDueCursor.Type;
 
 /** Local transaction commands. Admission is deliberately absent from this union. */
 export const ScheduleChange = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.Literal("Recover"),
+    expectedGeneration: Schema.Natural,
+    expectedRevision: Positive,
+    occurrenceId: Digest,
+    nowMillis: ScheduleInstant,
+  }),
   Schema.Struct({
     _tag: Schema.Literal("Update"),
     expectedRevision: Positive,

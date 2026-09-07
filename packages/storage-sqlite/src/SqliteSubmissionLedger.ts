@@ -15,8 +15,12 @@ import {
   AbortIntentRequest,
   AdmissionAdmitted,
   AdmissionConflict,
+  AdmissionFence,
+  AdmissionGroup,
+  AdmissionPolicyError,
   AdmissionNotAdmitted,
   AdmissionRequest,
+  SubmissionAdmissionFence,
   AdmissionResult,
   ApprovalConflict,
   ApprovalDecisionCommand,
@@ -139,6 +143,8 @@ class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   unknown_tool_call_ids_json: Schema.NullOr(BoundedStoredText),
   parent_submission_id: Schema.NullOr(BoundedIdentifier),
   parent_tool_call_id: Schema.NullOr(BoundedIdentifier),
+  admission_group: Schema.NullOr(AdmissionGroup),
+  admission_fence_json: Schema.NullOr(BoundedStoredText),
 }) {}
 
 class ChildReservationRow extends Schema.Class<ChildReservationRow>("ChildReservationRow")({
@@ -242,7 +248,9 @@ const SUBMISSION_COLUMNS = `
   unknown_reason,
   unknown_tool_call_ids_json,
   parent_submission_id,
-  parent_tool_call_id
+  parent_tool_call_id,
+  admission_group,
+  admission_fence_json
 `;
 
 const CHILD_RESERVATION_COLUMNS = `
@@ -336,6 +344,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   const failpoint = yield* SqliteStorageFailpoint;
   const sql = yield* SqlClientService.SqlClient;
   const crypto = yield* Crypto.Crypto;
+  const admissionFence = yield* SubmissionAdmissionFence;
   const journal = yield* initializeSqliteJournal();
 
   const hitFailpoint = (
@@ -354,6 +363,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     A,
     E extends
       | AdmissionConflict
+      | AdmissionPolicyError
       | ApprovalConflict
       | ChildReservationConflict
       | JoinedToHost
@@ -558,6 +568,14 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         receiptId: row.receipt_id,
         state: row.state,
         createdAt: row.created_at,
+        ...(row.admission_group === null ? {} : { admissionGroup: row.admission_group }),
+        ...(row.admission_fence_json === null
+          ? {}
+          : {
+              admissionFence: yield* parseStoredJsonText(row.admission_fence_json).pipe(
+                Effect.mapError(internalFailure(operation)),
+              ),
+            }),
         ...(row.settled_outcome === null ? {} : { settledOutcome: row.settled_outcome }),
         ...(row.ready_at === null ? {} : { readyAt: row.ready_at }),
         ...(row.parent_submission_id === null || row.parent_tool_call_id === null
@@ -1017,6 +1035,28 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               });
             }
 
+            const retainedFence =
+              existing[0].admission_fence_json === null
+                ? undefined
+                : yield* Schema.decodeEffect(Schema.fromJsonString(AdmissionFence))(
+                    existing[0].admission_fence_json,
+                  ).pipe(Effect.mapError(internalFailure(operation)));
+
+            if (
+              (existing[0].admission_group ?? undefined) !== validated.admissionGroup ||
+              !Schema.toEquivalence(Schema.optional(AdmissionFence))(
+                retainedFence,
+                validated.admissionFence,
+              )
+            )
+              return yield* AdmissionConflict.make({
+                threadId: validated.threadId,
+                principal: validated.principal,
+                idempotencyKey: validated.idempotencyKey,
+                existingInputDigest: existing[0].input_digest,
+                attemptedInputDigest: validated.inputDigest,
+              });
+
             return yield* decodeAdmissionResult({
               submissionId: existing[0].submission_id,
               receiptId: existing[0].receipt_id,
@@ -1024,6 +1064,20 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               state: existing[0].state,
               replayed: true,
             }).pipe(Effect.mapError(internalFailure(operation)));
+          }
+
+          yield* admissionFence.check(validated);
+          if (validated.admissionGroup !== undefined) {
+            const occupied = yield* sql<Record<string, unknown>>`
+              SELECT submission_id FROM effect_agent_submissions
+              WHERE thread_id=${validated.threadId} AND admission_group=${validated.admissionGroup} AND state<>'settled' LIMIT 1
+            `.pipe(Effect.mapError(sqlFailure(operation)));
+
+            if (occupied.length > 0)
+              return yield* AdmissionPolicyError.make({
+                reason: "occupied",
+                code: "admission-group",
+              });
           }
 
           const maxRows = yield* sql<Record<string, unknown>>`
@@ -1061,7 +1115,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               state,
               created_at,
               parent_submission_id,
-              parent_tool_call_id
+              parent_tool_call_id,
+              admission_group,
+              admission_fence_json
             ) VALUES (
               ${mintedSubmissionId},
               ${validated.threadId},
@@ -1077,7 +1133,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               'admitted',
               ${now.iso},
               ${validated.parentLinkage?.parentSubmissionId ?? null},
-              ${validated.parentLinkage?.parentToolCallId ?? null}
+              ${validated.parentLinkage?.parentToolCallId ?? null},
+              ${validated.admissionGroup ?? null},
+              ${validated.admissionFence === undefined ? null : JSON.stringify(validated.admissionFence)}
             )
           `.pipe(Effect.mapError(sqlFailure(operation)));
 

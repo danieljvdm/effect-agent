@@ -1,6 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId } from "@effect-agent/core/Identifiers";
+import { ReceiptId, ThreadId } from "@effect-agent/core/Identifiers";
 import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
@@ -20,6 +20,7 @@ import {
   OwnershipRenewal,
   OwnershipToken,
   Principal,
+  QueueSequence,
   RecoverySnapshotRequest,
   ReleaseOwnershipRequest,
   SubmissionLedger,
@@ -472,6 +473,78 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       }),
   );
 
+  it.effect("reports invalid public admission constraints as typed failures", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime();
+
+      expect(
+        (yield* runtime
+          .submit({ definition }, "input", {
+            ...options("invalid-constraints", "group"),
+            admissionGroup: "",
+          })
+          .pipe(Effect.flip))._tag,
+      ).toBe("LedgerError");
+      expect(
+        (yield* runtime
+          .submit({ definition }, "input", {
+            ...options("invalid-constraints", "fence"),
+            admissionFence: { policyId: "host", key: "entity", revision: "" },
+          })
+          .pipe(Effect.flip))._tag,
+      ).toBe("LedgerError");
+    }),
+  );
+
+  for (const location of [
+    "terminalize:after-reserve",
+    "terminalize:after-canonical-append",
+  ] as const) {
+    it.effect(`holds admission group through ${location} until canonical repair finalizes`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* makeRuntime();
+        const control = yield* DurableRuntimeFailpointTestControl;
+        const original = { ...options(`group-${location}`, "first"), admissionGroup: "entity" };
+        const receipt = yield* runtime.submit({ definition }, "first", original);
+
+        yield* runtime.abort(
+          AbortCommand.make({
+            submissionId: receipt.submissionId,
+            author: "test",
+            reason: "cancel",
+          }),
+        );
+        yield* control.setHandler((point) =>
+          point === location ? DurableRuntimeFailpointError.make({ location }) : Effect.void,
+        );
+        expect(
+          (yield* runtime.recoverSubmission(receipt.submissionId).pipe(Effect.flip))._tag,
+        ).toBe("DurableRuntimeFailpointError");
+        expect((yield* runtime.submissionStatus(receipt))._tag).toBe("pending");
+        expect(
+          yield* runtime
+            .submit({ definition }, "second", {
+              ...original,
+              idempotencyKey: Schema.decodeSync(IdempotencyKey)("second"),
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "occupied" });
+        expect((yield* runtime.submit({ definition }, "first", original)).receiptId).toBe(
+          receipt.receiptId,
+        );
+        yield* control.clear;
+        yield* runtime.recoverSubmission(receipt.submissionId);
+        expect((yield* runtime.submissionStatus(receipt))._tag).toBe("settled");
+        expect(
+          (yield* runtime.submit({ definition }, "second", {
+            ...original,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)("second"),
+          })).submissionId,
+        ).not.toBe(receipt.submissionId);
+      }),
+    );
+  }
+
   it.effect("authorizes status before ledger reads and rejects a mismatched receipt Thread", () =>
     Effect.gen(function* () {
       const runtime = yield* makeRuntime();
@@ -517,6 +590,13 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       expect((yield* runtime.submissionStatus(mismatched).pipe(Effect.flip))._tag).toBe(
         "OperationDenied",
       );
+      for (const altered of [
+        Receipt.make({ ...receipt, receiptId: Schema.decodeSync(ReceiptId)("wrong-receipt") }),
+        Receipt.make({ ...receipt, queueSequence: Schema.decodeSync(QueueSequence)(999) }),
+      ])
+        expect((yield* runtime.submissionStatus(altered).pipe(Effect.flip))._tag).toBe(
+          "OperationDenied",
+        );
     }),
   );
 });

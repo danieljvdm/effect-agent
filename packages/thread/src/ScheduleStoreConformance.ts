@@ -94,7 +94,10 @@ const pendingRecord = (name: string): ScheduleRecord => {
         authorization: { policyId: "policy", decisionId: "decision" },
       },
       retry: {
+        generation: 0,
         attempts: 0,
+        automaticAttempts: 0,
+        parked: false,
         nextAttemptAtMillis: 120,
         lastAttemptAtMillis: null,
         lastFailure: null,
@@ -185,6 +188,9 @@ const staleCompletion = conformanceCase(
         _tag: "Retry",
         occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
         retry: {
+          generation: 0,
+          automaticAttempts: 0,
+          parked: false,
           attempts: 2,
           nextAttemptAtMillis: 500,
           lastAttemptAtMillis: 200,
@@ -197,6 +203,9 @@ const staleCompletion = conformanceCase(
         _tag: "Retry",
         occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
         retry: {
+          generation: 0,
+          automaticAttempts: 0,
+          parked: false,
           attempts: 1,
           nextAttemptAtMillis: 300,
           lastAttemptAtMillis: 150,
@@ -315,6 +324,76 @@ const retainedEvidence = conformanceCase(
       yield* ensure(
         Result.isFailure(blocked) && blocked.failure._tag === "ScheduleCapacityError",
         "cancellation released unresolved pending capacity",
+      );
+
+      const parked = yield* store.change(original, {
+        _tag: "Retry",
+        occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
+        retry: {
+          generation: 0,
+          attempts: 3,
+          automaticAttempts: 3,
+          parked: true,
+          nextAttemptAtMillis: 140,
+          lastAttemptAtMillis: 130,
+          lastFailure: "transport",
+        },
+        nowMillis: 130,
+      });
+
+      yield* ensure(
+        (yield* store.due(140, 10, original.owner)).length === 0,
+        "Parked work must not retry automatically",
+      );
+
+      const recovered = yield* store.change(original, {
+        _tag: "Recover",
+        expectedGeneration: 0,
+        expectedRevision: parked.configurationRevision,
+        occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
+        nowMillis: 140,
+      });
+
+      yield* ensure(
+        recovered.state === "cancelled" &&
+          recovered.pending?.retry.automaticAttempts === 0 &&
+          recovered.pending.retry.attempts === 3 &&
+          recovered.pending.retry.parked === false &&
+          JSON.stringify(recovered.pending.envelope) === JSON.stringify(original.pending?.envelope),
+        "Explicit recovery must preserve cancelled pending identity and total attempts",
+      );
+
+      const staleRetry = yield* store.change(original, {
+        _tag: "Retry",
+        occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
+        retry: {
+          generation: 0,
+          attempts: 99,
+          automaticAttempts: 99,
+          parked: true,
+          nextAttemptAtMillis: 150,
+          lastAttemptAtMillis: 145,
+          lastFailure: "transport",
+        },
+        nowMillis: 145,
+      });
+
+      yield* ensure(
+        JSON.stringify(staleRetry) === JSON.stringify(recovered),
+        "A pre-recovery retry consumed the new generation",
+      );
+
+      const repeatedRecovery = yield* store.change(original, {
+        _tag: "Recover",
+        expectedGeneration: 0,
+        expectedRevision: recovered.configurationRevision,
+        occurrenceId: original.pending?.envelope.occurrenceId ?? digest,
+        nowMillis: 146,
+      });
+
+      yield* ensure(
+        JSON.stringify(repeatedRecovery) === JSON.stringify(recovered),
+        "A repeated recovery changed its original generation",
       );
 
       const completed = yield* store.change(original, {
