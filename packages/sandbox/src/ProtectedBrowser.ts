@@ -1,6 +1,10 @@
 import { Context, Effect, Layer, Schema, Scope, type Redacted } from "effect";
 
-import { InteractiveBrowserHost, type InteractiveBrowserPolicy } from "./InteractiveBrowser.ts";
+import {
+  InteractiveBrowserHost,
+  InteractiveBrowserTargetUrl,
+  type InteractiveBrowserPolicy,
+} from "./InteractiveBrowser.ts";
 
 /** Canonical HTTPS origin, including a non-default port. Host grants match exactly. */
 export const CredentialOrigin = Schema.String.check(
@@ -24,6 +28,7 @@ export const CredentialFieldRole = Schema.Literals([
 ]);
 
 const Label = Schema.String.check(Schema.isMaxLength(200));
+const LinkUrl = InteractiveBrowserTargetUrl.check(Schema.isStartsWith("https://"));
 
 export class CredentialTarget extends Schema.Class<CredentialTarget>("CredentialTarget")({
   topOrigin: CredentialOrigin,
@@ -41,9 +46,22 @@ export class ProtectedBrowserControl extends Schema.Class<ProtectedBrowserContro
   target: CredentialTarget,
   role: Schema.Union([
     CredentialFieldRole,
-    Schema.Literals(["submit", "link", "button", "unsupported"]),
+    Schema.Literals([
+      "text",
+      "select",
+      "radio",
+      "checkbox",
+      "submit",
+      "link",
+      "button",
+      "unsupported",
+    ]),
   ]),
   label: Label,
+  /** Current native radio/checkbox state; field values are never included. */
+  checked: Schema.optionalKey(Schema.Boolean),
+  /** Resolved HTTPS destination for a native link; target.recipientOrigin is its origin. */
+  url: Schema.optionalKey(LinkUrl),
 }) {}
 
 export class ProtectedBrowserObservation extends Schema.Class<ProtectedBrowserObservation>(
@@ -63,6 +81,18 @@ export class CredentialOfferMetadata extends Schema.Class<CredentialOfferMetadat
   label: Label,
   brand: Schema.optionalKey(Label),
   lastFour: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^\d{4}$/))),
+  /** Plaintext metadata disclosed only when the host authorizes listing this offer. */
+  billingAddress: Schema.optionalKey(
+    Schema.Struct({
+      name: Schema.optionalKey(Label),
+      line1: Schema.optionalKey(Label),
+      line2: Schema.optionalKey(Label),
+      city: Schema.optionalKey(Label),
+      region: Schema.optionalKey(Label),
+      postalCode: Schema.optionalKey(Label),
+      country: Schema.optionalKey(Label),
+    }),
+  ),
 }) {}
 
 export class CredentialOffer extends Schema.Class<CredentialOffer>("CredentialOffer")({
@@ -98,6 +128,20 @@ export class ProtectedBrowserClick extends Schema.Class<ProtectedBrowserClick>(
 )({
   ref: BrowserReference,
 }) {}
+
+/**
+ * Non-secret text for an ordinary text control or native single select in the current observation.
+ * Never pass credential material. Credential roles, including username, require useCredential.
+ * Selects match a unique enabled option value, then a unique exact trimmed label. Empty text clears.
+ */
+export class ProtectedBrowserFill extends Schema.Class<ProtectedBrowserFill>(
+  "ProtectedBrowserFill",
+)(
+  Schema.Struct({
+    ref: BrowserReference,
+    value: Schema.String.check(Schema.isMaxLength(8192)),
+  }).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } })),
+) {}
 
 export const CredentialDispatch = Schema.Literals([
   "not-dispatched",
@@ -198,6 +242,50 @@ export interface CredentialUseAuthorization extends CredentialAccessRequest {
   readonly submit: boolean;
 }
 
+/** Exact current action proposed to host authority; no ordinary fill value or secret is included. */
+export const ProtectedBrowserAction = Schema.Union([
+  Schema.TaggedStruct("Navigate", { url: ProtectedBrowserNavigate.fields.url }),
+  Schema.TaggedStruct("Fill", {
+    ref: BrowserReference,
+    target: CredentialTarget,
+    role: Schema.Literals(["text", "select"]),
+  }),
+  Schema.TaggedStruct("Click", {
+    ref: BrowserReference,
+    target: CredentialTarget,
+    role: Schema.Literals(["button", "radio", "checkbox"]),
+  }),
+  Schema.TaggedStruct("Click", {
+    ref: BrowserReference,
+    target: CredentialTarget,
+    role: Schema.Literal("link"),
+    url: LinkUrl,
+  }),
+  Schema.TaggedStruct("Submit", { ref: BrowserReference, target: CredentialTarget }),
+]);
+
+export type ProtectedBrowserAction = typeof ProtectedBrowserAction.Type;
+
+/**
+ * Trust only these current observation origins. The top origin must be included. Other frames
+ * supply neither text nor usable refs. This does not expand network policy or credential grants.
+ */
+export class CredentialObservationGrant extends Schema.Class<CredentialObservationGrant>(
+  "CredentialObservationGrant",
+)({
+  decision: Schema.Literal("trust-recipient-no-credential-echo"),
+  origins: Schema.Array(CredentialOrigin).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(16),
+    Schema.isUnique(),
+  ),
+}) {}
+
+export const CredentialObservationDecision = Schema.Union([
+  Schema.Literals(["trust-recipient-no-credential-echo", "deny"]),
+  CredentialObservationGrant,
+]);
+
 /**
  * Host-only vault and grant port. Derive caller from the authorized invocation, never Tool input.
  * Recheck account ownership, current grants, merchant/frame/recipient pairing, and any side
@@ -222,26 +310,43 @@ export class BrowserCredentialAccess extends Context.Service<
       request: CredentialUseAuthorization,
     ) => Effect.Effect<BrowserCredentialMaterial, CredentialAccessError>;
     /**
+     * Optional host authority for every ordinary navigate/fill/click, mandatory for Submit.
+     * Recheck caller ownership, user intent, current submission/continuation grants for ALL prior
+     * exposures, and this exact target. Exposures may come from separate credential frames/forms.
+     * Without this hook, ordinary actions retain their observation gate and Submit is unsupported.
+     * Observation trust alone never authorizes a new native submit. Called again on each action;
+     * approvals are not cached. The pass revalidates caller and target after this hook returns.
+     */
+    readonly authorizeAction?: (request: {
+      readonly caller: Redacted.Redacted<string>;
+      readonly action: ProtectedBrowserAction;
+      readonly exposures: ReadonlyArray<CredentialTarget>;
+    }) => Effect.Effect<void, CredentialAccessError>;
+    /**
      * Explicitly trust all observed destinations not to echo credentials, including transformed
      * or delayed echoes. Called for every observation and non-secret action after exposure.
-     * This is a recipient trust decision, not a universal secrecy guarantee or login verifier.
+     * The string grant trusts all current observed origins. Return CredentialObservationGrant
+     * to select an explicit subset instead. This is recipient trust, not submission authority,
+     * a universal secrecy guarantee, or a login verifier.
      */
     readonly observation: (request: {
       readonly caller: Redacted.Redacted<string>;
       readonly topOrigin: typeof CredentialOrigin.Type;
       readonly frameOrigins: ReadonlyArray<typeof CredentialOrigin.Type>;
       readonly exposures: ReadonlyArray<CredentialTarget>;
-    }) => Effect.Effect<"trust-recipient-no-credential-echo" | "deny", CredentialAccessError>;
+    }) => Effect.Effect<typeof CredentialObservationDecision.Type, CredentialAccessError>;
   }
 >()("@effect-agent/sandbox/BrowserCredentialAccess") {}
 
-/** A private ephemeral pass. No raw fill, JavaScript, screenshots, viewer, or provider identity. */
+/** A private ephemeral pass. No selectors, JavaScript, screenshots, viewer, or provider identity. */
 export interface ProtectedBrowserHandle {
   readonly navigate: (
     request: ProtectedBrowserNavigate,
   ) => Effect.Effect<void, ProtectedBrowserError>;
   readonly observe: Effect.Effect<ProtectedBrowserObservation, ProtectedBrowserError>;
   readonly click: (request: ProtectedBrowserClick) => Effect.Effect<void, ProtectedBrowserError>;
+  /** Uses the same lock, budgets, current-target checks and post-exposure grant as other actions. */
+  readonly fill: (request: ProtectedBrowserFill) => Effect.Effect<void, ProtectedBrowserError>;
   readonly listCredentialOffers: (
     request: ListCredentialOffers,
   ) => Effect.Effect<ReadonlyArray<CredentialOffer>, ProtectedBrowserError>;

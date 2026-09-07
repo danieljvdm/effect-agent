@@ -5,12 +5,14 @@ import {
   CardCredential,
   CredentialAccessError,
   CredentialOfferMetadata,
+  CredentialObservationGrant,
   CredentialTarget,
   ListCredentialOffers,
   LoginCredential,
   ProtectedBrowser,
   ProtectedBrowserClick,
   ProtectedBrowserControl,
+  ProtectedBrowserFill,
   ProtectedBrowserNavigate,
   ProtectedBrowserSession,
   UseCredential,
@@ -49,7 +51,7 @@ const material = LoginCredential.make({
   password: Redacted.make(password),
 });
 
-const fixture = (kind: "login" | "card" = "login") => {
+const fixture = (kind: "login" | "card" = "login", actionAuthority = true) => {
   let principal = "alice";
   let granted = true;
   let observes = true;
@@ -64,9 +66,17 @@ const fixture = (kind: "login" | "card" = "login") => {
   let cleanup: "confirmed" | "unconfirmed" = "confirmed";
   let listOverride: BrowserCredentialAccess["Service"]["list"] | undefined;
   let resolveOverride: BrowserCredentialAccess["Service"]["resolve"] | undefined;
+  let authorizeOverride: BrowserCredentialAccess["Service"]["authorize"] | undefined;
   let fillOverride: ProtectedBrowserTransport["fill"] | undefined;
   let navigateOverride: ProtectedBrowserTransport["navigate"] | undefined;
   let clickOverride: ProtectedBrowserTransport["click"] | undefined;
+
+  let authorizeActionOverride:
+    | NonNullable<BrowserCredentialAccess["Service"]["authorizeAction"]>
+    | undefined;
+
+  let observationOverride: BrowserCredentialAccess["Service"]["observation"] | undefined;
+  let selectedOrigins: ReadonlyArray<string> | undefined;
 
   const target = CredentialTarget.make({
     topOrigin: "https://shop.test",
@@ -90,7 +100,10 @@ const fixture = (kind: "login" | "card" = "login") => {
     Effect.suspend(() => {
       const found = controls.find((control) => control.ref === ref);
 
-      return stale || disposed || !found
+      return stale ||
+        disposed ||
+        !found ||
+        (selectedOrigins !== undefined && !selectedOrigins.includes(found.target.frameOrigin))
         ? Effect.fail(new ProtectedTransportError({ reason: "stale-reference" }))
         : Effect.succeed(found);
     });
@@ -102,11 +115,26 @@ const fixture = (kind: "login" | "card" = "login") => {
   };
 
   const driver: ProtectedBrowserTransport = {
+    restrictObservation: (origins) =>
+      Effect.sync(() => {
+        selectedOrigins = origins;
+      }),
     context: Effect.succeed(context),
     discover: Effect.sync(() => {
       reads++;
 
-      return { ...context, text: "account dashboard", controls, truncated: false };
+      return {
+        ...context,
+        frameOrigins: context.frameOrigins.filter(
+          (origin) => selectedOrigins === undefined || selectedOrigins.includes(origin),
+        ),
+        text: "account dashboard",
+        controls: controls.filter(
+          (control) =>
+            selectedOrigins === undefined || selectedOrigins.includes(control.target.frameOrigin),
+        ),
+        truncated: false,
+      };
     }),
     target: getTarget,
     navigate: (url) => Effect.suspend(() => navigateOverride?.(url) ?? Effect.void),
@@ -118,7 +146,7 @@ const fixture = (kind: "login" | "card" = "login") => {
       ),
     fill: Effect.fn(function* (
       ref: string,
-      role: typeof CredentialFieldRole.Type,
+      role: Parameters<ProtectedBrowserTransport["fill"]>[1],
       value: Redacted.Redacted<string>,
     ) {
       yield* getTarget(ref);
@@ -155,7 +183,7 @@ const fixture = (kind: "login" | "card" = "login") => {
         request.target.topOrigin === "https://shop.test" &&
         request.target.frameOrigin === target.frameOrigin &&
         request.target.recipientOrigin === target.recipientOrigin
-          ? Effect.void
+          ? (authorizeOverride?.(request) ?? Effect.void)
           : Effect.fail(new CredentialAccessError({ reason: "denied" })),
       ),
     resolve: (request) =>
@@ -177,7 +205,21 @@ const fixture = (kind: "login" | "card" = "login") => {
                   }),
             );
       }),
-    observation: () =>
+    ...(actionAuthority
+      ? {
+          authorizeAction: (
+            request: Parameters<
+              NonNullable<BrowserCredentialAccess["Service"]["authorizeAction"]>
+            >[0],
+          ) =>
+            authorizeActionOverride?.(request) ??
+            (request.action._tag === "Submit"
+              ? Effect.fail(new CredentialAccessError({ reason: "denied" }))
+              : Effect.void),
+        }
+      : {}),
+    observation: (request) =>
+      observationOverride?.(request) ??
       Effect.sync(() => (observes ? "trust-recipient-no-credential-echo" : "deny")),
   });
 
@@ -233,6 +275,9 @@ const fixture = (kind: "login" | "card" = "login") => {
     setResolve: (value: typeof resolveOverride) => {
       resolveOverride = value;
     },
+    setAuthorize: (value: typeof authorizeOverride) => {
+      authorizeOverride = value;
+    },
     setList: (value: typeof listOverride) => {
       listOverride = value;
     },
@@ -245,6 +290,13 @@ const fixture = (kind: "login" | "card" = "login") => {
     setClick: (value: typeof clickOverride) => {
       clickOverride = value;
     },
+    setAuthorizeAction: (value: typeof authorizeActionOverride) => {
+      authorizeActionOverride = value;
+    },
+    setObservation: (value: typeof observationOverride) => {
+      observationOverride = value;
+    },
+    context,
     needAttention: () => {
       attention = true;
     },
@@ -314,7 +366,9 @@ it.effect(
       };
 
       const error = yield* Effect.gen(function* () {
-        return yield* (yield* BrowserRunProtectedTransport).open(policy);
+        return yield* (yield* BrowserRunProtectedTransport).open(
+          InteractiveBrowserPolicy.make({ ...policy, maxElapsedMillis: 3_600_000 }),
+        );
       }).pipe(
         Effect.scoped,
         Effect.provide(
@@ -334,6 +388,7 @@ it.effect(
       );
 
       expect(new URL(requests[0]!.url).searchParams.get("recording")).toBe("false");
+      expect(new URL(requests[0]!.url).searchParams.get("keep_alive")).toBe("600000");
       expect(closed).toEqual([sessionId]);
       expect(error).toMatchObject({
         reason: "provider",
@@ -393,6 +448,7 @@ it.effect.each([
     ...f.controls[0]!,
     ref: crypto.randomUUID(),
     role: "link",
+    url: "https://shop.test/next",
   });
 
   f.controls.push(link);
@@ -628,29 +684,33 @@ it.effect("reports filled but not submitted when native requirements need attent
   }).pipe(Effect.scoped, Effect.provide(f.layer));
 });
 
-it.effect("denies metadata listing and card submission without resolving credentials", () => {
-  const f = fixture("card");
+it.effect(
+  "denies metadata listing and card submission after grant revocation without resolving credentials",
+  () => {
+    const f = fixture("card");
 
-  return Effect.gen(function* () {
-    const handle = yield* f.open;
-    const request = yield* proposal(f, handle);
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+      const request = yield* proposal(f, handle);
 
-    expect(
-      yield* handle
-        .useCredential(UseCredential.make({ ...request, submit: f.controls.at(-1)!.ref }))
-        .pipe(Effect.flip),
-    ).toMatchObject({ reason: "unsupported", dispatch: "not-dispatched" });
-    f.revoke();
-    expect(
-      yield* handle
-        .listCredentialOffers(
-          ListCredentialOffers.make({ kind: "card", target: f.controls[0]!.ref }),
-        )
-        .pipe(Effect.flip),
-    ).toMatchObject({ reason: "denied" });
-    expect(f.stats().resolved).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(f.layer));
-});
+      f.revoke();
+
+      expect(
+        yield* handle
+          .useCredential(UseCredential.make({ ...request, submit: f.controls.at(-1)!.ref }))
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "denied", dispatch: "not-dispatched" });
+      expect(
+        yield* handle
+          .listCredentialOffers(
+            ListCredentialOffers.make({ kind: "card", target: f.controls[0]!.ref }),
+          )
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "denied" });
+      expect(f.stats().resolved).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
 
 it.effect.each(["failure", "defect", "partial", "cleanup"] as const)(
   "sanitizes %s and preserves independent dispatch/cleanup evidence",
@@ -788,4 +848,677 @@ it.effect("one scoped session is shared by successive Tools and invalidated at S
     expect(f.stats().opens).toBe(1);
     expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({ reason: "closed" });
   }).pipe(Effect.provide(f.layer));
+});
+
+it.effect.each(["text", "select"] as const)(
+  "fills ordinary %s without vault resolution",
+  (role) => {
+    const f = fixture();
+
+    const control = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role,
+    });
+
+    f.controls.push(control);
+
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+
+      yield* handle.fill(
+        ProtectedBrowserFill.make({ ref: control.ref, value: "123 Example Street" }),
+      );
+      yield* handle.fill(ProtectedBrowserFill.make({ ref: control.ref, value: "" }));
+      expect(f.filled).toEqual(["123 Example Street", ""]);
+      expect(f.stats().resolved).toBe(0);
+      expect((yield* handle.observe).observation).toBe("before-exposure");
+      f.expire();
+      expect(
+        yield* handle
+          .fill(ProtectedBrowserFill.make({ ref: control.ref, value: "stale" }))
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "stale-reference", dispatch: "not-dispatched" });
+      expect(f.filled).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect.each(["login", "card"] as const)(
+  "refuses generic fill and submit for %s credentials",
+  (kind) => {
+    const f = fixture(kind);
+
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+
+      for (const field of f.controls) {
+        expect(
+          yield* handle
+            .fill(ProtectedBrowserFill.make({ ref: field.ref, value: "ordinary" }))
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "unsupported", dispatch: "not-dispatched" });
+      }
+      expect(
+        yield* handle
+          .click(ProtectedBrowserClick.make({ ref: f.controls.at(-1)!.ref }))
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "denied", dispatch: "not-dispatched" });
+      expect(f.stats().resolved).toBe(0);
+      expect(f.filled).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect.each(["radio", "checkbox"] as const)(
+  "clicks an observed %s and reports checked state",
+  (role) => {
+    const f = fixture();
+
+    const control = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role,
+      checked: false,
+    });
+
+    f.controls.push(control);
+    f.setClick((ref) =>
+      Effect.sync(() => {
+        expect(ref).toBe(control.ref);
+        f.controls[f.controls.length - 1] = ProtectedBrowserControl.make({
+          ...control,
+          checked: true,
+        });
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+
+      expect((yield* handle.observe).controls.at(-1)!.checked).toBe(false);
+      yield* handle.click(ProtectedBrowserClick.make({ ref: control.ref }));
+      expect((yield* handle.observe).controls.at(-1)!.checked).toBe(true);
+      expect(f.stats().resolved).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect("discloses billing metadata only through an authorized bounded offer", () => {
+  const f = fixture("card");
+
+  const metadata = CredentialOfferMetadata.make({
+    label: "Card",
+    billingAddress: { line1: "123 Example Street", country: "US" },
+  });
+
+  f.setList(() => Effect.succeed([{ key: Redacted.make("private-key"), metadata }]));
+
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+    const request = ListCredentialOffers.make({ kind: "card", target: f.controls[0]!.ref });
+    const offers = yield* handle.listCredentialOffers(request);
+
+    expect(offers[0]!.metadata).toEqual(metadata);
+    expect(JSON.stringify(offers)).not.toContain("private-key");
+    expect(f.stats().resolved).toBe(0);
+    f.revoke();
+    expect(yield* handle.listCredentialOffers(request).pipe(Effect.flip)).toMatchObject({
+      reason: "denied",
+    });
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect.each(["before", "after"] as const)(
+  "requires the post-exposure grant %s ordinary fill",
+  (when) => {
+    const f = fixture();
+
+    const control = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role: "text",
+    });
+
+    f.controls.push(control);
+
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+
+      yield* handle.useCredential(yield* proposal(f, handle));
+      let writes = 0;
+
+      f.setFill(() =>
+        Effect.gen(function* () {
+          yield* (yield* ProtectedBrowserDispatch).mark;
+          writes++;
+          f.blockObservations();
+        }),
+      );
+      if (when === "before") f.blockObservations();
+      expect(
+        yield* handle
+          .fill(ProtectedBrowserFill.make({ ref: control.ref, value: "address" }))
+          .pipe(Effect.flip),
+      ).toMatchObject({
+        reason: "observation-blocked",
+        dispatch: when === "before" ? "not-dispatched" : "dispatched",
+      });
+      expect(writes).toBe(when === "before" ? 0 : 1);
+      expect(f.stats().closed).toBe(when === "before" ? 0 : 1);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect.each(["failure", "defect", "timeout", "interrupt"] as const)(
+  "sanitizes ordinary fill %s and closes once without replay",
+  (mode) => {
+    const f = fixture();
+
+    const control = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role: "text",
+    });
+
+    f.controls.push(control);
+
+    return Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      let writes = 0;
+
+      f.setFill(() =>
+        Effect.gen(function* () {
+          yield* (yield* ProtectedBrowserDispatch).mark;
+          writes++;
+          yield* Deferred.succeed(entered, undefined);
+          if (mode === "failure") return yield* new ProtectedTransportError({ reason: "provider" });
+          if (mode === "defect") return yield* Effect.die(new Error("private-fill-diagnostic"));
+
+          return yield* Effect.never;
+        }),
+      );
+      const handle = yield* f.open;
+
+      const request = ProtectedBrowserFill.make({
+        ref: control.ref,
+        value: "private-fill-diagnostic",
+      });
+
+      const fiber = yield* Effect.forkChild(handle.fill(request));
+
+      yield* Deferred.await(entered);
+      if (mode === "interrupt") yield* Fiber.interrupt(fiber);
+      else {
+        if (mode === "timeout") {
+          expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({ reason: "busy" });
+          yield* TestClock.adjust("121 seconds");
+        }
+        const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+
+        expect(error).toMatchObject({
+          reason: mode === "timeout" ? "timeout" : "outcome-unknown",
+          dispatch: "possibly-dispatched",
+          cleanup: "confirmed",
+        });
+        expect(JSON.stringify(error)).not.toContain("private-fill-diagnostic");
+      }
+      expect(yield* handle.fill(request).pipe(Effect.flip)).toMatchObject({ reason: "closed" });
+      expect(writes).toBe(1);
+      expect(f.stats().closed).toBe(1);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect("enforces action and elapsed budgets during an hour-long pass", () => {
+  const f = fixture();
+
+  return Effect.gen(function* () {
+    const handle = yield* (yield* ProtectedBrowser).open(
+      InteractiveBrowserPolicy.make({ ...policy, maxElapsedMillis: 3_600_000, maxActions: 2 }),
+    );
+
+    yield* TestClock.adjust("11 minutes");
+    yield* handle.observe;
+    yield* handle.observe;
+    expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({ reason: "limit" });
+
+    const timed = yield* (yield* ProtectedBrowser).open(
+      InteractiveBrowserPolicy.make({ ...policy, maxElapsedMillis: 3_600_000 }),
+    );
+
+    yield* TestClock.adjust("60 minutes");
+    expect(yield* timed.observe.pipe(Effect.flip)).toMatchObject({
+      reason: "timeout",
+      cleanup: "confirmed",
+    });
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect("allows card submission only through current credential authorization", () => {
+  const f = fixture("card");
+  let clicks = 0;
+
+  f.setClick(() =>
+    Effect.sync(() => {
+      clicks++;
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+    const request = yield* proposal(f, handle);
+
+    expect(
+      yield* handle.useCredential(
+        UseCredential.make({ ...request, submit: f.controls.at(-1)!.ref }),
+      ),
+    ).toMatchObject({
+      dispatch: "dispatched",
+      milestone: "submission-dispatched",
+      authentication: "unverified",
+    });
+    expect(clicks).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect.each([
+  "success",
+  "revoked",
+  "caller-changed",
+  "target-changed",
+  "reply-lost",
+  "needs-attention",
+] as const)("authorizes a merchant submit after separate card-frame fills: %s", (mode) => {
+  const f = fixture("card");
+  let clicks = 0;
+
+  f.setClick(() =>
+    Effect.gen(function* () {
+      clicks++;
+      if (mode === "reply-lost") return yield* new ProtectedTransportError({ reason: "provider" });
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+
+    yield* handle.useCredential(yield* proposal(f, handle));
+
+    const separate = CredentialTarget.make({
+      ...f.controls[0]!.target,
+      frame: crypto.randomUUID(),
+      form: crypto.randomUUID(),
+      document: crypto.randomUUID(),
+    });
+
+    for (let index = 0; index < f.controls.length; index++)
+      f.controls[index] = ProtectedBrowserControl.make({ ...f.controls[index]!, target: separate });
+    yield* handle.useCredential(yield* proposal(f, handle));
+
+    const submit = ProtectedBrowserControl.make({
+      ref: crypto.randomUUID(),
+      role: "submit",
+      label: "Pay",
+      target: CredentialTarget.make({
+        ...separate,
+        frameOrigin: "https://shop.test",
+        recipientOrigin: "https://shop.test",
+        frame: crypto.randomUUID(),
+        form: crypto.randomUUID(),
+      }),
+    });
+
+    f.controls.push(submit);
+    f.setAuthorizeAction((request) =>
+      Effect.gen(function* () {
+        expect(Redacted.value(request.caller)).toBe("alice");
+        expect(request.action).toEqual({ _tag: "Submit", ref: submit.ref, target: submit.target });
+        expect(request.exposures).toHaveLength(2);
+        expect(request.exposures.every((target) => target.frameOrigin === "https://pay.test")).toBe(
+          true,
+        );
+        if (mode === "revoked") return yield* new CredentialAccessError({ reason: "denied" });
+        if (mode === "caller-changed") f.setPrincipal("mallory");
+        if (mode === "target-changed")
+          f.controls[f.controls.length - 1] = ProtectedBrowserControl.make({
+            ...submit,
+            target: CredentialTarget.make({
+              ...submit.target,
+              recipientOrigin: "https://evil.test",
+            }),
+          });
+      }),
+    );
+    if (mode === "needs-attention") f.needAttention();
+    const execute = handle.click(ProtectedBrowserClick.make({ ref: submit.ref }));
+
+    if (mode === "success") {
+      yield* execute;
+      f.setAuthorizeAction(() => Effect.fail(new CredentialAccessError({ reason: "denied" })));
+      expect(yield* execute.pipe(Effect.flip)).toMatchObject({
+        reason: "denied",
+        dispatch: "not-dispatched",
+      });
+    } else {
+      expect(yield* execute.pipe(Effect.flip)).toMatchObject({
+        reason:
+          mode === "reply-lost"
+            ? "outcome-unknown"
+            : mode === "target-changed"
+              ? "stale-reference"
+              : mode === "needs-attention"
+                ? "needs-attention"
+                : "denied",
+        dispatch: mode === "reply-lost" ? "possibly-dispatched" : "not-dispatched",
+      });
+    }
+    expect(clicks).toBe(mode === "success" || mode === "reply-lost" ? 1 : 0);
+    if (mode === "reply-lost") {
+      expect(f.stats().closed).toBe(1);
+      expect(yield* execute.pipe(Effect.flip)).toMatchObject({ reason: "closed" });
+    }
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect.each(["navigate", "fill", "click"] as const)(
+  "checks current continuation authority before ordinary %s",
+  (action) => {
+    const f = fixture();
+
+    const field = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role: "text",
+    });
+
+    const button = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role: "button",
+    });
+
+    f.controls.push(field, button);
+
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+
+      yield* handle.useCredential(yield* proposal(f, handle));
+      let writes = 0;
+
+      f.setFill(() =>
+        Effect.sync(() => {
+          writes++;
+        }),
+      );
+      f.setClick(() =>
+        Effect.sync(() => {
+          writes++;
+        }),
+      );
+      f.setNavigate(() =>
+        Effect.sync(() => {
+          writes++;
+        }),
+      );
+      f.setAuthorizeAction((request) =>
+        Effect.gen(function* () {
+          expect(request.exposures).toHaveLength(1);
+
+          return yield* new CredentialAccessError({ reason: "denied" });
+        }),
+      );
+
+      const operation =
+        action === "navigate"
+          ? handle.navigate(ProtectedBrowserNavigate.make({ url: "https://shop.test/next" }))
+          : action === "fill"
+            ? handle.fill(ProtectedBrowserFill.make({ ref: field.ref, value: "ordinary" }))
+            : handle.click(ProtectedBrowserClick.make({ ref: button.ref }));
+
+      expect(yield* operation.pipe(Effect.flip)).toMatchObject({
+        reason: "denied",
+        dispatch: "not-dispatched",
+      });
+      expect(writes).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect("uses explicit recipient selection and rejects a grant narrowed during discovery", () => {
+  const f = fixture("card");
+
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+
+    yield* handle.useCredential(yield* proposal(f, handle));
+    f.context.frameOrigins.push("https://untrusted.test");
+    let calls = 0;
+
+    f.setObservation((request) =>
+      Effect.sync(() => {
+        expect(request.frameOrigins).toContain("https://untrusted.test");
+        calls++;
+
+        return CredentialObservationGrant.make({
+          decision: "trust-recipient-no-credential-echo",
+          origins: calls >= 4 ? ["https://shop.test"] : ["https://shop.test", "https://pay.test"],
+        });
+      }),
+    );
+    expect((yield* handle.observe).controls).toHaveLength(f.controls.length);
+    expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({
+      reason: "observation-blocked",
+      dispatch: "not-dispatched",
+    });
+    expect(
+      yield* handle
+        .listCredentialOffers(
+          ListCredentialOffers.make({ kind: "card", target: f.controls[0]!.ref }),
+        )
+        .pipe(Effect.flip),
+    ).toMatchObject({ reason: "stale-reference" });
+    f.setObservation(() =>
+      Effect.succeed(
+        CredentialObservationGrant.make({
+          decision: "trust-recipient-no-credential-echo",
+          origins: ["https://pay.test"],
+        }),
+      ),
+    );
+    const reads = f.stats().reads;
+
+    expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({
+      reason: "observation-blocked",
+    });
+    expect(f.stats().reads).toBe(reads);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect.each(["timeout", "interrupt"] as const)(
+  "closes an uncertain authorized submit on %s without replay",
+  (mode) => {
+    const f = fixture("card");
+
+    f.setAuthorizeAction(() => Effect.void);
+
+    return Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      let clicks = 0;
+
+      f.setClick(() =>
+        Effect.gen(function* () {
+          clicks++;
+          yield* Deferred.succeed(entered, undefined);
+
+          return yield* Effect.never;
+        }),
+      );
+      const handle = yield* f.open;
+
+      yield* handle.useCredential(yield* proposal(f, handle));
+      const execute = handle.click(ProtectedBrowserClick.make({ ref: f.controls.at(-1)!.ref }));
+      const fiber = yield* Effect.forkChild(execute);
+
+      yield* Deferred.await(entered);
+      expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({ reason: "busy" });
+      if (mode === "interrupt") yield* Fiber.interrupt(fiber);
+      else {
+        yield* TestClock.adjust("121 seconds");
+        expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
+          reason: "timeout",
+          dispatch: "possibly-dispatched",
+          cleanup: "confirmed",
+        });
+      }
+      expect(f.stats().closed).toBe(1);
+      expect(yield* execute.pipe(Effect.flip)).toMatchObject({ reason: "closed" });
+      expect(clicks).toBe(1);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect("rejects a caller change while obtaining an observation grant before reading", () => {
+  const f = fixture();
+
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+
+    yield* handle.useCredential(yield* proposal(f, handle));
+    const reads = f.stats().reads;
+
+    f.setObservation(() =>
+      Effect.sync(() => {
+        f.setPrincipal("mallory");
+
+        return CredentialObservationGrant.make({
+          decision: "trust-recipient-no-credential-echo",
+          origins: ["https://shop.test"],
+        });
+      }),
+    );
+    expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({
+      reason: "denied",
+      dispatch: "not-dispatched",
+    });
+    expect(f.stats().reads).toBe(reads);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect("refuses native submission without explicit host action authority", () => {
+  const f = fixture("card", false);
+  let clicks = 0;
+
+  f.setClick(() =>
+    Effect.sync(() => {
+      clicks++;
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const handle = yield* f.open;
+    const execute = handle.click(ProtectedBrowserClick.make({ ref: f.controls.at(-1)!.ref }));
+
+    expect(yield* execute.pipe(Effect.flip)).toMatchObject({
+      reason: "unsupported",
+      dispatch: "not-dispatched",
+    });
+    yield* handle.useCredential(yield* proposal(f, handle));
+    expect(yield* execute.pipe(Effect.flip)).toMatchObject({
+      reason: "unsupported",
+      dispatch: "not-dispatched",
+    });
+    expect(clicks).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect.each(["allowed", "denied", "changed"] as const)(
+  "authorizes the exact link destination: %s",
+  (mode) => {
+    const f = fixture();
+
+    const link = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role: "link",
+      url: mode === "denied" ? "https://shop.test/private" : "https://shop.test/allowed",
+    });
+
+    f.controls.push(link);
+    let clicks = 0;
+
+    f.setClick(() =>
+      Effect.sync(() => {
+        clicks++;
+      }),
+    );
+    f.setAuthorizeAction((request) =>
+      Effect.gen(function* () {
+        if (
+          request.action._tag !== "Click" ||
+          request.action.role !== "link" ||
+          request.action.url !== "https://shop.test/allowed"
+        )
+          return yield* new CredentialAccessError({ reason: "denied" });
+        if (mode === "changed")
+          f.controls[f.controls.length - 1] = ProtectedBrowserControl.make({
+            ...link,
+            url: "https://shop.test/private",
+          });
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+      const execute = handle.click(ProtectedBrowserClick.make({ ref: link.ref }));
+
+      if (mode === "allowed") yield* execute;
+      else
+        expect(yield* execute.pipe(Effect.flip)).toMatchObject({
+          reason: mode === "denied" ? "denied" : "stale-reference",
+          dispatch: "not-dispatched",
+        });
+      expect(clicks).toBe(mode === "allowed" ? 1 : 0);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect("rechecks caller after the final asynchronous card-submit authorization", () => {
+  const f = fixture("card");
+  let clicks = 0;
+
+  f.setClick(() =>
+    Effect.sync(() => {
+      clicks++;
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const resume = yield* Deferred.make<void>();
+
+    f.setAuthorize(() =>
+      f.filled.length === f.fields.length
+        ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+        : Effect.void,
+    );
+    const handle = yield* f.open;
+    const request = yield* proposal(f, handle);
+
+    const fiber = yield* Effect.forkChild(
+      handle.useCredential(UseCredential.make({ ...request, submit: f.controls.at(-1)!.ref })),
+    );
+
+    yield* Deferred.await(entered);
+    f.setPrincipal("mallory");
+    yield* Deferred.succeed(resume, undefined);
+    expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
+      reason: "denied",
+      dispatch: "dispatched",
+      milestone: "filled",
+      cleanup: "confirmed",
+    });
+    expect(f.filled).toHaveLength(f.fields.length);
+    expect(clicks).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
 });

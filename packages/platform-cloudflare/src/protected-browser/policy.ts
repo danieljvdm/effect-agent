@@ -7,6 +7,7 @@ import {
   CredentialOffer,
   CredentialOfferMetadata,
   CredentialOrigin,
+  CredentialObservationDecision,
   type CredentialTarget,
   CredentialUseResult,
   ListCredentialOffers,
@@ -14,6 +15,7 @@ import {
   ProtectedBrowser,
   ProtectedBrowserClick,
   ProtectedBrowserError,
+  ProtectedBrowserFill,
   ProtectedBrowserNavigate,
   ProtectedBrowserObservation,
   ProtectedBrowserControl,
@@ -22,6 +24,7 @@ import {
   type CredentialKind,
   type CredentialUseAuthorization,
   type ProtectedBrowserHandle,
+  type ProtectedBrowserAction,
   type ProtectedCleanup,
   type ProtectedObservationState,
 } from "@effect-agent/sandbox/ProtectedBrowser";
@@ -51,6 +54,10 @@ export class ProtectedBrowserDispatch extends Context.Service<
 
 /** Decoded adapter boundary. SDK exceptions and page diagnostics never cross this port. */
 export interface ProtectedBrowserTransport {
+  /** Select observation/target origins; undefined restores all network-permitted HTTPS frames. */
+  readonly restrictObservation: (
+    origins: ReadonlyArray<typeof CredentialOrigin.Type> | undefined,
+  ) => Effect.Effect<void, ProtectedTransportError>;
   readonly context: Effect.Effect<typeof ProtectedPageContext.Type, ProtectedTransportError>;
   readonly discover: Effect.Effect<typeof ProtectedDiscovery.Type, ProtectedTransportError>;
   readonly target: (ref: string) => Effect.Effect<ProtectedBrowserControl, ProtectedTransportError>;
@@ -58,7 +65,7 @@ export interface ProtectedBrowserTransport {
   readonly click: (ref: string) => Effect.Effect<void, ProtectedTransportError>;
   readonly fill: (
     ref: string,
-    role: typeof CredentialFieldRole.Type,
+    role: typeof CredentialFieldRole.Type | "text" | "select",
     value: Redacted.Redacted<string>,
   ) => Effect.Effect<void, ProtectedTransportError, ProtectedBrowserDispatch>;
   /** Invalidates local references synchronously before bounded exact-session cleanup. */
@@ -133,7 +140,7 @@ const secretFor = (material: BrowserCredentialMaterial, role: typeof CredentialF
 
 /**
  * Fresh private passes only. Account administrators and Browser Rendering token holders are
- * trusted operators. No viewer, handoff, raw JavaScript, screenshot or plaintext-fill API exists.
+ * trusted operators. No viewer, handoff, raw JavaScript, screenshot or plaintext credential API exists.
  * Hosts explicitly authorize post-exposure observations for recipients they trust not to echo.
  */
 export const browserRunProtectedLayer = () =>
@@ -240,23 +247,68 @@ export const browserRunProtectedLayer = () =>
 
         const permitObservation = Effect.gen(function* () {
           const context = yield* pageContext;
+          let origins: ReadonlyArray<typeof CredentialOrigin.Type> | undefined;
 
           if (exposures.length > 0) {
             observation = "protected";
+            const principal = yield* caller;
 
-            const decision = yield* access
-              .observation({ ...context, caller: yield* caller, exposures: [...exposures] })
+            const rawDecision = yield* access
+              .observation({ ...context, caller: principal, exposures: [...exposures] })
               .pipe(Effect.mapError((error) => fail(error.reason)));
 
-            if (decision !== "trust-recipient-no-credential-echo")
-              return yield* fail("observation-blocked");
+            if (Redacted.value(yield* caller) !== Redacted.value(principal))
+              return yield* fail("denied");
+
+            const decision = yield* Schema.decodeUnknownEffect(CredentialObservationDecision)(
+              rawDecision,
+            ).pipe(Effect.mapError(() => fail("observation-blocked")));
+
+            if (decision === "deny") return yield* fail("observation-blocked");
+            if (typeof decision !== "string") {
+              origins = [...decision.origins];
+              if (!origins.includes(context.topOrigin)) return yield* fail("observation-blocked");
+            }
             observation = "approved-after-exposure";
           }
+          yield* remote(driver.restrictObservation(origins));
 
-          return context;
+          return {
+            ...context,
+            frameOrigins: context.frameOrigins.filter(
+              (origin) => origins === undefined || origins.includes(origin),
+            ),
+          };
         });
 
         const target = (ref: string) => remote(driver.target(ref));
+
+        const authorizeAction = Effect.fn("ProtectedBrowser.authorizeAction")(function* (
+          action: ProtectedBrowserAction,
+        ) {
+          if (access.authorizeAction === undefined) {
+            if (action._tag === "Submit") return yield* fail("unsupported");
+
+            return;
+          }
+          const principal = yield* caller;
+
+          yield* access
+            .authorizeAction({ caller: principal, action, exposures: [...exposures] })
+            .pipe(Effect.mapError((error) => fail(error.reason)));
+          if (Redacted.value(yield* caller) !== Redacted.value(principal))
+            return yield* fail("denied");
+          if (action._tag !== "Navigate") {
+            const current = yield* target(action.ref);
+
+            if (
+              !sameTarget(current.target, action.target) ||
+              current.role !== (action._tag === "Submit" ? "submit" : action.role) ||
+              (action._tag === "Click" && action.role === "link" && current.url !== action.url)
+            )
+              return yield* fail("stale-reference");
+          }
+        }, Effect.withTracerEnabled(false));
 
         const bounded = <A>(result: A) => {
           const bytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
@@ -366,6 +418,7 @@ export const browserRunProtectedLayer = () =>
                 )
                   return yield* fail("denied");
                 if (exposures.length > 0) yield* permitObservation;
+                yield* authorizeAction({ _tag: "Navigate", url: decoded.url });
                 offers.clear();
                 dispatch = "possibly-dispatched";
                 yield* remote(driver.navigate(decoded.url));
@@ -379,8 +432,14 @@ export const browserRunProtectedLayer = () =>
               const result = yield* remote(driver.discover);
               const after = yield* permitObservation;
 
-              if (before.document !== after.document || result.document !== after.document)
+              if (
+                before.document !== after.document ||
+                result.document !== after.document ||
+                result.topOrigin !== after.topOrigin
+              )
                 return yield* fail("stale-reference");
+              if (result.frameOrigins.some((origin) => !after.frameOrigins.includes(origin)))
+                return yield* fail("observation-blocked");
 
               return yield* bounded(
                 ProtectedBrowserObservation.make({
@@ -400,12 +459,78 @@ export const browserRunProtectedLayer = () =>
                 yield* permitObservation;
                 const control = yield* target(decoded.ref);
 
-                // Credential submission goes through useCredential, never a generic click.
-                if (control.role !== "link" && control.role !== "button")
+                if (
+                  control.role !== "link" &&
+                  control.role !== "button" &&
+                  control.role !== "radio" &&
+                  control.role !== "checkbox" &&
+                  control.role !== "submit"
+                )
                   return yield* fail("unsupported");
+                let action: ProtectedBrowserAction;
+
+                if (control.role === "link") {
+                  if (control.url === undefined) return yield* fail("unsupported");
+                  action = {
+                    _tag: "Click",
+                    ref: decoded.ref,
+                    target: control.target,
+                    role: "link",
+                    url: control.url,
+                  };
+                } else if (control.role === "submit") {
+                  action = { _tag: "Submit", ref: decoded.ref, target: control.target };
+                } else {
+                  action = {
+                    _tag: "Click",
+                    ref: decoded.ref,
+                    target: control.target,
+                    role: control.role,
+                  };
+                }
+                yield* authorizeAction(action);
                 dispatch = "possibly-dispatched";
-                yield* remote(driver.click(decoded.ref));
+                yield* remote(driver.click(decoded.ref)).pipe(
+                  Effect.catch((error) => {
+                    if (error.reason === "needs-attention") dispatch = "not-dispatched";
+
+                    return Effect.fail(error);
+                  }),
+                );
                 dispatch = "dispatched";
+                if (control.role === "submit") milestone = "submission-dispatched";
+                yield* permitObservation;
+              }),
+            ),
+          fill: (request) =>
+            run(
+              Effect.gen(function* () {
+                const decoded = yield* Schema.decodeUnknownEffect(ProtectedBrowserFill)(
+                  request,
+                ).pipe(Effect.mapError(() => fail("denied")));
+
+                yield* permitObservation;
+                const control = yield* target(decoded.ref);
+
+                if (control.role !== "text" && control.role !== "select")
+                  return yield* fail("unsupported");
+                yield* authorizeAction({
+                  _tag: "Fill",
+                  ref: decoded.ref,
+                  target: control.target,
+                  role: control.role,
+                });
+                yield* remote(
+                  driver.fill(decoded.ref, control.role, Redacted.make(decoded.value)),
+                ).pipe(
+                  Effect.provideService(ProtectedBrowserDispatch, {
+                    mark: Effect.sync(() => {
+                      dispatch = "possibly-dispatched";
+                    }),
+                  }),
+                );
+                dispatch = "dispatched";
+                milestone = "filled";
                 yield* permitObservation;
               }),
             ),
@@ -475,8 +600,6 @@ export const browserRunProtectedLayer = () =>
 
                 if (Redacted.value(principal) !== Redacted.value(offer.caller))
                   return yield* fail("denied");
-                if (offer.kind === "card" && decoded.submit !== undefined)
-                  return yield* fail("unsupported");
                 if (
                   new Set(decoded.fields.map((field) => field.ref)).size !==
                     decoded.fields.length ||
@@ -522,6 +645,8 @@ export const browserRunProtectedLayer = () =>
                   yield* access
                     .authorize(authorization)
                     .pipe(Effect.mapError((error) => fail(error.reason)));
+                  if (Redacted.value(yield* caller) !== Redacted.value(principal))
+                    return yield* fail("denied");
                 });
 
                 yield* authorize;

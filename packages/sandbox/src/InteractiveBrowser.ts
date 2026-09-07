@@ -79,13 +79,14 @@ export const InteractiveBrowserNetworkPolicy = Schema.Union([
 
 export type InteractiveBrowserNetworkPolicy = typeof InteractiveBrowserNetworkPolicy.Type;
 
+/** Finite per-pass budgets. The elapsed ceiling is one hour; provider idle limits may be shorter. */
 export class InteractiveBrowserPolicy extends Schema.Class<InteractiveBrowserPolicy>(
   "InteractiveBrowserPolicy",
 )(
   Schema.Struct({
     network: InteractiveBrowserNetworkPolicy,
     maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1_000)),
-    maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(10 * 60_000)),
+    maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(60 * 60_000)),
     maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
   }).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } })),
 ) {}
