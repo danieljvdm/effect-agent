@@ -398,6 +398,8 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
           );
         }),
       ),
+    // Real SQLite initialization and three durable drives need headroom on shared CI runners.
+    { timeout: 30_000 },
   );
 
   it.effect(

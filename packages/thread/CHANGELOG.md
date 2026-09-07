@@ -1,5 +1,17 @@
 # @effect-agent/session
 
+## 0.1.0-beta.51
+
+### Patch Changes
+
+- [#341](https://github.com/danieljvdm/effect-agent/pull/341) [`75898ae`](https://github.com/danieljvdm/effect-agent/commit/75898aef60b09945d90bfe5674b5153edb0717eb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add revisioned subscription management, bounded event retention, and explicit recovery of parked admissions. Fence fresh destination admission by host policy and retain one unsettled submission per optional admission group until canonical settlement.
+
+  BEHAVIOR CHANGE: Reset incompatible development storage and update custom stores for required configuration revisions and retry generations.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.51
+  - @effect-agent/engine@0.1.0-beta.51
+
 ## 0.1.0-beta.50
 
 ### Minor Changes

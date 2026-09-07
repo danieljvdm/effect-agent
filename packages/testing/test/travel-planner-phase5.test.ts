@@ -1309,5 +1309,7 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
           ),
         ),
       ),
+    // Real SQLite initialization and durable writes use wall-clock time even under TestClock.
+    { timeout: 30_000 },
   );
 });
