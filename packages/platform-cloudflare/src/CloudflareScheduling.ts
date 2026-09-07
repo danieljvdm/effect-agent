@@ -33,6 +33,7 @@ import {
   type ScheduleManagementFailure,
   ScheduleWakeNoop,
 } from "@effect-agent/thread/Scheduling";
+import { AdmissionFence } from "@effect-agent/thread/SubmissionLedger";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect";
@@ -81,6 +82,8 @@ const ScheduleMutationRequestFields = {
   destination: ScheduleDestination,
   deliveryPrincipal: ScheduleScopeSchema.fields.principal,
   definitions: DefinitionDigests,
+  admissionGroup: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(256))),
+  admissionFence: Schema.optionalKey(AdmissionFence),
 };
 
 const ScheduleCreateRequest = Schema.TaggedStruct("Create", ScheduleMutationRequestFields);
@@ -113,7 +116,16 @@ const ScheduleControlRequest = Schema.TaggedStruct("Control", {
   expectedRevision: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 
+const ScheduleRecoverRequest = Schema.TaggedStruct("Recover", {
+  schemaVersion: Schema.Literal(1),
+  scope: ScheduleScopeSchema,
+  scheduleId: ScheduleId,
+  expectedRevision: Schema.Int.check(Schema.isGreaterThan(0)),
+  expectedGeneration: Schema.Natural,
+});
+
 const ScheduleOwnerRequest = Schema.Union([
+  ScheduleRecoverRequest,
   ScheduleCreateRequest,
   ScheduleUpdateRequest,
   ScheduleGetRequest,
@@ -337,6 +349,24 @@ export class CloudflareSchedulingClient {
         list,
         pause: (scope, id, revision) => control("pause", scope, id, revision),
         resume: (scope, id, revision) => control("resume", scope, id, revision),
+        recover: (scope, scheduleId, expectedRevision, expectedGeneration) =>
+          Effect.gen(function* () {
+            const response = yield* call(scope.owner, {
+              _tag: "Recover",
+              schemaVersion: 1,
+              scope,
+              scheduleId,
+              expectedRevision,
+              expectedGeneration,
+            });
+
+            return response._tag === "Snapshot"
+              ? response.value
+              : yield* ScheduleStorageError.make({
+                  operation: "Schedule Owner protocol",
+                  reason: "corrupt",
+                });
+          }),
         cancel: (scope, id, revision) => control("cancel", scope, id, revision),
       });
     }),
@@ -489,6 +519,12 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
           destination: request.destination,
           deliveryPrincipal: request.deliveryPrincipal,
           definitions: request.definitions,
+          ...(request.admissionGroup === undefined
+            ? {}
+            : { admissionGroup: request.admissionGroup }),
+          ...(request.admissionFence === undefined
+            ? {}
+            : { admissionFence: request.admissionFence }),
         });
 
         return { _tag: "Snapshot" as const, value };
@@ -501,6 +537,12 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
           destination: request.destination,
           deliveryPrincipal: request.deliveryPrincipal,
           definitions: request.definitions,
+          ...(request.admissionGroup === undefined
+            ? {}
+            : { admissionGroup: request.admissionGroup }),
+          ...(request.admissionFence === undefined
+            ? {}
+            : { admissionFence: request.admissionFence }),
           expectedRevision: request.expectedRevision,
         });
 
@@ -518,6 +560,16 @@ const handleScheduleRequest = Effect.fn("ScheduleOwner.handleRequest")(function*
             ...(request.after === undefined ? {} : { after: request.after }),
             ...(request.limit === undefined ? {} : { limit: request.limit }),
           }),
+        };
+      case "Recover":
+        return {
+          _tag: "Snapshot" as const,
+          value: yield* scheduling.recover(
+            request.scope,
+            request.scheduleId,
+            request.expectedRevision,
+            request.expectedGeneration,
+          ),
         };
       case "Control": {
         const value =

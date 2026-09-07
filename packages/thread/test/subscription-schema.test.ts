@@ -16,7 +16,7 @@ const source = { name: "workflow-completed", version: "1" };
 const key = { partition, ownerId: "reviewer", subscriptionId: "watch-101" };
 const digest = "a".repeat(64);
 
-const registration = {
+const initialRegistration = {
   schemaVersion: 1,
   key,
   creationFingerprint: digest,
@@ -37,6 +37,13 @@ const registration = {
   },
   state: "active",
   recovery: { attempts: 1, nextAttemptAtMillis: 100, lastFailure: "github-rate-limited" },
+};
+
+const registration = {
+  ...initialRegistration,
+  configurationRevision: 1,
+  configurationFingerprint: digest,
+  creationConfiguration: initialRegistration.configuration,
 };
 
 const accepted = {
@@ -72,6 +79,8 @@ const selected = {
   key: { subscription: key, eventId: accepted.eventId },
   deliveryId: digest,
   subscriptionFingerprint: digest,
+  configurationRevision: 1,
+  configuration: registration.configuration,
   eventDigest: digest,
   source,
   threadId: envelope.threadId,
@@ -80,7 +89,15 @@ const selected = {
   state: "selected",
   envelope: null,
   envelopeDigest: null,
-  retry: { attempts: 0, nextAttemptAtMillis: 50, lastAttemptAtMillis: null, lastFailure: null },
+  retry: {
+    generation: 0,
+    attempts: 0,
+    automaticAttempts: 0,
+    parked: false,
+    nextAttemptAtMillis: 50,
+    lastAttemptAtMillis: null,
+    lastFailure: null,
+  },
   receipt: null,
   refusal: null,
 };
@@ -136,6 +153,8 @@ describe("Subscription wire fixtures", () => {
     });
     fixture(SubscriptionSnapshot, {
       key,
+      configurationFingerprint: digest,
+      configurationRevision: 1,
       source,
       mode: "once",
       state: "active",
@@ -145,6 +164,7 @@ describe("Subscription wire fixtures", () => {
     });
     fixture(SubscriptionDeliverySnapshot, {
       key: selected.key,
+      configurationRevision: 1,
       state: "delivered",
       retry: selected.retry,
       receipt,

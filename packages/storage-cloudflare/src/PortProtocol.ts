@@ -3,6 +3,7 @@ import {
   AbortCommand,
   AbortIntent,
   AdmissionConflict,
+  AdmissionPolicyError,
   AdmissionRequest,
   AdmissionResolution,
   AdmissionResult,
@@ -281,6 +282,7 @@ export type PortResult = typeof PortResult.Type;
  */
 export const PortFailure = Schema.Union([
   AdmissionConflict,
+  AdmissionPolicyError,
   SettlementConflict,
   JoinedToHost,
   LedgerError,

@@ -6,6 +6,8 @@ import { Digest } from "./Records.ts";
 import {
   AcceptedEvent,
   DeliveryChange,
+  SubscriptionChange,
+  SubscriptionRetentionPolicy,
   type SourcePartition,
   SubscriptionDelivery,
   SubscriptionDeliveryKey,
@@ -22,6 +24,8 @@ import {
 } from "./Subscription.ts";
 import {
   applySubscriptionDeliveryChange,
+  applySubscriptionChange,
+  validateEventRetention,
   sameAcceptedEventIdentity,
   sameSourcePartition,
   subscriptionCanSelect,
@@ -119,8 +123,9 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     source_version: Schema.String,
     matching_key: Schema.String,
     state: SubscriptionRecord.fields.state,
-    expires_at_millis: Schema.Number,
+    expires_at_millis: Schema.NullOr(Schema.Number),
     recovery_at_millis: Schema.NullOr(Schema.Number),
+    recovery_present: Schema.Literals([0, 1]),
     record_json: StoredJson,
   });
 
@@ -133,6 +138,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     cutoff: Schema.Natural,
     cursor: Schema.Natural,
     routing_complete: Schema.Number,
+    tombstone: Schema.Literals([0, 1]),
     next_attempt_at_millis: Schema.Number,
     record_json: StoredJson,
   });
@@ -147,11 +153,27 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     record_json: StoredJson,
   });
 
+  yield* sql`CREATE TABLE IF NOT EXISTS effect_agent_event_retention (
+    tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, replay_horizon_millis INTEGER NOT NULL,
+    next_maintenance_at_millis INTEGER, tombstone_count INTEGER NOT NULL DEFAULT 0, event_cursor TEXT NOT NULL DEFAULT '', delivery_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY (tenant_id, source_address)
+  )`.pipe(Effect.mapError(() => unavailable("initialize event retention")));
+
   yield* sql`
     INSERT INTO effect_agent_subscription_sequences (
       tenant_id, source_address, sequence, event_scan_cursor, delivery_scan_cursor, recovery_scan_cursor
     ) VALUES (${partition.tenantId}, ${partition.address}, 0, '', '', 0) ON CONFLICT DO NOTHING
   `.pipe(Effect.mapError(() => unavailable("initialize subscription partition")));
+
+  yield* sql`CREATE INDEX IF NOT EXISTS effect_agent_events_retention_order ON effect_agent_subscription_events
+    (tenant_id, source_address, tombstone, event_id)
+  `.pipe(Effect.mapError(() => unavailable("index event retention")));
+  yield* sql`CREATE INDEX IF NOT EXISTS effect_agent_subscriptions_recovery_reference ON effect_agent_subscriptions
+    (tenant_id, source_address, source_name, source_version, matching_key, recovery_present)
+    WHERE recovery_present=1
+  `.pipe(Effect.mapError(() => unavailable("index recovery retention")));
+  yield* sql`CREATE INDEX IF NOT EXISTS effect_agent_deliveries_event ON effect_agent_subscription_deliveries
+    (tenant_id, source_address, event_id, state)
+  `.pipe(Effect.mapError(() => unavailable("index delivery retention")));
 
   const query = <A extends object>(
     effect: Effect.Effect<ReadonlyArray<A>, SqlError>,
@@ -181,7 +203,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, ordinal, source_name, source_version, matching_key, state,
-        expires_at_millis, recovery_at_millis, record_json FROM effect_agent_subscriptions
+        expires_at_millis, recovery_at_millis, recovery_present, record_json FROM effect_agent_subscriptions
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${key.ownerId} AND subscription_id=${key.subscriptionId}
     `,
@@ -206,7 +228,8 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       record.configuration.matchingKey !== row.matching_key ||
       record.state !== row.state ||
       record.configuration.expiresAtMillis !== row.expires_at_millis ||
-      (record.recovery?.nextAttemptAtMillis ?? null) !== row.recovery_at_millis
+      (record.recovery?.nextAttemptAtMillis ?? null) !== row.recovery_at_millis ||
+      (record.recovery === null ? 0 : 1) !== row.recovery_present
     )
       return yield* corrupt(`${code}-projection`);
 
@@ -220,7 +243,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT event_id, source_name, source_version, matching_key, payload_digest, cutoff, cursor,
-        routing_complete, next_attempt_at_millis, record_json FROM effect_agent_subscription_events
+        routing_complete, tombstone, next_attempt_at_millis, record_json FROM effect_agent_subscription_events
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${eventId}
     `,
       code,
@@ -244,6 +267,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       event.cutoff !== row.cutoff ||
       event.cursor !== row.cursor ||
       (event.routingComplete ? 1 : 0) !== row.routing_complete ||
+      (event.tombstone === true ? 1 : 0) !== row.tombstone ||
       event.nextAttemptAtMillis !== row.next_attempt_at_millis
     )
       return yield* corrupt(`${code}-projection`);
@@ -324,8 +348,9 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
     yield* query(
       sql<Record<string, unknown>>`
-      UPDATE effect_agent_subscriptions SET state=${record.state}, expires_at_millis=${record.configuration.expiresAtMillis},
-        recovery_at_millis=${record.recovery?.nextAttemptAtMillis ?? null}, record_json=${json}
+      UPDATE effect_agent_subscriptions SET ordinal=${record.ordinal}, source_name=${record.configuration.source.name},
+        source_version=${record.configuration.source.version}, matching_key=${record.configuration.matchingKey}, state=${record.state}, expires_at_millis=${record.configuration.expiresAtMillis},
+        recovery_at_millis=${record.recovery?.nextAttemptAtMillis ?? null}, recovery_present=${record.recovery === null ? 0 : 1}, record_json=${json}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${record.key.ownerId} AND subscription_id=${record.key.subscriptionId}
     `,
@@ -338,7 +363,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
     yield* query(
       sql<Record<string, unknown>>`
-      UPDATE effect_agent_subscription_events SET cursor=${event.cursor}, routing_complete=${event.routingComplete ? 1 : 0},
+      UPDATE effect_agent_subscription_events SET cursor=${event.cursor}, routing_complete=${event.routingComplete ? 1 : 0}, tombstone=${event.tombstone === true ? 1 : 0},
         next_attempt_at_millis=${event.nextAttemptAtMillis}, record_json=${json}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId}
     `,
@@ -386,8 +411,8 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         if (bytes(record.configuration.parameters) > limits.maxPayloadBytes)
           return yield* error("capacity", "parameters-bytes");
         if (
-          record.configuration.expiresAtMillis - record.createdAtMillis >
-          limits.maxLifetimeMillis
+          record.configuration.expiresAtMillis !== null &&
+          record.configuration.expiresAtMillis - record.createdAtMillis > limits.maxLifetimeMillis
         )
           return yield* error("capacity", "lifetime");
         if (
@@ -415,10 +440,10 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         yield* query(
           sql<Record<string, unknown>>`
         INSERT INTO effect_agent_subscriptions (tenant_id, source_address, owner_id, subscription_id, ordinal,
-          source_name, source_version, matching_key, state, expires_at_millis, recovery_at_millis, record_json)
+          source_name, source_version, matching_key, state, expires_at_millis, recovery_at_millis, recovery_present, record_json)
         VALUES (${partition.tenantId}, ${partition.address}, ${assigned.key.ownerId}, ${assigned.key.subscriptionId}, ${assigned.ordinal},
           ${assigned.configuration.source.name}, ${assigned.configuration.source.version}, ${assigned.configuration.matchingKey}, ${assigned.state},
-          ${assigned.configuration.expiresAtMillis}, ${assigned.recovery?.nextAttemptAtMillis ?? null}, ${json})
+          ${assigned.configuration.expiresAtMillis}, ${assigned.recovery?.nextAttemptAtMillis ?? null}, ${assigned.recovery === null ? 0 : 1}, ${json})
       `,
           "insert registration",
         );
@@ -475,8 +500,40 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     },
   );
 
+  const change: SubscriptionStore["Service"]["change"] = Effect.fn("SubscriptionStore.change")(
+    function* (input, expectedRevision, inputChange) {
+      const key = yield* requireKey(input, "change-key");
+      const change = yield* validate(SubscriptionChange, inputChange, "change");
+
+      yield* validate(Schema.Int.check(Schema.isGreaterThan(0)), expectedRevision, "revision");
+
+      const updated = yield* transactions.run(
+        Effect.gen(function* () {
+          const existing = yield* readRegistration(key, "change-registration");
+
+          if (existing === null) return yield* error("not-found", "subscription");
+          yield* failpoint.hit("subscription:change:before");
+
+          const revised = yield* Effect.fromResult(
+            applySubscriptionChange(existing, expectedRevision, change),
+          );
+
+          const updated = { ...revised, ordinal: yield* nextSequence() };
+
+          yield* writeRegistration(updated);
+
+          return updated;
+        }),
+      );
+
+      yield* failpoint.hit("subscription:change:after");
+
+      return updated;
+    },
+  );
+
   const cancel: SubscriptionStore["Service"]["cancel"] = Effect.fn("SqlSubscriptionStore.cancel")(
-    function* (input) {
+    function* (input, expectedRevision) {
       const key = yield* requireKey(input, "cancel-key");
 
       const result = yield* transactions.run(
@@ -484,8 +541,28 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           const current = yield* readRegistration(key, "cancel subscription");
 
           if (current === null) return yield* error("not-found", "subscription");
+          if (
+            expectedRevision !== undefined &&
+            expectedRevision !== current.configurationRevision &&
+            !(
+              current.state === "cancelled" &&
+              expectedRevision + 1 === current.configurationRevision
+            )
+          )
+            return yield* SubscriptionError.make({
+              reason: "conflict",
+              code: "configuration-revision",
+              currentRevision: current.configurationRevision,
+              currentState: current.state,
+            });
           if (current.state === "cancelled") return { value: current, changed: false } as const;
-          const updated = { ...current, state: "cancelled" as const, recovery: null };
+
+          const updated = {
+            ...current,
+            configurationRevision: current.configurationRevision + 1,
+            state: "cancelled" as const,
+            recovery: null,
+          };
 
           yield* failpoint.hit("subscription:cancel:before");
           yield* writeRegistration(updated);
@@ -517,13 +594,49 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
             return { value: existing, changed: false } as const;
           }
+          yield* Effect.fromResult(
+            validateEventRetention(event, limits, yield* Clock.currentTimeMillis),
+          );
+
+          const retainedPolicies = yield* query(
+            sql<
+              Record<string, unknown>
+            >`SELECT replay_horizon_millis FROM effect_agent_event_retention WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
+            "retained horizon",
+          );
+
+          if (
+            retainedPolicies.length > 0 &&
+            retainedPolicies[0]?.replay_horizon_millis !== limits.retention?.replayHorizonMillis
+          )
+            return yield* error("conflict", "retention-horizon");
+          if (limits.retention !== undefined) {
+            yield* query(
+              sql<
+                Record<string, unknown>
+              >`INSERT INTO effect_agent_event_retention (tenant_id,source_address,replay_horizon_millis,next_maintenance_at_millis)
+            VALUES (${partition.tenantId},${partition.address},${limits.retention.replayHorizonMillis},${event.acceptedAtMillis}) ON CONFLICT DO NOTHING`,
+              "retain event horizon",
+            );
+
+            const policies = yield* query(
+              sql<
+                Record<string, unknown>
+              >`SELECT replay_horizon_millis FROM effect_agent_event_retention WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
+              "retained event horizon",
+            );
+
+            if (policies[0]?.replay_horizon_millis !== limits.retention.replayHorizonMillis)
+              return yield* error("conflict", "retention-horizon");
+          }
+
           if (bytes(event.payload) > limits.maxPayloadBytes)
             return yield* error("capacity", "payload-bytes");
           if (
             (yield* count(
               sql<
                 Record<string, unknown>
-              >`SELECT COUNT(*) AS count FROM effect_agent_subscription_events WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
+              >`SELECT COUNT(*) AS count FROM effect_agent_subscription_events WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND tombstone=0`,
               "count events",
             )) >= limits.maxEvents
           )
@@ -846,10 +959,14 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   const pendingDeliveries: SubscriptionStore["Service"]["pendingDeliveries"] = Effect.fn(
     "SqlSubscriptionStore.pendingDeliveries",
   )(function* (nowMillis, after, limit) {
+    // Malformed bodies remain selectable for isolated decoding. Keep the same CASE guard
+    // in both deadline queries so corruption cannot prevent cursor commits or alarm repair.
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, event_id FROM effect_agent_subscription_deliveries
-      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND state NOT IN ('delivered','refused')
+      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN json_valid(record_json) THEN
+          ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+          ELSE state<>'refused' END
         AND next_attempt_at_millis<=${nowMillis} AND delivery_key>${after} ORDER BY delivery_key LIMIT ${limit}
     `,
       "pending deliveries",
@@ -966,7 +1083,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
   const deferRecovery: SubscriptionStore["Service"]["deferRecovery"] = Effect.fn(
     "SqlSubscriptionStore.deferRecovery",
-  )(function* (input, recovery) {
+  )(function* (input, expectedRevision, recovery) {
     const key = yield* requireKey(input, "defer-recovery-key");
 
     yield* transactions.run(
@@ -974,10 +1091,11 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         const record = yield* readRegistration(key, "defer recovery");
 
         if (record === null) return yield* error("not-found", "subscription");
+        if (record.configurationRevision !== expectedRevision) return;
         yield* failpoint.hit("subscription:defer-recovery:before");
         yield* writeRegistration({
           ...record,
-          recovery: record.state === "active" ? recovery : null,
+          recovery: record.state === "active" || record.state === "paused" ? recovery : null,
         });
       }),
     );
@@ -1032,7 +1150,11 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       SELECT next_attempt_at_millis AS deadline FROM effect_agent_subscription_events
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND routing_complete=0
       UNION ALL SELECT next_attempt_at_millis FROM effect_agent_subscription_deliveries
-        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND state NOT IN ('delivered','refused')
+        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN json_valid(record_json) THEN
+          ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+          ELSE state<>'refused' END
+      UNION ALL SELECT next_maintenance_at_millis FROM effect_agent_event_retention
+          WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
       UNION ALL SELECT recovery_at_millis FROM effect_agent_subscriptions
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND state='active' AND recovery_at_millis IS NOT NULL
     )
@@ -1061,12 +1183,243 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     return yield* indexedDeadline;
   });
 
+  const compact: SubscriptionStore["Service"]["compact"] = Effect.fn(
+    "SqlSubscriptionStore.compact",
+  )(function* (nowMillis, inputPolicy, requestedLimit) {
+    nowMillis = Math.min(nowMillis, yield* Clock.currentTimeMillis);
+    const policy = yield* validate(SubscriptionRetentionPolicy, inputPolicy, "retention-policy");
+
+    const limit = yield* validate(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
+      requestedLimit,
+      "maintenance-limit",
+    );
+
+    const removed = yield* transactions.run(
+      Effect.gen(function* () {
+        yield* failpoint.hit("subscription:compact:before");
+        yield* query(
+          sql<
+            Record<string, unknown>
+          >`INSERT INTO effect_agent_event_retention (tenant_id, source_address, replay_horizon_millis) VALUES (${partition.tenantId}, ${partition.address}, ${policy.replayHorizonMillis}) ON CONFLICT DO NOTHING`,
+          "initialize maintenance",
+        );
+
+        const progress = yield* query(
+          sql<
+            Record<string, unknown>
+          >`SELECT replay_horizon_millis, tombstone_count, event_cursor, delivery_cursor FROM effect_agent_event_retention WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
+          "maintenance progress",
+        ).pipe(
+          Effect.flatMap((rows) =>
+            decodeRows(
+              Schema.Struct({
+                replay_horizon_millis: Schema.Number,
+                tombstone_count: Schema.Natural,
+                event_cursor: Schema.String,
+                delivery_cursor: Schema.String,
+              }),
+              rows,
+              "maintenance progress",
+            ),
+          ),
+        );
+
+        const cursor = progress[0];
+
+        if (progress.length !== 1 || cursor === undefined)
+          return yield* corrupt("maintenance progress");
+        if (cursor.replay_horizon_millis !== policy.replayHorizonMillis)
+          return yield* error("conflict", "retention-horizon");
+
+        const deliveryRows = yield* query(
+          sql<
+            Record<string, unknown>
+          >`SELECT delivery_key, record_json FROM effect_agent_subscription_deliveries WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND delivery_key>${cursor.delivery_cursor} ORDER BY delivery_key LIMIT ${limit}`,
+          "maintenance deliveries",
+        ).pipe(
+          Effect.flatMap((rows) =>
+            decodeRows(
+              Schema.Struct({ delivery_key: Schema.String, record_json: Schema.String }),
+              rows,
+              "maintenance deliveries",
+            ),
+          ),
+        );
+
+        const eventRows = yield* query(
+          sql<
+            Record<string, unknown>
+          >`SELECT event_id, record_json FROM effect_agent_subscription_events WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id>${cursor.event_cursor} ORDER BY event_id LIMIT ${limit}`,
+          "maintenance events",
+        ).pipe(
+          Effect.flatMap((rows) =>
+            decodeRows(
+              Schema.Struct({ event_id: Schema.String, record_json: Schema.String }),
+              rows,
+              "maintenance events",
+            ),
+          ),
+        );
+
+        const protectedByRecovery = (event: AcceptedEvent) =>
+          query(
+            sql<
+              Record<string, unknown>
+            >`SELECT 1 FROM effect_agent_subscriptions WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND source_name=${event.source.name} AND source_version=${event.source.version} AND matching_key=${event.matchingKey} AND recovery_present=1 LIMIT 1`,
+            "maintenance recovery reference",
+          ).pipe(Effect.map((rows) => rows.length > 0));
+
+        const cutoff = nowMillis - policy.completedRetentionMillis;
+
+        for (const row of deliveryRows) {
+          const decoded = yield* decode(
+            SubscriptionDelivery,
+            row.record_json,
+            "maintenance delivery",
+          ).pipe(Effect.result);
+
+          if (Result.isFailure(decoded)) {
+            yield* Effect.logWarning("Subscription retention preserved corrupt delivery");
+            continue;
+          }
+          const delivery = decoded.success;
+
+          if (
+            subscriptionDeliveryKeyString(delivery.key) !== row.delivery_key ||
+            !sameSourcePartition(delivery.key.subscription.partition, partition)
+          ) {
+            yield* Effect.logWarning(
+              "Subscription retention preserved mismatched delivery identity",
+            );
+            continue;
+          }
+
+          if (
+            delivery.state !== "refused" &&
+            (delivery.state !== "delivered" || delivery.settledAtMillis === undefined)
+          )
+            continue;
+          if (
+            (delivery.settledAtMillis ?? delivery.completedAtMillis ?? delivery.selectedAtMillis) >
+            cutoff
+          )
+            continue;
+
+          const accepted = yield* readEvent(
+            delivery.key.eventId,
+            "maintenance delivery event",
+          ).pipe(Effect.result);
+
+          if (Result.isFailure(accepted)) {
+            if (accepted.failure.reason !== "corrupt") return yield* accepted.failure;
+            yield* Effect.logWarning("Subscription retention preserved corrupt event");
+            continue;
+          }
+          const event = accepted.success;
+
+          if (
+            event === null ||
+            !event.routingComplete ||
+            event.occurredAtMillis === undefined ||
+            event.acceptedAtMillis > cutoff ||
+            (yield* protectedByRecovery(event))
+          )
+            continue;
+          yield* query(
+            sql<
+              Record<string, unknown>
+            >`DELETE FROM effect_agent_subscription_deliveries WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND delivery_key=${row.delivery_key}`,
+            "reclaim delivery",
+          );
+        }
+        let removed = 0;
+
+        let tombstones = cursor.tombstone_count;
+
+        for (const row of eventRows) {
+          const decoded = yield* decode(AcceptedEvent, row.record_json, "maintenance event").pipe(
+            Effect.result,
+          );
+
+          if (Result.isFailure(decoded)) {
+            yield* Effect.logWarning("Subscription retention preserved corrupt event");
+            continue;
+          }
+          const event = decoded.success;
+
+          if (event.eventId !== row.event_id || !sameSourcePartition(event.partition, partition)) {
+            yield* Effect.logWarning("Subscription retention preserved mismatched event identity");
+            continue;
+          }
+
+          if (
+            !event.routingComplete ||
+            event.occurredAtMillis === undefined ||
+            event.acceptedAtMillis > cutoff
+          )
+            continue;
+          const expired = event.occurredAtMillis <= nowMillis - policy.replayHorizonMillis;
+
+          if (event.tombstone === true && !expired) continue;
+          if (
+            (yield* query(
+              sql<
+                Record<string, unknown>
+              >`SELECT 1 FROM effect_agent_subscription_deliveries WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId} LIMIT 1`,
+              "maintenance delivery reference",
+            )).length > 0 ||
+            (yield* protectedByRecovery(event))
+          )
+            continue;
+          if (expired) {
+            yield* query(
+              sql<
+                Record<string, unknown>
+              >`DELETE FROM effect_agent_subscription_events WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId}`,
+              "expire event identity",
+            );
+            if (event.tombstone === true) tombstones--;
+          } else {
+            if (tombstones >= policy.maxTombstones) continue;
+            yield* writeEvent({ ...event, payload: null, tombstone: true });
+            tombstones++;
+          }
+          removed++;
+        }
+
+        const remaining =
+          (yield* query(
+            sql<
+              Record<string, unknown>
+            >`SELECT 1 FROM effect_agent_subscription_events WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} LIMIT 1`,
+            "remaining maintenance",
+          )).length > 0;
+
+        yield* query(
+          sql<
+            Record<string, unknown>
+          >`UPDATE effect_agent_event_retention SET tombstone_count=${tombstones}, event_cursor=${eventRows.length < limit ? "" : (eventRows.at(-1)?.event_id ?? "")}, delivery_cursor=${deliveryRows.length < limit ? "" : (deliveryRows.at(-1)?.delivery_key ?? "")}, next_maintenance_at_millis=${remaining ? nowMillis + 60_000 : null} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
+          "advance maintenance",
+        );
+
+        return removed;
+      }),
+    );
+
+    yield* failpoint.hit("subscription:compact:after");
+
+    return removed;
+  });
+
   return SubscriptionStore.of({
     partition,
+    compact,
     register,
     get,
     list,
     cancel,
+    change,
     accept,
     event,
     pendingEvents,

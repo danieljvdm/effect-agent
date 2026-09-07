@@ -60,6 +60,7 @@ import {
 } from "./observability-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 import {
+  subscriptionAlarmExtensionLayer,
   subscriptionAuthorizerLayer,
   subscriptionFailpointLayer,
   subscriptionSourcesLayer,
@@ -138,6 +139,7 @@ export class TestScheduleOwnerObject extends makeScheduleOwnerObjectClass(schedu
 }
 
 const subscriptionHostLayer = Layer.mergeAll(
+  subscriptionAlarmExtensionLayer,
   subscriptionAuthorizerLayer,
   subscriptionSourcesLayer,
   subscriptionFailpointLayer,

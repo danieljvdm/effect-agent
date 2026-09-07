@@ -86,6 +86,9 @@ const record = ScheduleRecord.make({
   pending: {
     envelope,
     retry: {
+      generation: 0,
+      automaticAttempts: 0,
+      parked: false,
       attempts: 1,
       nextAttemptAtMillis: 1_110,
       lastAttemptAtMillis: 110,
@@ -122,6 +125,9 @@ const snapshot = ScheduleSnapshot.make({
     preparedAtMillis: 110,
     occurrenceId,
     retry: {
+      generation: 0,
+      automaticAttempts: 0,
+      parked: false,
       attempts: 1,
       nextAttemptAtMillis: 1_110,
       lastAttemptAtMillis: 110,
@@ -205,6 +211,9 @@ describe("Schedule persisted schemas", () => {
         _tag: "Retry",
         occurrenceId,
         retry: {
+          generation: 0,
+          automaticAttempts: 0,
+          parked: false,
           attempts: 2,
           nextAttemptAtMillis: 1_200,
           lastAttemptAtMillis: 120,

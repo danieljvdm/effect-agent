@@ -120,7 +120,7 @@ type DriverRequirementsProof = Assert<
 type ManagementKeysProof = Assert<
   Equal<
     keyof Scheduling["Service"],
-    "create" | "update" | "get" | "list" | "pause" | "resume" | "cancel"
+    "create" | "update" | "get" | "list" | "pause" | "resume" | "cancel" | "recover"
   >
 >;
 

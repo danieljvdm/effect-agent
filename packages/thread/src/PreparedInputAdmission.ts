@@ -2,12 +2,17 @@ import { Context, Effect } from "effect";
 
 import type { Receipt } from "./DurableAgentRuntime.ts";
 import { type ScheduledInputFailure, ScheduleStorageError } from "./Schedule.ts";
+import type { SubmissionStatus } from "./SubmissionStatus.ts";
 import type { PreparedInput } from "./Subscription.ts";
 
 /** Host admission shared by event deliveries and scheduling adapters. */
 export class PreparedInputAdmission extends Context.Service<
   PreparedInputAdmission,
   {
+    /** Required when retention is configured; reports canonical settlement without releasing group ownership itself. */
+    readonly submissionStatus?: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionStatus, ScheduledInputFailure>;
     readonly submit: (envelope: PreparedInput) => Effect.Effect<Receipt, ScheduledInputFailure>;
   }
 >()("@effect-agent/thread/PreparedInputAdmission") {}

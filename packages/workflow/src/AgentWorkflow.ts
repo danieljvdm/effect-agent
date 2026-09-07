@@ -5,6 +5,7 @@ import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpo
 import { OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
 import {
   AdmissionConflict,
+  AdmissionPolicyError,
   LedgerError,
   SettlementConflict,
 } from "@effect-agent/thread/SubmissionLedger";
@@ -29,6 +30,7 @@ export const Error = Schema.Union([
   AgentInputError,
   AgentOutputError,
   AdmissionConflict,
+  AdmissionPolicyError,
   AppendConflict,
   BindingUnavailable,
   DigestError,

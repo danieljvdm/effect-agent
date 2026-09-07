@@ -78,7 +78,8 @@ Recovery retries that exact envelope until Receipt or conclusive refusal and nev
 from later configuration.
 
 **Subscription**
-An immutable, owner-scoped registration for Schema-defined events at one stable source partition.
+A revisioned, owner-scoped registration for Schema-defined events at one stable source partition.
+Selected deliveries retain immutable configuration even when future selection is edited or paused.
 A once registration is consumed when an event is atomically selected, before input preparation.
 A continuous registration creates a separate delivery obligation for each selected event.
 

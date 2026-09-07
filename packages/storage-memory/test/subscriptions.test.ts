@@ -6,7 +6,13 @@ import { EventSources, makeEventSource } from "@effect-agent/thread/EventSource"
 import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
 import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
 import { ScheduledInputRefused, ScheduledInputRetryable } from "@effect-agent/thread/Schedule";
-import { Principal, QueueSequence } from "@effect-agent/thread/SubmissionLedger";
+import {
+  Settlement,
+  submissionSettlementId,
+  Principal,
+  QueueSequence,
+} from "@effect-agent/thread/SubmissionLedger";
+import { SettledSubmission } from "@effect-agent/thread/SubmissionStatus";
 import {
   AcceptedEvent,
   SubscriptionAuthorizer,
@@ -34,7 +40,7 @@ import {
 } from "@effect-agent/thread/Subscriptions";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { DateTime, Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
 const partition = { tenantId: "tenant", address: "repository:42" };
@@ -45,7 +51,13 @@ const agentId = Schema.decodeSync(AgentId)("subscription-agent");
 const threadId = Schema.decodeSync(ThreadId)("subscription-thread");
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
-const Event = Schema.Struct({ id: Schema.String, key: Schema.String, text: Schema.String });
+
+const Event = Schema.Struct({
+  id: Schema.String,
+  key: Schema.String,
+  text: Schema.String,
+  occurredAtMillis: Schema.optionalKey(Schema.Number),
+});
 
 type Event = typeof Event.Type;
 const Input = Schema.Struct({ text: Schema.String });
@@ -93,6 +105,7 @@ interface Scenario {
   readonly prepare?: (event: Event) => Effect.Effect<typeof Input.Type, SubscriptionSourceError>;
   readonly reconcile?: () => Effect.Effect<Event | null, SubscriptionSourceError>;
   readonly submit?: PreparedInputAdmission["Service"]["submit"];
+  readonly submissionStatus?: NonNullable<PreparedInputAdmission["Service"]["submissionStatus"]>;
   readonly authorize?: SubscriptionAuthorizer["Service"]["prepare"];
   readonly authorizeIntake?: SubscriptionAuthorizer["Service"]["intake"];
   readonly authorizeReconcile?: SubscriptionAuthorizer["Service"]["reconcile"];
@@ -114,6 +127,7 @@ const layer = (scenario: Scenario = {}) => {
       event: Event,
       parameters: Schema.Struct({ key: Schema.String }),
       identity: (e) => e.id,
+      occurredAtMillis: (e) => e.occurredAtMillis,
       eventKey: (e) => e.key,
       parameterKey: (p) => p.key,
       matches: (e, p) => e.key === p.key,
@@ -146,6 +160,9 @@ const layer = (scenario: Scenario = {}) => {
         (() => Effect.succeed({ policyId: "policy", decisionId: "decision" })),
     }),
     Layer.succeed(PreparedInputAdmission, {
+      ...(scenario.submissionStatus === undefined
+        ? {}
+        : { submissionStatus: scenario.submissionStatus }),
       submit: scenario.submit ?? ((input) => Effect.succeed(receipt(input))),
     }),
   );
@@ -177,6 +194,242 @@ const registerAndAccept = Effect.gen(function* () {
 });
 
 describe("Durable subscription delivery", () => {
+  it.effect("keeps explicit indefinite lifetime separate from finite deadline bounds", () =>
+    Effect.gen(function* () {
+      const management = yield* Subscriptions;
+
+      expect(
+        yield* management
+          .subscribe(scope, {
+            ...options("too-long"),
+            expiresAtMillis: limits.maxLifetimeMillis + 1,
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "validation" });
+      yield* management.subscribe(scope, { ...options("indefinite"), expiresAtMillis: null });
+      yield* TestClock.adjust(limits.maxLifetimeMillis + 1);
+      expect((yield* management.getSubscription(scope, key("indefinite").subscription)).state).toBe(
+        "active",
+      );
+      yield* (yield* SubscriptionIntake).accept(principal, source, event("completion"));
+      yield* drain();
+      expect((yield* (yield* SubscriptionStore).delivery(key("indefinite")))?.state).toBe(
+        "delivered",
+      );
+      expect(yield* (yield* SubscriptionStore).nextDeadline).toBeNull();
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("pins selected configuration while CAS edits pause and resume future selection", () => {
+    const admitted: Array<PreparedInput> = [];
+
+    return Effect.gen(function* () {
+      const management = yield* Subscriptions;
+      const intake = yield* SubscriptionIntake;
+
+      yield* management.subscribe(scope, options("watch", "continuous"));
+      yield* intake.accept(principal, source, event("old"));
+      yield* drain(1);
+      const original = yield* (yield* SubscriptionStore).delivery(key("watch", "old"));
+
+      const changed = yield* management.updateSubscription(scope, key().subscription, 1, {
+        ...options("watch", "continuous"),
+        context: { text: "changed" },
+      });
+
+      expect(changed.configurationRevision).toBe(2);
+      yield* drain();
+      expect(admitted[0]?.admissionKey).toBe(original?.admissionKey);
+      expect(
+        (yield* (yield* SubscriptionStore).delivery(key("watch", "old")))?.configuration?.context,
+      ).toEqual({ text: "private-continuation" });
+      yield* management.pauseSubscription(scope, key().subscription, 2);
+      yield* intake.accept(principal, source, event("paused"));
+      yield* drain();
+      expect(admitted).toHaveLength(1);
+      yield* management.resumeSubscription(scope, key().subscription, 3);
+
+      const stale = yield* management
+        .pauseSubscription(scope, key().subscription, 2)
+        .pipe(Effect.flip);
+
+      expect(stale).toMatchObject({
+        reason: "conflict",
+        currentRevision: 4,
+        currentState: "active",
+      });
+      yield* intake.accept(principal, source, event("new"));
+      yield* drain();
+      expect(admitted).toHaveLength(2);
+      expect(
+        (yield* management.subscribe(scope, options("watch", "continuous"))).configurationRevision,
+      ).toBe(4);
+    }).pipe(
+      Effect.provide(
+        layer({
+          submit: (input) =>
+            Effect.sync(() => {
+              admitted.push(input);
+
+              return receipt(input);
+            }),
+        }),
+      ),
+    );
+  });
+
+  it.effect(
+    "parks ambiguous admission and explicitly recovers the same envelope after cancellation",
+    () => {
+      const attempts: Array<PreparedInput> = [];
+      let recovered = false;
+
+      return Effect.gen(function* () {
+        yield* registerAndAccept;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          yield* drain();
+          yield* TestClock.adjust(10);
+        }
+        const store = yield* SubscriptionStore;
+
+        expect((yield* store.delivery(key()))?.retry).toMatchObject({ attempts: 3, parked: true });
+        yield* TestClock.adjust(1000);
+        yield* drain();
+        expect(attempts).toHaveLength(3);
+        yield* (yield* Subscriptions).cancelSubscription(scope, key().subscription, 1);
+        recovered = true;
+        yield* (yield* Subscriptions).recoverDelivery(scope, key(), 0);
+        yield* drain();
+        expect((yield* store.delivery(key()))?.state).toBe("delivered");
+        expect(attempts).toHaveLength(4);
+        expect(
+          attempts.every((envelope) => envelope.admissionKey === attempts[0]?.admissionKey),
+        ).toBe(true);
+      }).pipe(
+        Effect.provide(
+          layer({
+            limits: { ...limits, maxAutomaticAttempts: 3 },
+            submit: (input) =>
+              Effect.suspend(() => {
+                attempts.push(input);
+
+                return recovered
+                  ? Effect.succeed(receipt(input))
+                  : ScheduledInputRetryable.make({ reason: "ambiguous" });
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect(
+    "sustains over 1000 distinct events with bounded retention and rejects expired replay",
+    () => {
+      let admitted = 0;
+
+      return Effect.gen(function* () {
+        yield* (yield* Subscriptions).subscribe(scope, options("watch", "continuous"));
+        const intake = yield* SubscriptionIntake;
+        const store = yield* SubscriptionStore;
+
+        for (let index = 0; index < 1005; index++) {
+          const payload = { ...event(`event-${index}`), occurredAtMillis: index * 20 };
+
+          yield* intake.accept(principal, source, payload);
+          yield* drain(4);
+          yield* intake.accept(principal, source, payload);
+          expect(
+            (yield* (yield* Subscriptions).listDeliveries(scope, key().subscription)).items.length,
+          ).toBeLessThanOrEqual(4);
+          yield* TestClock.adjust(20);
+        }
+        expect(admitted).toBe(1005);
+        expect(yield* store.event("event-0")).toBeNull();
+        expect(
+          yield* intake
+            .accept(principal, source, { ...event("event-0"), occurredAtMillis: 0 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ code: "event-replay-horizon" });
+        expect(yield* store.nextDeadline).not.toBeNull();
+      }).pipe(
+        Effect.provide(
+          layer({
+            limits: {
+              ...limits,
+              maxEvents: 4,
+              maxDeliveries: 4,
+              maxDeliveriesPerOwner: 4,
+              retention: {
+                replayHorizonMillis: 100,
+                completedRetentionMillis: 0,
+                maxTombstones: 8,
+              },
+            },
+            submissionStatus: (receipt) =>
+              Effect.succeed(
+                SettledSubmission.make({
+                  settlement: Settlement.make({
+                    submissionId: receipt.submissionId,
+                    receiptId: receipt.receiptId,
+                    settlementId: submissionSettlementId(receipt.submissionId),
+                    outcome: "completed",
+                    settledAt: DateTime.makeUnsafe(0),
+                  }),
+                }),
+              ),
+            submit: (input) =>
+              Effect.sync(() => {
+                admitted++;
+
+                return receipt(input);
+              }),
+          }),
+        ),
+      );
+    },
+    { timeout: 30_000 },
+  );
+
+  it.effect("defers failed settlement probes while retaining admitted evidence", () => {
+    let probes = 0;
+
+    return Effect.gen(function* () {
+      yield* (yield* Subscriptions).subscribe(scope, options("watch"));
+      yield* (yield* SubscriptionIntake).accept(principal, source, {
+        ...event("completion"),
+        occurredAtMillis: 0,
+      });
+      yield* drain();
+      expect(probes).toBe(1);
+      expect(yield* (yield* SubscriptionStore).delivery(key())).toMatchObject({
+        state: "delivered",
+        observeSettlement: true,
+        retry: { generation: 0, automaticAttempts: 0, parked: false, nextAttemptAtMillis: 10 },
+      });
+      yield* drain();
+      expect(probes).toBe(1);
+      yield* TestClock.adjust(10);
+      yield* drain();
+      expect(probes).toBe(2);
+    }).pipe(
+      Effect.provide(
+        layer({
+          limits: {
+            ...limits,
+            retention: { replayHorizonMillis: 100, completedRetentionMillis: 0, maxTombstones: 8 },
+          },
+          submissionStatus: () =>
+            Effect.suspend(() => {
+              probes++;
+
+              return ScheduledInputRetryable.make({ reason: "transport" });
+            }),
+        }),
+      ),
+    );
+  });
+
   it.effect("prepares one event for different Agents and retained definition versions", () =>
     Effect.gen(function* () {
       const otherAgent = Schema.decodeSync(AgentId)("other-agent");
@@ -976,6 +1229,84 @@ describe("Durable subscription delivery", () => {
       ),
     );
   });
+
+  for (const failure of ["corrupt", "defect", "timeout"] as const) {
+    it.effect(`isolates ${failure} recovery reads while routing, delivering and reclaiming`, () => {
+      const configured: SubscriptionLimits = {
+        ...limits,
+        retention: {
+          replayHorizonMillis: 10_000,
+          completedRetentionMillis: 0,
+          maxTombstones: 8,
+        },
+      };
+
+      return Effect.gen(function* () {
+        const subscriptions = yield* Subscriptions;
+
+        yield* subscriptions.subscribe(scope, options("healthy"));
+        const intake = yield* SubscriptionIntake;
+
+        yield* intake.accept(principal, source, { ...event("delivery"), occurredAtMillis: 0 });
+        yield* drain(1);
+        yield* subscriptions.subscribe(scope, {
+          ...options("broken"),
+          parameters: { key: "other" },
+        });
+        yield* intake.accept(principal, source, {
+          ...event("reclaim"),
+          key: "unmatched",
+          occurredAtMillis: 0,
+        });
+        const store = yield* SubscriptionStore;
+        const original = yield* store.get(key("broken").subscription);
+
+        const faulty = SubscriptionStore.of({
+          ...store,
+          get: (key) =>
+            key.subscriptionId !== "broken"
+              ? store.get(key)
+              : failure === "corrupt"
+                ? SubscriptionError.make({ reason: "corrupt", code: "registration-record" })
+                : failure === "defect"
+                  ? Effect.die("injected read defect")
+                  : Effect.never,
+        });
+
+        yield* Effect.gen(function* () {
+          const driver = yield* SubscriptionDriver;
+
+          for (let pass = 0; pass < 2; pass++) {
+            const sweep = yield* Effect.forkChild(driver.runDue);
+
+            yield* TestClock.adjust(configured.operationTimeoutMillis);
+            expect(yield* Fiber.join(sweep)).toMatchObject({ failed: 1 });
+            // One recovery row is smaller than the page: the cursor wraps on every pass.
+            expect((yield* store.readScanCursors).recovery).toBe(0);
+          }
+        }).pipe(
+          Effect.provide(
+            SubscriptionDriver.layer(configured).pipe(
+              Layer.provide(Layer.succeed(SubscriptionStore, faulty)),
+            ),
+          ),
+        );
+        expect((yield* store.delivery(key("healthy", "delivery")))?.state).toBe("delivered");
+        expect((yield* store.event("reclaim"))?.tombstone).toBe(true);
+        expect((yield* store.get(key("broken").subscription))?.recovery).toEqual(
+          original?.recovery,
+        );
+      }).pipe(
+        Effect.provide(
+          layer({
+            limits: configured,
+            reconcile: () => Effect.succeed(null),
+            submissionStatus: () => ScheduledInputRetryable.make({ reason: "storage" }),
+          }),
+        ),
+      );
+    });
+  }
 
   it.effect(
     "commits sweep progress before work and continues after a corrupt event across driver restart",

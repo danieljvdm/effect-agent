@@ -6,8 +6,9 @@ import {
 } from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
 import { defaultSubscriptionLimits } from "@effect-agent/thread/Subscription";
 import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
-import { env, runDurableObjectAlarm } from "cloudflare:test";
-import { Effect, Layer } from "effect";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { DateTime, Effect, Layer } from "effect";
+import { DurableObject, DurableObjectAlarm } from "effect-cf";
 import { expect, it } from "vite-plus/test";
 
 import { laneRows } from "./harness.ts";
@@ -177,3 +178,85 @@ for (const [caseIndex, row] of cases.entries()) {
     }
   });
 }
+
+it("isolates failed and unknown ancillary alarms while advancing native work and preserving replacements", async () => {
+  const partition = { tenantId: "alarm-fairness", address: "events" };
+  const stub = env.SUBSCRIPTIONS.get(env.SUBSCRIPTIONS.idFromName(sourcePartitionName(partition)));
+
+  // Keep the input gate closed through inspection: an automatic 10ms retry can otherwise
+  // consume the newly armed wake between dispatch and getAlarm(), racing this assertion.
+  const rows = await runInDurableObject(stub, (instance, state) =>
+    state.blockConcurrencyWhile(async () => {
+      await instance[DurableObject.RunSymbol](
+        Effect.gen(function* () {
+          const alarms = yield* DurableObjectAlarm.DurableObjectAlarm;
+
+          for (const [index, tag] of [
+            "test/failing",
+            "test/unknown",
+            "effect-agent/unknown",
+            "test/replacement",
+            "effect-agent/SubscriptionPartitionWake",
+          ].entries()) {
+            yield* alarms.scheduleAlarm({
+              tag,
+              id: tag.startsWith("effect-agent/Subscription") ? "driver" : "one",
+              runAt: DateTime.makeUnsafe(Date.now() - 100 + index),
+              payload:
+                tag === "test/replacement"
+                  ? 1
+                  : tag.startsWith("effect-agent/Subscription")
+                    ? { schemaVersion: 1, generation: 1 }
+                    : null,
+            });
+          }
+        }),
+      );
+      await state.storage.deleteAlarm();
+      await instance.alarm();
+
+      try {
+        const rows = state.storage.sql
+          .exec<{ tag: string; payload: string; run_at: number }>(
+            "SELECT tag, payload, run_at FROM effect_cf_scheduled_alarms ORDER BY tag",
+          )
+          .toArray();
+
+        expect(await state.storage.getAlarm()).not.toBeNull();
+
+        return rows;
+      } finally {
+        // Stop this fixture's intentionally failing retries after verifying rearm.
+        await state.storage.deleteAlarm();
+      }
+    }),
+  );
+
+  expect(rows.map((row) => row.tag)).toEqual([
+    "effect-agent/unknown",
+    "test/failing",
+    "test/replacement",
+    "test/unknown",
+  ]);
+  const replacement = rows.find((row) => row.tag === "test/replacement");
+
+  expect(replacement?.payload).toBe("2");
+  expect(replacement?.run_at).toBeGreaterThan(Date.now() + 30_000);
+});
+
+it("reserves ancillary callback time within the total partition alarm budget", async () => {
+  const limits = {
+    ...defaultSubscriptionLimits,
+    batchSize: 2,
+    concurrency: 1,
+    operationTimeoutMillis: 60_000,
+  };
+
+  await Effect.runPromise(validateCloudflareSubscriptionLimits(limits));
+
+  const failure = await Effect.runPromise(
+    validateCloudflareSubscriptionLimits(limits, { ancillaryAlarms: true }).pipe(Effect.flip),
+  );
+
+  expect(failure._tag).toBe("CloudflareSubscriptionConfigError");
+});

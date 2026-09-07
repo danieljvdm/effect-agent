@@ -217,6 +217,8 @@ import {
   turnResultsBatch,
 } from "./RunJournal.ts";
 import {
+  type AdmissionFence,
+  type AdmissionPolicyError,
   type AbortIntent,
   AbortIntentRequest,
   type AdmissionConflict,
@@ -510,6 +512,8 @@ export interface DurableSubmitOptions {
   readonly threadId: ThreadId;
   readonly principal: Principal;
   readonly idempotencyKey: IdempotencyKey;
+  readonly admissionGroup?: string;
+  readonly admissionFence?: AdmissionFence;
   /** Application-computed digests of the Agent/Model/Toolkit definitions (see `digestDefinitions`). */
   readonly definitions: DefinitionDigests;
 }
@@ -531,6 +535,7 @@ export type DurableSubmitFailure =
   | AgentInputError
   | DigestError
   | AdmissionConflict
+  | AdmissionPolicyError
   | LedgerError
   | ThreadStoreError
   | ThreadNotMaterialized
@@ -539,6 +544,7 @@ export type DurableSubmitFailure =
   | DurableRuntimeFailpointError;
 
 export type DurableWorkerFailure =
+  | AdmissionPolicyError
   | DigestError
   | LedgerError
   | OwnershipLost
@@ -7949,16 +7955,25 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const inputDigest = yield* withCrypto(digestJson(inputPayload));
 
     const admitted = yield* ledger.admit(
-      AdmissionRequest.make({
+      yield* Schema.decodeUnknownEffect(AdmissionRequest)({
         threadId: options.threadId,
         principal: options.principal,
         idempotencyKey: options.idempotencyKey,
+        ...(options.admissionGroup === undefined ? {} : { admissionGroup: options.admissionGroup }),
+        ...(options.admissionFence === undefined ? {} : { admissionFence: options.admissionFence }),
         agentId: agent.definition.id,
         agentDigests: options.definitions,
         deploymentId: config.deploymentId,
         inputPayload,
         inputDigest,
-      }),
+      }).pipe(
+        Effect.mapError(() =>
+          LedgerError.make({
+            operation: "submit",
+            message: "Admission fields do not satisfy the ledger contract",
+          }),
+        ),
+      ),
     );
 
     yield* hit("submit:after-admit");
@@ -8036,10 +8051,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         message: `Unknown Submission ${receipt.submissionId}`,
       });
     }
-    if (snapshot.value.threadId !== receipt.threadId) {
+    if (
+      snapshot.value.threadId !== receipt.threadId ||
+      snapshot.value.receiptId !== receipt.receiptId ||
+      snapshot.value.queueSequence !== receipt.queueSequence
+    ) {
       return yield* OperationDenied.make({
         operation: "awaitSettlement",
-        reason: "Receipt Submission does not belong to the authorized Thread",
+        reason: "Receipt does not match the authorized Submission",
         threadId: receipt.threadId,
         submissionId: receipt.submissionId,
       });

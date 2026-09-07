@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 /** The current storage version recorded in `effect_agent_meta`. */
-export const CurrentDoStorageVersion = 2;
+export const CurrentDoStorageVersion = 3;
 
 /**
  * The Thread Durable Object schema shares its thread and ledger tables with Node/SQLite.
@@ -108,6 +108,8 @@ export const doMigrations = SqliteMigrator.fromRecord({
         unknown_tool_call_ids_json TEXT,
         parent_submission_id TEXT,
         parent_tool_call_id TEXT,
+        admission_group TEXT,
+        admission_fence_json TEXT,
         UNIQUE (thread_id, principal, idempotency_key),
         UNIQUE (thread_id, queue_sequence)
       )
@@ -121,6 +123,11 @@ export const doMigrations = SqliteMigrator.fromRecord({
     yield* sql`
       CREATE INDEX effect_agent_submissions_parent
         ON effect_agent_submissions (parent_submission_id)
+    `.withoutTransform;
+
+    yield* sql`
+      CREATE INDEX effect_agent_submissions_group
+        ON effect_agent_submissions (thread_id, admission_group, state)
     `.withoutTransform;
 
     yield* sql`

@@ -75,6 +75,8 @@ describe("restricted subscription Tools", () => {
       }> = [];
 
       const subscriptions = Subscriptions.of({
+        getSubscription: () => Effect.die("unused"),
+        recoverSubscription: () => Effect.die("unused"),
         subscribe: (requestedScope, options) => {
           return Effect.sync(() => {
             calls.push({ scope: requestedScope, options });
@@ -88,12 +90,18 @@ describe("restricted subscription Tools", () => {
               source: options.source,
               mode: options.mode,
               state: "active",
+              configurationRevision: 1,
+              configurationFingerprint: digest,
               createdAtMillis: 50,
               expiresAtMillis: options.expiresAtMillis,
               recovery: null,
             });
           });
         },
+        recoverDelivery: () => Effect.die("unused"),
+        updateSubscription: () => Effect.die("unused"),
+        pauseSubscription: () => Effect.die("unused"),
+        resumeSubscription: () => Effect.die("unused"),
         listSubscriptions: () => Effect.succeed({ items: [], next: null }),
         cancelSubscription: () => Effect.die("unused"),
         listDeliveries: () => Effect.die("unused"),

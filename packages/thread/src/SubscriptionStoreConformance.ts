@@ -1,5 +1,6 @@
 import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core/Identifiers";
-import { Effect, Result, Schema } from "effect";
+import { Clock, Effect, Result, Schema } from "effect";
+import { TestClock } from "effect/testing";
 
 import { Receipt } from "./DurableAgentRuntime.ts";
 import { DefinitionDigests, Digest } from "./Records.ts";
@@ -55,6 +56,20 @@ const record = (
   createdBy: principal,
   createdAtMillis: 1,
   ordinal: 0,
+  configurationRevision: 1,
+  configurationFingerprint: digest(name.charCodeAt(0) % 2 === 0 ? "d" : "e"),
+  creationConfiguration: {
+    source: { name: "trusted", version: "1" },
+    matchingKey: "match",
+    parameters: { name },
+    context: { name },
+    mode,
+    expiresAtMillis: 100_000,
+    destination: { _tag: "ExistingThread", threadId },
+    deliveryPrincipal: principal,
+    agentId,
+    definitions,
+  },
   configuration: {
     source: { name: "trusted", version: "1" },
     matchingKey: "match",
@@ -99,7 +114,9 @@ const delivery = (
     key: { subscription: subscription.key, eventId: accepted.eventId },
     deliveryId,
     source: accepted.source,
-    subscriptionFingerprint: subscription.creationFingerprint,
+    subscriptionFingerprint: subscription.configurationFingerprint,
+    configurationRevision: subscription.configurationRevision,
+    configuration: subscription.configuration,
     eventDigest: accepted.payloadDigest,
     threadId,
     admissionKey: Schema.decodeSync(IdempotencyKey)(`subscription:${deliveryId}`),
@@ -107,7 +124,15 @@ const delivery = (
     state: "selected",
     envelope: null,
     envelopeDigest: null,
-    retry: { attempts: 0, nextAttemptAtMillis: 20, lastAttemptAtMillis: null, lastFailure: null },
+    retry: {
+      generation: 0,
+      attempts: 0,
+      automaticAttempts: 0,
+      parked: false,
+      nextAttemptAtMillis: 20,
+      lastAttemptAtMillis: null,
+      lastFailure: null,
+    },
     receipt: null,
     refusal: null,
   };
@@ -333,6 +358,9 @@ const preparationLifecycle = conformanceCase(
       });
 
       const retry = {
+        generation: 0,
+        automaticAttempts: 0,
+        parked: false,
         attempts: 2,
         nextAttemptAtMillis: 60,
         lastAttemptAtMillis: 35,
@@ -454,7 +482,412 @@ const replayUnderTighterLimits = conformanceCase(
     }),
 );
 
+const revisionsAndRetention = conformanceCase(
+  "preserves historical selection, CAS revisions, and unsettled evidence during retention",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* SubscriptionStore;
+      const now = yield* Clock.currentTimeMillis;
+      const policy = { replayHorizonMillis: 10_000, completedRetentionMillis: 0, maxTombstones: 8 };
+      const limits = { ...defaultSubscriptionLimits, retention: policy };
+      const indefinite = record("revision", "continuous");
+
+      const original = yield* store.register(
+        {
+          ...indefinite,
+          configuration: { ...indefinite.configuration, expiresAtMillis: null },
+        },
+        limits,
+      );
+
+      yield* ensure(
+        original.configuration.expiresAtMillis === null,
+        "UntilCancelled must remain explicit",
+      );
+      yield* ensure(
+        (yield* store.nextDeadline) === null,
+        "UntilCancelled cannot create an expiry wake",
+      );
+
+      const accepted = yield* store.accept(
+        { ...event("retained"), occurredAtMillis: now, acceptedAtMillis: now },
+        limits,
+      );
+
+      const selected = {
+        ...delivery(original, accepted),
+        configuration: original.configuration,
+        configurationRevision: 1,
+      };
+
+      yield* store.select(
+        accepted,
+        [selected],
+        original.ordinal,
+        true,
+        now + limits.maxLifetimeMillis + 1,
+        limits,
+      );
+      yield* ensure(
+        (yield* store.delivery(selected.key)) !== null,
+        "UntilCancelled cannot expire at the ordinary maximum lifetime",
+      );
+
+      const updated = yield* store.change(original.key, 1, {
+        _tag: "Update",
+        configuration: { ...original.configuration, context: { edited: true } },
+        configurationFingerprint: digest("9"),
+        recovery: null,
+      });
+
+      yield* ensure(
+        updated.configurationRevision === 2 && updated.creationConfiguration !== undefined,
+        "Update must preserve creation evidence and advance revision",
+      );
+      const stale = yield* store.change(original.key, 1, { _tag: "Pause" }).pipe(Effect.result);
+
+      yield* ensure(Result.isFailure(stale), "Stale management must conflict");
+      yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Prepare",
+        envelope: preparedInput(selected),
+        envelopeDigest: digest("4"),
+        nowMillis: now,
+      });
+      yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Complete",
+        receipt,
+        nowMillis: now,
+      });
+      yield* store.compact(now, policy, 8);
+      yield* ensure(
+        (yield* store.delivery(selected.key)) !== null,
+        "Admission is not settlement; delivery evidence must remain",
+      );
+      yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "ObserveSettlement",
+        receipt,
+        settled: true,
+        nowMillis: now,
+        nextAttemptAtMillis: now,
+      });
+      const recovering = yield* store.register(record("recovering-retention", "once"), limits);
+
+      yield* store.deferRecovery(recovering.key, recovering.configurationRevision, {
+        attempts: 1,
+        nextAttemptAtMillis: null,
+        lastFailure: "source-unavailable",
+      });
+      yield* store.compact(now, policy, 8);
+      yield* ensure(
+        (yield* store.delivery(selected.key)) !== null,
+        "Permanent recovery evidence must protect retained source facts",
+      );
+      yield* store.deferRecovery(recovering.key, recovering.configurationRevision, null);
+      yield* store.compact(now, policy, 8);
+      yield* ensure(
+        (yield* store.delivery(selected.key)) === null,
+        "Settled delivery must release retained capacity",
+      );
+      yield* ensure(
+        (yield* store.event(accepted.eventId))?.tombstone === true,
+        "Deduplication tombstone must outlive completed payload",
+      );
+      const replay = yield* store.accept(accepted, limits);
+
+      yield* ensure(
+        Result.isFailure(
+          yield* store
+            .accept({ ...accepted, occurredAtMillis: now + 1 }, limits)
+            .pipe(Effect.result),
+        ),
+        "An event identity cannot replace its retained source timestamp",
+      );
+
+      yield* ensure(
+        Result.isFailure(
+          yield* store.compact(now, { ...policy, replayHorizonMillis: 1 }, 8).pipe(Effect.result),
+        ),
+        "Compaction cannot change the persisted replay horizon",
+      );
+      yield* ensure(
+        Result.isFailure(
+          yield* store
+            .accept(event("without-policy"), defaultSubscriptionLimits)
+            .pipe(Effect.result),
+        ),
+        "Fresh intake cannot disable established retention",
+      );
+      yield* ensure(
+        replay.cutoff === accepted.cutoff && replay.tombstone === true,
+        "Duplicate intake cannot reopen routing after compaction",
+      );
+    }),
+);
+
+const sustainedRetention = conformanceCase(
+  "processes more than 1000 distinct events within fixed retained quotas",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* SubscriptionStore;
+      const policy = { replayHorizonMillis: 100, completedRetentionMillis: 0, maxTombstones: 8 };
+
+      const limits = {
+        ...defaultSubscriptionLimits,
+        maxEvents: 4,
+        maxDeliveries: 4,
+        maxDeliveriesPerOwner: 4,
+        retention: policy,
+      };
+
+      const registration = yield* store.register(record("sustained", "continuous"), limits);
+
+      for (let index = 0; index < 1005; index++) {
+        const now = yield* Clock.currentTimeMillis;
+
+        const accepted = yield* store.accept(
+          { ...event(`retained-${index}`), occurredAtMillis: now, acceptedAtMillis: now },
+          limits,
+        );
+
+        const deliveryId = Schema.decodeSync(Digest)(index.toString(16).padStart(64, "0"));
+
+        const selected = {
+          ...delivery(registration, accepted),
+          deliveryId,
+          admissionKey: Schema.decodeSync(IdempotencyKey)(`subscription:${deliveryId}`),
+        };
+
+        yield* store.select(accepted, [selected], registration.ordinal, true, now, limits);
+        yield* store.changeDelivery(selected.key, selected.deliveryId, {
+          _tag: "Prepare",
+          envelope: preparedInput(selected),
+          envelopeDigest: digest("4"),
+          nowMillis: now,
+        });
+        yield* store.changeDelivery(selected.key, selected.deliveryId, {
+          _tag: "Complete",
+          receipt,
+          nowMillis: now,
+        });
+        yield* store.changeDelivery(selected.key, selected.deliveryId, {
+          _tag: "ObserveSettlement",
+          receipt,
+          settled: true,
+          nowMillis: now,
+          nextAttemptAtMillis: now,
+        });
+        yield* store.compact(now, policy, 8);
+        yield* ensure(
+          (yield* store.accept(accepted, limits)).tombstone === true,
+          "Duplicate acknowledgement must preserve its tombstone",
+        );
+        yield* TestClock.adjust(20);
+      }
+      yield* ensure(
+        (yield* store.event("retained-0")) === null,
+        "Expired identity must be reclaimed",
+      );
+
+      const expired = yield* store
+        .accept({ ...event("retained-0"), occurredAtMillis: 0 }, limits)
+        .pipe(Effect.result);
+
+      yield* ensure(
+        Result.isFailure(expired),
+        "Reclaimed identity must not be admitted after its replay horizon",
+      );
+    }),
+);
+
+const recoveryRevisionFence = conformanceCase(
+  "fences source recovery across pause, resume and configuration replacement",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* SubscriptionStore;
+
+      const initial = yield* store.register(
+        {
+          ...record("recovery-revisions"),
+          recovery: { attempts: 0, nextAttemptAtMillis: 10, lastFailure: null },
+        },
+        defaultSubscriptionLimits,
+      );
+
+      const paused = yield* store.change(initial.key, 1, { _tag: "Pause" });
+
+      yield* store.deferRecovery(initial.key, 1, null);
+      yield* ensure(
+        (yield* store.get(initial.key))?.recovery?.nextAttemptAtMillis === 10,
+        "late provider completion erased paused recovery",
+      );
+
+      const resumed = yield* store.change(initial.key, paused.configurationRevision, {
+        _tag: "Resume",
+      });
+
+      yield* ensure(
+        resumed.recovery?.nextAttemptAtMillis === 10,
+        "resume lost the recovery obligation",
+      );
+
+      const updated = yield* store.change(initial.key, resumed.configurationRevision, {
+        _tag: "Update",
+        configuration: { ...initial.configuration, source: { name: "replacement", version: "2" } },
+        configurationFingerprint: digest("9"),
+        recovery: { attempts: 0, nextAttemptAtMillis: 50, lastFailure: null },
+      });
+
+      yield* store.deferRecovery(initial.key, resumed.configurationRevision, {
+        attempts: 9,
+        nextAttemptAtMillis: null,
+        lastFailure: "obsolete-source",
+      });
+      const retained = yield* store.get(initial.key);
+
+      yield* ensure(
+        retained?.recovery?.nextAttemptAtMillis === 50 &&
+          retained.configurationRevision === updated.configurationRevision,
+        "obsolete provider completion overwrote replacement recovery",
+      );
+      yield* ensure(
+        retained?.creationFingerprint === initial.creationFingerprint &&
+          retained.creationConfiguration.source.name === initial.configuration.source.name,
+        "revision rewrote creation identity",
+      );
+    }),
+);
+
+const retryGenerationFence = conformanceCase(
+  "rearms only one delivery generation and retains late receipt authority",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* SubscriptionStore;
+
+      const subscription = yield* store.register(
+        record("retry-generation", "continuous"),
+        defaultSubscriptionLimits,
+      );
+
+      const accepted = yield* store.accept(event("retry-generation"), defaultSubscriptionLimits);
+      const selected = { ...delivery(subscription, accepted), observeSettlement: true };
+
+      yield* store.select(
+        accepted,
+        [selected],
+        subscription.ordinal,
+        true,
+        20,
+        defaultSubscriptionLimits,
+      );
+      yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Prepare",
+        envelope: preparedInput(selected),
+        envelopeDigest: digest("4"),
+        nowMillis: 30,
+      });
+
+      const parked = yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Retry",
+        nowMillis: 40,
+        retry: {
+          ...selected.retry,
+          attempts: 8,
+          automaticAttempts: 8,
+          parked: true,
+          nextAttemptAtMillis: 50,
+          lastAttemptAtMillis: 40,
+          lastFailure: "ambiguous",
+        },
+      });
+
+      yield* ensure(
+        (yield* store.pendingDeliveries(100, "", 10)).length === 0,
+        "parked admission remained due for settlement observation",
+      );
+      yield* ensure(
+        (yield* store.nextDeadline) === null,
+        "parked admission retained a busy-loop deadline",
+      );
+
+      const recovered = yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Recover",
+        expectedGeneration: parked.retry.generation,
+        nowMillis: 50,
+      });
+
+      const stale = yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Retry",
+        nowMillis: 60,
+        retry: { ...parked.retry, attempts: 9, nextAttemptAtMillis: 70 },
+      });
+
+      yield* ensure(
+        !stale.retry.parked && stale.retry.generation === recovered.retry.generation,
+        "stale retry undid recovery",
+      );
+
+      const completed = yield* store.changeDelivery(selected.key, selected.deliveryId, {
+        _tag: "Complete",
+        receipt,
+        nowMillis: 70,
+      });
+
+      yield* ensure(
+        completed.receipt?.receiptId === receipt.receiptId &&
+          completed.envelopeDigest === digest("4"),
+        "late receipt or immutable envelope was lost",
+      );
+    }),
+);
+
+const retentionFairness = conformanceCase(
+  "advances bounded maintenance beyond protected oldest events",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* SubscriptionStore;
+      const policy = { replayHorizonMillis: 1_000, completedRetentionMillis: 0, maxTombstones: 8 };
+      const limits = { ...defaultSubscriptionLimits, retention: policy };
+
+      for (let index = 0; index < 6; index++) {
+        const accepted = yield* store.accept(
+          { ...event(`protected-${index}`), occurredAtMillis: 0, acceptedAtMillis: 0 },
+          limits,
+        );
+
+        if (index === 5) yield* store.select(accepted, [], 0, true, 0, limits);
+      }
+      yield* TestClock.setTime(10);
+      for (let pass = 0; pass < 8; pass++) yield* store.compact(10, policy, 1);
+      yield* ensure(
+        (yield* store.event("protected-5"))?.tombstone === true,
+        "protected first pages starved a reclaimable event",
+      );
+      yield* ensure(
+        (yield* store.event("protected-0"))?.tombstone !== true,
+        "unfinished event was reclaimed",
+      );
+      yield* TestClock.setTime(1_001);
+      for (let pass = 0; pass < 8; pass++) yield* store.compact(1_001, policy, 1);
+      yield* ensure(
+        (yield* store.event("protected-5")) === null,
+        "idle maintenance did not expire tombstone",
+      );
+
+      const rejected = yield* store
+        .accept({ ...event("protected-5"), occurredAtMillis: 0 }, limits)
+        .pipe(Effect.result);
+
+      // The caller cannot manufacture a recent occurrence to resurrect a pruned identity.
+      yield* ensure(Result.isFailure(rejected), "retention state became inconsistent");
+    }),
+);
+
 export const subscriptionStoreConformanceCases: ReadonlyArray<SubscriptionStoreConformanceCase> = [
+  recoveryRevisionFence,
+  retryGenerationFence,
+  retentionFairness,
+  sustainedRetention,
+  revisionsAndRetention,
   cutoffAndIntake,
   onceAndCapacity,
   preparationLifecycle,

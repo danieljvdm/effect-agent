@@ -9,7 +9,7 @@ import {
   ScheduleInstant,
   ScheduleRetry,
 } from "./Schedule.ts";
-import { IdempotencyKey, Principal } from "./SubmissionLedger.ts";
+import { AdmissionFence, AdmissionGroup, IdempotencyKey, Principal } from "./SubmissionLedger.ts";
 
 export const SubscriptionName = Schema.NonEmptyString.check(
   Schema.isMaxLength(256),
@@ -55,9 +55,12 @@ export const SubscriptionConfiguration = Schema.Struct({
   parameters: PersistedJson,
   context: PersistedJson,
   mode: Schema.Literals(["once", "continuous"]),
-  expiresAtMillis: ScheduleInstant,
+  /** Null disables time-based expiry; once selection and cancellation still apply. */
+  expiresAtMillis: Schema.NullOr(ScheduleInstant),
   destination: ScheduleDestination,
   deliveryPrincipal: Principal,
+  admissionGroup: Schema.optionalKey(AdmissionGroup),
+  admissionFence: Schema.optionalKey(AdmissionFence),
   agentId: AgentId,
   definitions: DefinitionDigests,
 });
@@ -77,19 +80,23 @@ export const SubscriptionRecord = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   key: SubscriptionKey,
   creationFingerprint: Digest,
+  configurationRevision: Positive,
+  configurationFingerprint: Digest,
+  creationConfiguration: SubscriptionConfiguration,
   createdBy: Principal,
   createdAtMillis: ScheduleInstant,
   /** Assigned atomically in the same order as event eligibility cutoffs. */
   ordinal: Schema.Natural,
   configuration: SubscriptionConfiguration,
-  state: Schema.Literals(["active", "consumed", "cancelled"]),
+  state: Schema.Literals(["active", "paused", "consumed", "cancelled"]),
   recovery: Schema.NullOr(SourceRecovery),
 }).check(
   Schema.makeFilter(
     (value) =>
       (value.state !== "consumed" || value.configuration.mode === "once") &&
       (value.recovery === null ||
-        (value.configuration.mode === "once" && value.state === "active")),
+        (value.configuration.mode === "once" &&
+          (value.state === "active" || value.state === "paused"))),
   ),
 );
 
@@ -104,12 +111,21 @@ export const AcceptedEvent = Schema.Struct({
   payload: PersistedJson,
   payloadDigest: Digest,
   acceptedAtMillis: ScheduleInstant,
+  occurredAtMillis: Schema.optionalKey(ScheduleInstant),
+  /** Deduplication evidence after completed payload/delivery retention ends. */
+  tombstone: Schema.optionalKey(Schema.Boolean),
   cutoff: Schema.Natural,
   cursor: Schema.Natural,
   routingComplete: Schema.Boolean,
   routingFailure: Schema.NullOr(SubscriptionName),
   nextAttemptAtMillis: ScheduleInstant,
-}).check(Schema.makeFilter((value) => value.cursor <= value.cutoff));
+}).check(
+  Schema.makeFilter(
+    (value) =>
+      value.cursor <= value.cutoff &&
+      (value.tombstone !== true || (value.payload === null && value.routingComplete)),
+  ),
+);
 
 export type AcceptedEvent = typeof AcceptedEvent.Type;
 
@@ -126,6 +142,8 @@ export const PreparedInput = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   threadId: ThreadId,
   deliveryPrincipal: Principal,
+  admissionGroup: Schema.optionalKey(AdmissionGroup),
+  admissionFence: Schema.optionalKey(AdmissionFence),
   agentId: AgentId,
   definitions: DefinitionDigests,
   input: PersistedJson,
@@ -153,11 +171,16 @@ export const SubscriptionDelivery = Schema.Struct({
   key: SubscriptionDeliveryKey,
   deliveryId: Digest,
   subscriptionFingerprint: Digest,
+  configurationRevision: Positive,
+  configuration: SubscriptionConfiguration,
   eventDigest: Digest,
   source: EventSourceVersion,
   threadId: ThreadId,
   admissionKey: IdempotencyKey,
   selectedAtMillis: ScheduleInstant,
+  observeSettlement: Schema.optionalKey(Schema.Boolean),
+  settledAtMillis: Schema.optionalKey(ScheduleInstant),
+  completedAtMillis: Schema.optionalKey(ScheduleInstant),
   state: Schema.Literals(["selected", "prepared", "delivered", "refused"]),
   envelope: Schema.NullOr(PreparedInput),
   envelopeDigest: Schema.NullOr(Digest),
@@ -193,9 +216,14 @@ export const SubscriptionSnapshot = Schema.Struct({
   key: SubscriptionKey,
   source: EventSourceVersion,
   mode: Schema.Literals(["once", "continuous"]),
-  state: Schema.Literals(["active", "consumed", "cancelled", "expired"]),
+  state: Schema.Literals(["active", "paused", "consumed", "cancelled", "expired"]),
+  configurationRevision: Positive,
+  configurationFingerprint: Digest,
+  admissionGroup: SubscriptionConfiguration.fields.admissionGroup,
+  admissionFence: SubscriptionConfiguration.fields.admissionFence,
   createdAtMillis: ScheduleInstant,
-  expiresAtMillis: ScheduleInstant,
+  /** Null disables time-based expiry; once selection and cancellation still apply. */
+  expiresAtMillis: Schema.NullOr(ScheduleInstant),
   recovery: Schema.NullOr(SourceRecovery),
 });
 
@@ -204,6 +232,9 @@ export type SubscriptionSnapshot = typeof SubscriptionSnapshot.Type;
 export const SubscriptionDeliverySnapshot = Schema.Struct({
   key: SubscriptionDeliveryKey,
   state: SubscriptionDelivery.fields.state,
+  configurationRevision: Positive,
+  observeSettlement: Schema.optionalKey(Schema.Boolean),
+  settledAtMillis: Schema.optionalKey(ScheduleInstant),
   retry: ScheduleRetry,
   receipt: Schema.NullOr(Receipt),
   refusal: Schema.NullOr(SubscriptionRefusal),
@@ -224,6 +255,10 @@ export class SubscriptionError extends Schema.TaggedError<SubscriptionError>()(
       "corrupt",
     ]),
     code: SubscriptionName,
+    currentRevision: Schema.optionalKey(Positive),
+    currentState: Schema.optionalKey(
+      Schema.Literals(["active", "paused", "consumed", "cancelled"]),
+    ),
   },
 ) {}
 
@@ -249,7 +284,16 @@ export const SubscriptionFailpoint = Context.Reference<{
   defaultValue: () => ({ hit: () => Effect.void }),
 });
 
+export const SubscriptionRetentionPolicy = Schema.Struct({
+  replayHorizonMillis: Positive,
+  completedRetentionMillis: Schema.Natural,
+  maxTombstones: Positive.check(Schema.isLessThanOrEqualTo(100_000)),
+});
+
+export type SubscriptionRetentionPolicy = typeof SubscriptionRetentionPolicy.Type;
+
 export const SubscriptionLimits = Schema.Struct({
+  retention: Schema.optionalKey(SubscriptionRetentionPolicy),
   maxRegistrations: Positive.check(Schema.isLessThanOrEqualTo(100_000)),
   maxRegistrationsPerOwner: Positive.check(Schema.isLessThanOrEqualTo(10_000)),
   maxEvents: Positive.check(Schema.isLessThanOrEqualTo(100_000)),
@@ -261,6 +305,7 @@ export const SubscriptionLimits = Schema.Struct({
   batchSize: Positive.check(Schema.isLessThanOrEqualTo(100)),
   concurrency: Positive.check(Schema.isLessThanOrEqualTo(16)),
   retryMillis: Positive.check(Schema.isLessThanOrEqualTo(86_400_000)),
+  maxAutomaticAttempts: Schema.optionalKey(Positive),
   operationTimeoutMillis: Positive.check(Schema.isLessThanOrEqualTo(300_000)),
 });
 
@@ -279,9 +324,35 @@ export const defaultSubscriptionLimits: SubscriptionLimits = {
   concurrency: 4,
   retryMillis: 30_000,
   operationTimeoutMillis: 30_000,
+  maxAutomaticAttempts: 8,
 };
 
+export const SubscriptionChange = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literal("Recover"), nowMillis: ScheduleInstant }),
+  Schema.Struct({
+    _tag: Schema.Literal("Update"),
+    configuration: SubscriptionConfiguration,
+    configurationFingerprint: Digest,
+    recovery: Schema.NullOr(SourceRecovery),
+  }),
+  Schema.Struct({ _tag: Schema.Literals(["Pause", "Resume"]) }),
+]);
+
+export type SubscriptionChange = typeof SubscriptionChange.Type;
+
 export const DeliveryChange = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.Literal("ObserveSettlement"),
+    receipt: Receipt,
+    settled: Schema.Boolean,
+    nowMillis: ScheduleInstant,
+    nextAttemptAtMillis: ScheduleInstant,
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("Recover"),
+    expectedGeneration: Schema.Natural,
+    nowMillis: ScheduleInstant,
+  }),
   Schema.Struct({
     _tag: Schema.Literal("Prepare"),
     envelope: PreparedInput,
@@ -322,6 +393,11 @@ export class SubscriptionStore extends Context.Service<
   SubscriptionStore,
   {
     readonly partition: SourcePartition;
+    readonly compact: (
+      nowMillis: number,
+      policy: SubscriptionRetentionPolicy,
+      limit: number,
+    ) => Effect.Effect<number, SubscriptionStoreFailure>;
     readonly readScanCursors: Effect.Effect<SubscriptionScanCursors, SubscriptionError>;
     readonly advanceScanCursors: (
       cursors: SubscriptionScanCursors,
@@ -338,8 +414,14 @@ export class SubscriptionStore extends Context.Service<
       after: number,
       limit: number,
     ) => Effect.Effect<ReadonlyArray<SubscriptionRecord>, SubscriptionError>;
+    readonly change: (
+      key: SubscriptionKey,
+      expectedRevision: number,
+      change: SubscriptionChange,
+    ) => Effect.Effect<SubscriptionRecord, SubscriptionStoreFailure>;
     readonly cancel: (
       key: SubscriptionKey,
+      expectedRevision?: number,
     ) => Effect.Effect<SubscriptionRecord, SubscriptionStoreFailure>;
     /** Duplicate identity returns the original cutoff and routing progress; payload/version conflicts fail. */
     readonly accept: (
@@ -410,6 +492,7 @@ export class SubscriptionStore extends Context.Service<
     >;
     readonly deferRecovery: (
       key: SubscriptionKey,
+      expectedRevision: number,
       recovery: typeof SourceRecovery.Type | null,
     ) => Effect.Effect<void, SubscriptionStoreFailure>;
     readonly nextDeadline: Effect.Effect<number | null, SubscriptionError>;
@@ -421,7 +504,16 @@ export class SubscriptionAuthorizer extends Context.Service<
   SubscriptionAuthorizer,
   {
     readonly manage: (
-      operation: "subscribe" | "list" | "cancel" | "deliveries",
+      operation:
+        | "get"
+        | "subscribe"
+        | "update"
+        | "pause"
+        | "resume"
+        | "recover"
+        | "list"
+        | "cancel"
+        | "deliveries",
       scope: SubscriptionScope,
       configuration?: SubscriptionConfiguration,
     ) => Effect.Effect<void, SubscriptionError>;

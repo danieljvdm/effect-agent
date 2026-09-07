@@ -25,7 +25,7 @@ import {
 import { Context, Effect, Layer, Result, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-const CURRENT_SCHEDULE_STORE_VERSION = 2;
+const CURRENT_SCHEDULE_STORE_VERSION = 3;
 const MAX_STORED_SCHEDULE_BYTES = 1_900_000;
 
 const StoredScheduleJson = Schema.String.check(Schema.isMaxLength(MAX_STORED_SCHEDULE_BYTES));

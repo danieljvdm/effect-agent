@@ -7,6 +7,7 @@ import {
   type ScheduledEnvelope,
   ScheduledInputAdmission,
   ScheduledInputRetryable,
+  ScheduledInputRefused,
   ScheduleStorageError,
 } from "@effect-agent/thread/Schedule";
 import {
@@ -50,12 +51,22 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
     const host = yield* NodeDurableHost;
 
     return PreparedInputAdmission.of({
+      submissionStatus: (receipt) =>
+        host
+          .submissionStatus(receipt)
+          .pipe(Effect.mapError(() => ScheduledInputRetryable.make({ reason: "storage" }))),
       submit: (envelope) =>
         host
           .submit(passthroughSubmitAgent(envelope.agentId), envelope.input, {
             threadId: envelope.threadId,
             principal: envelope.deliveryPrincipal,
             idempotencyKey: envelope.admissionKey,
+            ...(envelope.admissionGroup === undefined
+              ? {}
+              : { admissionGroup: envelope.admissionGroup }),
+            ...(envelope.admissionFence === undefined
+              ? {}
+              : { admissionFence: envelope.admissionFence }),
             definitions: envelope.definitions,
           })
           .pipe(
@@ -65,7 +76,13 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
               AgentInputError: () => Effect.fail(corrupt("prepared admission input")),
               AdmissionConflict: () => Effect.fail(corrupt("prepared admission conflict")),
               DigestError: () => Effect.fail(ambiguous()),
-              LedgerError: () => Effect.fail(ambiguous()),
+              AdmissionPolicyError: (error) =>
+                error.reason === "refused"
+                  ? ScheduledInputRefused.make({ code: error.code })
+                  : ScheduledInputRetryable.make({
+                      reason: error.reason === "occupied" ? "capacity" : "storage",
+                    }),
+              LedgerError: () => ScheduledInputRetryable.make({ reason: "storage" }),
               ThreadStoreError: () => Effect.fail(ambiguous()),
               ThreadNotMaterialized: () => Effect.fail(ambiguous()),
               AppendConflict: () => Effect.fail(ambiguous()),
@@ -81,6 +98,8 @@ const preparedFromSchedule = (envelope: ScheduledEnvelope): PreparedInput => ({
   schemaVersion: 1,
   threadId: envelope.threadId,
   deliveryPrincipal: envelope.deliveryPrincipal,
+  ...(envelope.admissionGroup === undefined ? {} : { admissionGroup: envelope.admissionGroup }),
+  ...(envelope.admissionFence === undefined ? {} : { admissionFence: envelope.admissionFence }),
   agentId: envelope.agentId,
   definitions: envelope.definitions,
   input: envelope.input,

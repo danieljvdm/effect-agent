@@ -2,7 +2,7 @@ import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const CurrentSqliteStorageVersion = 7;
+export const CurrentSqliteStorageVersion = 8;
 
 /** Initialize empty storage with the complete current schema. */
 export const sqliteMigrations = SqliteMigrator.fromRecord({
@@ -96,9 +96,16 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
         unknown_tool_call_ids_json TEXT,
         parent_submission_id TEXT,
         parent_tool_call_id TEXT,
+        admission_group TEXT,
+        admission_fence_json TEXT,
         UNIQUE (thread_id, principal, idempotency_key),
         UNIQUE (thread_id, queue_sequence)
       )
+    `.withoutTransform;
+
+    yield* sql`
+      CREATE INDEX effect_agent_submissions_group
+        ON effect_agent_submissions (thread_id, admission_group, state)
     `.withoutTransform;
 
     yield* sql`
@@ -271,8 +278,9 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
         source_version TEXT NOT NULL,
         matching_key TEXT NOT NULL,
         state TEXT NOT NULL,
-        expires_at_millis INTEGER NOT NULL,
+        expires_at_millis INTEGER,
         recovery_at_millis INTEGER,
+        recovery_present INTEGER NOT NULL DEFAULT 0,
         record_json TEXT NOT NULL,
         PRIMARY KEY (tenant_id, source_address, owner_id, subscription_id),
         UNIQUE (tenant_id, source_address, ordinal)
@@ -296,6 +304,7 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
         cutoff INTEGER NOT NULL,
         cursor INTEGER NOT NULL,
         routing_complete INTEGER NOT NULL,
+        tombstone INTEGER NOT NULL DEFAULT 0,
         next_attempt_at_millis INTEGER NOT NULL,
         record_json TEXT NOT NULL,
         PRIMARY KEY (tenant_id, source_address, event_id)
@@ -322,6 +331,6 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       .withoutTransform;
     yield* sql`CREATE INDEX effect_agent_subscription_deliveries_registration ON effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, delivery_key)`
       .withoutTransform;
-    yield* sql`PRAGMA user_version = 7`.withoutTransform;
+    yield* sql`PRAGMA user_version = 8`.withoutTransform;
   }),
 });

@@ -10,6 +10,7 @@ import {
 
 export interface NormalizedEvent {
   readonly eventId: string;
+  readonly occurredAtMillis?: number;
   readonly matchingKey: string;
   readonly payload: PersistedJson;
 }
@@ -60,6 +61,8 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
   readonly event: Event;
   readonly parameters: Parameters;
   readonly identity: (event: Event["Type"]) => string;
+  /** Authenticated source time, stable across delivery retries; required for bounded retention. */
+  readonly occurredAtMillis?: (event: Event["Type"]) => number | undefined;
   readonly eventKey: (event: Event["Type"]) => string;
   readonly parameterKey: (parameters: Parameters["Type"]) => string;
   readonly matches: (event: Event["Type"], parameters: Parameters["Type"]) => boolean;
@@ -97,8 +100,11 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
     );
 
   const normalized = Effect.fn("EventSource.normalized")(function* (event: Event["Type"]) {
+    const occurredAtMillis = options.occurredAtMillis?.(event);
+
     return {
       eventId: options.identity(event),
+      ...(occurredAtMillis === undefined ? {} : { occurredAtMillis }),
       matchingKey: options.eventKey(event),
       payload: yield* encode(options.event, event),
     };

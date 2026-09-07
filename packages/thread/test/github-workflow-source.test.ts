@@ -31,6 +31,23 @@ const record = Schema.decodeSync(SubscriptionRecord)({
   createdBy: principal,
   createdAtMillis: 1,
   ordinal: 1,
+  configurationRevision: 1,
+  configurationFingerprint: DIGEST,
+  creationConfiguration: {
+    source: { name: "github-workflow-run-completed", version: "1" },
+    matchingKey: "github-workflow-run:101:202:3:completed",
+    parameters: { runId: 202, attempt: 3, expectedHeadSha: SHA },
+    context: { reason: "release" },
+    mode: "once",
+    expiresAtMillis: 10_000,
+    destination: {
+      _tag: "ExistingThread",
+      threadId: Schema.decodeSync(ThreadId)("thread"),
+    },
+    deliveryPrincipal: principal,
+    agentId: Schema.decodeSync(AgentId)("agent"),
+    definitions: DefinitionDigests.make({ agent: DIGEST, model: DIGEST, tools: DIGEST }),
+  },
   configuration: {
     source: { name: "github-workflow-run-completed", version: "1" },
     matchingKey: "github-workflow-run:101:202:3:completed",
