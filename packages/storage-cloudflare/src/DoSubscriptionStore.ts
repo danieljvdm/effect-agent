@@ -202,7 +202,9 @@ const makeSubscriptionStore = Effect.fn("DoSubscriptionStore.make")(function* (
         SELECT next_attempt_at_millis AS deadline FROM effect_agent_subscription_events
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND routing_complete=0
         UNION ALL SELECT next_attempt_at_millis FROM effect_agent_subscription_deliveries
-          WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+          WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN json_valid(record_json) THEN
+          ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+          ELSE state<>'refused' END
         UNION ALL SELECT next_maintenance_at_millis FROM effect_agent_event_retention
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         UNION ALL SELECT recovery_at_millis FROM effect_agent_subscriptions

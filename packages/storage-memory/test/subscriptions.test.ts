@@ -1230,6 +1230,84 @@ describe("Durable subscription delivery", () => {
     );
   });
 
+  for (const failure of ["corrupt", "defect", "timeout"] as const) {
+    it.effect(`isolates ${failure} recovery reads while routing, delivering and reclaiming`, () => {
+      const configured: SubscriptionLimits = {
+        ...limits,
+        retention: {
+          replayHorizonMillis: 10_000,
+          completedRetentionMillis: 0,
+          maxTombstones: 8,
+        },
+      };
+
+      return Effect.gen(function* () {
+        const subscriptions = yield* Subscriptions;
+
+        yield* subscriptions.subscribe(scope, options("healthy"));
+        const intake = yield* SubscriptionIntake;
+
+        yield* intake.accept(principal, source, { ...event("delivery"), occurredAtMillis: 0 });
+        yield* drain(1);
+        yield* subscriptions.subscribe(scope, {
+          ...options("broken"),
+          parameters: { key: "other" },
+        });
+        yield* intake.accept(principal, source, {
+          ...event("reclaim"),
+          key: "unmatched",
+          occurredAtMillis: 0,
+        });
+        const store = yield* SubscriptionStore;
+        const original = yield* store.get(key("broken").subscription);
+
+        const faulty = SubscriptionStore.of({
+          ...store,
+          get: (key) =>
+            key.subscriptionId !== "broken"
+              ? store.get(key)
+              : failure === "corrupt"
+                ? SubscriptionError.make({ reason: "corrupt", code: "registration-record" })
+                : failure === "defect"
+                  ? Effect.die("injected read defect")
+                  : Effect.never,
+        });
+
+        yield* Effect.gen(function* () {
+          const driver = yield* SubscriptionDriver;
+
+          for (let pass = 0; pass < 2; pass++) {
+            const sweep = yield* Effect.forkChild(driver.runDue);
+
+            yield* TestClock.adjust(configured.operationTimeoutMillis);
+            expect(yield* Fiber.join(sweep)).toMatchObject({ failed: 1 });
+            // One recovery row is smaller than the page: the cursor wraps on every pass.
+            expect((yield* store.readScanCursors).recovery).toBe(0);
+          }
+        }).pipe(
+          Effect.provide(
+            SubscriptionDriver.layer(configured).pipe(
+              Layer.provide(Layer.succeed(SubscriptionStore, faulty)),
+            ),
+          ),
+        );
+        expect((yield* store.delivery(key("healthy", "delivery")))?.state).toBe("delivered");
+        expect((yield* store.event("reclaim"))?.tombstone).toBe(true);
+        expect((yield* store.get(key("broken").subscription))?.recovery).toEqual(
+          original?.recovery,
+        );
+      }).pipe(
+        Effect.provide(
+          layer({
+            limits: configured,
+            reconcile: () => Effect.succeed(null),
+            submissionStatus: () => ScheduledInputRetryable.make({ reason: "storage" }),
+          }),
+        ),
+      );
+    });
+  }
+
   it.effect(
     "commits sweep progress before work and continues after a corrupt event across driver restart",
     () => {

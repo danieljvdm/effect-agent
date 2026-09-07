@@ -1150,17 +1150,23 @@ const makeDriver = Effect.fn("SubscriptionDriver.make")(function* (requested: Su
       records,
       (cursor) =>
         Effect.gen(function* () {
-          const record = yield* store.get(cursor.key);
+          let record: SubscriptionRecord | null = null;
 
-          if (record === null) return;
           yield* attempt(
-            reconcile(record).pipe(Effect.timeout(limits.operationTimeoutMillis)),
+            Effect.gen(function* () {
+              record = yield* store.get(cursor.key);
+
+              if (record !== null) yield* reconcile(record);
+            }).pipe(Effect.timeout(limits.operationTimeoutMillis)),
             (code) =>
-              store.deferRecovery(record.key, record.configurationRevision, {
-                attempts: (record.recovery?.attempts ?? 0) + 1,
-                nextAttemptAtMillis: code === "unauthorized" ? null : nextAttempt(time),
-                lastFailure: code,
-              }),
+              // A failed read supplies no revision that can safely authorize a mutation.
+              record === null
+                ? Effect.void
+                : store.deferRecovery(record.key, record.configurationRevision, {
+                    attempts: (record.recovery?.attempts ?? 0) + 1,
+                    nextAttemptAtMillis: code === "unauthorized" ? null : nextAttempt(time),
+                    lastFailure: code,
+                  }),
           );
         }),
       { concurrency: limits.concurrency },

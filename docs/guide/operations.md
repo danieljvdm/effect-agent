@@ -327,6 +327,8 @@ An uncertain ordinary tool is never replayed automatically.
 
 Source recovery completions carry the captured registration revision. Pause preserves its recovery
 intent, resume restores polling, and callbacks from an older revision cannot overwrite a new one.
+Recovery reads share the per-item timeout and failure boundary. An unreadable record is reported
+without guessing its revision or blocking routing, delivery, and maintenance for other records.
 `recoverSubscription` re-arms source reconciliation where the configured source supports it;
 `recoverDelivery(scope, key, expectedGeneration)` re-arms an individual parked delivery without
 changing its identity or envelope. Repeating the same recovery generation is an idempotent no-op.

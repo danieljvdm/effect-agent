@@ -959,10 +959,14 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   const pendingDeliveries: SubscriptionStore["Service"]["pendingDeliveries"] = Effect.fn(
     "SqlSubscriptionStore.pendingDeliveries",
   )(function* (nowMillis, after, limit) {
+    // Malformed bodies remain selectable for isolated decoding. Keep the same CASE guard
+    // in both deadline queries so corruption cannot prevent cursor commits or alarm repair.
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, event_id FROM effect_agent_subscription_deliveries
-      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN json_valid(record_json) THEN
+          ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+          ELSE state<>'refused' END
         AND next_attempt_at_millis<=${nowMillis} AND delivery_key>${after} ORDER BY delivery_key LIMIT ${limit}
     `,
       "pending deliveries",
@@ -1146,7 +1150,9 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       SELECT next_attempt_at_millis AS deadline FROM effect_agent_subscription_events
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND routing_complete=0
       UNION ALL SELECT next_attempt_at_millis FROM effect_agent_subscription_deliveries
-        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN json_valid(record_json) THEN
+          ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+          ELSE state<>'refused' END
       UNION ALL SELECT next_maintenance_at_millis FROM effect_agent_event_retention
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
       UNION ALL SELECT recovery_at_millis FROM effect_agent_subscriptions

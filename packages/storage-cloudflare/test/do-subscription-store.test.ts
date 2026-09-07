@@ -6,6 +6,7 @@ import { Digest } from "@effect-agent/thread/Records";
 import {
   AcceptedEvent,
   defaultSubscriptionLimits,
+  subscriptionDeliveryKeyString,
   SubscriptionFailpoint,
   SubscriptionFailpointError,
   SubscriptionError,
@@ -141,9 +142,16 @@ it("persists bounded retention progress across faults and reopen, preserving cor
   withScheduleStorage("retention-reopen", (storage) =>
     Effect.gen(function* () {
       const partition = subscriptionConformancePartition;
+
+      const brokenKey = {
+        subscription: { partition, ownerId: "owner", subscriptionId: "broken" },
+        eventId: "malformed",
+      };
+
       const policy = { replayHorizonMillis: 10_000, completedRetentionMillis: 0, maxTombstones: 8 };
       const limits = { ...defaultSubscriptionLimits, retention: policy };
       let armed: string | undefined;
+      let alarmDeadline: number | null | undefined;
 
       const failpoints = Layer.succeed(SubscriptionFailpoint)({
         hit: (point) =>
@@ -155,7 +163,13 @@ it("persists bounded retention progress across faults and reopen, preserving cor
         Effect.map(SqlClientService.SqlClient, (sql) => ({
           run: (body) =>
             sql
-              .withTransaction(body(() => Effect.void))
+              .withTransaction(
+                body((replacement) =>
+                  Effect.sync(() => {
+                    alarmDeadline = replacement.deadlineAtMillis;
+                  }),
+                ),
+              )
               .pipe(
                 Effect.catchTag("SqlError", () =>
                   SubscriptionError.make({ reason: "storage", code: "test-transaction" }),
@@ -207,6 +221,9 @@ it("persists bounded retention progress across faults and reopen, preserving cor
           }
           yield* sql`UPDATE effect_agent_subscription_events SET record_json='{}' WHERE event_id='a-corrupt'`;
           yield* sql`UPDATE effect_agent_subscription_events SET record_json=(SELECT record_json FROM effect_agent_subscription_events WHERE event_id='c-reclaim') WHERE event_id='b-mismatch'`;
+          yield* sql`INSERT INTO effect_agent_subscription_deliveries
+              (tenant_id, source_address, owner_id, subscription_id, event_id, delivery_key, state, next_attempt_at_millis, record_json)
+              VALUES (${partition.tenantId}, ${partition.address}, ${brokenKey.subscription.ownerId}, ${brokenKey.subscription.subscriptionId}, ${brokenKey.eventId}, ${subscriptionDeliveryKeyString(brokenKey)}, 'selected', 0, '{')`;
         }),
       );
       armed = "subscription:compact:before";
@@ -236,7 +253,24 @@ it("persists bounded retention progress across faults and reopen, preserving cor
           expect(
             yield* sql`SELECT record_json FROM effect_agent_subscription_events WHERE event_id='a-corrupt'`,
           ).toEqual([{ record_json: "{}" }]);
+          for (const state of ["selected", "delivered"]) {
+            yield* sql`UPDATE effect_agent_subscription_deliveries SET state=${state} WHERE event_id=${brokenKey.eventId}`;
+            expect(yield* store.pendingDeliveries(1_000, "", 1)).toEqual([brokenKey]);
+            expect(yield* store.nextDeadline).toBe(0);
+            yield* store.advanceScanCursors({ events: "", deliveries: "", recovery: 0 });
+            expect(alarmDeadline).toBe(0);
+          }
+          expect(yield* store.delivery(brokenKey).pipe(Effect.flip)).toMatchObject({
+            reason: "corrupt",
+          });
+          expect(
+            yield* sql`SELECT record_json FROM effect_agent_subscription_deliveries WHERE event_id=${brokenKey.eventId}`,
+          ).toEqual([{ record_json: "{" }]);
+          // Remove only the injected fixture after proving it survived compaction and reopen.
+          yield* sql`DELETE FROM effect_agent_subscription_deliveries WHERE event_id=${brokenKey.eventId}`;
+          yield* store.advanceScanCursors({ events: "", deliveries: "", recovery: 0 });
           expect(yield* store.nextDeadline).toBe(61_000);
+          expect(alarmDeadline).toBe(61_000);
         }),
       );
     }).pipe(Effect.provide(TestClock.layer())),
