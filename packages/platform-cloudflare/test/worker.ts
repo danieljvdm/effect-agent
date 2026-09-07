@@ -37,6 +37,7 @@ import {
   plannerModel,
   registrationDefinitions,
   testRuntimeLayer,
+  makeTestBindings,
   runtimeEvictionFailpoint,
   notifyScheduleAlarmCompleted,
   scheduleAuthorizer,
@@ -58,6 +59,7 @@ import {
   observabilityProbeLayer,
   telemetryProbe,
 } from "./observability-fixture.ts";
+import { publicationLayer } from "./publication-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 import {
   subscriptionAlarmExtensionLayer,
@@ -311,6 +313,15 @@ const maintenanceClockLayer = Layer.effect(
     return maintenanceClocks.get(identity.threadId) ?? (yield* Clock.Clock);
   }),
 );
+
+export class PublicationThreadObject extends ThreadObject.make(
+  Layer.unwrap(
+    Effect.map(makeTestBindings, (bindings) =>
+      layerFromBindings(bindings, { publication: publicationLayer }),
+    ),
+  ).pipe(Layer.provideMerge(maintenanceClockLayer)),
+  { ...baseOptions, namespaceBinding: "PUBLICATIONS" },
+) {}
 
 export class TestThreadObject extends ThreadObject.make(
   testRuntimeLayer.pipe(Layer.provideMerge(maintenanceClockLayer)),

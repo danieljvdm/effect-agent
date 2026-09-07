@@ -6,6 +6,7 @@ import {
 } from "@effect-agent/thread/DurableAgentRuntime";
 import { SubmissionLedger, type SubmissionSnapshot } from "@effect-agent/thread/SubmissionLedger";
 import {
+  Cause,
   Clock,
   Context,
   DateTime,
@@ -157,7 +158,7 @@ export class DurableAlarmService extends Context.Service<
 export class MaintenancePassReport extends Schema.Class<MaintenancePassReport>(
   "@effect-agent/platform-cloudflare/MaintenancePassReport",
 )({
-  /** `caught-up` is generation-only; `actionable` ran recovery and at most one head Attempt. */
+  /** `caught-up` ran no runtime work (publication may be pending); `actionable` ran recovery. */
   phase: Schema.Literals(["caught-up", "actionable"]),
   /** Recovery decisions executed (or deferred) BEFORE any new claim in this pass. */
   recovered: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -195,6 +196,53 @@ export class ThreadMaintenanceFailpoint extends Context.Service<
 >()("@effect-agent/platform-cloudflare/ThreadMaintenanceFailpoint") {
   static readonly layer = Layer.succeed(this)({ hit: () => Effect.void });
 }
+
+/**
+ * Durable host publication of canonical records and ledger approval/abort/resolution intents.
+ * The host owns schema-versioned cursors, destination idempotency and acknowledgement. Delivery
+ * is at least once. Hooks must not write the alarm slot or mutate the supplied raw source ports.
+ *
+ * `invalidate`, `prepareGeneration` and `pendingDeadline` must be bounded local operations.
+ * `prepareGeneration` durably invalidates a scan only when its generation changes; repeated
+ * calls must preserve partial scan progress. It runs with no source mutation in flight.
+ * `drain` performs bounded delivery and persists retries before returning. A pending deadline
+ * defers runtime recovery/Attempts, allowing committed host publications to drain first.
+ * Unexpected hook failures leave the prearmed generation for retry. Hooks acquire per-call
+ * resources with Effect.scoped; Layer construction owns incarnation resources (eviction need
+ * not run finalizers). Do not hold a local hook behind network I/O or call back into producers.
+ */
+export interface ThreadPublicationService {
+  readonly invalidate: Effect.Effect<void, DurableAlarmError>;
+  readonly prepareGeneration: (generation: bigint) => Effect.Effect<void, DurableAlarmError>;
+  readonly drain: Effect.Effect<void, DurableAlarmError>;
+  readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
+}
+
+/** Opt in with `ThreadObject.layer(registrations, { publication: Layer.effect(ThreadPublication)(...) })`. */
+export class ThreadPublication extends Context.Service<
+  ThreadPublication,
+  ThreadPublicationService
+>()("@effect-agent/platform-cloudflare/ThreadPublication") {
+  static readonly layer = Layer.succeed(this)({
+    invalidate: Effect.void,
+    prepareGeneration: () => Effect.void,
+    drain: Effect.void,
+    pendingDeadline: Effect.succeed(Option.none()),
+  });
+}
+
+/** @internal A committed source operation must not become a failed operation because delivery failed. */
+export const publishCommitted = Effect.gen(function* () {
+  const publication = yield* ThreadPublication;
+
+  yield* publication.invalidate.pipe(Effect.andThen(publication.drain));
+}).pipe(
+  Effect.catchCause((cause) =>
+    Cause.hasInterrupts(cause)
+      ? Effect.interrupt
+      : Effect.logError("Thread publication deferred after source commit", cause),
+  ),
+);
 
 const MaintenanceGeneration = Schema.BigIntFromString.check(
   Schema.isGreaterThanOrEqualToBigInt(0n),
@@ -271,6 +319,80 @@ const stableExternalWait = (
   }
 };
 
+/** @internal Shared prearm/acknowledgement boundary for ingress and runtime-owned producers. */
+export class ThreadMutationGate extends Context.Service<
+  ThreadMutationGate,
+  {
+    readonly withMutation: <A, E, R>(
+      body: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | DurableAlarmError, R>;
+    readonly withSnapshot: <A, E, R>(
+      body: (active: number) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
+  }
+>()("@effect-agent/platform-cloudflare/internal/ThreadMutationGate") {
+  static readonly layer = Layer.effect(this)(
+    Effect.gen(function* () {
+      const { ctx } = yield* DurableObjectContext;
+      const config = yield* CloudflareDurableRuntimeConfig;
+      const failpoint = yield* ThreadMaintenanceFailpoint;
+      // A fresh incarnation has no live mutations; durable generations survive eviction.
+      const activeMutations = yield* Ref.make(0);
+      const generationGate = yield* Semaphore.make(1);
+      const minimumAlarmDelay = Math.max(1, Math.ceil(config.alarmBackoffBase / 2));
+
+      const runTransaction = <A>(operation: string, transaction: () => Promise<A>) =>
+        Effect.tryPromise({ try: transaction, catch: alarmFailure(operation) });
+
+      const beginMutation = Effect.fn("ThreadMaintenance.beginMutation")(function* () {
+        yield* failpoint.hit("maintenance:dirty:before");
+        const now = yield* Clock.currentTimeMillis;
+
+        yield* runTransaction("advance maintenance generation", () =>
+          ctx.storage.transaction(async (transaction) => {
+            const { state } = await readMaintenanceState(transaction);
+
+            const next = ThreadMaintenanceState.make({
+              ...state,
+              dirty: state.dirty + 1n,
+            });
+
+            await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
+            // The earliest configured retry bounds a newly actionable mutation without relying
+            // on its best-effort immediate wake hint.
+            await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
+          }),
+        );
+        yield* failpoint.hit("maintenance:dirty:after");
+        yield* Ref.update(activeMutations, (active) => active + 1);
+      });
+
+      const endMutation = generationGate.withPermit(
+        Ref.update(activeMutations, (active) => Math.max(0, active - 1)),
+      );
+
+      const withMutation = <A, E, R>(
+        body: Effect.Effect<A, E, R>,
+      ): Effect.Effect<A, E | DurableAlarmError, R> =>
+        Effect.acquireUseRelease(
+          generationGate.withPermit(beginMutation()),
+          () =>
+            failpoint.hit("maintenance:mutation:armed").pipe(
+              Effect.andThen(body),
+              Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
+            ),
+          () => endMutation,
+        );
+
+      return ThreadMutationGate.of({
+        withMutation,
+        withSnapshot: (body) =>
+          generationGate.withPermit(Effect.flatMap(Ref.get(activeMutations), body)),
+      });
+    }),
+  );
+}
+
 export type MaintenancePassFailure =
   | DurableWorkerFailure
   | DurableBindingFailure
@@ -313,6 +435,8 @@ export class ThreadMaintenance extends Context.Service<
   static readonly layer: Layer.Layer<
     ThreadMaintenance,
     never,
+    | ThreadMutationGate
+    | ThreadPublication
     | DurableAgentRuntime
     | SubmissionLedger
     | DurableAlarmService
@@ -335,68 +459,13 @@ export class ThreadMaintenance extends Context.Service<
        * restarts at zero and merely re-arms sooner than a long-lived one would have.
        */
       const stalls = yield* Ref.make(0);
-      /**
-       * Incarnation-local mutation count guarded with the generation transactions below. It is
-       * deliberately not durable: after eviction every begun mutation has stopped, while its
-       * pre-armed dirty generation remains durable for recovery. The short gate never spans the
-       * caller's mutation or cross-Object I/O.
-       */
-      const activeMutations = yield* Ref.make(0);
-      const generationGate = yield* Semaphore.make(1);
-      // At-least-once deliveries are idempotent, but overlapping pass bodies could otherwise
-      // acknowledge state while a sibling pass is still mutating it. Port/RPC mutations do not
-      // take this permit, so cross-Object I/O cannot deadlock the maintenance serialization.
+      const mutations = yield* ThreadMutationGate;
+      const publication = yield* ThreadPublication;
       const maintenancePassGate = yield* Semaphore.make(1);
       const minimumAlarmDelay = Math.max(1, Math.ceil(config.alarmBackoffBase / 2));
 
-      const runTransaction = <A>(
-        operation: string,
-        transaction: () => Promise<A>,
-      ): Effect.Effect<A, DurableAlarmError> =>
-        Effect.tryPromise({
-          try: transaction,
-          catch: alarmFailure(operation),
-        });
-
-      const beginMutation = Effect.fn("ThreadMaintenance.beginMutation")(function* () {
-        yield* failpoint.hit("maintenance:dirty:before");
-        const now = yield* Clock.currentTimeMillis;
-
-        yield* runTransaction("advance maintenance generation", () =>
-          ctx.storage.transaction(async (transaction) => {
-            const { state } = await readMaintenanceState(transaction);
-
-            const next = ThreadMaintenanceState.make({
-              ...state,
-              dirty: state.dirty + 1n,
-            });
-
-            await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
-            // The earliest configured retry bounds a newly actionable mutation without relying
-            // on its best-effort immediate wake hint.
-            await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
-          }),
-        );
-        yield* failpoint.hit("maintenance:dirty:after");
-        yield* Ref.update(activeMutations, (active) => active + 1);
-      });
-
-      const endMutation = generationGate.withPermit(
-        Ref.update(activeMutations, (active) => Math.max(0, active - 1)),
-      );
-
-      const withMutation = <A, E, R>(
-        body: Effect.Effect<A, E, R>,
-      ): Effect.Effect<A, E | DurableAlarmError, R> =>
-        Effect.acquireUseRelease(
-          generationGate.withPermit(beginMutation()),
-          () =>
-            failpoint.hit("maintenance:mutation:armed").pipe(
-              Effect.andThen(body),
-              Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
-            ),
-          () => endMutation,
-        );
+      const runTransaction = <A>(operation: string, transaction: () => Promise<A>) =>
+        Effect.tryPromise({ try: transaction, catch: alarmFailure(operation) });
 
       const ensureAlarm = Effect.fn("ThreadMaintenance.ensureAlarm")(function* () {
         yield* failpoint.hit("maintenance:ensure:before");
@@ -414,6 +483,18 @@ export class ThreadMaintenance extends Context.Service<
             }
           }),
         );
+        const deadline = yield* publication.pendingDeadline;
+
+        if (Option.isSome(deadline)) {
+          yield* runTransaction("ensure publication alarm", () =>
+            ctx.storage.transaction((transaction) =>
+              ensureTransactionAlarmBy(
+                transaction,
+                Math.max(now + minimumAlarmDelay, deadline.value),
+              ),
+            ),
+          );
+        }
         yield* failpoint.hit("maintenance:ensure:after");
       });
 
@@ -429,7 +510,8 @@ export class ThreadMaintenance extends Context.Service<
               await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
             }
             if (state.processed >= state.dirty) {
-              await transaction.deleteAlarm();
+              // Prearm even a publication-only pass before invoking any host hook.
+              await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
 
               return { _tag: "CaughtUp" as const, nonterminal: state.nonterminal };
             }
@@ -437,7 +519,11 @@ export class ThreadMaintenance extends Context.Service<
             // LATER to its bounded backoff, which does not cancel the running handler.
             await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
 
-            return { _tag: "Actionable" as const, generation: state.dirty };
+            return {
+              _tag: "Actionable" as const,
+              generation: state.dirty,
+              nonterminal: state.nonterminal,
+            };
           }),
         );
 
@@ -474,23 +560,74 @@ export class ThreadMaintenance extends Context.Service<
             alarm: report.alarm,
           }).pipe(Effect.as(report));
 
-        const started = yield* generationGate.withPermit(
+        const started = yield* mutations.withSnapshot((activeAtStart) =>
           Effect.gen(function* () {
-            const activeAtStart = yield* Ref.get(activeMutations);
             const generation = yield* beginPass();
+
+            if (generation._tag === "Actionable" && activeAtStart === 0) {
+              // The gate excludes a producer starting between the snapshot and certification.
+              yield* publication.prepareGeneration(generation.generation);
+            }
 
             return { ...generation, activeAtStart };
           }),
         );
 
-        if (started._tag === "CaughtUp") {
+        const deadline = yield* publication.pendingDeadline;
+
+        if (
+          started._tag === "Actionable" ||
+          (Option.isSome(deadline) && deadline.value <= (yield* Clock.currentTimeMillis))
+        ) {
+          yield* publication.drain;
+        }
+        const pending = yield* publication.pendingDeadline;
+
+        if (started._tag === "CaughtUp" || Option.isSome(pending)) {
+          yield* failpoint.hit("maintenance:finish:before");
+
+          const disposition = yield* mutations.withSnapshot((active) =>
+            Effect.gen(function* () {
+              // Re-read under the producer gate: a concurrent append/host mutation cannot be
+              // cleared using a stale empty deadline. Dirty generations bound all producer races.
+              const latest = yield* publication.pendingDeadline;
+              const now = yield* Clock.currentTimeMillis;
+
+              return yield* runTransaction("finish publication pass", () =>
+                ctx.storage.transaction(async (transaction) => {
+                  const { state } = await readMaintenanceState(transaction);
+
+                  const nativeDeadline =
+                    active > 0 || state.dirty > state.processed
+                      ? now + config.wakeScanInterval
+                      : Infinity;
+
+                  const next = Option.isSome(latest)
+                    ? Math.min(nativeDeadline, latest.value)
+                    : nativeDeadline;
+
+                  if (Number.isFinite(next)) {
+                    await transaction.setAlarm(Math.max(now + minimumAlarmDelay, next));
+
+                    return "rearmed" as const;
+                  }
+                  await transaction.deleteAlarm();
+
+                  return "cleared" as const;
+                }),
+              );
+            }),
+          );
+
+          yield* failpoint.hit("maintenance:finish:after");
+
           return yield* annotate(
             MaintenancePassReport.make({
               phase: "caught-up",
               recovered: 0,
               settled: 0,
               nonterminal: started.nonterminal,
-              alarm: "cleared",
+              alarm: disposition,
             }),
           );
         }
@@ -528,9 +665,9 @@ export class ThreadMaintenance extends Context.Service<
 
         yield* failpoint.hit("maintenance:finish:before");
 
-        const alarmDisposition = yield* generationGate.withPermit(
+        const alarmDisposition = yield* mutations.withSnapshot((active) =>
           Effect.gen(function* () {
-            const active = yield* Ref.get(activeMutations);
+            const publicationDeadline = yield* publication.pendingDeadline;
 
             return yield* runTransaction("finish maintenance pass", () =>
               ctx.storage.transaction(async (transaction) => {
@@ -556,7 +693,14 @@ export class ThreadMaintenance extends Context.Service<
                   // Replace the crash-fallback slot with this pass's bounded backoff. The target
                   // is never earlier than the begin-pass fallback, so workerd does not cancel
                   // this running alarm handler before its report/span can complete.
-                  await transaction.setAlarm(now + delay);
+                  await transaction.setAlarm(
+                    Option.isSome(publicationDeadline)
+                      ? Math.max(
+                          now + minimumAlarmDelay,
+                          Math.min(now + delay, publicationDeadline.value),
+                        )
+                      : now + delay,
+                  );
 
                   return "rearmed" as const;
                 }
@@ -566,7 +710,22 @@ export class ThreadMaintenance extends Context.Service<
                   // unseen effects are never acknowledged. Do not accelerate that future alarm
                   // from inside the current handler: workerd cancels a running handler when it
                   // writes an earlier slot.
-                  await ensureTransactionAlarmBy(transaction, now + config.wakeScanInterval);
+                  await ensureTransactionAlarmBy(
+                    transaction,
+                    Option.isSome(publicationDeadline)
+                      ? Math.max(
+                          now + minimumAlarmDelay,
+                          Math.min(now + config.wakeScanInterval, publicationDeadline.value),
+                        )
+                      : now + config.wakeScanInterval,
+                  );
+
+                  return "rearmed" as const;
+                }
+                if (Option.isSome(publicationDeadline)) {
+                  await transaction.setAlarm(
+                    Math.max(now + minimumAlarmDelay, publicationDeadline.value),
+                  );
 
                   return "rearmed" as const;
                 }
@@ -615,8 +774,15 @@ export class ThreadMaintenance extends Context.Service<
               }),
           }),
         ),
-        ensureAlarm: ensureAlarm(),
-        withMutation,
+        ensureAlarm: mutations.withSnapshot(() => ensureAlarm()),
+        withMutation: (body) =>
+          mutations.withMutation(
+            body.pipe(
+              Effect.tap(() =>
+                publishCommitted.pipe(Effect.provideService(ThreadPublication, publication)),
+              ),
+            ),
+          ),
       });
     }),
   );

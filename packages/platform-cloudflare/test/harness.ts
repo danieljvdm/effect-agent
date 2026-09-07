@@ -23,6 +23,7 @@ import { expect } from "vite-plus/test";
 
 import { decodeThreadId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
 import type {
+  PublicationThreadObject,
   ContextCompactorThreadObject,
   DynamicBindingsThreadObject,
   DeniedThreadObject,
@@ -38,6 +39,7 @@ declare global {
   namespace Cloudflare {
     interface Env {
       THREADS: DurableObjectNamespace<TestThreadObject>;
+      PUBLICATIONS: DurableObjectNamespace<PublicationThreadObject>;
       LIMITED: DurableObjectNamespace<LimitedThreadObject>;
       TINYDB: DurableObjectNamespace<TinyDatabaseThreadObject>;
       DENIED: DurableObjectNamespace<DeniedThreadObject>;
@@ -58,6 +60,7 @@ declare global {
  */
 
 export type TestNamespace =
+  | "PUBLICATIONS"
   | "THREADS"
   | "LIMITED"
   | "TINYDB"

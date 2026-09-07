@@ -110,6 +110,56 @@ They are captured when the Object acquires the runtime, not on each worker call.
 Use `options.eventLayer` for per-event observability and resources. Use
 `options.toolFailureObserver` for [recovered tool failures](../guide/run-agents#observe-recovered-tool-failures).
 
+### Publish durable host activity
+
+Use the optional publication Layer to deliver canonical records or durable approval, abort, and
+unknown-resolution intents to a host-owned destination:
+
+```ts
+import { ThreadPublication } from "@effect-agent/platform-cloudflare/Alarm";
+import {
+  DurableObjectContext,
+  ThreadObjectIdentity,
+} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+
+// `makePublication` is an application Effect yielding ThreadPublicationService.
+// It yields the raw LOCAL ThreadStore and SubmissionLedger, native DurableObjectContext,
+// ThreadObjectIdentity, and any application services its implementation needs.
+const RuntimeLive = ThreadObject.layer(registrations, {
+  publication: Layer.effect(ThreadPublication)(makePublication),
+});
+```
+
+Setup errors and service requirements remain in the resulting Layer; its Scope owns acquired
+resources. Initialization must remain local and bounded. The raw source ports are for reading;
+publication must not mutate them or write the native alarm slot. Other consumers need no setup.
+
+The host owns schema-versioned cursors, destination idempotency, acknowledgements and retry
+policy. Implement four hooks, with failures typed as `DurableAlarmError`:
+
+- `invalidate` durably marks source-derived work pending after a source commit.
+- `prepareGeneration(generation)` invalidates a scan when the native generation changes. Repeated
+  calls for the same generation must preserve bounded scan progress.
+- `drain` performs bounded delivery and persists acknowledgements or a retry deadline. External
+  delivery is at least once; use destination idempotency. Scope per-delivery resources explicitly.
+- `pendingDeadline` returns `Option<number>` in epoch milliseconds, or `None` when caught up.
+
+All hooks except `drain` must be bounded local operations, without waiting behind network I/O.
+Hooks can overlap: the host must prevent an older drain from overwriting newer cursor or retry
+state. Do not reenter source mutations from a publication hook. A parked obligation is host-owned
+and needs a host repair operation to restore its deadline.
+
+The platform prearms a native generation before ingress mutations and publication-producing
+runtime writes. It prepares a generation only after its producers have returned, drains publication
+before recovery or potentially slow Agent work, and keeps the earliest publication/runtime alarm.
+Pending publication defers runtime work, including when its retry deadline is in the future.
+A post-commit publication failure is logged without changing the committed source result; the
+new generation repairs missed invalidation after a crash. Alarm failures propagate for Workerd
+retry, and interruption remains interruption. Custom host facts must be committed through
+`ThreadMaintenance.withMutation` to get the same prearm and post-commit hooks.
+
 ## Configure the binding
 
 ```jsonc

@@ -103,6 +103,7 @@ import { ProgressWaitRegistry } from "./internal/progress-wait.ts";
 export {
   layer,
   layerConfig,
+  type ThreadPublicationOptions as PublicationOptions,
   type CloudflareDurableRuntimeOptions as RuntimeOptions,
   type CloudflareDurableRuntimeServices as Services,
   type CloudflareDurableRuntimeInitializationError as InitializationError,
