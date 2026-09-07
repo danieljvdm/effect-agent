@@ -966,7 +966,7 @@ describe("NodeDurableAgentRuntime", () => {
         if (error instanceof SqliteStorageCompatibilityError) {
           expect(error.actualVersion).toBe(1);
           expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
-          expect(error.message).toContain("Reset the database file explicitly");
+          expect(error.message).toContain("Keep the original file");
         }
 
         // Failing closed must not mutate the incompatible file.
