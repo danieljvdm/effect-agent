@@ -388,8 +388,9 @@ Use `ExactHosts` for a fixed network allowlist. `Unrestricted` is an explicit ho
 
 The host access service owns caller authentication, vault lookup, current grants, and recipient
 trust. Derive caller identity from the authorized invocation, never model arguments or possession
-of an offer. `list` authorizes only bounded display metadata, such as a label, brand, and last four
-digits, not vault keys or credentials. `authorize` checks current ownership, purpose, field roles,
+of an offer. `list` authorizes only bounded display metadata, such as a label, brand, last four
+digits, and optional plaintext `billingAddress`, not vault keys or credentials. Include address
+metadata only when the caller may see it for the authorized checkout. `authorize` checks current ownership, purpose, field roles,
 submission permission, and exact canonical HTTPS top-level, frame, and form-recipient origins,
 including non-default ports. Card grants must match both merchant and processor/frame. `resolve`
 returns Schema-validated `Redacted` material after those checks; authorization repeats before each
@@ -400,7 +401,29 @@ The runtime protocol needs no site-specific selectors:
 1. `navigate` to a host-authorized HTTPS URL, then `observe` bounded text and native controls.
 2. Select discovered field references and request `listCredentialOffers({ kind, target })`.
 3. Propose `useCredential({ offer, fields, submit? })` with only opaque refs and field roles.
-4. Continue with `observe`, `navigate`, or `click` under the post-exposure observation grant.
+4. Continue with `observe`, `navigate`, `fill`, or `click` under the post-exposure observation grant.
+
+`fill(ProtectedBrowserFill.make({ ref, value }))` accepts up to 8,192 characters of non-secret text
+for a discovered `text` or `select` control. Empty text clears a field. Native single selects match
+a unique enabled option value first, then a unique exact trimmed label; ambiguous, disabled, or
+missing options are unsupported. Ordinary inputs and textareas need no form. Credential roles,
+including username, remain exclusive to `useCredential`; never supply secrets to ordinary fill.
+`click` also accepts native `radio` and `checkbox` controls, whose observations include `checked`.
+Native submit clicks require the host's optional `BrowserCredentialAccess.authorizeAction` hook.
+When present, this hook runs before **every** ordinary navigation, fill, and click, with
+`{ caller, action, exposures }`. `action._tag` is `Navigate`, `Fill`, `Click`, or `Submit`;
+navigation includes its URL, while control actions include the current opaque ref, exact target,
+and role (implicit for Submit). Fill values are omitted. Recheck user intent, caller ownership,
+current grants for every prior exposure, and the requested merchant/frame/recipient target.
+The policy rechecks caller and target after authorization returns. No authorization is cached.
+
+This allows a merchant `Submit` after separate processor-frame credential fills: each prior
+target appears in `exposures`, while the submit has its own merchant target. Without the hook,
+native submit clicks remain unsupported and ordinary actions retain their observation gate.
+For a submit in the same credential form, `useCredential({ offer, fields, submit })` supports both
+login and card offers through the existing `authorize` call with `submit: true`.
+Fill and click can trigger page handlers and side effects; authorize them in the host.
+They share the private pass lock, limits, and failure cleanup.
 
 References bind actual nodes, documents, frames, forms, and roles. Node replacement, changed
 form/action/role, frame navigation, rediscovery, or 60 seconds of elapsed time invalidates them.
@@ -411,18 +434,19 @@ The adapter uses an isolated browser world and native setters, not model-provide
 
 Supported controls are native username/email/password inputs, native login form submission, and
 standard `cc-*` card fields, including native selects. Credential fields must have an associated
-native form, either by containment or an explicit `form` attribute. Standalone fields are unsupported.
+native form, either by containment or an explicit `form` attribute. Standalone credential fields are unsupported.
 Inspection rejects action URLs or fingerprint attributes longer than 2,048 characters inside the
 browser before serialization; fingerprints remain in the browser. HTTPS frames may be same- or cross-origin
-when every involved origin is allowed. Opaque frames, popups, shadow/custom controls, CAPTCHA,
+when every involved origin is allowed. Blank and opaque child frames are omitted from observations
+and cannot supply references. The main document still requires a valid HTTPS origin. Popups, shadow/custom controls, CAPTCHA,
 OTP, passkeys, wallets, and 3DS have no automation fallback. Invalid native form requirements
-produce `needs-attention`. Card filling never submits a purchase. Filling can itself execute page
+produce `needs-attention`. Card filling without an explicit submit does not dispatch native form submission. Filling can itself execute page
 handlers and cause side effects, which the host must authorize.
 
 ### Protection and recipient trust
 
 Secrets enter only the private browser transport, not Tool arguments/results, normal errors,
-traces, checkpoints, or journals. The handle exposes no raw fill, JavaScript, screenshot, Live
+traces, checkpoints, or journals. The handle exposes no selectors, JavaScript, screenshot, Live
 View, DevTools, handoff, or provider identity. A fresh session is acquired with `recording=false`
 explicitly on the wire. This relies on Cloudflare's opt-in recording behavior; no independent
 recording-enabled attestation endpoint exists.
@@ -433,7 +457,23 @@ Protection does not extend to those operators or a compromised provider. Expirin
 does not make a previously exposed session private; always open a fresh pass.
 
 After any possibly dispatched secret write, every observation and non-secret action requires
-`observation` to return `trust-recipient-no-credential-echo` for current origins and prior exposures.
+`observation` to approve current origins and prior exposures. The string
+`trust-recipient-no-credential-echo` trusts all current HTTPS observation origins. To select only
+host-authorized recipients, return:
+
+```ts
+CredentialObservationGrant.make({
+  decision: "trust-recipient-no-credential-echo",
+  origins: ["https://merchant.example", "https://processor.example"],
+});
+```
+
+The current top origin must be included. Excluded frames supply neither text nor usable refs;
+expanding a later grant cannot revive discarded refs. The hook receives all current frame origins
+on every check, so the host can reconsider selection. If trust narrows during discovery, the result
+is withheld. Origin selection never widens network policy, grants credential use, or authorizes
+submission. The library never infers trust from prior card exposures.
+
 This explicitly trusts the recipient not to echo raw, encoded, transformed, or delayed credentials.
 It is not universal secrecy against hostile pages. Discovery omits input values, but DOM scrubbing
 and substring redaction cannot make arbitrary pages safe. Denial blocks observation before reading
@@ -487,8 +527,12 @@ Browser APIs use finite requests and typed expected failures:
 - `PageCrawl` fixes the start host, purposes, page/depth/byte/deadline limits, and cancellation
   lifecycle. Its stream ends only after the provider reports a terminal result or a typed failure.
 - `PageScreenshot` accepts only PNG and enforces a caller-selected byte limit.
-- An interactive policy fixes network mode, at most 1,000 actions, at most 10 minutes, and at most
+- An interactive policy fixes network mode, at most 1,000 actions, at most 60 minutes, and at most
   8 MiB from one result. Handles expire at policy limits or explicit close.
+
+The protected Cloudflare binding requests at most ten minutes of provider idle keep-alive,
+independently of the total pass deadline. A longer policy permits active work; it does not promise
+that an idle browser will remain available for the whole hour or reconnect an expired session.
 
 These caps do not authorize the destination, protect every network path, or make provider actions
 replay-safe. Keep an application allowlist for stateless capture; choose the interactive network

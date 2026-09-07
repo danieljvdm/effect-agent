@@ -30,6 +30,7 @@ const Description = Schema.Struct({
   formIndex: Schema.Natural,
   action: Schema.String.check(Schema.isMaxLength(maxAttributeLength)),
   label: Schema.String.check(Schema.isMaxLength(200)),
+  checked: Schema.optionalKey(Schema.Boolean),
 });
 
 const Descriptions = Schema.Array(Schema.NullOr(Description)).check(Schema.isMaxLength(65));
@@ -97,6 +98,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
   let closed = false;
   let violation = false;
   let documentRef: string | undefined;
+  let observationOrigins: ReadonlySet<string> | undefined;
   const frames = new Map<Frame, FrameState>();
   const controls = new Map<string, ControlState>();
 
@@ -144,13 +146,30 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
     clear();
   };
 
-  const context = Effect.gen(function* () {
-    yield* check;
+  const observationFrames = Effect.gen(function* () {
     const list = page.frames();
 
-    if (list.length > 16) return yield* transportError("unsupported");
+    if (list.length > 32) return yield* transportError("unsupported");
+
+    // Opaque/blank child documents have no observation channel or credential targets.
+    // The main document and every retained HTTPS child still require strict origin validation.
+    return yield* Effect.filter(list, (frame) =>
+      frame === page.mainFrame()
+        ? Effect.succeed(true)
+        : Effect.try({
+            try: () => frame.url() !== "" && new URL(frame.url()).protocol === "https:",
+            catch: () => transportError("provider"),
+          }),
+    );
+  });
+
+  const context = Effect.gen(function* () {
+    yield* check;
+    const list = yield* observationFrames;
     const topOrigin = yield* origin(page.url());
-    const frameOrigins = yield* Effect.forEach(list, (frame) => origin(frame.url()));
+    const frameOrigins = [...new Set(yield* Effect.forEach(list, (frame) => origin(frame.url())))];
+
+    if (frameOrigins.length > 16) return yield* transportError("unsupported");
 
     if (documentRef === undefined) documentRef = yield* uuid;
 
@@ -175,6 +194,8 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
 
     if (
       !state ||
+      (observationOrigins !== undefined &&
+        !observationOrigins.has(state.control.target.frameOrigin)) ||
       state.expires <= (yield* clock.currentTimeMillis) ||
       !(yield* isCurrent(state.frame))
     )
@@ -232,6 +253,22 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
   );
 
   return {
+    restrictObservation: Effect.fn("ProtectedNativeTransport.restrictObservation")(
+      function* (origins) {
+        yield* check;
+        observationOrigins =
+          origins === undefined
+            ? undefined
+            : new Set(yield* decode(Schema.Array(CredentialOrigin), origins));
+        // A later grant expansion must not revive previously excluded references.
+        for (const [ref, state] of controls)
+          if (
+            observationOrigins !== undefined &&
+            !observationOrigins.has(state.control.target.frameOrigin)
+          )
+            controls.delete(ref);
+      },
+    ),
     context,
     invalidate,
     close,
@@ -252,8 +289,13 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       const discovered: Array<ProtectedBrowserControl> = [];
       let text = "";
       let truncated = false;
+      const frameOrigins = new Set<string>();
 
-      for (const frame of page.frames()) {
+      for (const frame of yield* observationFrames) {
+        const frameOrigin = yield* origin(frame.url());
+
+        if (observationOrigins !== undefined && !observationOrigins.has(frameOrigin)) continue;
+        frameOrigins.add(frameOrigin);
         if (typeof frame.isolatedRealm !== "function") return yield* transportError("unsupported");
         const handle = yield* remote(() => frame.isolatedRealm().evaluateHandle(inspectFrame));
 
@@ -300,6 +342,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
             ref: yield* uuid,
             role: desc.role,
             label: desc.label,
+            ...(desc.checked === undefined ? {} : { checked: desc.checked }),
             target: CredentialTarget.make({
               topOrigin: before.topOrigin,
               frameOrigin: yield* origin(frame.url()),
@@ -338,6 +381,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
 
       return yield* decode(ProtectedDiscovery, {
         ...before,
+        frameOrigins: [...frameOrigins],
         text,
         controls: discovered,
         truncated,

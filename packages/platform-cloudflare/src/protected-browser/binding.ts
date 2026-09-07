@@ -107,7 +107,8 @@ export const browserRunProtectedBindingLayer = (options: {
 
             const acquired = await puppeteer.acquire(binding, {
               recording: false,
-              keep_alive: Math.max(10_000, policy.maxElapsedMillis),
+              // Provider inactivity timeout, independent of the finite total pass deadline.
+              keep_alive: Math.min(600_000, Math.max(10_000, policy.maxElapsedMillis)),
             });
 
             sessionId = Redacted.make(

@@ -5,9 +5,27 @@ export const maxAttributeLength = 2048;
 export const inspectFrame = `(() => {
   const doc = document;
   const forms = [];
-  const elements = [...doc.querySelectorAll('input,select,button,a[href]')].slice(0, 65);
+  const isChoice = el => el instanceof HTMLInputElement && ['radio','checkbox'].includes(el.type);
+  const presented = el => {
+    if (el.closest('[hidden],[aria-hidden="true"],[inert]') ||
+      ['hidden','collapse'].includes(getComputedStyle(el).visibility)) return false;
+    for (let parent = el; parent; parent = parent.parentElement) {
+      if (getComputedStyle(parent).opacity === '0') return false;
+    }
+    return true;
+  };
+  const hasLayout = el => presented(el) &&
+    [...el.getClientRects()].some(rect => rect.width > 0 && rect.height > 0);
+  const available = el => el.type !== 'hidden' && !el.closest('[hidden],[aria-hidden="true"],[inert]') &&
+    (hasLayout(el) || (isChoice(el) && [...(el.labels ?? [])].some(hasLayout)));
+  const elements = [...doc.querySelectorAll('input,textarea,select,button,a[href]')].filter(available).slice(0, 65);
+  const labelText = el => {
+    const label = el.labels?.[0]?.cloneNode(true);
+    label?.querySelectorAll('input,textarea,select,script,style,noscript').forEach(child => child.remove());
+    return label?.textContent ?? el.getAttribute('aria-label');
+  };
   const describe = (el) => {
-    if (doc !== document || !el.isConnected || el.ownerDocument !== doc) return null;
+    if (doc !== document || !el.isConnected || el.ownerDocument !== doc || !available(el)) return null;
     const form = el.form ?? null;
     let formIndex = forms.indexOf(form);
     if (formIndex < 0) { formIndex = forms.length; forms.push(form); }
@@ -17,29 +35,35 @@ export const inspectFrame = `(() => {
     const name = el.name ?? '';
     const completion = el.getAttribute('autocomplete') ?? '';
     const inputType = el.type ?? '';
+    const choiceValue = isChoice(el) ? el.value : '';
     // Reject before parsing, fingerprinting or CDP transfer. Truncation could hide a target change.
-    if ([action, method, enctype, name, completion, inputType].some(value => value.length > ${maxAttributeLength})) return null;
+    if ([action, method, enctype, name, completion, inputType, choiceValue].some(value => value.length > ${maxAttributeLength})) return null;
     const type = inputType.toLowerCase();
     const autocomplete = completion.trim().toLowerCase().split(/\\s+/).at(-1);
     const cardRoles = { 'cc-name':'card-name', 'cc-number':'card-number', 'cc-exp':'card-expiry',
       'cc-exp-month':'card-expiry-month', 'cc-exp-year':'card-expiry-year', 'cc-csc':'card-security-code' };
     let role = 'unsupported';
-    const nativeField = el instanceof HTMLInputElement || el instanceof HTMLSelectElement;
-    if (nativeField && form && !['submit','button'].includes(type) && !el.disabled && !el.readOnly && el.getClientRects().length > 0) {
-      if (el instanceof HTMLInputElement && type === 'password') role = 'password';
-      else if (['text','email','tel','number','month',''].includes(type) || el instanceof HTMLSelectElement) {
-        if (cardRoles[autocomplete]) role = cardRoles[autocomplete];
-        else if (autocomplete === 'username' || autocomplete === 'email') role = 'username';
+    const nativeField = el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement;
+    if (nativeField && !['submit','button'].includes(type) && !el.matches(':disabled') && !el.readOnly && !(el instanceof HTMLSelectElement && el.multiple)) {
+      if (isChoice(el)) role = type;
+      else if (type === 'password' || ['current-password','new-password','one-time-code'].includes(autocomplete)) {
+        if (type === 'password' && form) role = 'password';
+      } else if (['text','email','tel','number','month','search','url','date','time','week','datetime-local','textarea',''].includes(type) || el instanceof HTMLSelectElement) {
+        if (cardRoles[autocomplete]) { if (form) role = cardRoles[autocomplete]; }
+        else if (autocomplete === 'username' || autocomplete === 'email') { if (form) role = 'username'; }
         else if (['text','email'].includes(type) && form && form.querySelector('input[type="password"]')) role = 'username';
+        else if (el instanceof HTMLSelectElement) { if (!el.multiple) role = 'select'; }
+        else role = 'text';
       }
     } else if (el instanceof HTMLButtonElement || (el instanceof HTMLInputElement && ['submit','button'].includes(type))) {
-      if (!el.disabled) role = type === 'submit' && form ? 'submit' : type === 'button' ? 'button' : 'unsupported';
+      if (!el.matches(':disabled')) role = type === 'submit' && form ? 'submit' : type === 'button' ? 'button' : 'unsupported';
     } else if (el instanceof HTMLAnchorElement) role = 'link';
-    const fingerprint = JSON.stringify([role, action, method, enctype, name, completion, type]);
-    return { role, formIndex, action, fingerprint,
-      label: (el.labels?.[0]?.textContent ?? el.getAttribute('aria-label') ?? el.textContent ?? '').slice(0,200) };
+    const fingerprint = JSON.stringify([role, action, method, enctype, name, completion, type, choiceValue]);
+    return { role, formIndex, action, fingerprint, ...(isChoice(el) ? {checked: el.checked} : {}),
+      label: (labelText(el) ?? (nativeField ? '' : el.textContent) ?? '').slice(0,200) };
   };
-  const expose = ({role, formIndex, action, label}) => ({role, formIndex, action, label});
+  const expose = ({role, formIndex, action, label, checked}) =>
+    ({role, formIndex, action, label, ...(checked === undefined ? {} : {checked})});
   const original = elements.map(describe);
   const validate = (index) => {
     const current = describe(elements[index]);
@@ -51,14 +75,32 @@ export const inspectFrame = `(() => {
     doc, elements, original: original.map(current => current && expose(current)), validate,
     text: () => {
       if (doc !== document) return null;
-      const clone = doc.body?.cloneNode(true);
-      clone?.querySelectorAll('input,textarea,select,script,style,noscript,iframe,object,embed').forEach(el => el.remove());
-      return (clone?.textContent ?? '').slice(0,65536);
+      if (!doc.body) return '';
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      const range = doc.createRange();
+      let text = '';
+      for (let node = walker.nextNode(); node && text.length < 65536; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest('input,textarea,select,script,style,noscript,iframe,object,embed')) continue;
+        if (!presented(parent)) continue;
+        range.selectNodeContents(node);
+        if (![...range.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)) continue;
+        text += (node.textContent ?? '').replace(/\\s+/g, ' ') + ' ';
+      }
+      return text.slice(0,65536);
     },
     fill: (index, role, value) => {
       const current = validate(index);
       if (!current || current.role !== role) return false;
       const el = elements[index];
+      if (role === 'select') {
+        const options = [...el.options].filter(option => !option.matches(':disabled'));
+        const values = options.filter(option => option.value === value);
+        const matches = values.length > 0 ? values : options.filter(option => option.textContent?.trim() === value);
+        if (matches.length !== 1) return 'unsupported';
+        value = matches[0].value;
+        if ([...el.options].filter(option => option.value === value).length !== 1) return 'unsupported';
+      }
       let prototype = Object.getPrototypeOf(el);
       let setter;
       while (prototype && !setter) { setter = Object.getOwnPropertyDescriptor(prototype,'value')?.set; prototype = Object.getPrototypeOf(prototype); }
@@ -73,7 +115,7 @@ export const inspectFrame = `(() => {
     },
     click: (index) => {
       const current = validate(index);
-      if (!current || !['button','submit','link'].includes(current.role)) return false;
+      if (!current || !['button','submit','link','radio','checkbox'].includes(current.role)) return false;
       if (current.role === 'submit' && elements[index].form && !elements[index].form.matches(':valid')) return 'needs-attention';
       elements[index].click();
       return true;

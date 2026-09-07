@@ -33,6 +33,8 @@ import {
   type BrowserCredentialAccess,
   CredentialOrigin,
   CardCredential,
+  CredentialOfferMetadata,
+  ProtectedBrowserFill,
 } from "@effect-agent/sandbox/ProtectedBrowser";
 import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
 import { Schema, type Effect, type Scope } from "effect";
@@ -45,6 +47,51 @@ type OpenResult =
   ReturnType<Open> extends Effect.Effect<infer A, infer E, infer R> ? [A, E, R] : never;
 
 describe("InteractiveBrowser schemas", () => {
+  it("bounds non-secret fill, authorized address metadata, and hour-long policies", () => {
+    const ref = "12345678-1234-4234-9234-123456789abc";
+
+    expect(Schema.decodeUnknownSync(ProtectedBrowserFill)({ ref, value: "" }).value).toBe("");
+    for (const request of [
+      { ref: "#address", value: "text" },
+      { ref, value: "x".repeat(8193) },
+      { ref, value: "text", selector: "input" },
+      { ref, value: "text", script: "document.body" },
+    ])
+      expect(Schema.decodeUnknownExit(ProtectedBrowserFill)(request)._tag).toBe("Failure");
+
+    const metadata = CredentialOfferMetadata.make({
+      label: "Personal card",
+      billingAddress: { line1: "123 Example Street", postalCode: "12345" },
+    });
+
+    expect(
+      Schema.decodeSync(CredentialOfferMetadata)(
+        Schema.encodeSync(CredentialOfferMetadata)(metadata),
+      ),
+    ).toEqual(metadata);
+    expect(
+      Schema.decodeUnknownExit(CredentialOfferMetadata)({
+        label: "Card",
+        billingAddress: { line1: "x".repeat(201) },
+      })._tag,
+    ).toBe("Failure");
+    for (const maxElapsedMillis of [600_001, 3_600_000])
+      expect(
+        Schema.decodeUnknownExit(InteractiveBrowserPolicy)({
+          network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
+          maxActions: 10,
+          maxElapsedMillis,
+          maxReturnedBytes: 1024,
+        })._tag,
+      ).toBe("Success");
+
+    const fill: Equal<
+      ReturnType<ProtectedBrowserHandle["fill"]>,
+      Effect.Effect<void, ProtectedBrowserError>
+    > = true;
+
+    expect(fill).toBe(true);
+  });
   it("keeps protected material and authority outside the model contract", () => {
     const open: Equal<
       ReturnType<ProtectedBrowser["Service"]["open"]>,
@@ -56,10 +103,7 @@ describe("InteractiveBrowser schemas", () => {
     > = true;
 
     const channels: Equal<
-      Extract<
-        keyof ProtectedBrowserHandle,
-        "fill" | "screenshot" | "sessionId" | "getLiveView" | "handoff"
-      >,
+      Extract<keyof ProtectedBrowserHandle, "screenshot" | "sessionId" | "getLiveView" | "handoff">,
       never
     > = true;
 
@@ -210,7 +254,9 @@ describe("InteractiveBrowser schemas", () => {
       { ...valid, maxActions: 0 },
       { ...valid, maxActions: 1_001 },
       { ...valid, maxElapsedMillis: 0 },
-      { ...valid, maxElapsedMillis: 600_001 },
+      { ...valid, maxElapsedMillis: 3_600_001 },
+      { ...valid, maxElapsedMillis: Number.POSITIVE_INFINITY },
+      { ...valid, maxElapsedMillis: Number.NaN },
       { ...valid, maxReturnedBytes: 0 },
       { ...valid, maxReturnedBytes: 8 * 1024 * 1024 + 1 },
     ])
