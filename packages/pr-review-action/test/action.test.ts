@@ -1,6 +1,7 @@
 import { ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, expectTypeOf, it, layer } from "@effect/vitest";
+import { parsePatch } from "diff";
 import {
   Cause,
   Config,
@@ -32,9 +33,10 @@ import {
   BinaryBlob,
   type ChangedFile,
   GitHubApiFailure,
+  makeExactPatch,
   type RepositorySnapshot,
 } from "../src/github.ts";
-import { reviewPriority, reviewMaxCostUsd } from "../src/review-openai.ts";
+import { reviewPriority, reviewMaxCostUsd, reviewCostLimitMicrousd } from "../src/review-openai.ts";
 import { reviewMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
@@ -1358,6 +1360,131 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
         ? Effect.die(`must not hydrate ${path}`)
         : Effect.succeed(files[path] ?? ""),
   });
+
+  // Regression: deleted dependency patches exhausted review spend on embedded source maps.
+  it.effect(
+    "omits embedded source maps before spending admission without shifting source anchors",
+    () =>
+      Effect.gen(function* () {
+        const path = "patches/dependency.patch";
+
+        const map = JSON.stringify({
+          version: 3,
+          sources: ["../src/value.ts"],
+          names: [],
+          mappings: "AAAA;".repeat(70_000),
+        });
+
+        const dependencyPatch = [
+          "diff --git a/dist/value.js.map b/dist/value.js.map",
+          "--- a/dist/value.js.map",
+          "+++ b/dist/value.js.map",
+          "@@ -1 +1 @@",
+          `-${map}`,
+          `+${map}`,
+          "diff --git a/src/value.ts b/src/value.ts",
+          "--- a/src/value.ts",
+          "+++ b/src/value.ts",
+          "@@ -1 +1 @@",
+          "-export const value = 1;",
+          "+export const value = 2;",
+          "",
+        ].join("\n");
+
+        for (const [before, after, omittedLines] of [
+          [dependencyPatch, "", 2],
+          ["", dependencyPatch, 2],
+          [dependencyPatch, dependencyPatch.replace("value = 2", "value = 3"), 0],
+          [
+            dependencyPatch,
+            dependencyPatch.replaceAll("AAAA;", "CAAA;").replace("value = 2", "value = 3"),
+            4,
+          ],
+        ] as const) {
+          const surface = yield* hydrateExactChanges({
+            files: [file(path, undefined)],
+            changedPaths: [path],
+            ignore: [],
+            base: treeSnapshot("base", before === "" ? {} : { [path]: before }),
+            head: treeSnapshot("head", after === "" ? {} : { [path]: after }),
+          });
+
+          const patch = surface.changes[0]?.patch ?? "";
+
+          const original =
+            makeExactPatch({ path, baseRevision: "base", headRevision: "head", before, after }) ??
+            "";
+
+          const coordinates = (text: string) =>
+            parsePatch(text).flatMap((item) =>
+              item.hunks.map(({ oldStart, oldLines, newStart, newLines }) => ({
+                oldStart,
+                oldLines,
+                newStart,
+                newLines,
+              })),
+            );
+
+          expect(coordinates(patch)).toEqual(coordinates(original));
+          expect(patch).toContain("export const value =");
+          expect(patch).not.toContain(map);
+          expect(patch.length).toBeLessThan(2_000);
+          expect(surface.unreviewedPaths).toEqual([]);
+          expect(surface.ignoredPaths).toEqual([]);
+          expect(surface.generatedContent).toEqual(
+            omittedLines === 0
+              ? []
+              : [{ path, lines: omittedLines, characters: map.length * omittedLines }],
+          );
+          expect(reviewCostLimitMicrousd({ changes: surface.changes }, 20, 4)).toBeLessThan(
+            4_020_000,
+          );
+        }
+      }),
+  );
+
+  it.effect("retains malformed maps and patches, non-map JSON, and generated-marker source", () =>
+    Effect.gen(function* () {
+      const validMap = '{"version":3,"sources":[],"mappings":"AAAA"}';
+
+      for (const [path, nestedPath, payload, hunk] of [
+        [
+          "patches/dependency.patch",
+          "dist/value.js.map",
+          '{"version":3,"mappings":42}',
+          "@@ -0,0 +1 @@",
+        ],
+        ["patches/dependency.patch", "dist/value.js.map", validMap, "@@ -0,0 +1,2 @@"],
+        ["patches/dependency.patch", "src/value.json", validMap, "@@ -0,0 +1 @@"],
+        ["docs/example.txt", "dist/value.js.map", validMap, "@@ -0,0 +1 @@"],
+      ]) {
+        const after = `diff --git a/${nestedPath} b/${nestedPath}\n--- /dev/null\n+++ b/${nestedPath}\n${hunk}\n+${payload}\n`;
+
+        const surface = yield* hydrateExactChanges({
+          files: [file(path, undefined)],
+          changedPaths: [path],
+          ignore: [],
+          base: treeSnapshot("base", {}),
+          head: treeSnapshot("head", { [path]: after }),
+        });
+
+        expect(surface.changes[0]?.patch).toContain(payload);
+        expect(surface.generatedContent).toEqual([]);
+      }
+      const source = "// @generated do not edit\nexport const bypassAuthorization = true;\n";
+
+      const surface = yield* hydrateExactChanges({
+        files: [file("src/auth.ts", undefined)],
+        changedPaths: ["src/auth.ts"],
+        ignore: [],
+        base: treeSnapshot("base", {}),
+        head: treeSnapshot("head", { "src/auth.ts": source }),
+      });
+
+      expect(surface.changes[0]?.patch).toContain("bypassAuthorization");
+      expect(surface.generatedContent).toEqual([]);
+    }),
+  );
 
   it.effect("keeps review capacity after exhausting generated classification requests", () =>
     Effect.gen(function* () {

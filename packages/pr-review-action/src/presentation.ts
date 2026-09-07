@@ -9,6 +9,7 @@ import {
 } from "@effect-agent/pr-review/Review";
 import { Schema } from "effect";
 
+import { type GeneratedContentOmission } from "./generated-content.ts";
 import { reviewMarker, reviewPauseMarker } from "./selection.ts";
 
 const severityAppearance: Record<
@@ -145,6 +146,7 @@ export interface ReviewPresentationInput {
   readonly reviewedFiles: number;
   readonly unreviewedFiles: number;
   readonly exclusions?: ReadonlyArray<ReviewExclusion>;
+  readonly generatedContent?: ReadonlyArray<GeneratedContentOmission>;
   readonly ignoredFiles: number;
   readonly modelTurns: number;
   readonly complete: boolean;
@@ -214,6 +216,32 @@ export const renderReviewBody = (input: ReviewPresentationInput): string => {
 
   if (automaticPause !== undefined) parts.push(automaticPause);
   parts.push("### Summary", input.report.summary);
+  if (input.generatedContent !== undefined && input.generatedContent.length > 0) {
+    const omissions = input.generatedContent;
+    const shown: Array<string> = [];
+    let characters = 0;
+
+    for (const item of omissions.slice(0, 10)) {
+      const line = `${JSON.stringify(item.path.slice(0, 512))}: ${formatNumber(item.lines)} lines · ${formatNumber(item.characters)} characters`;
+
+      if (characters + line.length + 1 > 4_000) break;
+      shown.push(line);
+      characters += line.length + 1;
+    }
+
+    parts.push(
+      "<details>",
+      `<summary>Generated source-map payloads omitted (${formatNumber(omissions.reduce((total, item) => total + item.characters, 0))} characters)</summary>`,
+      "These payloads were excluded from assessment. Patch headers, line coordinates, and source changes remain in the review input.",
+      fencedPlainText(shown.join("\n")),
+      ...(omissions.length > shown.length
+        ? [
+            `${omissions.length - shown.length} more files omitted from this list. See the Action log for the full list.`,
+          ]
+        : []),
+      "</details>",
+    );
+  }
   if (input.exclusions !== undefined && input.exclusions.length > 0) {
     // Leave room for the maximum finding report and summary in GitHub's body
     // bound, including paths whose JSON escaping expands every character.

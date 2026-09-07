@@ -35,6 +35,7 @@ import {
   Schema,
 } from "effect";
 
+import { type GeneratedContentOmission, omitGeneratedSourceMaps } from "./generated-content.ts";
 import {
   type ChangedFile,
   GitHubApiFailure,
@@ -335,6 +336,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
   const unreviewedPaths: Array<string> = [];
   const ignoredPaths: Array<string> = [];
   const exclusions: Array<ReviewExclusion> = [];
+  const generatedContent: Array<GeneratedContentOmission> = [];
   const unavailablePaths = new Set<string>();
 
   const exclude = (
@@ -503,7 +505,7 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
             after,
           });
 
-    const exactPatch =
+    const originalPatch =
       patch !== undefined && basePath !== file.path && !beforeBinary && !afterBinary
         ? [
             `diff --git a/${basePath} b/${file.path}`,
@@ -512,6 +514,19 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
             patch,
           ].join("\n")
         : patch;
+
+    const filtered =
+      originalPatch === undefined
+        ? undefined
+        : omitGeneratedSourceMaps({
+            path,
+            basePath,
+            before,
+            after,
+            patch: originalPatch,
+          });
+
+    const exactPatch = filtered?.patch;
 
     if (
       path.length > 512 ||
@@ -536,11 +551,12 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       continue;
     }
     changes.push(ReviewChange.make({ path, patch: exactPatch }));
+    if (filtered?.omission !== undefined) generatedContent.push(filtered.omission);
     admittedPaths += 1;
     patchCharacters += exactPatch.length;
   }
 
-  return { changes, unreviewedPaths, ignoredPaths, unavailablePaths, exclusions };
+  return { changes, unreviewedPaths, ignoredPaths, unavailablePaths, exclusions, generatedContent };
 });
 
 const reviewContextFailure = (message: string): ReviewContextError =>
@@ -896,6 +912,10 @@ export const reviewActionProgram = Effect.gen(function* () {
       ),
     );
 
+    for (const omission of surface.generatedContent) {
+      yield* Effect.logInfo("Generated source-map payloads omitted", { ...omission });
+    }
+
     const reviewRepository = makeReviewRepository({
       base: comparison.base,
       head: comparison.head,
@@ -1189,6 +1209,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       reviewedFiles: surface.changes.length,
       unreviewedFiles: surface.unreviewedPaths.length,
       exclusions: surface.exclusions,
+      generatedContent: surface.generatedContent,
       ignoredFiles: surface.ignoredPaths.length,
       modelTurns,
       complete,
