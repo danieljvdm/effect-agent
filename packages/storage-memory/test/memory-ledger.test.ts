@@ -111,7 +111,8 @@ describe("MemorySubmissionLedger", () => {
                 finalized = true;
               }),
             );
-            yield* Effect.never;
+
+            return yield* Effect.never;
           }),
         ),
     });

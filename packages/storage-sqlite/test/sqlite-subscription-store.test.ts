@@ -59,8 +59,12 @@ const withTemporaryDatabase = <A, E>(
 
 describe("SqliteSubscriptionStore", () => {
   for (const testCase of subscriptionStoreConformanceCases) {
-    it.effect(testCase.name, () =>
-      withTemporaryDatabase((filename) => testCase.run.pipe(Effect.provide(testLayer(filename)))),
+    it.effect(
+      testCase.name,
+      () =>
+        withTemporaryDatabase((filename) => testCase.run.pipe(Effect.provide(testLayer(filename)))),
+      // Shared conformance includes sustained durable writes on CI's slower filesystem.
+      30_000,
     );
   }
 });

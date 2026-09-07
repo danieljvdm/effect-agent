@@ -183,46 +183,54 @@ it("isolates failed and unknown ancillary alarms while advancing native work and
   const partition = { tenantId: "alarm-fairness", address: "events" };
   const stub = env.SUBSCRIPTIONS.get(env.SUBSCRIPTIONS.idFromName(sourcePartitionName(partition)));
 
-  await runInDurableObject(stub, (instance) =>
-    instance[DurableObject.RunSymbol](
-      Effect.gen(function* () {
-        const alarms = yield* DurableObjectAlarm.DurableObjectAlarm;
+  // Keep the input gate closed through inspection: an automatic 10ms retry can otherwise
+  // consume the newly armed wake between dispatch and getAlarm(), racing this assertion.
+  const rows = await runInDurableObject(stub, (instance, state) =>
+    state.blockConcurrencyWhile(async () => {
+      await instance[DurableObject.RunSymbol](
+        Effect.gen(function* () {
+          const alarms = yield* DurableObjectAlarm.DurableObjectAlarm;
 
-        for (const [index, tag] of [
-          "test/failing",
-          "test/unknown",
-          "effect-agent/unknown",
-          "test/replacement",
-          "effect-agent/SubscriptionPartitionWake",
-        ].entries()) {
-          yield* alarms.scheduleAlarm({
-            tag,
-            id: tag.startsWith("effect-agent/Subscription") ? "driver" : "one",
-            runAt: DateTime.makeUnsafe(Date.now() - 100 + index),
-            payload:
-              tag === "test/replacement"
-                ? 1
-                : tag.startsWith("effect-agent/Subscription")
-                  ? { schemaVersion: 1, generation: 1 }
-                  : null,
-          });
-        }
-      }),
-    ),
+          for (const [index, tag] of [
+            "test/failing",
+            "test/unknown",
+            "effect-agent/unknown",
+            "test/replacement",
+            "effect-agent/SubscriptionPartitionWake",
+          ].entries()) {
+            yield* alarms.scheduleAlarm({
+              tag,
+              id: tag.startsWith("effect-agent/Subscription") ? "driver" : "one",
+              runAt: DateTime.makeUnsafe(Date.now() - 100 + index),
+              payload:
+                tag === "test/replacement"
+                  ? 1
+                  : tag.startsWith("effect-agent/Subscription")
+                    ? { schemaVersion: 1, generation: 1 }
+                    : null,
+            });
+          }
+        }),
+      );
+      await state.storage.deleteAlarm();
+      await instance.alarm();
+
+      try {
+        const rows = state.storage.sql
+          .exec<{ tag: string; payload: string; run_at: number }>(
+            "SELECT tag, payload, run_at FROM effect_cf_scheduled_alarms ORDER BY tag",
+          )
+          .toArray();
+
+        expect(await state.storage.getAlarm()).not.toBeNull();
+
+        return rows;
+      } finally {
+        // Stop this fixture's intentionally failing retries after verifying rearm.
+        await state.storage.deleteAlarm();
+      }
+    }),
   );
-  await runDurableObjectAlarm(stub);
-
-  const rows = await runInDurableObject(stub, async (_instance, state) => {
-    const rows = state.storage.sql
-      .exec<{ tag: string; payload: string; run_at: number }>(
-        "SELECT tag, payload, run_at FROM effect_cf_scheduled_alarms ORDER BY tag",
-      )
-      .toArray();
-
-    expect(await state.storage.getAlarm()).not.toBeNull();
-
-    return rows;
-  });
 
   expect(rows.map((row) => row.tag)).toEqual([
     "effect-agent/unknown",
