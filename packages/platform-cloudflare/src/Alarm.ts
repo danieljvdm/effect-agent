@@ -319,7 +319,11 @@ const stableExternalWait = (
   }
 };
 
-/** @internal Shared prearm/acknowledgement boundary for ingress and runtime-owned producers. */
+/**
+ * Shared prearm/acknowledgement boundary for ingress and runtime-owned producers.
+ * `ThreadObject.layer` provides this same instance in its Services. Rebuilt runtime/maintenance
+ * Layers must reuse that instance; a second gate cannot observe the native producers' activity.
+ */
 export class ThreadMutationGate extends Context.Service<
   ThreadMutationGate,
   {

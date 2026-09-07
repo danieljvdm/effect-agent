@@ -171,6 +171,7 @@ export type CloudflareDurableRuntimeServices =
   | WakeScheduler
   | DurableAlarmService
   | ThreadMaintenance
+  | ThreadMutationGate
   | ThreadPublication
   | ThreadObjectPorts
   | ProgressWaitRegistry;
@@ -469,6 +470,6 @@ export const layerFromBindings = <E = never, R = never>(
         runtimeStack,
         ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack)),
         portsEndpointLayer,
-      ).pipe(Layer.provideMerge(publication), Layer.provide(ThreadMutationGate.layer));
+      ).pipe(Layer.provideMerge(publication), Layer.provideMerge(ThreadMutationGate.layer));
     }),
   );

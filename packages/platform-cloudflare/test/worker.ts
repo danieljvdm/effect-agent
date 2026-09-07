@@ -17,12 +17,14 @@ import {
 } from "@effect-agent/platform-cloudflare/CloudflareScheduling";
 import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
 import { ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread/Schedule";
 import { Clock, Context, Crypto, Effect, Layer, Schema } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
+import { ThreadMaintenance } from "../src/Alarm.ts";
 import { layerFromBindings } from "../src/internal/layers.ts";
 import {
   THREADS_BINDING,
@@ -317,9 +319,14 @@ const maintenanceClockLayer = Layer.effect(
 export class PublicationThreadObject extends ThreadObject.make(
   Layer.unwrap(
     Effect.map(makeTestBindings, (bindings) =>
-      layerFromBindings(bindings, { publication: publicationLayer }),
+      Layer.fresh(ThreadMaintenance.layer).pipe(
+        Layer.provideMerge(DurableAgentRuntime.layerWithBindings(bindings)),
+      ),
     ),
-  ).pipe(Layer.provideMerge(maintenanceClockLayer)),
+  ).pipe(
+    Layer.provideMerge(ThreadObject.layer([], { publication: publicationLayer })),
+    Layer.provideMerge(maintenanceClockLayer),
+  ),
   { ...baseOptions, namespaceBinding: "PUBLICATIONS" },
 ) {}
 
