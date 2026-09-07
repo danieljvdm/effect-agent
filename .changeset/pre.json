@@ -141,6 +141,7 @@
     "review-budget-finalization",
     "review-cache-cost",
     "revision-aware-generated-reviews",
+    "revisioned-subscription-admission",
     "scheduling-management-recovery",
     "scoped-browser-crawl",
     "scoped-interactive-browser",

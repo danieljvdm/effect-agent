@@ -1,5 +1,16 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.51
+
+### Patch Changes
+
+- Updated dependencies [[`75898ae`](https://github.com/danieljvdm/effect-agent/commit/75898aef60b09945d90bfe5674b5153edb0717eb)]:
+  - @effect-agent/thread@0.1.0-beta.51
+  - @effect-agent/capabilities@0.1.0-beta.51
+  - @effect-agent/core@0.1.0-beta.51
+  - @effect-agent/engine@0.1.0-beta.51
+  - @effect-agent/sandbox@0.1.0-beta.51
+
 ## 0.1.0-beta.50
 
 ### Minor Changes
