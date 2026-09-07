@@ -1,95 +1,128 @@
 # Effect Agent
 
-Effect Agent is a TypeScript framework for building agents with
-[Effect](https://github.com/Effect-TS/effect) and Effect AI. You supply a model, tools, instructions,
-and input/output schemas. It runs the agent loop, executes tool calls, and validates the result.
-
-`AgentRuntime.run` returns an `Effect`. `AgentRuntime.stream` returns a `Stream`. Expected failures
-stay in `E`, required services stay in `R`, and every resource belongs to a `Scope`.
-
-Start with the [getting-started guide](docs/guide/getting-started.md) or browse the
-[documentation](docs/index.md).
+Build TypeScript agents with [Effect](https://github.com/Effect-TS/effect) and Effect AI.
+Define inputs, outputs, and tools with schemas. Effect Agent runs the loop, executes tools,
+and validates the result — with typed errors, streaming, and bounded execution.
 
 ## Install
 
 ```sh
-npm install --save-exact effect-agent@beta
+bun add effect-agent@beta
 ```
 
-You also need `effect@^4.0.0-rc.112` and an Effect AI provider, such as
-`@effect/ai-openai@4.0.0-rc.112`. Your application supplies the provider Layer, credentials, and
-tool handlers.
+Use an [Effect AI provider](examples/providers/README.md) for model access.
+Public beta: APIs and stored data may change before 1.0.
 
-The `effect-agent` package includes core, engine, and capabilities. Persistent history, durable
-hosts, storage, and sandbox adapters are separate installs. See the
-[package map](docs/reference/packages.md#capability-inventory) for what each package provides.
+## A basic agent
 
-Effect Agent is in public beta. Releases use `X.Y.Z-beta.N` versions on npm's `beta` channel.
-Keep framework packages at the same exact release and choose Effect/provider versions that satisfy
-their peer ranges. APIs and stored data may change incompatibly before 1.0, with no compatibility
-window or migration promise. Incompatible data must fail clearly and may need a reset.
+```ts
+import { Effect, Schema } from "effect";
+import { Agent, AgentRuntime } from "effect-agent";
+import { Toolkit } from "effect/unstable/ai";
 
-## What it does
+const planner = Agent.make("travel-planner", {
+  input: Schema.Struct({ city: Schema.String, days: Schema.Int }),
+  output: Schema.Struct({ itinerary: Schema.Array(Schema.String) }),
+  instructions: ({ city, days }) => `Plan ${days} days in ${city}. Suggest one activity per day.`,
+  toolkit: Toolkit.empty,
+  policy: { maxTurns: 6, maxToolCalls: 10, maxDuration: "2 minutes" },
+});
 
-Effect Agent uses Effect AI's tools, models, and provider integrations directly. It adds:
+const program = Effect.gen(function* () {
+  const result = yield* AgentRuntime.run(planner, { city: "Lisbon", days: 2 });
+  yield* Effect.log(result.output.itinerary); // readonly string[]
+});
+```
 
-- [Execution limits](docs/concepts/budgets.md) for turns, tool calls, time, token usage, and cost.
-- [Tool execution](docs/guide/tools.md) in bounded parallel batches, with results recorded in
-  declaration order.
-- [Streaming, approvals, and interactive input](docs/guide/run-agents.md). Steering and follow-up
-  input wait until the current model response and tool batch finish.
-- [Thread history](docs/guide/threads.md) across runs, with
-  [context management](docs/guide/context-management.md) for long conversations.
-- [Transient recall](docs/guide/context-management.md) from application-owned readable sources.
-- [Revision-aware memory stores](docs/guide/context-management.md) with conditional corrections and
-  withdrawal.
-- [Background remembering](docs/guide/context-management.md#background-remembering) with durable
-  admission, saved proposals and commands, and source invalidation.
-- [Resumable processing of committed Thread activity](docs/guide/context-management.md).
-- [Attached subagents](docs/guide/subagents.md) with explicit permissions and budgets.
-- [Scheduled input](docs/guide/operations.md#scheduled-input) and
-  [event subscriptions](docs/guide/operations.md#event-subscriptions).
-- [Sandbox and browser tools](docs/guide/sandbox.md) for processes, page capture, screenshots, and
-  bounded crawling. The [browser guide](docs/guide/browser.md) covers adapters and host requirements.
-- [MCP server tools](docs/guide/tools.md#mcp) over Streamable HTTP or stdio, with bounded discovery.
+The output is schema-validated. Supply your model and runtime services to run it:
 
-## Durability
+<details>
+<summary>Run this example with OpenAI</summary>
 
-Saving thread history does not make a run durable. Durable execution is available on
-[Node.js with SQLite](docs/platforms/node.md) and
-[Cloudflare Workers with Durable Objects](docs/platforms/cloudflare.md).
+Save the code above and the setup below as `agent.ts`.
 
-The optional [`@effect-agent/workflow` host](docs/guide/workflows.md) drives the same durable
-runtime through an injected Effect `WorkflowEngine`. Platform adapters supply storage and repair
-scheduling while preserving the same agent definitions and canonical settlement contract.
-Use `AgentWorkflow.execute(agent, input, { name })` inside a native `Workflow.toLayer` handler
-to suspend for pending work and return the Agent's typed output when it settles.
+```ts
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { BunRuntime } from "@effect/platform-bun";
+import { Config, Layer } from "effect";
+import { IdGenerator } from "effect-agent/IdGenerator";
+import { ThreadHistory } from "effect-agent/ThreadHistory";
+import { FetchHttpClient } from "effect/unstable/http";
 
-Both hosts save work before acknowledging it, record one terminal settlement per accepted
-submission, and reject commits from workers that have lost ownership. They support approval
-suspension, joined input, and attached subagents.
+const AppLive = Layer.mergeAll(
+  OpenAiLanguageModel.model("gpt-6-astra"),
+  IdGenerator.layer,
+  ThreadHistory.layerTransient,
+).pipe(
+  Layer.provide(OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") })),
+  Layer.provide(FetchHttpClient.layer),
+);
 
-Execution is at least once. There is no exactly-once guarantee for external effects. If a worker
-disappears after an ordinary tool may have run, recovery records an unknown outcome and does not
-replay the call automatically. The [durability guide](docs/concepts/durability.md) explains the
-log, submission ledger, and recovery rules.
+BunRuntime.runMain(program.pipe(Effect.provide(AppLive)));
+```
 
-Cloudflare durability tests run under workerd/Miniflare. Hosted Browser Run verification and
-live-model/provider suites are opt-in.
+```sh
+export OPENAI_API_KEY="your-api-key"
+bun agent.ts
+```
 
-## Limits and safety
+</details>
 
-There is no hosted service, bundled chat UI, visual builder, or marketplace. Runtime Skills,
-framework-owned fact extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn
-Plans are not implemented. Subagents cannot nest, hand off, or detach. See the
-[capability inventory](docs/reference/packages.md#capability-inventory) for the full list.
+## Give it tools
 
-Your application owns authorization and isolation. The local sandbox runs trusted code without
-isolation. [MCP servers](docs/guide/tools.md#mcp) connect over Streamable HTTP or stdio with
-credentials and commands the application supplies. Read the
-[host isolation requirements](docs/guide/operations.md#authorization-and-isolation) before deploying.
+Use native Effect AI tools with typed parameters, results, and Effect handlers:
 
-For GitHub integrations, see the [read-only PR reviewer](packages/pr-review/README.md).
+```ts
+import { Tool } from "effect/unstable/ai";
+
+const SearchActivities = Tool.make("search_activities", {
+  description: "Find activities in a city.",
+  parameters: Schema.Struct({ city: Schema.String }),
+  success: Schema.Array(Schema.String),
+});
+
+const TravelTools = Toolkit.make(SearchActivities);
+const TravelToolsLive = TravelTools.toLayer({
+  // Sample data; replace with your database or API.
+  search_activities: ({ city }) =>
+    Effect.succeed(city === "Lisbon" ? ["Riverside walk", "Food market"] : []),
+});
+```
+
+Define these before `planner`, set its `toolkit` to `TravelTools`, and add `TravelToolsLive`
+to `Layer.mergeAll` above.
+[More about tools, approvals, and MCP →](docs/guide/tools.md)
+
+## Stream progress
+
+Use the same agent and services to observe text, tool activity, and lifecycle events:
+
+```ts
+import { Stream } from "effect";
+
+const streaming = AgentRuntime.stream(planner, { city: "Lisbon", days: 2 }).pipe(
+  Stream.runForEach((event) => Effect.log(event._tag)),
+  Effect.provide(AppLive),
+);
+
+BunRuntime.runMain(streaming);
+```
+
+Use this in place of the earlier `BunRuntime.runMain` call.
+[More about streaming and interactive input →](docs/guide/run-agents.md)
+
+## More examples
+
+- [Travel planner](docs/snippets/travel-planner/) — complete agent, tools, and provider setup.
+- [Subagents](docs/guide/subagents.md), [browser tools](docs/guide/browser.md), and
+  [Code Mode](docs/guide/code-mode.md) — delegate research, browse pages, and execute code.
+- [Persistent threads](docs/guide/threads.md), [durable execution](docs/concepts/durability.md), and
+  [Effect Workflows](docs/guide/workflows.md) — keep history and resume work.
+- [Runnable examples](examples/) and the [PR reviewer](packages/pr-review/README.md).
+
+Start with the [getting-started guide](docs/guide/getting-started.md), or explore the
+[package map](docs/reference/packages.md#capability-inventory) and
+[deployment guide](docs/guide/operations.md#authorization-and-isolation).
 
 ## Development
 
