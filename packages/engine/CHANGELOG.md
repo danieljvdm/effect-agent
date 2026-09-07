@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.53
+
+### Patch Changes
+
+- [#348](https://github.com/danieljvdm/effect-agent/pull/348) [`d93903e`](https://github.com/danieljvdm/effect-agent/commit/d93903ec923da7a9841b5ab1a72bba5c0a0fb34b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Support schema-validated plain-text final replies with `Output.text(schema)`. Honor prompt targets when pruning older tool results and durably replay pruning of fully settled current-run batches while preserving the newest result and incomplete work.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.53
+
 ## 0.1.0-beta.52
 
 ### Patch Changes

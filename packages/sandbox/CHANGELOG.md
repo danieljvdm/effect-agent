@@ -1,5 +1,11 @@
 # @effect-agent/sandbox
 
+## 0.1.0-beta.53
+
+### Patch Changes
+
+- [#350](https://github.com/danieljvdm/effect-agent/pull/350) [`1398ce5`](https://github.com/danieljvdm/effect-agent/commit/1398ce52ba6828a3ae17f1808c545c64b2fc566a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add protected non-secret form filling, native choice state, billing-address metadata, and explicit host authorization for checkout submission and observation origins. Allow finite interactive browser passes up to one hour while preserving credential gates and private session cleanup.
+
 ## 0.1.0-beta.52
 
 ## 0.1.0-beta.51
