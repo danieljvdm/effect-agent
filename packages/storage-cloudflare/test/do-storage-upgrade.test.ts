@@ -44,7 +44,8 @@ const fixture = <A, E>(
       | DoStorageFailpointError
       | ScheduleStorageError
       | SubscriptionError
-      | DoStorageInitializationError
+      | DoStorageInitializationError,
+      SqlClientService.SqlClient
     >,
     dependencies: ReturnType<typeof services>,
   ) => Effect.Effect<A, E, SqlClientService.SqlClient>,
@@ -52,11 +53,9 @@ const fixture = <A, E>(
 ) =>
   withScheduleStorage(`v2-upgrade-${counter++}`, (storage) =>
     Effect.gen(function* () {
-      const sql = yield* SqlClientService.SqlClient;
-
       yield* restoreV2(store);
       yield* Effect.promise(() => storage.setAlarm(4_000_000_000_000));
-      const deps = services(sql, storage, hit);
+      const deps = services(storage, hit);
 
       const open =
         store === "thread"
@@ -85,7 +84,6 @@ const fixture = <A, E>(
   );
 
 const services = (
-  sql: SqlClientService.SqlClient,
   storage: DurableObjectStorage,
   hit: (point: string) => "failure" | "interrupt" | "defect" | undefined,
 ) => {
@@ -103,7 +101,6 @@ const services = (
   };
 
   return Layer.mergeAll(
-    Layer.succeed(SqlClientService.SqlClient)(sql),
     storageConfigLayer({ storage }),
     BrowserCrypto.layer,
     Layer.succeed(DoStorageFailpoint)({
@@ -115,27 +112,39 @@ const services = (
     Layer.succeed(SubscriptionFailpoint)({
       hit: (point) => fault(point, SubscriptionFailpointError.make({ point })),
     }),
-    Layer.succeed(DoScheduleTransaction)({
-      run: (body) =>
-        sql.withTransaction(body(() => Effect.void)).pipe(
-          Effect.catchTag("SqlError", () =>
-            ScheduleStorageError.make({
-              operation: "fixture transaction",
-              reason: "unavailable",
-            }),
-          ),
-        ),
-    }),
-    Layer.succeed(DoSubscriptionTransaction)({
-      run: (body) =>
-        sql
-          .withTransaction(body(() => Effect.void))
-          .pipe(
-            Effect.catchTag("SqlError", () =>
-              SubscriptionError.make({ reason: "storage", code: "fixture-transaction" }),
+    Layer.effect(DoScheduleTransaction)(
+      Effect.gen(function* () {
+        const sql = yield* SqlClientService.SqlClient;
+
+        return DoScheduleTransaction.of({
+          run: (body) =>
+            sql.withTransaction(body(() => Effect.void)).pipe(
+              Effect.catchTag("SqlError", () =>
+                ScheduleStorageError.make({
+                  operation: "fixture transaction",
+                  reason: "unavailable",
+                }),
+              ),
             ),
-          ),
-    }),
+        });
+      }),
+    ),
+    Layer.effect(DoSubscriptionTransaction)(
+      Effect.gen(function* () {
+        const sql = yield* SqlClientService.SqlClient;
+
+        return DoSubscriptionTransaction.of({
+          run: (body) =>
+            sql
+              .withTransaction(body(() => Effect.void))
+              .pipe(
+                Effect.catchTag("SqlError", () =>
+                  SubscriptionError.make({ reason: "storage", code: "fixture-transaction" }),
+                ),
+              ),
+        });
+      }),
+    ),
   );
 };
 
