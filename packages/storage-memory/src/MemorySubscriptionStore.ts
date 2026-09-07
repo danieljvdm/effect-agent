@@ -20,6 +20,7 @@ import {
   subscriptionKeyString,
 } from "@effect-agent/thread/Subscription";
 import {
+  sameAcceptedEventIdentity,
   applySubscriptionDeliveryChange,
   applySubscriptionChange,
   validateEventRetention,
@@ -128,13 +129,7 @@ const candidateIndexKey = (record: SubscriptionRecord): string =>
 const eventCandidateIndexKey = (event: AcceptedEvent): string =>
   JSON.stringify([event.source.name, event.source.version, event.matchingKey]);
 
-const sameEventIdentity = (left: AcceptedEvent, right: AcceptedEvent): boolean =>
-  samePartition(left.partition, right.partition) &&
-  left.eventId === right.eventId &&
-  sameSource(left.source, right.source) &&
-  left.matchingKey === right.matchingKey &&
-  left.payloadDigest === right.payloadDigest &&
-  left.occurredAtMillis === right.occurredAtMillis;
+const sameEventIdentity = sameAcceptedEventIdentity;
 
 const deliveryBelongsTo = (
   delivery: SubscriptionDelivery,

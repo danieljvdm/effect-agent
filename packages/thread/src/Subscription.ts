@@ -255,6 +255,7 @@ export class SubscriptionError extends Schema.TaggedError<SubscriptionError>()(
       "corrupt",
     ]),
     code: SubscriptionName,
+    cause: Schema.optionalKey(Schema.Defect()),
     currentRevision: Schema.optionalKey(Positive),
     currentState: Schema.optionalKey(
       Schema.Literals(["active", "paused", "consumed", "cancelled"]),

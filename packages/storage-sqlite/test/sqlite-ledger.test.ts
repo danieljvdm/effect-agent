@@ -833,56 +833,52 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 
-  it.effect(
-    "rejects older files exactly with reset guidance and still rejects newer versions",
-    () =>
-      Effect.forEach(
-        [1, 2, 3, 4, 5, CurrentSqliteStorageVersion - 1, CurrentSqliteStorageVersion + 1, 99],
-        (storedVersion) =>
-          withTemporaryDatabase((filename) =>
+  it.effect("rejects unsupported older and newer versions with preservation guidance", () =>
+    Effect.forEach([1, 2, 3, 4, 5, 6, CurrentSqliteStorageVersion + 1, 99], (storedVersion) =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          yield* withSql(
+            filename,
             Effect.gen(function* () {
-              yield* withSql(
-                filename,
-                Effect.gen(function* () {
-                  const sql = yield* SqlClientService.SqlClient;
+              const sql = yield* SqlClientService.SqlClient;
 
-                  yield* sql.unsafe(`PRAGMA user_version = ${storedVersion}`);
-                }),
-              );
+              yield* sql.unsafe(`PRAGMA user_version = ${storedVersion}`);
+            }),
+          );
 
-              const opened = yield* withLedger(filename, SubmissionLedger).pipe(Effect.exit);
+          const opened = yield* withLedger(filename, SubmissionLedger).pipe(Effect.exit);
 
-              expect(Exit.isFailure(opened)).toBe(true);
-              if (Exit.isFailure(opened)) {
-                const error = Cause.squash(opened.cause);
+          expect(Exit.isFailure(opened)).toBe(true);
+          if (Exit.isFailure(opened)) {
+            const error = Cause.squash(opened.cause);
 
-                expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
-                if (isSqliteStorageCompatibilityError(error)) {
-                  expect(error.actualVersion).toBe(storedVersion);
-                  expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
-                  expect(error.message).toContain("Reset the database file explicitly");
-                }
-              }
+            expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
+            if (isSqliteStorageCompatibilityError(error)) {
+              expect(error.actualVersion).toBe(storedVersion);
+              expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
+              expect(error.message).toContain("Keep the original file");
+            }
+          }
 
-              // Failing closed must not mutate the incompatible file.
-              const tables = yield* withSql(
-                filename,
-                Effect.gen(function* () {
-                  const sql = yield* SqlClientService.SqlClient;
+          // Failing closed must not mutate the incompatible file.
+          const tables = yield* withSql(
+            filename,
+            Effect.gen(function* () {
+              const sql = yield* SqlClientService.SqlClient;
 
-                  return yield* sql<Record<string, unknown>>`
+              return yield* sql<Record<string, unknown>>`
                 SELECT name
                 FROM sqlite_master
                 WHERE type = 'table'
                   AND name LIKE 'effect_agent_%'
               `;
-                }),
-              );
-
-              expect(tables).toEqual([]);
             }),
-          ),
+          );
+
+          expect(tables).toEqual([]);
+        }),
       ),
+    ),
   );
 
   it.effect("leaves a recovery-classifiable state at every ledger failpoint", () =>

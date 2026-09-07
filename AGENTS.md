@@ -126,8 +126,9 @@ packages.
   re-propose them.
 - Do not silently widen errors to `unknown`, `Error`, or `any`.
 - Do not use type assertions to cross a schema boundary.
-- Do not build persistence migration tooling during private development. Incompatible development
-  data may be reset, but must fail clearly rather than decode incorrectly.
+- Keep supported persisted-format upgrades narrow and adapter-owned, atomic and data-preserving.
+  Unsupported or ambiguous data must fail clearly without mutation; never reset supported data.
+  Do not introduce a general migration framework.
 - Write changesets as one or two imperative sentences naming the consumer-visible change. Add only
   a short usage example or an explicit BEHAVIOR CHANGE note when consumers must act; keep IDs,
   root-cause, review and test stories, and implementation mechanics in the pull request.

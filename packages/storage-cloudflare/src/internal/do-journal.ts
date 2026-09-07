@@ -1,4 +1,5 @@
 import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
+import { checkV2ThreadLayout } from "@effect-agent/thread/SqlStorageV2Upgrade";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -235,7 +236,7 @@ const REQUIRED_TABLES = [
 ] as const;
 
 /**
- * Exact-or-fresh storage gate (DEPLOY-008) over `effect_agent_meta` instead of
+ * Supported-predecessor or fresh storage gate (DEPLOY-008) over `effect_agent_meta` instead of
  * `PRAGMA user_version` (unverified on Durable Object SQL storage; a meta table is portable
  * regardless). No WAL check (Durable Object storage owns durability and confirms writes
  * through output gates) and no busy timeout (a Durable Object has exactly one writer): the
@@ -281,7 +282,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         actualVersion: 0,
         supportedVersion: CurrentDoStorageVersion,
         message:
-          "The Durable Object contains unversioned Effect Agent tables. Reset the development namespace explicitly; refusing to mutate ambiguous stored data.",
+          "The Durable Object contains unversioned Effect Agent tables. Refusing to mutate ambiguous stored data; retain it for inspection with its original writer.",
       });
     }
 
@@ -311,19 +312,78 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       versionRows,
     );
 
-    // The storage version must match EXACTLY. Older private-development versions fail
-    // closed with reset guidance rather than being migrated, and newer versions fail closed
-    // rather than being decoded incorrectly (DEPLOY-008).
-    if (version.value !== String(CurrentDoStorageVersion)) {
+    if (version.value === "2") {
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const current = yield* sql<{
+              value: string;
+            }>`SELECT value FROM effect_agent_meta WHERE key='storage_version'`;
+
+            if (current.length === 1 && current[0].value === "3") return;
+            if (current.length !== 1 || current[0].value !== "2")
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: -1,
+                supportedVersion: CurrentDoStorageVersion,
+                message: "Storage version changed while acquiring the upgrade transaction.",
+              });
+
+            const required = yield* decodeRows(
+              Schema.Array(DoNameRow),
+              "sqlite_master",
+              "required_tables",
+              yield* sql`SELECT name FROM sqlite_master WHERE type='table' AND name IN ${sql.in([...REQUIRED_TABLES])}`,
+            );
+
+            if (required.length !== REQUIRED_TABLES.length)
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: 2,
+                supportedVersion: CurrentDoStorageVersion,
+                message:
+                  "The v2 store is missing required tables. Retain the original store for inspection; no upgrade was committed.",
+              });
+            yield* checkV2ThreadLayout();
+            for (const statement of [
+              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_group TEXT`,
+              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_fence_json TEXT`,
+              sql`CREATE INDEX effect_agent_submissions_group ON effect_agent_submissions (thread_id, admission_group, state)`,
+            ]) {
+              yield* failpoint("upgrade:before-mutation");
+              yield* statement;
+              yield* failpoint("upgrade:after-mutation");
+            }
+            yield* failpoint("upgrade:before-version");
+            yield* sql`UPDATE effect_agent_meta SET value='3' WHERE key='storage_version'`;
+            yield* failpoint("upgrade:after-version");
+          }),
+        )
+        .pipe(
+          Effect.catchTag("DoStorageFailpointError", (error) =>
+            DoStorageError.make({
+              cause: error,
+              operation: "upgrade storage",
+              message: error.message,
+            }),
+          ),
+          Effect.catchTag("StorageUpgradeError", (error) =>
+            DoStorageCorruptionError.make({
+              table: error.table,
+              rowKey: error.rowKey,
+              message: error.message,
+            }),
+          ),
+          Effect.catchTag("SqlError", storageError("upgrade v2 thread storage")),
+        );
+    } else if (version.value !== String(CurrentDoStorageVersion)) {
       const actualVersion = Number.parseInt(version.value, 10);
 
       return yield* DoStorageCompatibilityError.make({
         actualVersion: Number.isSafeInteger(actualVersion) ? actualVersion : -1,
         supportedVersion: CurrentDoStorageVersion,
         message:
-          `The Durable Object uses private-development storage version ${version.value}; ` +
+          `The Durable Object uses unsupported storage version ${version.value}; ` +
           `this build supports exactly version ${CurrentDoStorageVersion}. ` +
-          "Replace the development namespace explicitly; automatic stored-data migrations are not provided during private development.",
+          "Only unpatched v2 can be upgraded automatically. Keep the original store and use a compatible library version.",
       });
     }
   }
@@ -348,7 +408,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       actualVersion: CurrentDoStorageVersion,
       supportedVersion: CurrentDoStorageVersion,
       message:
-        "The Durable Object claims the current format but is missing required tables. Reset the corrupt private-development data.",
+        "The Durable Object claims the current format but is missing required tables. Retain the original store for inspection.",
     });
   }
 

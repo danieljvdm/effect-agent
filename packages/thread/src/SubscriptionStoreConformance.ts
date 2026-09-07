@@ -178,6 +178,44 @@ const conformanceCase = (
   ),
 });
 
+const historicalOccurrenceReplay = conformanceCase(
+  "preserves unknown occurrence time on replay and fences known times",
+  (ensure) =>
+    Effect.gen(function* () {
+      const store = yield* SubscriptionStore;
+      const original = yield* store.accept(event("legacy-occurrence"), defaultSubscriptionLimits);
+
+      const replay = yield* store.accept(
+        { ...original, occurredAtMillis: 1 },
+        defaultSubscriptionLimits,
+      );
+
+      yield* ensure(
+        replay.occurredAtMillis === undefined &&
+          replay.acceptedAtMillis === original.acceptedAtMillis &&
+          replay.cutoff === original.cutoff,
+        "replay invented historical occurrence or moved acceptance",
+      );
+
+      const known = yield* store.accept(
+        { ...event("known-occurrence"), occurredAtMillis: 1 },
+        defaultSubscriptionLimits,
+      );
+
+      const changed = yield* store
+        .accept({ ...known, occurredAtMillis: 2 }, defaultSubscriptionLimits)
+        .pipe(Effect.result);
+
+      yield* ensure(Result.isFailure(changed), "known occurrence time changed on replay");
+
+      const omitted = yield* store
+        .accept(event("known-occurrence"), defaultSubscriptionLimits)
+        .pipe(Effect.result);
+
+      yield* ensure(Result.isFailure(omitted), "known occurrence time was erased on replay");
+    }),
+);
+
 const cutoffAndIntake = conformanceCase(
   "orders eligibility cutoffs and preserves duplicate intake",
   (ensure) =>
@@ -883,6 +921,7 @@ const retentionFairness = conformanceCase(
 );
 
 export const subscriptionStoreConformanceCases: ReadonlyArray<SubscriptionStoreConformanceCase> = [
+  historicalOccurrenceReplay,
   recoveryRevisionFence,
   retryGenerationFence,
   retentionFairness,

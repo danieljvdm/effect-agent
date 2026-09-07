@@ -102,6 +102,10 @@ export class DoCheckpointConflict extends Schema.TaggedError<DoCheckpointConflic
  * locations. There is intentionally no Cloudflare-only location.
  */
 export const DoStorageFailpointLocation = Schema.Literals([
+  "upgrade:before-mutation",
+  "upgrade:after-mutation",
+  "upgrade:before-version",
+  "upgrade:after-version",
   "materialize:before",
   "materialize:after",
   "append:before",

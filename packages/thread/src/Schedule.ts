@@ -260,6 +260,7 @@ export class ScheduleCapacityError extends Schema.TaggedError<ScheduleCapacityEr
 export class ScheduleStorageError extends Schema.TaggedError<ScheduleStorageError>()(
   "ScheduleStorageError",
   {
+    cause: Schema.optionalKey(Schema.Defect()),
     operation: Schema.String,
     reason: Schema.Literals(["unavailable", "corrupt"]),
   },

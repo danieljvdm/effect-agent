@@ -96,6 +96,10 @@ export class SqliteCheckpointConflict extends Schema.TaggedError<SqliteCheckpoin
 ) {}
 
 export const SqliteStorageFailpointLocation = Schema.Literals([
+  "upgrade:before-mutation",
+  "upgrade:after-mutation",
+  "upgrade:before-version",
+  "upgrade:after-version",
   "materialize:before",
   "materialize:after",
   "append:before",

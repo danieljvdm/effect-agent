@@ -11,7 +11,8 @@ bun add effect-agent@beta
 ```
 
 Use an [Effect AI provider](examples/providers/README.md) for model access.
-Public beta: APIs and stored data may change before 1.0.
+Public beta: APIs and stored data may change before 1.0. Persistent adapters support a
+[data-preserving beta49/beta50 storage upgrade](docs/guide/operations.md#adopting-these-contracts).
 
 ## A basic agent
 
