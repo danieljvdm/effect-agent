@@ -1,19 +1,23 @@
 import { type ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import {
   CloudflareSubscriptionsClient,
+  makeSubscriptionPartitionAlarmHandler,
   makeSubscriptionPartitionObjectClass,
+  SubscriptionAlarmExtensionError,
+  SubscriptionPartitionAlarmExtension,
   type SubscriptionPartitionIdentity,
   SubscriptionPartitionNamespace,
   type SubscriptionPartitionObjectRpc,
 } from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
 import { type EventSources } from "@effect-agent/thread/EventSource";
+import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import {
   type SourcePartition,
   type SubscriptionAuthorizer,
 } from "@effect-agent/thread/Subscription";
 import { type SubscriptionInputBindings } from "@effect-agent/thread/SubscriptionInput";
 import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
 
 /**
@@ -27,6 +31,32 @@ export const makeSubscriptionPartition = <E>(
     DurableObjectState.DurableObjectState | WorkerEnvironment | SubscriptionPartitionIdentity
   >,
 ) => makeSubscriptionPartitionObjectClass(host);
+
+/** Merge into the host Layer. Only trusted host code may enqueue these verified events. */
+export const verifiedEventAlarms = Layer.effect(
+  SubscriptionPartitionAlarmExtension,
+  makeSubscriptionPartitionAlarmHandler({
+    tag: "application/verified-event",
+    payload: Schema.Struct({
+      eventId: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+      topic: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+      message: Schema.String.check(Schema.isMaxLength(4_096)),
+    }),
+    timeoutMillis: 30_000,
+    handle: ({ payload }) =>
+      Effect.gen(function* () {
+        const intake = yield* SubscriptionIntake;
+
+        yield* intake.accept(
+          Principal.make("application-verifier"),
+          { name: "application-event", version: "1" },
+          payload,
+        );
+      }).pipe(
+        Effect.mapError(() => SubscriptionAlarmExtensionError.make({ code: "verified-intake" })),
+      ),
+  }).pipe(Effect.map((handler) => ({ handlers: [handler] }))),
+);
 
 /** Bind one client to one permitted source partition; every operation creates a fresh RPC stub. */
 export const subscriptionClientLayer = (
