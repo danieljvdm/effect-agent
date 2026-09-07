@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.54
+
+### Patch Changes
+
+- [#353](https://github.com/danieljvdm/effect-agent/pull/353) [`e9c7591`](https://github.com/danieljvdm/effect-agent/commit/e9c75913024f09b74cdbb1bd4f25b15c87acf06e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve tool parameter encoder requirements in agent composition and validate policy bounds through Schema. Reduce UTF-8 sizing allocations and repeated response and prompt traversal.
+
+- Updated dependencies [[`e9c7591`](https://github.com/danieljvdm/effect-agent/commit/e9c75913024f09b74cdbb1bd4f25b15c87acf06e)]:
+  - @effect-agent/core@0.1.0-beta.54
+
 ## 0.1.0-beta.53
 
 ### Patch Changes

@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.54
+
+### Patch Changes
+
+- [#353](https://github.com/danieljvdm/effect-agent/pull/353) [`e9c7591`](https://github.com/danieljvdm/effect-agent/commit/e9c75913024f09b74cdbb1bd4f25b15c87acf06e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Bound Cloudflare progress-wait cancellation and Quick Action response cleanup, and retain cancellation hints for late progress retries. Apply sandbox wall-time limits to configuration, process startup, and execution together.
+
+- Updated dependencies [[`e9c7591`](https://github.com/danieljvdm/effect-agent/commit/e9c75913024f09b74cdbb1bd4f25b15c87acf06e), [`e9c7591`](https://github.com/danieljvdm/effect-agent/commit/e9c75913024f09b74cdbb1bd4f25b15c87acf06e), [`e9c7591`](https://github.com/danieljvdm/effect-agent/commit/e9c75913024f09b74cdbb1bd4f25b15c87acf06e)]:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.54
+  - @effect-agent/core@0.1.0-beta.54
+  - @effect-agent/engine@0.1.0-beta.54
+  - @effect-agent/thread@0.1.0-beta.54
+  - @effect-agent/sandbox@0.1.0-beta.54
+
 ## 0.1.0-beta.53
 
 ### Patch Changes
