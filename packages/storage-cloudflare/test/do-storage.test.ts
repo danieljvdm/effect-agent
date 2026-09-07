@@ -272,7 +272,7 @@ describe("DoThreadStore", () => {
   it("rejects an unsupported storage version without mutating its tables", () =>
     withThreadStorage("wp1-store-unsupported-version", (storage) =>
       Effect.gen(function* () {
-        const previousVersion = CurrentDoStorageVersion - 1;
+        const previousVersion = 1;
 
         storage.sql.exec(`
           CREATE TABLE effect_agent_meta (
@@ -303,9 +303,7 @@ describe("DoThreadStore", () => {
             if (isDoStorageCompatibilityError(failure.value)) {
               expect(failure.value.actualVersion).toBe(previousVersion);
               expect(failure.value.supportedVersion).toBe(CurrentDoStorageVersion);
-              expect(failure.value.message).toContain(
-                "Replace the development namespace explicitly",
-              );
+              expect(failure.value.message).toContain("Keep the original store");
             }
           }
         }
