@@ -1,3 +1,4 @@
+import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { ApprovalDecisionCommand, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
 import { ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
@@ -6,13 +7,14 @@ import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import type { DurableAlarmError } from "../src/Alarm.ts";
+import type { DurableAlarmError, ThreadMutationGate } from "../src/Alarm.ts";
 import { ThreadMaintenance, ThreadPublication } from "../src/Alarm.ts";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
   ThreadObjectNamespace,
 } from "../src/CloudflareBindings.ts";
+import type { CloudflarePlatformConfigError } from "../src/CloudflareConfig.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import * as ThreadObject from "../src/ThreadObject.ts";
 import {
@@ -207,6 +209,50 @@ describe("durable host publication", () => {
       expect((await cursor(thread)).source).toBe(1);
     }));
 
+  it("rebuilt maintenance observes an in-flight native ledger producer through the exported gate", () =>
+    withThread(async (thread) => {
+      const receipt = await submit(thread, approvalDefinition);
+
+      await drainAlarmsUntil(thread, anyInState(thread, "suspended", namespace), { namespace });
+      await quiesce(thread);
+      const before = await cursor(thread);
+
+      armMaintenancePause(thread, "maintenance:mutation:armed");
+
+      // Bypass ingress maintenance: only the source port's ORIGINAL producer gate is active.
+      const producer = runInDurableObject(stub(thread), (instance) =>
+        instance[DurableObject.RunSymbol](
+          SubmissionLedger.use((ledger) =>
+            ledger.recordApprovalDecision(
+              ApprovalDecisionCommand.make({
+                submissionId: receipt.submissionId,
+                toolCallId: BOOK_TOOL_CALL_ID,
+                decision: "approved",
+                resolver: "publication-composition-test",
+                reason: "share native producer activity",
+              }),
+            ),
+          ),
+        ),
+      );
+
+      await awaitMaintenancePause(thread, "maintenance:mutation:armed");
+      try {
+        await alarm(thread);
+        expect((await cursor(thread)).generation).toBe(before.generation);
+        const state = await generation(thread);
+
+        expect(state.dirty).toBeGreaterThan(state.processed);
+        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+      } finally {
+        releaseMaintenancePause(thread);
+        await producer;
+      }
+      await quiesce(thread);
+      expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
+      expect((await cursor(thread)).decisions).toEqual(["approved"]);
+    }));
+
   it("keeps a producer racing an empty publication drain armed", () =>
     withThread(async (thread) => {
       await alarm(thread);
@@ -371,4 +417,21 @@ it("preserves publication setup E/R/Scope and releases resources on typed initia
       }),
     ),
   );
+});
+
+it("provides the native gate to fresh maintenance and runtime Layers without new requirements", () => {
+  const rebuilt = Layer.fresh(ThreadMaintenance.layer).pipe(
+    Layer.provideMerge(DurableAgentRuntime.layerWithBindings([])),
+    Layer.provideMerge(ThreadObject.layer([])),
+  );
+
+  expectTypeOf<
+    Extract<ThreadObject.Services, ThreadMutationGate>
+  >().toEqualTypeOf<ThreadMutationGate>();
+  expectTypeOf<Layer.Services<typeof rebuilt>>().toEqualTypeOf<
+    ThreadObject.BootstrapServices | DurableObjectContext | ThreadObjectNamespace
+  >();
+  expectTypeOf<Layer.Error<typeof rebuilt>>().toEqualTypeOf<
+    Exclude<ThreadObject.InitializationError, CloudflarePlatformConfigError>
+  >();
 });
