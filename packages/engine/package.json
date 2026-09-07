@@ -17,6 +17,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./AgentRuntime": "./src/AgentRuntime.ts",
+    "./Output": "./src/Output.ts",
     "./Compaction": "./src/Compaction.ts",
     "./ContextCompactor": "./src/ContextCompactor.ts",
     "./DurableStep": "./src/DurableStep.ts",

@@ -274,17 +274,24 @@ export const buildCompactedView = (
  * Prune selection: the new `clearedThrough` bound. Walks tool messages
  * newest→oldest, always protecting the most recent tool message (the model
  * has not reacted to it yet), then protecting older ones while their
- * estimates fit inside `keepRecentTokens`. Never decreases the bound.
+ * estimates fit inside `keepRecentTokens`. If the whole view exceeds `targetTokens`,
+ * clear more older results until it fits or only the newest result remains.
+ * Replaced messages consume no retention budget. Never decreases the bound.
  */
 export const choosePruneBound = (
   source: ReadonlyArray<Prompt.Message>,
   state: ContextCompactionState,
   keepRecentTokens: number,
+  targetTokens?: number,
 ): number => {
   const toolIndices: Array<number> = [];
 
   for (let index = 0; index < source.length; index += 1) {
-    if (source[index]?.role === "tool" && !isProtected(state, source, index)) {
+    if (
+      index >= (state.replacement?.through ?? 0) &&
+      source[index]?.role === "tool" &&
+      !isProtected(state, source, index)
+    ) {
       toolIndices.push(index);
     }
   }
@@ -315,9 +322,32 @@ export const choosePruneBound = (
     break;
   }
 
-  return newestCleared === -1
-    ? state.clearedThrough
-    : Math.max(state.clearedThrough, newestCleared + 1);
+  let through =
+    newestCleared === -1 ? state.clearedThrough : Math.max(state.clearedThrough, newestCleared + 1);
+
+  if (targetTokens === undefined) return through;
+
+  let estimated = estimatePromptTokens(
+    buildCompactedView(source, { ...state, clearedThrough: through }),
+  );
+
+  for (
+    let position = 0;
+    position < toolIndices.length - 1 && estimated > targetTokens;
+    position += 1
+  ) {
+    const index = toolIndices[position];
+
+    if (index === undefined || index < through) continue;
+    const message = source[index];
+
+    if (message === undefined) continue;
+    through = index + 1;
+    estimated -=
+      estimateMessageTokens(message) - estimateMessageTokens(clearedToolMessage(message));
+  }
+
+  return through;
 };
 
 /**

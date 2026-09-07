@@ -4,6 +4,7 @@ import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import * as Output from "@effect-agent/engine/Output";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Logger, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
@@ -159,6 +160,106 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("RUN-028 model-visible output contract", (it) => {
+  it.effect("preserves plain-text final output verbatim, including empty replies", () =>
+    Effect.gen(function* () {
+      for (const text of [
+        'Hello, "world"!\nA second line.',
+        "",
+        "  ",
+        '{"answer":"literal text"}',
+      ]) {
+        const requests: Array<Prompt.Prompt> = [];
+
+        const definition = Agent.make("text-output", {
+          input: Schema.String,
+          output: Output.text(Schema.String.check(Schema.isMaxLength(100))),
+          instructions: "Reply in plain text.",
+          toolkit: Toolkit.empty,
+          policy,
+        });
+
+        const model = Model.make(
+          "test",
+          "text-output",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                requests.push(request.prompt);
+
+                return Stream.fromIterable(finalParts(text));
+              },
+            }),
+          ),
+        );
+
+        const agent = Agent.withModel(definition, model);
+        const result = yield* AgentRuntime.run(agent, "reply");
+
+        expect(result.output).toBe(text);
+        expect(yield* AgentRuntime.decodeFinalOutput(agent, text)).toEqual({
+          encoded: text,
+          decoded: text,
+        });
+        expect(contractMessages(requests[0] ?? Prompt.empty)[0]).toContain(
+          "ordinary assistant text",
+        );
+        expect(contractMessages(requests[0] ?? Prompt.empty)[0]).not.toContain("must be only JSON");
+      }
+    }),
+  );
+
+  it.effect("validates text Schemas and preserves their decoded transformations", () =>
+    Effect.gen(function* () {
+      const definition = Agent.make("validated-text", {
+        input: Schema.String,
+        output: Output.text(Schema.NumberFromString.check(Schema.isGreaterThan(0))),
+        instructions: "Return a positive number in plain text.",
+        toolkit: Toolkit.empty,
+        policy,
+      });
+
+      const agent = Agent.withModel(definition, liveShapedModel([]));
+
+      expect(yield* AgentRuntime.decodeFinalOutput(agent, "42")).toEqual({
+        encoded: "42",
+        decoded: 42,
+      });
+      for (const text of ["", "-1", "not a number"]) {
+        const exit = yield* AgentRuntime.decodeFinalOutput(agent, text).pipe(Effect.exit);
+
+        expect(failureFrom(exit)).toBeInstanceOf(AgentOutputError);
+      }
+    }),
+  );
+
+  it.effect("required completion Tools take precedence over a text output Schema", () => {
+    const Complete = Tool.make("complete_text", {
+      parameters: Schema.Struct({ answer: Schema.String }),
+      success: Schema.String,
+    });
+
+    const definition = Agent.make("required-text-completion", {
+      input: Schema.String,
+      output: Output.text(Schema.String),
+      instructions: "Complete through the Tool.",
+      toolkit: Toolkit.make(Complete),
+      policy,
+      completion: { tool: "complete_text", required: true, project: ({ result }) => result },
+    });
+
+    const contract = outputSchemaContract(definition);
+
+    expect(contract._tag).toBe("rendered");
+    if (contract._tag === "rendered") {
+      expect(contract.message).toContain('required completion Tool "complete_text"');
+      expect(contract.message).not.toContain("write the final reply as ordinary assistant text");
+    }
+
+    return Effect.void;
+  });
+
   it.effect(
     "carries the contract on every Turn's request adjacent to the last system block and never in official history",
     () => {

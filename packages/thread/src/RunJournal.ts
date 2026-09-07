@@ -547,7 +547,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
   // RUN-026 pre-scan: the widest VALID compaction bounds govern the fold. A
   // valid record covers strictly below its own sequence and never splits a response from its
-  // settled tool results. Only rollovers may cover their owner Run's records;
+  // settled tool results. Pruning and rollovers may cover complete owner-Run batches;
   // a summarize record must carry its summary. Invalid records
   // are ignored fail-safe — the full history stays authoritative. Ties on
   // coversThrough resolve to the record appended later (higher sequence),
@@ -599,9 +599,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     }),
   );
 
-  const rolloverCoverage = compactions.reduce(
+  const settledCoverage = compactions.reduce(
     (through, { payload }) =>
-      payload.kind === "rollover" ? Math.max(through, payload.coversThrough) : through,
+      payload.kind !== "summarize" ? Math.max(through, payload.coversThrough) : through,
     0,
   );
 
@@ -609,13 +609,12 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   let ownerPrefixSequence = Number.POSITIVE_INFINITY;
   let protectedContext: Prompt.Prompt | undefined;
 
-  if (rolloverCoverage > 0) {
+  if (settledCoverage > 0) {
     yield* Stream.runForEach(records, (envelope) =>
       Effect.gen(function* () {
         const payload = envelope.record.payload;
 
-        if (payload._tag !== "ModelResponseRecorded" || envelope.sequence > rolloverCoverage)
-          return;
+        if (payload._tag !== "ModelResponseRecorded" || envelope.sequence > settledCoverage) return;
         const messages = yield* decodePromptMessages(payload.messages);
         const declared = declaredApplicationToolCallIds(messages);
 
@@ -655,10 +654,10 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     if (coversThrough <= 0 || coversThrough >= ownSequence) return false;
     const ownerFirst = firstSequenceByRun.get(runId);
 
-    if (payload.kind !== "rollover" && ownerFirst !== undefined && coversThrough >= ownerFirst)
+    if (payload.kind === "summarize" && ownerFirst !== undefined && coversThrough >= ownerFirst)
       return false;
     if (
-      payload.kind === "rollover" &&
+      payload.kind !== "summarize" &&
       incompleteResponseSequences.some((sequence) => sequence <= coversThrough)
     )
       return false;

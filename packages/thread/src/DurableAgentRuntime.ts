@@ -4141,7 +4141,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           usageSummary: yield* currentUsageSummary(),
         };
       }
-      // Summaries and pruning cover only prior Runs. A rollover separately maps fully settled
+      // Summaries cover only prior Runs. Pruning and rollover also map fully settled
       // current-Run records and preserves the canonical instruction/input block during replay.
       let ownerFirstSequence: CanonicalSequence | undefined;
 
@@ -4544,8 +4544,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             let sourceJournal = journal;
             let sourceBoundaries = boundaries;
 
-            if (commit.kind === "rollover") {
-              // Results must be canonical before a rollover can cover them. Newly committed
+            if (commit.kind !== "summarize") {
+              // Results must be canonical before pruning or rollover can cover them. Newly committed
               // compactions remain overlays on this Attempt's append-only source, so omit those
               // overlays while reconstructing the exact source-to-record mapping.
               yield* recordHalt(commitPendingTurn);
@@ -4567,11 +4567,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               );
             }
 
-            // Summaries/pruning use the initial prior-Run boundaries; rollovers also admit
+            // Summaries use the initial prior-Run boundaries; pruning and rollover also admit
             // complete current-Run boundaries from the fresh canonical source above.
             const coverable = sourceBoundaries.filter(
               (boundary) =>
-                commit.kind === "rollover" ||
+                commit.kind !== "summarize" ||
                 ownerFirstSequence === undefined ||
                 boundary.sequence < ownerFirstSequence,
             );
@@ -4581,7 +4581,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 message:
                   commit.kind === "rollover"
                     ? "Durable rollover requires complete canonical records"
-                    : "Durable compaction requires eligible prior-Run records",
+                    : "Durable compaction requires eligible canonical records",
               });
             }
 
@@ -4644,19 +4644,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 message:
                   commit.kind === "rollover"
                     ? "Rollover coverage cannot be mapped to complete canonical records"
-                    : "Compaction coverage cannot be mapped to complete prior-Run records",
+                    : "Compaction coverage cannot be mapped to complete canonical records",
               });
             }
             const coveredSequence = lastCovered.sequence;
 
             if (
-              commit.kind === "rollover" &&
+              commit.kind !== "summarize" &&
               sourceBoundaries.some(
                 (boundary) => boundary.incomplete === true && boundary.sequence <= coveredSequence,
               )
             ) {
               return yield* CompactionError.make({
-                message: "Rollover cannot cover an incomplete Tool batch",
+                message: "Compaction cannot cover an incomplete Tool batch",
               });
             }
             if (commit.kind === "summarize" && (commit.summary ?? "").trim().length === 0) {

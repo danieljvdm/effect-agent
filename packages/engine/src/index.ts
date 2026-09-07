@@ -1,4 +1,5 @@
 export * as AgentRuntime from "./AgentRuntime.ts";
+export * as Output from "./Output.ts";
 export * as Compaction from "./Compaction.ts";
 export * as ContextCompactor from "./ContextCompactor.ts";
 export * as DurableStep from "./DurableStep.ts";
