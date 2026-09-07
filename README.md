@@ -7,7 +7,7 @@ and validates the result — with typed errors, streaming, and bounded execution
 ## Install
 
 ```sh
-npm install effect-agent@beta
+bun add effect-agent@beta
 ```
 
 Use an [Effect AI provider](examples/providers/README.md) for model access.
