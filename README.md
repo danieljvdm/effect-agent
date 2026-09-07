@@ -7,11 +7,11 @@ and validates the result — with typed errors, streaming, and bounded execution
 ## Install
 
 ```sh
-npm install --save-exact effect-agent@beta
+npm install effect-agent@beta
 ```
 
-Requires `effect@^4.0.0-rc.112` and an [Effect AI provider](examples/providers/README.md).
-Public beta: APIs and stored data may change before 1.0. Keep framework packages at the same exact release.
+Use an [Effect AI provider](examples/providers/README.md) for model access.
+Public beta: APIs and stored data may change before 1.0.
 
 ## A basic agent
 
@@ -39,12 +39,7 @@ The output is schema-validated. Supply your model and runtime services to run it
 <details>
 <summary>Run this example with OpenAI</summary>
 
-Install the example's dependencies, then save the code above and the setup below as `agent.ts`.
-
-```sh
-npm install --save-exact effect@4.0.0-rc.112 \
-  @effect/ai-openai@4.0.0-rc.112 @effect/platform-bun@4.0.0-rc.112
-```
+Save the code above and the setup below as `agent.ts`.
 
 ```ts
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
