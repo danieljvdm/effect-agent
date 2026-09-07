@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.52
+
+### Patch Changes
+
+- [#344](https://github.com/danieljvdm/effect-agent/pull/344) [`afe14c9`](https://github.com/danieljvdm/effect-agent/commit/afe14c9839a084af8c8d8f3046d757a157278643) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow ancillary alarm callbacks and payload decoders to use native partition subscription services while capturing host dependencies during assembly.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.52
+  - @effect-agent/engine@0.1.0-beta.52
+  - @effect-agent/sandbox@0.1.0-beta.52
+  - @effect-agent/thread@0.1.0-beta.52
+  - @effect-agent/storage-cloudflare@0.1.0-beta.52
+
 ## 0.1.0-beta.51
 
 ### Patch Changes

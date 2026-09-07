@@ -107,6 +107,7 @@
     "narrow-abort-intent-reads",
     "narrow-package-imports",
     "native-agent-workflows",
+    "native-subscription-alarm-services",
     "native-tool-observability",
     "navigable-pr-review",
     "node-host-workers",
