@@ -343,6 +343,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
             role: desc.role,
             label: desc.label,
             ...(desc.checked === undefined ? {} : { checked: desc.checked }),
+            ...(desc.role === "link" ? { url: desc.action } : {}),
             target: CredentialTarget.make({
               topOrigin: before.topOrigin,
               frameOrigin: yield* origin(frame.url()),

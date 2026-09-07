@@ -66,6 +66,7 @@ const fixture = (kind: "login" | "card" = "login", actionAuthority = true) => {
   let cleanup: "confirmed" | "unconfirmed" = "confirmed";
   let listOverride: BrowserCredentialAccess["Service"]["list"] | undefined;
   let resolveOverride: BrowserCredentialAccess["Service"]["resolve"] | undefined;
+  let authorizeOverride: BrowserCredentialAccess["Service"]["authorize"] | undefined;
   let fillOverride: ProtectedBrowserTransport["fill"] | undefined;
   let navigateOverride: ProtectedBrowserTransport["navigate"] | undefined;
   let clickOverride: ProtectedBrowserTransport["click"] | undefined;
@@ -182,7 +183,7 @@ const fixture = (kind: "login" | "card" = "login", actionAuthority = true) => {
         request.target.topOrigin === "https://shop.test" &&
         request.target.frameOrigin === target.frameOrigin &&
         request.target.recipientOrigin === target.recipientOrigin
-          ? Effect.void
+          ? (authorizeOverride?.(request) ?? Effect.void)
           : Effect.fail(new CredentialAccessError({ reason: "denied" })),
       ),
     resolve: (request) =>
@@ -273,6 +274,9 @@ const fixture = (kind: "login" | "card" = "login", actionAuthority = true) => {
     },
     setResolve: (value: typeof resolveOverride) => {
       resolveOverride = value;
+    },
+    setAuthorize: (value: typeof authorizeOverride) => {
+      authorizeOverride = value;
     },
     setList: (value: typeof listOverride) => {
       listOverride = value;
@@ -444,6 +448,7 @@ it.effect.each([
     ...f.controls[0]!,
     ref: crypto.randomUUID(),
     role: "link",
+    url: "https://shop.test/next",
   });
 
   f.controls.push(link);
@@ -1423,6 +1428,97 @@ it.effect("refuses native submission without explicit host action authority", ()
       reason: "unsupported",
       dispatch: "not-dispatched",
     });
+    expect(clicks).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(f.layer));
+});
+
+it.effect.each(["allowed", "denied", "changed"] as const)(
+  "authorizes the exact link destination: %s",
+  (mode) => {
+    const f = fixture();
+
+    const link = ProtectedBrowserControl.make({
+      ...f.controls[0]!,
+      ref: crypto.randomUUID(),
+      role: "link",
+      url: mode === "denied" ? "https://shop.test/private" : "https://shop.test/allowed",
+    });
+
+    f.controls.push(link);
+    let clicks = 0;
+
+    f.setClick(() =>
+      Effect.sync(() => {
+        clicks++;
+      }),
+    );
+    f.setAuthorizeAction((request) =>
+      Effect.gen(function* () {
+        if (
+          request.action._tag !== "Click" ||
+          request.action.role !== "link" ||
+          request.action.url !== "https://shop.test/allowed"
+        )
+          return yield* new CredentialAccessError({ reason: "denied" });
+        if (mode === "changed")
+          f.controls[f.controls.length - 1] = ProtectedBrowserControl.make({
+            ...link,
+            url: "https://shop.test/private",
+          });
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const handle = yield* f.open;
+      const execute = handle.click(ProtectedBrowserClick.make({ ref: link.ref }));
+
+      if (mode === "allowed") yield* execute;
+      else
+        expect(yield* execute.pipe(Effect.flip)).toMatchObject({
+          reason: mode === "denied" ? "denied" : "stale-reference",
+          dispatch: "not-dispatched",
+        });
+      expect(clicks).toBe(mode === "allowed" ? 1 : 0);
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect("rechecks caller after the final asynchronous card-submit authorization", () => {
+  const f = fixture("card");
+  let clicks = 0;
+
+  f.setClick(() =>
+    Effect.sync(() => {
+      clicks++;
+    }),
+  );
+
+  return Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const resume = yield* Deferred.make<void>();
+
+    f.setAuthorize(() =>
+      f.filled.length === f.fields.length
+        ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+        : Effect.void,
+    );
+    const handle = yield* f.open;
+    const request = yield* proposal(f, handle);
+
+    const fiber = yield* Effect.forkChild(
+      handle.useCredential(UseCredential.make({ ...request, submit: f.controls.at(-1)!.ref })),
+    );
+
+    yield* Deferred.await(entered);
+    f.setPrincipal("mallory");
+    yield* Deferred.succeed(resume, undefined);
+    expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
+      reason: "denied",
+      dispatch: "dispatched",
+      milestone: "filled",
+      cleanup: "confirmed",
+    });
+    expect(f.filled).toHaveLength(f.fields.length);
     expect(clicks).toBe(0);
   }).pipe(Effect.scoped, Effect.provide(f.layer));
 });

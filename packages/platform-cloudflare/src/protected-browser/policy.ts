@@ -303,7 +303,8 @@ export const browserRunProtectedLayer = () =>
 
             if (
               !sameTarget(current.target, action.target) ||
-              current.role !== (action._tag === "Submit" ? "submit" : action.role)
+              current.role !== (action._tag === "Submit" ? "submit" : action.role) ||
+              (action._tag === "Click" && action.role === "link" && current.url !== action.url)
             )
               return yield* fail("stale-reference");
           }
@@ -466,16 +467,28 @@ export const browserRunProtectedLayer = () =>
                   control.role !== "submit"
                 )
                   return yield* fail("unsupported");
-                yield* authorizeAction(
-                  control.role === "submit"
-                    ? { _tag: "Submit", ref: decoded.ref, target: control.target }
-                    : {
-                        _tag: "Click",
-                        ref: decoded.ref,
-                        target: control.target,
-                        role: control.role,
-                      },
-                );
+                let action: ProtectedBrowserAction;
+
+                if (control.role === "link") {
+                  if (control.url === undefined) return yield* fail("unsupported");
+                  action = {
+                    _tag: "Click",
+                    ref: decoded.ref,
+                    target: control.target,
+                    role: "link",
+                    url: control.url,
+                  };
+                } else if (control.role === "submit") {
+                  action = { _tag: "Submit", ref: decoded.ref, target: control.target };
+                } else {
+                  action = {
+                    _tag: "Click",
+                    ref: decoded.ref,
+                    target: control.target,
+                    role: control.role,
+                  };
+                }
+                yield* authorizeAction(action);
                 dispatch = "possibly-dispatched";
                 yield* remote(driver.click(decoded.ref)).pipe(
                   Effect.catch((error) => {
@@ -632,6 +645,8 @@ export const browserRunProtectedLayer = () =>
                   yield* access
                     .authorize(authorization)
                     .pipe(Effect.mapError((error) => fail(error.reason)));
+                  if (Redacted.value(yield* caller) !== Redacted.value(principal))
+                    return yield* fail("denied");
                 });
 
                 yield* authorize;

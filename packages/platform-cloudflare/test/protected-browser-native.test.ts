@@ -77,6 +77,9 @@ it.live(
             ? '<main>Private dashboard</main><a href="/next">Continue</a>'
             : "Not authenticated";
         } else if (url.pathname === "/next") body = "Useful next page";
+        else if (url.pathname === "/links")
+          body =
+            '<a id="allowed" href="/allowed">Allowed</a><a href="https://beta.test/private">Denied</a><a href="javascript:void(0)">Script</a><a href="https://u:p@alpha.test/private">Credential URL</a>';
         else if (url.pathname === "/standalone")
           body = '<section><input autocomplete="username"><input type="password"></section>'.repeat(
             2,
@@ -100,6 +103,7 @@ it.live(
       let grants = true;
       let observationTrusted = true;
       let selectedOrigins: ReadonlyArray<string> | undefined;
+      let actionOverride: BrowserCredentialAccess["Service"]["authorizeAction"] | undefined;
 
       const access = BrowserCredentialAccess.of({
         caller: Effect.succeed(Redacted.make("authorized-test-invocation")),
@@ -136,13 +140,14 @@ it.live(
                 });
           }),
         authorizeAction: (request) =>
-          request.action._tag !== "Submit" ||
+          actionOverride?.(request) ??
+          (request.action._tag !== "Submit" ||
           (grants &&
             request.action.target.frameOrigin === "https://alpha.test" &&
             request.action.target.recipientOrigin === "https://alpha.test" &&
             request.exposures.some((target) => target.frameOrigin === "https://processor.test"))
             ? Effect.void
-            : Effect.fail(new CredentialAccessError({ reason: "denied" })),
+            : Effect.fail(new CredentialAccessError({ reason: "denied" }))),
         observation: () =>
           Effect.succeed(
             !observationTrusted
@@ -223,6 +228,34 @@ it.live(
             page.evaluate("[...document.querySelectorAll('input')].map(el => el.value)"),
           ),
         ).toEqual(["", "", "", ""]);
+        phase = "link-destination-authorization";
+        yield* handle.navigate(ProtectedBrowserNavigate.make({ url: "https://alpha.test/links" }));
+        const links = (yield* handle.observe).controls;
+
+        expect(links.map((control) => control.label)).toEqual(["Allowed", "Denied"]);
+        expect(links[1]!.target.recipientOrigin).toBe("https://beta.test");
+        actionOverride = (request) =>
+          Effect.gen(function* () {
+            if (
+              request.action._tag !== "Click" ||
+              request.action.role !== "link" ||
+              request.action.url !== "https://alpha.test/allowed"
+            )
+              return yield* new CredentialAccessError({ reason: "denied" });
+            yield* native(() =>
+              page.evaluate(
+                "document.querySelector('#allowed').href='/changed-during-authorization'",
+              ),
+            ).pipe(Effect.mapError(() => new CredentialAccessError({ reason: "resolver" })));
+          });
+        expect(
+          yield* handle.click(ProtectedBrowserClick.make({ ref: links[1]!.ref })).pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied", dispatch: "not-dispatched" });
+        expect(
+          yield* handle.click(ProtectedBrowserClick.make({ ref: links[0]!.ref })).pipe(Effect.flip),
+        ).toMatchObject({ reason: "stale-reference", dispatch: "not-dispatched" });
+        expect(page.url()).toBe("https://alpha.test/links");
+        actionOverride = undefined;
         for (const attribute of ["name", "autocomplete", "action"]) {
           phase = `oversized-${attribute}`;
           yield* handle.navigate(

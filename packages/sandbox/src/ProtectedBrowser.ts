@@ -1,6 +1,10 @@
 import { Context, Effect, Layer, Schema, Scope, type Redacted } from "effect";
 
-import { InteractiveBrowserHost, type InteractiveBrowserPolicy } from "./InteractiveBrowser.ts";
+import {
+  InteractiveBrowserHost,
+  InteractiveBrowserTargetUrl,
+  type InteractiveBrowserPolicy,
+} from "./InteractiveBrowser.ts";
 
 /** Canonical HTTPS origin, including a non-default port. Host grants match exactly. */
 export const CredentialOrigin = Schema.String.check(
@@ -24,6 +28,7 @@ export const CredentialFieldRole = Schema.Literals([
 ]);
 
 const Label = Schema.String.check(Schema.isMaxLength(200));
+const LinkUrl = InteractiveBrowserTargetUrl.check(Schema.isStartsWith("https://"));
 
 export class CredentialTarget extends Schema.Class<CredentialTarget>("CredentialTarget")({
   topOrigin: CredentialOrigin,
@@ -55,6 +60,8 @@ export class ProtectedBrowserControl extends Schema.Class<ProtectedBrowserContro
   label: Label,
   /** Current native radio/checkbox state; field values are never included. */
   checked: Schema.optionalKey(Schema.Boolean),
+  /** Resolved HTTPS destination for a native link; target.recipientOrigin is its origin. */
+  url: Schema.optionalKey(LinkUrl),
 }) {}
 
 export class ProtectedBrowserObservation extends Schema.Class<ProtectedBrowserObservation>(
@@ -246,7 +253,13 @@ export const ProtectedBrowserAction = Schema.Union([
   Schema.TaggedStruct("Click", {
     ref: BrowserReference,
     target: CredentialTarget,
-    role: Schema.Literals(["link", "button", "radio", "checkbox"]),
+    role: Schema.Literals(["button", "radio", "checkbox"]),
+  }),
+  Schema.TaggedStruct("Click", {
+    ref: BrowserReference,
+    target: CredentialTarget,
+    role: Schema.Literal("link"),
+    url: LinkUrl,
   }),
   Schema.TaggedStruct("Submit", { ref: BrowserReference, target: CredentialTarget }),
 ]);

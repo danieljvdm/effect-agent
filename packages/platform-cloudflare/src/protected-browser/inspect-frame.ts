@@ -29,7 +29,8 @@ export const inspectFrame = `(() => {
     const form = el.form ?? null;
     let formIndex = forms.indexOf(form);
     if (formIndex < 0) { formIndex = forms.length; forms.push(form); }
-    const action = form ? (el.hasAttribute('formaction') ? el.formAction : form.action || doc.URL) : doc.URL;
+    // Resolved href (including path/query/fragment and base-URL changes) is part of the fingerprint.
+    const action = el instanceof HTMLAnchorElement ? el.href : form ? (el.hasAttribute('formaction') ? el.formAction : form.action || doc.URL) : doc.URL;
     const method = form ? (el.hasAttribute('formmethod') ? el.formMethod : form.method) : '';
     const enctype = form?.enctype ?? '';
     const name = el.name ?? '';

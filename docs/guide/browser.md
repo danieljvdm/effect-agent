@@ -413,7 +413,10 @@ Native submit clicks require the host's optional `BrowserCredentialAccess.author
 When present, this hook runs before **every** ordinary navigation, fill, and click, with
 `{ caller, action, exposures }`. `action._tag` is `Navigate`, `Fill`, `Click`, or `Submit`;
 navigation includes its URL, while control actions include the current opaque ref, exact target,
-and role (implicit for Submit). Fill values are omitted. Recheck user intent, caller ownership,
+and role (implicit for Submit). Link observations and `Click` actions with role `link` also include
+the resolved HTTPS destination `url`; their `target.recipientOrigin` is the destination origin.
+The native fingerprint pins the full destination, including changes to `href` or the document base,
+and the policy checks it again after authorization. Fill values are omitted. Recheck user intent, caller ownership,
 current grants for every prior exposure, and the requested merchant/frame/recipient target.
 The policy rechecks caller and target after authorization returns. No authorization is cached.
 
