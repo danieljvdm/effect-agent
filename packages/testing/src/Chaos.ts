@@ -588,7 +588,7 @@ export interface ChaosRunOptions {
   readonly betweenRounds?: Effect.Effect<void> | undefined;
 }
 
-/** Success → Some; typed failure → None (chaos tolerates it); defect → rethrown loudly. */
+/** Tolerate typed failures while preserving every defect and interruption reason. */
 const tolerateTyped = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<Option.Option<A>, never, R> =>
@@ -596,11 +596,11 @@ const tolerateTyped = <A, E, R>(
     Effect.exit,
     Effect.flatMap((exit) => {
       if (Exit.isSuccess(exit)) return Effect.succeed(Option.some(exit.value));
-      if (Option.isSome(Cause.findErrorOption(exit.cause))) {
-        return Effect.succeed(Option.none<A>());
-      }
+      const unexpected = exit.cause.reasons.filter((reason) => reason._tag !== "Fail");
 
-      return Effect.die(new Error(`chaos step died: ${Cause.pretty(exit.cause)}`));
+      return unexpected.length === 0
+        ? Effect.succeed(Option.none<A>())
+        : Effect.failCause(Cause.fromReasons<never>(unexpected));
     }),
   );
 

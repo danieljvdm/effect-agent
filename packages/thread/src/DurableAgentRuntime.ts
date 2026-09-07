@@ -3723,6 +3723,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const knownIds = knownRecordIdsOf(records);
       const stepOutputs = new Map<string, PersistedJson>();
 
+      // Derive replay identity from the recorded tuple, never from its historical ID format.
+      // This preserves committed Step outputs when reading legacy colon-separated record IDs.
       for (const envelope of records) {
         const payload = envelope.record.payload;
 

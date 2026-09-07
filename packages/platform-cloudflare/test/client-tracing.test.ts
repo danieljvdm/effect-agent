@@ -394,6 +394,69 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
     );
   });
 
+  it.effect.each(["rejected", "stalled"] as const)(
+    "preserves caller interruption and finishes cleanup when remote cancellation is %s",
+    (mode) => {
+      const started = Deferred.makeUnsafe<void>();
+      const cancelling = Deferred.makeUnsafe<void>();
+      const response = Deferred.makeUnsafe<unknown>();
+      const cancelled = Deferred.makeUnsafe<unknown>();
+      let finalized = 0;
+
+      const fixture = clientFixture(
+        (method) => {
+          if (method === "awaitProgressEncoded") {
+            Deferred.doneUnsafe(started, Effect.void);
+
+            return Effect.runPromise(Deferred.await(response));
+          }
+          Deferred.doneUnsafe(cancelling, Effect.void);
+
+          return mode === "rejected"
+            ? Promise.reject(new Error("cancellation reply lost"))
+            : Effect.runPromise(Deferred.await(cancelled));
+        },
+        { rpcTracing: true },
+      );
+
+      return Effect.gen(function* () {
+        const client = yield* CloudflareThreadClient;
+
+        const waiting = yield* client.awaitProgress(threadId, zeroSequence).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              finalized++;
+            }),
+          ),
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(started);
+        const interrupting = yield* Fiber.interrupt(waiting).pipe(Effect.forkChild);
+
+        yield* Deferred.await(cancelling);
+        if (mode === "stalled") {
+          expect(finalized).toBe(0);
+          yield* TestClock.adjust("1 second");
+        }
+        yield* Fiber.join(interrupting);
+        const exit = yield* Fiber.await(waiting);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+        expect(finalized).toBe(1);
+        expect(fixture.calls.map((call) => call.method)).toEqual([
+          "awaitProgressEncoded",
+          "cancelProgressEncoded",
+        ]);
+      }).pipe(
+        Effect.provide(fixture.layer),
+        Effect.ensuring(Deferred.succeed(response, { _tag: "ProgressObserved" })),
+        Effect.ensuring(Deferred.succeed(cancelled, { _tag: "ProgressCancelled" })),
+      );
+    },
+  );
+
   it.effect("creates a fresh native context for a reset retry without changing its request", () => {
     const started = Deferred.makeUnsafe<void>();
     let attempts = 0;

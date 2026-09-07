@@ -1,5 +1,6 @@
 import { Effect, Encoding, Schema } from "effect";
 
+import { utf8ByteLength as byteLength } from "./internal/utf8.ts";
 import { MemoryLookup, MemoryPassage } from "./MemoryReference.ts";
 import { MemoryAccess } from "./MemoryRevalidation.ts";
 import type { MemoryKey } from "./MemoryStore.ts";
@@ -49,8 +50,6 @@ export class SemanticCandidateResult extends Schema.Class<SemanticCandidateResul
   staleExcluded: Schema.Natural,
   unauthorizedExcluded: Schema.Natural,
 }) {}
-
-const byteLength = (text: string): number => Encoding.encodeHex(text).length / 2;
 
 const readDocument = Effect.fn("semanticCandidates.readDocument")(function* (key: MemoryKey) {
   const reader = yield* MemoryReader;

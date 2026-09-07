@@ -227,6 +227,13 @@ describe("thread canonical contracts", () => {
         expect(yield* digestJson({ z: "\ud800", value: "😀é" })).toBe(
           "a2ae949a2f22f7fc31138231e3db19f57f017e0d8a09f7b2b049398f9346f57c",
         );
+        expect(
+          yield* digestJson([
+            [{ z: "last", a: [false, null, 2.5] }],
+            [],
+            { nested: [[1], { b: 2, a: 3 }] },
+          ]),
+        ).toBe("8f7312be37bd42bc167b496ac42e8e8289a845c133097cf7ab5c8e5f7e38f5ab");
       }),
     );
   });
@@ -1317,6 +1324,79 @@ describe("phase 5 durable canonical payloads", () => {
     );
   });
 
+  it("keeps an aborted Run's unknown call open when a later Run reuses its call ID", () => {
+    const threadId = Schema.decodeSync(ThreadId)("travel-thread");
+    const prepared = decodeEnvelope(1, decodeRecord("run-1-prepared", encodedToolCallPrepared));
+    const unknown = decodeEnvelope(2, decodeRecord("run-1-unknown", encodedToolCallUnknown));
+
+    const aborted = decodeEnvelope(
+      3,
+      decodeRecord("run-1-aborted", {
+        _tag: "SubmissionSettled",
+        submissionId: "submission-1",
+        settlementId: "settlement:submission-1",
+        receiptId: "receipt-1",
+        runId: "run-1",
+        outcome: "aborted",
+      }),
+    );
+
+    const preparedAgain = decodeEnvelope(
+      4,
+      decodeRecord("run-2-prepared", {
+        ...encodedToolCallPrepared,
+        runId: "run-2",
+        turnId: "turn-2",
+      }),
+    );
+
+    const prefix = [prepared, unknown, aborted, preparedAgain];
+
+    const checkpoint = Schema.decodeSync(ThreadProjection)(
+      Schema.encodeSync(ThreadProjection)(replayThread(threadId, prefix)),
+    );
+
+    expect(checkpoint.openToolCalls.map((call) => [call.runId, call.toolCallId])).toEqual([
+      ["run-1", "call-1"],
+      ["run-2", "call-1"],
+    ]);
+
+    for (const terminal of [
+      decodeRecord("run-2-settled", {
+        _tag: "ToolCallSettled",
+        runId: "run-2",
+        toolCallId: "call-1",
+        toolName: "book_flight",
+        result: { bookingRef: "booking-43" },
+        isFailure: false,
+      }),
+      decodeRecord("run-2-resolved", { ...encodedToolCallResolved, runId: "run-2" }),
+    ]) {
+      const suffix = [decodeEnvelope(5, terminal)];
+      const full = replayThread(threadId, [...prefix, ...suffix]);
+
+      expect(full.openToolCalls.map((call) => [call.runId, call.toolCallId])).toEqual([
+        ["run-1", "call-1"],
+      ]);
+      expect(full.unknownToolCalls).toEqual([unknown.record.payload]);
+      expect(replayThreadFromCheckpoint(checkpoint, suffix)).toEqual(full);
+    }
+  });
+
+  it("rejects old projection versions even when their invocation and call views are empty", () => {
+    const empty = replayThread(Schema.decodeSync(ThreadId)("travel-thread"), []);
+    const { schemaVersion, ...legacy } = Schema.encodeSync(ThreadProjection)(empty);
+
+    expect(schemaVersion).toBe(2);
+    expect(legacy.openToolCalls).toEqual([]);
+    expect(legacy.subagentInvocations).toEqual([]);
+    expect(Schema.decodeUnknownExit(ThreadProjection)(legacy)._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(ThreadProjection)({ ...legacy, schemaVersion: 1 })._tag).toBe(
+      "Failure",
+    );
+    expect(Schema.decodeSync(ThreadProjection)({ ...legacy, schemaVersion: 2 })).toEqual(empty);
+  });
+
   it("rejects a Phase 4 checkpoint projection state so callers rebuild from canonical records", () => {
     const phase4State = {
       threadId: "travel-thread",
@@ -1493,6 +1573,85 @@ describe("S2 durable subagent canonical payloads", () => {
 
     expect(child.parentLink).toEqual(lineage.record.payload);
     expect(child.subagentInvocations).toEqual([]);
+  });
+
+  it("keeps subagent invocations separate when sequential Runs reuse a Tool Call ID", () => {
+    const threadId = Schema.decodeSync(ThreadId)("travel-thread");
+    const requested = decodeEnvelope(1, decodeRecord("first-requested", encodedSubagentRequested));
+    const started = decodeEnvelope(2, decodeRecord("first-started", encodedSubagentStarted));
+    const joined = decodeEnvelope(3, decodeRecord("first-joined", encodedSubagentJoined));
+
+    const completed = decodeEnvelope(
+      4,
+      decodeRecord("first-completed", {
+        _tag: "RunCompleted",
+        runId: encodedSubagentRequested.runId,
+        output: { answer: "Kyoto" },
+      }),
+    );
+
+    const requestedAgain = decodeEnvelope(
+      5,
+      decodeRecord("second-requested", {
+        ...encodedSubagentRequested,
+        runId: "run:submission-second",
+        turnId: "turn:run:submission-second:1",
+        childInput: { destination: "Osaka", month: "November" },
+        childThreadId: "subagent:submission-second:call-delegate-1",
+        childIdempotencyKey: "subagent:run:submission-second:call-delegate-1",
+        reservationId: "run%3Asubmission-second:call-delegate-1",
+      }),
+    );
+
+    const startedAgain = decodeEnvelope(
+      6,
+      decodeRecord("second-started", {
+        ...encodedSubagentStarted,
+        runId: "run:submission-second",
+        childThreadId: "subagent:submission-second:call-delegate-1",
+        childSubmissionId: "submission-child-2",
+        childReceiptId: "receipt-child-2",
+        childRunId: "run:submission-child-2",
+      }),
+    );
+
+    const joinedAgain = decodeEnvelope(
+      7,
+      decodeRecord("second-joined", {
+        ...encodedSubagentJoined,
+        runId: "run:submission-second",
+        childSubmissionId: "submission-child-2",
+        childSettlementId: "settlement:submission-child-2",
+        reservationId: "run%3Asubmission-second:call-delegate-1",
+      }),
+    );
+
+    const prefix = [requested, started, joined, completed, requestedAgain];
+
+    const checkpoint = Schema.decodeSync(ThreadProjection)(
+      Schema.encodeSync(ThreadProjection)(replayThread(threadId, prefix)),
+    );
+
+    const suffix = [startedAgain, joinedAgain];
+    const full = replayThread(threadId, [...prefix, ...suffix]);
+
+    expect(full.subagentInvocations).toEqual([
+      {
+        runId: encodedSubagentRequested.runId,
+        toolCallId: encodedSubagentRequested.toolCallId,
+        requested: requested.record.payload,
+        started: started.record.payload,
+        joined: joined.record.payload,
+      },
+      {
+        runId: "run:submission-second",
+        toolCallId: encodedSubagentRequested.toolCallId,
+        requested: requestedAgain.record.payload,
+        started: startedAgain.record.payload,
+        joined: joinedAgain.record.payload,
+      },
+    ]);
+    expect(replayThreadFromCheckpoint(checkpoint, suffix)).toEqual(full);
   });
 
   it("rejects a Phase 5 checkpoint projection state so callers rebuild from canonical records", () => {
@@ -1695,7 +1854,7 @@ describe("phase 5 ledger port schemas", () => {
       "tool-resolved:run:submission-1:2:call-1",
     );
     expect(toolStepSettledRecordId(runId, toolCallId, "reserve-flight")).toBe(
-      "step:run:submission-1:call-1:reserve-flight",
+      '["step@2","run:submission-1","call-1","reserve-flight"]',
     );
     expect(toolStepSettledBatchId(runId, toolCallId, "reserve-flight")).toBe(
       toolStepSettledRecordId(runId, toolCallId, "reserve-flight"),

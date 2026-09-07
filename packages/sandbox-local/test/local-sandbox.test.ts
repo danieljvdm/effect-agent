@@ -27,6 +27,7 @@ import {
   type Scope,
 } from "effect";
 import { PlatformError, SystemError } from "effect/PlatformError";
+import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 const AllowedEnvironmentResult = Schema.Struct({
@@ -439,6 +440,168 @@ const scriptedSpawner = (
   spawnerWithStdout(Stream.fromArray(stdoutChunks));
 
 describe("unisolated local Sandbox with an injected spawner double", () => {
+  it.effect.each(["configuration", "spawn"] as const)(
+    "times out pending %s setup without emitting process events",
+    (phase) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const events: Array<SandboxEvent> = [];
+        let interrupted = false;
+        let spawned = 0;
+        let finalized = 0;
+
+        const pending = Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              interrupted = true;
+            }),
+          ),
+        );
+
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            spawned++;
+            yield* Effect.acquireRelease(Effect.void, () =>
+              Effect.sync(() => {
+                finalized++;
+              }),
+            );
+            if (phase === "spawn") return yield* pending;
+
+            return yield* scriptedSpawner([]).spawn(command);
+          }),
+        );
+
+        const provider =
+          phase === "configuration"
+            ? ConfigProvider.make(() => pending)
+            : ConfigProvider.fromEnvRecord({ EFFECT_AGENT_ALLOWED: "visible" });
+
+        const fiber = yield* Effect.gen(function* () {
+          const sandbox = yield* Sandbox;
+
+          yield* sandbox
+            .execute(
+              request([], {
+                environment: { allow: ["EFFECT_AGENT_ALLOWED"] },
+                limits: { maxOutputBytes: 1_024, maxWallTime: Duration.seconds(1) },
+              }),
+            )
+            .pipe(
+              Stream.runForEach((event) =>
+                Effect.sync(() => {
+                  events.push(event);
+                }),
+              ),
+            );
+        }).pipe(
+          Effect.provide(sandboxLayer),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ConfigProvider.layer(provider)),
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust("1 second");
+        const exit = yield* Fiber.await(fiber);
+
+        expect(failureFrom(exit)).toMatchObject({ _tag: "SandboxTimeoutError" });
+        expect(events).toEqual([]);
+        expect(interrupted).toBe(true);
+        expect(spawned).toBe(phase === "spawn" ? 1 : 0);
+        expect(finalized).toBe(phase === "spawn" ? 1 : 0);
+      }),
+  );
+
+  it.effect("shares the setup deadline with active output and finalizes the child once", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const spawning = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<void>();
+      const output = yield* Deferred.make<void>();
+      const events: Array<SandboxEvent> = [];
+      const values = ConfigProvider.fromEnvRecord({ EFFECT_AGENT_ALLOWED: "visible" });
+      let finalized = 0;
+
+      const provider = ConfigProvider.make((path) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Effect.sleep("200 millis")),
+          Effect.andThen(values.load(path)),
+        ),
+      );
+
+      const stdout = Stream.fromEffectRepeat(
+        Effect.sleep("100 millis").pipe(Effect.as(new TextEncoder().encode("output"))),
+      );
+
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(spawning, undefined);
+          yield* Effect.sleep("300 millis");
+
+          return yield* Effect.acquireRelease(spawnerWithStdout(stdout).spawn(command), () =>
+            Effect.sync(() => {
+              finalized++;
+            }),
+          );
+        }),
+      );
+
+      const fiber = yield* Effect.gen(function* () {
+        const sandbox = yield* Sandbox;
+
+        yield* sandbox
+          .execute(
+            request([], {
+              environment: { allow: ["EFFECT_AGENT_ALLOWED"] },
+              limits: { maxOutputBytes: 1_024, maxWallTime: Duration.seconds(1) },
+            }),
+          )
+          .pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }).pipe(
+                Effect.andThen(
+                  event._tag === "SandboxStarted"
+                    ? Deferred.succeed(started, undefined)
+                    : event._tag === "SandboxOutput"
+                      ? Deferred.succeed(output, undefined)
+                      : Effect.void,
+                ),
+              ),
+            ),
+          );
+      }).pipe(
+        Effect.provide(sandboxLayer),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provide(ConfigProvider.layer(provider)),
+        Effect.forkChild,
+      );
+
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("200 millis");
+      yield* Deferred.await(spawning);
+      yield* TestClock.adjust("300 millis");
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("100 millis");
+      yield* Deferred.await(output);
+      yield* TestClock.adjust("300 millis");
+
+      expect(events[0]?._tag).toBe("SandboxStarted");
+      expect(events.some((event) => event._tag === "SandboxOutput")).toBe(true);
+      expect(finalized).toBe(0);
+
+      yield* TestClock.adjust("100 millis");
+      const exit = yield* Fiber.await(fiber);
+
+      expect(failureFrom(exit)).toMatchObject({ _tag: "SandboxTimeoutError" });
+      expect(events.some((event) => event._tag === "SandboxExited")).toBe(false);
+      expect(finalized).toBe(1);
+    }),
+  );
+
   it.effect("decodes UTF-8 sequences split across chunk boundaries and flushes the tail", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;

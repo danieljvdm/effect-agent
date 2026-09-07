@@ -1,5 +1,6 @@
-import { Effect, Encoding, Predicate, Schema, type Scope } from "effect";
+import { Effect, Predicate, Schema, type Scope } from "effect";
 
+import { utf8ByteLength as bytes } from "./internal/utf8.ts";
 import {
   MemoryLookup,
   MemoryPassage,
@@ -36,8 +37,6 @@ export class RecalledMemory extends Schema.Class<RecalledMemory>(
   bytes: Schema.Natural,
   estimatedTokens: Schema.Natural,
 }) {}
-
-const bytes = (text: string): number => Encoding.encodeHex(text).length / 2;
 
 const canonicalJson = (value: object): string =>
   JSON.stringify(value, (_key, item: unknown) =>

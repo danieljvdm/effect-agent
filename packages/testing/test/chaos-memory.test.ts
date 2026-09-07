@@ -2,6 +2,7 @@ import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemoryS
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
   ChaosPlan,
+  ChaosSubmissionSpec,
   DEFAULT_CHAOS_SEED,
   chaosSeedFromEnv,
   generateChaosPlans,
@@ -12,12 +13,13 @@ import {
   DurableRuntimeConfig,
 } from "@effect-agent/thread/DurableAgentRuntime";
 import { DeploymentId, ProducerId } from "@effect-agent/thread/Records";
+import { LedgerError, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
 import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
 import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";
+import { Cause, Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
 
 /**
  * P7 WP4 memory chaos lane (plan §5): ~200 seeded plans over the in-memory adapter pair,
@@ -58,7 +60,91 @@ const replayHint = (planIndex: number, plan: ChaosPlan): string =>
   `submissions [${plan.submissions.map((spec) => `${spec.lane}:${spec.kind}`).join(", ")}], ` +
   `arms [${[...plan.failpointArms, ...plan.adapterArms].join(", ")}])`;
 
+const runWithScanFailure = Effect.fn("test.runChaosWithScanFailure")(
+  function* (failure: Effect.Effect<never, LedgerError>) {
+    const ledger = yield* SubmissionLedger;
+    let injected = false;
+
+    const decorated = SubmissionLedger.of({
+      ...ledger,
+      scanNonterminal: Stream.unwrap(
+        Effect.sync(() => {
+          if (injected) return ledger.scanNonterminal;
+          injected = true;
+
+          return Stream.fromEffect(failure);
+        }),
+      ),
+    });
+
+    const plan = ChaosPlan.make({
+      seed: 1,
+      lanes: 1,
+      submissions: [ChaosSubmissionSpec.make({ lane: 0, kind: "plain" })],
+      failpointArms: [],
+      adapterArms: [],
+      abortInjections: [],
+      resolutionInjections: [],
+      approvalDecisions: [],
+    });
+
+    const exit = yield* runChaosPlan(plan).pipe(
+      Effect.provideService(SubmissionLedger, decorated),
+      Effect.exit,
+    );
+
+    expect(injected).toBe(true);
+
+    return exit;
+  },
+  Effect.provide(freshLayer()),
+  Effect.scoped,
+);
+
+const scanUnavailable = LedgerError.make({
+  operation: "scanNonterminal",
+  message: "one-shot scan unavailable",
+});
+
 describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
+  it.effect("tolerates a one-shot typed ledger failure and still verifies convergence", () =>
+    Effect.gen(function* () {
+      const exit = yield* runWithScanFailure(Effect.fail(scanUnavailable));
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.openObligations).toBe(0);
+        expect(exit.value.lanes.map((lane) => lane.verified)).toEqual([true]);
+      }
+    }),
+  );
+
+  it.effect("preserves a cleanup defect accompanying a tolerated ledger failure", () =>
+    Effect.gen(function* () {
+      const defect = new Error("scan cleanup defect");
+
+      const exit = yield* runWithScanFailure(
+        Effect.fail(scanUnavailable).pipe(Effect.ensuring(Effect.die(defect))),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(exit.cause.reasons.filter(Cause.isDieReason)).toHaveLength(1);
+        expect(exit.cause.reasons.find(Cause.isDieReason)?.defect).toBe(defect);
+        expect(Cause.hasFails(exit.cause)).toBe(false);
+      }
+    }),
+  );
+
+  it.effect("preserves ledger interruption without converting it to a defect", () =>
+    Effect.gen(function* () {
+      const exit = yield* runWithScanFailure(Effect.interrupt);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    }),
+  );
+
   it("accepts only schema-valid safe-integer CHAOS_SEED values", () => {
     expect(chaosSeedFromEnv({ CHAOS_SEED: "-42" })).toBe(-42);
     expect(chaosSeedFromEnv({ CHAOS_SEED: "12x" })).toBe(DEFAULT_CHAOS_SEED);

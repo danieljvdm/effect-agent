@@ -3,6 +3,7 @@ import { Crypto, Effect, Encoding, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
 import { ThreadMessage, ThreadSnapshot, ThreadText } from "./EphemeralThreads.ts";
+import { utf8ByteLength } from "./internal/utf8.ts";
 
 const MAX_CONTEXT_MESSAGES = 1_024;
 const MAX_CONTEXT_MESSAGE_BYTES = 4 * 1024 * 1024;
@@ -32,14 +33,12 @@ export class RetainedFact extends Schema.Class<RetainedFact>(
   sourceSequences: SourceSequences,
 }) {}
 
-const encodedBytes = (value: string): number => Encoding.encodeHex(value).length / 2;
-
 const ModelContextMessages = Schema.Array(ModelContextMessage)
   .check(Schema.isMaxLength(MAX_CONTEXT_MESSAGES))
   .pipe(
     Schema.refine(
       (messages): messages is ReadonlyArray<ModelContextMessage> =>
-        messages.reduce((total, message) => total + encodedBytes(message.content), 0) <=
+        messages.reduce((total, message) => total + utf8ByteLength(message.content), 0) <=
         MAX_CONTEXT_MESSAGE_BYTES,
       { expected: `model context totaling at most ${MAX_CONTEXT_MESSAGE_BYTES} UTF-8 bytes` },
     ),
@@ -50,7 +49,7 @@ const RetainedFacts = Schema.Array(RetainedFact)
   .pipe(
     Schema.refine(
       (facts): facts is ReadonlyArray<RetainedFact> =>
-        facts.reduce((total, retained) => total + encodedBytes(retained.fact), 0) <=
+        facts.reduce((total, retained) => total + utf8ByteLength(retained.fact), 0) <=
         MAX_RETAINED_FACT_BYTES,
       { expected: `retained facts totaling at most ${MAX_RETAINED_FACT_BYTES} UTF-8 bytes` },
     ),
@@ -159,7 +158,7 @@ const validateModelView = (
       }),
     );
   }
-  const bytes = messages.reduce((total, message) => total + encodedBytes(message.content), 0);
+  const bytes = messages.reduce((total, message) => total + utf8ByteLength(message.content), 0);
 
   return bytes > MAX_CONTEXT_MESSAGE_BYTES
     ? Effect.fail(

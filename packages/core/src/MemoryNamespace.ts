@@ -1,4 +1,6 @@
-import { Effect, Encoding, Schema } from "effect";
+import { Effect, Schema } from "effect";
+
+import { utf8ByteLength } from "./internal/utf8.ts";
 
 const Name = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 
@@ -59,7 +61,7 @@ export class MemoryNamespaceError extends Schema.TaggedError<MemoryNamespaceErro
 /** Portable address used by storage, receipts, indexes, and owner routing. */
 const BoundedAddress = Schema.String.check(
   Schema.isMaxLength(4_096),
-  Schema.makeFilter((address) => Encoding.encodeHex(address).length / 2 <= 4_096, {
+  Schema.makeFilter((address) => utf8ByteLength(address) <= 4_096, {
     expected: "at most 4096 UTF-8 bytes",
   }),
 );

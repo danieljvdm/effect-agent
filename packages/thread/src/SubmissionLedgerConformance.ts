@@ -616,6 +616,64 @@ const crossPrincipalAdmissionScoping = conformanceCase(
     }),
 );
 
+const admissionTupleBoundaries = conformanceCase(
+  "preserves admission tuple boundaries when principal and key contain separators",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      const threadId = decodeThreadId("ledger-conformance-admission-separators");
+      const ledger = yield* SubmissionLedger;
+      const base = yield* admissionRequest(threadId, "r", { work: "separators" });
+
+      const firstRequest = AdmissionRequest.make({
+        ...base,
+        principal: Schema.decodeSync(Principal)("p\u001fq"),
+      });
+
+      const secondRequest = AdmissionRequest.make({
+        ...base,
+        principal: Schema.decodeSync(Principal)("p"),
+        idempotencyKey: decodeIdempotencyKey("q\u001fr"),
+      });
+
+      const first = yield* ledger.admit(firstRequest);
+      const second = yield* ledger.admit(secondRequest);
+
+      yield* ensure(
+        !second.replayed &&
+          second.submissionId !== first.submissionId &&
+          second.receiptId !== first.receiptId &&
+          second.queueSequence === first.queueSequence + 1,
+        "Distinct admission tuples must allocate distinct identities and consecutive queue positions",
+      );
+
+      for (const [request, admitted] of [
+        [firstRequest, first],
+        [secondRequest, second],
+      ] as const) {
+        const key = SubmissionLookupByKey.make({
+          threadId,
+          principal: request.principal,
+          idempotencyKey: request.idempotencyKey,
+        });
+
+        const found = yield* expectSome("the exact admission tuple", yield* ledger.lookup(key));
+        const resolved = yield* ledger.resolveAdmission(key);
+        const replay = yield* ledger.admit(request);
+
+        yield* ensure(
+          found.submissionId === admitted.submissionId &&
+            resolved._tag === "Admitted" &&
+            resolved.submission.submissionId === admitted.submissionId &&
+            replay.replayed &&
+            replay.submissionId === admitted.submissionId &&
+            replay.receiptId === admitted.receiptId &&
+            replay.queueSequence === admitted.queueSequence,
+          "Lookup, authoritative resolution, and replay must preserve the exact admission tuple",
+        );
+      }
+    }),
+);
+
 const concurrentAdmissionFifo = conformanceCase(
   "allocates distinct FIFO queue sequences under concurrent admission and claims in order",
   ({ ensure, expectSome }) =>
@@ -971,7 +1029,7 @@ const releaseMakesHeadClaimable = conformanceCase(
 
 const inputAppliedIdempotency = conformanceCase(
   "marks canonical input applied idempotently under the owning token",
-  ({ ensure, expectSome }) =>
+  ({ ensure, expectFailure, expectSome }) =>
     Effect.gen(function* () {
       const threadId = decodeThreadId("ledger-conformance-input");
       const ledger = yield* SubmissionLedger;
@@ -1002,6 +1060,20 @@ const inputAppliedIdempotency = conformanceCase(
       );
 
       yield* ledger.markInputApplied(marker);
+      for (const conflicting of [
+        MarkInputAppliedRequest.make({
+          ...marker,
+          recordId: submissionInputRecordId(decodeSubmissionId("different-input-marker")),
+        }),
+        MarkInputAppliedRequest.make({ ...marker, sequence: decodeSequence(3) }),
+      ]) {
+        const error = yield* expectFailure(
+          "a conflicting input-applied marker",
+          ledger.markInputApplied(conflicting),
+        );
+
+        yield* ensure(isLedgerError(error), "Conflicting input markers must fail as LedgerError");
+      }
       const snapshot = yield* recoverySnapshot(admitted.submissionId);
 
       yield* ensure(
@@ -1009,7 +1081,7 @@ const inputAppliedIdempotency = conformanceCase(
           snapshot.inputApplied.recordId === marker.recordId &&
           snapshot.inputApplied.sequence === marker.sequence &&
           snapshot.submission.state === "input-applied",
-        "Repeating the identical input-applied marker must be a no-op with the marker retained",
+        "Identical replays and rejected conflicts must retain the original input-applied marker",
       );
     }),
 );
@@ -3988,6 +4060,7 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   admissionGroupRace,
   admissionGroupSettlement,
   crossPrincipalAdmissionScoping,
+  admissionTupleBoundaries,
   concurrentAdmissionFifo,
   fifoHeadClaim,
   leaseExpiryReclaim,

@@ -203,6 +203,8 @@ principal, idempotency key, and definition digests. Return its receipt after adm
 Use `client.awaitSettlement(receipt)` for completion.
 For updates, call `readPage`, then `awaitProgress`, then read after the last received sequence.
 Scope progress waits so interruption cancels them remotely.
+Cancellation is best effort and waits at most one second for the remote reply, so a lost reply
+does not prevent local shutdown. The Object retains bounded cancellation hints for late retries.
 Expose these Effects through your application's HTTP or RPC API.
 
 ## Shared memory {#shared-memory}

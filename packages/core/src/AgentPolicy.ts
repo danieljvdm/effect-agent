@@ -66,7 +66,16 @@ const AgentPolicyFields = Schema.Struct({
   toolResultBounds: ToolResultBounds,
   runStatus: Schema.Literals(["appended", "off"]),
   compaction: CompactionPolicy,
-});
+}).check(
+  Schema.makeFilter((policy) =>
+    policy.tokenBudget !== undefined && policy.completionReserveTokens > policy.tokenBudget
+      ? {
+          path: ["completionReserveTokens"],
+          issue: "completionReserveTokens cannot exceed tokenBudget",
+        }
+      : undefined,
+  ),
+);
 
 type AgentPolicyFields = typeof AgentPolicyFields.Type;
 
@@ -129,10 +138,6 @@ export class AgentPolicy extends Schema.Class<AgentPolicy>("AgentPolicy")(AgentP
       (input.tokenBudget === undefined
         ? 4_096
         : Math.min(4_096, Math.floor(input.tokenBudget / 5)));
-
-    if (input.tokenBudget !== undefined && completionReserveTokens > input.tokenBudget) {
-      throw new Error("completionReserveTokens cannot exceed tokenBudget");
-    }
 
     return super.make({
       ...input,

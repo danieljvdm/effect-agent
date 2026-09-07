@@ -24,6 +24,8 @@ import {
 import { Clock, Crypto, Effect, Encoding, Schema } from "effect";
 import { EmbeddingModel } from "effect/unstable/ai";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
+
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const InputTokens = Schema.NullOr(Schema.Natural);
 
@@ -99,8 +101,6 @@ const utf8 = (text: string): Uint8Array => {
     Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16),
   );
 };
-
-const byteLength = (text: string): number => Encoding.encodeHex(text).length / 2;
 
 const invalid = (operation: string) =>
   SemanticMemoryError.make({ operation, reason: "invalid-input" });
@@ -187,7 +187,7 @@ const chunkText = Effect.fn("semanticMemory.chunkText")(function* (
   profile: SemanticMemoryProfile,
   limits: SemanticIndexLimits,
 ) {
-  if (byteLength(text) > limits.maxSourceBytes) {
+  if (utf8ByteLength(text) > limits.maxSourceBytes) {
     return yield* SemanticMemoryError.make({ operation: "chunk source", reason: "budget" });
   }
 
@@ -203,7 +203,7 @@ const chunkText = Effect.fn("semanticMemory.chunkText")(function* (
   let currentBytes = 0;
 
   for (const codepoint of text) {
-    const size = byteLength(codepoint);
+    const size = utf8ByteLength(codepoint);
 
     if (currentBytes + size > profile.maxChunkBytes) {
       chunks.push({
@@ -334,7 +334,7 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* <
       key: checkedKey,
       status: "Indexed",
       embeddedChunks: chunks.length,
-      embeddedBytes: byteLength(document.content.text),
+      embeddedBytes: utf8ByteLength(document.content.text),
       inputTokens: response.usage.inputTokens ?? null,
       startedAt,
       finishedAt: yield* Clock.currentTimeMillis,
@@ -381,7 +381,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
     Effect.mapError(() => invalid("query limits")),
   );
 
-  const queryBytes = byteLength(checkedQuery);
+  const queryBytes = utf8ByteLength(checkedQuery);
 
   if (queryBytes > checkedLimits.maxQueryBytes)
     return yield* SemanticMemoryError.make({ operation: "query bytes", reason: "budget" });

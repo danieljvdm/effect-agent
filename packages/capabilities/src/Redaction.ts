@@ -1,25 +1,15 @@
 import { RunEvent } from "@effect-agent/core/RunEvent";
 import { Context, Effect, Layer, Schema } from "effect";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
+
 const MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
 const MAX_REDACTION_NODES = 4_096;
 const MAX_REDACTION_DEPTH = 16;
 
-const utf8Bytes = (value: string): number => {
-  let total = 0;
-
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-
-    total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-  }
-
-  return total;
-};
-
 /** Branded evidence that a preview passed through the configured structural Redactor. */
 export const RedactedPreview = Schema.String.pipe(
-  Schema.refine((value): value is string => utf8Bytes(value) <= MAX_REDACTED_PREVIEW_BYTES, {
+  Schema.refine((value): value is string => utf8ByteLength(value) <= MAX_REDACTED_PREVIEW_BYTES, {
     expected: `redacted preview of at most ${MAX_REDACTED_PREVIEW_BYTES} UTF-8 bytes`,
   }),
   Schema.brand("@effect-agent/capabilities/RedactedPreview"),
@@ -85,16 +75,16 @@ const redactValue = (value: unknown, depth: number, counter: RedactionCounter): 
 };
 
 const truncateUtf8 = (value: string, maxBytes: number): string => {
-  if (utf8Bytes(value) <= maxBytes) {
+  if (utf8ByteLength(value) <= maxBytes) {
     return value;
   }
   const suffix = "…";
-  const suffixBytes = utf8Bytes(suffix);
+  const suffixBytes = utf8ByteLength(suffix);
   let output = "";
   let bytes = 0;
 
   for (const character of value) {
-    const characterBytes = utf8Bytes(character);
+    const characterBytes = utf8ByteLength(character);
 
     if (bytes + characterBytes + suffixBytes > maxBytes) {
       break;

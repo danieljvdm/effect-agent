@@ -59,11 +59,13 @@ const makeWakeScheduler = Effect.gen(function* () {
 
   /**
    * Deployment §3: correctness must not depend on in-memory notifications, so every `wakes` run
-   * merges its PubSub subscription with a Clock-driven ledger-scan loop. Both live entirely in
-   * the consuming run's Scope; no fiber outlives its subscriber.
+   * merges its PubSub subscription with shared Clock-driven ledger scans. Share whole snapshots:
+   * sliding individual lanes would strand the beginning of scans larger than the hint buffer.
+   * The scan starts with the first subscriber and stops when the last subscriber leaves.
    */
-  const fallbackScans: Stream.Stream<ThreadId> = Stream.fromIterableEffectRepeat(
-    Effect.sleep(config.scanInterval).pipe(Effect.andThen(scanOnce)),
+  const fallbackScans = yield* Stream.share(
+    Stream.fromEffectRepeat(Effect.sleep(config.scanInterval).pipe(Effect.andThen(scanOnce))),
+    { capacity: 1, strategy: "sliding" },
   );
 
   return WakeScheduler.of({
@@ -72,13 +74,16 @@ const makeWakeScheduler = Effect.gen(function* () {
         .notify(threadId)
         .pipe(Effect.andThen(PubSub.publish(hints, threadId)), Effect.asVoid),
     subscribe: progress.subscribe,
-    wakes: Stream.merge(Stream.fromPubSub(hints), fallbackScans),
+    wakes: Stream.merge(
+      Stream.fromPubSub(hints),
+      fallbackScans.pipe(Stream.flatMap(Stream.fromIterable)),
+    ),
   });
 });
 
 /**
  * In-process Node `WakeScheduler`: `notify` publishes to a bounded sliding PubSub for prompt
- * same-process wakeups, and every `wakes` subscription additionally runs a periodic
+ * same-process wakeups, and active `wakes` subscriptions share one periodic
  * `SubmissionLedger.scanNonterminal` fallback so a dropped, coalesced, or never-sent notification
  * can never strand accepted work (persistence §14). Delivery may duplicate; consumers already
  * treat wakes as pure liveness hints.

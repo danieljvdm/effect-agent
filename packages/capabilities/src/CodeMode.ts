@@ -22,6 +22,8 @@ import { NetworkDisabled } from "@effect-agent/sandbox/Sandbox";
 import { type Layer, Context, Duration, Effect, Option, Schema, type Scope } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
+
 /**
  * Code Mode (D-035, ADR-0017; capability spec §9.1): one native Effect AI
  * Tool whose input is bounded JavaScript source, executed in one isolated
@@ -39,18 +41,6 @@ const BoundedErrorTag = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const BoundedLogLine = Schema.String.check(Schema.isMaxLength(16 * 1024));
 const BoundedLogs = Schema.Array(BoundedLogLine).check(Schema.isMaxLength(4_096));
 const BoundedCode = Schema.NonEmptyString.check(Schema.isMaxLength(512 * 1024));
-
-const utf8ByteLength = (value: string): number => {
-  let total = 0;
-
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-
-    total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-  }
-
-  return total;
-};
 
 const encodedJsonByteLength = (value: unknown): number | undefined => {
   try {

@@ -294,6 +294,85 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
   >();
 });
 
+it("retains transformed tool parameter services and handler failures across execution views", () => {
+  class ParametersDecoder extends Context.Service<ParametersDecoder, string>()(
+    "transformed-tool/ParametersDecoder",
+  ) {}
+  class ParametersEncoder extends Context.Service<ParametersEncoder, string>()(
+    "transformed-tool/ParametersEncoder",
+  ) {}
+
+  const Increment = Tool.make("increment", {
+    parameters: Schema.Struct({
+      value: Schema.FiniteFromString.pipe(
+        Schema.decode({
+          decode: SchemaGetter.transformOrFail((value) => Effect.as(ParametersDecoder, value)),
+          encode: SchemaGetter.transformOrFail((value) => Effect.as(ParametersEncoder, value)),
+        }),
+      ),
+    }),
+    success: Schema.Finite,
+    failure: ToolError,
+    failureMode: "error",
+    dependencies: [Catalog],
+  });
+
+  const tools = Toolkit.make(Increment);
+
+  const handlers = tools.toLayer({
+    increment: ({ value }) =>
+      Effect.gen(function* () {
+        expectTypeOf(value).toEqualTypeOf<number>();
+        const catalog = yield* Catalog;
+
+        if (catalog === "") return yield* ToolError.make({});
+
+        return value + 1;
+      }),
+  });
+
+  const definition = Agent.make("transformed-tool", {
+    input: Schema.String,
+    output: Schema.Finite,
+    instructions: "Increment the encoded number.",
+    toolkit: tools,
+    policy: planner.policy,
+  });
+
+  const binding = Agent.withModel(definition, model);
+  const run = AgentRuntime.run(binding, "Increment 41.");
+  const stream = AgentRuntime.stream(binding, "Increment 41.");
+  const start = AgentRuntime.start(binding, "Increment 41.");
+  const provided = run.pipe(Effect.provide(handlers));
+
+  type DefinitionServices =
+    | ParametersDecoder
+    | ParametersEncoder
+    | Catalog
+    | Tool.HandlersFor<typeof tools.tools>;
+  type RequiredServices =
+    | ParametersDecoder
+    | ParametersEncoder
+    | Catalog
+    | ProviderClient
+    | ThreadHistory
+    | IdGenerator;
+  type UnprovidedServices = RequiredServices | Tool.HandlersFor<typeof tools.tools>;
+  expectTypeOf<
+    Agent.DefinitionRequirements<typeof definition>
+  >().toEqualTypeOf<DefinitionServices>();
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<UnprovidedServices>();
+  expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<UnprovidedServices>();
+  expectTypeOf<Effect.Services<typeof start>>().toEqualTypeOf<UnprovidedServices | Scope.Scope>();
+  expectTypeOf<Effect.Services<typeof provided>>().toEqualTypeOf<RequiredServices>();
+  expectTypeOf<Extract<Effect.Error<typeof provided>, ToolError>>().toEqualTypeOf<ToolError>();
+  expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<AgentRuntimeFailure<typeof binding>>();
+  expectTypeOf<Stream.Error<typeof stream>>().toEqualTypeOf<Effect.Error<typeof run>>();
+  expectTypeOf<Effect.Error<Effect.Success<typeof start>["await"]>>().toEqualTypeOf<
+    Effect.Error<typeof run>
+  >();
+});
+
 it("retains every branch's tool requirements and failures across execution views", () => {
   const withoutTools = Agent.make("without-tools", {
     input: Input,

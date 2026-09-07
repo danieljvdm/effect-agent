@@ -271,14 +271,21 @@ const navigationError = (message: string, cause?: unknown): PageCaptureNavigatio
 const privateResponseCause = (bodyText: string): Error | undefined =>
   bodyText.length === 0 ? undefined : new Error(boundedDiagnostic(bodyText));
 
+/** Foreign cancellation must not keep a response Scope open indefinitely. */
+const cancelResponse = (cancel: () => Promise<void>, warning: string): Effect.Effect<void> =>
+  Effect.tryPromise({ try: cancel, catch: () => undefined }).pipe(
+    Effect.interruptible,
+    Effect.timeoutOrElse({
+      duration: "1 second",
+      orElse: () => Effect.fail(undefined),
+    }),
+    Effect.catch(() => Effect.logWarning(warning)),
+  );
+
 const releaseResponseReader = (
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Effect.Effect<void> =>
-  Effect.tryPromise({
-    try: () => reader.cancel(),
-    catch: (cause) => protocolError("Canceling the Quick Action response failed", cause),
-  }).pipe(
-    Effect.catch((error) => Effect.logWarning(error.message)),
+  cancelResponse(() => reader.cancel(), "Canceling the Quick Action response failed").pipe(
     Effect.ensuring(
       Effect.try({
         try: () => reader.releaseLock(),
@@ -655,16 +662,12 @@ const screenshotOptions = (request: PageScreenshotRequest): BrowserRunScreenshot
 };
 
 const cancelBody = (body: ReadableStream<Uint8Array>): Effect.Effect<void> =>
-  Effect.tryPromise({
-    try: () => body.cancel(),
-    catch: () => undefined,
-  }).pipe(Effect.catch(() => Effect.void));
+  cancelResponse(() => body.cancel(), "Canceling the screenshot response failed");
 
 const releaseScreenshotReader = (
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Effect.Effect<void> =>
-  Effect.tryPromise({ try: () => reader.cancel(), catch: () => undefined }).pipe(
-    Effect.catch(() => Effect.logWarning("Canceling the screenshot response failed")),
+  cancelResponse(() => reader.cancel(), "Canceling the screenshot response failed").pipe(
     Effect.ensuring(
       Effect.try({
         try: () => reader.releaseLock(),

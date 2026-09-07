@@ -61,6 +61,7 @@ import { cloudflareFailureSignals, safeCauseMessage } from "./internal/boundary.
 
 /** Ceiling for host protocol diagnostic strings. */
 const MAX_HOST_DIAGNOSTIC_LENGTH = 4_096;
+const PROGRESS_CANCELLATION_TIMEOUT = "1 second";
 
 const BoundedDiagnostic = Schema.String.check(Schema.isMaxLength(MAX_HOST_DIAGNOSTIC_LENGTH));
 
@@ -379,6 +380,7 @@ export class CloudflareThreadClient extends Context.Service<
     /**
      * Wait without polling until progress after `afterSequence` is already durable or hinted.
      * The result is deliberately void: canonical records remain authoritative and must be read.
+     * Interruption waits at most one second for best-effort remote cancellation.
      */
     readonly awaitProgress: (
       threadId: ThreadId,
@@ -556,6 +558,10 @@ export class CloudflareThreadClient extends Context.Service<
         encodeCancelProgressRequest(CancelProgressRequest.make({ waiterId })).pipe(
           Effect.mapError(() => undefined),
           Effect.flatMap((encoded) => call(threadId, "cancelProgress", encoded)),
+          // Finalizers are uninterruptible; only the foreign RPC branch must remain
+          // interruptible so a lost cancellation reply cannot prevent local shutdown.
+          Effect.interruptible,
+          Effect.timeout(PROGRESS_CANCELLATION_TIMEOUT),
           Effect.asVoid,
           Effect.ignore,
         );

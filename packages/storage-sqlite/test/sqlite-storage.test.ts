@@ -201,6 +201,75 @@ const withTemporaryDatabase = <A, E>(
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
 describe("SqliteThreadStore", () => {
+  for (const corruption of ["thread", "sequence", "digest"] as const) {
+    it.effect(`rejects checkpoint ${corruption} metadata that disagrees with its row`, () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const sql = yield* SqlClientService.SqlClient;
+
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+          );
+
+          const appended = yield* append(
+            store,
+            batch("checkpoint-metadata", [inputRecord("checkpoint-metadata-input", "Kyoto")]),
+          );
+
+          const checkpoint = ThreadCheckpoint.make({
+            schemaVersion: 1,
+            threadId,
+            throughSequence: sequence(0),
+            tailDigest: EMPTY_TAIL_DIGEST,
+            engineVersion: "checkpoint-metadata-test",
+            agentDefinitionDigest: EMPTY_TAIL_DIGEST,
+            modelDigest: EMPTY_TAIL_DIGEST,
+            toolDigest: EMPTY_TAIL_DIGEST,
+            state: {},
+            createdAt: at(2),
+          });
+
+          yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint }));
+
+          const corrupted = ThreadCheckpoint.make({
+            ...checkpoint,
+            ...(corruption === "thread" ? { threadId: secondThreadId } : {}),
+            ...(corruption === "sequence"
+              ? { throughSequence: appended.lastSequence, tailDigest: appended.tailDigest }
+              : {}),
+          });
+
+          const corruptedJson = JSON.stringify(
+            yield* Schema.encodeEffect(ThreadCheckpoint)(corrupted),
+          );
+
+          const rowDigest = corruption === "digest" ? appended.tailDigest : EMPTY_TAIL_DIGEST;
+
+          yield* sql`
+            UPDATE effect_agent_checkpoints
+            SET checkpoint_json = ${corruptedJson}, tail_digest = ${rowDigest}
+            WHERE thread_id = ${threadId} AND through_sequence = 0
+          `;
+
+          const loaded = yield* store
+            .checkpoints!.load(
+              LoadCheckpointRequest.make({ threadId, atOrBeforeSequence: sequence(0) }),
+            )
+            .pipe(Effect.exit);
+
+          expect(Exit.isFailure(loaded)).toBe(true);
+          if (Exit.isFailure(loaded)) {
+            const error = Cause.squash(loaded.cause);
+
+            expect(error).toBeInstanceOf(ThreadStoreError);
+            if (isThreadStoreError(error)) expect(error.operation).toBe("load checkpoint");
+          }
+        }).pipe(Effect.provide(explicitTestStorageLayer(filename))),
+      ),
+    );
+  }
+
   describe("shared ThreadStore conformance", () => {
     for (const conformanceCase of [
       ...threadStoreConformanceCases,

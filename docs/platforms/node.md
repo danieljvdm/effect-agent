@@ -30,6 +30,8 @@ The version declarations identify the agent, model, and tools used by accepted w
 Use a persistent database path with one live host per SQLite file. Give each replacement host
 incarnation a distinct `producerId`.
 `workerConcurrency` limits worker loops and defaults to one.
+Active workers share one periodic ledger scan.
+The scan stops when the last subscriber leaves and restarts when another subscribes.
 `NodeDurableHost.layer` checks storage, recovers pending work, and starts the worker pool when
 the Layer is acquired. Save this as `node-host.ts`, replacing `producerId` for each process start:
 

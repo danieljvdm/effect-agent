@@ -240,6 +240,8 @@ export type DefinitionRequirements<DefinitionValue extends AnyDefinition> =
         | EffectServices<InputPromptEffect<DefinitionValue["inputPrompt"], Input<DefinitionValue>>>
         | Tool.HandlersFor<Tools<DefinitionValue>>
         | Tool.HandlerServices<ToolUnion<DefinitionValue>>
+        // The interpreter canonically re-encodes decoded Tool parameters before recording them.
+        | Tool.ParametersSchema<ToolUnion<DefinitionValue>>["EncodingServices"]
         | Tool.SuccessSchema<ToolUnion<DefinitionValue>>["DecodingServices"]
         | DefinitionValue["input"]["DecodingServices"]
         | DefinitionValue["input"]["EncodingServices"]

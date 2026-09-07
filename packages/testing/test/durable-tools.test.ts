@@ -18,6 +18,7 @@ import {
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import { compileRegistrations } from "@effect-agent/thread/AgentRegistration";
+import { digestJson } from "@effect-agent/thread/Digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
@@ -28,6 +29,7 @@ import {
   type DurableRuntimeFailpointLocation,
 } from "@effect-agent/thread/DurableFailpoint";
 import {
+  CanonicalBatch,
   type CanonicalRecordEnvelope,
   DefinitionDigestInput,
   DefinitionDigests,
@@ -57,7 +59,12 @@ import {
   type UnknownResolutionConflict,
 } from "@effect-agent/thread/SubmissionLedger";
 import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import {
+  FencedAppendRequest,
+  ThreadRead,
+  ThreadStore,
+  ThreadTailRequest,
+} from "@effect-agent/thread/ThreadStore";
 import {
   ReconciliationCompleted,
   ReconciliationSafeToRetry,
@@ -2113,6 +2120,185 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(settled.result).toEqual({ state: "flight-trip+lodging-trip" });
       }
     }),
+  );
+
+  it.effect(
+    "records distinct Steps when legal Tool Call IDs and Step names contain separators",
+    () =>
+      Effect.gen(function* () {
+        yield* resetReconciler;
+        const runtime = yield* DurableAgentRuntime;
+        const executed = yield* Ref.make<ReadonlyArray<string>>([]);
+
+        const toolLayer = itineraryTools.toLayer({
+          itinerary: ({ ref }) =>
+            Effect.gen(function* () {
+              const step = yield* DurableStep;
+
+              const state = yield* step.do(
+                ref,
+                Schema.String,
+                Ref.update(executed, (names) => [...names, ref]).pipe(Effect.as(ref)),
+              );
+
+              return { state };
+            }),
+        });
+
+        const definition = Agent.make("durable-step-identities", {
+          input: itineraryDefinition.input,
+          output: itineraryDefinition.output,
+          instructions: itineraryDefinition.instructions,
+          toolkit: itineraryTools,
+          policy: { ...policy, toolConcurrency: 1 },
+        });
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(
+                toolCall("a:b", "itinerary", { ref: "c" }),
+                toolCall("a", "itinerary", { ref: "b:c" }),
+              )
+            : finalParts('{"answer":"reserved"}'),
+        );
+
+        const agent = Agent.withModel(definition, scripted.model);
+        const thread = "thread-durable-step-identities";
+
+        yield* runtime.submit(
+          agent,
+          { question: "reserve both" },
+          submitOptions(thread, "step-identities-1"),
+        );
+
+        const settlements = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.provide(toolLayer));
+
+        expect(settlements[0]?.outcome).toBe("completed");
+        expect(yield* Ref.get(executed)).toEqual(["c", "b:c"]);
+
+        const records = yield* readLog(thread);
+
+        const steps = records.filter(
+          (envelope) => envelope.record.payload._tag === "ToolStepSettled",
+        );
+
+        expect(steps.map((envelope) => envelope.record.payload)).toMatchObject([
+          { toolCallId: "a:b", stepName: "c", output: "c" },
+          { toolCallId: "a", stepName: "b:c", output: "b:c" },
+        ]);
+        expect(new Set(steps.map((envelope) => envelope.record.recordId)).size).toBe(2);
+        expect(new Set(steps.map((envelope) => envelope.batchId)).size).toBe(2);
+        expect(
+          records.flatMap((envelope) =>
+            envelope.record.payload._tag === "ToolCallSettled"
+              ? [envelope.record.payload.result]
+              : [],
+          ),
+        ).toEqual([{ state: "c" }, { state: "b:c" }]);
+      }),
+  );
+
+  it.effect(
+    "replays legacy Step records from their payload without executing the recorded body",
+    () =>
+      Effect.gen(function* () {
+        yield* resetReconciler;
+        const runtime = yield* DurableAgentRuntime;
+        const control = yield* ReconcilerTestControl;
+        const store = yield* ThreadStore;
+        const desk = yield* makeItineraryDesk;
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(toolCall("itinerary-1", "itinerary", { ref: "trip" }))
+            : finalParts('{"answer":"reserved"}'),
+        );
+
+        const agent = Agent.withModel(itineraryDefinition, scripted.model);
+        const thread = "thread-legacy-durable-step";
+        const threadId = decodeThreadId(thread);
+
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "reserve it" },
+          submitOptions(thread, "legacy-step-1"),
+        );
+
+        yield* armFailpoint("tools:after-prepared-append");
+
+        const killed = yield* Effect.exit(
+          runtime.processThread(agent, threadId).pipe(Effect.provide(desk.toolLayer)),
+        );
+
+        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+        expect(yield* desk.entries).toBe(0);
+
+        const runId = runIdForSubmission(receipt.submissionId);
+        // Deliberately spell the historical identity instead of using the current formatter.
+        const legacyId = `step:${runId}:itinerary-1:reserve-flight`;
+        const outputDigest = yield* digestJson("flight-legacy");
+
+        const batch = Schema.decodeSync(CanonicalBatch)({
+          batchId: legacyId,
+          producerId: "producer-legacy",
+          records: [
+            {
+              recordId: legacyId,
+              family: "thread",
+              schemaVersion: 1,
+              createdAt: "2026-08-12T12:00:00.000Z",
+              deploymentId: "deployment-legacy",
+              payload: {
+                _tag: "ToolStepSettled",
+                runId,
+                toolCallId: "itinerary-1",
+                stepName: "reserve-flight",
+                output: "flight-legacy",
+                outputDigest,
+              },
+            },
+          ],
+        });
+
+        const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
+        yield* store.append(
+          FencedAppendRequest.make({
+            threadId,
+            batch,
+            expectedTailSequence: tail.tailSequence,
+            expectedTailDigest: tail.tailDigest,
+            producerEpoch: tail.producerEpoch,
+          }),
+        );
+        yield* control.set(() => ReconciliationSafeToRetry.make());
+
+        const settlements = yield* runtime
+          .processThread(agent, threadId)
+          .pipe(Effect.provide(desk.toolLayer));
+
+        expect(settlements[0]?.outcome).toBe("completed");
+        expect(yield* desk.entries).toBe(1);
+        expect(yield* desk.flightRuns).toBe(0);
+        expect(yield* desk.lodgingRuns).toBe(1);
+
+        const records = yield* readLog(thread);
+
+        expect(records.filter((envelope) => envelope.record.recordId === legacyId)).toHaveLength(1);
+        expect(records.map((envelope) => envelope.record.recordId)).not.toContain(
+          toolStepSettledRecordId(runId, decodeToolCallId("itinerary-1"), "reserve-flight"),
+        );
+        expect(
+          records.flatMap((envelope) =>
+            envelope.record.payload._tag === "ToolCallSettled"
+              ? [envelope.record.payload.result]
+              : [],
+          ),
+        ).toEqual([{ state: "flight-legacy+lodging-trip" }]);
+      }),
   );
 
   it.effect("keeps failure and requirement channels typed (E/R proofs)", () =>

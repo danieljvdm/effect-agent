@@ -269,7 +269,7 @@ const makeExecute =
           }),
         );
 
-        const execution = Stream.concat(
+        return Stream.concat(
           Stream.succeed<SandboxEvent>(
             SandboxStarted.make({
               eventVersion: 1,
@@ -285,23 +285,20 @@ const makeExecute =
             terminal,
           ),
         );
-
-        return execution.pipe(
-          Stream.interruptWhen(
-            Effect.sleep(request.limits.maxWallTime).pipe(
-              Effect.andThen(
-                Effect.fail(
-                  SandboxTimeoutError.make({
-                    implementation: unisolatedImplementation,
-                    maxWallTime: request.limits.maxWallTime,
-                  }),
-                ),
-              ),
-            ),
-          ),
-        );
       }),
-    ).pipe(Stream.withSpan("LocalSandbox.execute"));
+    ).pipe(
+      Stream.interruptWhen(
+        Effect.gen(function* () {
+          yield* Effect.sleep(request.limits.maxWallTime);
+
+          return yield* SandboxTimeoutError.make({
+            implementation: unisolatedImplementation,
+            maxWallTime: request.limits.maxWallTime,
+          });
+        }),
+      ),
+      Stream.withSpan("LocalSandbox.execute"),
+    );
 
 /**
  * Development-only local process adapter with its `ChildProcessSpawner` requirement kept visible

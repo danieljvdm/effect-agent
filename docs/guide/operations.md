@@ -27,6 +27,10 @@ administration contract applies to Node and SQLite class `DN` and Cloudflare Dur
 Cloudflare Thread Objects expose encoded administration methods through the application's
 Worker.
 
+The `explain --thread <id> --json` payload is an array of recovery explanations, including `[]`
+when the lane has no nonterminal work. `explain --submission <id> --json` returns one explanation
+object.
+
 The administrative methods above, observation, settlement waits, abort, and unknown or approval
 resolution consult `OperationAuthorizer`. Its default allows trusted service holders. Install a
 real authorizer before exposing these methods outside a trusted host. Denial fails as

@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+import { codePointUtf8Length, utf8ByteLength } from "./internal/utf8.ts";
+
 /**
  * The minimal `TruncatedToolResult` envelope (empty head/tail, a 16-digit
  * `originalBytes`) encodes to at most 81 UTF-8 bytes; 256 guarantees every
@@ -81,28 +83,6 @@ export const unserializableToolResult = (
   }
 
   return sentinel;
-};
-
-const codePointUtf8Length = (codePoint: number): number => {
-  if (codePoint < 0x80) return 1;
-  if (codePoint < 0x800) return 2;
-  if (codePoint < 0x10000) return 3;
-
-  return 4;
-};
-
-const utf8ByteLength = (value: string): number => {
-  let bytes = 0;
-  let index = 0;
-
-  while (index < value.length) {
-    const codePoint = value.codePointAt(index) ?? 0;
-
-    bytes += codePointUtf8Length(codePoint);
-    index += codePoint > 0xffff ? 2 : 1;
-  }
-
-  return bytes;
 };
 
 const takePrefixWithinBytes = (value: string, maxBytes: number): string => {

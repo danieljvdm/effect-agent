@@ -1797,6 +1797,116 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
     }),
   );
 
+  it.effect("joins default and explicit projection failures in both durable failure modes", () =>
+    Effect.gen(function* () {
+      for (const contained of [false, true]) {
+        for (const explicit of [false, true]) {
+          const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
+          const child = durableChildIdentity(`projection-${contained}-${explicit}`);
+
+          const configuration = {
+            target: childDefinition,
+            success: Schema.String,
+            ...(explicit
+              ? {
+                  projectResult: () =>
+                    Effect.fail(
+                      SubagentProjectionFailure.make({
+                        delegationId: researchDelegation.delegationId,
+                        stage: "result",
+                        message: "The result projection was refused",
+                      }),
+                    ),
+                }
+              : {}),
+          };
+
+          const errorDelegation = Subagent.define("delegate_research", configuration);
+
+          const returnDelegation = Subagent.define("delegate_research", {
+            ...configuration,
+            failureMode: "return",
+          });
+
+          const childModel = answeringModel("unused-projection-child", '{"answer":"unused"}');
+          const options = { durable: { targetDigests: durableDigests } };
+
+          const handlers = contained
+            ? SubagentRuntime.layer(returnDelegation, childModel, options)
+            : SubagentRuntime.layer(errorDelegation, childModel, options);
+
+          const parent = Agent.make("projection-parent", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Delegate, then answer.",
+            toolkit: Toolkit.make(contained ? returnDelegation.tool : errorDelegation.tool),
+            policy: parentPolicy,
+          });
+
+          const handle = yield* AgentRuntime.start(parent, "start", {
+            subagent: scriptedDurableHook({
+              establish: () => ({
+                _tag: "settled",
+                ...child,
+                outcome: "completed",
+                encodedResult: { answer: "private-child-output" },
+              }),
+              joins,
+            }),
+          }).pipe(
+            Effect.provide([
+              handlers,
+              delegatingModel(
+                "projection-parent",
+                "delegate_research",
+                [{ id: "projection", params: { question: "research" } }],
+                '"done"',
+              ),
+            ]),
+          );
+
+          const exit = yield* Effect.exit(handle.await);
+
+          if (contained) {
+            expect(Exit.isSuccess(exit)).toBe(true);
+            expect(findEvent(yield* handle.events, "ToolCallSucceeded")).toMatchObject({
+              result: { _tag: "SubagentProjectionFailure", stage: "result" },
+            });
+          } else {
+            expect(failureFrom(exit)).toBeInstanceOf(SubagentProjectionFailure);
+          }
+          const recorded = yield* Ref.get(joins);
+
+          expect(recorded).toHaveLength(1);
+          expect(recorded[0]).toMatchObject({
+            toolCallId: "projection",
+            isFailure: !contained,
+            encodedResult: {
+              _tag: "SubagentProjectionFailure",
+              stage: "result",
+              message: explicit
+                ? "The result projection was refused"
+                : "Child output did not satisfy the delegation success Schema",
+            },
+          });
+          expect(JSON.stringify(recorded)).not.toContain("private-child-output");
+
+          const proofs: [
+            Assert<
+              Equal<
+                Effect.Error<ReturnType<typeof errorDelegation.projectResult>>,
+                SubagentProjectionFailure
+              >
+            >,
+            Assert<Equal<Effect.Services<ReturnType<typeof errorDelegation.projectResult>>, never>>,
+          ] = [true, true];
+
+          expect(proofs).toEqual([true, true]);
+        }
+      }
+    }),
+  );
+
   it.effect("a failed child joins as the bounded framework failure (no raw cause)", () =>
     Effect.gen(function* () {
       const invocations = yield* Ref.make(0);

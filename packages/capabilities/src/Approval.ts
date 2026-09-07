@@ -1,6 +1,7 @@
 import { ThreadId, RunId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { Clock, Context, DateTime, Duration, Effect, Encoding, Layer, Ref, Schema } from "effect";
+import { Clock, Context, DateTime, Duration, Effect, Layer, Ref, Schema } from "effect";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
 import { RedactedPreview, Redactor, type RedactionError } from "./Redaction.ts";
 
 const MAX_APPROVAL_TARGETS = 32;
@@ -12,7 +13,7 @@ const ApprovalTargets = Schema.Array(Schema.String.check(Schema.isMaxLength(2 * 
   .pipe(
     Schema.refine(
       (targets): targets is ReadonlyArray<string> =>
-        targets.reduce((total, target) => total + Encoding.encodeHex(target).length / 2, 0) <=
+        targets.reduce((total, target) => total + utf8ByteLength(target), 0) <=
         MAX_APPROVAL_TARGET_BYTES,
       { expected: `approval targets totaling at most ${MAX_APPROVAL_TARGET_BYTES} UTF-8 bytes` },
     ),

@@ -39,6 +39,7 @@ import {
   Ref,
   References,
   Schema,
+  SchemaGetter,
   Scope,
   Stream,
   Tracer,
@@ -3642,13 +3643,33 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
-  it.effect("preserves transformed parameters across the native Toolkit handler boundary", () => {
+  it.effect("preserves serviceful parameter transforms across the native Toolkit boundary", () => {
+    class ParametersDecoder extends Context.Service<ParametersDecoder, (value: number) => number>()(
+      "transformed-tool-runtime/ParametersDecoder",
+    ) {}
+    class ParametersEncoder extends Context.Service<ParametersEncoder, (value: number) => number>()(
+      "transformed-tool-runtime/ParametersEncoder",
+    ) {}
+
+    const decodedValues: Array<number> = [];
+    const encodedValues: Array<number> = [];
     let handlerParameter: unknown;
     let authorizationCall: RunToolAuthorizationRequest["call"] | undefined;
     let promptResult: unknown;
 
     const Increment = Tool.make("increment", {
-      parameters: Schema.Struct({ value: Schema.FiniteFromString }),
+      parameters: Schema.Struct({
+        value: Schema.FiniteFromString.pipe(
+          Schema.decode({
+            decode: SchemaGetter.transformOrFail((value) =>
+              Effect.map(ParametersDecoder, (decode) => decode(value)),
+            ),
+            encode: SchemaGetter.transformOrFail((value) =>
+              Effect.map(ParametersEncoder, (encode) => encode(value)),
+            ),
+          }),
+        ),
+      }),
       success: Schema.Struct({ value: Schema.Finite }),
     });
 
@@ -3736,12 +3757,24 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           },
         }),
       ),
+      Effect.provideService(ParametersDecoder, (value) => {
+        decodedValues.push(value);
+
+        return value;
+      }),
+      Effect.provideService(ParametersEncoder, (value) => {
+        encodedValues.push(value);
+
+        return value;
+      }),
       Effect.scoped,
       Effect.tap(() =>
         Effect.sync(() => {
           expect(authorizationCall?.parameters).toEqual({ value: "41" });
           expect(handlerParameter).toBe(41);
           expect(promptResult).toEqual({ value: 42 });
+          expect(decodedValues).toContain(41);
+          expect(encodedValues).toContain(41);
         }),
       ),
     );

@@ -271,7 +271,7 @@ const admissionKey = (
   threadId: ThreadId,
   principal: Principal,
   idempotencyKey: IdempotencyKey,
-): string => `${threadId}\u001f${principal}\u001f${idempotencyKey}`;
+): string => JSON.stringify([threadId, principal, idempotencyKey]);
 
 const toSnapshot = (row: SubmissionRow): SubmissionSnapshot =>
   SubmissionSnapshot.make({
@@ -865,6 +865,25 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             }
             if (!ownsLane(stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
+            }
+
+            if (stored.inputApplied !== undefined) {
+              if (
+                stored.inputApplied.recordId === request.recordId &&
+                stored.inputApplied.sequence === request.sequence
+              ) {
+                return [success(undefined), current];
+              }
+
+              return [
+                failure(
+                  ledgerError(
+                    "markInputApplied",
+                    `A different canonical input marker is already recorded for Submission ${request.submissionId}`,
+                  ),
+                ),
+                current,
+              ];
             }
 
             const marker = InputAppliedMarker.make({

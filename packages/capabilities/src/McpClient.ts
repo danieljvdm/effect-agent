@@ -3,7 +3,6 @@ import {
   Cause,
   Context,
   Effect,
-  Encoding,
   Layer,
   Option,
   Predicate,
@@ -24,6 +23,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { RpcClient, RpcClientError, type RpcMessage, RpcSerialization } from "effect/unstable/rpc";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
 import {
   McpConnectionError,
   McpConnector,
@@ -212,8 +212,6 @@ const routeMessage = (
   return options.writeResponse(options.clientId, message as RpcMessage.FromServerEncoded);
 };
 
-const byteLength = (text: string): number => Encoding.encodeHex(text).length / 2;
-
 /** Reads a response body as text while refusing bodies above `maxBytes`. */
 const readBoundedText = Effect.fn("McpHttpTransport.readBoundedText")(function* (
   response: HttpClientResponse.HttpClientResponse,
@@ -232,7 +230,7 @@ const readBoundedText = Effect.fn("McpHttpTransport.readBoundedText")(function* 
   yield* response.stream.pipe(
     Stream.decodeText(),
     Stream.runForEach((chunk) => {
-      received += byteLength(chunk);
+      received += utf8ByteLength(chunk);
       if (received > maxBytes) {
         return Effect.fail(
           protocolDefect(`MCP response exceeds the ${maxBytes} byte message bound`),
@@ -292,7 +290,7 @@ const consumeEventStream = Effect.fn("McpHttpTransport.consumeEventStream")(func
         blocks.push(buffer);
         buffer = "";
       }
-      pendingBytes = byteLength(buffer);
+      pendingBytes = utf8ByteLength(buffer);
 
       return Effect.forEach(blocks, dispatchEvent, { discard: true });
     });
@@ -301,7 +299,7 @@ const consumeEventStream = Effect.fn("McpHttpTransport.consumeEventStream")(func
     Stream.decodeText(),
     Stream.runForEach((chunk) => {
       buffer += chunk;
-      pendingBytes += byteLength(chunk);
+      pendingBytes += utf8ByteLength(chunk);
       if (pendingBytes > maxBytes) {
         return Effect.fail(protocolDefect(`MCP event stream buffered more than ${maxBytes} bytes`));
       }

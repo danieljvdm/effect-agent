@@ -1,4 +1,5 @@
 import {
+  Array,
   type JsonSchema,
   Context,
   Crypto,
@@ -14,12 +15,12 @@ import {
 import { Tool, type Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
 
+import { utf8ByteLength } from "./internal/utf8.ts";
+
 const MAX_MCP_TOOLS = 128;
 const MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 const Sha256Digest = Schema.String.check(Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
-const JsonArray = Schema.Array(Schema.Json);
-const isJsonArray = Schema.is(JsonArray);
 
 /** Server identity copied directly from Effect AI's native MCP initialization schema. */
 export class McpServerIdentity extends Schema.Class<McpServerIdentity>(
@@ -134,8 +135,6 @@ export class McpConnector extends Context.Service<
   }
 >()("@effect-agent/capabilities/McpConnector") {}
 
-const encodedBytes = (value: string): number => Encoding.encodeHex(value).length / 2;
-
 /**
  * `Tool.getJsonSchema`/`Tool.getJsonSchemaFromSchema` hoist a named, refined
  * type into `$defs` with a top-level `$ref`, but a real MCP server can only
@@ -167,7 +166,7 @@ const canonicalJson = (value: Schema.Json): Schema.Json => {
   ) {
     return value;
   }
-  if (isJsonArray(value)) return value.map(canonicalJson);
+  if (Array.isArray<Schema.Json>(value)) return value.map(canonicalJson);
   const output: Record<string, Schema.Json> = {};
 
   // Keys sort by UTF-16 code units (RFC 8785 style): locale-aware collation varies
@@ -264,7 +263,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
     });
   }
   for (const tool of server.tools) {
-    const descriptionBytes = encodedBytes(tool.description ?? "");
+    const descriptionBytes = utf8ByteLength(tool.description ?? "");
 
     if (descriptionBytes > request.maxToolDescriptionBytes) {
       return yield* McpDiscoveryLimitExceeded.make({
@@ -378,7 +377,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
     ),
   );
 
-  const discoveryBytes = encodedBytes(discoveryText);
+  const discoveryBytes = utf8ByteLength(discoveryText);
 
   if (discoveryBytes > request.maxDiscoveryBytes) {
     return yield* McpDiscoveryLimitExceeded.make({

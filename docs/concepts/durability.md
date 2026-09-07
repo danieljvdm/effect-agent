@@ -30,6 +30,11 @@ applied input and terminal outcomes. Projections, checkpoints, indexes, and UI v
 
 Replay rebuilds state from records. It never executes a tool or repeats an external effect.
 
+`ThreadProjection` version 2 scopes open tool calls and subagent invocations by Run and Tool Call
+ID. Decode checkpoint state with its Schema before replaying a suffix. Earlier projection states,
+including empty views, fail decoding and must be discarded and rebuilt from canonical records.
+The canonical record and checkpoint envelope versions remain unchanged.
+
 ## Track unfinished work {#operational-obligation}
 
 The submission ledger owns admission, FIFO readiness, attempt ownership, abort intent, recovery,
@@ -53,6 +58,11 @@ If an ordinary tool may have finished before its worker disappeared, recovery re
 
 Durable Steps record one result for each deterministic Step name. Their external execution is at
 least once and may repeat. Applications still need idempotency, reconciliation, or compensation.
+
+Step identity includes the Run ID, Tool Call ID, and Step name. New Step record and batch IDs use
+a versioned JSON tuple so separator characters cannot merge distinct Steps. Recovery derives
+the same identity from each recorded payload, preserving completed Steps stored with older IDs
+without executing their bodies again.
 
 ## Reuse the same agent definition {#one-authoring-model}
 
