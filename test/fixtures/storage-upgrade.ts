@@ -81,7 +81,8 @@ export const snapshotStore = Effect.gen(function* () {
 
   for (const row of definitions)
     if (row.sql.startsWith("CREATE TABLE"))
-      contents[row.name] = yield* sql`SELECT * FROM ${sql(row.name)} ORDER BY rowid`;
+      // The table shape changes during the upgrade; do not reuse pre-DDL column metadata.
+      contents[row.name] = yield* sql`SELECT * FROM ${sql(row.name)} ORDER BY rowid`.unprepared;
 
   return { definitions, contents };
 });
@@ -97,7 +98,9 @@ export const assertPreserved = Effect.fn("StorageUpgradeFixture.assertPreserved"
 
   for (const [table, oldRows] of Object.entries(storageV2Fixture.data)) {
     if (!owns(table, store)) continue;
-    const current = yield* sql<Record<string, unknown>>`SELECT * FROM ${sql(table)} ORDER BY rowid`;
+
+    const current = yield* sql<Record<string, unknown>>`SELECT * FROM ${sql(table)} ORDER BY rowid`
+      .unprepared;
 
     expect(current).toHaveLength(oldRows.length);
     for (const [index, old] of oldRows.entries()) {
