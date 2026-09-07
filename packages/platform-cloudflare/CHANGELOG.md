@@ -1,5 +1,22 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.53
+
+### Patch Changes
+
+- [#349](https://github.com/danieljvdm/effect-agent/pull/349) [`9ffca15`](https://github.com/danieljvdm/effect-agent/commit/9ffca15f5e2b6d3461fb25bc45f798a8c259ebbf) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add scoped host publication hooks to Thread Object Layers, with durable producer generations and publication deadlines sharing the native maintenance alarm. Drain pending host publications before runtime recovery and Agent work.
+
+- [#350](https://github.com/danieljvdm/effect-agent/pull/350) [`1398ce5`](https://github.com/danieljvdm/effect-agent/commit/1398ce52ba6828a3ae17f1808c545c64b2fc566a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add protected non-secret form filling, native choice state, billing-address metadata, and explicit host authorization for checkout submission and observation origins. Allow finite interactive browser passes up to one hour while preserving credential gates and private session cleanup.
+
+- [#352](https://github.com/danieljvdm/effect-agent/pull/352) [`1a86ca1`](https://github.com/danieljvdm/effect-agent/commit/1a86ca13b53885e30c6070c3527fb3f0b60f1690) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose the native producer gate through Thread Object services so rebuilt runtime and maintenance Layers share in-flight publication activity.
+
+- Updated dependencies [[`d93903e`](https://github.com/danieljvdm/effect-agent/commit/d93903ec923da7a9841b5ab1a72bba5c0a0fb34b), [`6b4839f`](https://github.com/danieljvdm/effect-agent/commit/6b4839f6ab14adcf82c72159152ab5fe2a946f97), [`1398ce5`](https://github.com/danieljvdm/effect-agent/commit/1398ce52ba6828a3ae17f1808c545c64b2fc566a)]:
+  - @effect-agent/engine@0.1.0-beta.53
+  - @effect-agent/thread@0.1.0-beta.53
+  - @effect-agent/storage-cloudflare@0.1.0-beta.53
+  - @effect-agent/sandbox@0.1.0-beta.53
+  - @effect-agent/core@0.1.0-beta.53
+
 ## 0.1.0-beta.52
 
 ### Patch Changes

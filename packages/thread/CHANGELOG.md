@@ -1,5 +1,17 @@
 # @effect-agent/session
 
+## 0.1.0-beta.53
+
+### Patch Changes
+
+- [#348](https://github.com/danieljvdm/effect-agent/pull/348) [`d93903e`](https://github.com/danieljvdm/effect-agent/commit/d93903ec923da7a9841b5ab1a72bba5c0a0fb34b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Support schema-validated plain-text final replies with `Output.text(schema)`. Honor prompt targets when pruning older tool results and durably replay pruning of fully settled current-run batches while preserving the newest result and incomplete work.
+
+- [#347](https://github.com/danieljvdm/effect-agent/pull/347) [`6b4839f`](https://github.com/danieljvdm/effect-agent/commit/6b4839f6ab14adcf82c72159152ab5fe2a946f97) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Upgrade supported beta49/beta50 persistent stores in place while preserving pending work, canonical history, receipts, and alarm state. Preserve unknown historical occurrence times when replaying retained events.
+
+- Updated dependencies [[`d93903e`](https://github.com/danieljvdm/effect-agent/commit/d93903ec923da7a9841b5ab1a72bba5c0a0fb34b)]:
+  - @effect-agent/engine@0.1.0-beta.53
+  - @effect-agent/core@0.1.0-beta.53
+
 ## 0.1.0-beta.52
 
 ### Patch Changes
