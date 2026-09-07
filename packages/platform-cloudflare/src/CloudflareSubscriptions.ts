@@ -65,11 +65,17 @@ export class SubscriptionAlarmExtensionError extends Schema.TaggedError<Subscrip
   { code: Schema.NonEmptyString.check(Schema.isMaxLength(128)) },
 ) {}
 
-export interface SubscriptionPartitionAlarmHandler {
+/** Native partition services supplied at alarm invocation, after the host Layer is built. */
+export type SubscriptionPartitionAlarmServices =
+  | Subscriptions
+  | SubscriptionIntake
+  | SubscriptionDriver;
+
+export interface SubscriptionPartitionAlarmHandler<R = SubscriptionPartitionAlarmServices> {
   readonly tag: string;
   readonly handle: (
     event: DurableObjectAlarm.DurableObjectAlarmEvent,
-  ) => Effect.Effect<void, SubscriptionAlarmProtocolError | SubscriptionAlarmExtensionError>;
+  ) => Effect.Effect<void, SubscriptionAlarmProtocolError | SubscriptionAlarmExtensionError, R>;
 }
 
 /** Host-only handlers; the framework reserves its namespace and rejects every unknown tag. */
@@ -79,7 +85,8 @@ export const SubscriptionPartitionAlarmExtension = Context.Reference<{
   defaultValue: () => ({ handlers: [] }),
 });
 
-/** Capture host services once; each invocation owns its codec/handler Scope and timeout.
+/** Capture host services once, deferring native partition services to invocation.
+ * Each invocation owns its codec/handler Scope and timeout.
  * Callback failures stay typed. Defects and interruption reach the native alarm multiplexer.
  * The host owns durable idempotency, prearming and external-effect uncertainty.
  */
@@ -95,9 +102,17 @@ export const makeSubscriptionPartitionAlarmHandler = Effect.fn(
     },
   ) => Effect.Effect<void, SubscriptionAlarmExtensionError, R>;
 }): Effect.fn.Return<
-  SubscriptionPartitionAlarmHandler,
+  SubscriptionPartitionAlarmHandler<
+    Exclude<
+      Exclude<R | Payload["DecodingServices"], Scope.Scope>,
+      Exclude<
+        Exclude<R | Payload["DecodingServices"], Scope.Scope | SubscriptionPartitionAlarmServices>,
+        SubscriptionPartitionAlarmServices
+      >
+    >
+  >,
   SubscriptionAlarmProtocolError,
-  Exclude<R | Payload["DecodingServices"], Scope.Scope>
+  Exclude<R | Payload["DecodingServices"], Scope.Scope | SubscriptionPartitionAlarmServices>
 > {
   if (
     options.tag.length === 0 ||
@@ -110,7 +125,11 @@ export const makeSubscriptionPartitionAlarmHandler = Effect.fn(
     return yield* SubscriptionAlarmProtocolError.make({
       message: "Invalid ancillary alarm tag or timeout",
     });
-  const services = yield* Effect.context<Exclude<R | Payload["DecodingServices"], Scope.Scope>>();
+
+  // Context capture includes unrequested services too; never retain a host override of native work.
+  const services = (yield* Effect.context<
+    Exclude<R | Payload["DecodingServices"], Scope.Scope | SubscriptionPartitionAlarmServices>
+  >()).pipe(Context.omit(Subscriptions, SubscriptionIntake, SubscriptionDriver));
 
   return {
     tag: options.tag,

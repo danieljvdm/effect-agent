@@ -3,6 +3,7 @@ import {
   makeSubscriptionPartitionAlarmHandler,
   SubscriptionPartitionAlarmExtension,
   SubscriptionAlarmExtensionError,
+  SubscriptionPartitionIdentity,
 } from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
 import { EventSources, makeEventSource } from "@effect-agent/thread/EventSource";
 import { Principal } from "@effect-agent/thread/SubmissionLedger";
@@ -15,6 +16,11 @@ import {
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
 } from "@effect-agent/thread/SubscriptionInput";
+import {
+  SubscriptionDriver,
+  SubscriptionIntake,
+  Subscriptions,
+} from "@effect-agent/thread/Subscriptions";
 import { DateTime, Effect, Layer, Schema } from "effect";
 import { DurableObjectAlarm, DurableObjectState } from "effect-cf";
 
@@ -144,6 +150,38 @@ export const subscriptionAlarmExtensionLayer = Layer.effect(
           .pipe(Effect.mapError(() => SubscriptionAlarmExtensionError.make({ code: "storage" }))),
     });
 
-    return { handlers: [failing, replacement] };
+    const intake = yield* makeSubscriptionPartitionAlarmHandler({
+      tag: "test/intake",
+      payload: Schema.Struct({
+        eventId: Schema.String,
+        topic: Schema.String,
+        message: Schema.String,
+      }),
+      timeoutMillis: 5_000,
+      handle: (event) =>
+        Effect.gen(function* () {
+          const state = yield* DurableObjectState.DurableObjectState;
+          const { partition } = yield* SubscriptionPartitionIdentity;
+          const subscriptions = yield* Subscriptions;
+          const intake = yield* SubscriptionIntake;
+          const driver = yield* SubscriptionDriver;
+
+          const page = yield* subscriptions.listSubscriptions({
+            partition,
+            ownerId: event.id,
+            principal: subscriptionPrincipal,
+          });
+
+          if (state.raw.id.name === undefined || page.items.length !== 1)
+            return yield* SubscriptionAlarmExtensionError.make({ code: "missing-registration" });
+
+          yield* intake.accept(subscriptionPrincipal, SubscriptionTestSourceVersion, event.payload);
+          yield* driver.runDue;
+        }).pipe(
+          Effect.mapError(() => SubscriptionAlarmExtensionError.make({ code: "native-intake" })),
+        ),
+    });
+
+    return { handlers: [failing, replacement, intake] };
   }),
 ).pipe(Layer.provide(DurableObjectAlarm.DurableObjectAlarm.layer));

@@ -376,8 +376,20 @@ Execution remains at least once; provider failures never invent event completion
 
 Cloudflare hosts can install `SubscriptionPartitionAlarmExtension` with handlers built by
 `makeSubscriptionPartitionAlarmHandler`. Each handler owns one non-framework tag, a payload
-Schema and a bounded timeout (at most 30 seconds). The factory captures host services while each
-codec/callback invocation owns a fresh Scope. Invocation cleanup runs on success, typed failure,
+Schema and a bounded timeout (at most 30 seconds). The factory captures host services but defers
+`Subscriptions`, `SubscriptionIntake` and `SubscriptionDriver` requirements, including those in
+payload decoders, until invocation. `makeSubscriptionPartitionObjectClass` supplies these native
+services from the addressed partition after building the host Layer. Keep their lookup inside the
+callback or decoder; yielding them while building the host Layer still requires them at assembly.
+Handlers retain only their required native services in `R`; host requirements remain on the factory
+Effect. Even if native services were present at assembly, the invocation uses its own instances.
+
+An existing `handle: () => runtime.process` can therefore keep `SubscriptionIntake` in the process
+Effect's requirements. Map its expected failures to `SubscriptionAlarmExtensionError`; no extra
+handler argument or client Layer is needed. See the compiling Cloudflare example below for a
+handler that accepts an event through native intake.
+
+Each codec/callback invocation owns a fresh Scope. Invocation cleanup runs on success, typed failure,
 defect, timeout and interruption; captured host services keep their host lifetime.
 
 The native multiplexer processes at most 16 alarms per invocation and durably retries failed rows
