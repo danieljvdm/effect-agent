@@ -147,6 +147,7 @@ and selected prior feedback, capped at the maximum even when the base exceeds it
 For example, 10,000 characters allow $1.10, 50,000 allow
 $1.50, and 150,000 or more allow $2.50 with the default configuration. Ignored and excluded
 files do not increase the allowance. Empty or skipped reviews have a zero allowance.
+Validated source-map JSON payloads omitted from dependency patches do not increase it either.
 The footer, logs, and `cost-limit-usd` output show the actual scaled allowance, including
 both settled charges and outstanding reservations. The same policy applies to full reviews,
 incremental reviews, and eval trials; a retry gets a new allowance.
@@ -234,12 +235,21 @@ cost. Raw provider failure causes, credentials, and
 repository source are excluded from the Action's diagnostics. Logs also count supplied tool
 definitions, returned function calls, and completion calls to diagnose protocol failures.
 
+Within `.patch` files, the Action replaces single-line source-map JSON payloads in
+valid nested `.map` diffs with explicit omission markers before model input and spending
+admission. It recognizes the source-map structure, not arbitrary generated-file comments.
+Patch headers, outer hunk coordinates, nested line prefixes, and source changes are retained.
+The report discloses omitted payload lines and character counts separately from assessed
+content. Malformed patches, unrecognized JSON, indexed or multiline maps, and non-map
+sections remain literal evidence. Source tools still allow targeted inspection when needed;
+the Action does not change repository files or automatically skip entire dependency patches.
+
 The Action admits implementation and configuration changes before documentation paths and prose,
 with alphabetical order within each group. One review conversation retains the complete changed-path
 manifest and established findings, so related changes stay visible across the investigation. Diffs
 up to 32,000 total characters appear directly in the initial prompt; larger changes use `read_diff`
 pages of up to 32,000 characters. Pages can cross file boundaries, so reviewing many small files does
-not require a separate call for each file. Every admitted patch remains available in full. One spending ledger,
+not require a separate call for each file. Every retained patch line remains available in full. One spending ledger,
 128-turn allowance, 512-tool-call allowance, 5-minute deadline, and 24-finding capacity cover the entire
 attempt. Findings survive an expected execution failure. Unread diff ranges prevent complete coverage;
 reading every range is necessary but does not prove the model finished assessing the change.
