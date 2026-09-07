@@ -47,8 +47,8 @@ import {
   type OperationAuthorizerService,
 } from "@effect-agent/thread/OperationAuthorizer";
 import { ProducerId } from "@effect-agent/thread/Records";
-import { type SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
-import { type ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { LedgerError, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import { ThreadStoreError, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { type WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { BrowserCrypto } from "@effect/platform-browser";
@@ -58,6 +58,9 @@ import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import {
   ThreadMaintenance,
+  ThreadMutationGate,
+  ThreadPublication,
+  publishCommitted,
   ThreadMaintenanceFailpoint,
   DurableAlarmService,
   type ThreadMaintenanceFailpointHandler,
@@ -168,6 +171,7 @@ export type CloudflareDurableRuntimeServices =
   | WakeScheduler
   | DurableAlarmService
   | ThreadMaintenance
+  | ThreadPublication
   | ThreadObjectPorts
   | ProgressWaitRegistry;
 
@@ -311,15 +315,33 @@ export const layerConfig = (
     }),
   );
 
+export interface ThreadPublicationOptions<E = never, R = never> {
+  /**
+   * Optional host outbox consumer, built once per incarnation with RAW LOCAL ThreadStore and
+   * SubmissionLedger services. Yield DurableObjectContext and ThreadObjectIdentity for native
+   * bindings and identity. Initialization is local-only, inside the constructor gate; setup
+   * errors and additional requirements remain in the returned Layer. Layer.effect owns Scope.
+   * Canonical appends and durable approval, abort and unknown-resolution intents invalidate
+   * publication after commit. Custom host facts must use ThreadMaintenance.withMutation.
+   */
+  readonly publication?: Layer.Layer<ThreadPublication, E, R>;
+}
+
 /**
  * Register typed Agents and version declarations. Hashing and dependency capture happen in
  * this Layer's Scope, after application Layers have been provided. Every Agent's instruction,
  * Tool, Schema, and model requirements remain visible until satisfied by Layer composition.
  * Use Layer.unwrap for registration values that need effectful application setup.
  */
-export const layer = <const Entries extends ReadonlyArray<AgentRegistration>>(
+export const layer = <const Entries extends ReadonlyArray<AgentRegistration>, E = never, R = never>(
   registrations: Entries,
-) => Layer.unwrap(Effect.map(compileRegistrations(registrations), layerFromBindings));
+  options: ThreadPublicationOptions<E, R> = {},
+) =>
+  Layer.unwrap(
+    Effect.map(compileRegistrations(registrations), (bindings) =>
+      layerFromBindings(bindings, options),
+    ),
+  );
 
 /**
  * Assemble the durable runtime from already-resolved Agent Bindings.
@@ -327,12 +349,16 @@ export const layer = <const Entries extends ReadonlyArray<AgentRegistration>>(
  * Supply host services through `ThreadObject.make` or `ThreadObject.layerConfig` and
  * the Durable Object context and namespace Layers when composing a custom host.
  */
-export const layerFromBindings = (
+export const layerFromBindings = <E = never, R = never>(
   bindings: ReadonlyArray<ResolvedBinding>,
+  options: ThreadPublicationOptions<E, R> = {},
 ): Layer.Layer<
   CloudflareDurableRuntimeServices,
-  DoStorageInitializationError,
-  DurableObjectContext | ThreadObjectNamespace | CloudflareBootstrapServices
+  DoStorageInitializationError | E,
+  | DurableObjectContext
+  | ThreadObjectNamespace
+  | CloudflareBootstrapServices
+  | Exclude<R, ThreadStore | SubmissionLedger>
 > =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -355,9 +381,66 @@ export const layerFromBindings = (
 
       // The same local ports serve routed decorators and owner-side RPC execution.
       // The RPC executor must never receive routed ports and bounce requests between Objects.
-      const localPorts = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
+      const rawLocalPorts = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
         Layer.provide(infrastructure),
       );
+
+      const publication = (options.publication ?? ThreadPublication.layer).pipe(
+        Layer.provide(rawLocalPorts),
+      );
+
+      const localPorts =
+        options.publication === undefined
+          ? rawLocalPorts
+          : Layer.effectContext(
+              Effect.gen(function* () {
+                const store = yield* ThreadStore;
+                const ledger = yield* SubmissionLedger;
+                const mutations = yield* ThreadMutationGate;
+                const publish = yield* Effect.context<ThreadPublication>();
+                const afterCommit = publishCommitted.pipe(Effect.provide(publish));
+
+                // Every runtime-owned producer prearms too: a crash between commit and invalidation
+                // leaves a NEW, uncertified generation. Source errors keep their native port types.
+                const observedStore = ThreadStore.of({
+                  ...store,
+                  append: (request) =>
+                    mutations
+                      .withMutation(store.append(request).pipe(Effect.tap(() => afterCommit)))
+                      .pipe(
+                        Effect.catchTag("DurableAlarmError", (cause) =>
+                          ThreadStoreError.make({
+                            operation: "prearm publication append",
+                            message: cause.message,
+                            cause,
+                          }),
+                        ),
+                      ),
+                });
+
+                const observeIntent = <A, Failure>(body: Effect.Effect<A, Failure>) =>
+                  mutations.withMutation(body.pipe(Effect.tap(() => afterCommit))).pipe(
+                    Effect.catchTag("DurableAlarmError", (cause) =>
+                      LedgerError.make({
+                        operation: "prearm publication intent",
+                        message: "The publication generation could not be armed",
+                        cause,
+                      }),
+                    ),
+                  );
+
+                return Context.make(ThreadStore, observedStore).pipe(
+                  Context.add(SubmissionLedger, {
+                    ...ledger,
+                    recordApprovalDecision: (request) =>
+                      observeIntent(ledger.recordApprovalDecision(request)),
+                    requestAbort: (request) => observeIntent(ledger.requestAbort(request)),
+                    recordUnknownResolution: (request) =>
+                      observeIntent(ledger.recordUnknownResolution(request)),
+                  }),
+                );
+              }),
+            ).pipe(Layer.provide(rawLocalPorts));
 
       const portsEndpointLayer = Layer.effect(ThreadObjectPorts)(
         Effect.gen(function* () {
@@ -386,6 +469,6 @@ export const layerFromBindings = (
         runtimeStack,
         ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack)),
         portsEndpointLayer,
-      );
+      ).pipe(Layer.provideMerge(publication), Layer.provide(ThreadMutationGate.layer));
     }),
   );

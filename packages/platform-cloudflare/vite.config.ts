@@ -72,6 +72,7 @@ export default defineConfig({
               compatibilityFlags: ["nodejs_compat"],
               durableObjects: {
                 THREADS: { className: "TestThreadObject", useSQLite: true },
+                PUBLICATIONS: { className: "PublicationThreadObject", useSQLite: true },
                 MEMORIES: { className: "TestMemoryObject", useSQLite: true },
                 SCHEDULES: { className: "TestScheduleOwnerObject", useSQLite: true },
                 SUBSCRIPTIONS: { className: "TestSubscriptionPartitionObject", useSQLite: true },
