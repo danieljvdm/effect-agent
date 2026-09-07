@@ -1,4 +1,15 @@
 import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
+import { ScheduleFailpoint, ScheduleFailpointError } from "@effect-agent/thread/Schedule";
+import {
+  checkV2ThreadLayout,
+  upgradeV2Schedules,
+  upgradeV2Subscriptions,
+} from "@effect-agent/thread/SqlStorageV2Upgrade";
+import {
+  SubscriptionFailpoint,
+  SubscriptionFailpointError,
+} from "@effect-agent/thread/Subscription";
+import { NodeCrypto } from "@effect/platform-node";
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Exit, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -11,6 +22,7 @@ import {
   SqliteCheckpointConflict,
   SqliteFenceRejected,
   SqliteStorageCompatibilityError,
+  SqliteStorageFailpointLocation,
   SqliteStorageCorruptionError,
   SqliteStorageError,
   SqliteWriteContention,
@@ -231,18 +243,100 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     versionRows,
   );
 
-  // D7: the storage version must match EXACTLY (or be 0 for a fresh file). Older
-  // private-development versions fail closed with reset guidance rather than being
-  // migrated, and newer versions fail closed rather than being decoded incorrectly.
-  if (version.user_version !== 0 && version.user_version !== CurrentSqliteStorageVersion) {
+  // Only the unpatched beta49/beta50 predecessor is upgradeable. Other versions fail closed.
+  if (
+    version.user_version !== 0 &&
+    version.user_version !== 7 &&
+    version.user_version !== CurrentSqliteStorageVersion
+  ) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: version.user_version,
       supportedVersion: CurrentSqliteStorageVersion,
       message:
-        `The SQLite file uses private-development storage version ${version.user_version}; ` +
+        `The SQLite file uses unsupported storage version ${version.user_version}; ` +
         `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
-        "Reset the database file explicitly; automatic stored-data migrations are not provided during private development.",
+        "Only unpatched v7 can be upgraded automatically. Keep the original file and use a compatible library version.",
     });
+  }
+
+  if (version.user_version === 7) {
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
+
+          if (current.length === 1 && current[0].user_version === 8) return;
+          if (current.length !== 1 || current[0].user_version !== 7)
+            return yield* SqliteStorageCompatibilityError.make({
+              actualVersion: -1,
+              supportedVersion: CurrentSqliteStorageVersion,
+              message: "Storage version changed while acquiring the upgrade transaction.",
+            });
+          yield* checkV2ThreadLayout();
+          for (const statement of [
+            sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_group TEXT`,
+            sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_fence_json TEXT`,
+            sql`CREATE INDEX effect_agent_submissions_group ON effect_agent_submissions (thread_id, admission_group, state)`,
+          ]) {
+            yield* failpoint("upgrade:before-mutation");
+            yield* statement;
+            yield* failpoint("upgrade:after-mutation");
+          }
+          yield* upgradeV2Schedules(16 * 1024 * 1024).pipe(
+            Effect.provideService(ScheduleFailpoint, {
+              hit: (point) =>
+                Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
+                  Effect.flatMap(failpoint),
+                  Effect.mapError(() => ScheduleFailpointError.make({ point })),
+                ),
+            }),
+          );
+          yield* upgradeV2Subscriptions(16 * 1024 * 1024).pipe(
+            Effect.provideService(SubscriptionFailpoint, {
+              hit: (point) =>
+                Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
+                  Effect.flatMap(failpoint),
+                  Effect.mapError(() => SubscriptionFailpointError.make({ point })),
+                ),
+            }),
+          );
+          yield* failpoint("upgrade:before-version");
+          yield* sql`PRAGMA user_version = 8`;
+          yield* failpoint("upgrade:after-version");
+        }),
+      )
+      .pipe(
+        Effect.provide(NodeCrypto.layer),
+        Effect.catchTag("SqliteStorageFailpointError", (error) =>
+          SqliteStorageError.make({
+            cause: error,
+            operation: "upgrade storage",
+            message: error.message,
+          }),
+        ),
+        Effect.catchTag(["ScheduleFailpointError", "SubscriptionFailpointError"], (error) =>
+          SqliteStorageError.make({
+            cause: error,
+            operation: "upgrade storage",
+            message: "Injected storage upgrade failure",
+          }),
+        ),
+        Effect.catchTag("StorageUpgradeError", (error) =>
+          SqliteStorageCorruptionError.make({
+            table: error.table,
+            rowKey: error.rowKey,
+            message: error.message,
+          }),
+        ),
+        Effect.catchTag("SqlError", storageError("upgrade v7 storage")),
+        Effect.catchTag("SchemaError", (error) =>
+          SqliteStorageCorruptionError.make({
+            table: "upgrade",
+            rowKey: "v7",
+            message: error.message,
+          }),
+        ),
+      );
   }
 
   if (version.user_version === 0) {
@@ -266,7 +360,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         actualVersion: 0,
         supportedVersion: CurrentSqliteStorageVersion,
         message:
-          "The SQLite file contains unversioned Effect Agent tables. Reset it explicitly; refusing to mutate ambiguous stored data.",
+          "The SQLite file contains unversioned Effect Agent tables. Refusing to mutate ambiguous stored data; retain it for inspection with its original writer.",
       });
     }
 
@@ -314,7 +408,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,
       message:
-        "The SQLite file claims the current format but is missing required tables. Reset the corrupt private-development data.",
+        "The SQLite file claims the current format but is missing required tables. Retain the original store for inspection.",
     });
   }
 

@@ -402,12 +402,36 @@ uncertainty, payloads and transactional prearming; this extension defines no pro
 
 ### Adopting these contracts
 
-The new persisted registration, delivery and retry fields are required. SQLite storage version 8
-and Cloudflare Thread/Schedule/Subscription storage version 3 reject incompatible development
-stores clearly; use the repository's development reset procedure where appropriate. There is no
-in-place migration in this private-development schema policy. Custom stores must implement revision
-and retry-generation fencing, bounded retention cursors and the canonical observation contract.
-Existing finite lifetimes, UTC cron defaults and no-retention behavior remain available.
+The persistent adapters automatically upgrade the unpatched beta49/beta50 format on acquisition:
+Cloudflare Thread, Schedule and Subscription stores move from version 2 to 3; the combined SQLite
+file moves from version 7 to 8. Each owning store upgrades in one native transaction and advances
+its version marker last. Reopening after interruption retries the entire uncommitted upgrade.
+Namespaces, canonical history and digests, receipts, pending work, ownership, deadlines, alarm
+generations and scan cursors are preserved. Keep the existing namespace/file and the old source
+versions, input bindings and agent registrations needed to finish retained work.
+
+Legacy subscription configurations become revision 1 and remain the immutable configuration for
+already selected deliveries. Retry counts become the initial generation's automatic attempt count;
+existing runnable work stays runnable even if it already exceeds a newly configured retry cap.
+The next failed attempt applies the current cap. No admission group or fence is inferred.
+
+Historical occurrence and settlement timestamps stay absent. An event replay with the same retained
+identity and payload digest returns the original event even if the caller now supplies an occurrence
+time that was previously unknown. Once an occurrence time is stored it must match on replay. Replay
+never fills missing historical timestamps or invents a receipt. Retention conservatively keeps
+history whose occurrence or settlement time is unknown.
+
+An unsupported layout, corrupt transformed record, orphaned delivery, mismatched fingerprint or translated value
+over the adapter's size limit fails acquisition without advancing the version. Thread errors identify
+the table and row; Schedule and Subscription errors retain the structured diagnosis in `cause`.
+Unchanged canonical history uses the existing reader validation rather than a new startup audit.
+Preserve the original store and investigate with its original writer or backup. Do not replace a
+namespace to work around an upgrade failure. Upgrades are forward-only: older binaries reject the
+new marker. Back up SQLite files or use the platform's backup facilities before an application rollout.
+
+Custom stores must implement revision and retry-generation fencing, bounded retention cursors and
+the canonical observation contract. Existing finite lifetimes, UTC cron defaults and no-retention
+behavior remain available.
 
 Node uses a Scope-owned indexed polling driver. Cloudflare commits work and required alarms
 together and re-arms after failed passes. If storage prevents both mutation and alarm repair,

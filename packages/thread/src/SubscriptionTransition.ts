@@ -23,6 +23,7 @@ const sameReceipt = Schema.toEquivalence(Receipt);
 export const sameSourcePartition = (left: SourcePartition, right: SourcePartition): boolean =>
   left.tenantId === right.tenantId && left.address === right.address;
 
+/** The retained event is authoritative. An absent historical occurrence stays unknown on replay. */
 export const sameAcceptedEventIdentity = (left: AcceptedEvent, right: AcceptedEvent): boolean =>
   sameSourcePartition(left.partition, right.partition) &&
   left.eventId === right.eventId &&
@@ -30,7 +31,7 @@ export const sameAcceptedEventIdentity = (left: AcceptedEvent, right: AcceptedEv
   left.source.version === right.source.version &&
   left.matchingKey === right.matchingKey &&
   left.payloadDigest === right.payloadDigest &&
-  left.occurredAtMillis === right.occurredAtMillis;
+  (left.occurredAtMillis === undefined || left.occurredAtMillis === right.occurredAtMillis);
 
 export const subscriptionMatchesEvent = (
   subscription: SubscriptionRecord,
