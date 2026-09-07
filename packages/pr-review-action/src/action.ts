@@ -437,6 +437,17 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
     ).pipe(Effect.result);
 
     if (Result.isFailure(contents)) {
+      yield* Effect.logWarning("Review source read failed", {
+        path: file.path,
+        basePath,
+        baseRevision: input.base.revision,
+        headRevision: input.head.revision,
+        operation: contents.failure.operation,
+        reason: contents.failure.reason,
+        attempts: contents.failure.attempts,
+        status: contents.failure.status,
+        requestId: contents.failure.requestId,
+      });
       hydratedSourceBytes += estimatedSourceBytes;
       exclude(unreviewedPaths, file, basePath, "source-read-failed");
       continue;

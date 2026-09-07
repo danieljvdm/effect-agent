@@ -159,7 +159,11 @@ export const selectReview = (input: {
   if (currentHeadAttempts.some(({ marker }) => marker.version === 3 && marker.completed)) {
     return { _tag: "skip", reason: "head-already-reviewed" };
   }
-  if (input.mode === "auto" && currentHeadAttempts.length > 0) {
+  if (
+    input.mode === "auto" &&
+    currentHeadAttempts.length > 0 &&
+    automaticAttempts >= input.automaticReviewLimit
+  ) {
     return { _tag: "skip", reason: "head-review-incomplete" };
   }
 

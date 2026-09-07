@@ -1,8 +1,8 @@
 import { ReviewFinding, ReviewFollowUp, ReviewReport } from "@effect-agent/pr-review/Review";
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Encoding, Exit, Fiber, Redacted, Ref, Schema } from "effect";
+import { Deferred, Effect, Encoding, Exit, Fiber, Logger, Redacted, Ref, Schema } from "effect";
 import { TestClock } from "effect/testing";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
 import { makeGitHubClient, type RepositorySnapshot } from "../src/github.ts";
 import { renderFindingBody, renderReviewBody } from "../src/presentation.ts";
@@ -317,6 +317,232 @@ const entry = (
   mode: "100644" | "100755" | "120000" | "040000" | "160000" = "100644",
   type: "blob" | "tree" | "commit" = "blob",
 ) => ({ path, sha, mode, type, ...(type === "blob" ? { size: 1 } : {}) });
+
+describe("GitHub read recovery", () => {
+  it.effect.each([
+    { failure: "server", attempts: 3, success: true },
+    { failure: "transport", attempts: 3, success: true },
+    { failure: "body", attempts: 3, success: true },
+    { failure: "timeout", attempts: 3, success: true },
+    { failure: "rate-limit", attempts: 3, success: true },
+    { failure: "rate-date", attempts: 3, success: true },
+    { failure: "rate-reset", attempts: 2, success: true },
+    { failure: "long-rate-limit", attempts: 1, success: false },
+    { failure: "exhausted", attempts: 4, success: false },
+    { failure: "deadline", attempts: 2, success: false },
+    { failure: "forbidden", attempts: 1, success: false },
+    { failure: "missing", attempts: 1, success: false },
+    { failure: "schema", attempts: 1, success: false },
+    { failure: "utf8", attempts: 1, success: false },
+  ])("recovers bounded blob reads: $failure", ({ failure, attempts, success }) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      let finalized = 0;
+      const logs: Array<unknown> = [];
+      const blob = "a".repeat(40);
+      const path = "src/example.ts";
+
+      const client = HttpClient.make((request, url) => {
+        let body: unknown;
+        let status = 200;
+        let headers: Record<string, string> = {};
+
+        if (url.pathname.includes("/git/commits/")) {
+          body = { sha: headRevision, tree: { sha: headTree } };
+        } else if (url.pathname.includes("/git/trees/")) {
+          body = { sha: headTree, truncated: false, tree: [entry(path, blob)] };
+        } else {
+          expect(url.pathname).toBe(`/repos/${repository}/git/blobs/${blob}`);
+          reads += 1;
+          body = { sha: blob, size: 4, encoding: "base64", content: Encoding.encodeBase64("text") };
+          if (failure === "utf8") {
+            body = {
+              sha: blob,
+              size: 1,
+              encoding: "base64",
+              content: Encoding.encodeBase64(new Uint8Array([255])),
+            };
+          } else if (failure === "schema") {
+            body = { secret: "private-source-sentinel" };
+          } else if (failure === "forbidden" || failure === "missing") {
+            status = failure === "forbidden" ? 403 : 404;
+          } else if (failure === "long-rate-limit" || failure === "deadline") {
+            status = 429;
+            headers = { "retry-after": failure === "deadline" ? "60" : "120" };
+          } else if (reads <= (failure === "rate-reset" ? 1 : 2) || failure === "exhausted") {
+            if (failure === "transport") {
+              return Effect.fail(
+                new HttpClientError.HttpClientError({
+                  reason: new HttpClientError.TransportError({
+                    request,
+                    cause: new Error("private-source-sentinel"),
+                  }),
+                }),
+              );
+            }
+            if (failure === "timeout") {
+              return Effect.never.pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    finalized += 1;
+                  }),
+                ),
+              );
+            }
+            if (failure === "body") {
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new globalThis.Response('{"private-source-sentinel":'),
+                ),
+              );
+            }
+            status =
+              failure === "rate-limit" || failure === "rate-date" || failure === "rate-reset"
+                ? 403
+                : 503;
+            headers =
+              failure === "rate-limit"
+                ? { "retry-after": "5" }
+                : failure === "rate-date"
+                  ? { "retry-after": "Thu, 01 Jan 1970 00:00:10 GMT" }
+                  : failure === "rate-reset"
+                    ? { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "60" }
+                    : {};
+          }
+        }
+
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new globalThis.Response(JSON.stringify(body), {
+              status,
+              headers: { ...headers, "x-github-request-id": "request-123" },
+            }),
+          ),
+        );
+      });
+
+      const github = yield* makeGitHubClient({
+        repository,
+        pullRequest: 12,
+        token: Redacted.make("credential-sentinel"),
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+      const snapshot = yield* github.readTreeSnapshot(headRevision);
+
+      const fiber = yield* snapshot
+        .readTextFile(path)
+        .pipe(
+          Effect.provide(
+            Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
+          ),
+          Effect.result,
+          Effect.forkChild,
+        );
+
+      yield* TestClock.adjust("90 seconds");
+      const result = yield* Fiber.join(fiber);
+
+      expect(result._tag).toBe(success ? "Success" : "Failure");
+      expect(reads).toBe(attempts);
+      if (result._tag === "Success") {
+        expect(result.success).toBe("text");
+        expect(yield* snapshot.readTextFile(path)).toBe("text");
+        expect(reads).toBe(attempts);
+      } else if (failure === "exhausted") {
+        expect(result.failure).toMatchObject({
+          operation: "get Git blob",
+          attempts: 4,
+          status: 503,
+          requestId: "request-123",
+        });
+        expect(logs).toContainEqual([
+          "GitHub read failed",
+          expect.objectContaining({ category: "StatusCodeError", status: 503, attempt: 4 }),
+        ]);
+      }
+      expect(finalized).toBe(failure === "timeout" ? 2 : 0);
+      expect(JSON.stringify(logs)).not.toContain("credential-sentinel");
+      expect(JSON.stringify(logs)).not.toContain("private-source-sentinel");
+    }),
+  );
+
+  it.effect.each(["active", "backoff", "defect"] as const)(
+    "preserves cancellation and defects: %s",
+    (phase) =>
+      Effect.gen(function* () {
+        let reads = 0;
+        let finalized = false;
+        const entered = yield* Deferred.make<void>();
+
+        const client = HttpClient.make((request) =>
+          Effect.gen(function* () {
+            reads += 1;
+            yield* Deferred.succeed(entered, undefined);
+            if (phase === "defect") return yield* Effect.die("broken adapter");
+            if (phase === "backoff")
+              return HttpClientResponse.fromWeb(
+                request,
+                new globalThis.Response("", { status: 503 }),
+              );
+
+            return yield* Effect.never.pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  finalized = true;
+                }),
+              ),
+            );
+          }),
+        );
+
+        const github = yield* makeGitHubClient({
+          repository,
+          pullRequest: 12,
+          token: Redacted.make("token"),
+        }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+        const fiber = yield* github.getPullRequest.pipe(Effect.forkChild);
+
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust(0);
+        if (phase !== "defect") yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+
+        yield* TestClock.adjust("90 seconds");
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(reads).toBe(1);
+        expect(finalized).toBe(phase === "active");
+      }),
+  );
+
+  it.effect("does not replay an uncertain GitHub write", () =>
+    Effect.gen(function* () {
+      let writes = 0;
+
+      const client = HttpClient.make((request) => {
+        writes += 1;
+        expect(request.method).toBe("POST");
+
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(request, new globalThis.Response("", { status: 503 })),
+        );
+      });
+
+      const github = yield* makeGitHubClient({
+        repository,
+        pullRequest: 12,
+        token: Redacted.make("token"),
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+      const failure = yield* github.acknowledgeComment(123).pipe(Effect.flip);
+
+      expect(failure._tag).toBe("GitHubApiFailure");
+      expect(writes).toBe(1);
+    }),
+  );
+});
 
 it.effect("PRR-009 publishes twenty-four blocking findings at the review field bounds", () =>
   Effect.gen(function* () {

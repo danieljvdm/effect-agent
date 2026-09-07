@@ -35,6 +35,16 @@ not incomplete coverage, and are unavailable to source tools. A binary-only PR n
 model call. SVG, JSON, XML, and other text assets remain reviewable. API failures, malformed
 responses, invalid UTF-8 without NUL bytes, and source-size limits still fail coverage checks.
 Binary detection by content retains the existing file and byte read limits.
+GitHub reads retry transport errors, incomplete or invalid JSON bodies, timeouts, HTTP 408,
+5xx responses, and rate-limited 403/429 responses up to three times. Attempts have a 15-second
+timeout, exponential backoff starting at one second, and a shared 90-second read deadline.
+Retry-After and rate-limit reset delays are respected; a delay beyond the deadline stops the read
+instead of retrying early. Generated-file classification retains its tighter 10-second deadline.
+Schema-invalid responses, invalid UTF-8, identity mismatches, and ordinary permission or missing-file
+errors fail immediately. Retries use the same immutable blob SHA. GitHub writes are never retried.
+Read diagnostics include the operation, attempt, failure category, HTTP status, and GitHub request
+ID when available, without response bodies or credentials. Exhausted source reads log the affected
+path and revisions and leave coverage incomplete.
 When a rename or content replacement crosses between binary and text, the textual side
 is still reviewed as an addition or deletion. Explicit ignore rules continue to exclude
 an entire rename when either path matches.
@@ -61,7 +71,7 @@ bots' reviews are never dismissed.
 
 Incremental passes select prior reviews with an inline finding on an admitted changed path.
 They verify those specific blockers without expanding new-defect discovery beyond the delta.
-Use `@effect-agent review full` for body-only findings, fixes in other paths, or a same-head retry.
+Use `@effect-agent review full` for body-only findings, fixes in other paths, or a manual same-head retry.
 At most eight prior reviews are considered, each with its complete review body and bot comments
 within 32,000 characters. Oversized feedback stays blocking; it is never truncated for verification.
 Follow-up verification shares the same conversation and spending and execution
@@ -74,7 +84,10 @@ GitHub still accepts review comments, so it consumes the automatic allowance. Re
 review or inspect and dismiss manually.
 
 Automatic waves use the configured limit, defaulting to two; this repository allows five.
-Zero disables automatic reviews.
+Zero disables automatic reviews. Rerunning the workflow can retry an incomplete review on the same
+head while automatic attempts remain. Each published attempt consumes that allowance; incomplete
+attempts never become incremental baselines. Once the allowance is exhausted, an incomplete head
+continues to fail until a manual review completes. Completed heads are still skipped.
 Only trusted bot-authored terminal markers count. Failed attempts count but cannot become diff
 baselines. An owner, member, or collaborator can request `@effect-agent review` for incremental
 review or `@effect-agent review full` for the whole admitted diff. Manual waves do not consume the
