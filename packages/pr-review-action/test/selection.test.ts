@@ -181,7 +181,7 @@ describe("GitHub review selection", () => {
     ).toEqual({ _tag: "skip", reason: "head-already-reviewed" });
   });
 
-  it("PRR-006 keeps a failed or incomplete same-head attempt failing without retrying it", () => {
+  it("PRR-006 retries incomplete same-head attempts within the automatic allowance", () => {
     for (const body of [
       `Review execution failed.\n\n${reviewMarker(true, false)}`,
       `Review coverage is incomplete.\n\n${reviewMarker(true, false)}`,
@@ -194,8 +194,39 @@ describe("GitHub review selection", () => {
           automaticReviewLimit: 2,
           history: [item(1, "head-1", true, false, { body })],
         }),
-      ).toEqual({ _tag: "skip", reason: "head-review-incomplete" });
+      ).toMatchObject({
+        _tag: "review",
+        scope: "full",
+        automatic: true,
+        automaticReviewsRemaining: 0,
+      });
     }
+  });
+
+  it("keeps an incomplete head failing after its automatic allowance is exhausted", () => {
+    expect(
+      selectReview({
+        mode: "auto",
+        currentHead: "head-1",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 2,
+        history: [item(1, "head-1", true, false), item(2, "head-1", true, false)],
+      }),
+    ).toEqual({ _tag: "skip", reason: "head-review-incomplete" });
+    expect(
+      selectReview({
+        mode: "auto",
+        currentHead: "head-2",
+        reviewAuthor: "effect-agent[bot]",
+        automaticReviewLimit: 3,
+        history: [item(1, "head-1", true, true), item(2, "head-2", true, false)],
+      }),
+    ).toMatchObject({
+      _tag: "review",
+      scope: "incremental",
+      baseRevision: "head-1",
+      automaticReviewsRemaining: 0,
+    });
   });
 
   it("PRR-006 counts failed automatic attempts but does not use them as baselines", () => {

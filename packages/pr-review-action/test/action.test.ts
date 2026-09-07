@@ -10,6 +10,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
   Schema,
@@ -776,68 +777,73 @@ describe("Incremental review scope", () => {
       }),
   );
 
-  it.effect("completes a binary-only PR without fetching blobs or calling a model", () =>
-    Effect.gen(function* () {
-      const published = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
+  it.effect.each([false, true])(
+    "completes a binary-only PR, including an incomplete same-head retry: %s",
+    (retry) =>
+      Effect.gen(function* () {
+        const published = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
 
-      const client = HttpClient.make((request, url) => {
-        let response: unknown;
+        const client = HttpClient.make((request, url) => {
+          let response: unknown;
 
-        if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
-          return Ref.update(published, (values) => [
-            ...values,
-            decodePublishedReview(request),
-          ]).pipe(
-            Effect.as(
-              jsonResponse(request, {
-                html_url: "https://github.test/reve-ai/example/pull/12#review",
-              }),
-            ),
-          );
-        }
-        if (url.pathname.endsWith("/pulls/12")) {
-          response = pullRequestWire("Update icons", "base", "head");
-        } else if (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files")) {
-          response = [];
-        } else if (url.pathname.includes("/compare/")) {
-          response = { merge_base_commit: { sha: "base" } };
-        } else if (url.pathname.includes("/git/commits/")) {
-          const sha = url.pathname.endsWith("/base") ? "base" : "head";
+          if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
+            return Ref.update(published, (values) => [
+              ...values,
+              decodePublishedReview(request),
+            ]).pipe(
+              Effect.as(
+                jsonResponse(request, {
+                  html_url: "https://github.test/reve-ai/example/pull/12#review",
+                }),
+              ),
+            );
+          }
+          if (url.pathname.endsWith("/pulls/12")) {
+            response = pullRequestWire("Update icons", "base", "head");
+          } else if (url.pathname.endsWith("/reviews") || url.pathname.endsWith("/files")) {
+            response =
+              retry && url.pathname.endsWith("/reviews")
+                ? [reviewHistoryWire(1, reviewMarker(true, false), "head", "2026-08-25T00:00:00Z")]
+                : [];
+          } else if (url.pathname.includes("/compare/")) {
+            response = { merge_base_commit: { sha: "base" } };
+          } else if (url.pathname.includes("/git/commits/")) {
+            const sha = url.pathname.endsWith("/base") ? "base" : "head";
 
-          response = { sha, tree: { sha: `${sha}-tree` } };
-        } else if (url.pathname.includes("/git/trees/")) {
-          const sha = url.pathname.endsWith("/base-tree") ? "base-tree" : "head-tree";
+            response = { sha, tree: { sha: `${sha}-tree` } };
+          } else if (url.pathname.includes("/git/trees/")) {
+            const sha = url.pathname.endsWith("/base-tree") ? "base-tree" : "head-tree";
 
-          response = {
-            sha,
-            truncated: false,
-            tree:
-              sha === "base-tree"
-                ? []
-                : [
-                    {
-                      path: "assets/icon.png",
-                      sha: "image",
-                      mode: "100644",
-                      type: "blob",
-                      size: 20_000_000,
-                    },
-                  ],
-          };
-        } else {
-          return Effect.die(`unexpected request ${request.method} ${url.href}`);
-        }
+            response = {
+              sha,
+              truncated: false,
+              tree:
+                sha === "base-tree"
+                  ? []
+                  : [
+                      {
+                        path: "assets/icon.png",
+                        sha: "image",
+                        mode: "100644",
+                        type: "blob",
+                        size: 20_000_000,
+                      },
+                    ],
+            };
+          } else {
+            return Effect.die(`unexpected request ${request.method} ${url.href}`);
+          }
 
-        return Effect.succeed(jsonResponse(request, response));
-      });
+          return Effect.succeed(jsonResponse(request, response));
+        });
 
-      yield* runReviewAction(client);
-      const reviews = yield* Ref.get(published);
+        yield* runReviewAction(client);
+        const reviews = yield* Ref.get(published);
 
-      expect(reviews).toHaveLength(1);
-      expect(reviews[0]?.body).toContain("1 ignored");
-      expect(reviews[0]?.body).toContain(reviewMarker(true, true));
-    }),
+        expect(reviews).toHaveLength(1);
+        expect(reviews[0]?.body).toContain("1 ignored");
+        expect(reviews[0]?.body).toContain(reviewMarker(true, true));
+      }),
   );
 
   it("publishes blocking findings as a head-bound change request", () => {
@@ -878,7 +884,7 @@ describe("Incremental review scope", () => {
   });
 
   it.effect(
-    "keeps failed and incomplete same-head automatic attempts failing at the action seam",
+    "keeps incomplete same-head attempts failing when the automatic allowance is exhausted",
     () =>
       Effect.gen(function* () {
         for (const body of [
@@ -901,7 +907,9 @@ describe("Incremental review scope", () => {
             return recordJsonResponse(requests, request, url, response);
           });
 
-          const exit = yield* runReviewAction(client).pipe(Effect.exit);
+          const exit = yield* runReviewAction(client, { PR_REVIEW_AUTOMATIC_LIMIT: "1" }).pipe(
+            Effect.exit,
+          );
 
           expect(Exit.isFailure(exit)).toBe(true);
           expect(yield* Ref.get(requests)).toEqual([
@@ -1689,6 +1697,7 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
 
   it.effect("keeps expected blob read failures as coverage gaps and admits other files", () =>
     Effect.gen(function* () {
+      const logs: Array<unknown> = [];
       const paths = ["src/a.ts", "src/b.ts"];
       const head = treeSnapshot("head", { "src/a.ts": "a", "src/b.ts": "b" });
 
@@ -1706,8 +1715,22 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
               : head.readTextFile(path),
         },
         ignore: [],
-      });
+      }).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
+        ),
+      );
 
+      expect(logs).toContainEqual([
+        "Review source read failed",
+        expect.objectContaining({
+          path: "src/a.ts",
+          baseRevision: "base",
+          headRevision: "head",
+          operation: "readTextFile",
+          reason: "blob unavailable",
+        }),
+      ]);
       expect(surface.unreviewedPaths).toEqual(["src/a.ts"]);
       expect(surface.exclusions).toEqual([{ path: "src/a.ts", reason: "source-read-failed" }]);
       expect([...surface.unavailablePaths]).toEqual(["src/a.ts"]);

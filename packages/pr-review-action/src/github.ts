@@ -1,7 +1,7 @@
 import { ReviewFollowUp } from "@effect-agent/pr-review/Review";
 import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
-import { Effect, Encoding, Schema } from "effect";
+import { Clock, DateTime, Effect, Encoding, Option, Result, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { unresolvedChangeRequests, type ReviewHistoryItem } from "./selection.ts";
@@ -209,6 +209,9 @@ export interface RepositorySnapshot {
 export class GitHubApiFailure extends Schema.TaggedError<GitHubApiFailure>()("GitHubApiFailure", {
   operation: Schema.String,
   reason: Schema.String,
+  attempts: Schema.optionalKey(Schema.Natural),
+  status: Schema.optionalKey(Schema.Natural),
+  requestId: Schema.optionalKey(Schema.String),
 }) {}
 
 /** A verified blob containing NUL bytes, not a failed GitHub read. */
@@ -299,8 +302,117 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
         Effect.mapError((cause) => failure(operation, cause)),
       );
 
-  const getPullRequest = execute("get pull request", HttpClientRequest.get(pullUrl)).pipe(
-    Effect.flatMap(decode(PullRequestWire, "get pull request")),
+  // Only explicitly read-only operations enter this retry boundary. Include body
+  // consumption in each attempt: retrying headers alone cannot repair a cut-off body.
+  const readJson = Effect.fn("GitHubClient.readJson")(function* <S extends Schema.Top>(
+    operation: string,
+    value: HttpClientRequest.HttpClientRequest,
+    schema: S,
+  ) {
+    const deadline = (yield* Clock.currentTimeMillis) + 90_000;
+
+    for (let attempt = 1; ; attempt += 1) {
+      const remaining = deadline - (yield* Clock.currentTimeMillis);
+
+      if (remaining <= 0) {
+        return yield* GitHubApiFailure.make({
+          operation,
+          reason: "GitHub read deadline exceeded",
+          attempts: attempt - 1,
+        });
+      }
+
+      const result = yield* client.execute(request(value)).pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.json),
+        Effect.timeout(Math.min(15_000, remaining)),
+        Effect.result,
+      );
+
+      if (Result.isSuccess(result)) {
+        return yield* Schema.decodeUnknownEffect(schema)(result.success).pipe(
+          Effect.mapError(() =>
+            GitHubApiFailure.make({
+              operation,
+              reason: "Response does not match the GitHub schema",
+              attempts: attempt,
+            }),
+          ),
+        );
+      }
+
+      const error = result.failure;
+      const response = error._tag === "HttpClientError" ? error.response : undefined;
+      const status = response?.status;
+      const category = error._tag === "TimeoutError" ? "TimeoutError" : error.reason._tag;
+      const headers = response?.headers;
+      const now = yield* Clock.currentTimeMillis;
+      const retryAfter = headers?.["retry-after"];
+
+      const retryDate =
+        retryAfter === undefined ? undefined : Option.getOrUndefined(DateTime.make(retryAfter));
+
+      const retryAfterMs =
+        retryAfter === undefined
+          ? undefined
+          : Number.isFinite(Number(retryAfter))
+            ? Math.max(0, Number(retryAfter) * 1_000)
+            : retryDate === undefined
+              ? undefined
+              : Math.max(0, DateTime.toEpochMillis(retryDate) - now);
+
+      const rateLimited =
+        status === 429 ||
+        (status === 403 &&
+          (retryAfterMs !== undefined || headers?.["x-ratelimit-remaining"] === "0"));
+
+      const reset = Number(headers?.["x-ratelimit-reset"]);
+
+      const rateDelay =
+        retryAfterMs ??
+        (rateLimited ? Math.max(60_000, Number.isFinite(reset) ? reset * 1_000 - now : 0) : 0);
+
+      const delay = Math.max(1_000 * 2 ** (attempt - 1), rateDelay);
+
+      const retryable =
+        category === "TimeoutError" ||
+        category === "TransportError" ||
+        category === "DecodeError" ||
+        status === 408 ||
+        rateLimited ||
+        (status !== undefined && status >= 500 && status <= 599);
+
+      const retry = retryable && attempt < 4 && now + delay < deadline;
+      const requestId = headers?.["x-github-request-id"]?.slice(0, 256);
+
+      const diagnostic = {
+        operation,
+        attempt,
+        category,
+        status,
+        requestId,
+        ...(retry ? { retryInMs: delay } : {}),
+      };
+
+      yield* Effect.logWarning(retry ? "Retrying GitHub read" : "GitHub read failed", diagnostic);
+      if (!retry) {
+        return yield* GitHubApiFailure.make({
+          operation,
+          reason: `${category}${status === undefined ? "" : ` (HTTP ${String(status)})`} after ${String(attempt)} attempt(s)`,
+          attempts: attempt,
+          ...(status === undefined ? {} : { status }),
+          ...(requestId === undefined ? {} : { requestId }),
+        });
+      }
+      yield* Effect.sleep(delay);
+    }
+  });
+
+  const getPullRequest = readJson(
+    "get pull request",
+    HttpClientRequest.get(pullUrl),
+    PullRequestWire,
+  ).pipe(
     Effect.map((wire): PullRequestView => ({
       number: wire.number,
       title: wire.title,
@@ -316,16 +428,10 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     const all: Array<ChangedFile> = [];
 
     for (let page = 1; page <= 30; page += 1) {
-      const wires = yield* execute(
+      const wires = yield* readJson(
         "list pull request files",
         HttpClientRequest.get(`${pullUrl}/files?per_page=100&page=${String(page)}`),
-      ).pipe(
-        Effect.flatMap(
-          decode(
-            Schema.Array(ChangedFileWire).check(Schema.isMaxLength(100)),
-            "list pull request files",
-          ),
-        ),
+        Schema.Array(ChangedFileWire).check(Schema.isMaxLength(100)),
       );
 
       all.push(...wires.map(changedFileFromWire));
@@ -342,16 +448,10 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     const all: Array<ReviewHistoryItem> = [];
 
     for (let page = 1; page <= 10; page += 1) {
-      const wires = yield* execute(
+      const wires = yield* readJson(
         "list pull request reviews",
         HttpClientRequest.get(`${pullUrl}/reviews?per_page=100&page=${String(page)}`),
-      ).pipe(
-        Effect.flatMap(
-          decode(
-            Schema.Array(ReviewWire).check(Schema.isMaxLength(100)),
-            "list pull request reviews",
-          ),
-        ),
+        Schema.Array(ReviewWire).check(Schema.isMaxLength(100)),
       );
 
       all.push(...wires.map(reviewFromWire));
@@ -384,18 +484,12 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
           });
         }
 
-        const batch = yield* execute(
+        const batch = yield* readJson(
           "list review comments",
           HttpClientRequest.get(
             `${pullUrl}/reviews/${String(review.id)}/comments?per_page=100&page=${String(page)}`,
           ),
-        ).pipe(
-          Effect.flatMap(
-            decode(
-              Schema.Array(ReviewCommentWire).check(Schema.isMaxLength(100)),
-              "list review comments",
-            ),
-          ),
+          Schema.Array(ReviewCommentWire).check(Schema.isMaxLength(100)),
         );
 
         if (batch.some((comment) => comment.pull_request_review_id !== review.id)) {
@@ -461,13 +555,11 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     }
     const reviewUrl = `${pullUrl}/reviews/${String(input.review.id)}`;
 
-    const currentReview = yield* execute(
+    const currentReview = yield* readJson(
       "get review before dismissal",
       HttpClientRequest.get(reviewUrl),
-    ).pipe(
-      Effect.flatMap(decode(ReviewWire, "get review before dismissal")),
-      Effect.map(reviewFromWire),
-    );
+      ReviewWire,
+    ).pipe(Effect.map(reviewFromWire));
 
     if (
       currentReview.id !== input.review.id ||
@@ -539,12 +631,13 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
 
     if (cached !== undefined) return cached;
 
-    const blob = yield* execute(
+    const blob = yield* readJson(
       "get Git blob",
       HttpClientRequest.get(
         `${apiUrl}/repos/${options.repository}/git/blobs/${encodeURIComponent(sha)}`,
       ),
-    ).pipe(Effect.flatMap(decode(GitBlobWire, "get Git blob")));
+      GitBlobWire,
+    );
 
     if (blob.sha !== sha) {
       return yield* GitHubApiFailure.make({
@@ -593,12 +686,13 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
   const readTreeSnapshot = Effect.fn("GitHubClient.readTreeSnapshot")(function* (
     revision: string,
   ): Effect.fn.Return<RepositorySnapshot, GitHubApiFailure> {
-    const commit = yield* execute(
+    const commit = yield* readJson(
       "get Git commit",
       HttpClientRequest.get(
         `${apiUrl}/repos/${options.repository}/git/commits/${encodeURIComponent(revision)}`,
       ),
-    ).pipe(Effect.flatMap(decode(GitCommitWire, "get Git commit")));
+      GitCommitWire,
+    );
 
     if (commit.sha !== revision) {
       return yield* GitHubApiFailure.make({
@@ -607,12 +701,13 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       });
     }
 
-    const tree = yield* execute(
+    const tree = yield* readJson(
       "get recursive Git tree",
       HttpClientRequest.get(
         `${apiUrl}/repos/${options.repository}/git/trees/${encodeURIComponent(commit.tree.sha)}?recursive=1`,
       ),
-    ).pipe(Effect.flatMap(decode(GitTreeWire, "get recursive Git tree")));
+      GitTreeWire,
+    );
 
     if (tree.sha !== commit.tree.sha) {
       return yield* GitHubApiFailure.make({
@@ -667,12 +762,13 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     base: string,
     head: string,
   ) {
-    const comparison = yield* execute(
+    const comparison = yield* readJson(
       "get pull request merge base",
       HttpClientRequest.get(
         `${apiUrl}/repos/${options.repository}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
       ),
-    ).pipe(Effect.flatMap(decode(CompareWire, "get pull request merge base")));
+      CompareWire,
+    );
 
     return comparison.merge_base_commit.sha;
   });
@@ -729,8 +825,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       Effect.mapError((cause) => failure("encode generated file query", cause)),
     );
 
-    const result = yield* execute("classify generated file", query).pipe(
-      Effect.flatMap(decode(GeneratedFileWire, "classify generated file")),
+    const result = yield* readJson("classify generated file", query, GeneratedFileWire).pipe(
       Effect.timeout("10 seconds"),
       Effect.catchTag("TimeoutError", () =>
         Effect.fail(
