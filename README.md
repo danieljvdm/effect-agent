@@ -50,7 +50,7 @@ import { ThreadHistory } from "effect-agent/ThreadHistory";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const AppLive = Layer.mergeAll(
-  OpenAiLanguageModel.model("gpt-4.1-mini"),
+  OpenAiLanguageModel.model("gpt-6-astra"),
   IdGenerator.layer,
   ThreadHistory.layerTransient,
 ).pipe(
