@@ -1091,6 +1091,79 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
     }),
   );
 
+  it.effect(
+    "pruning honors the whole prompt target even when all tool results fit the preferred tail",
+    () =>
+      Effect.gen(function* () {
+        const compactor = yield* ContextCompactor;
+
+        const source = Prompt.fromMessages([
+          Prompt.makeMessage("system", { content: "instructions ".repeat(100) }),
+          ...["oldest", "middle", "newest"].flatMap((id) => [
+            Prompt.makeMessage("assistant", {
+              content: [
+                Prompt.makePart("tool-call", {
+                  id,
+                  name: "search",
+                  params: {},
+                  providerExecuted: false,
+                }),
+              ],
+            }),
+            Prompt.makeMessage("tool", {
+              content: [
+                Prompt.makePart("tool-result", {
+                  id,
+                  name: "search",
+                  result: id.repeat(120),
+                  isFailure: false,
+                  providerExecuted: false,
+                }),
+              ],
+            }),
+          ]),
+        ]);
+
+        const request = {
+          source,
+          state: initialCompactionState(),
+          policy: CompactionPolicy.make({ keepRecentTokens: 10_000, mode: "prune" }),
+          threadId: ThreadId.make("target-pruning"),
+          runId: RunId.make("target-pruning"),
+          turn: 1,
+          trigger: "pressure" as const,
+          modelCallAllowed: false,
+          summarize: () => Effect.die("Pruning must not call a model"),
+        };
+
+        expect(
+          yield* compactor.compact({ ...request, targetTokens: undefined }).pipe(Stream.runCollect),
+        ).toEqual([]);
+        // Full prompt is ~1100 tokens. Both old results must clear to reach 800;
+        // tool results alone fit well inside the preferred tail and the 800-token target.
+        expect(
+          yield* compactor.compact({ ...request, targetTokens: 800 }).pipe(Stream.runCollect),
+        ).toEqual([{ kind: "clear-tool-results", through: 5 }]);
+        // An impossible target must still retain the newest batch.
+        expect(
+          yield* compactor.compact({ ...request, targetTokens: 1 }).pipe(Stream.runCollect),
+        ).toEqual([{ kind: "clear-tool-results", through: 5 }]);
+        // A replacement hides older results; their bytes must not trigger redundant pruning.
+        expect(
+          yield* compactor
+            .compact({
+              ...request,
+              state: {
+                ...request.state,
+                replacement: { kind: "rollover", through: 5, windowId: "window" },
+              },
+              targetTokens: 800,
+            })
+            .pipe(Stream.runCollect),
+        ).toEqual([]);
+      }),
+  );
+
   // ------------------------------------------------------------ RUN-026 prune
 
   it.effect(

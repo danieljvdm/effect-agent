@@ -36,6 +36,27 @@ It also accepts `inputPrompt`, `completion`, `runDisposition`, a description, an
 Instructions may be static prompt input or a function of decoded input. That function may return
 an `Effect`. Its errors and service requirements become part of the run type.
 
+## Choose final-output format
+
+Output Schemas use JSON final messages by default. For ordinary assistant text, wrap the complete
+Schema with `Output.text`. The Schema must encode as a string; its checks, transformations, and
+service requirements still apply.
+
+```ts twoslash
+import * as Output from "@effect-agent/engine/Output";
+import { Schema } from "effect";
+
+const Reply = Output.text(Schema.String.check(Schema.isMaxLength(20_000)));
+// Pass Reply as Agent.make(..., { output: Reply, ... }).
+```
+
+The runtime instructs the model to reply without JSON wrapping and decodes that text directly.
+Whitespace, quotes, and empty replies are preserved. Use `Schema.NonEmptyString` when silence is
+invalid. Apply `Output.text` after composing the Schema. Required completion tools still take
+precedence; optional completion tools retain their own parameter contract. Durable records store
+the string as a JSON string value and replay it through the same Schema. Metadata does not select
+an output format.
+
 ## Choose model-visible input
 
 The runtime normally sends the complete schema-encoded input as a JSON user message. Use

@@ -102,7 +102,7 @@ import {
 
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { boundedValueFootprint, utf8ByteLength } from "./bounded-value.ts";
-import { insertOutputContract, outputSchemaContract } from "./output-contract.ts";
+import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
 import {
   boundedCanonicalJsonSnapshot,
   boundedJsonSnapshot,
@@ -4262,15 +4262,15 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
   AgentOutputError,
   Agent.OutputSchema<AgentValue>["DecodingServices"]
 > {
-  const eventJson = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
-    text,
-  ).pipe(
-    Effect.mapError((cause) =>
-      AgentOutputError.make({
-        message: `Agent output is not valid JSON: ${cause.message}`,
-      }),
-    ),
-  );
+  const eventJson = isTextOutput(agent.definition.output)
+    ? text
+    : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
+        Effect.mapError((cause) =>
+          AgentOutputError.make({
+            message: `Agent output is not valid JSON: ${cause.message}`,
+          }),
+        ),
+      );
 
   const candidateOutput: unknown = eventJson;
 

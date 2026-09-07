@@ -109,7 +109,7 @@ const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
       const decisions: Array<CompactionDecision> = [];
 
       if (!forceSummarize && policy.mode !== "summarize") {
-        const through = choosePruneBound(source.content, state, keepRecentTokens);
+        const through = choosePruneBound(source.content, state, keepRecentTokens, targetTokens);
 
         if (through > state.clearedThrough) {
           state.clearedThrough = through;

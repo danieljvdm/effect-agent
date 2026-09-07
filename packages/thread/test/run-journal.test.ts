@@ -1098,38 +1098,84 @@ describe("engine compaction records and projection (RUN-026)", () => {
         }),
     );
 
+    for (const kind of ["rollover", "clear-tool-results"] as const)
+      it.effect(
+        `${kind} cannot cover an incomplete Tool batch even when its available results are below the cutoff`,
+        () =>
+          Effect.gen(function* () {
+            const batch = yield* turnCanonicalBatch({
+              ...turnInput(toolTurnAppended),
+              runScopedPrefixLength: 2,
+            });
+
+            const records = envelopesOf([batch]).slice(0, 2);
+
+            const rollover = envelopeAt(
+              3,
+              auditRecord(
+                "incomplete-rollover",
+                compactionPayload({
+                  kind,
+                  runId: RUN_ID,
+                  turn: 2,
+                  summary: undefined,
+                  coversThrough: 2,
+                  handoff: "Uncommitted handoff",
+                }),
+              ),
+            );
+
+            const projection = yield* projectRunJournal([...records, rollover], RUN_ID);
+
+            expect(projection.contextWindowId).toBeUndefined();
+            expect(promptText(projection.prompt)).not.toContain("Uncommitted handoff");
+            expect(projection.prompt.content.slice(0, 2)).toEqual(toolTurnAppended.slice(0, 2));
+            expect(toolResults(projection.prompt)).toEqual([{ bookingRef: "flight-42" }]);
+          }),
+      );
+
     it.effect(
-      "rollover cannot cover an incomplete Tool batch even when its available results are below the cutoff",
+      "prunes fully settled current-Run batches without losing replay usage, prefix or latest result",
       () =>
         Effect.gen(function* () {
-          const batch = yield* turnCanonicalBatch({
-            ...turnInput(toolTurnAppended),
+          const first = yield* turnCanonicalBatch({
+            ...turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 100, outputTokens: 10 }),
             runScopedPrefixLength: 2,
           });
 
-          const records = envelopesOf([batch]).slice(0, 2);
+          const next = yield* turnCanonicalBatch(
+            turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 200, outputTokens: 20 }),
+          );
 
-          const rollover = envelopeAt(
-            3,
+          const records = envelopesOf([first, next]);
+          const baseline = yield* projectRunJournal(records, RUN_ID);
+
+          const prune = envelopeAt(
+            records.length + 1,
             auditRecord(
-              "incomplete-rollover",
+              "prune-owner",
               compactionPayload({
-                kind: "rollover",
+                kind: "clear-tool-results",
                 runId: RUN_ID,
-                turn: 2,
+                turn: 3,
                 summary: undefined,
-                coversThrough: 2,
-                handoff: "Uncommitted handoff",
+                coversThrough: first.records.length,
               }),
             ),
           );
 
-          const projection = yield* projectRunJournal([...records, rollover], RUN_ID);
+          const replay = yield* projectRunJournal([...records, prune], RUN_ID);
 
-          expect(projection.contextWindowId).toBeUndefined();
-          expect(promptText(projection.prompt)).not.toContain("Uncommitted handoff");
-          expect(projection.prompt.content.slice(0, 2)).toEqual(toolTurnAppended.slice(0, 2));
-          expect(toolResults(projection.prompt)).toEqual([{ bookingRef: "flight-42" }]);
+          expect(toolResults(replay.prompt)).toEqual([
+            "[tool result cleared by compaction]",
+            "[tool result cleared by compaction]",
+            { bookingRef: "lodging-7" },
+          ]);
+          expect(replay.prompt.content.slice(0, 2)).toEqual(baseline.prompt.content.slice(0, 2));
+          expect(replay.usage).toEqual(baseline.usage);
+          expect(replay.policyUsage).toEqual(baseline.policyUsage);
+          expect(replay.committedTurns).toBe(baseline.committedTurns);
+          expect(replay.pendingContextToolCallId).toBe(baseline.pendingContextToolCallId);
         }),
     );
 

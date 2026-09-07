@@ -1,7 +1,7 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import { AgentRuntime } from "@effect-agent/engine";
+import { AgentRuntime, Output } from "@effect-agent/engine";
 import {
   type AgentResult,
   type AgentRuntimeFailure,
@@ -375,4 +375,45 @@ it("retains every branch's tool requirements and failures across execution views
   expectTypeOf<Effect.Services<typeof selectedRun>>().toEqualTypeOf<
     BoundServices | ThreadHistory | IdGenerator
   >();
+});
+
+it("text output preserves Schema transformations, errors and decoder requirements", () => {
+  const schema = Output.text(
+    Schema.NumberFromString.pipe(
+      Schema.decode({
+        decode: SchemaGetter.transformOrFail((value) => Effect.as(Decoder, value)),
+        encode: SchemaGetter.transformOrFail((value) => Effect.as(Encoder, value)),
+      }),
+    ),
+  );
+
+  expectTypeOf<typeof schema.Type>().toEqualTypeOf<number>();
+  expectTypeOf<typeof schema.Encoded>().toEqualTypeOf<string>();
+  expectTypeOf<typeof schema.DecodingServices>().toEqualTypeOf<Decoder>();
+  expectTypeOf<typeof schema.EncodingServices>().toEqualTypeOf<Encoder>();
+
+  const definition = Agent.make("typed-text-output", {
+    input: Schema.String,
+    output: schema,
+    instructions: "Return a number.",
+    toolkit: Toolkit.empty,
+  });
+
+  const agent = Agent.withModel(definition, model);
+  const decoded = AgentRuntime.decodeFinalOutput(agent, "42");
+
+  expectTypeOf<Effect.Services<typeof decoded>>().toEqualTypeOf<Decoder>();
+  expectTypeOf<Effect.Error<typeof decoded>>().toEqualTypeOf<
+    import("@effect-agent/core/AgentError").AgentOutputError
+  >();
+  expectTypeOf<Effect.Success<typeof decoded>["decoded"]>().toEqualTypeOf<number>();
+  const run = AgentRuntime.run(agent, "input");
+
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
+    Decoder | Encoder | ProviderClient | ThreadHistory | IdGenerator
+  >();
+  // @ts-expect-error Text output requires a string-encoded Schema.
+  Output.text(Schema.Struct({ answer: Schema.String }));
+  // @ts-expect-error A decoded string is insufficient when its encoded form is numeric.
+  Output.text(Schema.flip(Schema.NumberFromString));
 });

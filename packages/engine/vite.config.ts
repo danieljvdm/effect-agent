@@ -5,6 +5,7 @@ export default defineConfig({
     entry: [
       "src/index.ts",
       "src/AgentRuntime.ts",
+      "src/Output.ts",
       "src/Compaction.ts",
       "src/ContextCompactor.ts",
       "src/ContextWindow.ts",

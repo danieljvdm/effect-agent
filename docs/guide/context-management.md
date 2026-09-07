@@ -985,7 +985,7 @@ append-only history starts from the last provider-reported input and estimates a
 Preparation and transient-context hooks use a fresh estimate. Within a turn, the engine reuses
 the history view and estimate until compaction changes them. The default compactor then:
 
-1. clears old application tool results outside the protected `keepRecentTokens` tail while keeping
+1. clears old application tool results outside the preferred `keepRecentTokens` tail while keeping
    message structure and call/result pairs;
 2. if pruning is insufficient, makes one metered summary call and keeps the instruction prefix,
    summary, and recent tail.
@@ -1039,7 +1039,7 @@ Summary calls must use
 Defects and interruption retain their Effect meaning.
 
 Durable coordinators map the covered prefix to complete canonical records before committing a
-decision. Pruning and summarization cover prior-run records. Rollover can also cover settled batches
+decision. Summarization covers prior-run records. Pruning and rollover can also cover settled batches
 inside the current run, preserving its original instructions and input. A transform or decision that
 cannot map cleanly fails before the view changes. The canonical log remains append-only.
 
@@ -1178,7 +1178,9 @@ setup.
 
 - Leave output and summary room under the model window. For a 200k window, start with a
   `contextTokenLimit` between 150k and 170k.
-- `keepRecentTokens` defaults to 20k. Raise it when recent tool output must remain verbatim.
+- `keepRecentTokens` defaults to 20k. Pruning retains this preferred tail while the full prompt fits
+  its target; under pressure it clears additional older results. The newest tool result always
+  stays verbatim. If the remaining prompt cannot fit, the configured summary or overflow policy applies.
 - Use `tokenBudget` as a runaway limit. Use `costBudgetMicrousd` to bound estimated spend.
 - Delegate noisy research to bounded children so their raw tool output stays out of the parent
   context.

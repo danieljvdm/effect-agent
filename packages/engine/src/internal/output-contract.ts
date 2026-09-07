@@ -1,12 +1,34 @@
 import type * as Agent from "@effect-agent/core/Agent";
+import { Schema } from "effect";
 import { Prompt, Tool } from "effect/unstable/ai";
+
+const outputFormatAnnotation = "@effect-agent/engine/Output/format";
+
+/**
+ * Declare ordinary assistant text as an Agent's final-output wire format. Apply this to the
+ * complete output Schema after composing transformations. Its encoded type must be string;
+ * decoding, checks, transformations, and service requirements remain owned by that Schema.
+ * Text is preserved verbatim, including whitespace, quotes, and an empty reply when allowed.
+ * Required completion Tools still take precedence. Unmarked Schemas use JSON final output.
+ *
+ * @example
+ * ```ts
+ * output: Output.text(Schema.String.check(Schema.isMaxLength(20_000)))
+ * ```
+ */
+export const textOutput = <S extends Schema.Top & { readonly Encoded: string }>(
+  schema: S,
+): S["Rebuild"] => schema.annotate({ [outputFormatAnnotation]: "text" });
+
+export const isTextOutput = (schema: Schema.Top): boolean =>
+  Schema.resolveAnnotations(schema)?.[outputFormatAnnotation] === "text";
 
 /**
  * Model-visible final-output contract (RUN-028).
  *
  * For ordinary text completion, the interpreter's only output-conformance
  * point is `decodeFinalOutput`, which validates the final text after the
- * model has already finished. This module renders that Schema to JSON Schema
+ * model has already finished. This module renders that Schema's wire contract
  * with the same Effect AI derivation the providers use for Tool parameters
  * and states it as one framework-owned system message on every model request.
  * A required completion Tool instead gets a native-tool directive: its Tool
@@ -19,9 +41,6 @@ import { Prompt, Tool } from "effect/unstable/ai";
  * into official history, so canonical records, run events, and the committed
  * DN/DC golden are unchanged.
  *
- * Reversal: deleting this module, its single `makeTurn` call site, the
- * `RunContextRequest.outputContract` field, and its test file restores the
- * prior behavior exactly.
  */
 
 /** Rendering outcome for one definition's output Schema. */
@@ -65,6 +84,17 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
     return {
       _tag: "rendered",
       message: requiredCompletionDirective(definition.completion.tool),
+    };
+  }
+  if (isTextOutput(definition.output)) {
+    return {
+      _tag: "rendered",
+      message:
+        "Final output contract: write the final reply as ordinary assistant text, without JSON wrapping. " +
+        "An empty reply is valid only when allowed by the output Schema and the task instructions." +
+        (definition.completion === undefined
+          ? ""
+          : ` When calling the "${definition.completion.tool}" completion Tool, follow its parameter schema instead; the engine projects its successful result into the Agent output.`),
     };
   }
   try {
