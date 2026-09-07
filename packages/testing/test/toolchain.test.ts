@@ -485,6 +485,8 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(failure._tag).toBe("BundleSizeError");
         expect(yield* fs.exists(path.join(scratch, "report", "report.json"))).toBe(false);
       }),
+    // Repeated real bundle builds and smoke subprocesses need headroom on shared CI runners.
+    { timeout: 30_000 },
   );
 
   it.effect("executes an Effect program through the Vite+ test runner", () =>
