@@ -163,7 +163,8 @@ Set `priority: default` to force Standard processing, or `priority: fast` (local
 Fast is supported for the listed models, subject to account and regional availability.
 Fast mode costs twice the standard token rates for the supported models and uses the same
 size-scaled spending cap, so the allowance buys fewer tokens. The effect-agent repository's
-workflow opts into Fast mode with `max-cost-usd: "10.00"`; its allowance still scales with PR size.
+workflow opts into Fast mode with `base-cost-usd: "20.00"` and `max-cost-usd: "25.00"`;
+its allowance still scales with PR size.
 Requests with omitted priority reserve at Fast rates because the project setting can enable Fast.
 Explicit priorities reserve at the selected tier's rates, and settlement uses the tier reported by OpenAI,
 including standard-rate fallback from Fast mode. Both `fast` and `priority` response tags identify
