@@ -76,9 +76,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: context-continuity-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .context-continuity-eval/run/report.json
-            .context-continuity-eval/run/requests.ndjson
-            .context-continuity-eval/run/canonical.ndjson
+          path: .context-continuity-eval/run/
           if-no-files-found: ignore
           retention-days: 30

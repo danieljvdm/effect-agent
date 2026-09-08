@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { ProfileId } from "./profiles.ts";
+
 export class EvaluationError extends Schema.TaggedError<EvaluationError>()("EvaluationError", {
   stage: Schema.String,
   message: Schema.String,
@@ -59,6 +61,17 @@ export const WindowEvidence = Schema.Struct({
   coversThrough: Schema.Natural,
 });
 
+export const CompactionEvidence = Schema.Struct({
+  runId: Schema.String,
+  turn: Schema.Natural,
+  trigger: Schema.Literals(["pressure", "overflow", "requested"]),
+  estimatedTokens: Schema.Natural,
+  targetTokens: Schema.NullOr(Schema.Natural),
+  kind: Schema.Literals(["rollover", "summarize", "clear-tool-results"]),
+});
+
+export type CompactionEvidence = typeof CompactionEvidence.Type;
+
 export const RestartEvidence = Schema.Struct({
   phase: Schema.Natural,
   location: Schema.Literals([
@@ -69,6 +82,10 @@ export const RestartEvidence = Schema.Struct({
   notesRevisionBefore: Schema.NullOr(Schema.String),
   notesRevisionAfter: Schema.NullOr(Schema.String),
   notesTextUnchanged: Schema.Boolean,
+  mechanism: Schema.Literals(["service-reacquisition", "SIGKILL", "durable-object-eviction"]),
+  processBefore: Schema.NullOr(Schema.Natural),
+  processAfter: Schema.NullOr(Schema.Natural),
+  killConfirmed: Schema.Boolean,
 });
 
 export type RestartEvidence = typeof RestartEvidence.Type;
@@ -87,7 +104,7 @@ export const ModelUsage = Schema.Struct({
 export type ModelUsage = typeof ModelUsage.Type;
 
 export const EvaluationReport = Schema.Struct({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   status: Schema.Literals(["running", "passed", "failed"]),
   sourceCommit: Schema.String,
   dirtyWorkingTree: Schema.Boolean,
@@ -102,7 +119,8 @@ export const EvaluationReport = Schema.Struct({
   maxOutputTokens: Schema.Natural,
   maxCostMicrousd: Schema.Natural,
   maxModelCalls: Schema.Natural,
-  profile: Schema.Literal("explicit-rollover-sqlite-v1"),
+  profile: ProfileId,
+  compactions: Schema.Array(CompactionEvidence),
   startedAt: Schema.String,
   elapsedMillis: Schema.Natural,
   phases: Schema.Array(PhaseResult),
@@ -114,6 +132,25 @@ export const EvaluationReport = Schema.Struct({
 });
 
 export type EvaluationReport = typeof EvaluationReport.Type;
+
+export const ResumeCheckpoint = Schema.Struct({
+  version: Schema.Literal(1),
+  report: EvaluationReport,
+  phase: Schema.Natural,
+  runId: Schema.String,
+  processId: Schema.Natural,
+  notes: Schema.Struct({ revision: Schema.NullOr(Schema.String), text: Schema.String }),
+  firstProbeRequests: Schema.Array(Schema.Tuple([Schema.Natural, Schema.Boolean])),
+});
+
+export type ResumeCheckpoint = typeof ResumeCheckpoint.Type;
+
+export const KillWitness = Schema.Struct({
+  phase: Schema.Natural,
+  processId: Schema.Natural,
+  signal: Schema.Literal("SIGKILL"),
+  exited: Schema.Literal(true),
+});
 
 export const check = (name: string, actual: unknown, expected: unknown): Check => ({
   name,

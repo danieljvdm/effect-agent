@@ -7,22 +7,29 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
+    "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/thread": "workspace:*",
     "@effect/ai-openai": "catalog:",
+    "@effect/platform-browser": "catalog:",
     "@effect/platform-node": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "effect-cf": "catalog:"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
     "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "miniflare": "catalog:",
     "typescript": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   }
 }

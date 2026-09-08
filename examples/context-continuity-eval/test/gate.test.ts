@@ -1,3 +1,4 @@
+import { contextWindowId } from "@effect-agent/engine/Compaction";
 import { describe, expect, it } from "vite-plus/test";
 
 import { type EvaluationReport, type ProjectStatus } from "../src/contracts.ts";
@@ -28,7 +29,8 @@ const finalStatus: ProjectStatus = {
 };
 
 const completeReport = (): EvaluationReport => ({
-  version: 2,
+  version: 3,
+  compactions: [],
   status: "running",
   sourceCommit: "a".repeat(40),
   dirtyWorkingTree: false,
@@ -72,6 +74,10 @@ const completeReport = (): EvaluationReport => ({
     notesRevisionBefore: "rev-1",
     notesRevisionAfter: "rev-1",
     notesTextUnchanged: true,
+    mechanism: "service-reacquisition",
+    processBefore: null,
+    processAfter: null,
+    killConfirmed: false,
   })),
   checks: [],
   usage: {
@@ -162,3 +168,64 @@ describe("context continuity release gate", () => {
     expect(gateChecks(invalidate(completeReport())).some((check) => !check.passed)).toBe(true);
   });
 });
+
+const pressureReport = (): EvaluationReport => {
+  const base = completeReport();
+
+  return {
+    ...base,
+    profile: "pressure-restart-sqlite-v1",
+    windows: base.windows.map((w, i) => ({ ...w, id: contextWindowId(`run-${i}`, 1) })),
+    compactions: base.windows.map((_, i) => ({
+      runId: `run-${i}`,
+      turn: 1,
+      trigger: "pressure",
+      kind: "rollover",
+      estimatedTokens: 20_000,
+      targetTokens: 16_000,
+    })),
+    restarts: base.restarts.map((r) => ({
+      ...r,
+      mechanism: "SIGKILL",
+      killConfirmed: true,
+      processBefore: 10,
+      processAfter: 20,
+    })),
+  };
+};
+
+it("accepts measured pressure and confirmed separate processes", () => {
+  expect(gateChecks(pressureReport()).filter((c) => !c.passed)).toEqual([]);
+});
+
+it.each(["same-process", "no-kill", "requested", "overflow", "under-limit"] as const)(
+  "rejects false pressure/restart coverage: %s",
+  (failure) => {
+    const base = pressureReport();
+
+    const report: EvaluationReport = {
+      ...base,
+      compactions: base.compactions.map((c) => ({
+        ...c,
+        trigger:
+          failure === "requested" ? "requested" : failure === "overflow" ? "overflow" : c.trigger,
+        estimatedTokens: failure === "under-limit" ? 100 : c.estimatedTokens,
+      })),
+      restarts: base.restarts.map((r) => ({
+        ...r,
+        killConfirmed: failure !== "no-kill",
+        processAfter: failure === "same-process" ? r.processBefore : r.processAfter,
+      })),
+    };
+
+    const failures = gateChecks(report)
+      .filter((c) => !c.passed)
+      .map((c) => c.name);
+
+    expect(failures).toEqual([
+      failure === "same-process" || failure === "no-kill"
+        ? "actual-process-kills"
+        : "pressure-caused-committed-windows",
+    ]);
+  },
+);

@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "effect-agent-context-continuity-eval",
+  "main": "../../.context-continuity-eval/cloudflare/worker.mjs",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": { "CONTEXT_EVAL_MODEL": "gpt-6-astra" },
+  "durable_objects": { "bindings": [{ "name": "THREADS", "class_name": "ContinuityThread" }] },
+  "exports": { "ContinuityThread": { "type": "durable-object", "storage": "sqlite" } },
+}
