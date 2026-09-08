@@ -912,12 +912,6 @@ describe("cross-DO port routing", () => {
           .checkpoints!.load(LoadCheckpointRequest.make({ threadId: thread(foreignConv) }))
           .pipe(Effect.flip);
 
-        const recoveryCheckpointFailure = yield* store
-          .recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId: thread(foreignConv) }))
-          .pipe(Effect.flip);
-
-        expect(recoveryCheckpointFailure).toBeInstanceOf(ThreadStoreError);
-
         expect(checkpointFailure).toBeInstanceOf(ThreadStoreError);
         if (isThreadStoreError(checkpointFailure)) {
           expect(checkpointFailure.message).toContain("not route-capable");
@@ -926,6 +920,27 @@ describe("cross-DO port routing", () => {
     );
 
     // Fail-fast means fail BEFORE the transport: no delivery was ever attempted.
+    expect(state.calls).toBe(0);
+  });
+
+  it("treats a foreign recovery cache as missing without routing it", async () => {
+    const state = control();
+
+    await withRoutedPorts(
+      "wp2-cache-local",
+      state,
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+
+        const checkpoint = yield* store.recoveryCheckpoints!.load(
+          LoadCheckpointRequest.make({ threadId: thread("wp2-cache-foreign") }),
+        );
+
+        // Runtime recovery can continue through the authorized canonical read route.
+        expect(Option.isNone(checkpoint)).toBe(true);
+      }),
+    );
+
     expect(state.calls).toBe(0);
   });
 

@@ -187,7 +187,8 @@ export interface ThreadCheckpoints {
  * Saves atomically validate the producer epoch and canonical batch tail. An older snapshot
  * cannot replace a newer one; equal-tail replacement repairs disposable state. Invalid cached
  * data fails with CheckpointRejected, while infrastructure failures remain ThreadStoreError.
- * Loading at an earlier tail may return none. Canonical records and the ledger remain authority.
+ * Loading at an earlier tail or outside the adapter's cache locality may return none so callers
+ * can replay canonical records. Canonical records and the ledger remain authority.
  */
 export interface ThreadRecoveryCheckpoints {
   readonly save: (

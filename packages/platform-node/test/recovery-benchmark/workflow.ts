@@ -168,10 +168,9 @@ const checkpointBytes = (checkpoint: ThreadCheckpoint) =>
     .byteLength;
 
 /** Deliberately full-history checks. Call only outside measured startup and completion intervals. */
-const verifyPublicContract = Effect.fn("RecoveryBenchmark.verifyPublicContract")(function* (
-  store: ThreadStore["Service"],
-  runtime: DurableAgentRuntime["Service"],
-) {
+const verifyPublicContract = Effect.fn("RecoveryBenchmark.verifyPublicContract")(function* () {
+  const store = yield* ThreadStore;
+  const runtime = yield* DurableAgentRuntime;
   const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
   const encoded = yield* Schema.encodeEffect(ThreadExport)(exported);
   const decoded = yield* Schema.decodeUnknownEffect(ThreadExport)(encoded);
@@ -441,7 +440,9 @@ export const benchmark = Effect.gen(function* () {
       const tags = suffix.map(({ sequence, record }) => ({ sequence, tag: record.payload._tag }));
 
       const publicContract =
-        count === 100000 ? yield* verifyPublicContract(store, runtime) : undefined;
+        count === 100000
+          ? yield* verifyPublicContract().pipe(Effect.provideService(DurableAgentRuntime, runtime))
+          : undefined;
 
       yield* fs.writeFileString(
         `${root}/full-host-${count}-fixture.json`,
@@ -667,7 +668,12 @@ export const benchmark = Effect.gen(function* () {
       // A full export/verification between samples would warm unrelated full-history code.
       // Verify only the final sample after its startup/completion metrics are captured.
       const publicContract =
-        count === 100000 && index === 2 ? yield* verifyPublicContract(counted, runtime) : undefined;
+        count === 100000 && index === 2
+          ? yield* verifyPublicContract().pipe(
+              Effect.provideService(ThreadStore, counted),
+              Effect.provideService(DurableAgentRuntime, runtime),
+            )
+          : undefined;
 
       return {
         revision: config.revision,
