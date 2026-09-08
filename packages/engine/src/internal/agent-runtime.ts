@@ -4854,10 +4854,11 @@ const makeTurn = <
                       : {
                           name: tool.name,
                           description: Tool.getDescription(tool),
-                          parameters: Tool.getJsonSchema(
-                            tool.setParameters(Schema.toEncoded(tool.parametersSchema)),
-                            { transformer: toolSchemaTransformer },
-                          ),
+                          // Providers receive the original Tool; pre-encoding its schema can
+                          // discard definitions and annotations their transformer preserves.
+                          parameters: Tool.getJsonSchema(tool, {
+                            transformer: toolSchemaTransformer,
+                          }),
                         },
                   ),
                 ),
