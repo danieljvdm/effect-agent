@@ -7,7 +7,10 @@ export class EvaluationError extends Schema.TaggedError<EvaluationError>()("Eval
 
 /** The application's status contract. It contains no expected answers or grading hints. */
 export const ProjectStatus = Schema.Struct({
-  project: Schema.String,
+  project: Schema.String.annotate({
+    description: "The exact project identifier given by the user.",
+  }),
+  objective: Schema.Literals(["prepare-export-beta", "publish-export-beta", "cancel-export-beta"]),
   region: Schema.String,
   owner: Schema.String,
   launchDate: Schema.String,
@@ -84,7 +87,7 @@ export const ModelUsage = Schema.Struct({
 export type ModelUsage = typeof ModelUsage.Type;
 
 export const EvaluationReport = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   status: Schema.Literals(["running", "passed", "failed"]),
   sourceCommit: Schema.String,
   dirtyWorkingTree: Schema.Boolean,

@@ -7,7 +7,7 @@ import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import { MemoryKey, MemoryReader } from "@effect-agent/core/MemoryStore";
 import { contextWindowId } from "@effect-agent/engine/Compaction";
 import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import { ContextHistoryHit, ContextHistoryPage } from "@effect-agent/engine/ContextHistory";
+import { ContextHistoryPage } from "@effect-agent/engine/ContextHistory";
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import { digestDefinitions, digestDefinition } from "@effect-agent/thread/Digest";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
@@ -49,6 +49,7 @@ import {
   type PhaseResult,
   type RestartEvidence,
 } from "./contracts.ts";
+import { hasSearchPathToRead } from "./evidence.ts";
 import {
   makeLiveClient,
   MAX_INPUT_TOKENS,
@@ -242,7 +243,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
   });
 
   let report: EvaluationReport = {
-    version: 1,
+    version: 2,
     status: "running",
     sourceCommit: options.sourceCommit,
     dirtyWorkingTree: options.dirtyWorkingTree,
@@ -559,19 +560,14 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
         const source = records.find((record) => record.record.recordId === answer?.recordId);
         const evidence = source === undefined ? undefined : (yield* project(source)).evidence;
 
-        const searched = settledTool("search_context_windows").some(({ record, sequence }) => {
-          if (
-            record.payload._tag !== "ToolCallSettled" ||
-            sequence <= (lastWindow?.sequence ?? Number.MAX_SAFE_INTEGER)
-          )
-            return false;
-
-          const hits = Schema.decodeUnknownOption(Schema.Array(ContextHistoryHit))(
-            record.payload.result,
+        const searched =
+          answer !== undefined &&
+          hasSearchPathToRead(
+            runRecords,
+            lastWindow?.sequence ?? Number.MAX_SAFE_INTEGER,
+            answer.recordId,
+            phase.receipt.code,
           );
-
-          return Option.isSome(hits) && hits.value.some((hit) => hit.recordId === answer?.recordId);
-        });
 
         const read = settledTool("read_context_window").some(({ record, sequence }) => {
           if (
@@ -599,7 +595,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
             firstProbeRequests.get(phase.index),
             true,
           ),
-          check(`phase-${phase.index}/successful-search-after-rollover`, searched, true),
+          check(`phase-${phase.index}/search-path-to-original-read`, searched, true),
           check(`phase-${phase.index}/successful-read-after-rollover`, read, true),
           check(
             `phase-${phase.index}/cites-original-evidence`,

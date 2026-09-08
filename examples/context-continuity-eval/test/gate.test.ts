@@ -8,7 +8,8 @@ const scenario = makeScenario(17);
 const finalPhase = scenario[12]!;
 
 const finalStatus: ProjectStatus = {
-  project: "Harbor-17 export beta",
+  project: "Harbor-17",
+  objective: "prepare-export-beta",
   region: "eu-central",
   owner: "Ivo",
   launchDate: "2026-10-21",
@@ -27,7 +28,7 @@ const finalStatus: ProjectStatus = {
 };
 
 const completeReport = (): EvaluationReport => ({
-  version: 1,
+  version: 2,
   status: "running",
   sourceCommit: "a".repeat(40),
   dirtyWorkingTree: false,
@@ -93,6 +94,8 @@ describe("context continuity release gate", () => {
   });
 
   it.each([
+    { project: "Harbor-41" },
+    { objective: "publish-export-beta" as const },
     { owner: "Maya" },
     { region: "us-east" },
     { launchDate: "2026-10-14" },

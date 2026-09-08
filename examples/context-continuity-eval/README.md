@@ -7,8 +7,10 @@ restores notes into the prompt for it.
 
 The scripted user and reference answers are deterministic. Receipt codes vary by seed, and a
 delayed lookup must cite evidence covered by at least ten windows. Semantic checks compare the
-agent's status to the user's decisions; operational checks verify canonical rollover, notes, and
-retrieval evidence. No second model awards a subjective passing score.
+agent's status to the user's decisions, with project identity and objective in separate fields.
+Operational checks verify canonical rollover, notes, and retrieval evidence. A lookup may follow
+historical citations, but must finish by reading the original retained record. No second model
+awards a subjective passing score.
 
 This profile requests rollovers explicitly with a 16k estimated context limit. It does not measure
 natural context-pressure behavior, full production-window saturation, Cloudflare CPU, hard process

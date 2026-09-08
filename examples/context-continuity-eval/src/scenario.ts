@@ -2,7 +2,7 @@ import { Schema } from "effect";
 
 import { check, type Check, ProjectStatus } from "./contracts.ts";
 
-export const SCENARIO_VERSION = "harbor-handoff-v1";
+export const SCENARIO_VERSION = "harbor-handoff-v2";
 export const REQUIRED_ROLLOVERS = 12;
 
 export const RESTARTS = [
@@ -46,7 +46,8 @@ export const makeScenario = (seed: number): ReadonlyArray<ScenarioPhase> => {
   ).join("\n");
 
   let state: ProjectStatus = {
-    project: `Harbor-${seed} export beta`,
+    project: `Harbor-${seed}`,
+    objective: "prepare-export-beta",
     region: "eu-west",
     owner: "Maya",
     launchDate: "2026-10-14",
@@ -94,7 +95,8 @@ After the transition, read your notes, retrieve any requested archive evidence, 
     });
   };
 
-  add(`We are preparing ${state.project}. Maya owns it. Use eu-west. The target date is 2026-10-14
+  add(`The exact project identifier is ${state.project}. Our objective is prepare-export-beta.
+Maya owns it. Use eu-west. The target date is 2026-10-14
 and the budget is USD 12000. Use synthetic customer data only. External publication is NOT authorized.
 Nothing is complete. The next action is verify-backup. Maintain these facts until I change them.`);
   add(
@@ -163,6 +165,7 @@ They describe a rejected option. Keep our current approved plan. Security review
 export const gradeStatus = (phase: ScenarioPhase, actual: ProjectStatus): ReadonlyArray<Check> => {
   const fields = [
     "project",
+    "objective",
     "region",
     "owner",
     "launchDate",
