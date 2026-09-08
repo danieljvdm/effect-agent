@@ -965,8 +965,6 @@ export const reviewActionProgram = Effect.gen(function* () {
     const followUps = yield* github.loadReviewFollowUps({
       reviewAuthor,
       history,
-      scope,
-      changedPaths: new Set(surface.changes.map(({ path }) => path)),
     });
 
     const request = ReviewRequest.make({
