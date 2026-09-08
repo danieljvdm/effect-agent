@@ -2244,11 +2244,12 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       // regardless of parallel handler completion order.
       const waitingByDeclaration = new Map<number, ToolCallWaiting>();
 
+      const scheduling = options.scheduling ?? (yield* RunToolScheduling);
       const groups: Array<ReadonlyArray<PreparedToolCall<Tools>>> = [];
       let parallel: Array<PreparedToolCall<Tools>> = [];
 
       for (const call of executable) {
-        if (options.scheduling?.toolRequiresSequential?.(call.name) === true) {
+        if (scheduling.toolRequiresSequential?.(call.name) === true) {
           if (parallel.length > 0) {
             groups.push(parallel);
             parallel = [];
@@ -2445,29 +2446,28 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
     }),
   );
 
-const schedulingConcurrency = (
+const schedulingConcurrency = Effect.fn("AgentRuntime.schedulingConcurrency")(function* (
   configured: number,
-  scheduling: RunSchedulingHook | undefined,
-): Effect.Effect<number, AgentPolicyError> => {
-  const override = scheduling?.runOverride;
+  explicit: RunSchedulingHook | undefined,
+) {
+  const scheduling = explicit ?? (yield* RunToolScheduling);
+  const override = scheduling.runOverride;
 
   if (override === undefined) {
-    return Effect.succeed(configured);
+    return configured;
   }
   if (override.mode === "sequential") {
-    return Effect.succeed(1);
+    return 1;
   }
   if (!Number.isInteger(override.concurrency) || override.concurrency <= 0) {
-    return Effect.fail(
-      AgentPolicyError.make({
-        limit: "usage",
-        message: "Run Tool concurrency override must be a positive integer",
-      }),
-    );
+    return yield* AgentPolicyError.make({
+      limit: "usage",
+      message: "Run Tool concurrency override must be a positive integer",
+    });
   }
 
-  return Effect.succeed(Math.min(configured, override.concurrency));
-};
+  return Math.min(configured, override.concurrency);
+});
 
 /**
  * One terminal outcome per declared Tool Call of the completed Turn, in
@@ -6918,8 +6918,6 @@ function streamWithCompletion<
         Effect.map(Option.getOrUndefined),
       );
 
-      const scheduling = yield* RunToolScheduling;
-
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);
@@ -6951,7 +6949,6 @@ function streamWithCompletion<
         context: runOptions.context ?? preparation.hook,
         transientContext: runOptions.transientContext ?? preparation.transientContext,
         toolAuthorization: runOptions.toolAuthorization ?? authorization,
-        scheduling: runOptions.scheduling ?? scheduling,
         threadId,
         runId,
         ...(retained === undefined
