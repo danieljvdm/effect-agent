@@ -30,6 +30,7 @@ import { PerformanceIdentity } from "./performance-contracts.ts";
 import type { PerformanceTarget } from "./performance-deployment.ts";
 import {
   PerformanceDeployment,
+  PerformanceOwnership,
   PerformanceResources,
   loadPerformanceConfig,
   makePerformanceDeployment,
@@ -363,8 +364,9 @@ const command = Command.make(
       // Nest lifetimes so both targets coexist; measurements alternate without concurrent inference.
       const deployed = targets.reduceRight(
         (use, target) =>
-          withPerformanceDeployment(target, saveTarget, use).pipe(
+          withPerformanceDeployment(target, use).pipe(
             Effect.provideService(PerformanceDeployment, operations),
+            Effect.provideService(PerformanceOwnership, { saveTarget }),
           ),
         evaluate,
       );

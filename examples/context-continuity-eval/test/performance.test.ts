@@ -5,7 +5,7 @@ import { Effect, Exit, FileSystem, Layer, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
-import { expect, it } from "vite-plus/test";
+import { expect, expectTypeOf, it } from "vite-plus/test";
 
 import { EvaluationError } from "../src/contracts.ts";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../src/performance-contracts.ts";
 import {
   PerformanceDeployment,
+  PerformanceOwnership,
   withPerformanceDeployment,
   type PerformanceTarget,
 } from "../src/performance-deployment.ts";
@@ -26,12 +27,14 @@ import {
 
 it.each([
   "success",
+  "ownership-save-failure",
   "upload-failure",
   "flow-failure",
   "defect",
   "interruption",
   "timeout",
   "cleanup-failure",
+  "cleanup-save-failure",
 ] as const)("owns disposable cleanup through %s", async (mode) => {
   const actions: Array<string> = [];
 
@@ -47,26 +50,41 @@ it.each([
 
   const fail = EvaluationError.make({ stage: "test", message: "expected" });
 
+  const deployment = withPerformanceDeployment(
+    target,
+    mode === "flow-failure"
+      ? Effect.fail(fail)
+      : mode === "defect"
+        ? Effect.die("fixture defect")
+        : mode === "interruption"
+          ? Effect.interrupt
+          : mode === "timeout"
+            ? Effect.never.pipe(
+                Effect.timeout("1 millis"),
+                Effect.mapError(() => fail),
+              )
+            : Effect.void,
+  );
+
+  expectTypeOf<Effect.Services<typeof deployment>>().toEqualTypeOf<
+    PerformanceDeployment | PerformanceOwnership
+  >();
+  expectTypeOf<Effect.Error<typeof deployment>>().toEqualTypeOf<EvaluationError>();
+
   const exit = await Effect.runPromise(
-    withPerformanceDeployment(
-      target,
-      (saved) =>
-        Effect.sync(() => {
-          actions.push(saved.cleanupComplete ? "cleaned" : "owned");
-        }),
-      mode === "flow-failure"
-        ? Effect.fail(fail)
-        : mode === "defect"
-          ? Effect.die("fixture defect")
-          : mode === "interruption"
-            ? Effect.interrupt
-            : mode === "timeout"
-              ? Effect.never.pipe(
-                  Effect.timeout("1 millis"),
-                  Effect.mapError(() => fail),
-                )
-              : Effect.void,
-    ).pipe(
+    deployment.pipe(
+      Effect.provideService(PerformanceOwnership, {
+        saveTarget: (saved) =>
+          Effect.sync(() => {
+            actions.push(saved.cleanupComplete ? "save-cleanup" : "save-ownership");
+          }).pipe(
+            Effect.andThen(
+              mode === (saved.cleanupComplete ? "cleanup-save-failure" : "ownership-save-failure")
+                ? Effect.fail(fail)
+                : Effect.void,
+            ),
+          ),
+      }),
       Effect.provideService(PerformanceDeployment, {
         exists: () => Effect.succeed(false),
         deploy: () =>
@@ -83,9 +101,11 @@ it.each([
   );
 
   expect(actions).toEqual(
-    mode === "cleanup-failure"
-      ? ["owned", "deploy", "remove"]
-      : ["owned", "deploy", "remove", "cleaned"],
+    mode === "ownership-save-failure"
+      ? ["save-ownership"]
+      : mode === "cleanup-failure"
+        ? ["save-ownership", "deploy", "remove"]
+        : ["save-ownership", "deploy", "remove", "save-cleanup"],
   );
   expect(Exit.isSuccess(exit)).toBe(mode === "success");
 });
@@ -104,7 +124,13 @@ it("refuses existing Workers without deployment or deletion", async () => {
   };
 
   const exit = await Effect.runPromise(
-    withPerformanceDeployment(target, () => Effect.void, Effect.void).pipe(
+    withPerformanceDeployment(target, Effect.void).pipe(
+      Effect.provideService(PerformanceOwnership, {
+        saveTarget: () =>
+          Effect.sync(() => {
+            actions.push("save");
+          }),
+      }),
       Effect.provideService(PerformanceDeployment, {
         exists: () => Effect.succeed(true),
         deploy: () =>

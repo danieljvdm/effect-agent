@@ -33,17 +33,21 @@ export class PerformanceDeployment extends Context.Service<
   }
 >()("example/PerformanceDeployment") {}
 
+export class PerformanceOwnership extends Context.Service<
+  PerformanceOwnership,
+  {
+    saveTarget(target: typeof PerformanceTarget.Type): Effect.Effect<void, EvaluationError>;
+  }
+>()("example/PerformanceOwnership") {}
+
 /** Persist ownership before deployment: an interrupted upload may already have created resources. */
 export const withPerformanceDeployment = Effect.fn("Performance.withDeployment")(function* <
   A,
   E,
   R,
->(
-  target: typeof PerformanceTarget.Type,
-  save: (target: typeof PerformanceTarget.Type) => Effect.Effect<void, EvaluationError>,
-  use: Effect.Effect<A, E, R>,
-) {
+>(target: typeof PerformanceTarget.Type, use: Effect.Effect<A, E, R>) {
   const operations = yield* PerformanceDeployment;
+  const ownership = yield* PerformanceOwnership;
 
   if (yield* operations.exists(target))
     return yield* EvaluationError.make({
@@ -54,11 +58,13 @@ export const withPerformanceDeployment = Effect.fn("Performance.withDeployment")
 
   return yield* Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      yield* save(owned);
+      yield* ownership.saveTarget(owned);
 
       return yield* restore(operations.deploy(owned).pipe(Effect.andThen(use))).pipe(
         Effect.onExit(() =>
-          operations.remove(owned).pipe(Effect.andThen(save({ ...owned, cleanupComplete: true }))),
+          operations
+            .remove(owned)
+            .pipe(Effect.andThen(ownership.saveTarget({ ...owned, cleanupComplete: true }))),
         ),
       );
     }),
