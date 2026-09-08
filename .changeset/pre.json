@@ -135,6 +135,7 @@
     "plain-text-durable-pruning",
     "preserve-first-pass-findings",
     "preserve-required-delivery",
+    "preserve-resumed-model-response",
     "preserve-review-research",
     "preserve-schema-requirements",
     "preserve-supported-storage",
