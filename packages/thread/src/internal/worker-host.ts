@@ -91,6 +91,8 @@ import {
 } from "../ThreadStore.ts";
 import {
   WorkerBudgetAuthorizer,
+  WorkerConcurrencyLimit,
+  WorkerConcurrencyResolver,
   WorkerHostAuthorizer,
   WorkerHostConfig,
   WorkerPolicyResolver,
@@ -242,6 +244,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     authorizer: yield* WorkerHostAuthorizer,
     budgetAuthorizer: yield* WorkerBudgetAuthorizer,
     policyResolver: yield* WorkerPolicyResolver,
+    concurrencyResolver: yield* WorkerConcurrencyResolver,
     limits: yield* WorkerHostConfig,
     failpoint: yield* DurableRuntimeFailpoint,
     status: Option.getOrUndefined(admission)?.submissionStatus ?? control.status,
@@ -700,6 +703,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     admission: WorkerAdmission,
     inputDigest: Digest,
     input: PersistedJson,
+    principal: Principal,
   ): Effect.fn.Return<void, WorkerError> {
     const origin = admission.origin;
     const id = `worker-input:${admission.messageId}`;
@@ -862,11 +866,26 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         (row) => row.admission.origin.worker.threadId === origin.worker.threadId,
       ).length;
 
+      // Resolve inside the source CAS loop: independently delivered starts must compete
+      // against one canonical prefix. A conflict repeats both authority and capacity reads.
+      const selectedConcurrency = yield* deps.concurrencyResolver.resolve({
+        source: origin.source,
+        worker: origin.worker,
+        principal,
+        ...(source.submission === undefined ? {} : { sourceSubmission: source.submission }),
+      });
+
+      const sourceConcurrency = Option.isSome(selectedConcurrency)
+        ? (yield* decode(WorkerConcurrencyLimit, selectedConcurrency.value, "start"))
+            .maxActiveWorkersPerSource
+        : Infinity;
+
       if (
         pendingOwn >= deps.limits.maxPendingInputsPerWorker ||
         (!activeWorkers.has(origin.worker.threadId) &&
           activeWorkers.size >=
             Math.min(
+              sourceConcurrency,
               deps.limits.maxActiveWorkersPerSource ?? source.policy.toolConcurrency,
               independent
                 ? Infinity
@@ -973,7 +992,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         admission.deliveryPrincipal !== options.principal)
     )
       return yield* failure("start", "worker-mismatch");
-    yield* reservation(admission, inputDigest, input);
+    yield* reservation(admission, inputDigest, input, options.principal);
 
     return admission;
   });
@@ -1209,9 +1228,19 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         };
       }
 
+      // Reporting remains owned by the original allocator, even when a later input joins
+      // or starts another Run. Nested reports authorize the enclosing worker's source owner.
+      const authorizationSourceSubmissionId =
+        sourceOrigin === undefined
+          ? firstInput.admission.sourceSubmissionId
+          : workerAdmission?.sourceSubmissionId;
+
       const authorized = yield* deps.authorizer
         .authorize({
           sourceThreadId: sourceOrigin?.source.threadId ?? origin.source.threadId,
+          ...(authorizationSourceSubmissionId === undefined
+            ? {}
+            : { sourceSubmissionId: authorizationSourceSubmissionId }),
           principal,
           operation: "followUp",
           access: "send",

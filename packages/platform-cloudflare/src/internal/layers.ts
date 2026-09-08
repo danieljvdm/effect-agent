@@ -178,7 +178,11 @@ export type CloudflareDurableRuntimeInitializationError =
   | MessageDeliveryError
   | DoStorageInitializationError;
 
-/** The services `ThreadObject.layer` provides, including its single owner SQL client. */
+/**
+ * The services `ThreadObject.layer` provides, including its single owner SQL client.
+ * Its Context also supplies ThreadMessageDelivery (a defaulted Reference, with no required R)
+ * so application-composed maintenance retains the same native message recovery capability.
+ */
 export type CloudflareDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
@@ -605,6 +609,7 @@ const boundLayer = <E = never, R = never>(
         ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack), Layer.provide(messageRecovery)),
         portsEndpointLayer,
         messageStore,
+        messageRecovery,
       ).pipe(
         Layer.provideMerge(publication),
         Layer.provideMerge(projection),
