@@ -4,7 +4,7 @@ import {
   ContextBudgetError,
   ModelProtocolError,
 } from "@effect-agent/core/AgentError";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
 import { RunId, ThreadId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type RunEvent } from "@effect-agent/core/RunEvent";
@@ -39,6 +39,8 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 import { expectTypeOf, it as typeTest } from "vite-plus/test";
+
+import { initialCompactionState } from "../src/internal/compaction.ts";
 
 const identifiers = Layer.succeed(IdGenerator, {
   nextThreadId: Effect.succeed(ThreadId.make("rollover-thread")),
@@ -555,108 +557,405 @@ layer(testLayer)("native context windows", (it) => {
 
 // Regression seam: https://linear.app/reve/issue/KOM-125
 layer(testLayer)("resolved model context", (it) => {
-  it.effect.each(["oversized-default", "fitting-default", "separate-model", "legacy"] as const)(
-    "admits the complete compaction prompt for %s",
+  it.effect.each(["compressed", "binary", "copied-retry"] as const)(
+    "accounts for the entire captured image message: %s",
     (scenario) =>
       Effect.gen(function* () {
-        const main = scriptedModel(scenario === "separate-model" ? [done] : [done, done], "small");
+        const imageData =
+          scenario === "binary"
+            ? new Uint8Array(8_000).fill(255)
+            : scenario === "compressed"
+              ? "data:image/png;base64,AAAA"
+              : Schema.decodeUnknownSync(Schema.URLFromString)(
+                  `data:image/png;base64,${"A".repeat(20_000)}`,
+                );
 
-        const separate = scriptedModel([done], "large-compactor");
-        const compactor = yield* ContextCompactor;
+        const routed = scriptedModel(
+          scenario === "copied-retry" ? [{ overflow: true }, done] : [done],
+        );
+
+        let reservation = scenario === "compressed" ? 3_000 : 350;
         let resolutions = 0;
+        let countedImages = 0;
 
         const result = yield* driveRun({
-          script: scenario === "legacy" ? [done, done] : [],
-          history: Prompt.make([
-            ...Array.from({ length: scenario === "fitting-default" ? 5 : 10 }, () => ({
-              role: "assistant" as const,
-              content: "historical fact ".repeat(160),
-            })),
-            { role: "user", content: "recent evidence ".repeat(400) },
-          ]),
-          policy: AgentPolicy.make({
-            ...basePolicy,
-            contextTokenLimit: 3_500,
-            compaction: { mode: "summarize", keepRecentTokens: 1_500 },
-          }),
-          ...(scenario === "legacy"
-            ? {}
-            : {
-                context: {
-                  prepare: (request) =>
-                    Effect.sync(() => {
-                      resolutions += 1;
+          script: [],
+          ...(scenario === "copied-retry"
+            ? { history: Prompt.make([{ role: "assistant", content: "old evidence ".repeat(30) }]) }
+            : {}),
+          context: {
+            prepare: (request) =>
+              Effect.sync(() => {
+                resolutions += 1;
+                const capturedReservation = reservation;
+                const capturedHref = Schema.is(Schema.URL)(imageData) ? imageData.href : undefined;
 
-                      return {
-                        prompt: request.source,
-                        modelCall: {
-                          model: main.model,
-                          context: ModelCallContext.make({
-                            contextCapacity: 6_000,
-                            maxInputTokens: 4_000,
-                            outputReserveTokens: 2_000,
-                            uncountedOverheadTokens: 500,
-                          }),
-                        },
-                      };
+                return {
+                  prompt: request.source,
+                  modelCall: {
+                    model: routed.model,
+                    context: ModelCallContext.make({
+                      contextCapacity: 2_000,
+                      outputReserveTokens: 100,
+                      uncountedOverheadTokens: 0,
                     }),
-                } satisfies RunContextHook,
+                    estimateMessageTokens: (message: Prompt.Message) => {
+                      if (
+                        message.role !== "user" ||
+                        !message.content.some(
+                          (part) =>
+                            part.type === "file" &&
+                            part.mediaType === "image/png" &&
+                            (scenario === "binary" ||
+                              (Schema.is(Schema.URL)(part.data)
+                                ? part.data.href === capturedHref
+                                : part.data === imageData)),
+                        )
+                      )
+                        return undefined;
+                      countedImages += 1;
+
+                      return capturedReservation;
+                    },
+                  },
+                };
               }),
-        }).pipe(
-          Effect.provide(
-            scenario === "separate-model"
-              ? ContextCompactor.layerWithModel(separate.model)
-              : ContextCompactor.layer,
-          ),
-        );
+          },
+          transientContext: {
+            load: () =>
+              Effect.sync(() => {
+                reservation = 50_000;
 
-        if (scenario === "oversized-default") {
-          expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
-          expect(failureFrom(result.exit)).toMatchObject({
-            message: "Compaction summary request exceeds the resolved model input limit",
-          });
-          expect(main.requests).toHaveLength(0);
-          expect(result.compactions).toHaveLength(0);
-          expect(result.usageDeltas).toHaveLength(0);
-          expect(resolutions).toBe(1);
+                return Prompt.fromMessages([
+                  Prompt.userMessage({
+                    content: [
+                      Prompt.filePart({
+                        mediaType: "image/png",
+                        data: Schema.is(Schema.URL)(imageData)
+                          ? Schema.decodeUnknownSync(Schema.URLFromString)(imageData.href)
+                          : imageData,
+                      }),
+                    ],
+                  }),
+                ]);
+              }),
+          },
+        }).pipe(Effect.provide(ContextCompactor.layerRollover));
 
-          return;
-        }
-
-        expect(Exit.isSuccess(result.exit)).toBe(true);
-        expect(resolutions).toBe(scenario === "legacy" ? 0 : 1);
-        expect(result.compactions.map((event) => event.kind)).toEqual(["summarize"]);
-        expect(result.usageDeltas.map((entry) => entry.modelUsage?.model)).toEqual(
-          scenario === "legacy"
-            ? ["context-rollover", "context-rollover"]
-            : scenario === "separate-model"
-              ? ["large-compactor", "small"]
-              : ["small", "small"],
-        );
-        expect(result.usageDeltas.map((entry) => entry.inputTokens)).toEqual([100, 100]);
-        expect(result.usageDeltas.map((entry) => entry.outputTokens)).toEqual([5, 5]);
-
-        const summary =
-          scenario === "legacy"
-            ? result.requests[0]
-            : scenario === "separate-model"
-              ? separate.requests[0]
-              : main.requests[0];
-
-        if (summary === undefined) throw new Error("Expected a compaction model request");
-        expect(summary.toolCount).toBe(0);
-        expect(promptText(summary.prompt)).toContain("<transcript>");
-        expect(compactor.estimate(summary.prompt.content) > 3_000).toBe(
-          scenario !== "fitting-default",
-        );
-        if (scenario !== "legacy") {
-          expect(result.requests).toHaveLength(0);
-          expect(main.requests).toHaveLength(scenario === "separate-model" ? 1 : 2);
+        expect(resolutions).toBe(1);
+        expect(countedImages).toBeGreaterThan(0);
+        expect(result.requests).toHaveLength(0);
+        if (scenario === "compressed") {
+          expect(failureFrom(result.exit)).toBeInstanceOf(ContextBudgetError);
+          expect(routed.requests).toHaveLength(0);
+        } else {
+          expect(Exit.isSuccess(result.exit)).toBe(true);
+          expect(routed.requests).toHaveLength(scenario === "copied-retry" ? 2 : 1);
           expect(
-            main.requests.every((request) => compactor.estimate(request.prompt.content) <= 3_000),
+            routed.requests.every(({ prompt }) =>
+              prompt.content.some(
+                (message) =>
+                  message.role === "user" && message.content.some((part) => part.type === "file"),
+              ),
+            ),
           ).toBe(true);
+          expect(JSON.stringify(result.histories)).not.toContain("image/png");
+          expect(result.compactions).toHaveLength(scenario === "copied-retry" ? 1 : 0);
         }
       }),
+  );
+
+  it.effect.each([NaN, Infinity, -1, 0.5])(
+    "rejects invalid message estimate %s before I/O",
+    (estimate) =>
+      Effect.gen(function* () {
+        const routed = scriptedModel([done]);
+
+        const result = yield* driveRun({
+          script: [],
+          context: {
+            prepare: (request) =>
+              Effect.succeed({
+                prompt: request.source,
+                modelCall: {
+                  model: routed.model,
+                  context: ModelCallContext.make({
+                    contextCapacity: 2_000,
+                    outputReserveTokens: 100,
+                    uncountedOverheadTokens: 0,
+                  }),
+                  estimateMessageTokens: () => estimate,
+                },
+              }),
+          },
+        });
+
+        expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+        expect(routed.requests).toHaveLength(0);
+      }),
+  );
+
+  it.effect.each(["prune", "summarize", "rollover", "invalid-prune"] as const)(
+    "shares message accounting with built-in %s sizing",
+    (mode) =>
+      Effect.gen(function* () {
+        const compactor = yield* ContextCompactor;
+
+        const image = Prompt.userMessage({
+          content: [
+            Prompt.filePart({
+              mediaType: "image/png",
+              data: mode === "rollover" ? new Uint8Array(8_000) : "data:image/png;base64,AAAA",
+            }),
+          ],
+        });
+
+        const source =
+          mode === "prune" || mode === "invalid-prune"
+            ? Prompt.make([
+                {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "tool-call",
+                      id: "old",
+                      name: "search",
+                      params: {},
+                      providerExecuted: false,
+                    },
+                  ],
+                },
+                {
+                  role: "tool",
+                  content: [
+                    {
+                      type: "tool-result",
+                      id: "old",
+                      name: "search",
+                      result: "old result ".repeat(1_000),
+                      isFailure: false,
+                      providerExecuted: false,
+                    },
+                  ],
+                },
+                {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "tool-call",
+                      id: "new",
+                      name: "search",
+                      params: {},
+                      providerExecuted: false,
+                    },
+                  ],
+                },
+                {
+                  role: "tool",
+                  content: [
+                    {
+                      type: "tool-result",
+                      id: "new",
+                      name: "search",
+                      result: "new result",
+                      isFailure: false,
+                      providerExecuted: false,
+                    },
+                  ],
+                },
+              ])
+            : Prompt.fromMessages([
+                Prompt.userMessage({ content: [Prompt.textPart({ text: "old request" })] }),
+                Prompt.makeMessage("assistant", {
+                  content: [Prompt.textPart({ text: "old response" })],
+                }),
+                image,
+              ]);
+
+        const state = initialCompactionState();
+        let summaries = 0;
+
+        if (mode === "rollover") {
+          state.protectedStart = 2;
+          state.protectedEnd = 3;
+        }
+
+        const exit = yield* compactor
+          .compact({
+            threadId: ThreadId.make("accounting"),
+            runId: RunId.make("accounting"),
+            turn: 1,
+            source,
+            state,
+            targetTokens: mode === "summarize" ? 3_000 : 1_000,
+            policy: CompactionPolicy.make({
+              mode: mode === "summarize" ? "summarize" : "prune",
+              keepRecentTokens: 1_500,
+            }),
+            trigger: "pressure",
+            modelCallAllowed: mode === "summarize",
+            estimateMessageTokens: (message) => {
+              if (message.role === "user" && message.content.some((part) => part.type === "file"))
+                return mode === "summarize" ? 2_000 : 200;
+              if (mode === "prune" && message.role === "tool") return 40;
+              if (
+                mode === "invalid-prune" &&
+                message.role === "tool" &&
+                message.content.some(
+                  (part) =>
+                    part.type === "tool-result" &&
+                    part.result === "[tool result cleared by compaction]",
+                )
+              )
+                return NaN;
+
+              return undefined;
+            },
+            summarize: () =>
+              Effect.sync(() => {
+                summaries += 1;
+
+                return "old facts";
+              }),
+          })
+          .pipe(Stream.runCollect, Effect.exit);
+
+        if (mode === "invalid-prune") expect(failureFrom(exit)).toBeInstanceOf(CompactionError);
+        else {
+          expect(Exit.isSuccess(exit)).toBe(true);
+          if (Exit.isSuccess(exit)) {
+            expect(exit.value.map((decision) => decision.kind)).toEqual(
+              mode === "prune" ? [] : [mode],
+            );
+            if (mode !== "prune") expect(exit.value[0]?.through).toBe(2);
+          }
+        }
+        expect(summaries).toBe(mode === "summarize" ? 1 : 0);
+      }).pipe(
+        Effect.provide(
+          mode === "rollover" ? ContextCompactor.layerRollover : ContextCompactor.layer,
+        ),
+      ),
+  );
+
+  it.effect.each([
+    "oversized-default",
+    "fitting-default",
+    "invalid-default-estimate",
+    "separate-model",
+    "legacy",
+  ] as const)("admits the complete compaction prompt for %s", (scenario) =>
+    Effect.gen(function* () {
+      const main = scriptedModel(scenario === "separate-model" ? [done] : [done, done], "small");
+
+      const separate = scriptedModel([done], "large-compactor");
+      const compactor = yield* ContextCompactor;
+      let resolutions = 0;
+
+      const result = yield* driveRun({
+        script: scenario === "legacy" ? [done, done] : [],
+        history: Prompt.make([
+          ...Array.from({ length: scenario === "fitting-default" ? 5 : 10 }, () => ({
+            role: "assistant" as const,
+            content: "historical fact ".repeat(160),
+          })),
+          { role: "user", content: "recent evidence ".repeat(400) },
+        ]),
+        policy: AgentPolicy.make({
+          ...basePolicy,
+          contextTokenLimit: 3_500,
+          compaction: { mode: "summarize", keepRecentTokens: 1_500 },
+        }),
+        ...(scenario === "legacy"
+          ? {}
+          : {
+              context: {
+                prepare: (request) =>
+                  Effect.sync(() => {
+                    resolutions += 1;
+
+                    return {
+                      prompt: request.source,
+                      modelCall: {
+                        model: main.model,
+                        context: ModelCallContext.make({
+                          contextCapacity: 6_000,
+                          maxInputTokens: 4_000,
+                          outputReserveTokens: 2_000,
+                          uncountedOverheadTokens: 500,
+                        }),
+                        estimateMessageTokens: (message) =>
+                          (scenario === "invalid-default-estimate" ||
+                            scenario === "separate-model") &&
+                          message.role === "user" &&
+                          message.content.some(
+                            (part) => part.type === "text" && part.text.includes("<transcript>"),
+                          )
+                            ? NaN
+                            : undefined,
+                      },
+                    };
+                  }),
+              } satisfies RunContextHook,
+            }),
+      }).pipe(
+        Effect.provide(
+          scenario === "separate-model"
+            ? ContextCompactor.layerWithModel(separate.model)
+            : ContextCompactor.layer,
+        ),
+      );
+
+      if (scenario === "oversized-default" || scenario === "invalid-default-estimate") {
+        expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+        expect(failureFrom(result.exit)).toMatchObject({
+          message:
+            scenario === "oversized-default"
+              ? "Compaction summary request exceeds the resolved model input limit"
+              : "Message token estimator returned an invalid token count",
+        });
+        expect(main.requests).toHaveLength(0);
+        expect(result.compactions).toHaveLength(0);
+        expect(result.usageDeltas).toHaveLength(0);
+        expect(resolutions).toBe(1);
+
+        return;
+      }
+
+      expect(Exit.isSuccess(result.exit)).toBe(true);
+      expect(resolutions).toBe(scenario === "legacy" ? 0 : 1);
+      expect(result.compactions.map((event) => event.kind)).toEqual(["summarize"]);
+      expect(result.usageDeltas.map((entry) => entry.modelUsage?.model)).toEqual(
+        scenario === "legacy"
+          ? ["context-rollover", "context-rollover"]
+          : scenario === "separate-model"
+            ? ["large-compactor", "small"]
+            : ["small", "small"],
+      );
+      expect(result.usageDeltas.map((entry) => entry.inputTokens)).toEqual([100, 100]);
+      expect(result.usageDeltas.map((entry) => entry.outputTokens)).toEqual([5, 5]);
+
+      const summary =
+        scenario === "legacy"
+          ? result.requests[0]
+          : scenario === "separate-model"
+            ? separate.requests[0]
+            : main.requests[0];
+
+      if (summary === undefined) throw new Error("Expected a compaction model request");
+      expect(summary.toolCount).toBe(0);
+      expect(promptText(summary.prompt)).toContain("<transcript>");
+      expect(compactor.estimate(summary.prompt.content) > 3_000).toBe(
+        scenario !== "fitting-default",
+      );
+      if (scenario !== "legacy") {
+        expect(result.requests).toHaveLength(0);
+        expect(main.requests).toHaveLength(scenario === "separate-model" ? 1 : 2);
+        expect(
+          main.requests.every((request) => compactor.estimate(request.prompt.content) <= 3_000),
+        ).toBe(true);
+      }
+    }),
   );
 
   it.effect("freezes routing before transient preparation and admits a smaller next model", () =>

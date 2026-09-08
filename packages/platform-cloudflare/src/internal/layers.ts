@@ -55,6 +55,7 @@ import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import {
   ThreadMaintenance,
@@ -163,7 +164,7 @@ export type CloudflareDurableRuntimeInitializationError =
   | DigestError
   | DoStorageInitializationError;
 
-/** The services `ThreadObject.layer` provides. */
+/** The services `ThreadObject.layer` provides, including its single owner SQL client. */
 export type CloudflareDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
@@ -174,7 +175,8 @@ export type CloudflareDurableRuntimeServices =
   | ThreadMutationGate
   | ThreadPublication
   | ThreadObjectPorts
-  | ProgressWaitRegistry;
+  | ProgressWaitRegistry
+  | SqlClient;
 
 /**
  * Owner-side execution port for a `portCall` request the wire endpoint has already decoded.
@@ -359,7 +361,7 @@ export const layerFromBindings = <E = never, R = never>(
   | DurableObjectContext
   | ThreadObjectNamespace
   | CloudflareBootstrapServices
-  | Exclude<R, ThreadStore | SubmissionLedger>
+  | Exclude<R, ThreadStore | SubmissionLedger | SqlClient>
 > =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -387,7 +389,7 @@ export const layerFromBindings = <E = never, R = never>(
       );
 
       const publication = (options.publication ?? ThreadPublication.layer).pipe(
-        Layer.provide(rawLocalPorts),
+        Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))),
       );
 
       const localPorts =
@@ -470,6 +472,10 @@ export const layerFromBindings = <E = never, R = never>(
         runtimeStack,
         ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack)),
         portsEndpointLayer,
-      ).pipe(Layer.provideMerge(publication), Layer.provideMerge(ThreadMutationGate.layer));
+      ).pipe(
+        Layer.provideMerge(publication),
+        Layer.provideMerge(ThreadMutationGate.layer),
+        Layer.provideMerge(infrastructure),
+      );
     }),
   );

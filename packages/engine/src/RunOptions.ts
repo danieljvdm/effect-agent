@@ -22,7 +22,7 @@ import { type ModelCallUsage } from "@effect-agent/core/Usage";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
 
-import type { CompactionError } from "./ContextCompactor.ts";
+import type { CompactionError, ContextMessageTokenEstimator } from "./ContextCompactor.ts";
 import type { ContextRolloverSelection, ModelCallContext } from "./ContextWindow.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
 
@@ -226,6 +226,15 @@ export interface ResolvedModelCall {
    * provider-generated call parameter schemas are never transformed into function declarations.
    */
   readonly toolSchemaTransformer?: LanguageModel.CodecTransformer | undefined;
+  /**
+   * Replace the entire estimate of a message, including its framing, with a non-negative finite
+   * integer. Undefined uses the native structural estimate for that message. Capture any model
+   * or content-specific reservation before returning this callback; it must be deterministic for
+   * copied message content and same-Turn retries, without consulting mutable provider state.
+   * The engine shares it across admission, built-in compaction sizing, and default summaries.
+   * Do not also charge a replaced message through uncountedOverheadTokens.
+   */
+  readonly estimateMessageTokens?: ContextMessageTokenEstimator | undefined;
 }
 
 /** Prepared model-only context returned by a context adapter. */

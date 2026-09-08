@@ -222,6 +222,7 @@ import {
   CompactionError,
   ContextCompactor,
   type CompactionModelLayer,
+  type ContextMessageTokenEstimator,
 } from "../ContextCompactor.ts";
 import {
   ContextRolloverRequest,
@@ -286,6 +287,8 @@ import {
   buildCompactedView,
   contextWindowId,
   collectCoveredMessages,
+  estimatePromptTokens,
+  evaluateMessageTokenEstimates,
   initialCompactionState,
   isContextOverflowMessage,
   type ContextCompactionState,
@@ -3207,10 +3210,24 @@ const stampProviderResultEvent = (
  */
 const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(function* (
   messages: ReadonlyArray<Prompt.Message>,
+  messageTokenEstimator?: ContextMessageTokenEstimator,
 ) {
   const compactor = yield* ContextCompactor;
 
-  return yield* Schema.decodeUnknownEffect(Schema.Natural)(compactor.estimate(messages)).pipe(
+  const estimate =
+    messageTokenEstimator === undefined
+      ? Option.some(compactor.estimate(messages))
+      : evaluateMessageTokenEstimates(messageTokenEstimator, (estimate) =>
+          estimatePromptTokens(messages, estimate),
+        );
+
+  if (Option.isNone(estimate)) {
+    return yield* CompactionError.make({
+      message: "Message token estimator returned an invalid token count",
+    });
+  }
+
+  return yield* Schema.decodeUnknownEffect(Schema.Natural)(estimate.value).pipe(
     Effect.mapError((cause) =>
       CompactionError.make({ message: "Compactor returned an invalid token estimate", cause }),
     ),
@@ -3274,6 +3291,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   turn: number,
   options: RunOptions<HookError, HookRequirements>,
   resolvedModelInputLimit: number | undefined,
+  messageTokenEstimator: ContextMessageTokenEstimator | undefined,
   targetTokens: number | undefined,
   trigger: "pressure" | "overflow" | "requested",
   modelCallAllowed = true,
@@ -3396,7 +3414,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         message: "Compaction already replaced this Turn's context",
       });
     }
-    const before = yield* estimateContextTokens(buildCompactedView(messages, state));
+
+    const before = yield* estimateContextTokens(
+      buildCompactedView(messages, state),
+      messageTokenEstimator,
+    );
 
     const summarize = (summarizerPrompt: Prompt.Prompt, model?: CompactionModelLayer) => {
       const generate = Effect.gen(function* () {
@@ -3408,7 +3430,8 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         if (
           model === undefined &&
           resolvedModelInputLimit !== undefined &&
-          (yield* estimateContextTokens(summarizerPrompt.content)) > resolvedModelInputLimit
+          (yield* estimateContextTokens(summarizerPrompt.content, messageTokenEstimator)) >
+            resolvedModelInputLimit
         ) {
           return yield* CompactionError.make({
             message: "Compaction summary request exceeds the resolved model input limit",
@@ -3565,6 +3588,9 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         turn,
         trigger,
         modelCallAllowed,
+        ...(messageTokenEstimator === undefined
+          ? {}
+          : { estimateMessageTokens: messageTokenEstimator }),
         ...(resolvedRequest === undefined ? {} : { requested: resolvedRequest }),
         summarize,
       })
@@ -3642,7 +3668,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
               }
               next.clearedThrough = decision.through;
             }
-            const after = yield* estimateContextTokens(buildCompactedView(messages, next));
+
+            const after = yield* estimateContextTokens(
+              buildCompactedView(messages, next),
+              messageTokenEstimator,
+            );
 
             if (decision.kind === "rollover" && trigger !== "requested" && after >= before) {
               return yield* CompactionError.make({
@@ -4659,6 +4689,10 @@ const makeTurn = <
 
       context.windowContextTokenLimit = contextTokenLimit;
       const toolSchemaTransformer = modelContext.modelCall?.toolSchemaTransformer;
+      const messageTokenEstimator = modelContext.modelCall?.estimateMessageTokens;
+
+      const estimateCallTokens = (messages: ReadonlyArray<Prompt.Message>) =>
+        estimateContextTokens(messages, messageTokenEstimator);
 
       const modelServices =
         modelContext.modelCall === undefined
@@ -4794,7 +4828,7 @@ const makeTurn = <
       const outputContractTokens =
         !admissionRequired || outputContractMessage === undefined
           ? 0
-          : yield* estimateContextTokens([
+          : yield* estimateCallTokens([
               Prompt.makeMessage("system", { content: outputContractMessage }),
             ]);
 
@@ -4834,7 +4868,7 @@ const makeTurn = <
                 }),
             }).pipe(
               Effect.flatMap((content) =>
-                estimateContextTokens([Prompt.makeMessage("system", { content })]),
+                estimateCallTokens([Prompt.makeMessage("system", { content })]),
               ),
             );
       });
@@ -4843,7 +4877,7 @@ const makeTurn = <
 
       const canonicalDecorationPromptTokens = !admissionRequired
         ? 0
-        : outputContractTokens + (yield* estimateContextTokens(canonicalDecoration.content));
+        : outputContractTokens + (yield* estimateCallTokens(canonicalDecoration.content));
 
       const canonicalDecorationTokens = () => toolSchemaTokens + canonicalDecorationPromptTokens;
 
@@ -4853,7 +4887,7 @@ const makeTurn = <
       const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
         options.context === undefined && options.transientContext === undefined
           ? nextContextEstimate(context, view)
-          : estimateContextTokens(view);
+          : estimateCallTokens(view);
 
       let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
       let sourceTokens: number | undefined;
@@ -4899,6 +4933,7 @@ const makeTurn = <
           turn,
           options,
           callContext === undefined ? undefined : contextTokenLimit,
+          messageTokenEstimator,
           contextTokenLimit === undefined
             ? undefined
             : Math.max(0, contextTokenLimit - canonicalDecorationTokens()),
@@ -4966,6 +5001,7 @@ const makeTurn = <
             turn,
             options,
             callContext === undefined ? undefined : contextTokenLimit,
+            messageTokenEstimator,
             contextTokenLimit === undefined
               ? undefined
               : Math.max(0, contextTokenLimit - canonicalDecorationTokens()),
@@ -5025,6 +5061,7 @@ const makeTurn = <
             turn,
             options,
             callContext === undefined ? undefined : contextTokenLimit,
+            messageTokenEstimator,
             sourceTarget,
             "pressure",
             !tokenPressure,
@@ -5102,7 +5139,7 @@ const makeTurn = <
         ? 0
         : options.transientContext === undefined
           ? canonicalDecorationPromptTokens
-          : outputContractTokens + (yield* estimateContextTokens(derivedPrompt.content));
+          : outputContractTokens + (yield* estimateCallTokens(derivedPrompt.content));
 
       const derivedPromptTokens = () => toolSchemaTokens + derivedPromptContentTokens;
 
@@ -5162,6 +5199,7 @@ const makeTurn = <
             turn,
             options,
             callContext === undefined ? undefined : contextTokenLimit,
+            messageTokenEstimator,
             sourceTarget,
             "pressure",
             !tokenPressure,
@@ -5259,7 +5297,7 @@ const makeTurn = <
               // compaction admission. Runs without either hook keep their
               // provider-reported incremental estimate.
 
-              return estimateContextTokens(providerPrompt.content).pipe(
+              return estimateCallTokens(providerPrompt.content).pipe(
                 Effect.map((tokens) => tokens + toolSchemaTokens),
                 Effect.tap((estimatedTokens) =>
                   contextTokenLimit !== undefined &&
@@ -5366,6 +5404,7 @@ const makeTurn = <
                   turn,
                   options,
                   callContext === undefined ? undefined : contextTokenLimit,
+                  messageTokenEstimator,
                   Math.max(0, contextTokenLimit - derivedPromptTokens()),
                   "overflow",
                 )
