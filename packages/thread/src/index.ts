@@ -26,6 +26,7 @@ export * as SubscriptionTools from "./SubscriptionTools.ts";
 export * as SubscriptionTransition from "./SubscriptionTransition.ts";
 export * as ThreadInvariants from "./ThreadInvariants.ts";
 export * as ThreadProjection from "./ThreadProjection.ts";
+export * as ThreadProjectionMaintenance from "./ThreadProjectionMaintenance.ts";
 export * as ThreadStore from "./ThreadStore.ts";
 export * as ToolReconciler from "./ToolReconciler.ts";
 export * as WakeScheduler from "./WakeScheduler.ts";

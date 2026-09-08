@@ -47,6 +47,7 @@ export default defineConfig({
       "src/ThreadStoreConformance.ts",
       "src/ThreadInvariants.ts",
       "src/ThreadProjection.ts",
+      "src/ThreadProjectionMaintenance.ts",
       "src/ThreadStore.ts",
       "src/ToolReconciler.ts",
       "src/WakeScheduler.ts",

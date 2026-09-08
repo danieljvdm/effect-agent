@@ -6,11 +6,17 @@ import {
 } from "@effect-agent/thread/DurableAgentRuntime";
 import { SubmissionLedger, type SubmissionSnapshot } from "@effect-agent/thread/SubmissionLedger";
 import {
+  ThreadProjectionMaintenance,
+  drainDue,
+  type ThreadProjectionError,
+} from "@effect-agent/thread/ThreadProjectionMaintenance";
+import {
   Cause,
   Clock,
   Context,
   DateTime,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Option,
@@ -422,7 +428,8 @@ export class ThreadMutationGate extends Context.Service<
 export type MaintenancePassFailure =
   | DurableWorkerFailure
   | DurableBindingFailure
-  | DurableAlarmError;
+  | DurableAlarmError
+  | ThreadProjectionError;
 
 /**
  * Incremental, quiescent maintenance over a durable dirty/processed generation (issue #93).
@@ -463,6 +470,7 @@ export class ThreadMaintenance extends Context.Service<
     never,
     | ThreadMutationGate
     | ThreadPublication
+    | ThreadProjectionMaintenance
     | DurableAgentRuntime
     | SubmissionLedger
     | DurableAlarmService
@@ -487,12 +495,24 @@ export class ThreadMaintenance extends Context.Service<
       const stalls = yield* Ref.make(0);
       const mutations = yield* ThreadMutationGate;
       const publication = yield* ThreadPublication;
+      const projection = yield* ThreadProjectionMaintenance;
       const messages = yield* ThreadMessageDelivery;
+
+      // A broken disposable index still needs a retry alarm and must not prevent startup.
+      const projectionDeadline = projection.pendingDeadline.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterrupts(cause)
+            ? Effect.failCause(cause)
+            : Effect.logError("Thread projection deadline unavailable", cause).pipe(
+                Effect.as(Option.some(0)),
+              ),
+        ),
+      );
 
       const pendingDeadline = Effect.gen(function* () {
         return earliestDeadline(
-          yield* publication.pendingDeadline,
-          yield* messages.pendingDeadline,
+          earliestDeadline(yield* publication.pendingDeadline, yield* messages.pendingDeadline),
+          yield* projectionDeadline,
         );
       });
 
@@ -612,6 +632,15 @@ export class ThreadMaintenance extends Context.Service<
         // status RPCs cannot consume the source Attempt's execution window. Join before
         // acknowledging the alarm so the final deadline includes all delivery mutations.
         const delivery = yield* Effect.forkChild(messages.drain);
+
+        // Capture derived-index failures until canonical work has had its turn. Interruption
+        // still stops the event; ordinary failures and defects retain the prearmed generation.
+        const projected = yield* Effect.exit(
+          drainDue.pipe(Effect.provideService(ThreadProjectionMaintenance, projection)),
+        );
+
+        if (Exit.isFailure(projected) && Cause.hasInterrupts(projected.cause))
+          return yield* Effect.failCause(projected.cause);
         const deadline = yield* publication.pendingDeadline;
 
         if (
@@ -624,6 +653,7 @@ export class ThreadMaintenance extends Context.Service<
 
         if (started._tag === "CaughtUp" || Option.isSome(pending)) {
           yield* Fiber.join(delivery);
+          if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
           yield* failpoint.hit("maintenance:finish:before");
 
           const disposition = yield* mutations.withSnapshot((active) =>
@@ -678,6 +708,7 @@ export class ThreadMaintenance extends Context.Service<
         const settlement = yield* runtime.processThreadHead(identity.threadId, { yieldAfter });
 
         yield* Fiber.join(delivery);
+        if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
         // Observe residual state before acknowledging this exact pass-start generation.
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const reports = new Map(recovered.map((report) => [report.submissionId, report]));

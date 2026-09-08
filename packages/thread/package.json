@@ -53,6 +53,7 @@
     "./testing/SubscriptionStoreConformance": "./src/SubscriptionStoreConformance.ts",
     "./testing/ThreadStoreConformance": "./src/ThreadStoreConformance.ts",
     "./ThreadInvariants": "./src/ThreadInvariants.ts",
+    "./ThreadProjectionMaintenance": "./src/ThreadProjectionMaintenance.ts",
     "./ThreadProjection": "./src/ThreadProjection.ts",
     "./ThreadStore": "./src/ThreadStore.ts",
     "./ToolReconciler": "./src/ToolReconciler.ts",
