@@ -16,6 +16,7 @@ import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type MessageAdmission, type MessagingError } from "@effect-agent/core/Messaging";
 import { Receipt } from "@effect-agent/core/Receipt";
 import { type ExhaustedLimit, type RunEvent } from "@effect-agent/core/RunEvent";
+import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
 import {
   SubagentBudgetReservation,
   SubagentReservationAmounts,
@@ -125,6 +126,13 @@ import {
   resolveWorkerBinding,
 } from "./internal/agent-registration.ts";
 import { inspectForeignDiagnostic, safeUnknownString } from "./internal/foreign-diagnostic.ts";
+import {
+  JournalCheckpointSeed,
+  RecoveryCheckpointState,
+  RecoveryCheckpointContents,
+  RECOVERY_ENGINE_VERSION,
+  checkpointSuffixCompatible,
+} from "./internal/journal-checkpoint.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
 import {
@@ -133,8 +141,8 @@ import {
   OperationDenied,
 } from "./OperationAuthorizer.ts";
 import {
-  type CanonicalRecordPayload,
   type CanonicalRecordEnvelope,
+  type CanonicalRecordPayload,
   type DeploymentId,
   type Digest,
   type ProducerId,
@@ -305,7 +313,8 @@ import {
   ThreadTailRequest,
   FencedAppendRequest,
   LoadCheckpointRequest,
-  type ThreadCheckpoint,
+  ThreadCheckpoint,
+  SaveRecoveryCheckpointRequest,
 } from "./ThreadStore.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./ToolReconciler.ts";
 import { WakeScheduler } from "./WakeScheduler.ts";
@@ -1152,12 +1161,129 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     submissionIds: ReadonlyArray<SubmissionId>,
   ) {
     const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+    const view = yield* recoveryView(threadId, tail.tailSequence, submissionIds);
 
     return yield* Stream.runCollect(
-      canonicalRange(threadId, tail.tailSequence).pipe(
-        Stream.filter(controlRecords(submissionIds)),
+      view.canonical.pipe(Stream.filter(controlRecords(submissionIds))),
+    );
+  });
+
+  /** A checkpoint is useful only for its explicitly retained submissions and exact definitions. */
+  const recoveryView = Effect.fn("DurableAgentRuntime.recoveryView")(function* (
+    threadId: ThreadId,
+    throughSequence: CanonicalSequence,
+    submissionIds: ReadonlyArray<SubmissionId>,
+  ): Effect.fn.Return<
+    {
+      readonly canonical: Stream.Stream<
+        CanonicalRecordEnvelope,
+        ThreadStoreError | ThreadNotMaterialized
+      >;
+      readonly seed?: JournalCheckpointSeed;
+    },
+    ThreadStoreError | ThreadNotMaterialized
+  > {
+    const full = { canonical: canonicalRange(threadId, throughSequence) };
+
+    if (store.recoveryCheckpoints === undefined) return full;
+
+    const loaded = yield* store.recoveryCheckpoints
+      .load(LoadCheckpointRequest.make({ threadId, atOrBeforeSequence: throughSequence }))
+      .pipe(Effect.catchTag("CheckpointRejected", () => Effect.succeed(Option.none())));
+
+    if (Option.isNone(loaded)) return full;
+    const checkpoint = loaded.value;
+
+    if (
+      checkpoint.engineVersion !== RECOVERY_ENGINE_VERSION ||
+      checkpoint.threadId !== threadId ||
+      checkpoint.throughSequence > throughSequence ||
+      throughSequence - checkpoint.throughSequence > 4_096
+    )
+      return full;
+
+    const decoded = yield* Schema.decodeUnknownEffect(RecoveryCheckpointContents)(
+      checkpoint.state,
+    ).pipe(Effect.option);
+
+    if (Option.isNone(decoded)) return full;
+    const { state, digest } = decoded.value;
+
+    if (
+      !submissionIds.every((id) => state.submissionIds.includes(id)) ||
+      state.seed.runId !== runIdForSubmission(state.submissionId)
+    )
+      return full;
+
+    const encoded = yield* Schema.encodeEffect(RecoveryCheckpointState)(state).pipe(
+      Effect.mapError((cause) =>
+        ThreadStoreError.make({
+          operation: "decode recovery checkpoint",
+          message: "Invalid recovery state",
+          cause,
+        }),
       ),
     );
+
+    const actualDigest = yield* withCrypto(digestJson(encoded)).pipe(
+      Effect.mapError((cause) =>
+        ThreadStoreError.make({
+          operation: "decode recovery checkpoint",
+          message: cause.message,
+          cause,
+        }),
+      ),
+    );
+
+    if (digest !== actualDigest) return full;
+
+    const owner = yield* ledger
+      .lookup(SubmissionLookupById.make({ submissionId: state.submissionId }))
+      .pipe(
+        Effect.mapError((cause) =>
+          ThreadStoreError.make({
+            operation: "recovery checkpoint compatibility",
+            message: cause.message,
+            cause,
+          }),
+        ),
+      );
+
+    if (
+      Option.isNone(owner) ||
+      owner.value.threadId !== threadId ||
+      owner.value.agentDigests.agent !== checkpoint.agentDefinitionDigest ||
+      owner.value.agentDigests.model !== checkpoint.modelDigest ||
+      owner.value.agentDigests.tools !== checkpoint.toolDigest
+    )
+      return full;
+    const replacement = state.seed.compaction;
+
+    if (
+      replacement.threadId !== threadId ||
+      replacement.sequence > checkpoint.throughSequence ||
+      replacement.record.payload._tag !== "CompactionCreated" ||
+      replacement.record.payload.kind === "clear-tool-results" ||
+      replacement.record.payload.coversThrough < state.seed.throughSequence ||
+      replacement.record.payload.coversThrough >= replacement.sequence ||
+      state.records.some(
+        (record) => record.threadId !== threadId || record.sequence > checkpoint.throughSequence,
+      ) ||
+      !state.records.some(
+        (record) =>
+          record.sequence === replacement.sequence &&
+          record.record.recordId === replacement.record.recordId,
+      )
+    )
+      return full;
+
+    const suffix = yield* Stream.runCollect(
+      canonicalRange(threadId, throughSequence, checkpoint.throughSequence),
+    );
+
+    if (!checkpointSuffixCompatible(state.seed, suffix, state.records)) return full;
+
+    return { canonical: Stream.fromIterable([...state.records, ...suffix]), seed: state.seed };
   });
 
   const readAllTolerant = Effect.fn("DurableAgentRuntime.readAllTolerant")(
@@ -1218,12 +1344,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     if (Option.isNone(tail))
       return { records: [], materialized: false, throughSequence: ZERO_SEQUENCE, submissionIds };
 
-    const records = yield* readCanonicalRange(
-      threadId,
-      ZERO_SEQUENCE,
-      tail.value.tailSequence,
-      controlRecords(submissionIds),
-    ).pipe(
+    const records = yield* recoveryView(threadId, tail.value.tailSequence, submissionIds).pipe(
+      Effect.flatMap((view) =>
+        Stream.runCollect(view.canonical.pipe(Stream.filter(controlRecords(submissionIds)))),
+      ),
       Effect.catchTag("ThreadNotMaterialized", (error) =>
         ThreadStoreError.make({
           operation: "read recovery history",
@@ -3724,6 +3848,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     canonical: Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>,
     canonicalThrough: CanonicalSequence,
+    journalSeed: JournalCheckpointSeed | undefined,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
     runTiming: { readonly startedAt: DateTime.Utc; readonly deadline: DateTime.Utc },
@@ -3734,8 +3859,267 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const runId = runIdForSubmission(submissionId);
       const boundaries: Array<JournalBoundary> = [];
 
-      const journal = yield* projectRunJournalStream(canonical, runId, (boundary) =>
-        boundaries.push(boundary),
+      const journal = yield* projectRunJournalStream(
+        canonical,
+        runId,
+        (boundary) => boundaries.push(boundary),
+        journalSeed,
+      );
+
+      const saveRecoveryCheckpoint = Effect.fn("DurableAgentRuntime.saveRecoveryCheckpoint")(
+        function* (compactionId: RecordId): Effect.fn.Return<void, DurableWorkerFailure> {
+          if (store.recoveryCheckpoints === undefined) return;
+          const tail = yield* Ref.get(ctx.tailRef);
+
+          const source = Stream.concat(
+            canonical,
+            canonicalRange(ctx.threadId, tail.sequence, canonicalThrough),
+          );
+
+          let compaction: CanonicalRecordEnvelope | undefined;
+          let latestResponse: CanonicalSequence | undefined;
+          let firstSequence = journalSeed?.firstSequence;
+          const orchestrationCalls = new Set<string>();
+
+          yield* Stream.runForEach(source, (entry) =>
+            Effect.sync(() => {
+              const payload = entry.record.payload;
+
+              if (entry.record.recordId === compactionId) compaction = entry;
+              if (!("runId" in payload) || payload.runId !== runId) return;
+              firstSequence ??= entry.sequence;
+              if (payload._tag === "ModelResponseRecorded") latestResponse = entry.sequence;
+              if (
+                payload._tag === "ToolCallPrepared" &&
+                (payload.executionKind === "delegation" ||
+                  payload.executionKind === "orchestration")
+              )
+                orchestrationCalls.add(payload.toolCallId);
+            }),
+          );
+          if (
+            compaction === undefined ||
+            compaction.record.payload._tag !== "CompactionCreated" ||
+            compaction.record.payload.kind === "clear-tool-results"
+          )
+            return;
+          const replacement = compaction;
+          const covered = compaction.record.payload.coversThrough;
+
+          const retiredThrough = decodeCanonicalSequence(
+            Math.min(covered, (latestResponse ?? covered + 1) - 1),
+          );
+
+          if (retiredThrough <= (journalSeed?.throughSequence ?? 0)) return;
+
+          const retired = yield* projectRunJournalStream(
+            source.pipe(Stream.filter((entry) => entry.sequence <= retiredThrough)),
+            runId,
+            undefined,
+            journalSeed,
+          );
+
+          const detailed = yield* summarizeModelUsage(
+            retired.usage.modelUsage,
+            retired.usage.summarizedModelUsage,
+          ).pipe(
+            Effect.mapError((cause) =>
+              RunJournalError.make({ message: "Retired usage exceeds accounting bounds", cause }),
+            ),
+          );
+
+          const protectedContext = retired.protectedContext ?? journal.protectedContext;
+          // The first native rollover may precede this Attempt's first journal snapshot response.
+          const current = yield* projectRunJournalStream(source, runId, undefined, journalSeed);
+          const protectedMessages = protectedContext ?? current.protectedContext;
+
+          const encodedContext =
+            protectedMessages === undefined
+              ? undefined
+              : yield* Schema.encodeEffect(Prompt.Prompt)(protectedMessages).pipe(
+                  Effect.flatMap(decodePersisted),
+                  Effect.mapError((cause) =>
+                    RunJournalError.make({ message: "Cannot checkpoint protected context", cause }),
+                  ),
+                );
+
+          let frontier = journalSeed?.frontier;
+
+          const retained = yield* Stream.runCollect(
+            source.pipe(
+              Stream.filter((entry) => {
+                if (entry.sequence > retiredThrough) return true;
+                const payload = entry.record.payload;
+
+                if (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled")
+                  frontier = { sequence: entry.sequence, tag: payload._tag };
+                if (
+                  payload._tag === "ThreadCreated" ||
+                  payload._tag === "SubagentLineageRecorded" ||
+                  payload._tag === "WorkerOriginRecorded"
+                )
+                  return true;
+                if (!("runId" in payload) || payload.runId !== runId) return false;
+                if ("toolCallId" in payload && orchestrationCalls.has(payload.toolCallId))
+                  return true;
+                switch (payload._tag) {
+                  case "ModelResponseRecorded":
+                  case "ToolCallPrepared":
+                  case "ToolCallSettled":
+                  case "ToolCallUnknown":
+                  case "ToolCallResolved":
+                  case "ToolApprovalRequested":
+                  case "ToolApprovalDecided":
+                  case "CompactionCreated":
+                  case "RunPolicyUsageReserved":
+                    return false;
+                  default:
+                    return true;
+                }
+              }),
+            ),
+          );
+
+          const ids = new Set<SubmissionId>([submissionId]);
+
+          for (const {
+            record: { payload },
+          } of retained)
+            if (payload._tag === "UserInputRecorded" && payload.submissionId !== undefined)
+              ids.add(payload.submissionId);
+
+          const validated = yield* Effect.try({
+            try: () =>
+              RecoveryCheckpointState.make({
+                schemaVersion: 1,
+                policyAccountingVersion: 1,
+                submissionId,
+                submissionIds: [...ids],
+                seed: JournalCheckpointSeed.make({
+                  runId,
+                  throughSequence: retiredThrough,
+                  ...(firstSequence === undefined ? {} : { firstSequence }),
+                  committedTurns: retired.committedTurns,
+                  policyUsage: retired.policyUsage,
+                  modelCalls: retired.usage.modelCalls,
+                  unobservedModelCalls: retired.usage.unobservedModelCalls ?? 0,
+                  inputTokens: retired.usage.inputTokens,
+                  outputTokens: retired.usage.outputTokens,
+                  lastInputTokens: retired.usage.lastInputTokens,
+                  lastOutputTokens: retired.usage.lastOutputTokens,
+                  costMicrousd: retired.usage.costMicrousd,
+                  summarizedModelUsage: detailed,
+                  ...(current.contextWindowId === undefined
+                    ? {}
+                    : { contextWindowId: current.contextWindowId }),
+                  ...(frontier === undefined ? {} : { frontier }),
+                  ...(encodedContext === undefined ? {} : { protectedContext: encodedContext }),
+                  compaction: replacement,
+                }),
+                records: retained,
+              }),
+            catch: (cause) =>
+              RunJournalError.make({ message: "Recovery checkpoint exceeds cache bounds", cause }),
+          }).pipe(Effect.option);
+
+          // Capacity is a cache eligibility limit, never a reason to truncate canonical evidence.
+          if (Option.isNone(validated)) return;
+
+          // Removing proof must not make a previously invalid historical compaction valid.
+          // Check the disposable projection against the canonical source before publishing it.
+          const replayed = yield* projectRunJournalStream(
+            Stream.fromIterable(retained),
+            runId,
+            undefined,
+            validated.value.seed,
+          ).pipe(Effect.option);
+
+          if (Option.isNone(replayed)) return;
+          const candidate = replayed.value;
+          const equalPrompt = Schema.toEquivalence(Prompt.Prompt);
+
+          if (
+            !equalPrompt(current.prompt, candidate.prompt) ||
+            !equalPrompt(current.historyBefore, candidate.historyBefore) ||
+            !Schema.toEquivalence(Schema.optional(Prompt.Prompt))(
+              current.protectedContext,
+              candidate.protectedContext,
+            ) ||
+            current.contextWindowId !== candidate.contextWindowId ||
+            current.pendingContextToolCallId !== candidate.pendingContextToolCallId ||
+            current.committedTurns !== candidate.committedTurns ||
+            !Schema.toEquivalence(RunPolicyUsage)(current.policyUsage, candidate.policyUsage) ||
+            (
+              [
+                "modelCalls",
+                "inputTokens",
+                "outputTokens",
+                "lastInputTokens",
+                "lastOutputTokens",
+                "costMicrousd",
+              ] as const
+            ).some((field) => current.usage[field] !== candidate.usage[field]) ||
+            (current.usage.unobservedModelCalls ?? 0) !==
+              (candidate.usage.unobservedModelCalls ?? 0)
+          )
+            return;
+
+          const summaries = yield* Effect.all(
+            [current, candidate].map((projection) =>
+              summarizeModelUsage(
+                projection.usage.modelUsage,
+                projection.usage.summarizedModelUsage,
+              ),
+            ),
+          ).pipe(Effect.option);
+
+          if (
+            Option.isNone(summaries) ||
+            summaries.value[0] === undefined ||
+            summaries.value[1] === undefined ||
+            !Schema.toEquivalence(RunUsageSummary)(summaries.value[0], summaries.value[1])
+          )
+            return;
+
+          const encoded = yield* Schema.encodeEffect(RecoveryCheckpointState)(validated.value).pipe(
+            Effect.option,
+          );
+
+          if (Option.isNone(encoded)) return;
+          const digest = yield* withCrypto(digestJson(encoded.value));
+
+          // JSON serialization duplicates shared in-memory references without weakening the
+          // persisted depth/node/byte guard (which rejects cyclic/shared object graphs).
+          const contents = yield* Schema.encodeEffect(
+            Schema.fromJsonString(RecoveryCheckpointContents),
+          )(RecoveryCheckpointContents.make({ state: validated.value, digest })).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PersistedJson))),
+            Effect.option,
+          );
+
+          if (Option.isNone(contents)) return;
+
+          const checkpoint = ThreadCheckpoint.make({
+            schemaVersion: 1,
+            threadId: ctx.threadId,
+            throughSequence: tail.sequence,
+            tailDigest: tail.digest,
+            engineVersion: RECOVERY_ENGINE_VERSION,
+            agentDefinitionDigest: submission.agentDigests.agent,
+            modelDigest: submission.agentDigests.model,
+            toolDigest: submission.agentDigests.tools,
+            state: contents.value,
+            createdAt: replacement.record.createdAt,
+          });
+
+          yield* hit("checkpoint:before-save");
+          yield* store.recoveryCheckpoints
+            .save(
+              SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch: ctx.producerEpoch }),
+            )
+            .pipe(Effect.catchTag("CheckpointRejected", () => Effect.void));
+          yield* hit("checkpoint:after-save");
+        },
       );
 
       const childLineage = records.find(
@@ -3773,7 +4157,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const resumeProjection =
         pending === undefined
           ? journal
-          : yield* projectRunJournalStream(withoutPendingBatch(canonical, pending, runId), runId);
+          : yield* projectRunJournalStream(
+              withoutPendingBatch(canonical, pending, runId),
+              runId,
+              undefined,
+              journalSeed,
+            );
 
       const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
 
@@ -3929,7 +4318,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }
           const detailedCalls = [...journal.usage.modelUsage, ...stagedCalls];
 
-          const detailed = yield* summarizeModelUsage(detailedCalls).pipe(
+          const detailed = yield* summarizeModelUsage(
+            detailedCalls,
+            journal.usage.summarizedModelUsage,
+          ).pipe(
             Effect.mapError((cause) =>
               RunJournalError.make({
                 message: "Run detailed usage exceeds safe-integer accounting bounds",
@@ -4681,7 +5073,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               sourceBoundaries = [];
               sourceJournal = yield* recordHalt(
                 projectRunJournalStream(
-                  canonicalRange(ctx.threadId, tail.sequence).pipe(
+                  Stream.concat(
+                    canonical,
+                    canonicalRange(ctx.threadId, tail.sequence, canonicalThrough),
+                  ).pipe(
                     Stream.filter(
                       (envelope) =>
                         envelope.record.payload._tag !== "CompactionCreated" ||
@@ -4690,6 +5085,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   ),
                   runId,
                   (boundary) => sourceBoundaries.push(boundary),
+                  journalSeed,
                 ),
               );
             }
@@ -4829,6 +5225,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             );
             knownIds.add(recordId);
             yield* recordHalt(hit("compaction:after-canonical-append"));
+            if (commit.kind !== "clear-tool-results")
+              yield* recordHalt(saveRecoveryCheckpoint(recordId));
           }),
       };
 
@@ -6500,11 +6898,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       let controlThrough = (yield* store.inspectTail(ThreadTailRequest.make({ threadId })))
         .tailSequence;
 
-      let records: ReadonlyArray<CanonicalRecordEnvelope> = yield* readCanonicalRange(
-        threadId,
-        ZERO_SEQUENCE,
-        controlThrough,
-        controlRecords([submissionId]),
+      const initialThrough = controlThrough;
+      const initialView = yield* recoveryView(threadId, initialThrough, [submissionId]);
+
+      let records: ReadonlyArray<CanonicalRecordEnvelope> = yield* Stream.runCollect(
+        initialView.canonical.pipe(Stream.filter(controlRecords([submissionId]))),
       );
 
       // The append-only prefix remains valid for this Attempt. Retain only this Run's control
@@ -6702,7 +7100,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       while (true) {
         const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
-        const canonical = canonicalRange(threadId, tail.tailSequence);
+
+        const canonical = Stream.concat(
+          initialView.canonical,
+          canonicalRange(threadId, tail.tailSequence, initialThrough),
+        );
 
         const currentRecords = yield* refreshControl(tail.tailSequence);
 
@@ -6714,6 +7116,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           currentRecords,
           canonical,
           tail.tailSequence,
+          initialView.seed,
           lineage,
           approvalDecisionIntents,
           runTiming,
@@ -8147,11 +8550,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       snapshot.hostSubmissionId !== undefined &&
       !history.submissionIds.includes(snapshot.hostSubmissionId)
     ) {
-      const hostRecords = yield* readCanonicalRange(
-        submission.threadId,
-        ZERO_SEQUENCE,
-        history.throughSequence,
-        controlRecords([snapshot.hostSubmissionId]),
+      const hostId = snapshot.hostSubmissionId;
+      const hostView = yield* recoveryView(submission.threadId, history.throughSequence, [hostId]);
+
+      const hostRecords = yield* Stream.runCollect(
+        hostView.canonical.pipe(Stream.filter(controlRecords([hostId]))),
       );
 
       const merged = new Map(history.records.map((entry) => [entry.sequence, entry]));

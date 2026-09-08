@@ -63,9 +63,9 @@ A failure, defect, timeout, or interruption before commit retains none of the cu
 storage error after commit can leave the whole run recorded, so inspect history before retrying.
 The runtime never retries execution or resumes an interrupted run.
 
-Each encoded input, output, and native Prompt suffix has a 1 MiB limit. Exports have a 65,536
-record limit. If the next run would cross that limit, execution fails before model or tool calls.
-Start a new thread to continue.
+Each encoded input, output, and native Prompt suffix has a 1 MiB limit. The supplied adapters and
+`ThreadExport` support up to 131,072 canonical records per Thread. If the next run would cross
+that limit, execution fails before model or tool calls. Start a new thread to continue.
 
 ### Choose one history owner {#history-policy-and-append-ownership}
 
@@ -126,7 +126,13 @@ is append-only. It records user input, completed model output, settled tool call
 completion or failure, and repairs. Partial tool argument deltas and live queue state are absent.
 
 Immediate history appends `UserInputRecorded`, `ModelCompleted`, and `RunCompleted` together.
-Durable execution records each turn and tool result separately for recovery.
+Durable execution records each turn and tool result separately for recovery. It can resume from a
+[disposable recovery checkpoint](../concepts/durability#recovery-checkpoints) plus a bounded suffix;
+retained-history execution still loads the complete export.
+
+`ThreadStore.read` returns at most 1,024 records per request, and each atomic `CanonicalBatch`
+contains at most 256 records. SQLite and Cloudflare exports read payloads in bounded pages while
+preserving one captured snapshot; the returned export still contains the complete record array.
 
 <a id="store-contract"></a>
 
@@ -138,8 +144,9 @@ Durable execution records each turn and tool result separately for recovery.
 | `@effect-agent/storage-sqlite`     | History that survives a Node process restart        |
 | `@effect-agent/storage-cloudflare` | Durable Object SQLite history and routed operations |
 
-The SQLite adapter supports only the current pre-1.0 schema. Incompatible data fails clearly and
-may require a reset. See [Persistence & durability](../concepts/durability) before claiming that
-active execution survives process loss.
+Persistent adapters upgrade supported predecessor formats atomically while preserving stored
+history and accepted work. Unsupported or ambiguous formats fail without resetting the store.
+See [supported storage upgrades](./operations#adopting-these-contracts) before adopting a new
+version, and [Persistence & durability](../concepts/durability) for execution recovery guarantees.
 
 For a custom adapter, follow the [store contract and certification guide](./certify-adapters#store-contract).

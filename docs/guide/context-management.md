@@ -1247,9 +1247,14 @@ returning the first page again. The built-in `ThreadContextHistory.layer` implem
 over every `ThreadStore`; its default scan ceiling and deadline are unchanged, and storage
 adapters need no persisted-format migration.
 
-An evidence index does not replace durable recovery. Journal and recovery-control reconstruction
-still traverse historical canonical records after rollover. Measure that host path separately
-before adopting longer histories; a bounded model prompt does not establish bounded startup work.
+An evidence index supplies retrieval candidates; canonical history and the submission ledger own
+recovery. After a committed rollover, the runtime can use a compatible
+[recovery checkpoint](../concepts/durability#recovery-checkpoints) containing the replacement
+context, cumulative accounting, and retained control and Durable Step evidence. It reads at most
+4,096 suffix records through pages of at most 1,024; an absent, invalid, or incompatible checkpoint
+or suffix falls back to the captured canonical prefix. Checkpoint eligibility is separate from
+index coverage and prompt size, so measure both the checkpoint path and full-replay fallback before
+adopting longer histories.
 
 ### Manage summaries yourself {#explicit-compaction-artifacts}
 

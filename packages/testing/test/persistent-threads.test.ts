@@ -25,6 +25,7 @@ import {
 } from "@effect-agent/thread/Records";
 import { replayThread } from "@effect-agent/thread/ThreadProjection";
 import {
+  MAX_THREAD_EXPORT_RECORDS,
   ThreadExportRequest,
   ThreadMaterialization,
   ThreadStore,
@@ -697,16 +698,18 @@ describe("persistent threads", () => {
         let tailDigest = EMPTY_TAIL_DIGEST;
 
         // Seed through the store's public append contract without thousands of model calls.
-        for (let start = 0; start < 65_532; start += 256) {
-          const records = Array.makeBy(Math.min(256, 65_532 - start), (offset) =>
-            RecordEnvelope.make({
-              recordId: Schema.decodeSync(RecordId)(`seed:${start + offset}`),
-              family: "thread",
-              schemaVersion: 1,
-              createdAt,
-              deploymentId: Schema.decodeSync(DeploymentId)("history-limit-test"),
-              payload: RepairAnnotated.make({ reason: "history seed", details: {} }),
-            }),
+        for (let start = 0; start < MAX_THREAD_EXPORT_RECORDS - 4; start += 256) {
+          const records = Array.makeBy(
+            Math.min(256, MAX_THREAD_EXPORT_RECORDS - 4 - start),
+            (offset) =>
+              RecordEnvelope.make({
+                recordId: Schema.decodeSync(RecordId)(`seed:${start + offset}`),
+                family: "thread",
+                schemaVersion: 1,
+                createdAt,
+                deploymentId: Schema.decodeSync(DeploymentId)("history-limit-test"),
+                payload: RepairAnnotated.make({ reason: "history seed", details: {} }),
+              }),
           );
 
           const batch = yield* CanonicalBatch.makeEffect({
@@ -751,7 +754,7 @@ describe("persistent threads", () => {
         const before = yield* exported;
         const prompt = yield* loadHistory(threadId);
 
-        expect(before.records).toHaveLength(65_535);
+        expect(before.records).toHaveLength(MAX_THREAD_EXPORT_RECORDS - 1);
         expect(prompt.content.map((message) => message.role)).toEqual([
           "system",
           "user",
@@ -761,7 +764,7 @@ describe("persistent threads", () => {
         ]);
         expect(yield* run("overflow").pipe(Effect.flip)).toMatchObject({
           _tag: "ThreadHistoryError",
-          message: expect.stringContaining("65536"),
+          message: expect.stringContaining(String(MAX_THREAD_EXPORT_RECORDS)),
         });
         expect(yield* Ref.get(modelCalls)).toBe(2);
         expect(yield* Ref.get(toolCalls)).toBe(1);

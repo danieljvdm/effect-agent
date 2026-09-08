@@ -720,6 +720,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
 ) {
   const local = yield* ThreadStore;
   const checkpoints = local.checkpoints;
+  const recoveryCheckpoints = local.recoveryCheckpoints;
   const transport = yield* ThreadPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
 
@@ -848,14 +849,33 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             ThreadNotMaterialized,
           ).pipe(Effect.map((reply) => reply.export)),
 
-    // Observation and checkpoints are lane-local by construction (plan §1.3): the closed
-    // route-capable store subset is materialize/append/read/inspectTail/export, and a
-    // foreign address on anything else fails fast typed.
+    // Observation and checkpoints are lane-local: the closed route-capable store subset
+    // is materialize/append/read/inspectTail/export. Recovery cache misses can fall back
+    // to those canonical reads, including when the cache belongs to a foreign Object.
     observe: (request) =>
       request.threadId === options.localThreadId
         ? local.observe(request)
         : Stream.unwrap(Effect.fail(crossThreadStoreError("thread observe", request.threadId))),
 
+    ...(recoveryCheckpoints === undefined
+      ? {}
+      : {
+          recoveryCheckpoints: {
+            save: (request) =>
+              request.checkpoint.threadId === options.localThreadId
+                ? recoveryCheckpoints.save(request)
+                : Effect.fail(
+                    crossThreadStoreError(
+                      "thread save recovery checkpoint",
+                      request.checkpoint.threadId,
+                    ),
+                  ),
+            load: (request) =>
+              request.threadId === options.localThreadId
+                ? recoveryCheckpoints.load(request)
+                : Effect.succeed(Option.none()),
+          },
+        }),
     ...(checkpoints === undefined
       ? {}
       : {
@@ -892,7 +912,8 @@ export const routedSubmissionLedgerLayer = (
 /**
  * Routing decorator over the LOCAL `ThreadStore` facet (plan §1.3): this-thread
  * requests execute locally; foreign materialize/append/read/inspectTail/export travel the
- * transport; foreign observation and checkpoints fail fast typed.
+ * transport. Foreign recovery-cache loads return none for canonical replay; other foreign
+ * checkpoint operations and observation fail fast typed.
  */
 export const routedThreadStoreLayer = (
   options: RoutedPortOptions,

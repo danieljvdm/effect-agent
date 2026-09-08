@@ -29,6 +29,9 @@ import {
   FencedAppendRequest,
   LoadCheckpointRequest,
   SaveCheckpointRequest,
+  SaveRecoveryCheckpointRequest,
+  type ThreadRecoveryCheckpoints,
+  MAX_THREAD_EXPORT_RECORDS,
 } from "@effect-agent/thread/ThreadStore";
 import {
   Context,
@@ -44,7 +47,7 @@ import {
 } from "effect";
 
 const MAX_THREADS = 256;
-const MAX_RECORDS_PER_THREAD = 65_536;
+const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;
 const MAX_CHECKPOINTS_PER_THREAD = 1_024;
 
 const ThreadCapacity = Context.Reference<number>(
@@ -66,6 +69,7 @@ interface StoredThread {
   readonly batches: ReadonlyMap<BatchId, StoredBatch>;
   readonly tailDigests: ReadonlyMap<CanonicalSequence, Digest>;
   readonly checkpoints: ReadonlyMap<CanonicalSequence, ThreadCheckpoint>;
+  readonly recoveryCheckpoint?: ThreadCheckpoint;
 }
 
 interface MemoryState {
@@ -631,6 +635,106 @@ const makeThreadStore = Effect.gen(function* () {
       }),
   );
 
+  const saveRecoveryCheckpoint: ThreadRecoveryCheckpoints["save"] = Effect.fn(
+    "MemoryThreadStore.saveRecoveryCheckpoint",
+  )(function* (unvalidated) {
+    const request = yield* validate(
+      SaveRecoveryCheckpointRequest,
+      "saveRecoveryCheckpoint",
+      unvalidated,
+    );
+
+    const decision = yield* Ref.modify(
+      state,
+      (
+        current,
+      ): readonly [
+        CheckpointDecision | { readonly _tag: "failure"; readonly error: FenceRejected },
+        MemoryState,
+      ] => {
+        const checkpoint = request.checkpoint;
+        const thread = current.threads.get(checkpoint.threadId);
+
+        if (thread === undefined)
+          return [
+            {
+              _tag: "failure",
+              error: ThreadNotMaterialized.make({ threadId: checkpoint.threadId }),
+            },
+            current,
+          ];
+        if (thread.producerEpoch !== request.producerEpoch)
+          return [
+            {
+              _tag: "failure",
+              error: FenceRejected.make({
+                threadId: checkpoint.threadId,
+                actualEpoch: thread.producerEpoch,
+                attemptedEpoch: request.producerEpoch,
+              }),
+            },
+            current,
+          ];
+        if (checkpoint.throughSequence > thread.tailSequence)
+          return [
+            {
+              _tag: "failure",
+              error: CheckpointRejected.make({
+                threadId: checkpoint.threadId,
+                reason: "ahead-of-tail",
+              }),
+            },
+            current,
+          ];
+        if (thread.tailDigests.get(checkpoint.throughSequence) !== checkpoint.tailDigest)
+          return [
+            {
+              _tag: "failure",
+              error: CheckpointRejected.make({
+                threadId: checkpoint.threadId,
+                reason: "digest-mismatch",
+              }),
+            },
+            current,
+          ];
+        if ((thread.recoveryCheckpoint?.throughSequence ?? -1) > checkpoint.throughSequence)
+          return [{ _tag: "success" }, current];
+        const threads = new Map(current.threads);
+
+        threads.set(checkpoint.threadId, { ...thread, recoveryCheckpoint: checkpoint });
+
+        return [{ _tag: "success" }, { threads }];
+      },
+    );
+
+    if (decision._tag === "failure") return yield* decision.error;
+  });
+
+  const loadRecoveryCheckpoint: ThreadRecoveryCheckpoints["load"] = Effect.fn(
+    "MemoryThreadStore.loadRecoveryCheckpoint",
+  )(function* (unvalidated) {
+    const request = yield* validate(LoadCheckpointRequest, "loadRecoveryCheckpoint", unvalidated);
+
+    const thread = yield* Ref.get(state).pipe(
+      Effect.flatMap((current) => findThread(current, request.threadId)),
+    );
+
+    const checkpoint = thread.recoveryCheckpoint;
+
+    if (
+      checkpoint === undefined ||
+      checkpoint.throughSequence > (request.atOrBeforeSequence ?? thread.tailSequence)
+    )
+      return Option.none();
+    if (thread.tailDigests.get(checkpoint.throughSequence) !== checkpoint.tailDigest)
+      return yield* CheckpointRejected.make({
+        threadId: request.threadId,
+        reason: "digest-mismatch",
+      });
+
+    return Option.some(checkpoint);
+  });
+
   return ThreadStore.of({
     materialize,
     append,
@@ -639,6 +743,7 @@ const makeThreadStore = Effect.gen(function* () {
     export: exportThread,
     inspectTail,
     checkpoints: { save: saveCheckpoint, load: loadCheckpoint },
+    recoveryCheckpoints: { save: saveRecoveryCheckpoint, load: loadRecoveryCheckpoint },
   });
 });
 
