@@ -201,7 +201,9 @@ tests use a scripted transport and are explicitly not live-provider or Cloudflar
 Cleanup runs on success, failure, and interruption. Ownership is persisted before upload, including
 ambiguous partial deployments. The command first deploys a
 [deleted class tombstone](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
-to remove the entire disposable namespace/data, then deletes and verifies removal of the Worker.
+to remove the entire disposable namespace/data, then deletes the Worker through the Workers API
+and verifies its removal. Cleanup requires Workers Scripts permissions; it does not scan KV
+namespaces or require KV permissions.
 The workflow retries recorded cleanup in an `always()` step. A failed cleanup fails the run and
 leaves its exact resource names in `resources.json`; retry using the same account credentials:
 
