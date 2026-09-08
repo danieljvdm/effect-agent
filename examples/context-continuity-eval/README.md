@@ -9,7 +9,9 @@ The scripted user and reference answers are deterministic. Receipt codes vary by
 delayed lookup must cite evidence covered by at least ten windows. Semantic checks compare the
 agent's status to the user's decisions, with project identity and objective in separate fields.
 Operational checks verify canonical rollover, notes, and retrieval evidence. A lookup may follow
-historical citations, but must finish by reading the original retained record. No second model
+historical citations, but must finish by reading the original retained record. The oracle identifies
+that record from the accepted archive input and its first canonical model response; an old copied
+tool result or later transcript cannot substitute for it. No second model
 awards a subjective passing score.
 
 This profile requests rollovers explicitly with a 16k estimated context limit. It does not measure

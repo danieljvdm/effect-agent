@@ -49,15 +49,15 @@ import {
   type PhaseResult,
   type RestartEvidence,
 } from "./contracts.ts";
-import { hasSearchPathToRead } from "./evidence.ts";
+import { originalArchiveRecord, hasSearchPathToRead } from "./evidence.ts";
 import {
   makeLiveClient,
   MAX_INPUT_TOKENS,
   MAX_MODEL_CALLS,
   MAX_OUTPUT_TOKENS,
   type ModelId,
-  RequestAudit,
 } from "./live-model.ts";
+import { RequestAudit, RequestAuditSink } from "./request-audit.ts";
 import {
   gradeStatus,
   instructions,
@@ -204,7 +204,6 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
   const path = yield* Path.Path;
   const scenario = makeScenario(options.seed);
   const phaseIndex = yield* Ref.make(0);
-  const firstProbeRequests = new Map<number, boolean>();
   const started = yield* Clock.currentTimeMillis;
 
   const scenarioDigest = yield* digestDefinition({
@@ -221,26 +220,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     model: options.model,
     maxCostMicrousd: options.maxCostMicrousd,
     phase: phaseIndex,
-    audit: Effect.fn("ContextContinuity.audit")(
-      function* (event) {
-        const probe = scenario[event.phase]?.receipt;
-
-        if (
-          event.kind === "request" &&
-          probe !== undefined &&
-          probe !== null &&
-          !firstProbeRequests.has(event.phase)
-        )
-          firstProbeRequests.set(event.phase, !event.json.includes(probe.code));
-        const json = yield* Schema.encodeEffect(Schema.fromJsonString(RequestAudit))(event);
-
-        yield* fs.writeFileString(auditPath, `${json}\n`, { flag: "a" });
-      },
-      Effect.mapError(() =>
-        EvaluationError.make({ stage: "evidence", message: "Could not write request audit" }),
-      ),
-    ),
-  });
+  }).pipe(Effect.provide(RequestAuditSink.file(auditPath)));
 
   let report: EvaluationReport = {
     version: 2,
@@ -556,16 +536,22 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
           ),
         );
       if (phase.receipt !== null) {
+        const firstRequests = yield* Effect.forEach(
+          (yield* fs.readFileString(auditPath)).trim().split("\n"),
+          (line) => Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(line),
+        );
+
         const answer = result.output.receipts[0];
-        const source = records.find((record) => record.record.recordId === answer?.recordId);
+        const source = originalArchiveRecord(records, scenario[1]?.message ?? "", answer?.recordId);
         const evidence = source === undefined ? undefined : (yield* project(source)).evidence;
 
         const searched =
           answer !== undefined &&
+          source !== undefined &&
           hasSearchPathToRead(
             runRecords,
             lastWindow?.sequence ?? Number.MAX_SAFE_INTEGER,
-            answer.recordId,
+            source.record.recordId,
             phase.receipt.code,
           );
 
@@ -579,7 +565,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
 
           return (
             Option.isSome(page) &&
-            page.value.recordId === answer?.recordId &&
+            page.value.recordId === source?.record.recordId &&
             page.value.text.includes(phase.receipt?.code ?? "")
           );
         });
@@ -592,7 +578,9 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
         checks.push(
           check(
             `phase-${phase.index}/answer-absent-before-retrieval`,
-            firstProbeRequests.get(phase.index),
+            firstRequests
+              .find((event) => event.kind === "request" && event.phase === phase.index)
+              ?.json.includes(phase.receipt.code) === false,
             true,
           ),
           check(`phase-${phase.index}/search-path-to-original-read`, searched, true),
@@ -600,6 +588,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
           check(
             `phase-${phase.index}/cites-original-evidence`,
             evidence !== undefined &&
+              source?.record.recordId === answer?.recordId &&
               evidence.text.includes(phase.receipt.label) &&
               evidence.text.includes(phase.receipt.code) &&
               source !== undefined &&
