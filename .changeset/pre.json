@@ -26,7 +26,8 @@
     "@effect-agent/example-semantic-memory-eval": "0.0.0",
     "@effect-agent/example-cloudflare-memory": "0.0.0",
     "@effect-agent/workflow": "0.1.0-beta.44",
-    "@effect-agent/example-durable-orchestration": "0.0.0"
+    "@effect-agent/example-durable-orchestration": "0.0.0",
+    "@effect-agent/example-context-continuity-eval": "0.0.0"
   },
   "changesets": [
     "activity-progress-integrity",
@@ -125,6 +126,7 @@
     "normalize-overlapping-cache-writes",
     "observed-browser-actions",
     "older-context-matches",
+    "optional-checkpoint-metadata",
     "optional-semantic-memory",
     "original-provider-tool-schemas",
     "owned-progress-budget",
@@ -160,6 +162,7 @@
     "required-failed-settlement-diagnostic",
     "required-native-completion",
     "resolved-context-history",
+    "retained-context-tool-contracts",
     "retained-message-delivery",
     "review-budget-finalization",
     "review-cache-cost",

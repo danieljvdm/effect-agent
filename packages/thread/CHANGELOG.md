@@ -1,5 +1,17 @@
 # @effect-agent/session
 
+## 0.1.0-beta.65
+
+### Patch Changes
+
+- [#382](https://github.com/danieljvdm/effect-agent/pull/382) [`4d8a33a`](https://github.com/danieljvdm/effect-agent/commit/4d8a33a82ebae221bcb62e9cec4d53a0e76f6bd8) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow application projection checkpoint callers to omit deprecated compatibility metadata while preserving and validating values in existing checkpoints.
+
+  BEHAVIOR CHANGE: Older binaries cannot read newly written metadata-free checkpoints, including with `verifyOnOpen`.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.65
+  - @effect-agent/engine@0.1.0-beta.65
+
 ## 0.1.0-beta.64
 
 ### Patch Changes

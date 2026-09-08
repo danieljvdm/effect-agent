@@ -1,5 +1,16 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.65
+
+### Patch Changes
+
+- [#383](https://github.com/danieljvdm/effect-agent/pull/383) [`41cf0df`](https://github.com/danieljvdm/effect-agent/commit/41cf0df75f483ea99ba494db01cc3247ed5d00b9) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add legacy context tool and handler exports that preserve the pre-pagination schemas and descriptions for retained Agent definitions. Keep the default context toolkit paginated for new definitions with compatible history adapters.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.65
+  - @effect-agent/engine@0.1.0-beta.65
+  - @effect-agent/sandbox@0.1.0-beta.65
+
 ## 0.1.0-beta.64
 
 ### Patch Changes
