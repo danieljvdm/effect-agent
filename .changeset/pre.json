@@ -119,6 +119,7 @@
     "normalize-overlapping-cache-writes",
     "observed-browser-actions",
     "optional-semantic-memory",
+    "original-provider-tool-schemas",
     "owned-progress-budget",
     "persistent-conversations",
     "pin-internal-dependency-versions",

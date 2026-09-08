@@ -1,5 +1,13 @@
 # @effect-agent/storage-memory
 
+## 0.1.0-beta.56
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/thread@0.1.0-beta.56
+  - @effect-agent/core@0.1.0-beta.56
+
 ## 0.1.0-beta.55
 
 ### Patch Changes

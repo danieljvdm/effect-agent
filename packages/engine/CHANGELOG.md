@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.56
+
+### Patch Changes
+
+- [#360](https://github.com/danieljvdm/effect-agent/pull/360) [`fdde35f`](https://github.com/danieljvdm/effect-agent/commit/fdde35f4b837be8acef0dc1badca69bef1a2dd05) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Count original Tool schemas with the selected provider transformer so context admission includes the same definitions and annotations sent to the model.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.56
+
 ## 0.1.0-beta.55
 
 ### Minor Changes
