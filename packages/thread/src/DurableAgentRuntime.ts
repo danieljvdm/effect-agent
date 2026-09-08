@@ -4702,6 +4702,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       // committed inside the pending record — re-enter official history through the engine so
       // the resumed live model context does not silently drop them.
       let resumeLeadingMessages: Prompt.Prompt | undefined;
+      let resumeResponseMessages: Prompt.Prompt | undefined;
 
       if (pending !== undefined) {
         const pendingMessages = yield* decodePrompt(pending.messages).pipe(
@@ -4721,6 +4722,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         if (firstAssistant > 0) {
           resumeLeadingMessages = Prompt.fromMessages(
             pendingMessages.content.slice(0, firstAssistant),
+          );
+        }
+        if (firstAssistant >= 0) {
+          resumeResponseMessages = Prompt.fromMessages(
+            pendingMessages.content.slice(firstAssistant),
           );
         }
       }
@@ -6248,6 +6254,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 ...(resumeLeadingMessages === undefined
                   ? {}
                   : { leadingMessages: resumeLeadingMessages }),
+                ...(resumeResponseMessages === undefined
+                  ? {}
+                  : { responseMessages: resumeResponseMessages }),
               },
             }),
         ...(preparedContext === undefined ? {} : { context: preparedContext }),

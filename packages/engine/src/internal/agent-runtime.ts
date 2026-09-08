@@ -516,6 +516,8 @@ const toolCounter = Metric.counter("effect_agent_tool_calls_total", {
  * value and performs its own decode before invoking the handler.
  */
 interface TurnTrace {
+  /** A resumed Turn already has an authoritative model response in canonical history. */
+  readonly replayedResponse?: Prompt.Prompt | undefined;
   /** Number of decoded provider parts retained or inspected during this model call. */
   responsePartCount: number;
   /** Conservative retained-memory estimate across decoded provider parts. */
@@ -4086,6 +4088,8 @@ const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
  * handler results remain Tool messages for the next model request.
  */
 const promptFromTurnParts = (trace: TurnTrace): Prompt.Prompt => {
+  if (trace.replayedResponse !== undefined) return trace.replayedResponse;
+
   const responsePrompt = Prompt.fromResponseParts(
     trace.parts.filter((part) => !(part.type === "tool-result" && part.providerExecuted)),
   );
@@ -6456,6 +6460,7 @@ const makeResumeTurn = <
       }
 
       const trace: TurnTrace = {
+        replayedResponse: resume.responseMessages,
         responsePartCount: 0,
         responsePartBytes: 0,
         parts: [],
