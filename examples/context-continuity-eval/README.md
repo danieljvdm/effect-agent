@@ -78,6 +78,36 @@ Export the matching `CONTEXT_EVAL_TOKEN` locally. The Worker protects all routes
 uses a fresh Thread for each attempt. The test fixture intercepts all OpenAI traffic and never
 contacts a paid endpoint. Its scripted answers live only in `test/`, outside the deployed bundle.
 
+Hosted acceptance needs an explicitly selected isolated account/Worker, deployment credentials,
+permission to create its SQLite DO namespace, and an owner for evidence export and teardown.
+Existing consumer deployment permission does not select this target. Build and dry-run the exact
+reviewed commit, preserve bundle hashes and the deployment/version IDs, then verify the authenticated
+host identity before submitting one fresh Thread. A local bundle or dry-run is not deployment proof.
+
+The template enables unsampled invocation logging. Collect Cloudflare's invocation CPU/wall-time
+records, request IDs, DO IDs, outcomes and deployment version over the run's UTC interval; confirm
+log-query access and units before the attempt. Collect client submit/response and phase-completion
+latency separately: Worker wall time includes I/O and is not client response latency. Correlate the
+two eviction boundaries with the new incarnations and preserve missing samples as missing evidence.
+Namespace CPU aggregates can supplement the report, but cannot isolate a particular recovery.
+See Cloudflare's [DO metrics](https://developers.cloudflare.com/durable-objects/observability/metrics-and-analytics/)
+and [Worker metrics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/).
+
+Budget hosted continuity separately: one model attempt remains capped at $10, plus an explicit
+Cloudflare allowance for invocations, active duration, SQL rows, retained storage and logs. A proposed
+15-minute collection window with one active 128-MB DO consumes at most 115.2 GB-s of DO duration
+(about $0.00144 at the current marginal rate); this excludes the calling Worker, SQL and logs.
+Reserve $1 for those host resources, verify the account's rates/quotas, and stop collection at the
+deadline. This is a proposed allowance, not authorization or an enforced Cloudflare billing cap.
+Export evidence before deleting the isolated data and deployment; retained storage remains billable.
+See [DO pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+
+The distinct #356 performance case still needs a hosted benchmark adapter for the existing
+1k/10k/100k-history recovery workload, with a fixed active suffix and cold/warm cohorts. Keep model
+inference out of that benchmark, exclude seeding from recovery timing, and measure canonical reads,
+checkpoint selection, invocation CPU and client latency together. The continuity Worker is ready
+for isolated deployment preparation; its 12-window run alone does not close this scaling gate.
+
 Prepare a full-capacity workload without inference:
 
 ```sh

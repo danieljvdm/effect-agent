@@ -6,6 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
   "vars": { "CONTEXT_EVAL_MODEL": "gpt-6-astra" },
   "durable_objects": { "bindings": [{ "name": "THREADS", "class_name": "ContinuityThread" }] },
   "exports": { "ContinuityThread": { "type": "durable-object", "storage": "sqlite" } },
