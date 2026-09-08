@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.65
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.65
+  - @effect-agent/core@0.1.0-beta.65
+  - @effect-agent/engine@0.1.0-beta.65
+
 ## 0.1.0-beta.64
 
 ### Patch Changes
