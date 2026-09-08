@@ -73,6 +73,10 @@ const scenarios = [
   "missing",
   "corrupt",
   "incompatible",
+  "engineVersion",
+  "agentDefinitionDigest",
+  "modelDigest",
+  "toolDigest",
   "definitions",
   "gap",
   "uncertain",
@@ -296,6 +300,22 @@ describe("disposable durable recovery checkpoint", () => {
                   checkpoints.load(request).pipe(
                     Effect.map(
                       Option.map((saved) => {
+                        if (
+                          [
+                            "engineVersion",
+                            "agentDefinitionDigest",
+                            "modelDigest",
+                            "toolDigest",
+                          ].includes(scenario)
+                        ) {
+                          const encoded = Schema.encodeSync(ThreadCheckpoint)(saved);
+
+                          return Schema.decodeUnknownSync(ThreadCheckpoint)(
+                            Object.fromEntries(
+                              Object.entries(encoded).filter(([key]) => key !== scenario),
+                            ),
+                          );
+                        }
                         if (scenario === "corrupt")
                           return ThreadCheckpoint.make({ ...saved, state: { invalid: true } });
                         if (scenario === "incompatible")
@@ -397,6 +417,10 @@ describe("disposable durable recovery checkpoint", () => {
         completed.records.filter(({ record }) => record.payload._tag === "RunStarted"),
       ).toHaveLength(1);
       if (scenario === "cache") expect(readRecords).toBeLessThan(original.records.length * 2);
+      if (
+        ["engineVersion", "agentDefinitionDigest", "modelDigest", "toolDigest"].includes(scenario)
+      )
+        expect(readRecords).toBeGreaterThanOrEqual(original.records.length);
     }).pipe(Effect.provide(base)),
   );
 });

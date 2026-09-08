@@ -1,5 +1,17 @@
 # @effect-agent/session
 
+## 0.1.0-beta.64
+
+### Patch Changes
+
+- [#380](https://github.com/danieljvdm/effect-agent/pull/380) [`620d7d3`](https://github.com/danieljvdm/effect-agent/commit/620d7d38dd94b95c29d2e07a79b445a6fbccd648) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resume durable runs from disposable recovery checkpoints while preserving canonical side-effect obligations and cumulative accounting. Support up to 131,072 canonical records in storage, exports, and verification, with preserving upgrades for supported SQLite and Durable Object stores.
+
+- [#379](https://github.com/danieljvdm/effect-agent/pull/379) [`a5bcce2`](https://github.com/danieljvdm/effect-agent/commit/a5bcce2bcb8683735284b24dd026391237cf70d9) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resolve source-authorized background concurrency at the canonical reservation boundary, preserving active steering, retained origins, and retryable authority failures. Include the original owner submission in terminal report authorization and preserve native message recovery when applications rebuild Cloudflare runtime maintenance.
+
+- Updated dependencies [[`620d7d3`](https://github.com/danieljvdm/effect-agent/commit/620d7d38dd94b95c29d2e07a79b445a6fbccd648)]:
+  - @effect-agent/core@0.1.0-beta.64
+  - @effect-agent/engine@0.1.0-beta.64
+
 ## 0.1.0-beta.63
 
 ### Patch Changes

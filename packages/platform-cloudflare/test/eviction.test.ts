@@ -23,7 +23,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   BOOK_TOOL_CALL_ID,
-  TEST_DIGESTS,
   approvalDefinition,
   armRuntimeEviction,
   armStorageEviction,
@@ -1178,10 +1177,6 @@ describe("DC eviction matrix — checkpoints and export", () => {
           threadId: decodeThreadId(thread),
           throughSequence: tail.tailSequence,
           tailDigest: tail.tailDigest,
-          engineVersion: "cf-eviction-harness",
-          agentDefinitionDigest: TEST_DIGESTS.agent,
-          modelDigest: TEST_DIGESTS.model,
-          toolDigest: TEST_DIGESTS.tools,
           state: {},
           createdAt: DateTime.toUtc(DateTime.makeUnsafe(Date.now())),
         });

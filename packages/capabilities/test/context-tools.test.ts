@@ -32,7 +32,141 @@ const status = ContextWindowStatus.make({
   remainingTokens: 60,
 });
 
+// Isolated beta62 serialization from 903a6dba169f46b69ce01c59c7c5f4943746c7ca;
+// it does not import either current toolkit as its expected contract.
+const beta62Contract = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(
+  readFileSync(new URL("./fixtures/context-tools-beta62.json", import.meta.url), "utf8"),
+);
+
 describe("context window tools", () => {
+  // https://github.com/danieljvdm/effect-agent/commit/d0f36bfc21e821fcc34caacf3c39f1e904a5d1c9
+  it("preserves the beta62 tool contracts for retained Agent definitions", () => {
+    expect(ContextTools.legacyToolkit).toBeDefined();
+
+    const contract = Object.fromEntries(
+      Object.entries(ContextTools.legacyToolkit.tools).map(([name, tool]) => [
+        name,
+        {
+          id: tool.id,
+          description: tool.description,
+          parameters: Schema.toJsonSchemaDocument(tool.parametersSchema),
+          success: Schema.toJsonSchemaDocument(tool.successSchema),
+          failure: Schema.toJsonSchemaDocument(tool.failureSchema),
+          failureMode: tool.failureMode,
+          executionClass: getToolExecutionClass(tool),
+          readonly: Context.get(tool.annotations, Tool.Readonly),
+          idempotent: Context.get(tool.annotations, Tool.Idempotent),
+          rollover: Context.get(tool.annotations, ContextRolloverTool),
+        },
+      ]),
+    );
+
+    expect(contract).toEqual(beta62Contract);
+    expect(ContextTools.legacyToolkit.tools.search_context_windows).toBe(
+      ContextTools.LegacySearchContextWindows,
+    );
+    expect(ContextTools.toolkit.tools.search_context_windows).toBe(
+      ContextTools.SearchContextWindows,
+    );
+    expect(ContextTools.LegacySearchContextWindows).not.toBe(ContextTools.SearchContextWindows);
+  });
+
+  // https://github.com/danieljvdm/effect-agent/commit/d0f36bfc21e821fcc34caacf3c39f1e904a5d1c9
+  it.effect(
+    "keeps legacy handlers bound to the live Thread without advertising or forwarding cursors",
+    () =>
+      Effect.gen(function* () {
+        const tools = yield* ContextTools.legacyToolkit;
+        const current = yield* Ref.make(status);
+        const searches: Array<ContextHistorySearch> = [];
+        const reads: Array<ContextHistoryRead> = [];
+
+        const failure = ContextHistoryError.make({
+          reason: "unavailable",
+          message: "Archive offline",
+        });
+
+        const archive = ContextHistory.of({
+          search: Effect.fn(function* (request) {
+            searches.push(request);
+            if (request.query === "offline") return yield* failure;
+
+            return [
+              ContextHistoryHit.make({ recordId: "evidence", windowId: "old", text: "saved" }),
+            ];
+          }),
+          read: (request) =>
+            Effect.sync(() => {
+              reads.push(request);
+
+              return ContextHistoryPage.make({
+                recordId: request.recordId,
+                windowId: "old",
+                text: "saved evidence",
+                nextOffset: null,
+              });
+            }),
+        });
+
+        yield* Effect.gen(function* () {
+          const untrusted = { query: "saved", beforeRecordId: "foreign", threadId: "foreign" };
+
+          const found = yield* tools
+            .handle("search_context_windows", untrusted, "legacy-search")
+            .pipe(Effect.flatMap(Stream.runCollect));
+
+          expect(found).toMatchObject([{ isFailure: false, result: [{ recordId: "evidence" }] }]);
+
+          yield* Ref.set(
+            current,
+            ContextWindowStatus.make({ ...status, threadId: ThreadId.make("next-thread") }),
+          );
+
+          const unavailable = yield* tools
+            .handle("search_context_windows", { query: "offline", limit: 1 }, "legacy-offline")
+            .pipe(Effect.flatMap(Stream.runCollect));
+
+          expect(unavailable).toMatchObject([{ isFailure: true, result: failure }]);
+
+          const remaining = yield* tools
+            .handle("get_context_remaining", {}, "legacy-status")
+            .pipe(Effect.flatMap(Stream.runCollect));
+
+          expect(remaining).toMatchObject([{ result: { threadId: "next-thread" } }]);
+
+          const page = yield* tools
+            .handle("read_context_window", { recordId: "evidence" }, "legacy-read")
+            .pipe(Effect.flatMap(Stream.runCollect));
+
+          expect(page).toMatchObject([{ result: { text: "saved evidence", nextOffset: null } }]);
+
+          const rollover = yield* tools
+            .handle("new_context", { handoff: "Saved" }, "legacy-rollover")
+            .pipe(Effect.flatMap(Stream.runCollect));
+
+          expect(rollover).toMatchObject([{ result: { handoff: "Saved" } }]);
+
+          const invalid = yield* tools
+            .handle("search_context_windows", { query: "saved", limit: 4 }, "legacy-bound")
+            .pipe(Effect.flip);
+
+          expect(invalid).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
+        }).pipe(
+          Effect.provideService(ContextWindow, { status: Ref.get(current) }),
+          Effect.provideService(ContextHistory, archive),
+        );
+
+        expect(searches).toEqual([
+          { threadId: "current-thread", query: "saved", limit: 3 },
+          { threadId: "next-thread", query: "offline", limit: 1 },
+        ]);
+        expect(searches.every((request) => !Object.hasOwn(request, "beforeRecordId"))).toBe(true);
+        expect(reads).toEqual([
+          { threadId: "next-thread", recordId: "evidence", offset: 0, maxChars: 5_000 },
+        ]);
+      }).pipe(Effect.provide(ContextTools.legacyLayer)),
+  );
+
   // https://linear.app/reve-ai/issue/KOM-125 — native OpenAI encoding rejected empty Struct parameters.
   it.effect("sends native no-argument context and notes tools through OpenAI preparation", () =>
     Effect.gen(function* () {
@@ -307,3 +441,4 @@ describe("context window tools", () => {
     ),
   );
 });
+import { readFileSync } from "node:fs";
