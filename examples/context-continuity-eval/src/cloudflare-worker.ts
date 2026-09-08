@@ -35,8 +35,9 @@ import {
 } from "./cloudflare-contracts.ts";
 import { CompactionEvidence, EvaluationError, ModelUsage, RestartEvidence } from "./contracts.ts";
 import { notesNamespace, readLog, readNotes } from "./host-evidence.ts";
-import { makeLiveClient, RequestAudit } from "./live-model.ts";
+import { makeLiveClient } from "./live-model.ts";
 import { manifestLayer, observedCompactor } from "./pressure.ts";
+import { RequestAudit, RequestAuditSink } from "./request-audit.ts";
 import { RESTARTS } from "./scenario.ts";
 
 // Embedded by the build from this checkout, not a mutable deployment variable.
@@ -202,12 +203,8 @@ const application = Layer.unwrap(
     const currentNotes = readNotes(key).pipe(Effect.provide(ports));
     let snapshotUsage: Effect.Effect<ModelUsage> = Effect.succeed(state.usage);
 
-    const live = yield* makeLiveClient({
-      model: identity.model,
-      maxCostMicrousd: identity.maxCostMicrousd,
-      initialUsage: state.usage,
-      phase,
-      audit: (event) =>
+    const auditSink = RequestAuditSink.of({
+      write: (event) =>
         Effect.gen(function* () {
           put(
             `audit-${event.request.toString().padStart(4, "0")}-${event.kind}`,
@@ -223,10 +220,20 @@ const application = Layer.unwrap(
             }),
           ),
         ),
+    });
+
+    const live = yield* makeLiveClient({
+      model: identity.model,
+      maxCostMicrousd: identity.maxCostMicrousd,
+      initialUsage: state.usage,
+      phase,
     }).pipe(
       Effect.provide(
-        OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
-          Layer.provide(FetchHttpClient.layer),
+        Layer.merge(
+          Layer.succeed(RequestAuditSink, auditSink),
+          OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
+            Layer.provide(FetchHttpClient.layer),
+          ),
         ),
       ),
     );

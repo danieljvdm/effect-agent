@@ -4,8 +4,9 @@ import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@effect-agent/th
 import { Schema } from "effect";
 
 import { CompactionEvidence, ModelUsage, ProjectStatus, RestartEvidence } from "./contracts.ts";
-import { ModelId, RequestAudit, MAX_OUTPUT_TOKENS } from "./live-model.ts";
+import { ModelId, MAX_OUTPUT_TOKENS } from "./live-model.ts";
 import { pressureInstructions, pressureToolkit } from "./pressure.ts";
+import { RequestAudit } from "./request-audit.ts";
 
 export const CloudflareIdentity = Schema.Struct({
   sourceCommit: Schema.String,

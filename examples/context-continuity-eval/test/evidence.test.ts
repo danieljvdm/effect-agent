@@ -3,14 +3,14 @@ import { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { hasSearchPathToRead } from "../src/evidence.ts";
+import { hasSearchPathToRead, originalArchiveRecord } from "../src/evidence.ts";
 
 const source = "model-response:run:archive:1";
 const citation = "tool-settled:run:earlier:10:read-archive";
 const code = "harbor-665786a8";
 
 const settled = (sequence: number, toolName: string, result: PersistedJson, isFailure = false) =>
-  Schema.decodeSync(CanonicalRecordEnvelope)({
+  Schema.decodeUnknownSync(CanonicalRecordEnvelope)({
     threadId: "thread-1",
     batchId: `batch:${sequence}`,
     sequence,
@@ -87,4 +87,65 @@ describe("canonical retrieval evidence", () => {
   ] as const)("rejects %s", (_, records) => {
     expect(hasSearchPathToRead(records, 20, source, code)).toBe(false);
   });
+});
+
+it("rejects aged copies and later transcripts instead of trusting a model-selected source", () => {
+  const input = "Archive document HARBOR-RECEIPTS follows. dock-17-17 | verification code " + code;
+
+  const envelope = (sequence: number, recordId: string, payload: PersistedJson) =>
+    Schema.decodeUnknownSync(CanonicalRecordEnvelope)({
+      threadId: "thread-1",
+      batchId: `batch:${sequence}`,
+      sequence,
+      offset: `offset:${sequence}`,
+      record: {
+        recordId,
+        family: "thread",
+        schemaVersion: 1,
+        createdAt: "2026-09-08T00:00:00.000Z",
+        deploymentId: "test",
+        payload,
+      },
+    });
+
+  const accepted = envelope(14, "input", {
+    _tag: "UserInputRecorded",
+    kind: "user",
+    runId: "archive",
+    input,
+  });
+
+  const original = envelope(16, source, {
+    _tag: "ModelResponseRecorded",
+    runId: "archive",
+    turnId: "archive:1",
+    turn: 1,
+    messages: { content: [{ role: "user", content: input }] },
+    messagesDigest: "a".repeat(64),
+  });
+
+  const later = envelope(17, "later-transcript", {
+    _tag: "ModelResponseRecorded",
+    runId: "archive",
+    turnId: "archive:2",
+    turn: 2,
+    messages: { content: [{ role: "user", content: input }] },
+    messagesDigest: "b".repeat(64),
+  });
+
+  const copied = read(18, source, input);
+  const records = [accepted, original, later, copied];
+
+  expect(originalArchiveRecord(records, input, source)?.sequence).toBe(16);
+  // Both copies predate the later windows, and a search/read can reach them. Age alone cannot distinguish provenance.
+  for (const copyId of [later.record.recordId, copied.record.recordId]) {
+    expect(
+      hasSearchPathToRead([search(121, copyId), read(122, copyId, input)], 120, copyId, code),
+    ).toBe(true);
+    expect(originalArchiveRecord(records, input, copyId)).toBeUndefined();
+  }
+  expect(
+    originalArchiveRecord([accepted, later, copied], input, later.record.recordId),
+  ).toBeUndefined();
+  expect(originalArchiveRecord([accepted, accepted, original], input, source)).toBeUndefined();
 });

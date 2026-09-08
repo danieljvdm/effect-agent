@@ -9,6 +9,8 @@ original-source, and window-age checks. Receipt codes vary by seed. Delayed look
 read original retained evidence, including a source covered by ten windows, whose answer is absent
 from notes and the current prompt. Citation chains are allowed; citing a recent recollection alone
 fails. No second model awards a subjective score.
+The oracle identifies the original from the accepted archive input and its first canonical model
+response. An aged copied tool result or later transcript cannot substitute for that source.
 
 | Profile                                 | Context pressure and recovery                                                                                                                                                                                | Coverage limits                                                                                                                                                    |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

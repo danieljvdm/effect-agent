@@ -5,6 +5,7 @@ import { expect, it } from "vite-plus/test";
 
 import { type ModelUsage } from "../src/contracts.ts";
 import { makeLiveClient } from "../src/live-model.ts";
+import { RequestAuditSink } from "../src/request-audit.ts";
 
 it.each(["ceiling", "remaining", "unresolved"] as const)(
   "refuses inference and retry for %s spending",
@@ -48,7 +49,6 @@ it.each(["ceiling", "remaining", "unresolved"] as const)(
           maxCostMicrousd: mode === "ceiling" ? 10_000_001 : 10_000_000,
           initialUsage: initial,
           phase,
-          audit: () => Effect.void,
         });
 
         const request = {
@@ -65,8 +65,11 @@ it.each(["ceiling", "remaining", "unresolved"] as const)(
         return { first, second, usage: yield* live.snapshot };
       }).pipe(
         Effect.provide(
-          OpenAiClient.layer({ apiKey: Redacted.make("test") }).pipe(
-            Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
+          Layer.merge(
+            Layer.succeed(RequestAuditSink, RequestAuditSink.of({ write: () => Effect.void })),
+            OpenAiClient.layer({ apiKey: Redacted.make("test") }).pipe(
+              Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
+            ),
           ),
         ),
       ),

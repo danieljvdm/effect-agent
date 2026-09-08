@@ -3,8 +3,9 @@ import { Clock, Effect, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError } from "effect/unstable/ai";
 import { HttpBody, HttpClientResponse } from "effect/unstable/http";
 
-import { type EvaluationError, type ModelUsage } from "./contracts.ts";
+import { type ModelUsage } from "./contracts.ts";
 import { MAX_COST_MICROUSD } from "./profiles.ts";
+import { RequestAuditSink, type RequestAudit } from "./request-audit.ts";
 
 export const MODEL_IDS = [
   "gpt-6-astra",
@@ -42,18 +43,6 @@ export const productionCostPlan = (contextTokens: number) => ({
     inputOnlyMicrousd: Math.ceil(12 * Math.floor(contextTokens * 0.8) * prices[model].input),
   })),
 });
-
-export const RequestAudit = Schema.Struct({
-  kind: Schema.Literals(["request", "response"]),
-  request: Schema.Natural,
-  phase: Schema.Natural,
-  inputTokens: Schema.Natural,
-  outputTokens: Schema.Natural,
-  /** Exact synthetic provider request, or a bounded response summary. No HTTP headers. */
-  json: Schema.String,
-});
-
-export type RequestAudit = typeof RequestAudit.Type;
 
 const TokenCount = Schema.Struct({
   object: Schema.Literal("response.input_tokens"),
@@ -99,10 +88,10 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
   readonly model: ModelId;
   readonly maxCostMicrousd: number;
   readonly phase: Ref.Ref<number>;
-  readonly audit: (event: RequestAudit) => Effect.Effect<void, EvaluationError>;
   readonly initialUsage?: ModelUsage;
 }) {
   const native = yield* OpenAiClient.OpenAiClient;
+  const auditSink = yield* RequestAuditSink;
   const price = prices[options.model];
 
   const state = yield* Ref.make<Spending>({
@@ -143,8 +132,8 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
     );
 
   const audit = (event: RequestAudit) =>
-    options
-      .audit(event)
+    auditSink
+      .write(event)
       .pipe(Effect.catch(() => refuse("Could not preserve evaluation request evidence")));
 
   const admit = Effect.fn("ContextContinuity.admit")(function* (original: Payload) {

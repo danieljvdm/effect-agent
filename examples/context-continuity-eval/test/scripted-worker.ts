@@ -7,8 +7,8 @@ import { Config, Console, Effect, FileSystem, Layer, Redacted, Schema } from "ef
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { runEvaluation } from "../src/evaluate.ts";
-import { RequestAudit } from "../src/live-model.ts";
 import { WorkerOptions } from "../src/process-host.ts";
+import { RequestAudit } from "../src/request-audit.ts";
 import { scriptedResponse } from "./scripted-model.ts";
 
 // Test-only provider. No network transport is installed. It exercises the actual

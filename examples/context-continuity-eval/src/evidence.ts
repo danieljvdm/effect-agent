@@ -56,3 +56,40 @@ export const hasSearchPathToRead = (
 
   return false;
 };
+
+/** Identify provenance from the accepted archive input, independently of the model's citation.
+ * Raw UserInputRecorded is deliberately not searchable. Its first model response retains the
+ * normalized input; later model responses and tool results are copies, even when equally old.
+ */
+export const originalArchiveRecord = (
+  records: ReadonlyArray<CanonicalRecordEnvelope>,
+  archiveInput: string,
+  citedRecordId: string | undefined,
+): CanonicalRecordEnvelope | undefined => {
+  const inputs = records.filter(
+    ({ record }) =>
+      record.payload._tag === "UserInputRecorded" &&
+      record.payload.kind === "user" &&
+      record.payload.input === archiveInput,
+  );
+
+  if (inputs.length !== 1) return undefined;
+  const input = inputs[0];
+
+  if (
+    input?.record.payload._tag !== "UserInputRecorded" ||
+    input.record.payload.runId === undefined
+  )
+    return undefined;
+  const runId = input.record.payload.runId;
+
+  const original = records.find(
+    ({ record, sequence }) =>
+      sequence > input.sequence &&
+      record.payload._tag === "ModelResponseRecorded" &&
+      record.payload.runId === runId &&
+      record.payload.turn === 1,
+  );
+
+  return original?.record.recordId === citedRecordId ? original : undefined;
+};

@@ -51,7 +51,6 @@ import {
   MAX_MODEL_CALLS,
   MAX_OUTPUT_TOKENS,
   type ModelId,
-  RequestAudit,
 } from "./live-model.ts";
 import {
   manifestLayer,
@@ -66,6 +65,7 @@ import {
   REDUCED_CONTEXT_TOKENS,
   type ProfileId,
 } from "./profiles.ts";
+import { RequestAudit, RequestAuditSink } from "./request-audit.ts";
 import {
   instructions,
   makeScenario,
@@ -235,7 +235,6 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
       message: "Recovery candidate/configuration changed or provider accounting is unresolved",
     });
   const phaseIndex = yield* Ref.make(0);
-  const firstProbeRequests = new Map<number, boolean>(checkpoint?.firstProbeRequests);
   const compactions: Array<CompactionEvidence> = [...(checkpoint?.report.compactions ?? [])];
   const started = yield* Clock.currentTimeMillis;
 
@@ -266,26 +265,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     maxCostMicrousd: options.maxCostMicrousd,
     ...(checkpoint === undefined ? {} : { initialUsage: checkpoint.report.usage }),
     phase: phaseIndex,
-    audit: Effect.fn("ContextContinuity.audit")(
-      function* (event) {
-        const probe = scenario[event.phase]?.receipt;
-
-        if (
-          event.kind === "request" &&
-          probe !== undefined &&
-          probe !== null &&
-          !firstProbeRequests.has(event.phase)
-        )
-          firstProbeRequests.set(event.phase, !event.json.includes(probe.code));
-        const json = yield* Schema.encodeEffect(Schema.fromJsonString(RequestAudit))(event);
-
-        yield* fs.writeFileString(auditPath, `${json}\n`, { flag: "a" });
-      },
-      Effect.mapError(() =>
-        EvaluationError.make({ stage: "evidence", message: "Could not write request audit" }),
-      ),
-    ),
-  });
+  }).pipe(Effect.provide(RequestAuditSink.file(auditPath)));
 
   let report: EvaluationReport = {
     version: 3,
@@ -425,7 +405,6 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
         runId: startedRun.runId,
         processId: options.processId,
         notes,
-        firstProbeRequests: [...firstProbeRequests],
       };
 
       const json = yield* Schema.encodeEffect(Schema.fromJsonString(ResumeCheckpoint))(saved);
@@ -649,13 +628,24 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
           message: "Recovered attempt did not finish",
         });
 
+      const requestEvidence = yield* Effect.forEach(
+        (yield* fs.readFileString(auditPath)).trim().split("\n"),
+        (line) => Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(line),
+      );
+
+      const firstRequest = requestEvidence.find(
+        (event) => event.kind === "request" && event.phase === phase.index,
+      );
+
       const checks = yield* gradePhase(
         phase,
         result,
         records,
         report.windows,
-        firstProbeRequests.get(phase.index),
+        firstRequest !== undefined &&
+          !firstRequest.json.includes(phase.receipt?.code ?? "missing-receipt"),
         pressure,
+        scenario[1]?.message ?? "",
       );
 
       const phaseResult: PhaseResult = {

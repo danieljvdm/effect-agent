@@ -16,6 +16,7 @@ import { cloudflareDefinition, cloudflareModelSettings } from "../src/cloudflare
 import { notesNamespace } from "../src/host-evidence.ts";
 import { makeLiveClient } from "../src/live-model.ts";
 import { manifestLayer } from "../src/pressure.ts";
+import type { RequestAuditSink } from "../src/request-audit.ts";
 
 it("preserves native model, history and durable note requirements in the pressure composition", () => {
   const notes = MemoryNotes.layer({
@@ -63,10 +64,11 @@ it("preserves native model, history and durable note requirements in the pressur
       model: "gpt-6-astra",
       maxCostMicrousd: 10_000_000,
       phase: yield* Ref.make(0),
-      audit: () => Effect.void,
     });
   });
 
-  expectTypeOf<Effect.Services<typeof client>>().toEqualTypeOf<OpenAiClient.OpenAiClient>();
+  expectTypeOf<Effect.Services<typeof client>>().toEqualTypeOf<
+    OpenAiClient.OpenAiClient | RequestAuditSink
+  >();
   expectTypeOf<Effect.Error<typeof client>>().toEqualTypeOf<never>();
 });

@@ -4,7 +4,7 @@ import { project } from "@effect-agent/thread/ThreadContextHistoryProjection";
 import { Effect, Option, Schema } from "effect";
 
 import { check, type Check, type ProjectStatus, type WindowEvidence } from "./contracts.ts";
-import { hasSearchPathToRead } from "./evidence.ts";
+import { originalArchiveRecord, hasSearchPathToRead } from "./evidence.ts";
 import { gradeStatus, type ScenarioPhase } from "./scenario.ts";
 
 export const gradePhase = Effect.fn("ContextContinuity.gradePhase")(function* (
@@ -18,6 +18,7 @@ export const gradePhase = Effect.fn("ContextContinuity.gradePhase")(function* (
   windowsEvidence: ReadonlyArray<typeof WindowEvidence.Type>,
   answerAbsentBeforeRetrieval: boolean | undefined,
   pressure: boolean,
+  archiveInput: string,
 ) {
   const runRecords = records.filter(
     ({ record }) => "runId" in record.payload && record.payload.runId === result.runId,
@@ -75,15 +76,15 @@ export const gradePhase = Effect.fn("ContextContinuity.gradePhase")(function* (
     );
   if (phase.receipt !== null) {
     const answer = result.output.receipts[0];
-    const source = records.find((record) => record.record.recordId === answer?.recordId);
+    const source = originalArchiveRecord(records, archiveInput, answer?.recordId);
     const evidence = source === undefined ? undefined : (yield* project(source)).evidence;
 
     const searched =
-      answer !== undefined &&
+      source !== undefined &&
       hasSearchPathToRead(
         runRecords,
         lastWindow?.sequence ?? Number.MAX_SAFE_INTEGER,
-        answer.recordId,
+        source.record.recordId,
         phase.receipt.code,
       );
 
@@ -97,7 +98,8 @@ export const gradePhase = Effect.fn("ContextContinuity.gradePhase")(function* (
 
       return (
         Option.isSome(page) &&
-        page.value.recordId === answer?.recordId &&
+        source !== undefined &&
+        page.value.recordId === source.record.recordId &&
         page.value.text.includes(phase.receipt?.code ?? "")
       );
     });

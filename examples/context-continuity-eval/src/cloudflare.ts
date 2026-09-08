@@ -217,6 +217,7 @@ export const runCloudflareEvaluation = Effect.fn("ContextContinuity.runCloudflar
               report.windows,
               first !== undefined && !first.json.includes(phase.receipt?.code ?? "missing-receipt"),
               true,
+              scenario[1]?.message ?? "",
             );
 
             report = {

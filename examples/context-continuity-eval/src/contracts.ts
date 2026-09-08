@@ -140,7 +140,6 @@ export const ResumeCheckpoint = Schema.Struct({
   runId: Schema.String,
   processId: Schema.Natural,
   notes: Schema.Struct({ revision: Schema.NullOr(Schema.String), text: Schema.String }),
-  firstProbeRequests: Schema.Array(Schema.Tuple([Schema.Natural, Schema.Boolean])),
 });
 
 export type ResumeCheckpoint = typeof ResumeCheckpoint.Type;
