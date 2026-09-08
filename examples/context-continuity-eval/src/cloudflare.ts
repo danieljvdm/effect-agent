@@ -152,9 +152,8 @@ export const runCloudflareEvaluation = Effect.fn("ContextContinuity.runCloudflar
           );
           yield* fs.writeFileString(
             path.join(options.outputDirectory, "canonical.ndjson"),
-            (yield* Effect.forEach(
-              snapshot.records,
-              (record) => Schema.encodeEffect(Schema.fromJsonString(CanonicalRecordEnvelope))(record),
+            (yield* Effect.forEach(snapshot.records, (record) =>
+              Schema.encodeEffect(Schema.fromJsonString(CanonicalRecordEnvelope))(record),
             )).join("\n") + "\n",
           );
           yield* fs.writeFileString(
@@ -181,7 +180,9 @@ export const runCloudflareEvaluation = Effect.fn("ContextContinuity.runCloudflar
           };
           yield* flush;
 
-          if (snapshot.failure !== null) return yield* EvaluationError.make({ stage: "provider", message: snapshot.failure });
+          if (snapshot.failure !== null)
+            return yield* EvaluationError.make({ stage: "provider", message: snapshot.failure });
+
           const settled = snapshot.records.find(
             ({ record }) =>
               record.payload._tag === "SubmissionSettled" &&

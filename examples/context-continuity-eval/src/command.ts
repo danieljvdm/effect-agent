@@ -18,8 +18,8 @@ import { runCloudflareEvaluation } from "./cloudflare.ts";
 import { EvaluationError, EvaluationReport } from "./contracts.ts";
 import { runEvaluation } from "./evaluate.ts";
 import { ModelId, MODEL_IDS, productionCostPlan } from "./live-model.ts";
-import { supervise } from "./process-host.ts";
 import { pressureScenario } from "./pressure.ts";
+import { supervise } from "./process-host.ts";
 import { DEFAULT_PROFILE, PROFILE_IDS, profilePlan } from "./profiles.ts";
 import {
   makeScenario,
@@ -95,7 +95,9 @@ export const command = Command.make(
   Effect.fn("ContextContinuity.command")(function* (options) {
     if (options.validate) {
       const phases = yield* Schema.decodeUnknownEffect(Schema.Array(ScenarioPhase))(
-        options.profile === DEFAULT_PROFILE ? makeScenario(options.seed) : pressureScenario(options.seed),
+        options.profile === DEFAULT_PROFILE
+          ? makeScenario(options.seed)
+          : pressureScenario(options.seed),
       );
 
       yield* Console.log(
@@ -106,7 +108,9 @@ export const command = Command.make(
           recoveryBoundaries: RESTARTS,
           liveEvaluation: false,
           plan: profilePlan(options.profile, options.productionContextTokens),
-          ...(options.profile === "production-capacity-v1" ? { costPlanning: productionCostPlan(options.productionContextTokens) } : {}),
+          ...(options.profile === "production-capacity-v1"
+            ? { costPlanning: productionCostPlan(options.productionContextTokens) }
+            : {}),
         }),
       );
 

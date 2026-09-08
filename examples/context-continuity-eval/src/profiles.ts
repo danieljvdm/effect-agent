@@ -32,8 +32,15 @@ export const profilePlan = (profile: ProfileId, productionContextTokens: number)
   maxCostMicrousd: MAX_COST_MICROUSD,
   requiredCommittedWindows: 12,
   manifestPagesPerUpdate: profile === DEFAULT_PROFILE ? 0 : 2,
-  manifestPageCharacters: profile === "production-capacity-v1" ? productionContextTokens * 2 : REDUCED_CONTEXT_TOKENS * 2,
-  ...(profile === "production-capacity-v1" ? {
-    prerequisites: ["Confirm actual application/model capacity", "Approve a model-specific budget including output and repeated history", "Enable a separate full-capacity input ceiling and verify the production host"],
-  } : {}),
+  manifestPageCharacters:
+    profile === "production-capacity-v1" ? productionContextTokens * 2 : REDUCED_CONTEXT_TOKENS * 2,
+  ...(profile === "production-capacity-v1"
+    ? {
+        prerequisites: [
+          "Confirm actual application/model capacity",
+          "Approve a model-specific budget including output and repeated history",
+          "Enable a separate full-capacity input ceiling and verify the production host",
+        ],
+      }
+    : {}),
 });

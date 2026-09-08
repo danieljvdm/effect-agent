@@ -146,7 +146,10 @@ const application = Layer.unwrap(
         : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(State))(stored);
 
     if (JSON.stringify(state.identity) !== JSON.stringify(identity))
-      return yield* EvaluationError.make({ stage: "source", message: "Persisted Cloudflare candidate identity changed" });
+      return yield* EvaluationError.make({
+        stage: "source",
+        message: "Persisted Cloudflare candidate identity changed",
+      });
     state = { ...state, incarnation: state.incarnation + 1 };
     const phase = yield* Ref.make(state.phase);
     const persist = () => put("state", Schema.encodeSync(Schema.fromJsonString(State))(state));
@@ -385,7 +388,14 @@ const application = Layer.unwrap(
               };
               persist();
               // Confirm the evidence before aborting; abort discards unconfirmed SQLite writes.
-              yield* Effect.tryPromise({ try: () => ctx.storage.sync(), catch: () => EvaluationError.make({ stage: "evidence", message: "Eviction checkpoint did not persist" }) });
+              yield* Effect.tryPromise({
+                try: () => ctx.storage.sync(),
+                catch: () =>
+                  EvaluationError.make({
+                    stage: "evidence",
+                    message: "Eviction checkpoint did not persist",
+                  }),
+              });
               ctx.abort("context continuity: planned native eviction");
             }).pipe(Effect.provide(services), Effect.orDie),
         });

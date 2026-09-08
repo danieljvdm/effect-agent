@@ -402,9 +402,8 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
 
       if (startedRun?._tag !== "RunStarted") return yield* Effect.die("No run at kill barrier");
 
-      const encodedLog = yield* Effect.forEach(
-        log,
-        (record) => Schema.encodeEffect(Schema.fromJsonString(CanonicalRecordEnvelope))(record),
+      const encodedLog = yield* Effect.forEach(log, (record) =>
+        Schema.encodeEffect(Schema.fromJsonString(CanonicalRecordEnvelope))(record),
       );
 
       yield* fs.writeFileString(

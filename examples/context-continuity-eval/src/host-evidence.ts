@@ -1,8 +1,8 @@
 import { type ThreadId } from "@effect-agent/core/Identifiers";
 import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import type { MemoryKey} from "@effect-agent/core/MemoryStore";
+import type { MemoryKey } from "@effect-agent/core/MemoryStore";
 import { MemoryReader } from "@effect-agent/core/MemoryStore";
-import type { CanonicalRecordEnvelope} from "@effect-agent/thread/Records";
+import type { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import { CanonicalSequence } from "@effect-agent/thread/Records";
 import { ThreadRead, ThreadStore, ThreadTailRequest } from "@effect-agent/thread/ThreadStore";
 import { Effect, Schema, Stream } from "effect";
