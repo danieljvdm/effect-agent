@@ -9,6 +9,7 @@ export {
   startUnknown,
   stream,
   streamUnknown,
+  streamWithUsageAccountingUnknown,
   AgentResultSchema,
   AgentChildPending,
   AgentSpawner,

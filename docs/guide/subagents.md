@@ -218,6 +218,43 @@ input-retention, concurrency, and lifetime limits still apply across the source 
 Set `WorkerHostConfig.maxActiveWorkersPerSource` to bound concurrent background workers separately
 from the root's Tool execution concurrency; omission retains the prior concurrency ceiling.
 
+### Resolve policies from captured input
+
+Supply `WorkerPolicyResolver` from `@effect-agent/thread/WorkerHost` when immutable application
+input captures an execution policy separately from a finite, versioned Agent Definition. Provide
+its implementation through an Effect Layer and retain the Layer's construction dependencies.
+The default returns `Option.none()`, preserving registered policy inheritance and overrides.
+Returning `Option.some(policy)` selects a complete policy without reapplying static overrides.
+Missing authority for an opted-in definition must fail explicitly, rather than returning the
+legacy fallback or loading mutable settings. Use `WorkerError` with reason `unavailable` when
+the same captured evidence can become available on retry.
+
+`Subagent.start` prepares and encodes input before the caller-bound host resolves its target
+policy. Both source start and destination admission validate that exact initial input; destination
+validation also runs before replay returns an existing reservation. Explicit declaration limits
+still narrow the resolved policy. Construct a declaration per invocation from the same immutable
+capture when its allocation includes the worker's own ceiling plus fixed attached-scout reserves.
+Reuse the exact registered target Definition, grant, and reporting projection; this does not
+require a dynamic registration graph or another compiled model Tool.
+
+The initial admission stores the effective policy in the existing immutable worker origin.
+For `RetainedWorker`, a resolver may affirm `origin.policy`; returning a different policy fails.
+Later inputs, joined receipts, retries, and replacement Attempts never select a new worker policy.
+Application follow-up preparation must retain the original authorized capture and change only
+the intended task input. Receiving a new payload does not authorize changing its capture.
+
+Root source resolution receives the exact explicitly selected owner Submission and its registered
+binding, when retained. It never selects the latest input. Programmatic callers can pass
+`sourceSubmissionId` to `durableRuntime.workerHost`; `WorkerHostAuthorizer` receives that locator
+for authorization. Worker and attached source policies continue to come from stored lineage.
+Inspection, listing, observation, and cancellation do not require resolving a source policy.
+Keep retained binding versions available; a policy resolver cannot repair ambiguous historical
+definition identities or reconstruct a missing capture.
+
+Captured source reporting uses the initial owner binding and stores its existing reporting intent
+in the worker origin. A later input from another source revision does not replace that projection;
+terminal preparation validates the original owner retained by the first worker input reservation.
+
 ## Bound child work
 
 Children inherit omitted policy fields from their parent's resolved policy. Explicit child fields

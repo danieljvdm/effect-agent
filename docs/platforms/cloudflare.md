@@ -160,6 +160,27 @@ new generation repairs missed invalidation after a crash. Alarm failures propaga
 retry, and interruption remains interruption. Custom host facts must be committed through
 `ThreadMaintenance.withMutation` to get the same prearm and post-commit hooks.
 
+### Maintain a disposable Thread index
+
+Supply `projection` to `ThreadObject.layer` with a Layer providing
+`ThreadProjectionMaintenance` from `@effect-agent/thread/ThreadProjectionMaintenance`.
+The Layer receives the raw local `ThreadStore` and the same owner `SqlClient`; additional
+services it provides are exposed by the resulting runtime Layer so Tools can share that index.
+
+Implement `applyCommitted(request, result)` to keep an already-caught-up index current through
+the complete committed batch before Tools execute. One batch contains at most 256 records;
+chunk within local byte limits and stop at `result.lastSequence`. An earlier gap belongs to
+bounded `drain` backfill. Rows and their contiguous watermark must commit atomically, including
+records with no indexable content. Replays and concurrent backfill must be idempotent.
+
+The owner serializes canonical append and live projection; it releases that local gate before
+publication. Live failures are logged while the source commit remains authoritative. The native
+alarm runs at most one due backfill batch, and `pendingDeadline` keeps unfinished work scheduled
+across reconstruction. A projection deadline never gates approval publication or runtime work.
+Backfill failures are reported after eligible canonical work, retaining the prearmed generation;
+interruption stops the event. Hooks return typed `ThreadProjectionError` failures, own scoped
+resources, and never write the alarm slot or call source mutation ports.
+
 ## Configure the binding
 
 ```jsonc

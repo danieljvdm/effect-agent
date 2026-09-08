@@ -2,6 +2,17 @@ import { Effect, Schema } from "effect";
 
 const UsageIdentity = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 
+/** Bounded provider response identity. Request configuration is not response evidence. */
+export class ModelResponseIdentity extends Schema.Class<ModelResponseIdentity>(
+  "@effect-agent/core/ModelResponseIdentity",
+)({
+  id: Schema.optionalKey(UsageIdentity),
+  model: Schema.optionalKey(UsageIdentity),
+}) {}
+
+/** Missing legacy status means unknown, never a free call or a complete report. */
+export const UsageCompleteness = Schema.Literals(["complete", "partial", "unknown"]);
+
 const hasAdditiveTotal = (total: number, components: ReadonlyArray<number>): boolean => {
   const sum = components.reduce((accumulator, component) => accumulator + component, 0);
 
@@ -45,9 +56,14 @@ export class ModelCallUsage extends Schema.Class<ModelCallUsage>(
   "@effect-agent/core/ModelCallUsage",
 )({
   provider: UsageIdentity,
+  /** Configured binding identity. See response.model for provider-reported identity. */
   model: UsageIdentity,
   serviceTier: Schema.optionalKey(UsageIdentity),
   pricingVersion: Schema.optionalKey(UsageIdentity),
+  response: Schema.optionalKey(ModelResponseIdentity),
+  purpose: Schema.optionalKey(Schema.Literals(["turn", "summary"])),
+  usageStatus: Schema.optionalKey(UsageCompleteness),
+  pricingStatus: Schema.optionalKey(Schema.Literals(["estimated", "unknown"])),
   inputTokens: InputTokenUsage,
   outputTokens: OutputTokenUsage,
   costMicrousd: Schema.Natural,
@@ -59,6 +75,8 @@ export class ModelUsageGroup extends Schema.Class<ModelUsageGroup>(
 )({
   provider: UsageIdentity,
   model: UsageIdentity,
+  /** Actual returned model; absent when only the configured binding is known. */
+  responseModel: Schema.optionalKey(UsageIdentity),
   serviceTier: Schema.optionalKey(UsageIdentity),
   pricingVersion: Schema.optionalKey(UsageIdentity),
   modelCalls: Schema.Natural.check(Schema.isGreaterThan(0)),
@@ -73,6 +91,11 @@ const RunUsageSummaryFields = Schema.Struct({
   outputTokens: OutputTokenUsage,
   costMicrousd: Schema.Natural,
   byModel: Schema.Array(ModelUsageGroup),
+  /** Coverage of recorded calls only; interruptions can make the Run less complete. */
+  usageStatus: Schema.optionalKey(UsageCompleteness),
+  pricingStatus: Schema.optionalKey(UsageCompleteness),
+  /** Observed invocations without retained accounting, excluded from numeric call/token totals. */
+  unobservedModelCalls: Schema.optionalKey(Schema.Natural),
 }).check(
   Schema.makeFilter(
     (summary) => {
@@ -80,6 +103,7 @@ const RunUsageSummaryFields = Schema.Struct({
         JSON.stringify([
           group.provider,
           group.model,
+          group.responseModel ?? null,
           group.serviceTier ?? null,
           group.pricingVersion ?? null,
         ]),
@@ -140,6 +164,7 @@ export class RunUsageSummary extends Schema.Class<RunUsageSummary>(
 interface MutableUsageGroup {
   readonly provider: string;
   readonly model: string;
+  readonly responseModel?: string | undefined;
   readonly serviceTier?: string | undefined;
   readonly pricingVersion?: string | undefined;
   modelCalls: number;
@@ -238,6 +263,7 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
     const key = JSON.stringify([
       call.provider,
       call.model,
+      call.response?.model ?? null,
       call.serviceTier ?? null,
       call.pricingVersion ?? null,
     ]);
@@ -248,6 +274,7 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
       group = {
         provider: call.provider,
         model: call.model,
+        ...(call.response?.model === undefined ? {} : { responseModel: call.response.model }),
         ...(call.serviceTier === undefined ? {} : { serviceTier: call.serviceTier }),
         ...(call.pricingVersion === undefined ? {} : { pricingVersion: call.pricingVersion }),
         modelCalls: 0,
@@ -305,10 +332,23 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
     inputTokens: InputTokenUsage.make(inputTokens),
     outputTokens: OutputTokenUsage.make(outputTokens),
     costMicrousd,
+    usageStatus: calls.every(
+      (call) => call.usageStatus === undefined || call.usageStatus === "unknown",
+    )
+      ? "unknown"
+      : calls.every((call) => call.usageStatus === "complete")
+        ? "complete"
+        : "partial",
+    pricingStatus: calls.every((call) => call.pricingStatus !== "estimated")
+      ? "unknown"
+      : calls.every((call) => call.pricingStatus === "estimated")
+        ? "complete"
+        : "partial",
     byModel: [...groups.values()].map((group) =>
       ModelUsageGroup.make({
         provider: group.provider,
         model: group.model,
+        ...(group.responseModel === undefined ? {} : { responseModel: group.responseModel }),
         ...(group.serviceTier === undefined ? {} : { serviceTier: group.serviceTier }),
         ...(group.pricingVersion === undefined ? {} : { pricingVersion: group.pricingVersion }),
         modelCalls: group.modelCalls,

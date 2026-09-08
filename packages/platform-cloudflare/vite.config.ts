@@ -73,6 +73,7 @@ export default defineConfig({
               durableObjects: {
                 THREADS: { className: "TestThreadObject", useSQLite: true },
                 PUBLICATIONS: { className: "PublicationThreadObject", useSQLite: true },
+                PROJECTIONS: { className: "ProjectionThreadObject", useSQLite: true },
                 MEMORIES: { className: "TestMemoryObject", useSQLite: true },
                 SCHEDULES: { className: "TestScheduleOwnerObject", useSQLite: true },
                 SUBSCRIPTIONS: { className: "TestSubscriptionPartitionObject", useSQLite: true },

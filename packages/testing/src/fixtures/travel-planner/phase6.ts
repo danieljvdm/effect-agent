@@ -709,6 +709,9 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
           {
             provider: "scripted",
             model: "travel-planner-phase-4",
+            purpose: "turn",
+            usageStatus: "partial",
+            pricingStatus: "unknown",
             inputTokens: {
               total: 128,
               uncached: 128,
@@ -876,6 +879,9 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
           {
             provider: "scripted",
             model: "travel-planner-phase-4",
+            purpose: "turn",
+            usageStatus: "partial",
+            pricingStatus: "unknown",
             inputTokens: {
               total: 128,
               uncached: 128,
@@ -981,7 +987,11 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
             },
           ],
         },
+        uncommittedModelUsage: [],
         usageSummary: {
+          usageStatus: "partial",
+          pricingStatus: "unknown",
+          unobservedModelCalls: 0,
           modelCalls: 2,
           inputTokens: {
             total: 256,

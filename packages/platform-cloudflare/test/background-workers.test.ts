@@ -1,4 +1,6 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import type { SubmissionId } from "@effect-agent/core/Identifiers";
 import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { MessageDeliveryStore } from "@effect-agent/thread/MessageDelivery";
@@ -23,6 +25,8 @@ import {
   backgroundReportProjections,
   backgroundReportingWorkers,
   backgroundReportGates,
+  capturedPolicySource,
+  capturedPolicyWorkers,
 } from "./background-worker-fixture.ts";
 import {
   decodeIdempotencyKey,
@@ -44,6 +48,7 @@ const evict = async (thread: string) => {
 const withOwner = <A, E>(
   source: string,
   use: (host: SubagentHost["Service"]) => Effect.Effect<A, E>,
+  sourceSubmissionId?: SubmissionId,
 ) =>
   runInDurableObject(stubFor(source), (instance) =>
     instance[DurableObject.RunSymbol](
@@ -53,12 +58,204 @@ const withOwner = <A, E>(
         const host = yield* runtime.workerHost({
           sourceThreadId: decodeThreadId(source),
           principal: TEST_PRINCIPAL,
+          ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
         });
 
         return yield* use(host);
       }),
     ),
   );
+
+// Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+it("admits exact captured policies with one registered target and retains them through native eviction, joins and scouts", async () => {
+  const source = `background-cf-independent-captured-${crypto.randomUUID()}`;
+
+  const sourcePolicy = AgentPolicy.make({
+    maxTurns: 9,
+    maxToolCalls: 8,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  });
+
+  const ownerReceipt = await runClient(
+    Effect.flatMap(CloudflareThreadClient, (client) =>
+      client.submit(
+        { definition: capturedPolicySource },
+        { question: "initialize", policy: sourcePolicy },
+        submitOptions(source, "source"),
+      ),
+    ),
+  );
+
+  await drainAlarmsUntil(source, allSettled(source));
+  // Read controls do not require an arbitrary owner input. Resolving a captured policy does.
+  expect(
+    await withOwner(source, (host) =>
+      host.list({
+        delegationId: independentBudgetWorkers.delegationId,
+        target: independentBudgetWorkers.target,
+        limit: 10,
+      }),
+    ),
+  ).toEqual({ items: [], next: null });
+  await expect(withOwner(source, (host) => host.context)).rejects.toThrow();
+  const context = await withOwner(source, (host) => host.context, ownerReceipt.submissionId);
+
+  expect(context.policy).toEqual(sourcePolicy);
+
+  const firstPolicy = AgentPolicy.make({
+    maxTurns: 4,
+    maxToolCalls: 3,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+    toolResultBounds: { maxBytes: 1024 },
+  });
+
+  const secondPolicy = AgentPolicy.make({ ...firstPolicy, maxTurns: 7, maxToolCalls: 5 });
+  const firstDeclaration = capturedPolicyWorkers(firstPolicy);
+  const secondDeclaration = capturedPolicyWorkers(secondPolicy);
+
+  expect(firstDeclaration.target).toBe(secondDeclaration.target);
+  independentBudgetGrants.add(source);
+  backgroundWakeDropPrefixes.add("worker:");
+  droppedMessageWakes.add(source);
+
+  const launch = (policy: AgentPolicy, task: number) =>
+    withOwner(
+      source,
+      (host) =>
+        Subagent.start(
+          capturedPolicyWorkers(policy),
+          { question: `${source}:task:${task}`, policy },
+          { idempotencyKey: decodeIdempotencyKey(`captured-${task}`), budgetScope: "worker-run" },
+        ).pipe(Effect.provideService(SubagentHost, host)),
+      ownerReceipt.submissionId,
+    );
+
+  const first = await launch(firstPolicy, 1);
+  const second = await launch(secondPolicy, 3);
+
+  const finish = (thread: string) =>
+    drainAlarmsUntil(thread, async () => {
+      for (const { record } of await readCanonical(thread)) {
+        if (record.payload._tag === "SubagentRequested")
+          await drainAlarmsUntil(
+            record.payload.childThreadId,
+            allSettled(record.payload.childThreadId),
+          );
+      }
+
+      return allSettled(thread)();
+    });
+
+  try {
+    expect(await launch(firstPolicy, 1)).toEqual(first);
+    const alarm = runDurableObjectAlarm(stubFor(first.worker.threadId)).catch(() => false);
+
+    await expect
+      .poll(async () =>
+        (await readCanonical(first.worker.threadId)).some(
+          ({ record }) => record.payload._tag === "RunStarted",
+        ),
+      )
+      .toBe(true);
+
+    const joined = await withOwner(
+      source,
+      (host) =>
+        Subagent.followUp(
+          firstDeclaration,
+          first.worker,
+          { question: "continue with the retained policy" },
+          { idempotencyKey: decodeIdempotencyKey("captured-joined") },
+        ).pipe(Effect.provideService(SubagentHost, host)),
+      ownerReceipt.submissionId,
+    );
+
+    armRuntimeEviction(first.worker.threadId, "turn:after-response-append");
+    independentBudgetGates.add(`${source}:task:1`);
+    await alarm;
+    await finish(first.worker.threadId);
+    expect(armedEvictionsRemaining(first.worker.threadId)).toBe(0);
+    await evict(source);
+    await evict(first.worker.threadId);
+    independentBudgetGates.add(`${source}:task:2`);
+
+    const later = await withOwner(
+      source,
+      (host) =>
+        Subagent.followUp(
+          firstDeclaration,
+          first.worker,
+          { question: `${source}:task:2`, policy: firstPolicy },
+          { idempotencyKey: decodeIdempotencyKey("captured-later") },
+        ).pipe(Effect.provideService(SubagentHost, host)),
+      ownerReceipt.submissionId,
+    );
+
+    await finish(first.worker.threadId);
+    independentBudgetGates.add(`${source}:task:3`);
+    await finish(second.worker.threadId);
+    for (const [started, policy] of [
+      [first, firstPolicy],
+      [second, secondPolicy],
+    ] as const) {
+      const records = await readCanonical(started.worker.threadId);
+
+      const origins = records.flatMap(({ record }) =>
+        record.payload._tag === "WorkerOriginRecorded" ? [record.payload.origin] : [],
+      );
+
+      expect(origins).toHaveLength(1);
+      expect(origins[0]?.policy).toEqual(policy);
+      expect(origins[0]?.budget.allocation.turns).toBe(policy.maxTurns + 1);
+      expect(origins[0]?.policy.tokenBudget).toBeUndefined();
+      expect(origins[0]?.policy.costBudgetMicrousd).toBeUndefined();
+
+      const scouts = records.flatMap(({ record }) =>
+        record.payload._tag === "SubagentRequested" ? [record.payload] : [],
+      );
+
+      expect(scouts).toHaveLength(started === first ? 2 : 1);
+      for (const scout of scouts) {
+        expect(scout.depth).toBe(2);
+        expect(scout.policy?.tokenBudget).toBe(50);
+        const child = await readCanonical(scout.childThreadId);
+
+        expect(child.some(({ record }) => record.payload._tag === "ModelResponseRecorded")).toBe(
+          true,
+        );
+        expect(
+          child
+            .filter(({ record }) => record.payload._tag === "SubmissionSettled")
+            .map(({ record }) => record.payload),
+        ).toEqual([expect.objectContaining({ outcome: "completed" })]);
+      }
+    }
+    const records = await readCanonical(first.worker.threadId);
+
+    const settlements = records.flatMap(({ record }) =>
+      record.payload._tag === "SubmissionSettled" ? [record.payload] : [],
+    );
+
+    expect(settlements).toHaveLength(3);
+    const initial = settlements.find((row) => row.submissionId === first.receipt.submissionId);
+
+    expect(settlements.find((row) => row.submissionId === joined.submissionId)?.runId).toBe(
+      initial?.runId,
+    );
+    expect(settlements.find((row) => row.submissionId === later.submissionId)?.runId).not.toBe(
+      initial?.runId,
+    );
+    expect(settlements.every((row) => row.outcome === "completed")).toBe(true);
+  } finally {
+    for (const task of [1, 2, 3]) independentBudgetGates.delete(`${source}:task:${task}`);
+    independentBudgetGrants.delete(source);
+    independentBudgetAuthorityCalls.delete(source);
+    droppedMessageWakes.delete(source);
+    backgroundWakeDropPrefixes.delete("worker:");
+  }
+});
 
 it("reopens a background worker and admits follow-up input across Objects after its source has settled", async () => {
   const source = `background-cf-${crypto.randomUUID()}`;

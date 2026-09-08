@@ -1,5 +1,30 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.62
+
+### Patch Changes
+
+- [#374](https://github.com/danieljvdm/effect-agent/pull/374) [`46e8ad2`](https://github.com/danieljvdm/effect-agent/commit/46e8ad22fa9f436ce155a6696ddf8e11cec2931c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resolve background worker policies from host-authorized immutable input while retaining each worker's admitted policy across followups and recovery. Preserve static policy defaults and support an explicitly selected owner Submission for captured source policy.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.62
+
+## 0.1.0-beta.61
+
+### Patch Changes
+
+- [#369](https://github.com/danieljvdm/effect-agent/pull/369) [`21431ae`](https://github.com/danieljvdm/effect-agent/commit/21431ae6cacd78e6330b1017c2768f4f9c347b7a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose actual provider response identity and finish metadata to cost estimators, and retain per-call accounting completeness alongside canonical usage. Preserve reported failed-call usage in settlements and distinguish unobserved calls from zero-cost work.
+
+- Updated dependencies [[`21431ae`](https://github.com/danieljvdm/effect-agent/commit/21431ae6cacd78e6330b1017c2768f4f9c347b7a)]:
+  - @effect-agent/core@0.1.0-beta.61
+
+## 0.1.0-beta.60
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.60
+
 ## 0.1.0-beta.59
 
 ### Patch Changes

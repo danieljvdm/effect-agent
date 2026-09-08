@@ -287,6 +287,8 @@ const ModelResponseRecordedFields = Schema.Struct({
    * records, whose aggregate totals below retain the old resume behavior.
    */
   modelUsage: Schema.optionalKey(Schema.Array(ModelCallUsage)),
+  /** Observed invocations without retained accounting before this Turn committed. */
+  unobservedModelCalls: Schema.optionalKey(Schema.Natural),
   /** Aggregate compatibility fields used by older projections. */
   inputTokens: Schema.optionalKey(Schema.Natural),
   outputTokens: Schema.optionalKey(Schema.Natural),
@@ -572,6 +574,8 @@ const RawSubmissionSettled = Schema.Struct({
   policyLimit: Schema.optionalKey(PolicyLimit),
   /** Canonical aggregate of all priced model calls made by this Run. */
   usageSummary: Schema.optionalKey(RunUsageSummary),
+  /** Calls included in usageSummary but not in any ModelResponseRecorded, retained on failure. */
+  uncommittedModelUsage: Schema.optionalKey(Schema.Array(ModelCallUsage)),
 });
 
 const isPolicyFailureProjection = Schema.is(
@@ -584,6 +588,8 @@ const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): bo
   (settled.finishReason === undefined || settled.outcome === "completed") &&
   (settled.finishReason === undefined) === (settled.exhausted === undefined) &&
   (settled.usageSummary === undefined || settled.runId !== undefined) &&
+  (settled.uncommittedModelUsage === undefined ||
+    (settled.runId !== undefined && settled.usageSummary !== undefined)) &&
   (settled.runDisposition === undefined ||
     (settled.outcome === "completed" &&
       settled.finishReason === undefined &&

@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/thread",
-  "version": "0.1.0-beta.59",
+  "version": "0.1.0-beta.62",
   "description": "Canonical Thread records, reducers, store ports, recovery classifier, and the durable agent runtime coordinator for Effect Agent.",
   "license": "MIT",
   "repository": {
@@ -53,6 +53,7 @@
     "./testing/SubscriptionStoreConformance": "./src/SubscriptionStoreConformance.ts",
     "./testing/ThreadStoreConformance": "./src/ThreadStoreConformance.ts",
     "./ThreadInvariants": "./src/ThreadInvariants.ts",
+    "./ThreadProjectionMaintenance": "./src/ThreadProjectionMaintenance.ts",
     "./ThreadProjection": "./src/ThreadProjection.ts",
     "./ThreadStore": "./src/ThreadStore.ts",
     "./ToolReconciler": "./src/ToolReconciler.ts",

@@ -14,7 +14,7 @@ import {
   type WorkerStarted,
   type WorkerSummary,
 } from "@effect-agent/core/Worker";
-import type { Effect } from "effect";
+import type { Effect, Option } from "effect";
 import { Context, Schema, Stream } from "effect";
 
 /** Prepared values cross this port only to be Schema-decoded before durable storage. */
@@ -112,6 +112,11 @@ export class SubagentHost extends Context.Service<
   SubagentHost,
   {
     readonly context: Effect.Effect<WorkerContext, WorkerError>;
+    /** Resolve prepared input through host authority; None retains legacy target inheritance. */
+    readonly resolveTargetPolicy: (request: {
+      readonly target: Agent.AnyDefinition;
+      readonly encodedInput: unknown;
+    }) => Effect.Effect<Option.Option<AgentPolicy>, WorkerError>;
     readonly start: (request: StartWorkerRequest) => Effect.Effect<WorkerStarted, WorkerError>;
     readonly followUp: (request: FollowUpWorkerRequest) => Effect.Effect<Receipt, WorkerError>;
     readonly inspect: (
@@ -146,6 +151,7 @@ export class SubagentHost extends Context.Service<
 >()("@effect-agent/engine/SubagentHost") {
   static readonly unavailable: SubagentHost["Service"] = {
     context: WorkerError.make({ operation: "context", reason: "unavailable" }),
+    resolveTargetPolicy: () => WorkerError.make({ operation: "start", reason: "unavailable" }),
     start: () => WorkerError.make({ operation: "start", reason: "unavailable" }),
     followUp: () => WorkerError.make({ operation: "followUp", reason: "unavailable" }),
     inspect: () => WorkerError.make({ operation: "inspect", reason: "unavailable" }),

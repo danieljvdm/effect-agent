@@ -313,6 +313,8 @@ export interface RunCostEstimate {
   readonly costMicrousd: number;
   readonly serviceTier?: string | undefined;
   readonly pricingVersion?: string | undefined;
+  /** Unknown estimates do not prove a free call and fail an explicit cost budget after usage is retained. */
+  readonly pricingStatus?: "estimated" | "unknown" | undefined;
 }
 
 /** A number preserves the original estimator API; the object form adds pricing provenance. */
@@ -321,8 +323,19 @@ export type RunCostEstimateValue = number | RunCostEstimate;
 /** Model identity presented beside the legacy raw-usage estimator argument. */
 export interface RunCostEstimateRequest {
   readonly provider: string;
+  /** Configured binding identity; only response.model identifies the returned model. */
   readonly model: string;
   readonly usage: Response.Usage;
+  /** Actual provider response fields, never the configured binding name. */
+  readonly response?:
+    | {
+        readonly id?: string | undefined;
+        readonly model?: string | undefined;
+      }
+    | undefined;
+  /** Native Effect AI provider metadata, runtime-only; HTTP details are excluded. */
+  readonly finishMetadata?: Response.FinishPart["metadata"] | undefined;
+  readonly purpose?: "turn" | "summary" | undefined;
 }
 
 /**
@@ -480,6 +493,21 @@ export interface RunCompactionCommit {
 export interface RunTurnUsage {
   readonly turn: number;
   readonly usage: ModelCallUsage;
+}
+
+/**
+ * Attempt-local accounting for provider invocations without retained usage.
+ * Staging is infallible and does not itself persist records. Durable runtime
+ * composition supplies the canonical Turn accumulator; ephemeral entry points
+ * explicitly supply the no-op implementation.
+ */
+export class ModelUsageAccounting extends Context.Service<
+  ModelUsageAccounting,
+  { readonly noteIncompleteUsage: (turn: number) => Effect.Effect<void> }
+>()("@effect-agent/engine/ModelUsageAccounting") {
+  static readonly layerEphemeral = Layer.succeed(ModelUsageAccounting, {
+    noteIncompleteUsage: () => Effect.void,
+  });
 }
 
 /**
