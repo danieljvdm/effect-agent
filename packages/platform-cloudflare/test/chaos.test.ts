@@ -206,6 +206,11 @@ describe("DC chaos-abort evidence equivalence", () => {
         { thread: lane("seeded-chaos-planner"), definition: plannerDefinition },
       ] as const;
 
+      // Force recovery from RunCompleted, before settlement reservation; the seeded schedule
+      // alone may miss the empty-usage mismatch introduced by:
+      // https://github.com/danieljvdm/effect-agent/commit/21431ae6cacd78e6330b1017c2768f4f9c347b7a
+      armRuntimeEviction(lanes[1].thread, "turn:after-canonical-append");
+
       const receipts = [
         await submitTo(lanes[0].definition, lanes[0].thread),
         await submitTo(lanes[1].definition, lanes[1].thread),
@@ -247,6 +252,7 @@ describe("DC chaos-abort evidence equivalence", () => {
         await drainAlarmsUntil(thread, allSettled(thread));
         await assertConvergence(thread);
       }
+      expect(armedEvictionsRemaining(lanes[1].thread)).toBe(0);
       expect(
         normalizedEvidence(await readCanonical(lanes[0].thread), receipts[0], lanes[0].thread),
       ).toEqual(
