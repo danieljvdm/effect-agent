@@ -71,6 +71,7 @@ import {
   type ToolResultBounds,
 } from "@effect-agent/core/ToolResult";
 import { InputTokenUsage, ModelCallUsage, OutputTokenUsage } from "@effect-agent/core/Usage";
+import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
 import type { Take } from "effect";
 import {
   Cause,
@@ -7145,6 +7146,7 @@ function streamWithCompletion<
               agent.definition.policy,
               options.subagentGrant,
               options.subagentBudget,
+              options.subagentBudgetScope,
             ),
           ).pipe(
             Context.add(ContextWindow, {
@@ -8793,6 +8795,7 @@ export interface AgentSpawnerService {
   readonly depth: number;
   readonly grant?: SubagentGrant;
   readonly budget?: SubagentBudgetReservation;
+  readonly budgetScope?: WorkerBudgetScope;
   readonly parent: AgentSpawnerParent;
   readonly spawn: <
     InputSchema extends Schema.Top,
@@ -8895,9 +8898,11 @@ const makeAgentSpawner = (
   policy: AgentPolicy,
   grant?: SubagentGrant,
   budget?: SubagentBudgetReservation,
+  budgetScope?: WorkerBudgetScope,
 ): AgentSpawnerService => ({
   ...(grant === undefined ? {} : { grant }),
   ...(budget === undefined ? {} : { budget }),
+  ...(budgetScope === undefined ? {} : { budgetScope }),
   policy,
   depth,
   parent,

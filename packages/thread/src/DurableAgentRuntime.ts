@@ -3745,6 +3745,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         submission.workerAdmission?.origin.depth ??
         (childLineage?._tag === "SubagentLineageRecorded" ? childLineage.parentLink.depth : 0);
 
+      // worker-run origins supply a frozen ceiling, not usage credit. Only this native
+      // host Run's journal owns usage; joined inputs and replacement Attempts keep its RunId.
       const inheritedBudget =
         submission.workerAdmission?.origin.budget ??
         (childLineage?._tag === "SubagentLineageRecorded" ? childLineage.budget : undefined);
@@ -5765,6 +5767,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         delegationDepth,
         ...(inheritedGrant === undefined ? {} : { subagentGrant: inheritedGrant }),
         ...(inheritedBudget === undefined ? {} : { subagentBudget: inheritedBudget }),
+        ...(submission.workerAdmission?.origin.budgetScope === undefined
+          ? {}
+          : { subagentBudgetScope: submission.workerAdmission.origin.budgetScope }),
         runStartedAt: runTiming.startedAt,
         durationDeadline: runTiming.deadline,
         ...(submission.workerAdmission === undefined
@@ -8199,7 +8204,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             .pipe(
               Effect.mapError((cause) =>
                 AdmissionPolicyError.make({
-                  reason: cause.reason === "storage" ? "unavailable" : "refused",
+                  reason:
+                    cause.reason === "storage" || cause.reason === "unavailable"
+                      ? "unavailable"
+                      : "refused",
                   code: `worker-${cause.reason}`,
                 }),
               ),

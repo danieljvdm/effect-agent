@@ -23,6 +23,10 @@ export const WorkerStarted = Schema.Struct({
 
 export type WorkerStarted = typeof WorkerStarted.Type;
 
+/** A host-authorized Run allowance is independent of the immutable delegation lineage. */
+export const WorkerBudgetScope = Schema.Literals(["source-subtree", "worker-run"]);
+export type WorkerBudgetScope = typeof WorkerBudgetScope.Type;
+
 /** Host-bound caller metadata. Programmatic calls never fabricate Run or Tool Call identities. */
 export const WorkerSource = Schema.Union([
   Schema.Struct({

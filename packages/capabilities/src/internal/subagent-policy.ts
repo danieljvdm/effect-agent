@@ -160,6 +160,7 @@ export const residualSubagentCaps = (
   declared: SubagentDelegationCaps,
   parent: AgentPolicy,
   inherited: SubagentBudgetReservation,
+  independentRun = false,
 ): SubagentDelegationCaps => {
   const allocation = inherited.allocation;
 
@@ -183,21 +184,48 @@ export const residualSubagentCaps = (
       Math.ceil(Duration.toMillis(parent.maxDuration)),
       declared.maxDurationMillis,
     ),
-    maxInputTokens: remaining(
-      allocation.inputTokens,
-      parent.tokenBudget ?? allocation.inputTokens,
-      declared.maxInputTokens,
-    ),
-    maxOutputTokens: remaining(
-      allocation.outputTokens,
-      parent.tokenBudget ?? allocation.outputTokens,
-      declared.maxOutputTokens,
-    ),
-    maxCostMicrousd: remaining(
-      allocation.costMicrousd,
-      parent.costBudgetMicrousd ?? allocation.costMicrousd,
-      declared.maxCostMicrousd,
-    ),
+    ...(independentRun &&
+    inherited.caps.maxInputTokens === undefined &&
+    allocation.inputTokens === 0 &&
+    parent.tokenBudget === undefined
+      ? declared.maxInputTokens === undefined
+        ? {}
+        : { maxInputTokens: declared.maxInputTokens }
+      : {
+          maxInputTokens: remaining(
+            allocation.inputTokens,
+            parent.tokenBudget ?? allocation.inputTokens,
+            declared.maxInputTokens,
+          ),
+        }),
+    ...(independentRun &&
+    inherited.caps.maxOutputTokens === undefined &&
+    allocation.outputTokens === 0 &&
+    parent.tokenBudget === undefined
+      ? declared.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: declared.maxOutputTokens }
+      : {
+          maxOutputTokens: remaining(
+            allocation.outputTokens,
+            parent.tokenBudget ?? allocation.outputTokens,
+            declared.maxOutputTokens,
+          ),
+        }),
+    ...(independentRun &&
+    inherited.caps.maxCostMicrousd === undefined &&
+    allocation.costMicrousd === 0 &&
+    parent.costBudgetMicrousd === undefined
+      ? declared.maxCostMicrousd === undefined
+        ? {}
+        : { maxCostMicrousd: declared.maxCostMicrousd }
+      : {
+          maxCostMicrousd: remaining(
+            allocation.costMicrousd,
+            parent.costBudgetMicrousd ?? allocation.costMicrousd,
+            declared.maxCostMicrousd,
+          ),
+        }),
     maxResultBytes: remaining(
       allocation.resultBytes,
       parent.toolResultBounds.maxBytes,

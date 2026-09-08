@@ -1,8 +1,15 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
 import * as Agent from "@effect-agent/core/Agent";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import { WorkerError } from "@effect-agent/core/Worker";
 import { DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
-import { WorkerHostAuthorizer } from "@effect-agent/thread/WorkerHost";
+import {
+  WorkerBudgetAuthorizer,
+  WorkerHostAuthorizer,
+  WorkerHostConfig,
+} from "@effect-agent/thread/WorkerHost";
 import { Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -111,7 +118,136 @@ export const backgroundReportingWorkers = Subagent.make("reported_research", {
   }),
 });
 
+export const independentBudgetSource = Agent.make("cf-independent-source", {
+  input: backgroundSource.input,
+  output: backgroundSource.output,
+  instructions: "Answer as JSON.",
+  toolkit: Toolkit.empty,
+  policy: { maxTurns: 1, maxToolCalls: 1, maxDuration: "1 second", toolConcurrency: 1 },
+});
+
+const independentScout = Agent.make("cf-independent-scout", {
+  input: backgroundTarget.input,
+  output: backgroundTarget.output,
+  instructions: "Answer as JSON.",
+  toolkit: Toolkit.empty,
+  policy: {
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "10 seconds",
+    toolConcurrency: 1,
+    toolResultBounds: { maxBytes: 512 },
+  },
+});
+
+const independentScoutDeclaration = Subagent.make("budget_scout", {
+  target: independentScout,
+  grant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 2, childLifetimes: ["attached"] }),
+  policy: Subagent.SubagentPolicy.make({
+    maxChildren: 1,
+    maxConcurrency: 1,
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "10 seconds",
+    maxInputTokens: 20,
+    maxOutputTokens: 30,
+    maxCostMicrousd: 2,
+    maxResultBytes: 512,
+  }),
+});
+
+const independentPersona = Agent.make("cf-independent-persona", {
+  input: backgroundTarget.input,
+  output: backgroundTarget.output,
+  instructions: "Attach a scout once per task, then answer as JSON.",
+  toolkit: Toolkit.make(independentScoutDeclaration.tool),
+  policy: {
+    maxTurns: 2,
+    maxToolCalls: 1,
+    maxDuration: "20 seconds",
+    toolConcurrency: 1,
+    toolResultBounds: { maxBytes: 1024 },
+  },
+});
+
+export const independentBudgetWorkers = Subagent.make("independent_persona", {
+  target: independentPersona,
+  grant: SubagentGrant.make({
+    allowedToolNames: ["budget_scout"],
+    maxDepth: 2,
+    childLifetimes: ["attached"],
+  }),
+  policy: Subagent.SubagentPolicy.make({
+    maxChildren: 1,
+    maxConcurrency: 1,
+    descendantInvocations: 1,
+    maxTurns: 3,
+    maxToolCalls: 2,
+    maxDuration: "40 seconds",
+    maxResultBytes: 2048,
+  }),
+});
+
+export const independentBudgetGrants = new Set<string>();
+/** A source authorization succeeds before the destination's next admission loses its dependency. */
+export const independentBudgetAdmissionOutages = new Set<string>();
+export const independentBudgetAuthorityCalls = new Map<string, number>();
+export const independentBudgetGates = new Set<string>();
+
+const independentPersonaModel = Model.make(
+  "scripted",
+  "cf-independent-persona",
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: ({ prompt }) => {
+        const index = prompt.content.findLastIndex(
+          (message) => message.role === "user" && JSON.stringify(message).includes(":task:"),
+        );
+
+        const task =
+          /background-cf-independent-[a-z0-9-]+:task:[0-9]+/u.exec(
+            JSON.stringify(prompt.content[index]),
+          )?.[0] ?? "missing";
+
+        const finished = prompt.content.slice(index + 1).some((message) => message.role === "tool");
+
+        if (finished) return Stream.fromIterable(finalParts('{"answer":"done"}'));
+
+        const wait = Effect.gen(function* () {
+          while (!independentBudgetGates.has(task)) yield* Effect.sleep("10 millis");
+        });
+
+        const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+          {
+            type: "tool-call",
+            id: "scout-once",
+            name: "budget_scout",
+            params: { question: task },
+            providerExecuted: false,
+          },
+          { type: "finish", reason: "tool-calls", usage: { inputTokens: {}, outputTokens: {} } },
+        ];
+
+        return Stream.fromEffectDrain(wait).pipe(Stream.concat(Stream.fromIterable(parts)));
+      },
+    }),
+  ),
+);
+
+const independentScoutHandlers = Subagent.SubagentRuntime.layer(
+  independentScoutDeclaration,
+  Agent.withModel(independentScout, model),
+).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
+
 export const backgroundWorkerBindings = Effect.all([
+  DurableWorkerBinding.make(Agent.withModel(independentBudgetSource, model), TEST_DIGESTS),
+  DurableWorkerBinding.make(Agent.withModel(independentScout, model), TEST_DIGESTS),
+  DurableWorkerBinding.make(
+    Agent.withModel(independentPersona, independentPersonaModel),
+    TEST_DIGESTS,
+  ).pipe(Effect.provide(independentScoutHandlers)),
   DurableWorkerBinding.make(Agent.withModel(backgroundSource, model), TEST_DIGESTS),
   DurableWorkerBinding.make(Agent.withModel(backgroundTarget, model), TEST_DIGESTS),
   DurableWorkerBinding.make(Agent.withModel(backgroundReportSource, model), TEST_DIGESTS, [
@@ -138,12 +274,45 @@ export const backgroundWorkerBindings = Effect.all([
   ),
 ]);
 
-export const backgroundWorkerAuthority = Layer.succeed(WorkerHostAuthorizer)({
-  authorize: (request) =>
-    request.principal === TEST_PRINCIPAL && request.sourceThreadId.startsWith("background-cf-")
-      ? Effect.succeed(TEST_PRINCIPAL)
-      : WorkerError.make({ operation: request.operation, reason: "denied" }),
-});
+export const backgroundWorkerAuthority = Layer.mergeAll(
+  Layer.succeed(WorkerHostConfig)({
+    maxWorkersPerSource: 32,
+    maxActiveWorkersPerSource: 2,
+    maxInputsPerWorker: 64,
+    maxPendingInputsPerWorker: 8,
+    lifetimeMillis: 86_400_000,
+  }),
+  Layer.succeed(WorkerBudgetAuthorizer)({
+    authorize: (request) =>
+      Effect.gen(function* () {
+        const source = request.source.threadId;
+        const calls = (independentBudgetAuthorityCalls.get(source) ?? 0) + 1;
+
+        independentBudgetAuthorityCalls.set(source, calls);
+
+        const declared =
+          (request.worker.targetAgentId === independentPersona.id &&
+            request.worker.delegationId === independentBudgetWorkers.delegationId) ||
+          (request.worker.targetAgentId === backgroundTarget.id &&
+            request.worker.delegationId === backgroundWorkers.delegationId);
+
+        if (
+          request.principal !== TEST_PRINCIPAL ||
+          !independentBudgetGrants.has(source) ||
+          !declared
+        )
+          return yield* WorkerError.make({ operation: "start", reason: "denied" });
+        if (independentBudgetAdmissionOutages.has(source) && calls > 1)
+          return yield* WorkerError.make({ operation: "start", reason: "unavailable" });
+      }),
+  }),
+  Layer.succeed(WorkerHostAuthorizer)({
+    authorize: (request) =>
+      request.principal === TEST_PRINCIPAL && request.sourceThreadId.startsWith("background-cf-")
+        ? Effect.succeed(TEST_PRINCIPAL)
+        : WorkerError.make({ operation: request.operation, reason: "denied" }),
+  }),
+);
 
 /** Explicitly suppress worker wake hints while the recovery test drives stored alarms. */
 export const backgroundWakeDropPrefixes = new Set<string>();

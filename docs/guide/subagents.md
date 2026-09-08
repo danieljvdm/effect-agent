@@ -182,6 +182,42 @@ require the platform Crypto service. Projection services are supplied to the han
 Custom `prepareInput` receives `context.source` as `"tool"` or `"programmatic"`. Only the tool
 variant contains `context.toolCallId` and `context.parent.runId`.
 
+## Independently fund background Runs
+
+Background workers normally reserve against their source's subtree. A host may separately
+fund a root's reusable worker by supplying `WorkerBudgetAuthorizer` from
+`@effect-agent/thread/WorkerHost` and allowing the exact source, destination, and allowance.
+The default denies this permission. Request it from author-owned code:
+
+```ts
+const start = Subagent.start(Research, request, {
+  idempotencyKey,
+  budgetScope: "worker-run",
+});
+const tools = Subagent.background(Research, { start: true, budgetScope: "worker-run" });
+```
+
+The model cannot select the funding scope. The host checks it before every native input admission.
+This mode resolves the worker's own Definition policy without inheriting its source's execution
+ceiling. Declared delegation allocations bound the worker's own work and its descendants. Tokens
+and cost have no cumulative ceiling unless explicitly configured. Keep finite turn, tool-call,
+duration, concurrency, and result bounds, and authorize the exact allocation at the host.
+
+The first admission freezes the scope with the worker's immutable source, grant, and depth.
+A later native logical Run receives the same configured allowance. Input joining an active Run
+shares that Run's usage and deadline; a Receipt does not create budget credit. Retried delivery,
+replacement Attempts, owner eviction, and compaction retain the same Run journal. Changing history
+or application task identifiers never resets an active allowance.
+
+Independent funding is available only to root-created workers. Root, worker, and attached scout
+still have depths zero, one, and two. Set the worker grant's `childLifetimes` to `["attached"]`
+and `maxDepth` to `2` to allow scouts without another background generation. Reserve enough
+`descendantInvocations` and allocation beyond the worker's own full ceiling for those scouts.
+Scouts share the immediate worker Run's remaining allocation. Host worker-count, pending-input,
+input-retention, concurrency, and lifetime limits still apply across the source Thread.
+Set `WorkerHostConfig.maxActiveWorkersPerSource` to bound concurrent background workers separately
+from the root's Tool execution concurrency; omission retains the prior concurrency ceiling.
+
 ## Bound child work
 
 Children inherit omitted policy fields from their parent's resolved policy. Explicit child fields
