@@ -131,10 +131,6 @@ export const makePhase3TravelPlannerCheckpoint = (projection: ThreadProjection):
     threadId: projection.threadId,
     throughSequence: projection.throughSequence,
     tailDigest: projection.tailDigest,
-    engineVersion: "phase-3-test-runtime",
-    agentDefinitionDigest: phase3TravelPlannerDefinitionDigests.agent,
-    modelDigest: phase3TravelPlannerDefinitionDigests.model,
-    toolDigest: phase3TravelPlannerDefinitionDigests.tools,
     state: Schema.encodeSync(ThreadProjection)(projection),
     createdAt: "2026-09-01T00:00:04.000Z",
   });

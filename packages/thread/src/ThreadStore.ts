@@ -86,6 +86,12 @@ export class ThreadExport extends Schema.Class<ThreadExport>("@effect-agent/thre
   ),
 }) {}
 
+/**
+ * A disposable projection snapshot. Adapters bind its sequence and digest to the canonical
+ * log; consumers decode `state` and decide projection compatibility before suffix replay.
+ * Legacy metadata is optional for application projections and preserved when supplied.
+ * Runtime-owned recovery checkpoints populate and compare it before using cached state.
+ */
 export class ThreadCheckpoint extends Schema.Class<ThreadCheckpoint>(
   "@effect-agent/thread/ThreadCheckpoint",
 )({
@@ -93,10 +99,14 @@ export class ThreadCheckpoint extends Schema.Class<ThreadCheckpoint>(
   threadId: ThreadId,
   throughSequence: CanonicalSequence,
   tailDigest: Digest,
-  engineVersion: Schema.NonEmptyString,
-  agentDefinitionDigest: Digest,
-  modelDigest: Digest,
-  toolDigest: Digest,
+  /** @deprecated For application projections; retained for existing data and runtime recovery. */
+  engineVersion: Schema.optionalKey(Schema.NonEmptyString),
+  /** @deprecated For application projections; retained for existing data and runtime recovery. */
+  agentDefinitionDigest: Schema.optionalKey(Digest),
+  /** @deprecated For application projections; retained for existing data and runtime recovery. */
+  modelDigest: Schema.optionalKey(Digest),
+  /** @deprecated For application projections; retained for existing data and runtime recovery. */
+  toolDigest: Schema.optionalKey(Digest),
   state: PersistedJson,
   createdAt: Schema.DateTimeUtcFromString,
 }) {}
@@ -169,6 +179,7 @@ export type ThreadStoreFailure =
 /**
  * Optional, disposable projection storage. Neither history execution nor durable recovery
  * requires it. Adapters that offer it must bind every checkpoint to a canonical batch tail.
+ * Application consumers own projection compatibility; this port does not interpret metadata.
  */
 export interface ThreadCheckpoints {
   readonly save: (

@@ -147,10 +147,6 @@ const checkpointAt = (
     threadId,
     throughSequence,
     tailDigest,
-    engineVersion: "conformance",
-    agentDefinitionDigest: tailDigest,
-    modelDigest: tailDigest,
-    toolDigest: tailDigest,
     state: { conformance: true },
     createdAt: CONFORMANCE_CREATED_AT,
   });

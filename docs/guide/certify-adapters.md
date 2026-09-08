@@ -24,8 +24,22 @@ values through schemas.
 `ThreadStore.checkpoints` is optional storage for application projections. An adapter offering it
 must run the generic checkpoint conformance suite. Retained-history execution does not use it.
 
+A new `ThreadCheckpoint` needs only `schemaVersion`, `threadId`,
+`throughSequence`, `tailDigest`, `state`, and `createdAt`. Adapters bind the sequence and digest
+to a canonical batch tail; consumers decode `state` and decide whether its projection version
+supports suffix replay. `ThreadProjection` retains version 2 and rejects older snapshots so
+consumers can rebuild from canonical records.
+
+The optional `engineVersion`, `agentDefinitionDigest`, `modelDigest`, and `toolDigest` fields are
+deprecated for application projections; adapters retain them without interpreting them. Supplied
+values remain validated and survive decoding and encoding, including historical checkpoint
+load/save. SQLite and Cloudflare retain immutable byte comparisons for generic projection
+checkpoints: changing or removing metadata from an existing checkpoint can conflict.
+
 The separate optional `ThreadStore.recoveryCheckpoints` capability stores one latest recovery
-snapshot per Thread. `SaveRecoveryCheckpointRequest` carries the checkpoint and producer epoch.
+snapshot per Thread. The runtime populates and compares all four metadata fields in this
+slot; absent or incompatible metadata falls back to canonical replay.
+`SaveRecoveryCheckpointRequest` carries the checkpoint and producer epoch.
 In one transaction, validate epoch equality and the canonical batch tail sequence and digest,
 then replace the cached value. An older snapshot must not replace a newer one; equal-tail
 replacement permits repair. Keep generic projection checkpoints independent of this slot.
