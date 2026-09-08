@@ -2,7 +2,9 @@
 
 Run the same Agent declarations on a bounded Node worker pool or SQLite-backed Cloudflare Durable
 Objects. Both entrypoints use OpenAI through native Effect AI model Layers. The default model is
-`gpt-4.1-mini`; set `OPENAI_MODEL` to select another Responses API model with tool calling.
+`gpt-5.6-sol`, with low reasoning effort and a 4,096-token output budget. Set `OPENAI_MODEL`
+to select another Responses API model that supports tool calling and low reasoning effort,
+such as `gpt-5.6-terra`.
 The agents propose plans and verification steps using real model calls; they have no filesystem
 or shell tools. Deterministic models live only in the tests.
 
@@ -50,20 +52,21 @@ the first reports so it has a separate worker Run.
 The Node boundary observes `NodeHost.run` alongside the interaction, so a worker-pool failure
 ends the demonstration immediately with that failure.
 
-State persists in `examples/durable-orchestration/orchestration-openai.sqlite`. Running the command
+State persists in `examples/durable-orchestration/orchestration-gpt-5.6-sol.sqlite`. Running the command
 again uses the same explicit idempotency keys and reconnects to those admissions. The host
 recovers accepted work after interruption. For an independent demonstration or a different model,
 choose a new database:
 
 ```sh
-ORCHESTRATION_DATABASE=orchestration-second.sqlite \
+OPENAI_MODEL=gpt-5.6-terra ORCHESTRATION_DATABASE=orchestration-second.sqlite \
   vp run @effect-agent/example-durable-orchestration#node
 ```
 
 Model identity is pinned in durable registrations. Reopening a completed demonstration reuses
 its results; accepted unfinished work resumes. Reopening does not reset failures. Keep a failed
-database for inspection and use a new filename to try again. The OpenAI default uses a separate file from the earlier
-scripted example.
+database for inspection and use a new filename to try again. The GPT-5.6 default uses a separate
+file from the earlier GPT-4.1 mini and scripted examples. For Cloudflare, use fresh Durable Object
+storage when changing models; existing registrations retain their original model identity.
 
 ## Cloudflare
 

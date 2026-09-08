@@ -6,7 +6,7 @@ import { nodeDemonstration, nodeHost } from "./node.ts";
 NodeRuntime.runMain(
   Effect.gen(function* () {
     const filename = yield* Config.nonEmptyString("ORCHESTRATION_DATABASE").pipe(
-      Config.withDefault("orchestration-openai.sqlite"),
+      Config.withDefault("orchestration-gpt-5.6-sol.sqlite"),
     );
 
     yield* Effect.sync(() =>

@@ -10,7 +10,7 @@ import { nodeDemonstration, nodeHost } from "../src/node.ts";
 it.each(["unauthorized", "no-tools"] as const)(
   "uses the OpenAI HTTP boundary and reports %s without persisting the key",
   async (scenario) => {
-    const model = scenario === "unauthorized" ? "gpt-4.1-mini" : "gpt-4.1-mini-2025-04-14";
+    const model = scenario === "unauthorized" ? "gpt-5.6-sol" : "gpt-5.6-terra";
     const apiKey = "sk-fixture-secret-never-persist";
     const requests: Array<{ url: string; authorization: string | null; body: unknown }> = [];
 
@@ -37,7 +37,7 @@ it.each(["unauthorized", "no-tools"] as const)(
 
       const response = {
         id: "resp_fixture",
-        model: "gpt-4.1-mini-2025-04-14",
+        model,
         created_at: 1,
         output: [],
       };
@@ -112,6 +112,9 @@ it.each(["unauthorized", "no-tools"] as const)(
         model,
         store: false,
         stream: true,
+        max_output_tokens: 4096,
+        reasoning: { effort: "low" },
+        include: expect.arrayContaining(["reasoning.encrypted_content"]),
         tools: expect.arrayContaining([
           expect.objectContaining({ name: "build_a_start" }),
           expect.objectContaining({ name: "build_b_start" }),

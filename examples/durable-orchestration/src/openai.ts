@@ -8,11 +8,14 @@ import type { Models } from "./agents.ts";
 export const openAiModels = Effect.gen(function* () {
   const apiKey = yield* Config.nonEmptyString("OPENAI_API_KEY").pipe(Config.map(Redacted.make));
 
-  const name = yield* Config.nonEmptyString("OPENAI_MODEL").pipe(
-    Config.withDefault("gpt-4.1-mini"),
-  );
+  const name = yield* Config.nonEmptyString("OPENAI_MODEL").pipe(Config.withDefault("gpt-5.6-sol"));
 
-  const config = { store: false, max_output_tokens: 1024 } as const;
+  const config = {
+    store: false,
+    max_output_tokens: 4096,
+    reasoning: { effort: "low" },
+  } as const;
+
   const client = OpenAiClient.layer({ apiKey }).pipe(Layer.provide(FetchHttpClient.layer));
   const model = OpenAiLanguageModel.model(name, config).pipe(Layer.provide(client));
 
