@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.58
+
+### Patch Changes
+
+- [#364](https://github.com/danieljvdm/effect-agent/pull/364) [`daca525`](https://github.com/danieljvdm/effect-agent/commit/daca52585983bb90b6c43a29e4a44a28c8de1743) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve completed Tool results before repeated-failure termination and allow later context rollover past invisible incomplete batches from canonically terminated prior Runs without rewriting or replaying their evidence.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.58
+
 ## 0.1.0-beta.57
 
 ### Minor Changes

@@ -1,5 +1,13 @@
 # @effect-agent/workflow
 
+## 0.1.0-beta.58
+
+### Patch Changes
+
+- Updated dependencies [[`daca525`](https://github.com/danieljvdm/effect-agent/commit/daca52585983bb90b6c43a29e4a44a28c8de1743)]:
+  - @effect-agent/thread@0.1.0-beta.58
+  - @effect-agent/core@0.1.0-beta.58
+
 ## 0.1.0-beta.57
 
 ### Patch Changes
