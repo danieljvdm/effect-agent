@@ -10,10 +10,19 @@ import {
   type DurableWorkerFailure,
   type RecoveryReport,
 } from "@effect-agent/thread/DurableAgentRuntime";
-import { type Settlement, type Principal } from "@effect-agent/thread/SubmissionLedger";
+import {
+  type Settlement,
+  type Principal,
+  type SubmissionLedger,
+} from "@effect-agent/thread/SubmissionLedger";
 import { type SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
+import type { ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { expectTypeOf, it } from "@effect/vitest";
-import type { DateTime, Effect, Option } from "effect";
+import type { Crypto, DateTime, Effect, Option } from "effect";
+
+import type { DurableRuntimeFailpoint } from "../src/DurableFailpoint.ts";
+import type { makeMessagingRuntime } from "../src/internal/messaging-host.ts";
+import type { makeWorkerRuntime, WorkerInputControl } from "../src/internal/worker-host.ts";
 
 type Runtime = DurableAgentRuntime["Service"];
 type Head = ReturnType<Runtime["processThreadHead"]>;
@@ -22,6 +31,12 @@ type Inspection = ReturnType<Runtime["inspectSubmissionStatus"]>;
 type Recovery = ReturnType<Runtime["recoverSubmission"]>;
 
 it("keeps bounded worker operations and status reads typed without hidden requirements", () => {
+  expectTypeOf<Effect.Services<ReturnType<typeof makeWorkerRuntime>>>().toEqualTypeOf<
+    ThreadStore | SubmissionLedger | Crypto.Crypto | DurableRuntimeFailpoint | WorkerInputControl
+  >();
+  expectTypeOf<Effect.Services<ReturnType<typeof makeMessagingRuntime>>>().toEqualTypeOf<
+    ThreadStore | Crypto.Crypto
+  >();
   expectTypeOf<Parameters<Runtime["workerHost"]>>().toEqualTypeOf<
     [request: { readonly sourceThreadId: ThreadId; readonly principal: Principal }]
   >();

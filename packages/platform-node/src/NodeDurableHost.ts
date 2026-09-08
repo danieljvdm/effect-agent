@@ -28,8 +28,8 @@ import {
   type RecoveryReport,
 } from "@effect-agent/thread/DurableAgentRuntime";
 import {
+  type MessageDeliveryStore,
   MessageDeliveryDriver,
-  MessageDeliveryStore,
   type MessageDeliveryError,
 } from "@effect-agent/thread/MessageDelivery";
 import { type OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
@@ -48,7 +48,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { type Stream, Context, Effect, Fiber, Layer, Ref, Schema } from "effect";
 
 import { runNodeMessageDeliveries } from "./internal/message-delivery.ts";
-import { makeNodePreparedInputAdmission } from "./internal/prepared-admission.ts";
+import { makeNodePreparedInputAdmission, NodeAdmission } from "./internal/prepared-admission.ts";
 import {
   NodeDurableAgentRuntime,
   NodeDurableAgentRuntimeConfig,
@@ -97,7 +97,7 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
     InputSchema["EncodingServices"]
   > => requireAdmission.pipe(Effect.andThen(runtime.submit(agent, input, options)));
 
-  const deliveryStore = yield* MessageDeliveryStore;
+  const deliveryServices = yield* Effect.context<MessageDeliveryStore>();
 
   const deliveryContext = yield* Layer.build(
     MessageDeliveryDriver.layer({
@@ -106,20 +106,17 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
     }).pipe(
       Layer.provide(NodeCrypto.layer),
       Layer.provide(
-        Layer.succeed(
-          PreparedInputAdmission,
-          makeNodePreparedInputAdmission({ submit, submissionStatus: runtime.submissionStatus }),
+        Layer.effect(PreparedInputAdmission, makeNodePreparedInputAdmission).pipe(
+          Layer.provide(
+            Layer.succeed(NodeAdmission, { submit, submissionStatus: runtime.submissionStatus }),
+          ),
         ),
       ),
     ),
   );
 
-  const deliveryDriver = Context.get(deliveryContext, MessageDeliveryDriver);
-
-  const runDeliveries = runNodeMessageDeliveries(
-    deliveryDriver,
-    deliveryStore,
-    config.wakeScanInterval,
+  const runDeliveries = runNodeMessageDeliveries(config.wakeScanInterval).pipe(
+    Effect.provide(Context.merge(deliveryServices, deliveryContext)),
   );
 
   const runWorkers = <A, E, R>(worker: Effect.Effect<A, E, R>): Effect.Effect<void, E, R> =>

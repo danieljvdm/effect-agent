@@ -26,8 +26,6 @@ import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { CompactionError } from "./ContextCompactor.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
-import type { MessagingHost } from "./MessagingHost.ts";
-import type { SubagentHost } from "./SubagentHost.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
 interface ToolFailureIdentity {
@@ -872,10 +870,6 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * delegation Tools keep their S1 in-process spawn semantics unchanged.
    */
   readonly subagent?: RunSubagentHook<HookError, HookRequirements> | undefined;
-  /** Trusted host facet bound to each actual Tool Call; omitted hosts fail background operations closed. */
-  readonly subagentHost?: ((toolCallId: ToolCallId) => SubagentHost["Service"]) | undefined;
-  /** Per-call peer authority; source identity never comes from Tool parameters. */
-  readonly messagingHost?: ((toolCallId: ToolCallId) => MessagingHost["Service"]) | undefined;
   /**
    * Resume a declared, canonically committed Tool batch without re-invoking
    * the model (durable batch-resume seam). Consumed by the Run's first Turn.

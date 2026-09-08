@@ -1,10 +1,11 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
 import * as Agent from "@effect-agent/core/Agent";
-import { ThreadId } from "@effect-agent/core/Identifiers";
+import { AgentId, RunId, ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import { WorkerError } from "@effect-agent/core/Worker";
+import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import * as NodeHost from "@effect-agent/platform-node/NodeDurableHost";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
@@ -185,7 +186,31 @@ it.live(
           Agent.make("nested-root-agent", {
             input,
             output,
-            instructions: "Start one builder and finish without waiting for it.",
+            instructions: Effect.fn("NestedWorkers.rootInstructions")(function* () {
+              const workerForTool = yield* SubagentHost.forTool;
+              const peerForTool = yield* MessagingHost.forTool;
+
+              const foreignSource = {
+                _tag: "tool" as const,
+                agentId: Schema.decodeSync(AgentId)("nested-root-agent"),
+                threadId: rootThreadId,
+                runId: Schema.decodeSync(RunId)("another-run"),
+                toolCallId: Schema.decodeSync(ToolCallId)("foreign-call"),
+              };
+
+              expect(yield* workerForTool(foreignSource).context.pipe(Effect.result)).toMatchObject(
+                {
+                  _tag: "Failure",
+                  failure: { _tag: "WorkerError", reason: "unavailable" },
+                },
+              );
+              expect(yield* peerForTool(foreignSource).context.pipe(Effect.result)).toMatchObject({
+                _tag: "Failure",
+                failure: { _tag: "MessagingError", reason: "unavailable" },
+              });
+
+              return "Start one builder and finish without waiting for it.";
+            }),
             toolkit: background.toolkit,
             policy: {
               maxTurns: 8,

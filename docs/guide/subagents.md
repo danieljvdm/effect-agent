@@ -352,6 +352,11 @@ result Schemas. Programmatic code acquires a separately authorized facet with
 `durableRuntime.workerHost({ sourceThreadId, principal })` and provides it as `SubagentHost`.
 The source Thread must already exist. No fabricated Run or Tool Call ID is needed.
 
+For native tools, the durable runtime provides `SubagentHost.forTool` through Effect context.
+The interpreter supplies the actual Agent, Thread, Run, and Tool Call identity; the runtime
+refuses a binding from another Run. The reference defaults to an unavailable host and is not
+a `RunOptions` callback.
+
 Keep the two references distinct: a worker identifies its continuing Thread, while a Receipt
 identifies one input. Neither grants access. Encode/decode worker references with
 `Subagent.Worker(Research)`. `inspect(Research, worker)` returns the same summary as discovery;
@@ -442,6 +447,8 @@ Provide the caller-bound `MessagingHost` returned by
 The interpreter provides native tools with the actual caller facet. `sendTool`, `replyTool`,
 `inboxTool`, `inspectTool`, and `retryTool` each derive a native Tool, Toolkit, and handler Layer;
 install only the operations the host wants to expose.
+The runtime provides `MessagingHost.forTool` through Effect context with the same per-Run
+identity check and unavailable default as worker tools.
 
 `PeerRoutes` maps a source, fixed peer name, and registered target to a destination Thread.
 `PeerAuthorizer` separately authorizes context, read, send, and control and returns a stable

@@ -15,7 +15,18 @@ import {
   type WorkerReceiptRequest,
   type WorkerRunReport,
 } from "@effect-agent/engine/SubagentHost";
-import { Cause, Clock, Crypto, DateTime, Duration, Effect, Option, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Crypto,
+  DateTime,
+  Duration,
+  Effect,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 
 import { digestJson } from "../Digest.ts";
 import type {
@@ -25,7 +36,7 @@ import type {
   DurableSubmitOptions,
 } from "../DurableAgentRuntime.ts";
 import {
-  type DurableRuntimeFailpoint,
+  DurableRuntimeFailpoint,
   type DurableRuntimeFailpointLocation,
 } from "../DurableFailpoint.ts";
 import {
@@ -60,7 +71,7 @@ import {
   ScheduledInputRetryable,
 } from "../Schedule.ts";
 import {
-  type SubmissionLedger,
+  SubmissionLedger,
   AbortCommand,
   type AbortIntent,
   type Principal,
@@ -71,14 +82,14 @@ import {
 } from "../SubmissionLedger.ts";
 import type { SubmissionStatus } from "../SubmissionStatus.ts";
 import { PreparedInput } from "../Subscription.ts";
-import type { ThreadStore } from "../ThreadStore.ts";
 import {
+  ThreadStore,
   FencedAppendRequest,
   ThreadExportRequest,
   ThreadRead,
   ThreadTailRequest,
 } from "../ThreadStore.ts";
-import { type WorkerHostAuthorizer, type WorkerHostLimits } from "../WorkerHost.ts";
+import { WorkerHostAuthorizer, WorkerHostConfig } from "../WorkerHost.ts";
 import {
   definitionDigestsEqual,
   resolveDefinitionBinding,
@@ -186,29 +197,46 @@ const withinPolicy = (origin: WorkerOrigin, source: AgentPolicy, target: AgentPo
   );
 };
 
-export interface WorkerRuntimeDependencies {
-  readonly store: Pick<ThreadStore["Service"], "export" | "inspectTail" | "append" | "read">;
-  readonly ledger: Pick<SubmissionLedger["Service"], "lookup">;
-  readonly deliveries: Option.Option<MessageDeliveryStore["Service"]>;
-  readonly crypto: Crypto.Crypto;
+export interface WorkerRuntimeOptions {
   readonly bindings: ReadonlyArray<ResolvedBinding>;
-  readonly authorizer: ContextAuthorizer;
-  readonly limits: WorkerHostLimits;
   readonly deploymentId: DeploymentId;
   readonly producerId: ProducerId;
-  readonly failpoint: DurableRuntimeFailpoint["Service"];
-  readonly submit: (envelope: PreparedInput) => Effect.Effect<Receipt, DurableSubmitFailure>;
-  readonly status: (
-    receipt: Receipt,
-  ) => Effect.Effect<SubmissionStatus, DurableAwaitFailure | ScheduledInputFailure>;
   readonly settlementPollInterval: Duration.Duration;
-  readonly abort: (command: AbortCommand) => Effect.Effect<AbortIntent, DurableAbortFailure>;
 }
 
-type ContextAuthorizer = typeof WorkerHostAuthorizer.Service;
+/** Admission and cancellation enter the owning runtime, never the raw ledger. */
+export class WorkerInputControl extends Context.Service<
+  WorkerInputControl,
+  {
+    readonly submit: (envelope: PreparedInput) => Effect.Effect<Receipt, DurableSubmitFailure>;
+    readonly status: (
+      receipt: Receipt,
+    ) => Effect.Effect<SubmissionStatus, DurableAwaitFailure | ScheduledInputFailure>;
+    readonly abort: (command: AbortCommand) => Effect.Effect<AbortIntent, DurableAbortFailure>;
+  }
+>()("@effect-agent/thread/internal/WorkerInputControl") {}
 
 /** No in-memory ownership: every mutation is reserved in source canonical history with CAS. */
-export const makeWorkerRuntime = (deps: WorkerRuntimeDependencies) => {
+export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
+  options: WorkerRuntimeOptions,
+) {
+  const control = yield* WorkerInputControl;
+  // A routed read may belong to another owner; capture it before exposing worker operations.
+  const admission = yield* Effect.serviceOption(PreparedInputAdmission);
+
+  const deps = {
+    ...options,
+    ...control,
+    store: yield* ThreadStore,
+    ledger: yield* SubmissionLedger,
+    deliveries: yield* Effect.serviceOption(MessageDeliveryStore),
+    crypto: yield* Crypto.Crypto,
+    authorizer: yield* WorkerHostAuthorizer,
+    limits: yield* WorkerHostConfig,
+    failpoint: yield* DurableRuntimeFailpoint,
+    status: Option.getOrUndefined(admission)?.submissionStatus ?? control.status,
+  };
+
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, deps.crypto);
 
@@ -1846,4 +1874,4 @@ export const makeWorkerRuntime = (deps: WorkerRuntimeDependencies) => {
   });
 
   return { facet, acquire, validateAdmission, ensureOrigin, completeInput, reserveSubtree };
-};
+});

@@ -19,12 +19,17 @@ import { Clock, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect"
 import { digestJson } from "../Digest.ts";
 import type { DurableSubmitOptions } from "../DurableAgentRuntime.ts";
 import {
-  type MessageDeliveryFailpoint,
-  type MessageDeliveryStore,
+  MessageDeliveryFailpoint,
+  MessageDeliveryStore,
   type MessageDeliveryRecord,
   prepareMessageDelivery,
 } from "../MessageDelivery.ts";
-import type { PeerAuthorizer, PeerRoutes } from "../MessagingHost.ts";
+import {
+  PeerAuthorizer,
+  PeerRoutes,
+  PeerDeliveryLifetime,
+  PeerMessageCapacity,
+} from "../MessagingHost.ts";
 import {
   BatchId,
   CanonicalBatch,
@@ -43,7 +48,7 @@ import {
   ThreadExportRequest,
   ThreadRead,
   ThreadTailRequest,
-  type ThreadStore,
+  ThreadStore,
 } from "../ThreadStore.ts";
 import {
   definitionDigestsEqual,
@@ -51,18 +56,10 @@ import {
   type ResolvedBinding,
 } from "./agent-registration.ts";
 
-export interface MessagingRuntimeDependencies {
-  readonly store: Pick<ThreadStore["Service"], "export" | "read" | "inspectTail" | "append">;
-  readonly deliveries: Option.Option<MessageDeliveryStore["Service"]>;
-  readonly crypto: Crypto.Crypto;
+export interface MessagingRuntimeOptions {
   readonly bindings: ReadonlyArray<ResolvedBinding>;
-  readonly authorizer: typeof PeerAuthorizer.Service;
-  readonly routes: typeof PeerRoutes.Service;
-  readonly lifetimeMillis: number;
-  readonly maxMessagesPerSource?: number;
   readonly deploymentId: DeploymentId;
   readonly producerId: ProducerId;
-  readonly failpoint: typeof MessageDeliveryFailpoint.Service;
 }
 
 const failure = (operation: MessagingError["operation"], reason: MessagingError["reason"]) =>
@@ -73,7 +70,21 @@ const sameAdmission = Schema.toEquivalence(MessageAdmission);
 const sameJson = Schema.toEquivalence(PersistedJson);
 
 /** Thread-owned durable peer delivery. Source proof and the independent due index survive Run settlement. */
-export const makeMessagingRuntime = (deps: MessagingRuntimeDependencies) => {
+export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
+  options: MessagingRuntimeOptions,
+) {
+  const deps = {
+    ...options,
+    store: yield* ThreadStore,
+    deliveries: yield* Effect.serviceOption(MessageDeliveryStore),
+    crypto: yield* Crypto.Crypto,
+    authorizer: yield* PeerAuthorizer,
+    routes: yield* PeerRoutes,
+    lifetimeMillis: yield* PeerDeliveryLifetime,
+    maxMessagesPerSource: yield* PeerMessageCapacity,
+    failpoint: yield* MessageDeliveryFailpoint,
+  };
+
   const digest = (value: Schema.Json) =>
     digestJson(value).pipe(
       Effect.provideService(Crypto.Crypto, deps.crypto),
@@ -591,4 +602,4 @@ export const makeMessagingRuntime = (deps: MessagingRuntimeDependencies) => {
       return admission;
     }),
   };
-};
+});

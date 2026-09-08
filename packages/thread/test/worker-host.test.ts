@@ -26,7 +26,6 @@ import { expect, layer } from "@effect/vitest";
 import {
   Clock,
   Context,
-  Crypto,
   DateTime,
   Duration,
   Effect,
@@ -41,11 +40,16 @@ import { Toolkit } from "effect/unstable/ai";
 
 import { DurableWorkerBinding } from "../src/AgentRegistration.ts";
 import {
+  DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
 } from "../src/DurableFailpoint.ts";
-import { makeWorkerRuntime, type WorkerRuntimeDependencies } from "../src/internal/worker-host.ts";
-import { applyMessageDeliveryChange, type MessageDeliveryRecord } from "../src/MessageDelivery.ts";
+import { makeWorkerRuntime, WorkerInputControl } from "../src/internal/worker-host.ts";
+import {
+  MessageDeliveryStore,
+  applyMessageDeliveryChange,
+  type MessageDeliveryRecord,
+} from "../src/MessageDelivery.ts";
 import {
   BatchId,
   CanonicalRecordEnvelope,
@@ -70,10 +74,12 @@ import {
   Principal,
   Settlement,
   SubmissionSnapshot,
+  SubmissionLedger,
   submissionSettlementId,
 } from "../src/SubmissionLedger.ts";
 import { PendingSubmission, SettledSubmission } from "../src/SubmissionStatus.ts";
 import { PreparedInput } from "../src/Subscription.ts";
+import { WorkerHostAuthorizer, WorkerHostConfig } from "../src/WorkerHost.ts";
 
 class ReportService extends Context.Service<ReportService, string>()("test/ReportService") {}
 class PrivateReportFailure extends Schema.TaggedError<PrivateReportFailure>()(
@@ -86,6 +92,7 @@ import {
   ThreadExport,
   ThreadNotMaterialized,
   ThreadTail,
+  ThreadStore,
 } from "../src/ThreadStore.ts";
 
 const sourceId = Schema.decodeSync(ThreadId)("source");
@@ -165,7 +172,6 @@ const harness = Effect.fn("workerHostHarness")(function* (
     readonly targetReports?: ReadonlyArray<WorkerReporting<WorkerReportPreparationFailure>>;
   } = {},
 ) {
-  const crypto = yield* Crypto.Crypto;
   const now = yield* Clock.currentTimeMillis;
   const logs = new Map<ThreadId, Array<CanonicalRecordEnvelope>>();
   const deliveries = new Map<string, MessageDeliveryRecord>();
@@ -203,7 +209,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
   push(sourceId, ThreadCreated.make({ agentId: sourceAgent.id, definitions }), "source-created");
   const lookup = (id: SubmissionId) => Option.fromNullishOr(submissions.get(id));
 
-  const status: WorkerRuntimeDependencies["status"] = (receipt) =>
+  const status: WorkerInputControl["Service"]["status"] = (receipt) =>
     Effect.sync(() => {
       const settlement = settlements.get(receipt.submissionId);
 
@@ -212,18 +218,12 @@ const harness = Effect.fn("workerHostHarness")(function* (
         : SettledSubmission.make({ settlement });
     });
 
-  let runtime: ReturnType<typeof makeWorkerRuntime>;
+  let runtime: Effect.Success<ReturnType<typeof makeWorkerRuntime>>;
 
-  runtime = makeWorkerRuntime({
-    crypto,
+  runtime = yield* makeWorkerRuntime({
     deploymentId: Schema.decodeSync(DeploymentId)("test"),
     producerId: Schema.decodeSync(ProducerId)("test"),
-    limits: {
-      maxWorkersPerSource: 2,
-      maxInputsPerWorker: 3,
-      maxPendingInputsPerWorker: 2,
-      lifetimeMillis: 60_000,
-    },
+    settlementPollInterval: Duration.millis(5),
     bindings: [sourceAgent, target].map((definition) => ({
       definition,
       agentId: definition.id,
@@ -232,7 +232,14 @@ const harness = Effect.fn("workerHostHarness")(function* (
       reporting:
         definition === sourceAgent ? (options.sourceReports ?? []) : (options.targetReports ?? []),
     })),
-    authorizer: {
+  }).pipe(
+    Effect.provideService(WorkerHostConfig, {
+      maxWorkersPerSource: 2,
+      maxInputsPerWorker: 3,
+      maxPendingInputsPerWorker: 2,
+      lifetimeMillis: 60_000,
+    }),
+    Effect.provideService(WorkerHostAuthorizer, {
       authorize: (request) =>
         Effect.suspend(() => {
           auth.push(request.access);
@@ -243,16 +250,16 @@ const harness = Effect.fn("workerHostHarness")(function* (
             ? WorkerError.make({ operation: request.operation, reason: "denied" })
             : Effect.succeed(principal);
         }),
-    },
-    failpoint: {
+    }),
+    Effect.provideService(DurableRuntimeFailpoint, {
       hit: (point) =>
         Effect.suspend(() =>
           point === failpoint
             ? DurableRuntimeFailpointError.make({ location: point })
             : Effect.void,
         ),
-    },
-    store: {
+    }),
+    Effect.provideService(ThreadStore, {
       read: ({ threadId, afterSequence = 0, limit }) =>
         Stream.fromIterable(
           (logs.get(threadId) ?? [])
@@ -313,8 +320,11 @@ const harness = Effect.fn("workerHostHarness")(function* (
             replayed: false,
           });
         }),
-    },
-    deliveries: Option.some({
+
+      materialize: () => Effect.die("Worker fixture materializes through input control"),
+      observe: () => Stream.die("Worker fixture uses finite canonical reads"),
+    }),
+    Effect.provideService(MessageDeliveryStore, {
       get: ({ messageId }) => Effect.sync(() => deliveries.get(messageId) ?? null),
       insert: (record) =>
         Effect.sync(() => {
@@ -347,7 +357,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         ),
       nextDeadline: () => Effect.succeed(null),
     }),
-    ledger: {
+    Effect.provideService(SubmissionLedger, {
       lookup: (request) =>
         Effect.sync(() =>
           request._tag === "SubmissionLookupById"
@@ -361,90 +371,120 @@ const harness = Effect.fn("workerHostHarness")(function* (
                 ),
               ),
         ),
-    },
-    submit: (envelope) =>
-      Effect.gen(function* () {
-        const metadata = envelope.workerAdmission!;
 
-        const options = {
-          threadId: envelope.threadId,
-          definitions: envelope.definitions,
-          principal: envelope.deliveryPrincipal,
-          idempotencyKey: envelope.admissionKey,
-          workerAdmission: metadata,
-        };
+      capabilities: Effect.die("Worker fixture only implements ledger lookup"),
+      scanNonterminal: Stream.die("Worker fixture only implements ledger lookup"),
+      admit: () => Effect.die("Worker fixture only implements ledger lookup"),
+      markReady: () => Effect.die("Worker fixture only implements ledger lookup"),
+      resolveAdmission: () => Effect.die("Worker fixture only implements ledger lookup"),
+      claim: () => Effect.die("Worker fixture only implements ledger lookup"),
+      renewOwnership: () => Effect.die("Worker fixture only implements ledger lookup"),
+      releaseOwnership: () => Effect.die("Worker fixture only implements ledger lookup"),
+      markInputApplied: () => Effect.die("Worker fixture only implements ledger lookup"),
+      reserveSettlement: () => Effect.die("Worker fixture only implements ledger lookup"),
+      finalizeSettlement: () => Effect.die("Worker fixture only implements ledger lookup"),
+      requestAbort: () => Effect.die("Worker fixture only implements ledger lookup"),
+      readAbortIntent: () => Effect.die("Worker fixture only implements ledger lookup"),
+      claimJoining: () => Effect.die("Worker fixture only implements ledger lookup"),
+      markJoined: () => Effect.die("Worker fixture only implements ledger lookup"),
+      revertJoining: () => Effect.die("Worker fixture only implements ledger lookup"),
+      suspend: () => Effect.die("Worker fixture only implements ledger lookup"),
+      recordApprovalDecision: () => Effect.die("Worker fixture only implements ledger lookup"),
+      markUnknown: () => Effect.die("Worker fixture only implements ledger lookup"),
+      recordUnknownResolution: () => Effect.die("Worker fixture only implements ledger lookup"),
+      recordChildSettled: () => Effect.die("Worker fixture only implements ledger lookup"),
+      reserveChildBudget: () => Effect.die("Worker fixture only implements ledger lookup"),
+      attachChildToReservation: () => Effect.die("Worker fixture only implements ledger lookup"),
+      beginChildBudgetRelease: () => Effect.die("Worker fixture only implements ledger lookup"),
+      releaseChildBudget: () => Effect.die("Worker fixture only implements ledger lookup"),
+      loadRecoverySnapshot: () => Effect.die("Worker fixture only implements ledger lookup"),
+    }),
+    Effect.provideService(WorkerInputControl, {
+      submit: (envelope) =>
+        Effect.gen(function* () {
+          const metadata = envelope.workerAdmission!;
 
-        yield* runtime
-          .validateAdmission(metadata, options, envelope.agentId, envelope.inputDigest)
-          .pipe(
-            Effect.mapError((error) =>
-              AdmissionPolicyError.make({
-                reason: error.reason === "storage" ? "unavailable" : "refused",
-                code: `worker-${error.reason}`,
-              }),
-            ),
-          );
-        if (admissionFailure) return yield* Effect.die("simulated admission crash");
-
-        const existing = [...submissions.values()].find(
-          (row) => row.idempotencyKey === envelope.admissionKey,
-        );
-
-        if (existing !== undefined)
-          return Receipt.make({
-            threadId: existing.threadId,
-            submissionId: existing.submissionId,
-            receiptId: existing.receiptId,
-            queueSequence: existing.queueSequence,
-          });
-        if (!logs.has(envelope.threadId))
-          push(
-            envelope.threadId,
-            ThreadCreated.make({ agentId: target.id, definitions }),
-            "child-created",
-          );
-        yield* runtime.ensureOrigin(metadata.origin).pipe(Effect.orDie);
-        sequence++;
-        const submissionId = Schema.decodeSync(SubmissionId)(`submission-${sequence}`);
-
-        const receipt = Receipt.make({
-          threadId: envelope.threadId,
-          submissionId,
-          receiptId: Schema.decodeSync(ReceiptId)(`receipt-${sequence}`),
-          queueSequence: Schema.decodeSync(QueueSequence)(sequence),
-        });
-
-        submissions.set(
-          submissionId,
-          SubmissionSnapshot.make({
-            ...receipt,
-            principal,
+          const options = {
+            threadId: envelope.threadId,
+            definitions: envelope.definitions,
+            principal: envelope.deliveryPrincipal,
             idempotencyKey: envelope.admissionKey,
-            agentId: target.id,
-            agentDigests: definitions,
-            deploymentId: Schema.decodeSync(DeploymentId)("test"),
-            inputPayload: envelope.input,
-            inputDigest: envelope.inputDigest,
-            state: "ready",
-            createdAt: DateTime.makeUnsafe(now),
             workerAdmission: metadata,
-          }),
-        );
+          };
 
-        return receipt;
-      }),
-    status,
-    settlementPollInterval: Duration.millis(5),
-    abort: (command) =>
-      Effect.suspend(() =>
-        command.submissionId === joined
-          ? JoinedToHost.make({
-              submissionId: command.submissionId,
-              hostSubmissionId: [...submissions.keys()][0]!,
-            })
-          : Effect.succeed(AbortIntent.make({ ...command, requestedAt: DateTime.makeUnsafe(now) })),
-      ),
-  });
+          yield* runtime
+            .validateAdmission(metadata, options, envelope.agentId, envelope.inputDigest)
+            .pipe(
+              Effect.mapError((error) =>
+                AdmissionPolicyError.make({
+                  reason: error.reason === "storage" ? "unavailable" : "refused",
+                  code: `worker-${error.reason}`,
+                }),
+              ),
+            );
+          if (admissionFailure) return yield* Effect.die("simulated admission crash");
+
+          const existing = [...submissions.values()].find(
+            (row) => row.idempotencyKey === envelope.admissionKey,
+          );
+
+          if (existing !== undefined)
+            return Receipt.make({
+              threadId: existing.threadId,
+              submissionId: existing.submissionId,
+              receiptId: existing.receiptId,
+              queueSequence: existing.queueSequence,
+            });
+          if (!logs.has(envelope.threadId))
+            push(
+              envelope.threadId,
+              ThreadCreated.make({ agentId: target.id, definitions }),
+              "child-created",
+            );
+          yield* runtime.ensureOrigin(metadata.origin).pipe(Effect.orDie);
+          sequence++;
+          const submissionId = Schema.decodeSync(SubmissionId)(`submission-${sequence}`);
+
+          const receipt = Receipt.make({
+            threadId: envelope.threadId,
+            submissionId,
+            receiptId: Schema.decodeSync(ReceiptId)(`receipt-${sequence}`),
+            queueSequence: Schema.decodeSync(QueueSequence)(sequence),
+          });
+
+          submissions.set(
+            submissionId,
+            SubmissionSnapshot.make({
+              ...receipt,
+              principal,
+              idempotencyKey: envelope.admissionKey,
+              agentId: target.id,
+              agentDigests: definitions,
+              deploymentId: Schema.decodeSync(DeploymentId)("test"),
+              inputPayload: envelope.input,
+              inputDigest: envelope.inputDigest,
+              state: "ready",
+              createdAt: DateTime.makeUnsafe(now),
+              workerAdmission: metadata,
+            }),
+          );
+
+          return receipt;
+        }),
+      status,
+      abort: (command) =>
+        Effect.suspend(() =>
+          command.submissionId === joined
+            ? JoinedToHost.make({
+                submissionId: command.submissionId,
+                hostSubmissionId: [...submissions.keys()][0]!,
+              })
+            : Effect.succeed(
+                AbortIntent.make({ ...command, requestedAt: DateTime.makeUnsafe(now) }),
+              ),
+        ),
+    }),
+  );
   const host = yield* runtime.acquire({ sourceThreadId: sourceId, principal });
 
   const settle = Effect.fn("workerHostHarness.settle")(function* (

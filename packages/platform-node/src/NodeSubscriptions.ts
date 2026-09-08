@@ -19,7 +19,7 @@ import {
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Duration, Effect, Exit, Layer, Option } from "effect";
 
-import { makeNodePreparedInputAdmission } from "./internal/prepared-admission.ts";
+import { makeNodePreparedInputAdmission, NodeAdmission } from "./internal/prepared-admission.ts";
 import { NodeDurableHost } from "./NodeDurableHost.ts";
 
 /** Ordinary prepared admission through the Scope-owned Node host gate. */
@@ -27,9 +27,8 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
   PreparedInputAdmission,
   never,
   NodeDurableHost
-> = Layer.effect(
-  PreparedInputAdmission,
-  Effect.map(NodeDurableHost, makeNodePreparedInputAdmission),
+> = Layer.effect(PreparedInputAdmission, makeNodePreparedInputAdmission).pipe(
+  Layer.provide(Layer.effect(NodeAdmission, NodeDurableHost)),
 );
 
 const preparedFromSchedule = (envelope: ScheduledEnvelope): PreparedInput => ({

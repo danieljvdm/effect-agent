@@ -46,7 +46,7 @@ import {
   getToolExecutionClass,
   type ToolExecutionClassValue,
 } from "@effect-agent/engine/DurableStep";
-import type { MessagingHost } from "@effect-agent/engine/MessagingHost";
+import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import {
   CurrentToolFailureObserver,
   RunContextPreparation,
@@ -67,7 +67,7 @@ import {
   type RunToolAuthorizationHook,
   type RunToolAuthorizationRequest,
 } from "@effect-agent/engine/RunOptions";
-import type { SubagentHost } from "@effect-agent/engine/SubagentHost";
+import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import type { Scope } from "effect";
 import {
@@ -125,20 +125,12 @@ import {
 } from "./internal/agent-registration.ts";
 import { inspectForeignDiagnostic, safeUnknownString } from "./internal/foreign-diagnostic.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
-import { makeWorkerRuntime } from "./internal/worker-host.ts";
-import { MessageDeliveryStore, MessageDeliveryFailpoint } from "./MessageDelivery.ts";
-import {
-  PeerAuthorizer,
-  PeerRoutes,
-  PeerDeliveryLifetime,
-  PeerMessageCapacity,
-} from "./MessagingHost.ts";
+import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationDenied,
 } from "./OperationAuthorizer.ts";
-import { PreparedInputAdmission } from "./PreparedInputAdmission.ts";
 import {
   type CanonicalRecordPayload,
   type CanonicalRecordEnvelope,
@@ -316,7 +308,6 @@ import {
 } from "./ThreadStore.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./ToolReconciler.ts";
 import { WakeScheduler } from "./WakeScheduler.ts";
-import { WorkerHostAuthorizer, WorkerHostConfig } from "./WorkerHost.ts";
 
 // Capture the tracing call site once; each application still creates a fresh Attempt span.
 const withThreadHeadSpan = Effect.withSpan("DurableAgentRuntime.processThreadHead");
@@ -999,18 +990,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   // RUN-036: capture once with the runtime, including explicit absence. A worker caller's ambient
   // observer must never replace this host choice on a fresh or replacement Attempt.
   const toolFailureObserver = yield* CurrentToolFailureObserver;
-  const workerAuthorizer = yield* WorkerHostAuthorizer;
-  const workerLimits = yield* WorkerHostConfig;
-  const messageDeliveries = yield* Effect.serviceOption(MessageDeliveryStore);
-  const peerAuthorizer = yield* PeerAuthorizer;
-  const peerRoutes = yield* PeerRoutes;
-  const peerDeliveryLifetime = yield* PeerDeliveryLifetime;
-  const peerMessageCapacity = yield* PeerMessageCapacity;
-  const messageDeliveryFailpoint = yield* MessageDeliveryFailpoint;
-  // Status may belong to another owner. Capture the host's routed read once, rather than
-  // asking lane-local ledger recovery/finalization to operate on a foreign Submission.
-  const preparedInputAdmission = yield* Effect.serviceOption(PreparedInputAdmission);
-  const workerSubmissionStatus = Option.getOrUndefined(preparedInputAdmission)?.submissionStatus;
 
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>): Effect.Effect<A, E> =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
@@ -5780,34 +5759,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         toolAuthorization,
         durability,
         subagent,
-        subagentHost: (toolCallId) =>
-          workerRuntime.facet(
-            {
-              source: {
-                _tag: "tool",
-                threadId: submission.threadId,
-                agentId: submission.agentId,
-                runId,
-                toolCallId,
-              },
-              policy: agent.definition.policy,
-              depth: delegationDepth,
-              ...(inheritedGrant === undefined ? {} : { grant: inheritedGrant }),
-            },
-            submission.principal,
-            submission.submissionId,
-          ),
-        messagingHost: (toolCallId) =>
-          messagingRuntime.forTool(
-            {
-              _tag: "tool",
-              threadId: submission.threadId,
-              agentId: submission.agentId,
-              runId,
-              toolCallId,
-            },
-            submission.principal,
-          ),
         delegationDepth,
         ...(inheritedGrant === undefined ? {} : { subagentGrant: inheritedGrant }),
         ...(inheritedBudget === undefined ? {} : { subagentBudget: inheritedBudget }),
@@ -6202,6 +6153,29 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const consume = Stream.runForEach(
         AgentRuntime.streamUnknown(agent, submission.inputPayload, options).pipe(
           Stream.provide(ThreadHistory.layerTransient),
+          Stream.provideService(SubagentHost.forTool, (source) =>
+            source.threadId !== submission.threadId ||
+            source.agentId !== submission.agentId ||
+            source.runId !== runId
+              ? SubagentHost.unavailable
+              : workerRuntime.facet(
+                  {
+                    source,
+                    policy: agent.definition.policy,
+                    depth: delegationDepth,
+                    ...(inheritedGrant === undefined ? {} : { grant: inheritedGrant }),
+                  },
+                  submission.principal,
+                  submission.submissionId,
+                ),
+          ),
+          Stream.provideService(MessagingHost.forTool, (source) =>
+            source.threadId !== submission.threadId ||
+            source.agentId !== submission.agentId ||
+            source.runId !== runId
+              ? MessagingHost.unavailable
+              : messagingRuntime.forTool(source, submission.principal),
+          ),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),
           Stream.provideService(RunContextPreparation, runContextPreparation),
@@ -9086,48 +9060,36 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     yield* Stream.runForEach(wake.wakes, (threadId) => processThreadResolvedImpl(threadId));
   });
 
-  const messagingRuntime = makeMessagingRuntime({
-    store,
-    deliveries: messageDeliveries,
-    crypto,
+  const messagingRuntime = yield* makeMessagingRuntime({
     bindings: registeredBindings,
-    authorizer: peerAuthorizer,
-    routes: peerRoutes,
-    lifetimeMillis: peerDeliveryLifetime,
-    maxMessagesPerSource: peerMessageCapacity,
     deploymentId: config.deploymentId,
     producerId: config.producerId,
-    failpoint: messageDeliveryFailpoint,
   });
 
-  const workerRuntime = makeWorkerRuntime({
-    store,
-    ledger,
-    deliveries: messageDeliveries,
-    crypto,
+  const workerRuntime = yield* makeWorkerRuntime({
     bindings: registeredBindings,
-    authorizer: workerAuthorizer,
-    limits: workerLimits,
     deploymentId: config.deploymentId,
     producerId: config.producerId,
-    failpoint,
-    status: workerSubmissionStatus ?? readSubmissionStatus,
     settlementPollInterval: config.settlementPollInterval,
-    abort,
-    submit: (envelope) =>
-      submit({ definition: { id: envelope.agentId, input: PersistedJson } }, envelope.input, {
-        threadId: envelope.threadId,
-        principal: envelope.deliveryPrincipal,
-        idempotencyKey: envelope.admissionKey,
-        definitions: envelope.definitions,
-        ...(envelope.workerAdmission === undefined
-          ? {}
-          : { workerAdmission: envelope.workerAdmission }),
-        ...(envelope.messageAdmission === undefined
-          ? {}
-          : { messageAdmission: envelope.messageAdmission }),
-      }),
-  });
+  }).pipe(
+    Effect.provideService(WorkerInputControl, {
+      status: readSubmissionStatus,
+      abort,
+      submit: (envelope) =>
+        submit({ definition: { id: envelope.agentId, input: PersistedJson } }, envelope.input, {
+          threadId: envelope.threadId,
+          principal: envelope.deliveryPrincipal,
+          idempotencyKey: envelope.admissionKey,
+          definitions: envelope.definitions,
+          ...(envelope.workerAdmission === undefined
+            ? {}
+            : { workerAdmission: envelope.workerAdmission }),
+          ...(envelope.messageAdmission === undefined
+            ? {}
+            : { messageAdmission: envelope.messageAdmission }),
+        }),
+    }),
+  );
 
   return DurableAgentRuntime.of({
     workerHost: workerRuntime.acquire,

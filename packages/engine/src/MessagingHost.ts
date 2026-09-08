@@ -50,4 +50,11 @@ export class MessagingHost extends Context.Service<
     inspect: () => MessagingError.make({ operation: "inspect", reason: "unavailable" }),
     retry: () => MessagingError.make({ operation: "retry", reason: "unavailable" }),
   };
+
+  /** Runtime-owned per-call binding. Unconfigured Runs deny peer operations. */
+  static readonly forTool = Context.Reference<
+    (source: Extract<WorkerSource, { readonly _tag: "tool" }>) => MessagingHost["Service"]
+  >("@effect-agent/engine/MessagingHost/forTool", {
+    defaultValue: () => () => MessagingHost.unavailable,
+  });
 }

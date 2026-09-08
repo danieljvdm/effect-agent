@@ -7,6 +7,7 @@ import {
   WorkerError,
   type WorkerHistoryEntry,
   type WorkerContext,
+  type WorkerSource,
   type WorkerPage,
   type WorkerRef,
   type WorkerStarted,
@@ -151,4 +152,11 @@ export class SubagentHost extends Context.Service<
     list: () => WorkerError.make({ operation: "list", reason: "unavailable" }),
     cancel: () => WorkerError.make({ operation: "cancel", reason: "unavailable" }),
   };
+
+  /** Runtime-owned per-call binding. Unconfigured Runs deny background operations. */
+  static readonly forTool = Context.Reference<
+    (source: Extract<WorkerSource, { readonly _tag: "tool" }>) => SubagentHost["Service"]
+  >("@effect-agent/engine/SubagentHost/forTool", {
+    defaultValue: () => () => SubagentHost.unavailable,
+  });
 }

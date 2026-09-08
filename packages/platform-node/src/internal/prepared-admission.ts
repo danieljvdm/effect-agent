@@ -7,7 +7,7 @@ import {
   ScheduledInputRefused,
   ScheduleStorageError,
 } from "@effect-agent/thread/Schedule";
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 
 import { type NodeDurableHost } from "../NodeDurableHost.ts";
 
@@ -21,11 +21,17 @@ const ambiguous = (): ScheduledInputRetryable =>
 const corrupt = (operation: string): ScheduleStorageError =>
   ScheduleStorageError.make({ operation, reason: "corrupt" });
 
-/** Share ordinary prepared admission through the host gate without importing its runtime module. */
-export const makeNodePreparedInputAdmission = (
-  host: Pick<NodeDurableHost["Service"], "submit" | "submissionStatus">,
-): PreparedInputAdmission["Service"] =>
-  PreparedInputAdmission.of({
+/** Host-owned admission gate, available while the host's worker pool is being assembled. */
+export class NodeAdmission extends Context.Service<
+  NodeAdmission,
+  Pick<NodeDurableHost["Service"], "submit" | "submissionStatus">
+>()("@effect-agent/platform-node/internal/NodeAdmission") {}
+
+/** Acquire the gated source once; worker callers cannot replace its admission authority. */
+export const makeNodePreparedInputAdmission = Effect.gen(function* () {
+  const host = yield* NodeAdmission;
+
+  return PreparedInputAdmission.of({
     submissionStatus: (receipt) =>
       host
         .submissionStatus(receipt)
@@ -72,3 +78,4 @@ export const makeNodePreparedInputAdmission = (
           }),
         ),
   });
+});

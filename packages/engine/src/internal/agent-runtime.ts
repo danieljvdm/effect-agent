@@ -2262,6 +2262,17 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
               semaphore,
               Stream.unwrap(
                 Effect.gen(function* () {
+                  const subagentHost = yield* SubagentHost.forTool;
+                  const messagingHost = yield* MessagingHost.forTool;
+
+                  const source = {
+                    _tag: "tool" as const,
+                    agentId: context.agentId,
+                    threadId: context.threadId,
+                    runId: context.runId,
+                    toolCallId: call.toolCallId,
+                  };
+
                   const broker = yield* makeToolBrokerService({
                     context,
                     turnId,
@@ -2285,14 +2296,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                     },
                   ).pipe(
                     Stream.provideService(DurableStep, stepServiceFor(call)),
-                    Stream.provideService(
-                      SubagentHost,
-                      options.subagentHost?.(call.toolCallId) ?? SubagentHost.unavailable,
-                    ),
-                    Stream.provideService(
-                      MessagingHost,
-                      options.messagingHost?.(call.toolCallId) ?? MessagingHost.unavailable,
-                    ),
+                    Stream.provideService(SubagentHost, subagentHost(source)),
+                    Stream.provideService(MessagingHost, messagingHost(source)),
                     // Construct and close the broker within this call's permit. Inner
                     // invocations use the handler's fiber and acquire no batch permit;
                     // retained passes cannot outlive the call's scheduling authority.

@@ -1,7 +1,7 @@
 import {
-  type MessageDeliveryDriver,
+  MessageDeliveryDriver,
   type MessageDeliveryFailure,
-  type MessageDeliveryStore,
+  MessageDeliveryStore,
 } from "@effect-agent/thread/MessageDelivery";
 import { Cause, Clock, Effect, Exit, Option } from "effect";
 
@@ -19,10 +19,11 @@ const reportFailure = (cause: Cause.Cause<MessageDeliveryFailure>): Effect.Effec
 
 /** Caller-owned loop. Indexed scans repair absent hints even when both Threads have settled. */
 export const runNodeMessageDeliveries = Effect.fn("NodeMessageDelivery.run")(function* (
-  driver: MessageDeliveryDriver["Service"],
-  store: MessageDeliveryStore["Service"],
   scanInterval: number,
 ) {
+  const driver = yield* MessageDeliveryDriver;
+  const store = yield* MessageDeliveryStore;
+
   while (true) {
     const pass = yield* driver.runDue().pipe(Effect.exit);
 

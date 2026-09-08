@@ -352,21 +352,23 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
         agent,
         { question: "manage" },
         {
-          subagentHost: (toolCallId) => ({
-            ...SubagentHost.unavailable,
-            context: Effect.succeed({
-              source: {
-                _tag: "tool",
-                agentId: definition.id,
-                threadId: decodeThreadId("parent"),
-                runId: decodeRunId("parent-run"),
-                toolCallId,
-              },
-              policy: definition.policy,
-              depth: 0,
-            }),
-          }),
+          threadId: decodeThreadId("parent"),
+          runId: decodeRunId("parent-run"),
         },
+      ).pipe(
+        Effect.provideService(SubagentHost.forTool, (source) => {
+          expect(source).toMatchObject({
+            _tag: "tool",
+            agentId: definition.id,
+            threadId: decodeThreadId("parent"),
+            runId: decodeRunId("parent-run"),
+          });
+
+          return {
+            ...SubagentHost.unavailable,
+            context: Effect.succeed({ source, policy: definition.policy, depth: 0 }),
+          };
+        }),
       );
 
       type HostExcluded = [Extract<Effect.Services<typeof program>, SubagentHost>] extends [never]
