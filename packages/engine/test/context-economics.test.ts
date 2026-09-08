@@ -21,6 +21,7 @@ import {
   type RunUsageDelta,
   type RunContextHook,
 } from "@effect-agent/engine/RunOptions";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { expect, layer } from "@effect/vitest";
 import { Cause, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -34,6 +35,7 @@ import {
 } from "effect/unstable/ai";
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
+import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unstable/http";
 
 import { formatRunStatus } from "../src/internal/agent-runtime.ts";
 import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
@@ -3150,6 +3152,161 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       }),
     );
   }
+
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/2259fc0
+  // KOM-125: a transformed Class retains provider definitions that Schema.toEncoded removes.
+  it.effect("admits original Tool schemas exactly as native OpenAI serializes them", () =>
+    Effect.gen(function* () {
+      class CredentialLookup extends Schema.Class<CredentialLookup>("CredentialLookupEncoded")({
+        bindingId: Schema.String.annotate({
+          description: "Reserved credential metadata. ".repeat(200),
+        }),
+      }) {}
+
+      const lookup = Tool.make("credential_lookup", {
+        parameters: CredentialLookup,
+        success: Schema.String,
+      });
+
+      const toolkit = Toolkit.make(lookup);
+
+      const definition = Agent.make("original-tool-provider-schema", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Return a JSON string.",
+        toolkit,
+        policy: { maxTurns: 2, maxToolCalls: 2, maxDuration: "30 seconds", runStatus: "off" },
+      });
+
+      const run = Effect.fn(function* (capacity: number) {
+        const admittedSchemas: Array<unknown> = [];
+        const wireSchemas: Array<unknown> = [];
+
+        const client = HttpClient.make((request) =>
+          Effect.gen(function* () {
+            if (request.body._tag !== "Uint8Array") throw new Error("Expected JSON request body");
+
+            const body = yield* HttpClientResponse.fromWeb(
+              request,
+              HttpServerResponse.toWeb(HttpServerResponse.uint8Array(request.body.body)),
+            ).json.pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(
+                  Schema.Struct({
+                    tools: Schema.Array(
+                      Schema.Struct({ name: Schema.String, parameters: Schema.Json }),
+                    ),
+                  }),
+                ),
+              ),
+              Effect.orDie,
+            );
+
+            expect(body.tools.map(({ name }) => name)).toEqual(["credential_lookup"]);
+            wireSchemas.push(body.tools[0]?.parameters);
+
+            const message = {
+              type: "message",
+              id: "message-schema",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: '"done"', annotations: [] }],
+            };
+
+            const response = {
+              id: "response-schema",
+              object: "response",
+              model: "gpt-5.6-terra",
+              created_at: 0,
+              output: [message],
+            };
+
+            const events = [
+              { type: "response.created", response: { ...response, output: [] } },
+              {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { ...message, status: "in_progress", content: [] },
+              },
+              {
+                type: "response.output_text.delta",
+                item_id: message.id,
+                output_index: 0,
+                content_index: 0,
+                delta: '"done"',
+              },
+              { type: "response.output_item.done", output_index: 0, item: message },
+              { type: "response.completed", response },
+            ];
+
+            return HttpClientResponse.fromWeb(
+              request,
+              HttpServerResponse.toWeb(
+                HttpServerResponse.text(
+                  events
+                    .map(
+                      (event, sequence_number) =>
+                        `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
+                    )
+                    .join(""),
+                  { contentType: "text/event-stream" },
+                ),
+              ),
+            );
+          }),
+        );
+
+        const provider = yield* OpenAiClient.make({ apiUrl: "https://provider.invalid/v1" }).pipe(
+          Effect.provideService(HttpClient.HttpClient, client),
+        );
+
+        const model = OpenAiLanguageModel.model("gpt-5.6-terra").pipe(
+          Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, provider)),
+        );
+
+        const transformer: LanguageModel.CodecTransformer = (schema) => {
+          const transformed = toCodecOpenAI(schema);
+
+          admittedSchemas.push(transformed.jsonSchema);
+
+          return transformed;
+        };
+
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+          context: {
+            prepare: (request) =>
+              Effect.succeed({
+                prompt: request.source,
+                modelCall: {
+                  model,
+                  toolSchemaTransformer: transformer,
+                  context: ModelCallContext.make({
+                    contextCapacity: capacity,
+                    outputReserveTokens: 100,
+                    uncountedOverheadTokens: 0,
+                  }),
+                },
+              }),
+          },
+        }).pipe(
+          Effect.provide(toolkit.toLayer({ credential_lookup: () => Effect.succeed("unused") })),
+          Effect.exit,
+        );
+
+        return { exit, admittedSchemas, wireSchemas };
+      });
+
+      const fitting = yield* run(20_000);
+
+      expect(Exit.isSuccess(fitting.exit)).toBe(true);
+      expect(fitting.wireSchemas).toHaveLength(1);
+      expect(fitting.admittedSchemas).toEqual(fitting.wireSchemas);
+      const tooSmall = yield* run(2_400);
+
+      expect(failureFrom(tooSmall.exit)).toBeInstanceOf(ContextBudgetError);
+      expect(tooSmall.wireSchemas).toHaveLength(0);
+    }),
+  );
 
   for (const timing of ["initial", "canonical-late", "transient-late"] as const) {
     it.effect(`accounts only selected completion tools after ${timing} finalization`, () =>
