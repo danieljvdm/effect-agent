@@ -1,5 +1,20 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.57
+
+### Minor Changes
+
+- [#358](https://github.com/danieljvdm/effect-agent/pull/358) [`4ff21e2`](https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Deliver typed peer messages and worker reports independently of active agent runs, with frozen input, bounded retries, and separate acceptance and processing status. Recover delivery through scoped Node polling and Cloudflare alarms while preserving existing thread data on supported storage upgrades.
+
+### Patch Changes
+
+- Updated dependencies [[`4ff21e2`](https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81), [`4ff21e2`](https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81)]:
+  - @effect-agent/core@0.1.0-beta.57
+  - @effect-agent/engine@0.1.0-beta.57
+  - @effect-agent/thread@0.1.0-beta.57
+  - @effect-agent/storage-sqlite@0.1.0-beta.57
+  - @effect-agent/workflow@0.1.0-beta.57
+
 ## 0.1.0-beta.56
 
 ### Patch Changes
