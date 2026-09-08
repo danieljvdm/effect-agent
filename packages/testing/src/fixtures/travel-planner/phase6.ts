@@ -987,7 +987,6 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
             },
           ],
         },
-        uncommittedModelUsage: [],
         usageSummary: {
           usageStatus: "partial",
           pricingStatus: "unknown",

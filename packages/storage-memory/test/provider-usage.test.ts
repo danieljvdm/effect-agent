@@ -167,7 +167,7 @@ for (const failure of ["open-part", "missing-usage", "continuation", "invalid-es
           unobservedModelCalls: retainsUsage ? 0 : 1,
           pricingStatus: retainsUsage ? "complete" : "partial",
         });
-        expect(settlement?.uncommittedModelUsage).toHaveLength(retainsUsage ? 1 : 0);
+        expect(settlement?.uncommittedModelUsage?.length).toBe(retainsUsage ? 1 : undefined);
         if (settlement === undefined) throw new Error("expected terminal accounting");
 
         const committedCalls = responses.flatMap(({ record }) =>
@@ -423,7 +423,6 @@ it.live(
 
         expect(settlement).toMatchObject({
           outcome: "completed",
-          uncommittedModelUsage: [],
           usageSummary: {
             modelCalls: 3,
             costMicrousd: 75,
@@ -432,6 +431,7 @@ it.live(
             pricingStatus: "partial",
           },
         });
+        expect(settlement).not.toHaveProperty("uncommittedModelUsage");
         expect(
           records
             .flatMap(({ record }) =>

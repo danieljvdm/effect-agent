@@ -2699,7 +2699,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ? { policyLimit: outcome.policyLimit }
           : {}),
         ...(outcome.usageSummary === undefined ? {} : { usageSummary: outcome.usageSummary }),
-        ...(includeRunId && outcome.uncommittedModelUsage !== undefined
+        ...(includeRunId &&
+        outcome.uncommittedModelUsage !== undefined &&
+        outcome.uncommittedModelUsage.length > 0
           ? { uncommittedModelUsage: outcome.uncommittedModelUsage }
           : {}),
       }),
