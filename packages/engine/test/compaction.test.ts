@@ -17,6 +17,8 @@ import {
   type CompactionRequest,
 } from "@effect-agent/engine/ContextCompactor";
 import {
+  type RunCostEstimator,
+  type RunCostEstimateRequest,
   type RunUsageDelta,
   type RunCompactionCommit,
   type RunContextHook,
@@ -200,6 +202,7 @@ interface RunSetup {
   readonly commitCompaction?: (commit: RunCompactionCommit) => Effect.Effect<void>;
   readonly noteTurnUsage?: (usage: RunTurnUsage) => Effect.Effect<void>;
   readonly consume?: (delta: RunUsageDelta) => Effect.Effect<void>;
+  readonly estimateCostMicrousd?: RunCostEstimator;
   readonly transientContext?: RunTransientContextHook | undefined;
   readonly context?: RunContextHook | undefined;
   readonly history?: Prompt.Prompt | undefined;
@@ -258,6 +261,9 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
       {
         context: setup.context,
         history: setup.history,
+        ...(setup.estimateCostMicrousd === undefined
+          ? {}
+          : { estimateCostMicrousd: setup.estimateCostMicrousd }),
         onHistory: (history) => Effect.sync(() => void histories.push(history)),
         ...(durability === undefined ? {} : { durability }),
         ...(setup.transientContext === undefined
@@ -1240,6 +1246,9 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
 
   it.effect("RUN-034: summarizer usage is charged before admitting the post-compaction call", () =>
     Effect.gen(function* () {
+      const calls: Array<RunTurnUsage> = [];
+      const estimates: Array<RunCostEstimateRequest> = [];
+
       const policy = AgentPolicy.make({
         ...basePolicy,
         tokenBudget: 12_000,
@@ -1253,13 +1262,41 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         script: [
           toolCallParts("s1", "search", {}, usageOf(100, 5)),
           toolCallParts("s2", "search", {}, usageOf(1_300, 5)),
-          finalParts("Goal: preserve delivery capacity", usageOf(9_600, 100)),
+          [
+            { type: "response-metadata", id: "summary-response" },
+            { type: "response-metadata", modelId: "actual-summary-model" },
+            ...finalParts("Goal: preserve delivery capacity", usageOf(9_600, 100)).map((part) =>
+              part.type === "finish"
+                ? { ...part, metadata: { scripted: { serviceTier: "priority" } } }
+                : part,
+            ),
+          ],
           finalParts('{"answer":"delivered"}', usageOf(50, 10)),
         ],
         results: ["a".repeat(4_000), "b".repeat(4_000)],
+        commitCompaction: () => Effect.void,
+        noteTurnUsage: (call) =>
+          Effect.sync(() => {
+            calls.push(call);
+          }),
+        estimateCostMicrousd: (_usage, request) =>
+          Effect.sync(() => {
+            estimates.push(request);
+
+            return 1;
+          }),
       });
 
       expect(requests).toHaveLength(4);
+      expect(calls[2]?.usage).toMatchObject({
+        purpose: "summary",
+        response: { id: "summary-response", model: "actual-summary-model" },
+      });
+      expect(estimates[2]).toMatchObject({
+        purpose: "summary",
+        response: { id: "summary-response", model: "actual-summary-model" },
+        finishMetadata: { scripted: { serviceTier: "priority" } },
+      });
       expect(Exit.isSuccess(exit)).toBe(true);
       expect(requests[3]?.toolChoice).toBe("none");
       expect(

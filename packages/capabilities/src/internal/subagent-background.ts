@@ -244,14 +244,24 @@ const operations = <
       });
     }
 
+    const prepared = yield* prepare(parameters, caller);
+
+    const effectiveTarget = yield* service.resolveTargetPolicy({
+      target: declaration.target,
+      encodedInput: prepared.encodedInput,
+    });
+
+    const resolvedTarget = Option.getOrUndefined(effectiveTarget);
+
     const resolved = resolveSubagentPolicy(
       declaration,
-      options.budgetScope === "worker-run" ? declaration.target.policy : caller.policy,
+      options.budgetScope === "worker-run"
+        ? (resolvedTarget ?? declaration.target.policy)
+        : caller.policy,
       undefined,
       options.budgetScope === "worker-run" ? "root-attached" : "conserved",
+      resolvedTarget,
     );
-
-    const prepared = yield* prepare(parameters, caller);
 
     const encodedGrant = yield* Schema.encodeEffect(SubagentGrant)(grant).pipe(
       Effect.mapError(() => projectionFailure("input")),

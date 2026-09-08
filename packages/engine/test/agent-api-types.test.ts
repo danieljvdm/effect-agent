@@ -9,7 +9,11 @@ import {
   type AgentCompletionProjectionRequirements,
 } from "@effect-agent/engine/AgentRuntime";
 import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
-import { type RunBufferLimits, type RunContextHook } from "@effect-agent/engine/RunOptions";
+import {
+  ModelUsageAccounting,
+  type RunBufferLimits,
+  type RunContextHook,
+} from "@effect-agent/engine/RunOptions";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
@@ -113,6 +117,29 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<AgentRuntimeFailure<typeof planner>>();
 
   const stream = AgentRuntime.stream(planner, input);
+
+  const accounted = AgentRuntime.streamWithUsageAccountingUnknown(planner, input);
+
+  expectTypeOf<Stream.Services<typeof accounted>>().toEqualTypeOf<
+    Stream.Services<typeof stream> | ModelUsageAccounting
+  >();
+  expectTypeOf<Stream.Error<typeof accounted>>().toEqualTypeOf<Stream.Error<typeof stream>>();
+
+  const accountedProvided = accounted.pipe(
+    Stream.provide(
+      Layer.effect(
+        ModelUsageAccounting,
+        Effect.as(TurnHost, ModelUsageAccounting.of({ noteIncompleteUsage: () => Effect.void })),
+      ),
+    ),
+  );
+
+  expectTypeOf<Stream.Services<typeof accountedProvided>>().toEqualTypeOf<
+    Stream.Services<typeof stream> | TurnHost
+  >();
+  expectTypeOf<Stream.Error<typeof accountedProvided>>().toEqualTypeOf<
+    Stream.Error<typeof stream>
+  >();
 
   const gated = AgentRuntime.stream(planner, input, {
     beforeTurn: () => TurnHost.pipe(Effect.andThen(Effect.fail(new TurnHostError()))),

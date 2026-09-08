@@ -67,6 +67,7 @@ import {
   observabilityProbeLayer,
   telemetryProbe,
 } from "./observability-fixture.ts";
+import { makeProjectionBinding, projectionLayer } from "./projection-fixture.ts";
 import { publicationLayer } from "./publication-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 import {
@@ -334,6 +335,22 @@ export class PublicationThreadObject extends ThreadObject.make(
     Layer.provideMerge(maintenanceClockLayer),
   ),
   { ...baseOptions, namespaceBinding: "PUBLICATIONS" },
+) {}
+
+export class ProjectionThreadObject extends ThreadObject.make(
+  Layer.unwrap(
+    Effect.map(Effect.all([makeTestBindings, makeProjectionBinding]), ([bindings, projection]) =>
+      Layer.fresh(ThreadMaintenance.layer).pipe(
+        Layer.provideMerge(DurableAgentRuntime.layerWithBindings([...bindings, projection])),
+      ),
+    ),
+  ).pipe(
+    Layer.provideMerge(
+      ThreadObject.layer([], { projection: projectionLayer, publication: publicationLayer }),
+    ),
+    Layer.provideMerge(maintenanceClockLayer),
+  ),
+  { ...baseOptions, namespaceBinding: "PROJECTIONS" },
 ) {}
 
 export class TestThreadObject extends ThreadObject.make(
