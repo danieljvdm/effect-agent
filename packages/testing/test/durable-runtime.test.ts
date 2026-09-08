@@ -3238,12 +3238,29 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           expect(scripted.prompts).toHaveLength(providerFirst ? 1 : 3);
           expect(yield* Ref.get(starts)).toBe(providerFirst ? 1 : 2);
 
+          const completed = yield* readLog(receipt.threadId);
+
+          const settled = completed.flatMap(({ record }) =>
+            record.payload._tag === "ToolCallSettled" ? [record.payload] : [],
+          );
+
+          expect(
+            settled.map(({ toolCallId, isFailure, result }) => ({ toolCallId, isFailure, result })),
+          ).toEqual(
+            (providerFirst ? ["app-1"] : ["app-1", "app-2"]).map((toolCallId) => ({
+              toolCallId,
+              isFailure: true,
+              result: "failed",
+            })),
+          );
+
           const journal = yield* projectRunJournal(
-            yield* readLog(receipt.threadId),
+            completed,
             runIdForSubmission(receipt.submissionId),
           );
 
-          expect(journal.policyUsage.consecutiveToolFailures).toBe(providerFirst ? 0 : 1);
+          // A completed mixed batch retains both failures even when they end the Run.
+          expect(journal.policyUsage.consecutiveToolFailures).toBe(providerFirst ? 2 : 1);
         }
       }),
   );
