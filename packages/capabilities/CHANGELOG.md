@@ -1,5 +1,25 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.56
+
+### Patch Changes
+
+- Updated dependencies [[`fdde35f`](https://github.com/danieljvdm/effect-agent/commit/fdde35f4b837be8acef0dc1badca69bef1a2dd05)]:
+  - @effect-agent/engine@0.1.0-beta.56
+  - @effect-agent/core@0.1.0-beta.56
+  - @effect-agent/sandbox@0.1.0-beta.56
+
+## 0.1.0-beta.55
+
+### Patch Changes
+
+- [#357](https://github.com/danieljvdm/effect-agent/pull/357) [`2259fc0`](https://github.com/danieljvdm/effect-agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Use native empty tool parameters for context status and note reads so provider schema conversion accepts their no-argument calls.
+
+- Updated dependencies [[`2259fc0`](https://github.com/danieljvdm/effect-agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735)]:
+  - @effect-agent/engine@0.1.0-beta.55
+  - @effect-agent/core@0.1.0-beta.55
+  - @effect-agent/sandbox@0.1.0-beta.55
+
 ## 0.1.0-beta.54
 
 ### Patch Changes

@@ -119,6 +119,9 @@ export {
  * ONE bounded `runRecovery` + `processThreadHead` pass, and the persisted alarm
  * (the single multiplexed slot, D-P6-2) finishes accepted work across evictions WITHOUT any
  * incoming request.
+ * `Services` exposes the same owner `SqlClient` used by the Thread stores. Compose optional
+ * local repositories after `ThreadObject.layer`; never acquire another independently locked
+ * SQL client for the same Object. Exposing the client installs no additional storage schemas.
  *
  * Constructor gate (`blockConcurrencyWhile`) is LOCAL-ONLY: schema migration and the
  * exact-version check, configuration decode, and the defensive ensure-alarm half of the

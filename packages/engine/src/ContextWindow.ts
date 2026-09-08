@@ -18,6 +18,31 @@ export const ContextRolloverRequest = Schema.Struct({
 export type ContextRolloverRequest = typeof ContextRolloverRequest.Type;
 
 /**
+ * Host-selected exclusive source-message boundary, applied at the next safe model seam.
+ * Omit through to reset the prefix before the protected current instructions/input. The
+ * engine resolves that prefix after preparation; an empty prior prefix needs no new window.
+ */
+export const ContextRolloverSelection = Schema.Struct({
+  ...ContextRolloverRequest.fields,
+  through: Schema.optionalKey(Schema.Natural),
+});
+
+export type ContextRolloverSelection = typeof ContextRolloverSelection.Type;
+
+/**
+ * Bounds resolved alongside the native model for one Turn. Output reserve must match the
+ * selected provider configuration. Uncounted overhead includes only provider framing or image
+ * token costs absent from the prompt estimate; prompt text, output contracts, and native Tool
+ * schemas are counted by the engine. These are live-context bounds, not cumulative Run budgets.
+ */
+export class ModelCallContext extends Schema.Class<ModelCallContext>("ModelCallContext")({
+  contextCapacity: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxInputTokens: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  outputReserveTokens: Schema.Natural,
+  uncountedOverheadTokens: Schema.Natural,
+}) {}
+
+/**
  * Definition-owned control annotation. A successful singleton application Tool carrying this
  * annotation returns ContextRolloverRequest. The engine applies it at the next Turn seam,
  * including after durable Tool-result replay. A Tool name alone never grants this authority.

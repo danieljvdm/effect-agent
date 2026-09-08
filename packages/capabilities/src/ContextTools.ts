@@ -31,7 +31,7 @@ export const NewContext = Tool.make("new_context", {
 export const GetContextRemaining = Tool.make("get_context_remaining", {
   description:
     "Inspect the current context window and its estimated remaining capacity. A null limit or remaining count means the host has not configured a context limit.",
-  parameters: Schema.Struct({}),
+  parameters: Tool.EmptyParams,
   success: ContextWindowStatus,
   dependencies: [ContextWindow],
 })

@@ -5787,23 +5787,23 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               },
             }),
         ...(preparedContext === undefined ? {} : { context: preparedContext }),
-        ...(yieldAfter === undefined
-          ? {}
-          : {
-              beforeTurn: () =>
-                Effect.gen(function* () {
-                  // The engine chooses the next Turn only after completing Tools and advancing
-                  // history. Stop before context preparation can invoke a compaction Model.
-                  if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(yieldAfter)) {
-                    yield* recordHalt(commitPendingTurn);
-                    yield* Deferred.succeed(yieldSignal, undefined);
+        beforeTurn: () =>
+          Effect.gen(function* () {
+            // Preparation may resolve the next Model from canonical Tool results or invoke
+            // a compaction Model. Publish the completed Turn before either can observe it.
+            yield* recordHalt(commitPendingTurn);
 
-                    // The successful signal wins the outer race and closes the stream Scope;
-                    // no synthetic engine RunFailed event or terminal Settlement is produced.
-                    return yield* Effect.never;
-                  }
-                }),
-            }),
+            if (
+              yieldAfter !== undefined &&
+              (yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(yieldAfter)
+            ) {
+              yield* Deferred.succeed(yieldSignal, undefined);
+
+              // The successful signal wins the outer race and closes the stream Scope;
+              // no synthetic engine RunFailed event or terminal Settlement is produced.
+              return yield* Effect.never;
+            }
+          }),
         ...(runContextPreparation.transientContext === undefined
           ? {}
           : { transientContext: runContextPreparation.transientContext }),

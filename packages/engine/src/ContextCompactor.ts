@@ -1,6 +1,6 @@
 import { type CompactionPolicy } from "@effect-agent/core/AgentPolicy";
 import { type RunId, type ThreadId } from "@effect-agent/core/Identifiers";
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { type LanguageModel, type Model, Prompt } from "effect/unstable/ai";
 
 import { ContextHandoff, type ContextRolloverRequest } from "./ContextWindow.ts";
@@ -11,6 +11,7 @@ import {
   chooseSummarizeCut,
   collectCoveredMessages,
   estimatePromptTokens,
+  evaluateMessageTokenEstimates,
   renderForSummary,
   SUMMARY_MAX_LENGTH,
   SUMMARY_REQUEST_PREFIX,
@@ -53,6 +54,9 @@ export type CompactionModelLayer = Layer.Layer<
   LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
 >;
 
+/** A full message estimate, or undefined to use the native structural estimate. */
+export type ContextMessageTokenEstimator = (message: Prompt.Message) => number | undefined;
+
 /**
  * One bounded pass over an immutable source snapshot. A harness owns state, metering, and
  * application of decisions. The interpreter permits at most one prune followed by one replacement
@@ -72,6 +76,8 @@ export interface CompactionRequest<E, R> {
   readonly trigger: "pressure" | "overflow" | "requested";
   /** Budget admission may prohibit a separate model call while still allowing a rollover. */
   readonly modelCallAllowed: boolean;
+  /** The current captured Model's message accounting, including native fallback. */
+  readonly estimateMessageTokens?: ContextMessageTokenEstimator | undefined;
   /** Present for a successful, singleton context rollover Tool; through excludes later steering. */
   readonly requested?: (ContextRolloverRequest & { readonly through: number }) | undefined;
   readonly summarize: (
@@ -89,87 +95,112 @@ export interface ContextCompaction {
   ) => Stream.Stream<CompactionDecision, E | CompactionError, R>;
 }
 
+const evaluateEstimates = <A>(
+  override: ContextMessageTokenEstimator | undefined,
+  operation: (estimate: (message: Prompt.Message) => number) => A,
+): Effect.Effect<A, CompactionError> =>
+  Effect.suspend(() => {
+    const result = evaluateMessageTokenEstimates(override, operation);
+
+    return Option.isSome(result)
+      ? Effect.succeed(result.value)
+      : CompactionError.make({
+          message: "Message token estimator returned an invalid token count",
+        });
+  });
+
 const defaultCompactor = (model?: CompactionModelLayer): ContextCompaction => ({
   estimate: estimatePromptTokens,
   compact: <E, R>(request: CompactionRequest<E, R>) =>
-    Stream.suspend(() => {
-      const { source, policy, targetTokens, trigger, modelCallAllowed } = request;
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const { source, policy, targetTokens, trigger, modelCallAllowed } = request;
 
-      if (request.requested !== undefined) {
-        return Stream.succeed({ kind: "rollover", ...request.requested });
-      }
-      const forceSummarize = trigger === "overflow";
-      const state = { ...request.state };
+        if (request.requested !== undefined) {
+          return Stream.succeed({ kind: "rollover", ...request.requested });
+        }
+        const forceSummarize = trigger === "overflow";
+        const state = { ...request.state };
 
-      const keepRecentTokens =
-        targetTokens === undefined
-          ? policy.keepRecentTokens
-          : Math.max(1, Math.min(policy.keepRecentTokens, targetTokens));
+        const keepRecentTokens =
+          targetTokens === undefined
+            ? policy.keepRecentTokens
+            : Math.max(1, Math.min(policy.keepRecentTokens, targetTokens));
 
-      const decisions: Array<CompactionDecision> = [];
+        const decisions: Array<CompactionDecision> = [];
 
-      if (!forceSummarize && policy.mode !== "summarize") {
-        const through = choosePruneBound(source.content, state, keepRecentTokens, targetTokens);
+        if (!forceSummarize && policy.mode !== "summarize") {
+          const through = yield* evaluateEstimates(request.estimateMessageTokens, (estimate) =>
+            choosePruneBound(source.content, state, keepRecentTokens, targetTokens, estimate),
+          );
 
-        if (through > state.clearedThrough) {
-          state.clearedThrough = through;
-          decisions.push({ kind: "clear-tool-results", through });
-          if (
-            targetTokens !== undefined &&
-            estimatePromptTokens(buildCompactedView(source.content, state)) <= targetTokens
-          ) {
-            return Stream.fromIterable(decisions);
+          if (through > state.clearedThrough) {
+            state.clearedThrough = through;
+            decisions.push({ kind: "clear-tool-results", through });
+            if (
+              targetTokens !== undefined &&
+              (yield* evaluateEstimates(request.estimateMessageTokens, (estimate) =>
+                estimatePromptTokens(buildCompactedView(source.content, state), estimate),
+              )) <= targetTokens
+            ) {
+              return Stream.fromIterable(decisions);
+            }
           }
         }
-      }
-      const prune = Stream.fromIterable(decisions);
+        const prune = Stream.fromIterable(decisions);
 
-      if ((!modelCallAllowed || policy.mode === "prune") && !forceSummarize) return prune;
+        if ((!modelCallAllowed || policy.mode === "prune") && !forceSummarize) return prune;
 
-      return prune.pipe(
-        Stream.concat(
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const through = chooseSummarizeCut(source.content, state, keepRecentTokens);
-              const covered = collectCoveredMessages(source.content, state, through);
+        return prune.pipe(
+          Stream.concat(
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const through = yield* evaluateEstimates(
+                  request.estimateMessageTokens,
+                  (estimate) =>
+                    chooseSummarizeCut(source.content, state, keepRecentTokens, estimate),
+                );
 
-              if (covered.length === 0) return Stream.empty;
+                const covered = collectCoveredMessages(source.content, state, through);
 
-              const transcript = renderForSummary(
-                covered,
-                state.replacement?.kind === "summarize"
-                  ? state.replacement.summary
-                  : state.replacement?.handoff,
-              );
+                if (covered.length === 0) return Stream.empty;
 
-              if (transcript === undefined) {
-                return yield* CompactionError.make({
-                  message: `Previous compaction summary exceeds ${SUMMARY_MAX_LENGTH} characters`,
-                });
-              }
+                const transcript = renderForSummary(
+                  covered,
+                  state.replacement?.kind === "summarize"
+                    ? state.replacement.summary
+                    : state.replacement?.handoff,
+                );
 
-              const prompt = Prompt.fromMessages([
-                Prompt.userMessage({
-                  content: [
-                    Prompt.textPart({
-                      text: `${SUMMARY_REQUEST_PREFIX}${transcript}${SUMMARY_REQUEST_SUFFIX}`,
-                    }),
-                  ],
-                }),
-              ]);
+                if (transcript === undefined) {
+                  return yield* CompactionError.make({
+                    message: `Previous compaction summary exceeds ${SUMMARY_MAX_LENGTH} characters`,
+                  });
+                }
 
-              const text = yield* request.summarize(prompt, model);
+                const prompt = Prompt.fromMessages([
+                  Prompt.userMessage({
+                    content: [
+                      Prompt.textPart({
+                        text: `${SUMMARY_REQUEST_PREFIX}${transcript}${SUMMARY_REQUEST_SUFFIX}`,
+                      }),
+                    ],
+                  }),
+                ]);
 
-              return Stream.succeed({
-                kind: "summarize",
-                through,
-                summary: text.trim(),
-              } satisfies CompactionDecision);
-            }),
+                const text = yield* request.summarize(prompt, model);
+
+                return Stream.succeed({
+                  kind: "summarize",
+                  through,
+                  summary: text.trim(),
+                } satisfies CompactionDecision);
+              }),
+            ),
           ),
-        ),
-      );
-    }),
+        );
+      }),
+    ),
 });
 
 /**
@@ -190,40 +221,49 @@ export class ContextCompactor extends Context.Service<ContextCompactor, ContextC
   static readonly layerRollover = Layer.succeed(ContextCompactor, {
     estimate: estimatePromptTokens,
     compact: <E, R>(request: CompactionRequest<E, R>) =>
-      Stream.suspend(() => {
-        if (request.requested !== undefined) {
-          return Stream.succeed({
-            kind: "rollover",
-            ...request.requested,
-          } satisfies CompactionDecision);
-        }
+      Stream.unwrap(
+        Effect.gen(function* () {
+          if (request.requested !== undefined) {
+            return Stream.succeed({
+              kind: "rollover",
+              ...request.requested,
+            } satisfies CompactionDecision);
+          }
 
-        // Trailing user steering may not be canonical until the next response. Keep it verbatim.
-        const through =
-          request.source.content.findLastIndex(
-            (message) => message.role === "assistant" || message.role === "tool",
-          ) + 1;
+          // Trailing user steering may not be canonical until the next response. Keep it verbatim.
+          const through =
+            request.source.content.findLastIndex(
+              (message) => message.role === "assistant" || message.role === "tool",
+            ) + 1;
 
-        if (collectCoveredMessages(request.source.content, request.state, through).length === 0) {
-          return Stream.empty;
-        }
+          if (collectCoveredMessages(request.source.content, request.state, through).length === 0) {
+            return Stream.empty;
+          }
 
-        const handoff = buildRolloverHandoff(
-          request.source.content,
-          request.state,
-          request.targetTokens,
-          through,
-        );
-
-        if (handoff === undefined)
-          return Stream.fail(
-            CompactionError.make({
-              message: "Insufficient context capacity for an automatic rollover handoff",
-            }),
+          const handoff = yield* evaluateEstimates(request.estimateMessageTokens, (estimate) =>
+            buildRolloverHandoff(
+              request.source.content,
+              request.state,
+              request.targetTokens,
+              through,
+              estimate,
+            ),
           );
 
-        return Stream.succeed({ kind: "rollover", through, handoff } satisfies CompactionDecision);
-      }),
+          if (handoff === undefined)
+            return Stream.fail(
+              CompactionError.make({
+                message: "Insufficient context capacity for an automatic rollover handoff",
+              }),
+            );
+
+          return Stream.succeed({
+            kind: "rollover",
+            through,
+            handoff,
+          } satisfies CompactionDecision);
+        }),
+      ),
   });
 
   /** Use the bounded default algorithm with a separate upstream Effect AI Model. */

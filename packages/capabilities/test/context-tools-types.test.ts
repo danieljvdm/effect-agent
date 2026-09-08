@@ -79,6 +79,12 @@ type NativeRuntimeServices =
   | ThreadHistory;
 
 it("keeps history and storage dependencies visible while the engine owns its local services", () => {
+  expectTypeOf<Tool.Parameters<typeof ContextTools.GetContextRemaining>>().toEqualTypeOf<{
+    readonly [key: string]: never;
+  }>();
+  expectTypeOf<Tool.Parameters<typeof MemoryNotes.ReadNotes>>().toEqualTypeOf<{
+    readonly [key: string]: never;
+  }>();
   expectTypeOf<Tool.HandlerServices<typeof ContextTools.SearchContextWindows>>().toEqualTypeOf<
     ContextWindow | ContextHistory
   >();
