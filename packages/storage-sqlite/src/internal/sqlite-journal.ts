@@ -28,6 +28,7 @@ import {
   SqliteWriteContention,
 } from "../SqliteStorageError.ts";
 import { SqliteStorageFailpoint } from "../SqliteStorageFailpoint.ts";
+import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { CurrentSqliteStorageVersion, sqliteMigrations } from "./migrations.ts";
 
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
@@ -201,6 +202,196 @@ export const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
     ),
 );
 
+/** Column inventory of the supported v8 predecessor, independent of physical column order. */
+const predecessorColumns = {
+  effect_agent_threads: [
+    "thread_id",
+    "created_at",
+    "tail_sequence",
+    "tail_digest",
+    "producer_epoch",
+  ],
+  effect_agent_canonical_batches: [
+    "thread_id",
+    "batch_id",
+    "first_sequence",
+    "last_sequence",
+    "batch_digest",
+    "tail_digest",
+    "batch_json",
+  ],
+  effect_agent_canonical_records: ["thread_id", "sequence", "record_id", "batch_id", "record_json"],
+  effect_agent_checkpoints: ["thread_id", "through_sequence", "tail_digest", "checkpoint_json"],
+  effect_agent_submissions: [
+    "submission_id",
+    "thread_id",
+    "queue_sequence",
+    "principal",
+    "idempotency_key",
+    "agent_id",
+    "agent_digests_json",
+    "deployment_id",
+    "input_json",
+    "input_digest",
+    "receipt_id",
+    "state",
+    "settled_outcome",
+    "created_at",
+    "ready_at",
+    "input_applied_record_id",
+    "input_applied_sequence",
+    "joined_host_submission_id",
+    "suspended_reason_json",
+    "suspended_at",
+    "unknown_reason",
+    "unknown_tool_call_ids_json",
+    "parent_submission_id",
+    "parent_tool_call_id",
+    "admission_group",
+    "admission_fence_json",
+  ],
+  effect_agent_submission_ownership: [
+    "submission_id",
+    "attempt_id",
+    "ownership_token",
+    "producer_epoch",
+    "owner_producer_id",
+    "lease_expires_at",
+  ],
+  effect_agent_attempts: [
+    "attempt_id",
+    "submission_id",
+    "thread_id",
+    "owner_producer_id",
+    "producer_epoch",
+    "claimed_at",
+  ],
+  effect_agent_settlement_reservations: [
+    "submission_id",
+    "settlement_id",
+    "outcome",
+    "record_id",
+    "record_json",
+    "record_digest",
+    "reserved_at",
+    "finalized_at",
+  ],
+  effect_agent_abort_intents: [
+    "submission_id",
+    "author",
+    "reason",
+    "requested_at",
+    "canonical_record_id",
+  ],
+  effect_agent_approval_decisions: [
+    "submission_id",
+    "tool_call_id",
+    "decision",
+    "resolver",
+    "reason",
+    "decided_at",
+  ],
+  effect_agent_unknown_resolutions: [
+    "submission_id",
+    "tool_call_id",
+    "author",
+    "reason",
+    "resolution_json",
+    "resolved_at",
+  ],
+  effect_agent_child_reservations: [
+    "reservation_id",
+    "parent_submission_id",
+    "parent_tool_call_id",
+    "child_submission_id",
+    "status",
+    "allocation_json",
+    "allocation_digest",
+    "accounting_json",
+    "reserved_at",
+    "release_began_at",
+    "released_at",
+  ],
+  effect_agent_schedules: [
+    "tenant_id",
+    "owner_id",
+    "schedule_id",
+    "deadline_at_millis",
+    "record_json",
+  ],
+  effect_agent_subscription_sequences: [
+    "tenant_id",
+    "source_address",
+    "sequence",
+    "event_scan_cursor",
+    "delivery_scan_cursor",
+    "recovery_scan_cursor",
+  ],
+  effect_agent_subscriptions: [
+    "tenant_id",
+    "source_address",
+    "owner_id",
+    "subscription_id",
+    "ordinal",
+    "source_name",
+    "source_version",
+    "matching_key",
+    "state",
+    "expires_at_millis",
+    "recovery_at_millis",
+    "recovery_present",
+    "record_json",
+  ],
+  effect_agent_subscription_events: [
+    "tenant_id",
+    "source_address",
+    "event_id",
+    "source_name",
+    "source_version",
+    "matching_key",
+    "payload_digest",
+    "cutoff",
+    "cursor",
+    "routing_complete",
+    "next_attempt_at_millis",
+    "record_json",
+    "tombstone",
+  ],
+  effect_agent_subscription_deliveries: [
+    "tenant_id",
+    "source_address",
+    "owner_id",
+    "subscription_id",
+    "event_id",
+    "delivery_key",
+    "state",
+    "next_attempt_at_millis",
+    "record_json",
+  ],
+} as const;
+
+const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  for (const [table, expected] of Object.entries(predecessorColumns)) {
+    const columns = yield* decodeRows(
+      Schema.Array(Schema.Struct({ name: BoundedIdentifier })),
+      table,
+      "schema",
+      yield* sql.unsafe(`PRAGMA table_info(${table})`),
+    );
+
+    const names = new Set<string>(expected);
+
+    if (columns.length !== names.size || columns.some((column) => !names.has(column.name)))
+      return yield* SqliteStorageCompatibilityError.make({
+        actualVersion: 8,
+        supportedVersion: CurrentSqliteStorageVersion,
+        message: `The v8 ${table} columns do not match the supported predecessor; no upgrade was committed.`,
+      });
+  }
+});
+
 export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const { hit: failpoint } = yield* SqliteStorageFailpoint;
@@ -243,10 +434,11 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     versionRows,
   );
 
-  // Only the unpatched beta49/beta50 predecessor is upgradeable. Other versions fail closed.
+  // Support the known beta49/beta50 and immediate predecessor formats atomically.
   if (
     version.user_version !== 0 &&
     version.user_version !== 7 &&
+    version.user_version !== 8 &&
     version.user_version !== CurrentSqliteStorageVersion
   ) {
     return yield* SqliteStorageCompatibilityError.make({
@@ -255,53 +447,87 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       message:
         `The SQLite file uses unsupported storage version ${version.user_version}; ` +
         `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
-        "Only unpatched v7 can be upgraded automatically. Keep the original file and use a compatible library version.",
+        "Only supported v7 and v8 can be upgraded automatically. Keep the original file and use a compatible library version.",
     });
   }
 
-  if (version.user_version === 7) {
+  if (version.user_version === 7 || version.user_version === 8) {
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
           const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
 
-          if (current.length === 1 && current[0].user_version === 8) return;
-          if (current.length !== 1 || current[0].user_version !== 7)
+          if (current.length === 1 && current[0].user_version === CurrentSqliteStorageVersion)
+            return;
+          if (
+            current.length !== 1 ||
+            (current[0].user_version !== 7 && current[0].user_version !== 8)
+          )
             return yield* SqliteStorageCompatibilityError.make({
               actualVersion: -1,
               supportedVersion: CurrentSqliteStorageVersion,
               message: "Storage version changed while acquiring the upgrade transaction.",
             });
-          yield* checkV2ThreadLayout();
-          for (const statement of [
-            sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_group TEXT`,
-            sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_fence_json TEXT`,
-            sql`CREATE INDEX effect_agent_submissions_group ON effect_agent_submissions (thread_id, admission_group, state)`,
-          ]) {
-            yield* failpoint("upgrade:before-mutation");
-            yield* statement;
-            yield* failpoint("upgrade:after-mutation");
+
+          const required = yield* sql<{
+            name: string;
+          }>`SELECT name FROM sqlite_master WHERE type='table' AND name IN (
+            'effect_agent_threads', 'effect_agent_canonical_batches', 'effect_agent_canonical_records',
+            'effect_agent_checkpoints', 'effect_agent_submissions', 'effect_agent_submission_ownership',
+            'effect_agent_attempts', 'effect_agent_settlement_reservations', 'effect_agent_abort_intents',
+            'effect_agent_approval_decisions', 'effect_agent_unknown_resolutions', 'effect_agent_schedules'
+          )`;
+
+          if (required.length !== 12)
+            return yield* SqliteStorageCompatibilityError.make({
+              actualVersion: current[0].user_version,
+              supportedVersion: CurrentSqliteStorageVersion,
+              message:
+                "The predecessor store is missing required tables; no upgrade was committed.",
+            });
+
+          if (current[0].user_version === 7) {
+            yield* checkV2ThreadLayout();
+            for (const statement of [
+              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_group TEXT`,
+              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_fence_json TEXT`,
+              sql`CREATE INDEX effect_agent_submissions_group ON effect_agent_submissions (thread_id, admission_group, state)`,
+            ]) {
+              yield* failpoint("upgrade:before-mutation");
+              yield* statement;
+              yield* failpoint("upgrade:after-mutation");
+            }
+            yield* upgradeV2Schedules(16 * 1024 * 1024).pipe(
+              Effect.provideService(ScheduleFailpoint, {
+                hit: (point) =>
+                  Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
+                    Effect.flatMap(failpoint),
+                    Effect.mapError(() => ScheduleFailpointError.make({ point })),
+                  ),
+              }),
+            );
+            yield* upgradeV2Subscriptions(16 * 1024 * 1024).pipe(
+              Effect.provideService(SubscriptionFailpoint, {
+                hit: (point) =>
+                  Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
+                    Effect.flatMap(failpoint),
+                    Effect.mapError(() => SubscriptionFailpointError.make({ point })),
+                  ),
+              }),
+            );
           }
-          yield* upgradeV2Schedules(16 * 1024 * 1024).pipe(
-            Effect.provideService(ScheduleFailpoint, {
-              hit: (point) =>
-                Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
-                  Effect.flatMap(failpoint),
-                  Effect.mapError(() => ScheduleFailpointError.make({ point })),
-                ),
-            }),
-          );
-          yield* upgradeV2Subscriptions(16 * 1024 * 1024).pipe(
-            Effect.provideService(SubscriptionFailpoint, {
-              hit: (point) =>
-                Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
-                  Effect.flatMap(failpoint),
-                  Effect.mapError(() => SubscriptionFailpointError.make({ point })),
-                ),
-            }),
-          );
+          if (current[0].user_version === 8) yield* checkPredecessorLayout();
+          yield* failpoint("upgrade:before-mutation");
+          yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
+          yield* failpoint("upgrade:after-mutation");
+          yield* failpoint("upgrade:before-mutation");
+          yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN message_admission_json TEXT`;
+          yield* failpoint("upgrade:after-mutation");
+          yield* failpoint("upgrade:before-mutation");
+          yield* createMessageDeliveryTables;
+          yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
-          yield* sql`PRAGMA user_version = 8`;
+          yield* sql`PRAGMA user_version = 9`;
           yield* failpoint("upgrade:after-version");
         }),
       )
@@ -328,7 +554,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             message: error.message,
           }),
         ),
-        Effect.catchTag("SqlError", storageError("upgrade v7 storage")),
+        Effect.catchTag("SqlError", storageError("upgrade supported storage")),
         Effect.catchTag("SchemaError", (error) =>
           SqliteStorageCorruptionError.make({
             table: "upgrade",
@@ -391,7 +617,8 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         'effect_agent_abort_intents',
         'effect_agent_approval_decisions',
         'effect_agent_unknown_resolutions',
-        'effect_agent_schedules'
+        'effect_agent_schedules',
+        'effect_agent_message_deliveries'
       )
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
@@ -403,7 +630,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     requiredRows,
   );
 
-  if (required.length !== 12) {
+  if (required.length !== 13) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,

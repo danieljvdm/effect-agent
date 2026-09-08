@@ -406,9 +406,10 @@ uncertainty, payloads and transactional prearming; this extension defines no pro
 
 ### Adopting these contracts
 
-The persistent adapters automatically upgrade the unpatched beta49/beta50 format on acquisition:
-Cloudflare Thread, Schedule and Subscription stores move from version 2 to 3; the combined SQLite
-file moves from version 7 to 8. Each owning store upgrades in one native transaction and advances
+The persistent adapters automatically upgrade supported predecessor formats on acquisition:
+Cloudflare Thread stores move from version 2 or 3 to 4; Schedule and Subscription stores move
+from version 2 to 3; the combined SQLite file moves from version 7 or 8 to 9. Thread and SQLite
+stores add independently discoverable message delivery storage. Each owning store upgrades in one native transaction and advances
 its version marker last. Reopening after interruption retries the entire uncommitted upgrade.
 Namespaces, canonical history and digests, receipts, pending work, ownership, deadlines, alarm
 generations and scan cursors are preserved. Keep the existing namespace/file and the old source
@@ -460,6 +461,33 @@ new watch without a check-then-subscribe race. Cancellation, expiry, and once se
 provider polling. GitHub does not automatically redeliver failed webhooks, so reconciliation checks
 the registered attempt while it remains retained, readable, and authorized. It does not provide
 general historical replay.
+
+## Retained message delivery
+
+When composing additional SQLite adapters with a Node host, provide the host Layer to the adapter.
+The host exposes its `SqlClient`, `SqliteStorageConfig`, and `SqliteStorageFailpoint` so subscriptions
+and runtime operations share one serialized connection, including during startup recovery.
+
+`MessageDeliveryStore` retains a host-prepared input independently of either Thread's current Run.
+`pending` means the obligation is saved; `accepted` means the destination returned a durable
+Receipt; `processed` means that exact Receipt has a terminal Settlement. A lost admission reply
+reuses the frozen envelope and admission key. It cannot create a replacement input.
+
+Node hosts run a scoped, bounded polling loop over the delivery deadline index. Cloudflare Thread
+Objects prearm their maintenance generation before message writes, retain the earliest alarm,
+and run one bounded delivery wave beside source work. Both paths recover without wake hints,
+including after the source and destination Runs settle. Interrupting a host releases live
+resources while retaining the obligation for recovery.
+
+Automatic retry has finite attempt and deadline bounds. `refused` and `parked` remain inspectable;
+an explicit driver `retry` renews a parked obligation's deadline without changing its envelope.
+Healthy destination processing does not consume the failure-attempt budget. Completed rows retain
+deduplication evidence and count toward the retention limit; capacity exhaustion fails explicitly.
+
+These are trusted host ports. Authenticate the sender, authorize routing and encode the
+destination input before preparing an envelope. Possession of a message key or Receipt is not
+an authorization decision. Reads require an owner Thread; Cloudflare also enforces that each
+Object's delivery store belongs to its own Thread.
 
 ## Next steps
 

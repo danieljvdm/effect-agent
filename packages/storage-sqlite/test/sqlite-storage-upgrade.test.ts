@@ -77,6 +77,75 @@ const withFixture = <A, E>(
   );
 
 describe("supported beta50 storage upgrade", () => {
+  for (const [table, column] of [
+    ["effect_agent_submissions", "admission_fence_json"],
+    ["effect_agent_subscriptions", "recovery_present"],
+  ] as const) {
+    it.effect(`rejects v8 missing ${table}.${column} without mutating storage`, () => {
+      let armed = false;
+      let mutations = 0;
+
+      return withFixture(
+        (open) =>
+          Effect.gen(function* () {
+            yield* open;
+            const sql = yield* SqlClient.SqlClient;
+
+            yield* sql`DROP TABLE effect_agent_message_deliveries`;
+            yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN worker_admission_json`;
+            yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN message_admission_json`;
+            yield* sql`PRAGMA user_version = 8`;
+            yield* sql.unsafe(`ALTER TABLE ${table} RENAME COLUMN ${column} TO malformed_column`);
+            const before = yield* snapshotStore;
+
+            armed = true;
+            expect(yield* open.pipe(Effect.result)).toMatchObject({
+              _tag: "Failure",
+              failure: { _tag: "SqliteStorageCompatibilityError", actualVersion: 8 },
+            });
+            expect(mutations).toBe(0);
+            expect(yield* snapshotStore).toEqual(before);
+            expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 8 }]);
+          }),
+        (location) =>
+          Effect.sync(() => {
+            if (armed && location === "upgrade:before-mutation") mutations += 1;
+          }),
+      );
+    });
+  }
+
+  it.effect("adds message storage to v8 atomically without changing existing records", () => {
+    let armed = false;
+
+    return withFixture(
+      (open) =>
+        Effect.gen(function* () {
+          yield* open;
+          const sql = yield* SqlClient.SqlClient;
+
+          yield* sql`DROP TABLE effect_agent_message_deliveries`;
+          yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN worker_admission_json`;
+          yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN message_admission_json`;
+          yield* sql`PRAGMA user_version = 8`;
+          const before = yield* snapshotStore;
+
+          armed = true;
+          expect(Exit.isFailure(yield* open.pipe(Effect.exit))).toBe(true);
+          expect(yield* snapshotStore).toEqual(before);
+          expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 8 }]);
+          armed = false;
+          yield* open;
+          yield* assertPreserved("sqlite");
+          expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 9 }]);
+          expect(yield* sql`SELECT * FROM effect_agent_message_deliveries`).toEqual([]);
+        }),
+      (location) =>
+        armed && location === "upgrade:after-version"
+          ? SqliteStorageFailpointError.make({ location })
+          : Effect.void,
+    );
+  });
   it.effect("preserves v7 state and exactly replays retained admissions after reopen", () =>
     withFixture((open, filename) =>
       Effect.gen(function* () {
@@ -102,7 +171,7 @@ describe("supported beta50 storage upgrade", () => {
         );
         const sql = yield* SqlClient.SqlClient;
 
-        expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 8 }]);
+        expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 9 }]);
       }),
     ),
   );

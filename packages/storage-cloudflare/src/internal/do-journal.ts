@@ -16,6 +16,7 @@ import {
   DoValueBoundExceeded,
   type DoStorageFailpointLocation,
 } from "../DoStorageError.ts";
+import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { CurrentDoStorageVersion, doMigrations } from "./migrations.ts";
 
 /**
@@ -218,6 +219,147 @@ export const decodeSingleRow = Effect.fn(
     ),
 );
 
+/** Column inventory of the supported v3 predecessor, independent of physical column order. */
+const predecessorColumns = {
+  effect_agent_threads: [
+    "thread_id",
+    "created_at",
+    "tail_sequence",
+    "tail_digest",
+    "producer_epoch",
+  ],
+  effect_agent_canonical_batches: [
+    "thread_id",
+    "batch_id",
+    "first_sequence",
+    "last_sequence",
+    "batch_digest",
+    "tail_digest",
+    "batch_json",
+  ],
+  effect_agent_canonical_records: ["thread_id", "sequence", "record_id", "batch_id", "record_json"],
+  effect_agent_checkpoints: ["thread_id", "through_sequence", "tail_digest", "checkpoint_json"],
+  effect_agent_submissions: [
+    "submission_id",
+    "thread_id",
+    "queue_sequence",
+    "principal",
+    "idempotency_key",
+    "agent_id",
+    "agent_digests_json",
+    "deployment_id",
+    "input_json",
+    "input_digest",
+    "receipt_id",
+    "state",
+    "settled_outcome",
+    "created_at",
+    "ready_at",
+    "input_applied_record_id",
+    "input_applied_sequence",
+    "joined_host_submission_id",
+    "suspended_reason_json",
+    "suspended_at",
+    "unknown_reason",
+    "unknown_tool_call_ids_json",
+    "parent_submission_id",
+    "parent_tool_call_id",
+    "admission_group",
+    "admission_fence_json",
+  ],
+  effect_agent_submission_ownership: [
+    "submission_id",
+    "attempt_id",
+    "ownership_token",
+    "producer_epoch",
+    "owner_producer_id",
+    "lease_expires_at",
+  ],
+  effect_agent_attempts: [
+    "attempt_id",
+    "submission_id",
+    "thread_id",
+    "owner_producer_id",
+    "producer_epoch",
+    "claimed_at",
+  ],
+  effect_agent_settlement_reservations: [
+    "submission_id",
+    "settlement_id",
+    "outcome",
+    "record_id",
+    "record_json",
+    "record_digest",
+    "reserved_at",
+    "finalized_at",
+  ],
+  effect_agent_abort_intents: [
+    "submission_id",
+    "author",
+    "reason",
+    "requested_at",
+    "canonical_record_id",
+  ],
+  effect_agent_approval_decisions: [
+    "submission_id",
+    "tool_call_id",
+    "decision",
+    "resolver",
+    "reason",
+    "decided_at",
+  ],
+  effect_agent_unknown_resolutions: [
+    "submission_id",
+    "tool_call_id",
+    "author",
+    "reason",
+    "resolution_json",
+    "resolved_at",
+  ],
+  effect_agent_child_reservations: [
+    "reservation_id",
+    "parent_submission_id",
+    "parent_tool_call_id",
+    "child_submission_id",
+    "status",
+    "allocation_json",
+    "allocation_digest",
+    "accounting_json",
+    "reserved_at",
+    "release_began_at",
+    "released_at",
+  ],
+  effect_agent_meta: ["key", "value"],
+  effect_agent_child_settlements: [
+    "parent_submission_id",
+    "child_submission_id",
+    "child_outcome",
+    "recorded_at",
+  ],
+} as const;
+
+const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  for (const [table, expected] of Object.entries(predecessorColumns)) {
+    const columns = yield* decodeRows(
+      Schema.Array(Schema.Struct({ name: BoundedIdentifier })),
+      table,
+      "schema",
+      yield* sql.unsafe(`PRAGMA table_info(${table})`),
+    );
+
+    const names = new Set<string>(expected);
+
+    if (columns.length !== names.size || columns.some((column) => !names.has(column.name)))
+      return yield* DoStorageCompatibilityError.make({
+        actualVersion: 3,
+        supportedVersion: CurrentDoStorageVersion,
+        message: `The v3 ${table} columns do not match the supported predecessor; no upgrade was committed.`,
+      });
+  }
+});
+
 const REQUIRED_TABLES = [
   "effect_agent_abort_intents",
   "effect_agent_approval_decisions",
@@ -312,7 +454,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       versionRows,
     );
 
-    if (version.value === "2") {
+    if (version.value === "2" || version.value === "3") {
       yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -320,8 +462,9 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               value: string;
             }>`SELECT value FROM effect_agent_meta WHERE key='storage_version'`;
 
-            if (current.length === 1 && current[0].value === "3") return;
-            if (current.length !== 1 || current[0].value !== "2")
+            if (current.length === 1 && current[0].value === String(CurrentDoStorageVersion))
+              return;
+            if (current.length !== 1 || (current[0].value !== "2" && current[0].value !== "3"))
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: -1,
                 supportedVersion: CurrentDoStorageVersion,
@@ -337,23 +480,35 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
 
             if (required.length !== REQUIRED_TABLES.length)
               return yield* DoStorageCompatibilityError.make({
-                actualVersion: 2,
+                actualVersion: Number(current[0].value),
                 supportedVersion: CurrentDoStorageVersion,
                 message:
-                  "The v2 store is missing required tables. Retain the original store for inspection; no upgrade was committed.",
+                  "The predecessor store is missing required tables. Retain the original store for inspection; no upgrade was committed.",
               });
-            yield* checkV2ThreadLayout();
-            for (const statement of [
-              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_group TEXT`,
-              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_fence_json TEXT`,
-              sql`CREATE INDEX effect_agent_submissions_group ON effect_agent_submissions (thread_id, admission_group, state)`,
-            ]) {
-              yield* failpoint("upgrade:before-mutation");
-              yield* statement;
-              yield* failpoint("upgrade:after-mutation");
+            if (current[0].value === "2") {
+              yield* checkV2ThreadLayout();
+              for (const statement of [
+                sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_group TEXT`,
+                sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_fence_json TEXT`,
+                sql`CREATE INDEX effect_agent_submissions_group ON effect_agent_submissions (thread_id, admission_group, state)`,
+              ]) {
+                yield* failpoint("upgrade:before-mutation");
+                yield* statement;
+                yield* failpoint("upgrade:after-mutation");
+              }
             }
+            if (current[0].value === "3") yield* checkPredecessorLayout();
+            yield* failpoint("upgrade:before-mutation");
+            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
+            yield* failpoint("upgrade:after-mutation");
+            yield* failpoint("upgrade:before-mutation");
+            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN message_admission_json TEXT`;
+            yield* failpoint("upgrade:after-mutation");
+            yield* failpoint("upgrade:before-mutation");
+            yield* createMessageDeliveryTables;
+            yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* sql`UPDATE effect_agent_meta SET value='3' WHERE key='storage_version'`;
+            yield* sql`UPDATE effect_agent_meta SET value='4' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -372,7 +527,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               message: error.message,
             }),
           ),
-          Effect.catchTag("SqlError", storageError("upgrade v2 thread storage")),
+          Effect.catchTag("SqlError", storageError("upgrade supported thread storage")),
         );
     } else if (version.value !== String(CurrentDoStorageVersion)) {
       const actualVersion = Number.parseInt(version.value, 10);
@@ -383,7 +538,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         message:
           `The Durable Object uses unsupported storage version ${version.value}; ` +
           `this build supports exactly version ${CurrentDoStorageVersion}. ` +
-          "Only unpatched v2 can be upgraded automatically. Keep the original store and use a compatible library version.",
+          "Only supported v2 and v3 can be upgraded automatically. Keep the original store and use a compatible library version.",
       });
     }
   }
@@ -392,7 +547,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     SELECT name
     FROM sqlite_master
     WHERE type = 'table'
-      AND name IN ${sql.in([...REQUIRED_TABLES])}
+      AND name IN ${sql.in([...REQUIRED_TABLES, "effect_agent_message_deliveries"])}
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
 
@@ -403,7 +558,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     requiredRows,
   );
 
-  if (required.length !== REQUIRED_TABLES.length) {
+  if (required.length !== REQUIRED_TABLES.length + 1) {
     return yield* DoStorageCompatibilityError.make({
       actualVersion: CurrentDoStorageVersion,
       supportedVersion: CurrentDoStorageVersion,

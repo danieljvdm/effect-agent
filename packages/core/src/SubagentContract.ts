@@ -4,6 +4,35 @@ import { AgentId, ThreadId, DelegationId, RunId, ToolCallId } from "./Identifier
 
 const Natural = Schema.Natural;
 
+/** Tree authority ceiling. Each child exposes only its own Toolkit's permitted names. */
+export class SubagentGrant extends Schema.Class<SubagentGrant>(
+  "@effect-agent/capabilities/SubagentGrant",
+)({
+  allowedToolNames: Schema.Array(Schema.NonEmptyString).check(Schema.isMaxLength(128)),
+  maxDepth: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16 })),
+  /** Omitted permits either lifetime within the depth and reserved subtree budgets. */
+  childLifetimes: Schema.optionalKey(
+    Schema.Array(Schema.Literals(["attached", "background"])).check(Schema.isMaxLength(2)),
+  ),
+}) {}
+
+/** Intersect inherited authority; another delegation can never restore a removed capability. */
+export const narrowSubagentGrant = (
+  declared: SubagentGrant,
+  inherited?: SubagentGrant,
+): SubagentGrant =>
+  inherited === undefined
+    ? declared
+    : SubagentGrant.make({
+        allowedToolNames: declared.allowedToolNames.filter((name) =>
+          inherited.allowedToolNames.includes(name),
+        ),
+        maxDepth: Math.min(declared.maxDepth, inherited.maxDepth),
+        childLifetimes: (declared.childLifetimes ?? ["attached", "background"]).filter((lifetime) =>
+          (inherited.childLifetimes ?? ["attached", "background"]).includes(lifetime),
+        ),
+      });
+
 /** Finite delegable caps for one parent Run. Absent means not configured; present values are finite. */
 export class SubagentDelegationCaps extends Schema.Class<SubagentDelegationCaps>(
   "@effect-agent/capabilities/SubagentDelegationCaps",
@@ -38,6 +67,8 @@ export class SubagentReservationAmounts extends Schema.Class<SubagentReservation
 export const SubagentBudgetReservation = Schema.Struct({
   caps: SubagentDelegationCaps,
   allocation: SubagentReservationAmounts,
+  /** Slots reserved for every descendant input beneath this input; absent reserves none. */
+  descendantInvocations: Schema.optionalKey(Natural),
 });
 
 export type SubagentBudgetReservation = typeof SubagentBudgetReservation.Type;
@@ -46,10 +77,10 @@ export type SubagentBudgetReservation = typeof SubagentBudgetReservation.Type;
 export const DelegationDepth = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 export type DelegationDepth = typeof DelegationDepth.Type;
 
-/** Model-visible naming convention; names never authorize recovery replay. */
+/** @deprecated Names are application-owned; use DelegationTool metadata for classification. */
 export const delegationToolPrefix = "delegate_";
 
-/** Checks the authoring convention only, never execution or recovery semantics. */
+/** @deprecated Checks a legacy spelling only, never execution, nesting or recovery semantics. */
 export const isDelegationToolName = (toolName: string): boolean =>
   toolName.startsWith(delegationToolPrefix);
 
@@ -58,9 +89,50 @@ export const DelegationTool = Context.Reference<boolean>("@effect-agent/core/Del
   defaultValue: () => false,
 });
 
+/** Marks a host-managed idempotent worker operation, independently of its Tool name. */
+export const WorkerOperationTool = Context.Reference<boolean>(
+  "@effect-agent/core/WorkerOperationTool",
+  {
+    defaultValue: () => false,
+  },
+);
+
+/** Identifies the background launch operation within a generated management Toolkit. */
+export const BackgroundSpawnTool = Context.Reference<boolean>(
+  "@effect-agent/core/BackgroundSpawnTool",
+  {
+    defaultValue: () => false,
+  },
+);
+
+/** Declaration metadata and inherited authority determine the effective visible Tool set. */
+export const isSubagentToolAllowed = (
+  grant: SubagentGrant | undefined,
+  depth: number,
+  name: string,
+  annotations: Context.Context<never>,
+): boolean =>
+  grant === undefined ||
+  (grant.allowedToolNames.includes(name) &&
+    (Context.get(annotations, BackgroundSpawnTool)
+      ? depth < grant.maxDepth &&
+        (grant.childLifetimes ?? ["attached", "background"]).includes("background")
+      : Context.get(annotations, DelegationTool)
+        ? depth < grant.maxDepth &&
+          (grant.childLifetimes ?? ["attached", "background"]).includes("attached")
+        : true));
+
 /** Persisted preparation classification, checked against the resolved Tool before replay. */
-export const ToolExecutionKind = Schema.Literals(["ordinary", "delegation"]);
+export const ToolExecutionKind = Schema.Literals(["ordinary", "delegation", "orchestration"]);
 export type ToolExecutionKind = typeof ToolExecutionKind.Type;
+
+/** Resolve only trusted declaration metadata; names never authorize automatic replay. */
+export const getToolExecutionKind = (annotations: Context.Context<never>): ToolExecutionKind =>
+  Context.get(annotations, WorkerOperationTool)
+    ? "orchestration"
+    : Context.get(annotations, DelegationTool)
+      ? "delegation"
+      : "ordinary";
 
 /** Immutable lineage from a child Thread to the parent identity that established it. */
 export class SubagentParentLink extends Schema.Class<SubagentParentLink>("SubagentParentLink")({

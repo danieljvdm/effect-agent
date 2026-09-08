@@ -7,7 +7,11 @@ import {
 } from "@effect-agent/core/Agent";
 import { type ThreadId, AgentId } from "@effect-agent/core/Identifiers";
 import { type RuntimeBinding } from "@effect-agent/engine/AgentRuntime";
-import { type Crypto, type Option, Effect, Layer, Schema } from "effect";
+import {
+  WorkerReportPreparationFailure,
+  type WorkerReporting,
+} from "@effect-agent/engine/SubagentHost";
+import { type Crypto, type Option, type Scope, Effect, Layer, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
 import { digestDefinitions, type DigestError } from "../Digest.ts";
@@ -132,12 +136,38 @@ interface CapturedBinding {
   readonly agentId: AgentId;
   /** Exact immutable definition whose codecs and behavior the worker captured. */
   readonly definition: Agent.AnyDefinition;
+  /** Captured independently from per-Attempt services: report preparation has no fenced Claim. */
+  readonly reporting?: ReadonlyArray<WorkerReporting<WorkerReportPreparationFailure>>;
   readonly attempt: (
     driver: ResolvedAttemptDriver,
     threadId: ThreadId,
     claim: Claim,
   ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure>;
 }
+
+type ReportRequirements<Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>> = [
+  Reports[number],
+] extends [never]
+  ? never
+  : Reports[number] extends WorkerReporting<unknown, infer R>
+    ? Exclude<R, Scope.Scope>
+    : never;
+
+const captureReporting = <R>(reports: ReadonlyArray<WorkerReporting<unknown, R>>) =>
+  Effect.map(Effect.context<Exclude<R, Scope.Scope>>(), (context) =>
+    reports.map((report): WorkerReporting<WorkerReportPreparationFailure> => ({
+      ...report,
+      prepare: (value) =>
+        Effect.scoped(Effect.suspend(() => report.prepare(value))).pipe(
+          Effect.provide(context),
+          Effect.mapError((error) =>
+            Schema.is(WorkerReportPreparationFailure)(error)
+              ? error
+              : WorkerReportPreparationFailure.make({ stage: "preparation" }),
+          ),
+        ),
+    })),
+  );
 
 /** One exact executable registration used by durable claim-time resolution. */
 export interface ResolvedBinding extends CapturedBinding {
@@ -204,11 +234,28 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
  * may supply a previously computed digest triple directly.
  */
 export const DurableWorkerBinding = {
-  make: <A extends ExecutableAgentBinding>(
+  make: <
+    A extends ExecutableAgentBinding,
+    const Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>> = readonly [],
+  >(
     agent: A,
     digests: DefinitionDigests,
-  ): Effect.Effect<ResolvedBinding, never, DurableWorkerRequirements<A>> =>
-    Effect.map(capture(agent), (binding): ResolvedBinding => ({ ...binding, digests })),
+    reporting?: Reports,
+  ): Effect.Effect<
+    ResolvedBinding,
+    never,
+    DurableWorkerRequirements<A> | ReportRequirements<Reports>
+  > =>
+    Effect.gen(function* () {
+      const binding = yield* capture(agent);
+      const reports = yield* captureReporting(reporting ?? []);
+
+      return { ...binding, digests, reporting: reports };
+    }) as Effect.Effect<
+      ResolvedBinding,
+      never,
+      DurableWorkerRequirements<A> | ReportRequirements<Reports>
+    >,
 } as const;
 
 /** INTERNAL identity-only capture retained for the legacy direct worker path. */
@@ -243,6 +290,35 @@ export const resolveWorkerBinding = (
   return Effect.succeed(exact);
 };
 
+/** Resolve authoring-time admission through the one exact host registration, never by identity alone. */
+export const resolveDefinitionBinding = (
+  bindings: ReadonlyArray<ResolvedBinding>,
+  definition: Pick<Agent.AnyDefinition, "id">,
+): Effect.Effect<ResolvedBinding, BindingUnavailable> => {
+  const candidates = bindings.filter((binding) => binding.agentId === definition.id);
+  const binding = candidates[0];
+
+  if (candidates.length !== 1 || binding === undefined) {
+    return Effect.fail(
+      BindingUnavailable.make({
+        agentId: definition.id,
+        message: "Registered admission requires exactly one binding for the Agent identity",
+      }),
+    );
+  }
+
+  if (!Object.is(binding.definition, definition)) {
+    return Effect.fail(
+      BindingUnavailable.make({
+        agentId: definition.id,
+        message: "Registered admission requires the exact Agent Definition used in registration",
+      }),
+    );
+  }
+
+  return Effect.succeed(binding);
+};
+
 /** Application versions and a model Layer, supplied directly or through an existing Binding. */
 export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgentBinding> = (
   | { readonly agent: A; readonly model?: never; readonly definitions: DefinitionDigestInput }
@@ -252,6 +328,12 @@ export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgent
       readonly definitions: DefinitionDigestInput;
     }
 ) & {
+  /**
+   * Source-owned reports capture services outside attemptLayer and open a fresh Scope per
+   * preparation. Version changes with this registration. Missing exact code and preparation
+   * failures become retained report refusals; durable delivery retries reuse the frozen input.
+   */
+  readonly reporting?: ReadonlyArray<WorkerReporting<unknown, unknown>>;
   /**
    * Build fresh services for exactly one fenced Attempt, across all its Tool/model turns.
    * Finalizes on completion, suspension, failure and interruption. Never reused after eviction.
@@ -272,13 +354,21 @@ type EntryWorkerRequirements<Entry> = Entry extends {
     ? DurableWorkerRequirements<{ readonly definition: D; readonly model: M }>
     : never;
 
-type EntryRequirements<Entry> = Entry extends {
+type EntryAttemptRequirements<Entry> = Entry extends {
   readonly attemptLayer: (
     context: AgentAttemptContext,
   ) => Layer.Layer<infer Provides, never, infer Requires>;
 }
   ? Exclude<EntryWorkerRequirements<Entry>, Provides> | Requires
   : EntryWorkerRequirements<Entry>;
+
+type EntryRequirements<Entry> =
+  | EntryAttemptRequirements<Entry>
+  | (Entry extends {
+      readonly reporting: infer Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>;
+    }
+      ? ReportRequirements<Reports>
+      : never);
 
 type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> = [
   Entries[number],
@@ -292,13 +382,16 @@ const compileRegistration = <Entry extends AgentRegistration>(
   Effect.flatMap(
     digestDefinitions(entry.definitions),
     (digests) =>
-      Effect.map(
-        capture(
+      Effect.gen(function* () {
+        const binding = yield* capture(
           entry.model === undefined ? entry.agent : { definition: entry.agent, model: entry.model },
           entry.attemptLayer,
-        ),
-        (binding): ResolvedBinding => ({ ...binding, digests }),
-      ),
+        );
+
+        const reporting = yield* captureReporting(entry.reporting ?? []);
+
+        return { ...binding, digests, reporting };
+      }),
     // The erased descriptor accepts arbitrary provided services. Restore the concrete entry's
     // Exclude<worker requirements, provided services> | layer requirements at this collection seam.
   ) as Effect.Effect<ResolvedBinding, DigestError, Crypto.Crypto | EntryRequirements<Entry>>;

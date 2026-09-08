@@ -71,7 +71,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
         toolkit: Toolkit.empty,
       });
 
-      const delegation = Subagent.define("delegate_shared_budget", {
+      const delegation = Subagent.make("research", {
         target,
         failureMode: "return",
       });
@@ -127,9 +127,9 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
         ),
       );
 
-      const handlers = SubagentRuntime.layer(delegation, childModel, {
-        durable: { targetDigests: sharedDigests },
-      }).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
+      const handlers = SubagentRuntime.layer(delegation, childModel).pipe(
+        Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]),
+      );
 
       const bindings = yield* compileRegistrations([
         { agent: parent, definitions: versions },
@@ -252,7 +252,7 @@ it.effect(
           let offeredAllowance = 1;
 
           const tools = Toolkit.make(
-            Tool.make("probe", {
+            Tool.make("delegate_payment", {
               parameters: Schema.Struct({ index: Schema.Int }),
               success: Schema.String,
               needsApproval: ({ index }) => index === 1,
@@ -260,7 +260,7 @@ it.effect(
           );
 
           const handlers = tools.toLayer({
-            probe: ({ index }) =>
+            delegate_payment: ({ index }) =>
               Effect.sync(() => {
                 starts.push(index);
 
@@ -290,13 +290,13 @@ it.effect(
                     const count = request.prompt.content
                       .flatMap((message) => (message.role === "tool" ? message.content : []))
                       .filter(
-                        (part) => part.type === "tool-result" && part.name === "probe",
+                        (part) => part.type === "tool-result" && part.name === "delegate_payment",
                       ).length;
 
                     return Stream.fromIterable(
                       request.toolChoice === "none"
                         ? finalParts
-                        : toolTurn(`probe-${count + 1}`, "probe", { index: count + 1 }),
+                        : toolTurn(`probe-${count + 1}`, "delegate_payment", { index: count + 1 }),
                     );
                   },
                 }),
@@ -304,7 +304,7 @@ it.effect(
             ),
           );
 
-          const delegation = Subagent.define("delegate_probe", {
+          const delegation = Subagent.make("research", {
             target: childDefinition,
             description: "Run bounded probes.",
             parameters: Schema.Struct({ allowance: Schema.optionalKey(Schema.Number) }),
@@ -362,7 +362,6 @@ it.effect(
 
           const delegationLayer = SubagentRuntime.layer(delegation, child.model, {
             mapChildFailure: (failure) => new ProbeFailed({ tag: failure._tag }),
-            durable: { targetDigests: digests },
           }).pipe(Layer.provide([handlers, SubagentReservationsMemoryLive, IdGenerator.layer]));
 
           const bindings = [

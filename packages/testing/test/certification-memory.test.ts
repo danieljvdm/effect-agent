@@ -1,5 +1,5 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { memoryThreadStoreLayer } from "@effect-agent/storage-memory/MemoryThreadStore";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
@@ -42,7 +42,7 @@ const certified = Effect.gen(function* () {
   const report = yield* certifyDurableAdapters({
     adapter: { name: "@effect-agent/storage-memory" },
     submissionLedger: MemorySubmissionLedgerLive,
-    threadStore: MemoryThreadStoreLive,
+    threadStore: memoryThreadStoreLayer({ maxThreads: 512 }),
   }).pipe(Effect.provide(NodeCrypto.layer));
 
   yield* maybeWriteReport("storage-memory", report);

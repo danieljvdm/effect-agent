@@ -4,6 +4,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/SqliteMessageDeliveryStore.ts",
       "src/SqliteActivityStore.ts",
       "src/SqliteScheduleStore.ts",
       "src/SqliteStorageConfig.ts",

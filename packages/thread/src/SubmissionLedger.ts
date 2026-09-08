@@ -7,6 +7,9 @@ import {
   SubmissionId,
   ToolCallId,
 } from "@effect-agent/core/Identifiers";
+import { MessageAdmission } from "@effect-agent/core/Messaging";
+import type { JoinedToHost } from "@effect-agent/core/Receipt";
+import { IdempotencyKey, QueueSequence, Principal } from "@effect-agent/core/Receipt";
 import { RunUsageSummary } from "@effect-agent/core/Usage";
 import type { Option, Stream } from "effect";
 import { Context, Duration, Effect, Schema } from "effect";
@@ -29,20 +32,15 @@ import {
   ToolApprovalDecided,
   ToolCallResolved,
   ToolCallUnknown,
+  WorkerAdmission,
 } from "./Records.ts";
+
+export { IdempotencyKey, JoinedToHost, QueueSequence, Principal } from "@effect-agent/core/Receipt";
 
 const identifier = <const Name extends string>(name: Name) =>
   Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(
     Schema.brand(`@effect-agent/thread/${name}`),
   );
-
-/** Configured client identity that scopes admission idempotency keys (durability §2). */
-export const Principal = identifier("Principal");
-export type Principal = typeof Principal.Type;
-
-/** Client-supplied idempotency key, scoped to one (thread, principal) pair. */
-export const IdempotencyKey = identifier("IdempotencyKey");
-export type IdempotencyKey = typeof IdempotencyKey.Type;
 
 /**
  * Opaque proof that one Attempt currently owns a Submission's lane. It authorizes ledger
@@ -50,13 +48,6 @@ export type IdempotencyKey = typeof IdempotencyKey.Type;
  */
 export const OwnershipToken = identifier("OwnershipToken");
 export type OwnershipToken = typeof OwnershipToken.Type;
-
-/** Thread-local FIFO position allocated once at admission (DUR-004). */
-export const QueueSequence = Schema.Natural.pipe(
-  Schema.brand("@effect-agent/thread/QueueSequence"),
-);
-
-export type QueueSequence = typeof QueueSequence.Type;
 
 /**
  * Ledger lifecycle states for one Submission. `settled` is the only terminal state; every other
@@ -165,6 +156,8 @@ export class AdmissionRequest extends Schema.Class<AdmissionRequest>(
   inputPayload: PersistedJson,
   inputDigest: Digest,
   parentLinkage: Schema.optionalKey(ParentLinkage),
+  workerAdmission: Schema.optionalKey(WorkerAdmission),
+  messageAdmission: Schema.optionalKey(MessageAdmission),
   admissionGroup: Schema.optionalKey(AdmissionGroup),
   admissionFence: Schema.optionalKey(AdmissionFence),
 }) {}
@@ -230,6 +223,8 @@ export class SubmissionSnapshot extends Schema.Class<SubmissionSnapshot>(
   admissionGroup: Schema.optionalKey(AdmissionGroup),
   admissionFence: Schema.optionalKey(AdmissionFence),
   parentLinkage: Schema.optionalKey(ParentLinkage),
+  workerAdmission: Schema.optionalKey(WorkerAdmission),
+  messageAdmission: Schema.optionalKey(MessageAdmission),
 }) {}
 
 /** The authoritative store proves the scoped idempotency key was never admitted (SUB-031). */
@@ -901,15 +896,6 @@ export class UnknownResolutionConflict extends Schema.TaggedError<UnknownResolut
     toolCallId: ToolCallId,
   },
 ) {}
-
-/**
- * The target Submission is `joined` to a host Run: it settles with the host, so the abort target
- * is the host Submission carried here (plan §2.5).
- */
-export class JoinedToHost extends Schema.TaggedError<JoinedToHost>()("JoinedToHost", {
-  submissionId: SubmissionId,
-  hostSubmissionId: SubmissionId,
-}) {}
 
 /**
  * A child budget reservation request contradicts recorded reservation state: a divergent

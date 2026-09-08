@@ -3,8 +3,8 @@ import { type RunDispositionDeclaration, type InputPromptSource } from "@effect-
 import { AgentApprovalPending, AgentInputError, PolicyLimit } from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
+  type ReceiptId,
   ThreadId,
-  ReceiptId,
   SubmissionId,
   ToolCallId,
   type AgentId,
@@ -13,12 +13,15 @@ import {
   type TurnId,
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { type MessageAdmission, type MessagingError } from "@effect-agent/core/Messaging";
+import { Receipt } from "@effect-agent/core/Receipt";
 import { type ExhaustedLimit, type RunEvent } from "@effect-agent/core/RunEvent";
 import {
   SubagentBudgetReservation,
   SubagentReservationAmounts,
+  SubagentGrant,
   DelegationDepth,
-  DelegationTool,
+  getToolExecutionKind,
   SubagentParentLink,
 } from "@effect-agent/core/SubagentContract";
 import {
@@ -29,6 +32,7 @@ import {
   summarizeModelUsage,
   OutputTokenUsage,
 } from "@effect-agent/core/Usage";
+import type { WorkerError } from "@effect-agent/core/Worker";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
   AgentChildPending,
@@ -42,6 +46,7 @@ import {
   getToolExecutionClass,
   type ToolExecutionClassValue,
 } from "@effect-agent/engine/DurableStep";
+import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import {
   CurrentToolFailureObserver,
   RunContextPreparation,
@@ -62,6 +67,7 @@ import {
   type RunToolAuthorizationHook,
   type RunToolAuthorizationRequest,
 } from "@effect-agent/engine/RunOptions";
+import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import type { Scope } from "effect";
 import {
@@ -114,9 +120,12 @@ import {
   type DurableBindingFailure,
   makeLegacyWorkerBinding,
   type ResolvedBinding,
+  resolveDefinitionBinding,
   resolveWorkerBinding,
 } from "./internal/agent-registration.ts";
 import { inspectForeignDiagnostic, safeUnknownString } from "./internal/foreign-diagnostic.ts";
+import { makeMessagingRuntime } from "./internal/messaging-host.ts";
+import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
@@ -145,6 +154,7 @@ import {
   SettlementFailureDiagnostic,
   SubagentJoined,
   SubagentLineageRecorded,
+  SubtreeBudgetReserved,
   SubagentRequested,
   SubagentStarted,
   SubmissionSettled,
@@ -158,6 +168,7 @@ import {
   ToolCallUnknown,
   ToolStepSettled,
   UserInputRecorded,
+  WorkerAdmission,
   type ApprovalDecision,
   type SettlementOutcome,
   type ToolCallResolution,
@@ -218,7 +229,7 @@ import {
 } from "./RunJournal.ts";
 import {
   type AdmissionFence,
-  type AdmissionPolicyError,
+  AdmissionPolicyError,
   type AbortIntent,
   AbortIntentRequest,
   type AdmissionConflict,
@@ -248,7 +259,6 @@ import {
   OwnershipToken,
   ParentLinkage,
   Principal,
-  QueueSequence,
   RecoverySnapshotRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
@@ -484,12 +494,7 @@ export const recoveryRepairRecordId = (submissionId: SubmissionId, decisionTag: 
  * readiness are committed (DUR-001). It is an identifier for observation and reattachment, not
  * an authorization capability.
  */
-export class Receipt extends Schema.Class<Receipt>("@effect-agent/thread/Receipt")({
-  receiptId: ReceiptId,
-  submissionId: SubmissionId,
-  threadId: ThreadId,
-  queueSequence: QueueSequence,
-}) {}
+export { Receipt } from "@effect-agent/core/Receipt";
 
 /** One executed (or deliberately deferred) recovery decision (durability §14, DUR-013). */
 export class RecoveryReport extends Schema.Class<RecoveryReport>(
@@ -514,6 +519,10 @@ export interface DurableSubmitOptions {
   readonly idempotencyKey: IdempotencyKey;
   readonly admissionGroup?: string;
   readonly admissionFence?: AdmissionFence;
+  /** Host-prepared worker input; immutable origin and per-input projection parameters. */
+  readonly workerAdmission?: WorkerAdmission;
+  /** Authenticated peer provenance, verified against the source's frozen canonical proof. */
+  readonly messageAdmission?: MessageAdmission;
   /** Application-computed digests of the Agent/Model/Toolkit definitions (see `digestDefinitions`). */
   readonly definitions: DefinitionDigests;
 }
@@ -1130,6 +1139,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       runMarkers.some((marker) => record.recordId.includes(marker)) ||
       record.recordId.startsWith("subagent-lineage:") ||
       record.payload._tag === "SubagentLineageRecorded" ||
+      record.payload._tag === "WorkerOriginRecorded" ||
       ("runId" in record.payload &&
         record.payload.runId !== undefined &&
         runIds.has(record.payload.runId));
@@ -1542,7 +1552,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         }),
       );
     }
-    const openToolCalls = allOpenCalls.filter((call) => !isPreparedDelegation(call));
+
+    const isPreparedWorker = (call: OpenToolCallEvidence): boolean =>
+      preparedKinds.get(toolCallPreparedRecordId(runId, call.turn, call.toolCallId)) ===
+      "orchestration";
+
+    const openWorkerCalls = allOpenCalls.filter(isPreparedWorker);
+
+    const openToolCalls = allOpenCalls.filter(
+      (call) => !isPreparedDelegation(call) && !isPreparedWorker(call),
+    );
 
     let declaredPendingBatch: DeclaredPendingBatchEvidence | undefined;
 
@@ -1565,6 +1584,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       subagentLineageRecorded,
       openToolCalls,
       openDelegationCalls,
+      openWorkerCalls,
       approvalsPending,
       joinedInputCovered: hostSubmissionId === undefined ? true : hostRespondedAfterInput,
       ...(recordedSettlementOutcome === undefined ? {} : { recordedSettlementOutcome }),
@@ -1694,55 +1714,66 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   /**
    * Coordinator invariant: every Thread's first canonical record is `ThreadCreated`,
    * so `tailSequence >= 1` is the deterministic already-created check. A lost race (conflict or
-   * fence) is verified against that invariant instead of being trusted blindly.
+   * fence) is verified against that invariant instead of being trusted blindly. An admitted
+   * child can be claimed before it is runnable; that advances the shared storage fence without
+   * appending anything. Re-read and retry that initialization race with the current fence.
    */
-  const ensureThreadCreated = Effect.fn("DurableAgentRuntime.ensureThreadCreated")(function* (
-    threadId: ThreadId,
-    agentId: AgentId,
-    definitions: DefinitionDigests,
-  ): Effect.fn.Return<
-    void,
-    ThreadStoreError | ThreadNotMaterialized | AppendConflict | FenceRejected
-  > {
-    const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+  const ensureThreadCreated = Effect.fn("DurableAgentRuntime.ensureThreadCreated")(
+    function* (
+      threadId: ThreadId,
+      agentId: AgentId,
+      definitions: DefinitionDigests,
+    ): Effect.fn.Return<
+      void,
+      ThreadStoreError | ThreadNotMaterialized | AppendConflict | FenceRejected
+    > {
+      const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
 
-    if (tail.tailSequence > 0) return;
+      if (tail.tailSequence > 0) return;
 
-    const record = yield* makeEnvelope(
-      threadCreatedRecordId(threadId),
-      ThreadCreated.make({ agentId, definitions }),
-    );
-
-    yield* store
-      .append(
-        FencedAppendRequest.make({
-          threadId,
-          batch: CanonicalBatch.make({
-            batchId: threadCreatedBatchId(threadId),
-            producerId: config.producerId,
-            records: [record],
-          }),
-          expectedTailSequence: tail.tailSequence,
-          expectedTailDigest: tail.tailDigest,
-          producerEpoch: tail.producerEpoch,
-        }),
-      )
-      .pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" || error._tag === "FenceRejected"
-            ? store
-                .inspectTail(ThreadTailRequest.make({ threadId }))
-                .pipe(
-                  Effect.flatMap((current) =>
-                    current.tailSequence > 0 ? Effect.void : Effect.fail(error),
-                  ),
-                )
-            : Effect.fail(error),
-        ),
-        Effect.andThen(wake.notify(threadId)),
-        Effect.asVoid,
+      const record = yield* makeEnvelope(
+        threadCreatedRecordId(threadId),
+        ThreadCreated.make({ agentId, definitions }),
       );
-  });
+
+      yield* store
+        .append(
+          FencedAppendRequest.make({
+            threadId,
+            batch: CanonicalBatch.make({
+              batchId: threadCreatedBatchId(threadId),
+              producerId: config.producerId,
+              records: [record],
+            }),
+            expectedTailSequence: tail.tailSequence,
+            expectedTailDigest: tail.tailDigest,
+            producerEpoch: tail.producerEpoch,
+          }),
+        )
+        .pipe(
+          Effect.catch((error) =>
+            error._tag === "AppendConflict" || error._tag === "FenceRejected"
+              ? store
+                  .inspectTail(ThreadTailRequest.make({ threadId }))
+                  .pipe(
+                    Effect.flatMap((current) =>
+                      current.tailSequence > 0 ? Effect.void : Effect.fail(error),
+                    ),
+                  )
+              : Effect.fail(error),
+          ),
+          Effect.andThen(wake.notify(threadId)),
+          Effect.asVoid,
+        );
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.retry({
+          times: 7,
+          while: (error) => error._tag === "AppendConflict" || error._tag === "FenceRejected",
+        }),
+      ),
+  );
 
   const attemptContextFor = Effect.fn("DurableAgentRuntime.attemptContextFor")(function* (
     threadId: ThreadId,
@@ -2225,6 +2256,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         kind: "user",
         runId: runIdForSubmission(submissionId),
         input: submission.inputPayload,
+        ...(submission.messageAdmission === undefined
+          ? {}
+          : { messageAdmission: submission.messageAdmission }),
       }),
     );
 
@@ -2348,6 +2382,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const notifyParentOfChildSettlement = Effect.fn(
     "DurableAgentRuntime.notifyParentOfChildSettlement",
   )(function* (submission: SubmissionSnapshot): Effect.fn.Return<void, LedgerError> {
+    yield* workerRuntime
+      .completeInput(submission)
+      .pipe(
+        Effect.mapError((cause) =>
+          LedgerError.make({ operation: "worker-completion", message: cause.reason }),
+        ),
+      );
     const linkage = submission.parentLinkage;
 
     if (linkage === undefined) return;
@@ -2697,76 +2738,88 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * Append the child Thread's immutable lineage record (spec §12 step 6, §11): its own
    * single-record batch under `subagent-lineage:{childThreadId}` so the generic
    * `thread-created:{cid}` batch identity is never contradicted. Idempotent by record
-   * identity; a fence advance defers to a log that provably carries the record already.
+   * identity; a racing append is re-proved from the log. A claim of the admitted child may
+   * advance only its fence, so bounded retries acquire the current tail before appending.
    */
-  const ensureChildLineage = Effect.fn("DurableAgentRuntime.ensureChildLineage")(function* (
-    parent: SubmissionSnapshot,
-    request: SubagentRequested,
-    childRecords: ReadonlyArray<CanonicalRecordEnvelope>,
-  ): Effect.fn.Return<void, DurableWorkerFailure> {
-    const recordId = subagentLineageRecordId(request.childThreadId);
+  const ensureChildLineage = Effect.fn("DurableAgentRuntime.ensureChildLineage")(
+    function* (
+      parent: SubmissionSnapshot,
+      request: SubagentRequested,
+      childRecords: ReadonlyArray<CanonicalRecordEnvelope>,
+    ): Effect.fn.Return<void, DurableWorkerFailure> {
+      const recordId = subagentLineageRecordId(request.childThreadId);
 
-    if (childRecords.some((envelope) => envelope.record.recordId === recordId)) return;
+      if (childRecords.some((envelope) => envelope.record.recordId === recordId)) return;
 
-    const envelope = yield* makeEnvelope(
-      recordId,
-      SubagentLineageRecorded.make({
-        parentLink: SubagentParentLink.make({
-          delegationId: request.delegationId,
-          parentAgentId: parent.agentId,
-          parentThreadId: parent.threadId,
-          parentRunId: request.runId,
-          parentToolCallId: request.toolCallId,
-          depth: CHILD_DELEGATION_DEPTH,
-        }),
-        parentSubmissionId: parent.submissionId,
-        childDefinitionDigests: request.targetDigests,
-        childInputDigest: request.childInputDigest,
-        grantDigest: request.grantDigest,
-        ...(request.toolCallAllowance === undefined
-          ? {}
-          : { toolCallAllowance: request.toolCallAllowance }),
-        ...(request.policy === undefined ? {} : { policy: request.policy }),
-      }),
-    );
-
-    const tail = yield* store.inspectTail(
-      ThreadTailRequest.make({ threadId: request.childThreadId }),
-    );
-
-    yield* store
-      .append(
-        FencedAppendRequest.make({
-          threadId: request.childThreadId,
-          batch: CanonicalBatch.make({
-            batchId: subagentLineageBatchId(request.childThreadId),
-            producerId: config.producerId,
-            records: [envelope],
+      const envelope = yield* makeEnvelope(
+        recordId,
+        SubagentLineageRecorded.make({
+          parentLink: SubagentParentLink.make({
+            delegationId: request.delegationId,
+            parentAgentId: parent.agentId,
+            parentThreadId: parent.threadId,
+            parentRunId: request.runId,
+            parentToolCallId: request.toolCallId,
+            depth: request.depth ?? CHILD_DELEGATION_DEPTH,
           }),
-          expectedTailSequence: tail.tailSequence,
-          expectedTailDigest: tail.tailDigest,
-          producerEpoch: tail.producerEpoch,
+          parentSubmissionId: parent.submissionId,
+          childDefinitionDigests: request.targetDigests,
+          childInputDigest: request.childInputDigest,
+          grantDigest: request.grantDigest,
+          ...(request.toolCallAllowance === undefined
+            ? {}
+            : { toolCallAllowance: request.toolCallAllowance }),
+          ...(request.policy === undefined ? {} : { policy: request.policy }),
+          ...(request.budget === undefined ? {} : { budget: request.budget }),
+          ...(request.grant === undefined ? {} : { grant: request.grant }),
         }),
-      )
-      .pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" || error._tag === "FenceRejected"
-            ? // A racing establishment pass (or the child's own claimed worker) advanced the
-              // log; the deterministic identity means the record either exists or the next
-              // pass re-proves it — verify instead of trusting the race blindly.
-              readControl(request.childThreadId, []).pipe(
-                Effect.flatMap((current) =>
-                  current.some((candidate) => candidate.record.recordId === recordId)
-                    ? Effect.void
-                    : Effect.fail(error),
-                ),
-              )
-            : Effect.fail(error),
-        ),
-        Effect.andThen(wake.notify(request.childThreadId)),
-        Effect.asVoid,
       );
-  });
+
+      const tail = yield* store.inspectTail(
+        ThreadTailRequest.make({ threadId: request.childThreadId }),
+      );
+
+      yield* store
+        .append(
+          FencedAppendRequest.make({
+            threadId: request.childThreadId,
+            batch: CanonicalBatch.make({
+              batchId: subagentLineageBatchId(request.childThreadId),
+              producerId: config.producerId,
+              records: [envelope],
+            }),
+            expectedTailSequence: tail.tailSequence,
+            expectedTailDigest: tail.tailDigest,
+            producerEpoch: tail.producerEpoch,
+          }),
+        )
+        .pipe(
+          Effect.catch((error) =>
+            error._tag === "AppendConflict" || error._tag === "FenceRejected"
+              ? // A racing establishment pass (or the child's own claimed worker) advanced the
+                // log; the deterministic identity means the record either exists or the next
+                // pass re-proves it — verify instead of trusting the race blindly.
+                readControl(request.childThreadId, []).pipe(
+                  Effect.flatMap((current) =>
+                    current.some((candidate) => candidate.record.recordId === recordId)
+                      ? Effect.void
+                      : Effect.fail(error),
+                  ),
+                )
+              : Effect.fail(error),
+          ),
+          Effect.andThen(wake.notify(request.childThreadId)),
+          Effect.asVoid,
+        );
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.retry({
+          times: 7,
+          while: (error) => error._tag === "AppendConflict" || error._tag === "FenceRejected",
+        }),
+      ),
+  );
 
   /** Where one idempotent child admission pass ended (spec §12 steps 4-8). */
   type ChildAdmissionOutcome =
@@ -3009,6 +3062,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       lineage.parentLink.parentThreadId !== parent.threadId ||
       lineage.parentLink.parentRunId !== request.runId ||
       lineage.parentLink.parentToolCallId !== request.toolCallId ||
+      lineage.parentLink.depth !== (request.depth ?? CHILD_DELEGATION_DEPTH) ||
       lineage.parentSubmissionId !== parent.submissionId
     ) {
       return mismatch("The child Parent Link does not name exactly this parent Run and Tool Call");
@@ -3018,7 +3072,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       lineage.childInputDigest !== request.childInputDigest ||
       lineage.grantDigest !== request.grantDigest ||
       lineage.toolCallAllowance !== request.toolCallAllowance ||
-      !Equal.equals(lineage.policy, request.policy)
+      !Equal.equals(lineage.policy, request.policy) ||
+      !Equal.equals(lineage.budget, request.budget) ||
+      !Equal.equals(lineage.grant, request.grant)
     ) {
       return mismatch("The child lineage digests or allowance do not match the canonical request");
     }
@@ -3681,6 +3737,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         ({ record }) => record.recordId === subagentLineageRecordId(submission.threadId),
       )?.record.payload;
 
+      const inheritedGrant =
+        submission.workerAdmission?.origin.grant ??
+        (childLineage?._tag === "SubagentLineageRecorded" ? childLineage.grant : undefined);
+
+      const delegationDepth =
+        submission.workerAdmission?.origin.depth ??
+        (childLineage?._tag === "SubagentLineageRecorded" ? childLineage.parentLink.depth : 0);
+
+      const inheritedBudget =
+        submission.workerAdmission?.origin.budget ??
+        (childLineage?._tag === "SubagentLineageRecorded" ? childLineage.budget : undefined);
+
       if (
         submission.parentLinkage !== undefined &&
         (childLineage?._tag !== "SubagentLineageRecorded" ||
@@ -3708,10 +3776,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         if (payload._tag !== "ToolCallPrepared" || payload.runId !== runId) continue;
         const tool = tools[payload.toolName];
 
-        const kind =
-          tool !== undefined && Context.get(tool.annotations, DelegationTool)
-            ? "delegation"
-            : "ordinary";
+        const kind = tool === undefined ? "ordinary" : getToolExecutionKind(tool.annotations);
 
         if (tool === undefined || (payload.executionKind ?? "ordinary") !== kind) {
           return yield* RunJournalError.make({
@@ -5032,6 +5097,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                           kind: "steering",
                           runId,
                           input: claim.inputPayload,
+                          ...(claimSnapshot.submission.messageAdmission === undefined
+                            ? {}
+                            : { messageAdmission: claimSnapshot.submission.messageAdmission }),
                         }),
                       );
 
@@ -5118,18 +5186,50 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               // steps 2-3). Replays below proceed from the canonical record instead — the
               // recorded request, not the re-computed handler values, is the establishment
               // authority (SUB-016/SUB-018).
-              if (request.depth !== CHILD_DELEGATION_DEPTH) {
+              if (request.depth !== delegationDepth + 1) {
                 return denied(
                   "SubagentDepthUnsupported",
-                  `S2 fixes attached durable children at delegation depth 1; depth ${request.depth} was requested`,
+                  `The child depth must be exactly one greater than its source depth ${delegationDepth}`,
                 );
               }
 
-              const decodedDigests = yield* decodeDefinitionDigests({
-                agent: request.targetDigests.agent,
-                model: request.targetDigests.model,
-                tools: request.targetDigests.tools,
-              }).pipe(Effect.option);
+              // Resolve the exact declaration through ordinary host registration. Recovery
+              // below uses the already-persisted request, never a newer registration.
+              let targetDigests = request.targetDigests;
+
+              if (request.target !== undefined) {
+                if (request.target.id !== request.targetAgentId) {
+                  return denied(
+                    "SubagentBindingUnavailable",
+                    "The child target identity differs from its Definition",
+                  );
+                }
+
+                const binding = yield* resolveDefinitionBinding(
+                  registeredBindings,
+                  request.target,
+                ).pipe(Effect.result);
+
+                if (binding._tag === "Failure") {
+                  return denied("SubagentBindingUnavailable", binding.failure.message);
+                }
+                if (
+                  targetDigests !== undefined &&
+                  (targetDigests.agent !== binding.success.digests.agent ||
+                    targetDigests.model !== binding.success.digests.model ||
+                    targetDigests.tools !== binding.success.digests.tools)
+                ) {
+                  return denied(
+                    "SubagentDigestsInvalid",
+                    "The explicit child digests differ from its exact registration",
+                  );
+                }
+                targetDigests = binding.success.digests;
+              }
+
+              const decodedDigests = yield* decodeDefinitionDigests(targetDigests).pipe(
+                Effect.option,
+              );
 
               if (Option.isNone(decodedDigests)) {
                 return denied(
@@ -5160,6 +5260,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   "The delegation grant or allocation does not satisfy the canonical persistence bounds",
                 );
               }
+              const decodedGrant = Schema.decodeUnknownOption(SubagentGrant)(grant.value);
+
+              if (Option.isNone(decodedGrant))
+                return denied("SubagentGrantInvalid", "The child authority grant is invalid");
+              if (request.policy === undefined || request.budget === undefined)
+                return denied(
+                  "SubagentBudgetInvalid",
+                  "New durable children require their full execution policy and subtree allocation",
+                );
               if (
                 request.toolCallAllowance !== undefined &&
                 !Schema.is(SubagentRequested.fields.toolCallAllowance)(request.toolCallAllowance)
@@ -5205,7 +5314,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 }
                 if (
                   caps.maxTotalChildInvocations !== undefined &&
-                  prior.length >= caps.maxTotalChildInvocations
+                  prior.reduce(
+                    (sum, entry) => sum + 1 + (entry.budget?.descendantInvocations ?? 0),
+                    1 + (request.budget.descendantInvocations ?? 0),
+                  ) > caps.maxTotalChildInvocations
                 ) {
                   return denied(
                     "SubagentBudgetExhausted",
@@ -5268,6 +5380,40 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               const reservationId = childReservationIdFor(runId, toolCallId);
               const ownershipToken = yield* Ref.get(tokenRef);
 
+              // Top-level attached declarations retain their independent explicit pool. A
+              // child with an ancestor allocation shares its residual with both lifetimes.
+              const subtree =
+                delegationDepth === 0
+                  ? undefined
+                  : yield* workerRuntime
+                      .reserveSubtree(
+                        submission.threadId,
+                        SubtreeBudgetReserved.make({
+                          reservationId,
+                          sourceSubmissionId: submissionId,
+                          childThreadId: childThreadIdFor(submissionId, toolCallId),
+                          lifetime: "attached",
+                          depth: request.depth,
+                          policy: request.policy,
+                          grant: decodedGrant.value,
+                          budget: request.budget,
+                        }),
+                      )
+                      .pipe(Effect.result);
+
+              if (subtree?._tag === "Failure") {
+                if (subtree.failure.reason === "storage")
+                  return yield* LedgerError.make({
+                    operation: "reserve-subtree",
+                    message: "Subtree reservation is unavailable",
+                  });
+
+                return denied(
+                  "SubagentBudgetExhausted",
+                  `The subtree reservation was refused: ${subtree.failure.reason}`,
+                );
+              }
+
               yield* ledger
                 .reserveChildBudget(
                   ChildBudgetReservationRequest.make({
@@ -5297,6 +5443,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 childInput: childInput.value,
                 childInputDigest,
                 grantDigest,
+                grant: decodedGrant.value,
+                depth: request.depth,
                 reservationId,
                 reservationDigest: allocationDigest,
                 childThreadId: childThreadIdFor(submissionId, toolCallId),
@@ -5581,12 +5729,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const toolAuthorization: RunToolAuthorizationHook = {
         authorize: (request: RunToolAuthorizationRequest) =>
-          runToolAuthorization.authorize({
-            ...request,
-            // Preserve the admitted wire value even when an Agent Schema's decode/encode
-            // pair normalizes differently on a second pass.
-            input: submission.inputPayload,
-          }),
+          inheritedGrant !== undefined &&
+          !inheritedGrant.allowedToolNames.includes(request.call.toolName)
+            ? Effect.succeed({
+                _tag: "denied",
+                reason: "Tool exceeds the worker's immutable grant",
+              })
+            : runToolAuthorization.authorize({
+                ...request,
+                // Preserve the admitted wire value even when an Agent Schema's decode/encode
+                // pair normalizes differently on a second pass.
+                input: submission.inputPayload,
+              }),
       };
 
       const options: RunOptions<
@@ -5605,8 +5759,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         toolAuthorization,
         durability,
         subagent,
+        delegationDepth,
+        ...(inheritedGrant === undefined ? {} : { subagentGrant: inheritedGrant }),
+        ...(inheritedBudget === undefined ? {} : { subagentBudget: inheritedBudget }),
         runStartedAt: runTiming.startedAt,
         durationDeadline: runTiming.deadline,
+        ...(submission.workerAdmission === undefined
+          ? {}
+          : {
+              toolCallAllowance: submission.workerAdmission.origin.toolCallAllowance,
+            }),
         ...(submission.parentLinkage !== undefined &&
         childLineage?._tag === "SubagentLineageRecorded"
           ? { toolCallAllowance: childLineage.toolCallAllowance }
@@ -5991,6 +6153,29 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const consume = Stream.runForEach(
         AgentRuntime.streamUnknown(agent, submission.inputPayload, options).pipe(
           Stream.provide(ThreadHistory.layerTransient),
+          Stream.provideService(SubagentHost.forTool, (source) =>
+            source.threadId !== submission.threadId ||
+            source.agentId !== submission.agentId ||
+            source.runId !== runId
+              ? SubagentHost.unavailable
+              : workerRuntime.facet(
+                  {
+                    source,
+                    policy: agent.definition.policy,
+                    depth: delegationDepth,
+                    ...(inheritedGrant === undefined ? {} : { grant: inheritedGrant }),
+                  },
+                  submission.principal,
+                  submission.submissionId,
+                ),
+          ),
+          Stream.provideService(MessagingHost.forTool, (source) =>
+            source.threadId !== submission.threadId ||
+            source.agentId !== submission.agentId ||
+            source.runId !== runId
+              ? MessagingHost.unavailable
+              : messagingRuntime.forTool(source, submission.principal),
+          ),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(ContextCompactor, compactor),
           Stream.provideService(RunContextPreparation, runContextPreparation),
@@ -6218,6 +6403,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const submission = snapshot.submission;
 
       yield* ensureThreadCreated(threadId, submission.agentId, submission.agentDigests);
+      if (submission.workerAdmission !== undefined) {
+        yield* workerRuntime
+          .ensureOrigin(submission.workerAdmission.origin)
+          .pipe(
+            Effect.mapError((cause) =>
+              LedgerError.make({ operation: "worker-origin", message: cause.reason }),
+            ),
+          );
+      }
       if (submission.state === "admitted") {
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId }));
       }
@@ -6257,12 +6451,28 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         return records;
       });
 
+      const workerOrigin = records
+        .map((envelope) => envelope.record.payload)
+        .find((payload) => payload._tag === "WorkerOriginRecorded")?.origin;
+
+      if (
+        workerOrigin !== undefined &&
+        (submission.workerAdmission === undefined ||
+          !Schema.toEquivalence(WorkerAdmission.fields.origin)(
+            workerOrigin,
+            submission.workerAdmission.origin,
+          ))
+      ) {
+        return yield* RunJournalError.make({
+          message: "Worker input does not match its immutable Thread origin",
+        });
+      }
+
       const childPolicy =
-        submission.parentLinkage === undefined
-          ? undefined
-          : records
-              .map((envelope) => envelope.record.payload)
-              .find((payload) => payload._tag === "SubagentLineageRecorded")?.policy;
+        workerOrigin?.policy ??
+        records
+          .map((envelope) => envelope.record.payload)
+          .find((payload) => payload._tag === "SubagentLineageRecorded")?.policy;
 
       const agent =
         childPolicy === undefined
@@ -6315,12 +6525,25 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }
       yield* applyCanonicalInput(ctx, submission, tokenRef, records, snapshot.inputApplied);
 
-      const runTiming = yield* ensureRunStarted(
+      const savedRunTiming = yield* ensureRunStarted(
         ctx,
         submission,
         Duration.toMillis(agent.definition.policy.maxDuration),
         yield* refreshControl(),
       );
+
+      const runTiming =
+        workerOrigin === undefined
+          ? savedRunTiming
+          : {
+              ...savedRunTiming,
+              deadline: DateTime.makeUnsafe(
+                Math.min(
+                  DateTime.toEpochMillis(savedRunTiming.deadline),
+                  workerOrigin.expiresAtMillis,
+                ),
+              ),
+            };
 
       let expiredChildObligation = false;
 
@@ -7428,6 +7651,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             submission.agentId,
             submission.agentDigests,
           );
+          if (submission.workerAdmission !== undefined) {
+            yield* workerRuntime
+              .ensureOrigin(submission.workerAdmission.origin)
+              .pipe(
+                Effect.mapError((cause) =>
+                  LedgerError.make({ operation: "worker-origin", message: cause.reason }),
+                ),
+              );
+          }
           yield* ledger.markReady(MarkReadyRequest.make({ submissionId: submission.submissionId }));
 
           return "repaired";
@@ -7956,6 +8188,37 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     const inputDigest = yield* withCrypto(digestJson(inputPayload));
 
+    const workerAdmission =
+      options.workerAdmission === undefined
+        ? undefined
+        : yield* workerRuntime
+            .validateAdmission(options.workerAdmission, options, agent.definition.id, inputDigest)
+            .pipe(
+              Effect.mapError((cause) =>
+                AdmissionPolicyError.make({
+                  reason: cause.reason === "storage" ? "unavailable" : "refused",
+                  code: `worker-${cause.reason}`,
+                }),
+              ),
+            );
+
+    const messageAdmission =
+      options.messageAdmission === undefined
+        ? undefined
+        : yield* messagingRuntime
+            .validateAdmission(options.messageAdmission, options, agent.definition.id, inputDigest)
+            .pipe(
+              Effect.mapError((cause) =>
+                AdmissionPolicyError.make({
+                  reason:
+                    cause.reason === "storage" || cause.reason === "unavailable"
+                      ? "unavailable"
+                      : "refused",
+                  code: `message-${cause.reason}`,
+                }),
+              ),
+            );
+
     const admitted = yield* ledger.admit(
       yield* Schema.decodeUnknownEffect(AdmissionRequest)({
         threadId: options.threadId,
@@ -7968,6 +8231,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         deploymentId: config.deploymentId,
         inputPayload,
         inputDigest,
+        ...(workerAdmission === undefined
+          ? {}
+          : {
+              workerAdmission: yield* Schema.encodeEffect(WorkerAdmission)(workerAdmission).pipe(
+                Effect.mapError(() =>
+                  LedgerError.make({
+                    operation: "submit",
+                    message: "Worker admission cannot be encoded",
+                  }),
+                ),
+              ),
+            }),
+        ...(messageAdmission === undefined ? {} : { messageAdmission }),
       }).pipe(
         Effect.mapError(() =>
           LedgerError.make({
@@ -7994,6 +8270,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     }
     yield* materializeAtLeast(options.threadId, ZERO_EPOCH);
     yield* ensureThreadCreated(options.threadId, agent.definition.id, options.definitions);
+    if (workerAdmission !== undefined) {
+      yield* workerRuntime
+        .ensureOrigin(workerAdmission.origin)
+        .pipe(
+          Effect.mapError((cause) =>
+            LedgerError.make({ operation: "worker-origin", message: cause.reason }),
+          ),
+        );
+    }
     yield* hit("submit:after-materialize");
     yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
     yield* wake.notify(options.threadId);
@@ -8017,25 +8302,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     input: InputSchema["Type"],
     options: Omit<DurableSubmitOptions, "definitions">,
   ) {
-    const candidates = registeredBindings.filter(
-      (binding) => binding.agentId === agent.definition.id,
-    );
-
-    const binding = candidates[0];
-
-    if (candidates.length !== 1 || binding === undefined) {
-      return yield* BindingUnavailable.make({
-        agentId: agent.definition.id,
-        message: "Registered admission requires exactly one binding for the Agent identity",
-      });
-    }
-
-    if (!Object.is(binding.definition, agent.definition)) {
-      return yield* BindingUnavailable.make({
-        agentId: agent.definition.id,
-        message: "Registered admission requires the exact Agent Definition used in registration",
-      });
-    }
+    const binding = yield* resolveDefinitionBinding(registeredBindings, agent.definition);
 
     return yield* submit(agent, input, { ...options, definitions: binding.digests });
   });
@@ -8793,7 +9060,40 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     yield* Stream.runForEach(wake.wakes, (threadId) => processThreadResolvedImpl(threadId));
   });
 
+  const messagingRuntime = yield* makeMessagingRuntime({
+    bindings: registeredBindings,
+    deploymentId: config.deploymentId,
+    producerId: config.producerId,
+  });
+
+  const workerRuntime = yield* makeWorkerRuntime({
+    bindings: registeredBindings,
+    deploymentId: config.deploymentId,
+    producerId: config.producerId,
+    settlementPollInterval: config.settlementPollInterval,
+  }).pipe(
+    Effect.provideService(WorkerInputControl, {
+      status: readSubmissionStatus,
+      abort,
+      submit: (envelope) =>
+        submit({ definition: { id: envelope.agentId, input: PersistedJson } }, envelope.input, {
+          threadId: envelope.threadId,
+          principal: envelope.deliveryPrincipal,
+          idempotencyKey: envelope.admissionKey,
+          definitions: envelope.definitions,
+          ...(envelope.workerAdmission === undefined
+            ? {}
+            : { workerAdmission: envelope.workerAdmission }),
+          ...(envelope.messageAdmission === undefined
+            ? {}
+            : { messageAdmission: envelope.messageAdmission }),
+        }),
+    }),
+  );
+
   return DurableAgentRuntime.of({
+    workerHost: workerRuntime.acquire,
+    messagingHost: messagingRuntime.acquire,
     submitRegistered,
     settlementRecord,
     submit,
@@ -8885,6 +9185,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 export class DurableAgentRuntime extends Context.Service<
   DurableAgentRuntime,
   {
+    /** Acquire an authenticated source Thread facet; its References confer no authority. */
+    readonly workerHost: (request: {
+      readonly sourceThreadId: ThreadId;
+      readonly principal: Principal;
+    }) => Effect.Effect<SubagentHost["Service"], WorkerError>;
+    readonly messagingHost: (request: {
+      readonly sourceThreadId: ThreadId;
+      readonly principal: Principal;
+    }) => Effect.Effect<MessagingHost["Service"], MessagingError>;
     /** Admit the exact registered Definition instance; reject missing, ambiguous, or different definitions. */
     readonly submitRegistered: <InputSchema extends Schema.Top>(
       agent: DurableSubmitAgent<InputSchema>,

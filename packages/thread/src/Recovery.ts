@@ -59,8 +59,9 @@ export type DelegationAdmissionEvidence = typeof DelegationAdmissionEvidence.Typ
  * One prepared-without-outcome parent Tool Call that IS a delegation (plan §4.1), separated from
  * `openToolCalls` because its establishment protocol is idempotent by construction and must
  * NEVER be marked Unknown (spec §13 vs. DUR-009). Delegation detection is durable and
- * fail-closed: a matching `ChildBudgetReservation` row or `SubagentRequested` record, plus — for
- * the pre-reservation window — the core-owned `delegate_` naming rule. The
+ * fail-closed: canonical preparation records carry the definition-owned execution kind;
+ * child reservations and request records must agree with that classification. Names never
+ * authorize replay, including in the pre-reservation window. The
  * `requested`/`started`/`joined` flags come from the parent-log canonical records; the child
  * identity fields are present exactly when those records (or the reservation attachment) carry
  * them.
@@ -124,6 +125,8 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
   openDelegationCalls: Schema.Array(OpenDelegationCallEvidence).pipe(
     Schema.withConstructorDefault(Effect.succeed([])),
   ),
+  /** Only persisted orchestration classification authorizes idempotent host-operation replay. */
+  openWorkerCalls: Schema.optionalKey(Schema.Array(OpenToolCallEvidence)),
   /** A declared-but-unprepared tool batch: response canonical, zero prepared, zero settled. */
   declaredPendingBatch: Schema.optionalKey(DeclaredPendingBatchEvidence),
   /** Canonically requested approvals without a canonical decision. */
@@ -980,6 +983,11 @@ export const classifyRecovery = (
       submissionId,
       turn: evidence.declaredPendingBatch.turn,
     });
+  }
+  const workerCall = evidence.openWorkerCalls?.[0];
+
+  if (workerCall !== undefined) {
+    return ResumePendingToolBatch.make({ submissionId, turn: workerCall.turn });
   }
   if (state === "admitted") {
     // A parent-linked child never self-repairs readiness before its immutable

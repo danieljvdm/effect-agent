@@ -1,4 +1,6 @@
 export * as AgentRuntime from "./AgentRuntime.ts";
+export * as SubagentHost from "./SubagentHost.ts";
+export * as MessagingHost from "./MessagingHost.ts";
 export * as Output from "./Output.ts";
 export * as Compaction from "./Compaction.ts";
 export * as ContextCompactor from "./ContextCompactor.ts";

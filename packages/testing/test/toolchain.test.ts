@@ -118,6 +118,7 @@ const exampleNames = [
   "cloudflare-memory",
   "code-mode-cloudflare",
   "demo",
+  "durable-orchestration",
   "pr-review-eval",
   "providers",
   "repo-ops",

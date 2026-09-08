@@ -177,7 +177,7 @@ and keep local server commands under application control.
 
 ## Delegate to an agent
 
-`Subagent.define` exposes a child agent as a tool with explicit input and result projections.
+`Subagent.make` exposes a child agent as a tool with explicit input and result projections.
 The [Subagents guide](./subagents) covers definition, model binding, budgets, authority, failure
 handling, and durable child recovery.
 

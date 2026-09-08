@@ -26,7 +26,7 @@ Ordinary delegation needs only a target. Its toolkit remains explicit; parent to
 inherited.
 
 ```ts
-const Research = Subagent.define("delegate_research", {
+const Research = Subagent.make("research", {
   target: Agent.make("researcher", {
     input: ResearchRequest,
     output: ResearchFindings,
@@ -70,8 +70,13 @@ only the delegation tool.
 
 ## Expose the child as a tool {#define-a-delegation}
 
-In `delegation.ts`, `Subagent.define` connects what the parent requests, what the child receives,
-and what the parent gets back. Delegation tool names must start with `delegate_`.
+In `delegation.ts`, `Subagent.make` connects what the parent requests, what the child receives,
+and what the parent gets back. Use an application name such as `research`. The definition's
+tool annotation determines delegation behavior; names never confer authority or authorize replay.
+
+Replace `Subagent.define(name, options)` with `Subagent.make(name, options)`. The deprecated
+constructor remains an alias. Keep existing names, including `delegate_` names, when upgrading:
+the constructor migration preserves their durable identities.
 
 <<< @/snippets/travel-planner/delegation.ts{ts twoslash}
 
@@ -122,6 +127,60 @@ The model Layer on `AgentRuntime.run` supplies the parent. The model passed to
 keeps this example ephemeral. `RunContextPreparationPassthrough` disables additional context
 loading. Children inherit the parent's history and context services. The provider client and
 HTTP Layer serve both model bindings.
+
+## Start and manage a background worker
+
+An authorized durable host can run a declaration in the background. A worker identifies its
+reusable child Thread; a Receipt identifies one accepted input in that Thread. Programmatic
+starts and follow-ups require an explicit `IdempotencyKey`:
+
+```ts
+const { worker, receipt } =
+  yield *
+  Subagent.start(Research, request, {
+    idempotencyKey: Schema.decodeSync(IdempotencyKey)("research:first-request"),
+  });
+const status = yield * Subagent.inspect(Research, worker, receipt);
+const settled = yield * Subagent.await(Research, worker, receipt);
+const next =
+  yield *
+  Subagent.followUp(Research, worker, nextRequest, {
+    idempotencyKey: Schema.decodeSync(IdempotencyKey)("research:follow-up"),
+  });
+```
+
+Import `IdempotencyKey` from `@effect-agent/core/Receipt`. These operations require the host's
+authorized `SubagentHost` facet. The host resolves the declaration's exact registered target;
+worker values carry identity, not permission. An unavailable host fails closed.
+
+`inspect` returns `Pending` or a `Settled` result for the requested Receipt. Successful settlement
+decodes that input's saved parameters and child output before applying `projectResult`.
+Interrupting or timing out `await` stops only the waiter. Use `Subagent.cancel(Research, worker,
+receipt)` to request cancellation of that input. A `JoinedToHost` conflict remains explicit and
+never redirects cancellation to the host input. `Subagent.list(Research, { limit: 20 })` returns a
+bounded page of visible workers.
+
+Opt in to native model tools separately:
+
+```ts
+const ResearchBackground = Subagent.background(Research, {
+  start: true,
+  followUp: true,
+  inspect: true,
+  summary: true,
+  list: true,
+  cancel: true,
+});
+```
+
+Use `ResearchBackground.toolkit` and provide `ResearchBackground.layer` for its handlers. The
+selected names are `research_start`, `research_follow_up`, `research_inspect`, `research_summary`,
+`research_list`, and `research_cancel`; `Research.tool` remains the attached delegation. There is no model wait
+tool. Start and follow-up tools derive stable keys from the host-bound Tool Call identity and
+require the platform Crypto service. Projection services are supplied to the handler Layer.
+
+Custom `prepareInput` receives `context.source` as `"tool"` or `"programmatic"`. Only the tool
+variant contains `context.toolCallId` and `context.parent.runId`.
 
 ## Bound child work
 
@@ -198,7 +257,7 @@ interruption retain their Effect meaning.
 The example gives the child `TravelTools` and gives the parent only `Research.tool`. Adding a tool
 to the parent does not add it to the child.
 
-To require approval before establishing the child, add this to `Subagent.define`:
+To require approval before establishing the child, add this to `Subagent.make`:
 
 ```diff
  failureMode: "error",
@@ -206,8 +265,9 @@ To require approval before establishing the child, add this to `Subagent.define`
 ```
 
 Supply an [approval handler](./tools#approval) for the request. This approves starting the child;
-its individual actions still need their own authorization. A narrower grant rejects a child whose
-toolkit exceeds it. Define a smaller child toolkit to reduce authority.
+its individual actions still need their own authorization. A narrower grant hides child tools
+outside its allowlist and rejects attempts to invoke them, including through the programmatic
+broker. It does not reject the whole child Toolkit.
 
 ## Keep the child attached {#keep-children-attached}
 
@@ -218,16 +278,10 @@ parent invokes child → reserve allowance → run child → project result → 
 Ephemeral children share the parent's Scope. Durable children have separate threads and
 attempts; a waiting parent releases its worker permit.
 
-For durable execution, the handler Layer also needs the registered child's exact digests:
-
-```diff
-SubagentRuntime.layer(Research, ResearchModel, {
-   mapChildFailure: (error) => ResearchFailed.make({ reason: error._tag }),
-+  durable: { targetDigests },
- })
-```
-
-Obtain `targetDigests` from the child's matching host registration. Use the
+For durable execution, register the exact target Definition with its model and version declarations.
+The handler resolves its digests from that registration. Missing, ambiguous, or different
+Definitions fail before child admission; an explicit `durable.targetDigests` override must
+match the registration. Use the
 [Node](../platforms/node) or [Cloudflare](../platforms/cloudflare) runtime setup to supply durable
 storage and registrations instead of the ephemeral assembly above.
 
@@ -246,4 +300,186 @@ and committed usage. These values are recorded before child admission. Uncertain
 never starts a replacement child. Parent abort joins the child's terminal outcome before settling
 the parent; it cannot undo external effects. See [child recovery](../concepts/durability#attached-subagents).
 
-Nested delegation, handoff, and detached children are currently unsupported.
+## Bound nested delegation
+
+Nested declarations are allowed. The default `maxDepth: 1` keeps further launch tools hidden.
+Set a root-relative `maxDepth` such as `2` on the participating declarations to permit a child
+and grandchild, and include the permitted tool names across that subtree in the grant. Each Run
+still exposes only tools from its own Toolkit. Effective names, depth, and child lifetimes
+intersect at every level; a descendant cannot restore removed authority.
+
+`grant.childLifetimes` controls children that the resulting worker may launch. For example,
+a root may start a background builder whose grant permits only `["attached"]`; the builder can
+then attach scouts but cannot start background grandchildren. Omitting the field permits both
+lifetimes, subject to depth and budget. Inspection and cancellation tools remain usable at the
+depth ceiling when their names are allowed.
+
+Reserve descendant slots explicitly with `SubagentPolicy.descendantInvocations`; omission
+reserves zero. The allocation covers the child's own execution plus its descendants. Its own
+resolved policy for nested and background launches remains bounded by the parent and child
+policies, while the allocation may be larger to leave a remainder. Descendants reserve only that remainder after the child's full
+own ceiling is deducted, across turns, calls, duration, tokens, cost, and result bytes.
+`maxChildren` includes the held descendant slots. Ephemeral subtrees also hold their possible
+concurrent child slots up front and charge the whole started subtree allocation at settlement.
+
+A top-level attached delegation's explicit pool remains separate from its parent's own Run
+counters. At inherited depth one and deeper, attached and background descendants share the
+reserved subtree allowance. Background roots remain bounded by the source Thread's host policy.
+A declaration with sufficient depth but no remaining slots or allocation fails before starting
+another child. Handoff remains unsupported.
+
+## Continue work in the background
+
+`Subagent.start` returns a continuing worker identity and the Receipt for its first accepted
+input. `Subagent.followUp` submits more declared parameters to that same Thread. Both are
+Effects; acceptance does not wait for the child to finish. Programmatic calls require an
+explicit, stable `IdempotencyKey`. A model tool derives its key from its actual invocation.
+
+```ts
+const Research = Subagent.make("research", { target: researcher });
+const tools = Subagent.background(Research, {
+  start: true,
+  followUp: true,
+  inspect: true,
+  list: true,
+  cancel: true,
+});
+// Add tools.toolkit to the parent Definition and tools.layer to its services.
+```
+
+The host chooses which native tools to expose. Each retains this declaration's parameter and
+result Schemas. Programmatic code acquires a separately authorized facet with
+`durableRuntime.workerHost({ sourceThreadId, principal })` and provides it as `SubagentHost`.
+The source Thread must already exist. No fabricated Run or Tool Call ID is needed.
+
+For native tools, the durable runtime provides `SubagentHost.forTool` through Effect context.
+The interpreter supplies the actual Agent, Thread, Run, and Tool Call identity; the runtime
+refuses a binding from another Run. The reference defaults to an unavailable host and is not
+a `RunOptions` callback.
+
+Keep the two references distinct: a worker identifies its continuing Thread, while a Receipt
+identifies one input. Neither grants access. Encode/decode worker references with
+`Subagent.Worker(Research)`. `inspect(Research, worker)` returns the same summary as discovery;
+passing a third Receipt argument inspects that exact input. `await` takes the declaration,
+worker, and exact Receipt and can be interrupted without cancelling work. `cancel` targets only that
+Receipt and preserves `JoinedToHost` if it joined another input's Run. Cancellation does not
+close the worker or cancel an entire work tree.
+
+Inputs can join an active Run at a safe boundary or start a later Run. Callers use the same
+operation for both. Parent completion or abort leaves background work running; attached
+children retain their existing cancellation and join semantics. Worker provenance, authority,
+and reservations survive later coordinator Runs and host reconstruction. The admission ledger
+atomically prevents replacing an ordinary Thread lane with a worker lane or changing its origin.
+
+`Subagent.list(Research, { limit, after })` returns a bounded page. Read canonical history with
+`Subagent.observe(Research, worker, { after })`: this is a finite Stream through the tail captured
+at acquisition, using bounded storage pages. Pass its last `sequence` as the next cursor.
+Observation acquires no execution permit and does not cancel work when interrupted.
+
+`WorkerHostAuthorizer` separates context, read, send, and control access and denies by default.
+`WorkerHostConfig` bounds retained workers, inputs per worker, pending inputs, and lifetime across
+coordinator Runs (defaults: 32 workers, 64 inputs, 8 pending, 24 hours). Started allocations are
+not refunded. Execution concurrency is a separate host setting; waiting attached parents release
+their permits. Configure sufficient host capacity for conversational work and the chosen child
+concurrency. Idle workers own no execution resources.
+
+## Deliver completion reports
+
+Declare the conversion from the child's projected outcome to coordinator input on the existing
+coordinator registration:
+
+```ts
+const report = Subagent.reporting(Research, {
+  input: CoordinatorInput,
+  prepare: (outcome) =>
+    Effect.succeed({
+      _tag: "ResearchFinished",
+      runId: outcome.runId,
+      summary: outcome.outcome === "completed" ? outcome.result : outcome.failure.classification,
+    }),
+});
+
+const registration = {
+  agent: coordinator,
+  definitions: coordinatorVersions,
+  reporting: [report],
+};
+```
+
+The Schema must be the coordinator Definition's exact input Schema. Registration captures the
+projection's required services separately from per-Attempt services. Declare an expected mapper
+failure with the optional `failure` Schema. Change the existing registration versions when changing
+report behavior; recovery never substitutes another source binding or target Definition.
+
+Launch intent pins reporting before acceptance. Each actual child Run has one logical report,
+even when several steering Receipts join it; an input cancelled before any Run starts has no Run
+report. The declaration's result projection and mapper produce a frozen `PreparedInput` before
+delivery insertion. They should be deterministic and free of external side effects: a crash before
+the canonical preparation decision commits can rerun them. Delivery retries never reproject a
+committed decision. Expected failure, defect, invalid output, or preparation timeout records a
+bounded refusal without replacing the child's outcome. Preparation has its own Scope and a
+5-second default timeout, configurable up to 30 seconds in `WorkerHostConfig`.
+
+For a receiving coordinator that is itself a background worker, express the report in its incoming
+declaration's Parameters Schema and wrap it with
+`Subagent.reportingToWorker(report, receivingDeclaration)`. This explicitly maps parameters into
+Agent input and charges the additional input to the original ancestor allocation. It cannot reuse
+old parameters or obtain a fresh budget. An attached destination has no independent continuing
+input lifetime; delivery to it is refused. An attached scout returns directly through its waiting
+parent's tool result.
+
+Report preparation decisions appear in authorized canonical worker history. Retained delivery
+records expose pending, accepted, processed, parked, and refused states through the host-owned
+`MessageDeliveryStore`. A child's completion and its report's processing remain separate facts.
+
+## Send messages through fixed peer routes
+
+Peers are independent Agent Threads. Their input Schema belongs to the receiving Definition:
+
+```ts
+const Advisor = Messaging.peer("advisor", { target: advisor });
+const send = Messaging.sendTool(Advisor);
+// Programmatic: Messaging.send(Advisor, input, { idempotencyKey })
+```
+
+Provide the caller-bound `MessagingHost` returned by
+`durableRuntime.messagingHost({ sourceThreadId, principal })` for programmatic operations.
+The interpreter provides native tools with the actual caller facet. `sendTool`, `replyTool`,
+`inboxTool`, `inspectTool`, and `retryTool` each derive a native Tool, Toolkit, and handler Layer;
+install only the operations the host wants to expose.
+The runtime provides `MessagingHost.forTool` through Effect context with the same per-Run
+identity check and unavailable default as worker tools.
+
+`PeerRoutes` maps a source, fixed peer name, and registered target to a destination Thread.
+`PeerAuthorizer` separately authorizes context, read, send, and control and returns a stable
+delivery principal. Both deny by default. Reply authorization receives the recorded sender
+address and the original `reply` operation. Incoming messages confer no reverse send grant or
+worker management grant. Use `Subagent.followUp` for worker input; a peer route cannot bypass
+worker admission and budget ownership.
+
+The runtime retains authenticated sender and return-address metadata separately from application
+input, backed by a canonical source proof. `Messaging.inbox` returns bounded provenance from
+authorized sender Threads. `Messaging.reply` requires one of those actual inbound references
+and checks its sender against the declared peer. A send's optional `inReplyTo` is correlation
+only. Models cannot choose arbitrary destination Threads, principals, or return addresses.
+
+`Messaging.send` and `reply` return a retained message status. `pending` means outbound work is
+stored; `accepted` includes the destination Receipt; `processed` includes its Settlement. Use
+`Messaging.inspect` to read status. Automatic delivery retries preserve the exact destination,
+input, principal, code version, and admission identity, including after a lost admission reply.
+`Messaging.retry` renews a parked delivery's finite retry budget after control authorization;
+conclusively refused and processed deliveries cannot be rewound.
+
+Default delivery limits are eight automatic attempts, a 30-second attempt timeout, exponential
+backoff from 1 to 60 seconds, and a 24-hour peer deadline. Exhaustion parks work; rejection remains
+inspectable. `PeerMessageCapacity` bounds canonical send intents across all peers and principals
+in a source Thread (default 256, maximum 1,000), including preparations whose insertion failed.
+The delivery store separately bounds pending and retained rows. Neither history nor deduplication
+evidence is automatically deleted. Effect spans identify preparation, admission, and driver
+operations; persisted failures contain bounded codes rather than raw application errors.
+
+Node's scoped delivery pump and Cloudflare's persisted alarms rediscover stored obligations even
+after both Runs settle and wake hints are lost. Progress still needs a functioning host and
+available capacity. The complete [Node and Cloudflare orchestration example](https://github.com/danieljvdm/effect-agent/tree/main/examples/durable-orchestration)
+shows builders, attached scouts, later input, automatic reports, and peer request/reply using
+the same platform-independent declarations.

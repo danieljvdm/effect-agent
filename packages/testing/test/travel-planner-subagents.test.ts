@@ -655,7 +655,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
         targetAgentId: "destination-researcher",
       });
       if (denial instanceof SubagentPrestartDenied) {
-        expect(denial.message).toContain("depth 1");
+        expect(denial.message).toContain("depth ceiling");
       }
 
       // Fail-closed preflight ran before any reservation: the desk Run never

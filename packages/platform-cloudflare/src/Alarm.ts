@@ -11,6 +11,7 @@ import {
   Context,
   DateTime,
   Effect,
+  Fiber,
   Layer,
   Option,
   Random,
@@ -230,6 +231,27 @@ export class ThreadPublication extends Context.Service<
     pendingDeadline: Effect.succeed(Option.none()),
   });
 }
+
+/**
+ * @internal Host-assembled message recovery. These obligations outlive source Runs and never
+ * defer a ready source Attempt while a destination is processing an accepted message.
+ */
+export const ThreadMessageDelivery = Context.Reference<{
+  readonly drain: Effect.Effect<void, DurableAlarmError>;
+  readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
+}>("@effect-agent/platform-cloudflare/ThreadMessageDelivery", {
+  defaultValue: () => ({ drain: Effect.void, pendingDeadline: Effect.succeed(Option.none()) }),
+});
+
+const earliestDeadline = (
+  left: Option.Option<number>,
+  right: Option.Option<number>,
+): Option.Option<number> =>
+  Option.isSome(left)
+    ? Option.isSome(right)
+      ? Option.some(Math.min(left.value, right.value))
+      : left
+    : right;
 
 /** @internal A committed source operation must not become a failed operation because delivery failed. */
 export const publishCommitted = Effect.gen(function* () {
@@ -465,6 +487,15 @@ export class ThreadMaintenance extends Context.Service<
       const stalls = yield* Ref.make(0);
       const mutations = yield* ThreadMutationGate;
       const publication = yield* ThreadPublication;
+      const messages = yield* ThreadMessageDelivery;
+
+      const pendingDeadline = Effect.gen(function* () {
+        return earliestDeadline(
+          yield* publication.pendingDeadline,
+          yield* messages.pendingDeadline,
+        );
+      });
+
       const maintenancePassGate = yield* Semaphore.make(1);
       const minimumAlarmDelay = Math.max(1, Math.ceil(config.alarmBackoffBase / 2));
 
@@ -487,7 +518,7 @@ export class ThreadMaintenance extends Context.Service<
             }
           }),
         );
-        const deadline = yield* publication.pendingDeadline;
+        const deadline = yield* pendingDeadline;
 
         if (Option.isSome(deadline)) {
           yield* runTransaction("ensure publication alarm", () =>
@@ -577,6 +608,10 @@ export class ThreadMaintenance extends Context.Service<
           }),
         );
 
+        // Run one bounded message wave beside source work. Slow destination admission or
+        // status RPCs cannot consume the source Attempt's execution window. Join before
+        // acknowledging the alarm so the final deadline includes all delivery mutations.
+        const delivery = yield* Effect.forkChild(messages.drain);
         const deadline = yield* publication.pendingDeadline;
 
         if (
@@ -588,13 +623,14 @@ export class ThreadMaintenance extends Context.Service<
         const pending = yield* publication.pendingDeadline;
 
         if (started._tag === "CaughtUp" || Option.isSome(pending)) {
+          yield* Fiber.join(delivery);
           yield* failpoint.hit("maintenance:finish:before");
 
           const disposition = yield* mutations.withSnapshot((active) =>
             Effect.gen(function* () {
               // Re-read under the producer gate: a concurrent append/host mutation cannot be
               // cleared using a stale empty deadline. Dirty generations bound all producer races.
-              const latest = yield* publication.pendingDeadline;
+              const latest = yield* pendingDeadline;
               const now = yield* Clock.currentTimeMillis;
 
               return yield* runTransaction("finish publication pass", () =>
@@ -640,6 +676,8 @@ export class ThreadMaintenance extends Context.Service<
         // One head Attempt per event. The runtime yields after a committed turn when the
         // soft deadline is reached; queued followers belong to a subsequent alarm.
         const settlement = yield* runtime.processThreadHead(identity.threadId, { yieldAfter });
+
+        yield* Fiber.join(delivery);
         // Observe residual state before acknowledging this exact pass-start generation.
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const reports = new Map(recovered.map((report) => [report.submissionId, report]));
@@ -671,7 +709,7 @@ export class ThreadMaintenance extends Context.Service<
 
         const alarmDisposition = yield* mutations.withSnapshot((active) =>
           Effect.gen(function* () {
-            const publicationDeadline = yield* publication.pendingDeadline;
+            const publicationDeadline = yield* pendingDeadline;
 
             return yield* runTransaction("finish maintenance pass", () =>
               ctx.storage.transaction(async (transaction) => {

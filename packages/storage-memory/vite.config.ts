@@ -12,6 +12,7 @@ export default defineConfig({
       "src/MemorySemanticIndex.ts",
       "src/MemorySubmissionLedger.ts",
       "src/MemorySubscriptionStore.ts",
+      "src/MemoryMessageDeliveryStore.ts",
       "src/MemoryThreadStore.ts",
     ],
     dts: true,

@@ -1,8 +1,9 @@
 import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
+import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { Receipt } from "@effect-agent/core/Receipt";
 import { Context, Effect, Schema } from "effect";
 
-import { Receipt } from "./DurableAgentRuntime.ts";
-import { DefinitionDigests, Digest, PersistedJson } from "./Records.ts";
+import { DefinitionDigests, Digest, PersistedJson, WorkerAdmission } from "./Records.ts";
 import {
   ScheduleAuthorizationDecision,
   ScheduleDestination,
@@ -150,6 +151,8 @@ export const PreparedInput = Schema.Struct({
   inputDigest: Digest,
   admissionKey: IdempotencyKey,
   authorization: ScheduleAuthorizationDecision,
+  workerAdmission: Schema.optionalKey(WorkerAdmission),
+  messageAdmission: Schema.optionalKey(MessageAdmission),
 });
 
 export type PreparedInput = typeof PreparedInput.Type;

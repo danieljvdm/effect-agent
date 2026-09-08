@@ -8,12 +8,16 @@ import {
   type RunCostEstimator,
   type RunToolFailureObserver,
 } from "@effect-agent/engine/RunOptions";
+import { messageDeliveryStoreLayer } from "@effect-agent/storage-sqlite/SqliteMessageDeliveryStore";
 import { scheduleStoreLayer } from "@effect-agent/storage-sqlite/SqliteScheduleStore";
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
 } from "@effect-agent/storage-sqlite/SqliteStorageConfig";
-import { type SqliteStorageFailpointHandler } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import {
+  type SqliteStorageFailpoint,
+  type SqliteStorageFailpointHandler,
+} from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
 import { submissionLedgerLayer } from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
 import {
   threadStoreLayer,
@@ -32,6 +36,10 @@ import {
   DurableRuntimeFailpoint,
   type DurableRuntimeFailpointHandler,
 } from "@effect-agent/thread/DurableFailpoint";
+import {
+  type MessageDeliveryError,
+  type MessageDeliveryStore,
+} from "@effect-agent/thread/MessageDelivery";
 import { DeploymentId, ProducerId } from "@effect-agent/thread/Records";
 import { type ScheduleStore } from "@effect-agent/thread/Schedule";
 import {
@@ -46,6 +54,7 @@ import { type WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Context, type Crypto, Duration, Effect, Layer, Ref, Schema } from "effect";
+import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { NodeWakeSchedulerConfig, nodeWakeSchedulerLayer } from "./NodeWakeScheduler.ts";
 
@@ -74,7 +83,7 @@ export class NodePlatformConfigError extends Schema.TaggedError<NodePlatformConf
 export class NodeDurableAgentRuntimeConfigValue extends Schema.Class<NodeDurableAgentRuntimeConfigValue>(
   "@effect-agent/platform-node/NodeDurableAgentRuntimeConfigValue",
 )({
-  /** SQLite database file backing BOTH the Thread Log and the Submission Ledger. */
+  /** SQLite database file backing the Thread Log, Submission Ledger, and delivery obligations. */
   filename: Schema.NonEmptyString,
   deploymentId: DeploymentId,
   producerId: ProducerId,
@@ -82,7 +91,7 @@ export class NodeDurableAgentRuntimeConfigValue extends Schema.Class<NodeDurable
   ownershipLeaseDuration: PositiveMillis,
   /** Finite bound on concurrent worker loops per host (rule 10). */
   workerConcurrency: WorkerConcurrency,
-  /** Ledger-scan fallback cadence of the Node wake scheduler (deployment §3). */
+  /** Fallback scan cadence for the Node wake scheduler and independent message delivery recovery. */
   wakeScanInterval: PositiveMillis,
   /** `awaitSettlement` ledger re-check cadence when no wake arrives. */
   settlementPollInterval: PositiveMillis,
@@ -177,17 +186,25 @@ export interface NodeDurableAgentRuntimeOptions<
 /** Built-in construction failures. `layer` also preserves supplied service Layers' errors. */
 export type NodeDurableAgentRuntimeInitializationError =
   | NodePlatformConfigError
+  | MessageDeliveryError
   | SqliteStorageInitializationError;
 
-/** The services `NodeDurableAgentRuntime.layer` provides. */
+/**
+ * The services `NodeDurableAgentRuntime.layer` provides. Additional SQLite adapters can use
+ * the same client and storage configuration, sharing its serialized connection and Scope.
+ */
 export type NodeDurableAgentRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
   | ThreadStore
   | ScheduleStore
+  | MessageDeliveryStore
   | WakeScheduler
   | DurableRuntimeConfig
-  | NodeDurableAgentRuntimeConfig;
+  | NodeDurableAgentRuntimeConfig
+  | SqlClientService.SqlClient
+  | SqliteStorageConfig
+  | SqliteStorageFailpoint;
 
 const decodeConfigValue = Schema.decodeUnknownEffect(NodeDurableAgentRuntimeConfigValue);
 
@@ -387,7 +404,8 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
  * The DN Layer assembly (deployment §12: a Layer-assembly library, not an app entrypoint).
  * `layer(options)` decodes the configuration, opens ONE SQLite database serving both the
  * Thread Log and the Submission Ledger (so claims fence the same producer epochs), wires
- * the Node wake scheduler with its ledger-scan fallback, wraps the ledger with the shutdown
+ * the Node wake scheduler with its ledger-scan fallback, exposes independent message delivery
+ * storage, wraps the ledger with the shutdown
  * ownership drain, defaults the Tool reconciliation policy to the fail-closed
  * `ToolReconciler.uncertain` (override via `options.toolReconciler`), and provides a ready
  * `DurableAgentRuntime` on top. Storage compatibility is
@@ -537,6 +555,7 @@ export class NodeDurableAgentRuntime {
         const ports = Layer.mergeAll(
           threadStoreLayer,
           scheduleStoreLayer,
+          messageDeliveryStoreLayer(),
           nodeWakeSchedulerLayer.pipe(
             Layer.provideMerge(ownershipDrainLayer.pipe(Layer.provide(submissionLedgerLayer))),
           ),

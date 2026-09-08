@@ -183,6 +183,24 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   "policy:after-reservation-append",
   "resolve:after-intent",
   "subagent:after-child-abort-intent",
+  // Background workers use retained delivery, source capacity, and child-origin paths absent
+  // from these six attached/ordinary scenarios. The before/after creation and completion
+  // boundaries are exercised by packages/thread/test/worker-host.test.ts.
+  "worker:before-source-append",
+  "worker:after-source-append",
+  "worker:before-origin-append",
+  "worker:after-origin-append",
+  "worker:before-completion-append",
+  "worker:after-completion-append",
+  // Root attached declarations keep their independent pool; nested shared subtree mutations
+  // are covered by the same focused worker-host failpoint suite.
+  "worker:before-subtree-append",
+  "worker:after-subtree-append",
+  // Automatic report decisions and retained delivery insertion have dedicated worker crash tests.
+  "worker:before-report-append",
+  "worker:after-report-append",
+  "worker:before-report-delivery",
+  "worker:after-report-delivery",
 ];
 
 /** Locations of `tier2` rows whose armed fault never fired in ANY scenario, sorted. */

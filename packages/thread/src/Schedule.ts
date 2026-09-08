@@ -1,7 +1,7 @@
 import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
+import { Receipt } from "@effect-agent/core/Receipt";
 import { Context, Effect, Schema } from "effect";
 
-import { Receipt } from "./DurableAgentRuntime.ts";
 import { DefinitionDigests, Digest, PersistedJson } from "./Records.ts";
 import { AdmissionFence, AdmissionGroup, IdempotencyKey, Principal } from "./SubmissionLedger.ts";
 

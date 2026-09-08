@@ -163,17 +163,18 @@ could be activated for future Turns. No runtime Skill API is implemented. Contri
 
 **Subagent**  
 An Agent Definition invoked by another agent through a declared delegation capability. A durable
-Subagent owns a child Thread with explicit parent linkage.
+Subagent owns a child Thread with explicit provenance and either attached or background lifetime.
 
-**Delegation Definition**
-An immutable declaration that exposes one target Agent Definition to a parent as an Effect AI
-Tool. Input schemas and identity mapping default to the child's input. The default result wraps
-its output with an exhaustion marker. Custom projections, authority, budget, and policy bounds
-remain explicit when needed.
+**Subagent Capability**
+An immutable configuration created with `Subagent.make` that exposes one target Agent Definition
+through an Effect AI Tool. Input schemas and identity mapping default to the child's input.
+The default result wraps its output with an exhaustion marker. Custom projections, authority,
+budget, and policy bounds remain explicit when needed. The target Agent owns the behavior.
 
 **Subagent Invocation**
 One parent Tool Call that runs one declared Subagent. Its child Thread is fresh and distinct;
-its stable parent-side identity is the parent Run and Tool Call pair.
+its stable parent-side identity is the parent Run and Tool Call pair for attached model calls.
+Background programmatic calls use explicit durable idempotency keys.
 
 **Parent Link**
 The immutable lineage from a child Thread to the parent Thread, Run, Tool Call, Agent,
@@ -181,7 +182,26 @@ delegation, and depth that established it.
 
 **Attached Child**
 A Subagent Invocation whose terminal outcome must be joined into its parent Tool Call before that
-Tool Call settles. Detachment is a separate future capability.
+Tool Call settles.
+
+**Background Worker**
+A continuing durable child Thread established through a Subagent capability. Its worker reference
+identifies the Thread; a separate Receipt identifies each accepted input. Ownership, grants,
+reservations, and reporting persist independently of the launching Run.
+
+**Worker Report**
+One declaration-projected canonical child Run outcome converted to coordinator input by the
+coordinator's existing registration. Joined Receipts do not duplicate reports. Preparation and
+delivery can refuse independently of the child's terminal outcome.
+
+**Peer Message**
+Destination-owned Agent input sent through a fixed host-authorized route. Canonical provenance
+binds sender and return address; receiving a message or its correlation identity grants no authority.
+
+**Message Delivery**
+A source-Thread-owned frozen input envelope with independent bounded recovery. Pending retention,
+destination acceptance, and destination processing are distinct states; a retained message identity
+is not a Submission Receipt.
 
 **MCP Server**
 An external Model Context Protocol server reached through an application-configured transport.

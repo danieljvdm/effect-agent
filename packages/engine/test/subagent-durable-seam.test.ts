@@ -12,6 +12,7 @@ import {
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type RunEvent } from "@effect-agent/core/RunEvent";
+import { WorkerError } from "@effect-agent/core/Worker";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
   AgentChildPending,
@@ -52,6 +53,7 @@ import {
 } from "effect/unstable/ai";
 
 import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
+import { SubagentHost } from "../src/SubagentHost.ts";
 import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 class DelegationFailed extends Schema.TaggedError<DelegationFailed>()("DelegationFailed", {
@@ -290,6 +292,156 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
+  it.effect("binds worker management to each actual Tool Call and preserves typed errors", () =>
+    Effect.gen(function* () {
+      const manage = Tool.make("manage", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+        failure: WorkerError,
+      }).addDependency(SubagentHost);
+
+      const toolkit = Toolkit.make(manage);
+      const observed = yield* Ref.make<ReadonlyArray<string>>([]);
+
+      const handlers = toolkit.toLayer({
+        manage: () =>
+          Effect.gen(function* () {
+            const host = yield* SubagentHost;
+            const { source } = yield* host.context;
+            const id = source._tag === "tool" ? source.toolCallId : "programmatic";
+
+            yield* Ref.update(observed, (ids) => [...ids, id]);
+
+            return id;
+          }),
+      });
+
+      const definition = Agent.make("worker-host-parent", {
+        input: batchDefinition.input,
+        output: batchDefinition.output,
+        instructions: "Manage workers and answer.",
+        toolkit,
+        policy: batchDefinition.policy,
+      });
+
+      const agent = Agent.withModel(
+        definition,
+        scriptedModel(
+          [
+            {
+              type: "tool-call",
+              id: "manage-a",
+              name: "manage",
+              params: {},
+              providerExecuted: false,
+            },
+            {
+              type: "tool-call",
+              id: "manage-b",
+              name: "manage",
+              params: {},
+              providerExecuted: false,
+            },
+            { type: "finish", reason: "tool-calls", usage },
+          ],
+          '{"answer":"managed"}',
+        ),
+      );
+
+      const program = AgentRuntime.run(
+        agent,
+        { question: "manage" },
+        {
+          threadId: decodeThreadId("parent"),
+          runId: decodeRunId("parent-run"),
+        },
+      ).pipe(
+        Effect.provideService(SubagentHost.forTool, (source) => {
+          expect(source).toMatchObject({
+            _tag: "tool",
+            agentId: definition.id,
+            threadId: decodeThreadId("parent"),
+            runId: decodeRunId("parent-run"),
+          });
+
+          return {
+            ...SubagentHost.unavailable,
+            context: Effect.succeed({ source, policy: definition.policy, depth: 0 }),
+          };
+        }),
+      );
+
+      type HostExcluded = [Extract<Effect.Services<typeof program>, SubagentHost>] extends [never]
+        ? true
+        : false;
+      type ErrorKept = WorkerError extends Effect.Error<typeof program> ? true : false;
+      const hostExcluded: HostExcluded = true;
+      const errorKept: ErrorKept = true;
+
+      expect({ hostExcluded, errorKept }).toEqual({ hostExcluded: true, errorKept: true });
+      yield* program.pipe(Effect.provide(handlers), Effect.scoped);
+      expect(yield* Ref.get(observed)).toEqual(["manage-a", "manage-b"]);
+    }),
+  );
+
+  it.effect("fails worker operations closed when no host facet was installed", () =>
+    Effect.gen(function* () {
+      const manage = Tool.make("manage", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+        failure: WorkerError,
+      }).addDependency(SubagentHost);
+
+      const toolkit = Toolkit.make(manage);
+
+      const definition = Agent.make("unconfigured-worker-host", {
+        input: batchDefinition.input,
+        output: batchDefinition.output,
+        instructions: "Manage workers.",
+        toolkit,
+        policy: batchDefinition.policy,
+      });
+
+      const agent = Agent.withModel(
+        definition,
+        scriptedModel(
+          [
+            {
+              type: "tool-call",
+              id: "manage",
+              name: "manage",
+              params: {},
+              providerExecuted: false,
+            },
+            { type: "finish", reason: "tool-calls", usage },
+          ],
+          '{"answer":"unreachable"}',
+        ),
+      );
+
+      const handlers = toolkit.toLayer({
+        manage: () =>
+          Effect.gen(function* () {
+            const host = yield* SubagentHost;
+
+            yield* host.context;
+
+            return "unreachable";
+          }),
+      });
+
+      const exit = yield* AgentRuntime.run(agent, { question: "manage" }).pipe(
+        Effect.provide(handlers),
+        Effect.scoped,
+        Effect.exit,
+      );
+
+      expect(failureFrom(exit)).toEqual(
+        WorkerError.make({ operation: "context", reason: "unavailable" }),
+      );
+    }),
+  );
+
   it.effect("a waiting delegation call does not trigger the batch failure policy", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);

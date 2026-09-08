@@ -59,7 +59,10 @@ import {
 } from "@effect-agent/core/RunEvent";
 import {
   DelegationDepth,
-  DelegationTool,
+  getToolExecutionKind,
+  isSubagentToolAllowed,
+  type SubagentGrant,
+  type SubagentBudgetReservation,
   SubagentParentLink,
 } from "@effect-agent/core/SubagentContract";
 import {
@@ -93,6 +96,8 @@ import {
 } from "effect";
 import { Tool, AiError, LanguageModel, Model, Prompt, Response, Toolkit } from "effect/unstable/ai";
 
+import { MessagingHost } from "../MessagingHost.ts";
+import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { boundedValueFootprint, utf8ByteLength } from "./bounded-value.ts";
 import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
@@ -359,6 +364,8 @@ export type EngineProvidedToolServices =
   | RunEventSink
   | DurableStep
   | SubagentDurability
+  | SubagentHost
+  | MessagingHost
   | ToolBroker
   | ToolSpanTelemetry
   | ContextWindow;
@@ -1071,6 +1078,10 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
  * extension by re-invoking with a larger allowance below the Definition's
  * ceiling.
  */
+const CurrentSubagentAuthority = Context.Reference<
+  { readonly grant: SubagentGrant; readonly depth: number } | undefined
+>("@effect-agent/engine/internal/CurrentSubagentAuthority", { defaultValue: () => undefined });
+
 const boundedAllowance = (policyBound: number, allowance: number | undefined): number =>
   // Fail closed on non-finite allowances (RUN-021): `NaN` propagates through
   // floor/max/min and every later `>` comparison answers false, which would
@@ -1182,7 +1193,7 @@ const snapshotResumedSettledCalls = Effect.fn("AgentRuntime.snapshotResumedSettl
         ) {
           throw new TypeError("Turn resume settled has an invalid length");
         }
-        const snapshot = new Array<unknown>(lengthDescriptor.value);
+        const snapshot: Array<unknown> = [];
 
         for (let index = 0; index < lengthDescriptor.value; index += 1) {
           const entryDescriptor = Object.getOwnPropertyDescriptor(settled, String(index));
@@ -1190,7 +1201,7 @@ const snapshotResumedSettledCalls = Effect.fn("AgentRuntime.snapshotResumedSettl
           if (entryDescriptor === undefined || !("value" in entryDescriptor)) {
             throw new TypeError("Turn resume settled entries must be own data properties");
           }
-          snapshot[index] = entryDescriptor.value;
+          snapshot.push(entryDescriptor.value);
         }
 
         return snapshot;
@@ -1542,12 +1553,26 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
   turn: number,
   call: RunToolCallDescriptor,
   options: RunOptions<HookError, HookRequirements>,
+  annotations: Context.Context<never>,
 ): Stream.Stream<
   RunEvent,
   HookError | ModelProtocolError | AgentToolAuthorizationDenied,
   HookRequirements
 > => {
-  const authorization = options.toolAuthorization;
+  const authorization = isSubagentToolAllowed(
+    options.subagentGrant,
+    options.delegationDepth ?? options.parentLink?.depth ?? 0,
+    call.toolName,
+    annotations,
+  )
+    ? options.toolAuthorization
+    : {
+        authorize: () =>
+          Effect.succeed({
+            _tag: "denied" as const,
+            reason: "Tool exceeds the inherited subagent grant",
+          }),
+      };
 
   if (authorization === undefined) return Stream.empty;
 
@@ -2146,7 +2171,16 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       >(
         (stream, call) =>
           stream.pipe(
-            Stream.concat(preflightToolAuthorization(context, turnId, turn, call, options)),
+            Stream.concat(
+              preflightToolAuthorization(
+                context,
+                turnId,
+                turn,
+                call,
+                options,
+                toolkit.tools[call.toolName]?.annotations ?? Context.empty(),
+              ),
+            ),
           ),
         Stream.empty,
       );
@@ -2163,8 +2197,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           : Stream.fromEffect(
               Effect.suspend(() => {
                 const preparedDescriptors = descriptors.filter(
-                  (call) =>
-                    call.executionClass !== "readonly" || call.executionKind === "delegation",
+                  (call) => call.executionClass !== "readonly" || call.executionKind !== "ordinary",
                 );
 
                 return preparedDescriptors.length === 0
@@ -2229,6 +2262,17 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
               semaphore,
               Stream.unwrap(
                 Effect.gen(function* () {
+                  const subagentHost = yield* SubagentHost.forTool;
+                  const messagingHost = yield* MessagingHost.forTool;
+
+                  const source = {
+                    _tag: "tool" as const,
+                    agentId: context.agentId,
+                    threadId: context.threadId,
+                    runId: context.runId,
+                    toolCallId: call.toolCallId,
+                  };
+
                   const broker = yield* makeToolBrokerService({
                     context,
                     turnId,
@@ -2252,6 +2296,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                     },
                   ).pipe(
                     Stream.provideService(DurableStep, stepServiceFor(call)),
+                    Stream.provideService(SubagentHost, subagentHost(source)),
+                    Stream.provideService(MessagingHost, messagingHost(source)),
                     // Construct and close the broker within this call's permit. Inner
                     // invocations use the handler's fiber and acquire no batch permit;
                     // retained passes cannot outlive the call's scheduling authority.
@@ -4163,7 +4209,7 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
           toolName: part.name,
           parameters,
           executionClass: getToolExecutionClass(tool),
-          executionKind: Context.get(tool.annotations, DelegationTool) ? "delegation" : "ordinary",
+          executionKind: getToolExecutionKind(tool.annotations),
         });
       }
 
@@ -4605,6 +4651,21 @@ const makeTurn = <
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
 
+      // Filtering removes tools without changing any remaining schema or handler requirements.
+      const modelToolkit: Toolkit.Toolkit<Tools> =
+        options.subagentGrant === undefined
+          ? agent.definition.toolkit
+          : (Toolkit.make(
+              ...Object.values(agent.definition.toolkit.tools).filter((tool) =>
+                isSubagentToolAllowed(
+                  options.subagentGrant,
+                  options.delegationDepth ?? options.parentLink?.depth ?? 0,
+                  tool.name,
+                  tool.annotations,
+                ),
+              ),
+            ) as unknown as Toolkit.Toolkit<Tools>);
+
       if (options.beforeTurn !== undefined) yield* options.beforeTurn();
       const now = yield* Clock.currentTimeMillis;
 
@@ -4839,7 +4900,7 @@ const makeTurn = <
       const estimateToolSchemaTokens = Effect.suspend(() => {
         const choice = modelToolChoice();
 
-        const tools = Object.values(agent.definition.toolkit.tools).filter((tool) =>
+        const tools = Object.values(modelToolkit.tools).filter((tool) =>
           typeof choice === "object" && "oneOf" in choice ? choice.oneOf.includes(tool.name) : true,
         );
 
@@ -5325,7 +5386,7 @@ const makeTurn = <
                       // including the overflow retry — carries it at the last
                       // system block.
                       prompt: providerPrompt,
-                      toolkit: agent.definition.toolkit,
+                      toolkit: modelToolkit,
                       disableToolCallResolution: true,
                       // Exact required Tool selection preserves the toolkit. A oneOf
                       // subset can drop other schemas and break the cached prefix.
@@ -6320,7 +6381,7 @@ const makeResumeTurn = <
           toolName: call.name,
           parameters,
           executionClass: getToolExecutionClass(tool),
-          executionKind: Context.get(tool.annotations, DelegationTool) ? "delegation" : "ordinary",
+          executionKind: getToolExecutionKind(tool.annotations),
         });
       }
       const completionTool = agent.definition.completion?.tool;
@@ -7068,10 +7129,12 @@ function streamWithCompletion<
                 threadId: context.threadId,
                 runId: context.runId,
               },
-              options.parentLink?.depth ?? 0,
+              options.delegationDepth ?? options.parentLink?.depth ?? 0,
               history,
               preparation,
               agent.definition.policy,
+              options.subagentGrant,
+              options.subagentBudget,
             ),
           ).pipe(
             Context.add(ContextWindow, {
@@ -7099,6 +7162,17 @@ function streamWithCompletion<
             Context.add(RunEventSink, closedRunEventSink),
             Context.add(DurableStep, closedDurableStep),
             Context.add(SubagentDurability, closedSubagentDurability),
+            Context.add(SubagentHost, SubagentHost.unavailable),
+            Context.add(MessagingHost, MessagingHost.unavailable),
+            Context.add(
+              CurrentSubagentAuthority,
+              options.subagentGrant === undefined
+                ? undefined
+                : {
+                    grant: options.subagentGrant,
+                    depth: options.delegationDepth ?? options.parentLink?.depth ?? 0,
+                  },
+            ),
             Context.add(ToolBroker, closedToolBroker),
           );
 
@@ -7728,6 +7802,8 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
   const service: ToolBrokerService = {
     openPass: (toolkit, passOptions) =>
       Effect.gen(function* () {
+        const inheritedAuthority = yield* CurrentSubagentAuthority;
+
         if (lifecycle.closed) {
           return yield* ToolBrokerUnavailableError.make({
             message: "The outer Tool Call for this broker has already settled",
@@ -7790,6 +7866,22 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
               );
             }
             const tool = toolkit.tools[input.toolName] as Tool.Any;
+
+            if (
+              !isSubagentToolAllowed(
+                inheritedAuthority?.grant,
+                inheritedAuthority?.depth ?? 0,
+                input.toolName,
+                tool.annotations,
+              )
+            ) {
+              return yield* preflightFailure(
+                input,
+                "infrastructure",
+                "ProgrammaticToolAuthorizationDenied",
+                "Tool exceeds the inherited subagent grant",
+              );
+            }
 
             if (Context.get(tool.annotations, ContextRolloverTool)) {
               return yield* preflightFailure(
@@ -8589,7 +8681,7 @@ export interface SpawnedChildRun<Output, Error> extends DetachedRun<Output, Erro
  * `depth + 1`, and starts the child eagerly with `AgentRuntime.start` inside
  * the caller-provided Scope, so parent interruption always reaches the child
  * and its finalizers. Preflight policy (including S1's normative
- * nested-delegation rejection) belongs to the delegation capability and runs
+ * subtree reservation and inherited-grant checks) belongs to the delegation capability and runs
  * before `spawn` is called. Children inherit the parent Run's provided history and context
  * services; delegation handlers do not select separate host policies.
  */
@@ -8683,12 +8775,14 @@ const spawnWithParent = (
  * Narrow parent execution value visible to Tool handlers. `depth` is the
  * current Run's root-relative delegation depth: `0` for a root Run and
  * `parentLink.depth` for a child, which the delegation preflight uses to
- * reject nested delegation (SUB-029).
+ * enforce inherited nesting ceilings and conserved subtree allocations.
  */
 export interface AgentSpawnerService {
   /** Resolved defaults for this parent Run; never includes its tools or handlers. */
   readonly policy: AgentPolicy;
   readonly depth: number;
+  readonly grant?: SubagentGrant;
+  readonly budget?: SubagentBudgetReservation;
   readonly parent: AgentSpawnerParent;
   readonly spawn: <
     InputSchema extends Schema.Top,
@@ -8789,7 +8883,11 @@ const makeAgentSpawner = (
   history: ThreadHistory["Service"],
   preparation: RunContextPreparation["Service"],
   policy: AgentPolicy,
+  grant?: SubagentGrant,
+  budget?: SubagentBudgetReservation,
 ): AgentSpawnerService => ({
+  ...(grant === undefined ? {} : { grant }),
+  ...(budget === undefined ? {} : { budget }),
   policy,
   depth,
   parent,

@@ -28,6 +28,7 @@
     "./RunHooks": "./src/RunHooks.ts",
     "./SemanticMemory": "./src/SemanticMemory.ts",
     "./Subagent": "./src/Subagent.ts",
+    "./Messaging": "./src/Messaging.ts",
     "./SubagentReservations": "./src/SubagentReservations.ts",
     "./WebCapture": "./src/WebCapture.ts",
     "./Remembering": "./src/Remembering.ts",

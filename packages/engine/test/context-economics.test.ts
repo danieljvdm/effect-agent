@@ -8,6 +8,7 @@ import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type RunCompleted, type RunEvent } from "@effect-agent/core/RunEvent";
+import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import {
   ToolResultBounds,
   TruncatedToolResult,
@@ -3152,6 +3153,78 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       }),
     );
   }
+
+  it.effect("counts only tools exposed by the inherited grant for resolved context admission", () =>
+    Effect.gen(function* () {
+      const search = Tool.make("search", {
+        parameters: Schema.Struct({ query: Schema.String }),
+        success: Schema.String,
+      });
+
+      const forbidden = Tool.make("forbidden", {
+        description: "Unavailable tool schema detail. ".repeat(220),
+        parameters: Schema.Struct({ query: Schema.String }),
+        success: Schema.String,
+      });
+
+      const tools = Toolkit.make(search, forbidden);
+
+      const definition = Agent.make("granted-tool-context", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Return a JSON string.",
+        toolkit: tools,
+        policy: { maxTurns: 2, maxToolCalls: 2, maxDuration: "30 seconds", runStatus: "off" },
+      });
+
+      const run = Effect.fn(function* (restricted: boolean) {
+        const { model, requests } = scriptedModel([finalParts('"done"')]);
+
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+          delegationDepth: 1,
+          ...(restricted
+            ? { subagentGrant: SubagentGrant.make({ allowedToolNames: ["search"], maxDepth: 1 }) }
+            : {}),
+          context: {
+            prepare: (request) =>
+              Effect.succeed({
+                prompt: request.source,
+                modelCall: {
+                  model,
+                  toolSchemaTransformer: toCodecOpenAI,
+                  context: ModelCallContext.make({
+                    contextCapacity: 900,
+                    outputReserveTokens: 100,
+                    uncountedOverheadTokens: 0,
+                  }),
+                },
+              }),
+          },
+        }).pipe(
+          Effect.provide(
+            tools.toLayer({
+              search: () => Effect.succeed("unused"),
+              forbidden: () => Effect.die("The hidden tool must not run"),
+            }),
+          ),
+          Effect.exit,
+        );
+
+        return { exit, requests };
+      });
+
+      const unrestricted = yield* run(false);
+
+      expect(failureFrom(unrestricted.exit)).toBeInstanceOf(ContextBudgetError);
+      expect(unrestricted.requests).toHaveLength(0);
+
+      const restricted = yield* run(true);
+
+      expect(Exit.isSuccess(restricted.exit)).toBe(true);
+      expect(restricted.requests).toHaveLength(1);
+      expect(restricted.requests[0]?.toolCount).toBe(1);
+    }),
+  );
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/2259fc0
   // KOM-125: a transformed Class retains provider definitions that Schema.toEncoded removes.

@@ -1,5 +1,6 @@
 import { AgentInputError } from "@effect-agent/core/AgentError";
 import { AgentId, type ThreadId } from "@effect-agent/core/Identifiers";
+import { MessageAdmission } from "@effect-agent/core/Messaging";
 import { DigestError } from "@effect-agent/thread/Digest";
 import {
   Receipt,
@@ -13,6 +14,7 @@ import {
   CanonicalSequence,
   DefinitionDigests,
   PersistedJson,
+  WorkerAdmission,
 } from "@effect-agent/thread/Records";
 import {
   AdmissionFence,
@@ -114,6 +116,8 @@ export class SubmitRequest extends Schema.Class<SubmitRequest>(
   idempotencyKey: IdempotencyKey,
   admissionGroup: Schema.optionalKey(AdmissionGroup),
   admissionFence: Schema.optionalKey(AdmissionFence),
+  workerAdmission: Schema.optionalKey(WorkerAdmission),
+  messageAdmission: Schema.optionalKey(MessageAdmission),
   definitions: DefinitionDigests,
   inputPayload: PersistedJson,
 }) {}
@@ -601,6 +605,12 @@ export class CloudflareThreadClient extends Context.Service<
               ...(options.admissionFence === undefined
                 ? {}
                 : { admissionFence: options.admissionFence }),
+              ...(options.workerAdmission === undefined
+                ? {}
+                : { workerAdmission: options.workerAdmission }),
+              ...(options.messageAdmission === undefined
+                ? {}
+                : { messageAdmission: options.messageAdmission }),
               definitions: options.definitions,
               inputPayload,
             });

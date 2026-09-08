@@ -45,6 +45,12 @@ export const cloudflarePreparedInputAdmissionLayer: Layer.Layer<
             ...(envelope.admissionFence === undefined
               ? {}
               : { admissionFence: envelope.admissionFence }),
+            ...(envelope.workerAdmission === undefined
+              ? {}
+              : { workerAdmission: envelope.workerAdmission }),
+            ...(envelope.messageAdmission === undefined
+              ? {}
+              : { messageAdmission: envelope.messageAdmission }),
             definitions: envelope.definitions,
           })
           .pipe(

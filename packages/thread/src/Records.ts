@@ -12,14 +12,19 @@ import {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core/Identifiers";
+import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
 import { ExhaustedLimit } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
 import {
+  DelegationDepth,
   SubagentBudgetReservation,
+  SubagentGrant,
   SubagentParentLink,
   ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
 import { ModelCallUsage, RunUsageSummary } from "@effect-agent/core/Usage";
+import { WorkerRef, WorkerSource } from "@effect-agent/core/Worker";
 import { ContextHandoff } from "@effect-agent/engine/ContextWindow";
 import { Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
@@ -210,6 +215,7 @@ export class UserInputRecorded extends Schema.TaggedClass<UserInputRecorded>(
   kind: Schema.Literals(["user", "steering", "follow-up"]),
   runId: Schema.optionalKey(RunId),
   input: PersistedJson,
+  messageAdmission: Schema.optionalKey(MessageAdmission),
 }) {}
 
 /** Immutable clock and duration allowance for one logical Run, before any agent execution. */
@@ -675,6 +681,8 @@ export class SubagentRequested extends Schema.TaggedClass<SubagentRequested>(
   toolCallAllowance: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   policy: Schema.optionalKey(Schema.toCodecJson(AgentPolicy)),
   budget: Schema.optionalKey(SubagentBudgetReservation),
+  grant: Schema.optionalKey(SubagentGrant),
+  depth: Schema.optionalKey(DelegationDepth),
 }) {}
 
 /**
@@ -734,7 +742,141 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
   /** Copied from the canonical request before readiness; restored for every child Attempt. */
   toolCallAllowance: SubagentRequested.fields.toolCallAllowance,
   policy: SubagentRequested.fields.policy,
+  budget: SubagentRequested.fields.budget,
+  grant: SubagentRequested.fields.grant,
 }) {}
+
+export const WorkerReportingIntent = Schema.Struct({
+  sourceDigests: DefinitionDigests,
+  destinationDelegationId: Schema.optionalKey(DelegationId),
+});
+
+/** Immutable worker Thread origin. Each input has its own digest and parameters separately. */
+export const WorkerOrigin = Schema.Struct({
+  worker: WorkerRef,
+  source: WorkerSource,
+  targetDigests: DefinitionDigests,
+  policy: Schema.toCodecJson(AgentPolicy),
+  budget: SubagentBudgetReservation,
+  grant: SubagentGrant,
+  depth: DelegationDepth,
+  toolCallAllowance: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  firstMessageId: IdempotencyKey,
+  createdAtMillis: Schema.Natural,
+  expiresAtMillis: Schema.Natural,
+  /** Exact source registration owns projection; absence means reporting was not declared. */
+  reporting: Schema.optionalKey(WorkerReportingIntent),
+}).check(Schema.makeFilter((value) => value.expiresAtMillis > value.createdAtMillis));
+
+export type WorkerOrigin = typeof WorkerOrigin.Type;
+
+/** Frozen per-input metadata; it grants no attached-child or parent-abort semantics. */
+export const WorkerAdmission = Schema.Struct({
+  origin: WorkerOrigin,
+  messageId: IdempotencyKey,
+  parameters: PersistedJson,
+  createdAtMillis: Schema.Natural,
+  /** Host-bound source input whose subtree funds this input; never chosen by a model. */
+  sourceSubmissionId: Schema.optionalKey(SubmissionId),
+  /** Enables routed receipt lookup when the delivery is owned by a reporting child. */
+  deliveryPrincipal: Schema.optionalKey(Principal),
+});
+
+export type WorkerAdmission = typeof WorkerAdmission.Type;
+
+/** Source-log capacity reservation, retained independently of the source Run's settlement. */
+export class WorkerInputRequested extends Schema.TaggedClass<WorkerInputRequested>()(
+  "WorkerInputRequested",
+  { admission: WorkerAdmission, inputDigest: Digest },
+) {}
+
+/** Child-log origin, reconstructed from a retained delivery before the child becomes ready. */
+export class WorkerOriginRecorded extends Schema.TaggedClass<WorkerOriginRecorded>()(
+  "WorkerOriginRecorded",
+  { origin: WorkerOrigin },
+) {}
+
+/** Canonical child completion acknowledgement releases only this input's active capacity. */
+export class WorkerInputCompleted extends Schema.TaggedClass<WorkerInputCompleted>()(
+  "WorkerInputCompleted",
+  {
+    messageId: IdempotencyKey,
+    workerThreadId: ThreadId,
+    submissionId: SubmissionId,
+    receiptId: ReceiptId,
+    settlementId: SettlementId,
+    completedAtMillis: Schema.Natural,
+  },
+) {}
+
+/**
+ * Frozen report decision for one actual Run, shared by every joined Receipt. The envelope is
+ * a Schema-encoded PreparedInput, validated before append and decoded again on recovery.
+ * Keeping the encoded value here avoids a Records/PreparedInput schema dependency cycle.
+ */
+export class WorkerReportPrepared extends Schema.TaggedClass<WorkerReportPrepared>()(
+  "WorkerReportPrepared",
+  {
+    runId: RunId,
+    messageId: IdempotencyKey,
+    envelope: PersistedJson,
+    createdAtMillis: Schema.Natural,
+    deadlineAtMillis: Schema.Natural,
+  },
+) {}
+
+/** Permanent bounded report refusal. Application errors and raw Run dispositions stay private. */
+export class WorkerReportRefused extends Schema.TaggedClass<WorkerReportRefused>()(
+  "WorkerReportRefused",
+  {
+    runId: RunId,
+    messageId: IdempotencyKey,
+    reason: Schema.Literals([
+      "declaration-unavailable",
+      "destination",
+      "projection",
+      "input",
+      "preparation",
+      "timeout",
+      "defect",
+      "expired",
+      "denied",
+      "capacity",
+    ]),
+  },
+) {}
+
+/** Frozen source proof of peer provenance, readable through routed canonical storage. */
+export class PeerMessagePrepared extends Schema.TaggedClass<PeerMessagePrepared>()(
+  "PeerMessagePrepared",
+  {
+    messageId: IdempotencyKey,
+    sourcePrincipal: Principal,
+    operation: Schema.Literals(["send", "reply"]),
+    deadlineAtMillis: Schema.Int.check(Schema.isGreaterThan(0)),
+    encodedEnvelope: PersistedJson,
+  },
+) {}
+
+/**
+ * One disjoint subtree slice shared by attached and background children of a source input.
+ * The source keeps its own execution ceiling; descendants spend only the remaining allocation.
+ * Reservations include future descendant slots and never refund, including after interruption.
+ * resultBytes reserves the terminal/projection result, not cumulative Tool output bytes.
+ */
+export class SubtreeBudgetReserved extends Schema.TaggedClass<SubtreeBudgetReserved>()(
+  "SubtreeBudgetReserved",
+  {
+    reservationId: BoundedName,
+    sourceSubmissionId: Schema.optionalKey(SubmissionId),
+    childThreadId: ThreadId,
+    lifetime: Schema.Literals(["attached", "background"]),
+    depth: DelegationDepth,
+    policy: Schema.toCodecJson(AgentPolicy),
+    grant: SubagentGrant,
+    budget: SubagentBudgetReservation,
+  },
+) {}
 
 /**
  * Current private-development canonical payload family. Phase 5 adds the seven durable-Tool tags
@@ -766,6 +908,13 @@ export const CanonicalRecordPayload = Schema.Union([
   SubagentStarted,
   SubagentJoined,
   SubagentLineageRecorded,
+  WorkerInputRequested,
+  WorkerOriginRecorded,
+  WorkerInputCompleted,
+  WorkerReportPrepared,
+  WorkerReportRefused,
+  PeerMessagePrepared,
+  SubtreeBudgetReserved,
   RepairAnnotated,
 ]);
 

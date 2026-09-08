@@ -10,7 +10,14 @@ import {
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type RunEvent } from "@effect-agent/core/RunEvent";
-import { type SubagentParentLink } from "@effect-agent/core/SubagentContract";
+import {
+  type SubagentParentLink,
+  BackgroundSpawnTool,
+  DelegationTool,
+  WorkerOperationTool,
+  SubagentGrant,
+  SubagentBudgetReservation,
+} from "@effect-agent/core/SubagentContract";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { AgentSpawner } from "@effect-agent/engine/AgentRuntime";
 import {
@@ -204,6 +211,195 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("SUB S1 engine execution seam", (it) => {
+  it.effect("exposes only the effective model tools at each depth and lifetime", () =>
+    Effect.gen(function* () {
+      const ordinary = Tool.make("delegate_payment", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+
+      const forbidden = Tool.make("forbidden", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+
+      const attached = Tool.make("research", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(DelegationTool, true);
+
+      const background = Tool.make("research_start", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      })
+        .annotate(WorkerOperationTool, true)
+        .annotate(BackgroundSpawnTool, true);
+
+      const inspect = Tool.make("research_inspect", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(WorkerOperationTool, true);
+
+      const tools = Toolkit.make(ordinary, forbidden, attached, background, inspect);
+
+      const definition = Agent.make("effective-tools", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Answer.",
+        toolkit: tools,
+      });
+
+      const names = yield* Ref.make<ReadonlyArray<string>>([]);
+
+      const model = Model.make(
+        "scripted",
+        "effective-tools",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (options) =>
+              Stream.unwrap(
+                Ref.set(
+                  names,
+                  options.tools.map((tool) => tool.name),
+                ).pipe(Effect.as(Stream.fromIterable(finalParts('"done"')))),
+              ),
+          }),
+        ),
+      );
+
+      const handlers = tools.toLayer({
+        delegate_payment: () => Effect.succeed("ok"),
+        forbidden: () => Effect.succeed("no"),
+        research: () => Effect.succeed("ok"),
+        research_start: () => Effect.succeed("ok"),
+        research_inspect: () => Effect.succeed("ok"),
+      });
+
+      const grant = SubagentGrant.make({
+        allowedToolNames: ["delegate_payment", "research", "research_start", "research_inspect"],
+        maxDepth: 2,
+        childLifetimes: ["attached"],
+      });
+
+      yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+        delegationDepth: 1,
+        subagentGrant: grant,
+      }).pipe(Effect.provide(handlers));
+      expect(yield* Ref.get(names)).toEqual(["delegate_payment", "research", "research_inspect"]);
+      yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+        delegationDepth: 2,
+        subagentGrant: grant,
+      }).pipe(Effect.provide(handlers));
+      expect(yield* Ref.get(names)).toEqual(["delegate_payment", "research_inspect"]);
+    }),
+  );
+
+  it.effect("denies a stale model call hidden by the inherited grant before its handler", () =>
+    Effect.gen(function* () {
+      const forbidden = Tool.make("forbidden", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+
+      const tools = Toolkit.make(forbidden);
+
+      const definition = Agent.make("denied-tools", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Answer.",
+        toolkit: tools,
+      });
+
+      const starts = yield* Ref.make(0);
+
+      const handlers = tools.toLayer({
+        forbidden: () => Ref.update(starts, (count) => count + 1).pipe(Effect.as("no")),
+      });
+
+      const model = modelFromParts("stale-call", [
+        {
+          type: "tool-call",
+          id: "denied-call",
+          name: "forbidden",
+          params: {},
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+
+      const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+        subagentGrant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
+        delegationDepth: 1,
+      }).pipe(Effect.provide(handlers), Effect.exit);
+
+      expect(failureFrom(exit)).toMatchObject({
+        _tag: "AiError",
+        reason: { _tag: "InvalidOutputError" },
+      });
+      expect(yield* Ref.get(starts)).toBe(0);
+    }),
+  );
+
+  it.effect("binds the inherited grant, depth, and subtree budget to the live spawner", () =>
+    Effect.gen(function* () {
+      const probe = Tool.make("delegate", {
+        parameters: Schema.Struct({ question: Schema.String }),
+        success: Schema.String,
+      }).addDependency(AgentSpawner);
+
+      const tools = Toolkit.make(probe);
+
+      const definition = Agent.make("frame-probe", {
+        input: Schema.String,
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Probe.",
+        toolkit: tools,
+      });
+
+      const grant = SubagentGrant.make({ allowedToolNames: ["delegate"], maxDepth: 3 });
+
+      const budget = SubagentBudgetReservation.make({
+        caps: {},
+        allocation: {
+          turns: 4,
+          toolCalls: 4,
+          durationMillis: 30000,
+          inputTokens: 0,
+          outputTokens: 0,
+          costMicrousd: 0,
+          resultBytes: 1024,
+        },
+        descendantInvocations: 1,
+      });
+
+      const seen = yield* Ref.make<unknown>(undefined);
+
+      const handlers = tools.toLayer({
+        delegate: () =>
+          Effect.gen(function* () {
+            const spawner = yield* AgentSpawner;
+
+            yield* Ref.set(seen, {
+              grant: spawner.grant,
+              depth: spawner.depth,
+              budget: spawner.budget,
+            });
+
+            return "ok";
+          }),
+      });
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, delegatingModel("frame", { question: "q" }, '{"answer":"ok"}')),
+        "input",
+        { subagentGrant: grant, subagentBudget: budget, delegationDepth: 2 },
+      ).pipe(Effect.provide(handlers));
+      expect(yield* Ref.get(seen)).toEqual({ grant, budget, depth: 2 });
+    }),
+  );
+
   it.effect("honors preallocated Thread and Run identity in every emitted event", () => {
     const threadId = Schema.decodeSync(ThreadId)("thread-preallocated");
     const runId = Schema.decodeSync(RunId)("run-preallocated");

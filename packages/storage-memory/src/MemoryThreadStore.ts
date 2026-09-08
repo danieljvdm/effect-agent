@@ -30,11 +30,27 @@ import {
   LoadCheckpointRequest,
   SaveCheckpointRequest,
 } from "@effect-agent/thread/ThreadStore";
-import { Crypto, Effect, Encoding, Layer, Option, PubSub, Ref, Schema, Stream } from "effect";
+import {
+  Context,
+  Crypto,
+  Effect,
+  Encoding,
+  Layer,
+  Option,
+  PubSub,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 const MAX_THREADS = 256;
 const MAX_RECORDS_PER_THREAD = 65_536;
 const MAX_CHECKPOINTS_PER_THREAD = 1_024;
+
+const ThreadCapacity = Context.Reference<number>(
+  "@effect-agent/storage-memory/MemoryThreadStore/ThreadCapacity",
+  { defaultValue: () => MAX_THREADS },
+);
 
 interface StoredBatch {
   readonly digest: Digest;
@@ -155,6 +171,7 @@ const validateCheckpointVersion = Effect.fn("MemoryThreadStore.validateCheckpoin
 );
 
 const makeThreadStore = Effect.gen(function* () {
+  const maxThreads = yield* ThreadCapacity;
   const crypto = yield* Crypto.Crypto;
   const state = yield* Ref.make<MemoryState>({ threads: new Map() });
   const updates = yield* PubSub.sliding<void>(1);
@@ -198,11 +215,11 @@ const makeThreadStore = Effect.gen(function* () {
 
             return [{ _tag: "success" }, { threads }];
           }
-          if (current.threads.size >= MAX_THREADS) {
+          if (current.threads.size >= maxThreads) {
             return [
               {
                 _tag: "failure",
-                error: storeError("materialize", `In-memory thread limit ${MAX_THREADS} exceeded`),
+                error: storeError("materialize", `In-memory thread limit ${maxThreads} exceeded`),
               },
               current,
             ];
@@ -630,3 +647,15 @@ const makeThreadStore = Effect.gen(function* () {
  * SubmissionLedger port; this Layer deliberately provides only the ThreadStore.
  */
 export const MemoryThreadStoreLive = Layer.effect(ThreadStore, makeThreadStore);
+
+/** Configure a finite retained Thread capacity. Invalid construction options throw immediately. */
+export const memoryThreadStoreLayer = (options: { readonly maxThreads?: number } = {}) =>
+  MemoryThreadStoreLive.pipe(
+    Layer.provide(
+      Layer.succeed(ThreadCapacity)(
+        Schema.decodeSync(
+          Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(65_536)),
+        )(options.maxThreads ?? MAX_THREADS),
+      ),
+    ),
+  );

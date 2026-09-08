@@ -17,6 +17,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./AgentRuntime": "./src/AgentRuntime.ts",
+    "./SubagentHost": "./src/SubagentHost.ts",
+    "./MessagingHost": "./src/MessagingHost.ts",
     "./Output": "./src/Output.ts",
     "./Compaction": "./src/Compaction.ts",
     "./ContextCompactor": "./src/ContextCompactor.ts",

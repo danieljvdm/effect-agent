@@ -31,6 +31,10 @@ import {
 } from "@effect-agent/thread/DurableAgentRuntime";
 import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
 import {
+  type MessageDeliveryError,
+  type MessageDeliveryStore,
+} from "@effect-agent/thread/MessageDelivery";
+import {
   DefinitionDigests,
   DefinitionDigestInput,
   Digest,
@@ -164,6 +168,7 @@ type RuntimeInitializationErrorProof = Assert<
   Equal<
     NodeDurableAgentRuntimeInitializationError,
     | SqliteStorageInitializationError
+    | MessageDeliveryError
     | Extract<
         NodeDurableAgentRuntimeInitializationError,
         { readonly _tag: "NodePlatformConfigError" }
@@ -171,7 +176,10 @@ type RuntimeInitializationErrorProof = Assert<
   >
 >;
 type HostLayerRequirementsProof = Assert<
-  Equal<Layer.Services<typeof hostLayerProbe>, DurableAgentRuntime | NodeDurableAgentRuntimeConfig>
+  Equal<
+    Layer.Services<typeof hostLayerProbe>,
+    DurableAgentRuntime | NodeDurableAgentRuntimeConfig | MessageDeliveryStore
+  >
 >;
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));

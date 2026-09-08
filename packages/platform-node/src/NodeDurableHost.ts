@@ -27,7 +27,13 @@ import {
   type Receipt,
   type RecoveryReport,
 } from "@effect-agent/thread/DurableAgentRuntime";
+import {
+  type MessageDeliveryStore,
+  MessageDeliveryDriver,
+  type MessageDeliveryError,
+} from "@effect-agent/thread/MessageDelivery";
 import { type OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
+import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
 import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import {
   type AbortCommand,
@@ -38,8 +44,11 @@ import {
   type ThreadNotMaterialized,
   type ThreadStoreError,
 } from "@effect-agent/thread/ThreadStore";
+import { NodeCrypto } from "@effect/platform-node";
 import { type Stream, Context, Effect, Fiber, Layer, Ref, Schema } from "effect";
 
+import { runNodeMessageDeliveries } from "./internal/message-delivery.ts";
+import { makeNodePreparedInputAdmission, NodeAdmission } from "./internal/prepared-admission.ts";
 import {
   NodeDurableAgentRuntime,
   NodeDurableAgentRuntimeConfig,
@@ -88,11 +97,40 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
     InputSchema["EncodingServices"]
   > => requireAdmission.pipe(Effect.andThen(runtime.submit(agent, input, options)));
 
+  const deliveryServices = yield* Effect.context<MessageDeliveryStore>();
+
+  const deliveryContext = yield* Layer.build(
+    MessageDeliveryDriver.layer({
+      batchSize: 100,
+      concurrency: Math.min(config.workerConcurrency, 32),
+    }).pipe(
+      Layer.provide(NodeCrypto.layer),
+      Layer.provide(
+        Layer.effect(PreparedInputAdmission, makeNodePreparedInputAdmission).pipe(
+          Layer.provide(
+            Layer.succeed(NodeAdmission, { submit, submissionStatus: runtime.submissionStatus }),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  const runDeliveries = runNodeMessageDeliveries(config.wakeScanInterval).pipe(
+    Effect.provide(Context.merge(deliveryServices, deliveryContext)),
+  );
+
   const runWorkers = <A, E, R>(worker: Effect.Effect<A, E, R>): Effect.Effect<void, E, R> =>
-    Effect.forEach(
-      Array.from({ length: config.workerConcurrency }, (_, index) => index),
-      () => worker,
-      { concurrency: "unbounded", discard: true },
+    Effect.scoped(
+      // Either side exiting stops and joins the other; delivery interruption cannot leave
+      // an apparently healthy worker pool running without message recovery.
+      Effect.raceFirst(
+        Effect.forEach(
+          Array.from({ length: config.workerConcurrency }, (_, index) => index),
+          () => worker,
+          { concurrency: "unbounded", discard: true },
+        ),
+        runDeliveries,
+      ),
     );
 
   // S2 multi-binding pool: every claimed head resolves its exact registered Binding through
@@ -203,7 +241,8 @@ export class NodeDurableHost extends Context.Service<
     /**
      * Run `workerConcurrency` copies of the given worker effect (typically
      * `DurableAgentRuntime.runWorker(agent)`) until the caller's Scope interrupts them. The
-     * bound is the validated finite configuration value; the host never forks daemon fibers.
+     * same Scope drives pending message admission and settlement observation independently
+     * of Submission liveness. The host never forks daemon fibers.
      */
     readonly runWorkers: <A, E, R>(worker: Effect.Effect<A, E, R>) => Effect.Effect<void, E, R>;
     /**
@@ -251,8 +290,8 @@ export class NodeDurableHost extends Context.Service<
    */
   static readonly layer: Layer.Layer<
     NodeDurableHost,
-    DurableWorkerFailure,
-    DurableAgentRuntime | NodeDurableAgentRuntimeConfig
+    DurableWorkerFailure | MessageDeliveryError,
+    DurableAgentRuntime | NodeDurableAgentRuntimeConfig | MessageDeliveryStore
   > = Layer.effect(NodeDurableHost)(makeHost(false));
 
   /** The complete DN host: `NodeDurableAgentRuntime.layer(options)` plus the host lifecycle gates. */

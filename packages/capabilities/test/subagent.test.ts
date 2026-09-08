@@ -29,7 +29,7 @@ import {
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type RunEvent } from "@effect-agent/core/RunEvent";
-import { isDelegationToolName, SubagentDelegationCaps } from "@effect-agent/core/SubagentContract";
+import { DelegationTool, SubagentDelegationCaps } from "@effect-agent/core/SubagentContract";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
   type SubagentDurability,
@@ -509,6 +509,8 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
   it.effect("rejects nested delegation at preflight before any reservation (SUB-029)", () =>
     Effect.gen(function* () {
+      const delegation = Subagent.make("research", researchDelegation);
+
       // A handmade (non-delegation) spawning Tool runs a mid-level Agent whose
       // Toolkit contains the delegation Tool; invoking it at depth 1 must be
       // denied before a child or reservation exists.
@@ -521,7 +523,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         input: ChildInput,
         output: ChildOutput,
         instructions: "Delegate research, then answer as JSON.",
-        toolkit: Toolkit.make(researchDelegation.tool),
+        toolkit: Toolkit.make(delegation.tool),
         policy: childPolicy,
       });
 
@@ -529,7 +531,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         midDefinition,
         delegatingModel(
           "mid-model",
-          "delegate_research",
+          "research",
           [{ id: "nested-1", params: { topic: "nested" } }],
           '{"answer":"mid"}',
         ),
@@ -540,7 +542,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const dependencies = yield* Effect.context<SubagentReservations | IdGenerator>();
 
       const midDelegationLayer = Layer.provide(
-        researchLayer(grandchildBinding),
+        SubagentRuntime.layer(delegation, grandchildBinding, { mapChildFailure }),
         Layer.succeedContext(dependencies),
       );
 
@@ -562,7 +564,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
               midBinding,
               { question: "root" },
               {
-                delegationId: researchDelegation.delegationId,
+                delegationId: delegation.delegationId,
                 parentToolCallId: outerCallId,
               },
             );
@@ -608,7 +610,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       expect(denial).toBeInstanceOf(SubagentPrestartDenied);
       expect(denial).toMatchObject({
         reason: "nested-delegation",
-        delegationId: "delegate_research",
+        delegationId: "research",
       });
 
       // No child started, so no delegation budget was ever registered for the
@@ -1096,7 +1098,156 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
     }),
   );
 
-  it.effect("denies a child Tool outside the grant ceiling before any budget exists", () =>
+  it.effect(
+    "executes depth-two attached children from the reserved residual and charges the subtree",
+    () =>
+      Effect.gen(function* () {
+        const ownPolicy = AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "10 seconds",
+          toolConcurrency: 1,
+          toolResultBounds: { maxBytes: 256 },
+        });
+
+        const leafTarget = Agent.make("nested-leaf", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy: { ...ownPolicy, maxTurns: 1 },
+        });
+
+        const leaf = Subagent.make("leaf", {
+          target: leafTarget,
+          grant: SubagentGrant.make({
+            allowedToolNames: [],
+            maxDepth: 2,
+            childLifetimes: ["attached"],
+          }),
+          policy: SubagentPolicy.make({
+            maxChildren: 1,
+            maxConcurrency: 1,
+            maxTurns: 1,
+            maxToolCalls: 1,
+            maxDuration: "5 seconds",
+            maxResultBytes: 256,
+          }),
+        });
+
+        const middleTarget = Agent.make("nested-middle", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Delegate.",
+          toolkit: Toolkit.make(leaf.tool),
+          policy: ownPolicy,
+        });
+
+        const middlePolicy = SubagentPolicy.make({
+          maxChildren: 2,
+          maxConcurrency: 2,
+          maxTurns: 4,
+          maxToolCalls: 2,
+          maxDuration: "20 seconds",
+          maxResultBytes: 512,
+          descendantInvocations: 1,
+        });
+
+        const middle = Subagent.make("middle", {
+          target: middleTarget,
+          policy: middlePolicy,
+          grant: SubagentGrant.make({
+            allowedToolNames: ["leaf"],
+            maxDepth: 2,
+            childLifetimes: ["attached"],
+          }),
+        });
+
+        const root = Agent.make("nested-root", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Delegate.",
+          toolkit: Toolkit.make(middle.tool),
+          policy: {
+            maxTurns: 10,
+            maxToolCalls: 10,
+            maxDuration: "1 minute",
+            toolConcurrency: 2,
+            toolResultBounds: { maxBytes: 1024 },
+          },
+        });
+
+        const leafLive = SubagentRuntime.layer(leaf, answeringModel("leaf-answer", '"leaf"'));
+
+        const middleLive = SubagentRuntime.layer(
+          middle,
+          delegatingModel(
+            "middle-answer",
+            "leaf",
+            [{ id: "leaf-call", params: "leaf input" }],
+            '"middle"',
+          ),
+        ).pipe(Layer.provide(leafLive));
+
+        const runId = decodeRunId("nested-root-run");
+
+        const result = yield* AgentRuntime.run(
+          Agent.withModel(
+            root,
+            delegatingModel(
+              "root-answer",
+              "middle",
+              [{ id: "middle-call", params: "middle input" }],
+              '"root"',
+            ),
+          ),
+          "input",
+          { runId },
+        ).pipe(Effect.provide(middleLive));
+
+        expect(result.output).toBe("root");
+        const reservations = yield* SubagentReservations;
+        const snapshot = yield* reservations.parentSnapshot(runId);
+
+        expect(snapshot.totalChildInvocations).toBe(2);
+        expect(snapshot.reservations).toHaveLength(1);
+        expect(snapshot.reservations[0]?.coveredConsumed).toEqual(
+          delegationAllocationFromPolicy(middlePolicy),
+        );
+        expect(snapshot.reservations[0]?.released.turns).toBe(0);
+        expectSettledOnce(snapshot.reservations[0]);
+        for (const [descendantInvocations, turns, dimension] of [
+          [0, 4, "total-child-invocations"],
+          [1, 2, "turns"],
+        ] as const) {
+          const denied = yield* AgentRuntime.run(
+            Agent.withModel(
+              middleTarget,
+              delegatingModel(
+                `denied-${dimension}`,
+                "leaf",
+                [{ id: `denied-${dimension}`, params: "input" }],
+                '"unreached"',
+              ),
+            ),
+            "input",
+            {
+              delegationDepth: 1,
+              subagentGrant: middle.grant,
+              subagentBudget: {
+                caps: delegationCapsFromPolicy(middlePolicy),
+                allocation: { ...delegationAllocationFromPolicy(middlePolicy), turns },
+                descendantInvocations,
+              },
+            },
+          ).pipe(Effect.provide(leafLive), Effect.exit);
+
+          expect(failureFrom(denied)).toMatchObject({ _tag: "SubagentBudgetExhausted", dimension });
+        }
+      }),
+  );
+
+  it.effect("runs a child with tools narrowed out of its grant", () =>
     Effect.gen(function* () {
       const Probe = Tool.make("probe_docs", {
         parameters: Schema.Struct({}),
@@ -1164,15 +1315,12 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         Effect.exit,
       );
 
-      const failure = failureFrom(exit);
-
-      expect(failure).toBeInstanceOf(SubagentPrestartDenied);
-      expect(failure).toMatchObject({ reason: "grant-violation" });
-
+      expect(Exit.isSuccess(exit)).toBe(true);
       const reservations = yield* SubagentReservations;
-      const snapshotExit = yield* Effect.exit(reservations.parentSnapshot(runId));
+      const snapshot = yield* reservations.parentSnapshot(runId);
 
-      expect(failureFrom(snapshotExit)._tag).toBe("SubagentParentBudgetUnknown");
+      expect(snapshot.totalChildInvocations).toBe(1);
+      expectSettledOnce(snapshot.reservations[0]);
     }),
   );
 
@@ -1629,6 +1777,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
       expect(requests[0]).toEqual({
         toolCallId: "call-1",
         delegationId: "delegate_research",
+        target: childDefinition,
         targetAgentId: "research-child",
         depth: 1,
         targetDigests: durableDigests,
@@ -2043,38 +2192,110 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
     }),
   );
 
-  it.effect("fails closed under a durable coordinator without a construction declaration", () =>
-    Effect.gen(function* () {
-      const invocations = yield* Ref.make(0);
-      const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
-      const child = durableChildIdentity("undeclared");
+  it.effect(
+    "supplies the exact target to durable registration resolution without a digest override",
+    () =>
+      Effect.gen(function* () {
+        const invocations = yield* Ref.make(0);
+        const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
+        const child = durableChildIdentity("undeclared");
 
-      const subagent = scriptedDurableHook({
-        establish: () => ({ _tag: "waiting", ...child }),
-        establishes,
-      });
+        const subagent = scriptedDurableHook({
+          establish: () => ({ _tag: "waiting", ...child }),
+          establishes,
+        });
 
-      // The Layer was built WITHOUT SubagentRuntimeOptions.durable.
-      const undeclaredLayer = SubagentRuntime.layer(
-        researchDelegation,
-        countingChildBinding(invocations),
-        { mapChildFailure },
-      );
+        const undeclaredLayer = SubagentRuntime.layer(
+          researchDelegation,
+          countingChildBinding(invocations),
+          { mapChildFailure },
+        );
 
-      const exit = yield* AgentRuntime.run(
-        durableParent("parent-durable-undeclared", "undeclared"),
-        { mission: "m" },
-        { runId: decodeRunId("parent-run-durable-undeclared"), subagent },
-      ).pipe(Effect.provide(undeclaredLayer), Effect.scoped, Effect.exit);
+        const exit = yield* AgentRuntime.run(
+          durableParent("parent-durable-undeclared", "undeclared"),
+          { mission: "m" },
+          { runId: decodeRunId("parent-run-durable-undeclared"), subagent },
+        ).pipe(Effect.provide(undeclaredLayer), Effect.scoped, Effect.exit);
 
-      const failure = failureFrom(exit);
+        const failure = failureFrom(exit);
 
-      expect(failure).toBeInstanceOf(SubagentExecutionFailure);
-      expect(failure).toMatchObject({ classification: "declaration-unavailable" });
-      // Fail closed before any establishment: no digests were invented.
-      expect(yield* Ref.get(establishes)).toEqual([]);
-      expect(yield* Ref.get(invocations)).toBe(0);
-    }),
+        expect(failure).toBeInstanceOf(AgentChildPending);
+        const requests = yield* Ref.get(establishes);
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.target).toBe(childDefinition);
+        expect(requests[0]?.targetDigests).toBeUndefined();
+        expect(yield* Ref.get(invocations)).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "records the effective inherited grant and descendant slots for durable attachment",
+    () =>
+      Effect.gen(function* () {
+        const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
+        const nestedPolicy = SubagentPolicy.make({ ...researchPolicy, descendantInvocations: 1 });
+
+        const declared = Subagent.make("delegate_research", {
+          ...researchDelegation,
+          policy: nestedPolicy,
+          grant: SubagentGrant.make({
+            allowedToolNames: ["read", "write"],
+            maxDepth: 3,
+            childLifetimes: ["attached", "background"],
+          }),
+        });
+
+        const parent = Agent.make("durable-narrowing", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Delegate.",
+          toolkit: Toolkit.make(declared.tool),
+          policy: parentPolicy,
+        });
+
+        const inherited = SubagentGrant.make({
+          allowedToolNames: ["delegate_research", "read"],
+          maxDepth: 2,
+          childLifetimes: ["attached"],
+        });
+
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(
+            parent,
+            delegatingModel(
+              "durable-narrowing",
+              declared.name,
+              [{ id: "narrow-call", params: { topic: "request" } }],
+              '"unreached"',
+            ),
+          ),
+          "input",
+          {
+            delegationDepth: 1,
+            subagentGrant: inherited,
+            subagent: scriptedDurableHook({
+              establish: () => ({ _tag: "waiting", ...durableChildIdentity("narrow") }),
+              establishes,
+            }),
+          },
+        ).pipe(
+          Effect.provide(
+            SubagentRuntime.layer(declared, answeringModel("not-started", '{"answer":"none"}'), {
+              mapChildFailure,
+            }),
+          ),
+          Effect.scoped,
+          Effect.exit,
+        );
+
+        expect(failureFrom(exit)).toBeInstanceOf(AgentChildPending);
+        expect((yield* Ref.get(establishes))[0]).toMatchObject({
+          depth: 2,
+          encodedGrant: { allowedToolNames: ["read"], maxDepth: 2, childLifetimes: ["attached"] },
+          budget: { descendantInvocations: 1 },
+        });
+      }),
   );
 
   it.effect("a narrowed grant denies the resumed action before establishment replay", () =>
@@ -2087,9 +2308,8 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         establishes,
       });
 
-      // A child agent WITH a Tool, exposed through a delegation whose grant
-      // ceiling no longer allows it — the shape of a grant revoked between
-      // the original establishment and this resumed Attempt.
+      // Attached lifetime authority was revoked between establishment and resume;
+      // narrowing the visible Tool set alone would still permit the child to run.
       const Probe = Tool.make("probe_docs", {
         parameters: Schema.Struct({}),
         success: Schema.String,
@@ -2114,7 +2334,11 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         prepareInput: ({ topic }) => Effect.succeed({ question: topic }),
         projectResult: (output) => Effect.succeed({ summary: output.answer }),
         policy: researchPolicy,
-        grant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
+        grant: SubagentGrant.make({
+          allowedToolNames: [],
+          maxDepth: 1,
+          childLifetimes: ["background"],
+        }),
       });
 
       const revokedParentDefinition = Agent.make("coordinator-revoked-durable", {
@@ -2159,6 +2383,11 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         {
           runId: decodeRunId("parent-run-durable-revoked"),
           subagent,
+          subagentGrant: SubagentGrant.make({
+            allowedToolNames: ["delegate_revoked_durable"],
+            maxDepth: 1,
+            childLifetimes: ["background"],
+          }),
           resume,
           resumeUsage: {
             committedTurns: 1,
@@ -2182,8 +2411,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
 
       const failure = failureFrom(exit);
 
-      expect(failure).toBeInstanceOf(SubagentPrestartDenied);
-      expect(failure).toMatchObject({ reason: "grant-violation" });
+      expect(failure).toMatchObject({ _tag: "AgentToolAuthorizationDenied" });
       // Preflight denied the resumed action BEFORE any establishment replay.
       expect(yield* Ref.get(establishes)).toEqual([]);
     }),
@@ -2226,33 +2454,30 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
   );
 });
 
-describe("Subagent.define", () => {
-  it("rejects delegation names outside the naming convention", () => {
-    expect(() =>
-      Subagent.define("research", {
-        description: "Missing prefix.",
-        target: childDefinition,
-        parameters: ResearchParams,
-        success: ResearchFindings,
-        failure: ResearchDelegationFailed,
-        prepareInput: ({ topic }) => Effect.succeed({ question: topic }),
-        projectResult: (output) => Effect.succeed({ summary: output.answer }),
-        policy: researchPolicy,
-      }),
-    ).toThrow();
+describe("Subagent.make", () => {
+  it("preserves application names and rejects an empty identity", () => {
+    for (const name of ["research", "research-docs", "delegate_research"]) {
+      const delegation = Subagent.make(name, { target: childDefinition });
+
+      expect(delegation.name).toBe(name);
+      expect(delegation.tool.name).toBe(name);
+      expect(delegation.delegationId).toBe(name);
+    }
+    expect(() => Subagent.make("", { target: childDefinition })).toThrow(/length/);
+    expect(Subagent.define).toBe(Subagent.make);
   });
 
-  it("rejects a target whose Toolkit already contains a delegation Tool", () => {
+  it("accepts nested declarations while defaulting their depth ceiling to one", () => {
     const nestedDefinition = Agent.make("nested-target", {
       input: ChildInput,
       output: ChildOutput,
       instructions: "Nested.",
-      toolkit: Toolkit.make(researchDelegation.tool),
+      toolkit: Toolkit.make(Subagent.make("research", { target: childDefinition }).tool),
       policy: childPolicy,
     });
 
     expect(() =>
-      Subagent.define("delegate_nested", {
+      Subagent.make("nested", {
         description: "Nested delegation.",
         target: nestedDefinition,
         parameters: ResearchParams,
@@ -2262,13 +2487,18 @@ describe("Subagent.define", () => {
         projectResult: (output) => Effect.succeed({ summary: output.answer }),
         policy: researchPolicy,
       }),
-    ).toThrow(/nested delegation/);
+    ).not.toThrow();
   });
 
   it("marks delegation Tools recognizably for preflight", () => {
-    expect(isDelegationToolName("delegate_research")).toBe(true);
-    expect(isDelegationToolName("delegate_anything_else")).toBe(true);
-    expect(isDelegationToolName("search_docs")).toBe(false);
+    expect(Context.get(researchDelegation.tool.annotations, DelegationTool)).toBe(true);
+    expect(
+      Context.get(
+        Subagent.make("research", { target: childDefinition }).tool.annotations,
+        DelegationTool,
+      ),
+    ).toBe(true);
+    expect(Context.get(Tool.make("delegate_payment").annotations, DelegationTool)).toBe(false);
     expect(researchDelegation.delegationId).toBe("delegate_research");
     expect(researchDelegation.grant.allowedToolNames).toEqual([]);
     expect(researchDelegation.grant.maxDepth).toBe(1);
@@ -2367,7 +2597,7 @@ const typedModel = Model.make(
   ),
 );
 
-const typedDelegation = Subagent.define("delegate_typed", {
+const typedDelegation = Subagent.make("typed", {
   description: "Typed delegation for compile proofs.",
   target: typedChildDefinition,
   parameters: ResearchParams,
@@ -2619,7 +2849,7 @@ describe("Subagent type proofs", () => {
 // (`ToolCallWaiting`, `SubagentDurabilityError`) stay in the error channel.
 // ---------------------------------------------------------------------------
 
-const containedDelegation = Subagent.define("delegate_contained", {
+const containedDelegation = Subagent.make("delegate_contained", {
   description: "Research one bounded question; failures are contained result data.",
   target: childDefinition,
   parameters: ResearchParams,
@@ -3026,6 +3256,80 @@ const allowanceCoordinator = Agent.make("allowance-coordinator", {
 });
 
 layer(TestServices)("derived subagent declarations", (it) => {
+  it.effect("runs research with an ordinary delegate_payment child Tool and joins its result", () =>
+    Effect.gen(function* () {
+      const payments = yield* Ref.make<ReadonlyArray<string>>([]);
+
+      const payment = Tool.make("delegate_payment", {
+        parameters: Schema.Struct({ recipient: Schema.String }),
+        success: Schema.String,
+      });
+
+      const childTools = Toolkit.make(payment);
+
+      const research = Subagent.make("research", {
+        target: Agent.make("payment-researcher", {
+          input: ChildInput,
+          output: ChildOutput,
+          instructions: "Invoke the payment tool and answer as JSON.",
+          toolkit: childTools,
+          policy: childPolicy,
+        }),
+        policy: researchPolicy,
+      });
+
+      const parent = Agent.make("payment-coordinator", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Delegate research.",
+        toolkit: Toolkit.make(research.tool),
+        policy: parentPolicy,
+      });
+
+      const researchLayer = SubagentRuntime.layer(
+        research,
+        delegatingModel(
+          "payment-child",
+          "delegate_payment",
+          [{ id: "payment", params: { recipient: "merchant" } }],
+          '{"answer":"paid"}',
+        ),
+      ).pipe(
+        Layer.provide(
+          childTools.toLayer({
+            delegate_payment: ({ recipient }) =>
+              Ref.update(payments, (all) => [...all, recipient]).pipe(Effect.as("paid")),
+          }),
+        ),
+      );
+
+      const handle = yield* AgentRuntime.start(parent, "start").pipe(
+        Effect.provide([
+          researchLayer,
+          delegatingModel(
+            "payment-parent",
+            "research",
+            [{ id: "research-call", params: { question: "Pay merchant" } }],
+            '"done"',
+          ),
+        ]),
+      );
+
+      expect((yield* handle.await).output).toBe("done");
+      expect(yield* Ref.get(payments)).toEqual(["merchant"]);
+      const events = yield* handle.events;
+
+      expect(findEvent(events, "SubagentJoined")).toMatchObject({
+        delegationId: "research",
+        toolCallId: "research-call",
+        depth: 1,
+      });
+      expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
+        result: { output: { answer: "paid" }, budgetExhausted: false },
+      });
+    }),
+  );
+
   it.effect("inherits defaults, clamps child overrides, and keeps partial results visible", () =>
     Effect.gen(function* () {
       for (const overrides of [
@@ -3114,9 +3418,9 @@ layer(TestServices)("derived subagent declarations", (it) => {
           toolkit: Toolkit.empty,
         });
 
-        const delegation = Subagent.define("delegate_transformed", { target });
+        const delegation = Subagent.make("research", { target });
 
-        const projected = Subagent.define("delegate_projected_result", {
+        const projected = Subagent.make("projected_result", {
           target,
           success: Schema.String,
           projectResult: (output) => Effect.succeed(output.answer),
@@ -3160,6 +3464,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
         ).toBe("public");
 
         const proofs: [
+          Assert<Equal<typeof delegation.name, "research">>,
           Assert<Equal<Tool.Parameters<typeof delegation.tool>, { readonly amount: number }>>,
           Assert<
             Equal<
@@ -3167,9 +3472,9 @@ layer(TestServices)("derived subagent declarations", (it) => {
               { readonly output: { readonly answer: string }; readonly budgetExhausted: boolean }
             >
           >,
-        ] = [true, true];
+        ] = [true, true, true];
 
-        expect(proofs).toEqual([true, true]);
+        expect(proofs).toEqual([true, true, true]);
       }),
   );
 

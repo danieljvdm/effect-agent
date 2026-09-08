@@ -26,6 +26,8 @@
     "./EventSource": "./src/EventSource.ts",
     "./GitHubWorkflowSource": "./src/GitHubWorkflowSource.ts",
     "./OperationAuthorizer": "./src/OperationAuthorizer.ts",
+    "./MessageDelivery": "./src/MessageDelivery.ts",
+    "./MessagingHost": "./src/MessagingHost.ts",
     "./PersistentHistory": "./src/PersistentHistory.ts",
     "./PreparedInputAdmission": "./src/PreparedInputAdmission.ts",
     "./Records": "./src/Records.ts",
@@ -55,8 +57,11 @@
     "./ThreadStore": "./src/ThreadStore.ts",
     "./ToolReconciler": "./src/ToolReconciler.ts",
     "./WakeScheduler": "./src/WakeScheduler.ts",
+    "./WorkerHost": "./src/WorkerHost.ts",
     "./ThreadContextHistory": "./src/ThreadContextHistory.ts",
-    "./ThreadContextHistoryProjection": "./src/ThreadContextHistoryProjection.ts"
+    "./ThreadContextHistoryProjection": "./src/ThreadContextHistoryProjection.ts",
+    "./SqlMessageDeliveryStore": "./src/SqlMessageDeliveryStore.ts",
+    "./testing/MessageDeliveryStoreConformance": "./src/MessageDeliveryStoreConformance.ts"
   },
   "publishConfig": {
     "access": "public"

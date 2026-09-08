@@ -149,6 +149,78 @@ const services = (
 };
 
 describe("unpatched v2 native storage upgrade", () => {
+  for (const [table, column] of [
+    ["effect_agent_submissions", "admission_fence_json"],
+    ["effect_agent_child_settlements", "child_outcome"],
+  ] as const) {
+    it(`rejects v3 missing ${table}.${column} without mutating storage or its alarm`, () => {
+      let armed = false;
+      let mutations = 0;
+
+      return fixture(
+        "thread",
+        (open) =>
+          Effect.gen(function* () {
+            yield* open;
+            const sql = yield* SqlClientService.SqlClient;
+
+            yield* sql`DROP TABLE effect_agent_message_deliveries`;
+            yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN worker_admission_json`;
+            yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN message_admission_json`;
+            yield* sql`UPDATE effect_agent_meta SET value='3' WHERE key='storage_version'`;
+            yield* sql.unsafe(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+            const before = yield* snapshotStore;
+
+            armed = true;
+            expect(yield* open.pipe(Effect.result)).toMatchObject({
+              _tag: "Failure",
+              failure: { _tag: "DoStorageCompatibilityError", actualVersion: 3 },
+            });
+            expect(mutations).toBe(0);
+            expect(yield* snapshotStore).toEqual(before);
+            expect(
+              yield* sql`SELECT value FROM effect_agent_meta WHERE key='storage_version'`,
+            ).toEqual([{ value: "3" }]);
+          }),
+        (location) => {
+          if (armed && location === "upgrade:before-mutation") mutations += 1;
+
+          return undefined;
+        },
+      );
+    });
+  }
+
+  it("adds message storage to v3 atomically and preserves native alarm and canonical data", () => {
+    let armed = false;
+
+    return fixture(
+      "thread",
+      (open) =>
+        Effect.gen(function* () {
+          yield* open;
+          const sql = yield* SqlClientService.SqlClient;
+
+          yield* sql`DROP TABLE effect_agent_message_deliveries`;
+          yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN worker_admission_json`;
+          yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN message_admission_json`;
+          yield* sql`UPDATE effect_agent_meta SET value='3' WHERE key='storage_version'`;
+          const before = yield* snapshotStore;
+
+          armed = true;
+          expect(Exit.isFailure(yield* open.pipe(Effect.exit))).toBe(true);
+          expect(yield* snapshotStore).toEqual(before);
+          armed = false;
+          yield* open;
+          yield* assertPreserved("thread");
+          expect(
+            yield* sql`SELECT value FROM effect_agent_meta WHERE key='storage_version'`,
+          ).toEqual([{ value: "4" }]);
+          expect(yield* sql`SELECT * FROM effect_agent_message_deliveries`).toEqual([]);
+        }),
+      (point) => (armed && point === "upgrade:after-version" ? "failure" : undefined),
+    );
+  });
   for (const store of ["thread", "schedule", "subscription"] as const) {
     it(`preserves ${store} state, native alarm and repeated acquisition`, () =>
       fixture(store, (open, deps) =>
@@ -164,7 +236,7 @@ describe("unpatched v2 native storage upgrade", () => {
           if (store === "thread") {
             expect(
               yield* sql`SELECT value FROM effect_agent_meta WHERE key='storage_version'`,
-            ).toEqual([{ value: "3" }]);
+            ).toEqual([{ value: "4" }]);
             expect(yield* sql`SELECT * FROM effect_agent_child_settlements`).toEqual([
               {
                 parent_submission_id: "parent",
