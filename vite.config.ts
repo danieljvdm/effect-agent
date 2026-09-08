@@ -188,8 +188,7 @@ export default defineConfig({
       },
       "release:checked-publish": {
         cache: false,
-        command:
-          "vp run --no-cache context-continuity-eval --require-clean && vp run --no-cache release:publish",
+        command: "vp run --no-cache release:publish --check-continuity",
       },
     },
   },

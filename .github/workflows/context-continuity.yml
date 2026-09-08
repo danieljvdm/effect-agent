@@ -10,10 +10,6 @@ on:
         type: choice
         default: gpt-6-astra
         options: [gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4-mini]
-  pull_request:
-    paths:
-      - "examples/context-continuity-eval/**"
-      - ".github/workflows/context-continuity.yml"
 
 permissions:
   contents: read
@@ -24,8 +20,6 @@ concurrency:
 
 jobs:
   evaluate:
-    # Fork code never executes with the provider credential. No pull_request_target.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -35,7 +29,7 @@ jobs:
       - name: Check out the exact candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6

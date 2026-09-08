@@ -164,15 +164,18 @@ Use `vp run changeset` to describe a consumer-visible change.
 On pushes to `main`, `.github/workflows/release.yml` maintains the version PR.
 After that PR merges, the workflow publishes through npm trusted publishing with provenance.
 
-Publication first runs `release:checked-publish`, which requires a fresh, uncached
+Publication first runs `release:checked-publish`, which checks npm for unpublished public versions.
+If all versions already exist, it skips publication and the paid evaluation. Registry failures
+stop the attempt before inference. A pending release requires a fresh, uncached
 [context continuity evaluation](../examples/context-continuity-eval/README.md) on the exact clean
 candidate checkout. Missing credentials, incomplete runs, model failures, or failed assertions stop
 publication. Configure `OPENAI_API_KEY` as a repository secret and optionally `CONTEXT_EVAL_MODEL`
 as a repository variable; the workflow explicitly selects `gpt-6-astra` by default. Each suite has a
-conservative $10 spending limit. The same evaluation runs nightly and when its implementation changes
-in a same-repository PR. Fork code never receives the model credential. Each attempt preserves its
-own evidence artifact, including failures. This gate proves the documented continuity scenario;
-it does not certify large-history startup or Cloudflare host performance.
+conservative $10 spending limit. The same evaluation runs nightly or by manual dispatch. Its PR
+checks are deterministic and never call a model.
+Each attempt preserves its own evidence artifact, including failures. This gate proves the
+documented continuity scenario; it does not certify large-history startup or Cloudflare host
+performance.
 
 The release PR runs the same static checks, tests, and builds as every other PR. The workflow
 uses the existing Effect Agent GitHub App to create and update it, so those pushes trigger
