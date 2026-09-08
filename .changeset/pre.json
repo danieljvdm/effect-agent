@@ -82,6 +82,7 @@
     "durable-progress-wait",
     "durable-run-duration",
     "durable-subagent-capabilities",
+    "durable-tool-scheduling",
     "effect-agent-umbrella",
     "effect-cf-040-upgrade",
     "effect-rc110-upgrade",
