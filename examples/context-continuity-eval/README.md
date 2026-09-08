@@ -129,3 +129,88 @@ kill or eviction evidence. Process artifacts also retain SQLite and each barrier
 A partial report, provider outage, exhausted budget, missing credential, unsettled reservation, or
 failed assertion is a failed gate. Pricing is an estimate, not an invoice. There are no inference
 retries or model fallbacks; server-side conversation state and automatic truncation are disabled.
+
+## Manual deployed performance evaluation
+
+`vp run perf:cloudflare` deploys a separate disposable Worker and SQLite Durable Object namespace
+and runs real OpenAI inference through the public Thread HTTP/DO path. The dedicated
+`Manual Cloudflare performance` workflow accepts exact candidate and optional reference SHAs.
+It has only `workflow_dispatch`: PR, push, nightly, and release continuity jobs never select it.
+Configure the `performance-cloudflare` GitHub environment with `OPENAI_API_KEY`,
+`CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN` secrets, plus the
+`CLOUDFLARE_WORKERS_SUBDOMAIN` variable. Use a dedicated benchmark account/environment with
+Workers/DO deployment and deletion permissions.
+
+Install each checkout with its own lockfile, then run from the candidate checkout:
+
+```sh
+vp run perf:cloudflare --dry-run --output-dir .context-continuity-eval/perf-plan
+
+# Export the same four Cloudflare/provider settings listed above.
+EFFECT_AGENT_LIVE=1 vp run perf:cloudflare --model gpt-6-astra --samples 1 \
+  --reference-root ../reference --output-dir .context-continuity-eval/perf-candidate
+```
+
+The optional reference must support the fixture's public APIs. Both bundles use identical fixture
+source, with public imports resolved against each clean checkout's own installed dependencies.
+Both are minified Workers bundles with the same compatibility date, model settings and limits.
+The source commit, fixture/lockfile/bundle digests, deployed version ID and configuration are
+retained. A changed checkout or a mismatched deployed identity fails validation. For an isolated
+bundle check, use `vp run perf:cloudflare:build --source-root . --output-dir <new-directory>`.
+
+Each sample makes three sequential orders on one thread. The model selects independent price
+and stock tools, consumes both results in subsequent inference, and produces a schema-validated
+computed order. Assertions require exact totals and current evidence codes, successful canonical
+tool records, exactly one durable completion/settlement, and the previous order's total on the
+same-thread follow-up. The fresh-thread probe verifies no canonical history, then initializes the
+host before submission; it is not a guaranteed cold start. The warm case requires the same observed
+incarnation. The recovery case aborts the real DO after confirmed tool-result persistence and
+requires a new incarnation, completed follow-up inference, and no repeated committed tool work.
+Successful Attempt finalization is checked; native abort does not promise finalizers.
+The tool handlers use fixed synthetic price/stock data and each wait 20 ms so their independent
+execution is observable. Their latency does not represent an external inventory backend.
+
+Runs allow 1–3 samples per target, one active submission, two concurrent tools, four turns and four
+tool calls per submission, two minutes per agent run, and eight minutes per sample. A thread permits
+at most 18 model calls, 8,192 input tokens/request, 4,096 output tokens/request, and $2 of conservative
+provider reservations. The maximum is $6 per target or $12 for both targets; these estimates exclude
+Cloudflare charges. Unmetered/interrupted provider calls retain their reservation and block further
+dispatch. No inference is retried. Synthetic data is bounded to three submissions per thread and a
+16 MiB database admission limit. Tokens, returned model identities, cache usage, and cost estimates
+are in the request/response audits. No API keys or authorization headers enter evidence artifacts.
+
+`report.json`, `summary.md`, per-phase snapshots, and deployment logs retain every sample, including
+failures and slow runs. They include admission, queue-to-claim, preparation, input-token preflight,
+the actual Fetch dispatch boundary, first provider delta, tool intervals, canonical commits and
+client delivery. First client-visible feedback means the first **observed canonical model response**
+with 100 ms polling; it does not claim live token streaming. Runner and DO clock domains remain
+separate. The [Workers clock only advances after I/O](https://developers.cloudflare.com/workers/runtime-apis/performance/),
+so a zero synchronous duration is unresolved at that timer precision. Do not add overlapping spans
+or subtract synthetic processing time from provider latency. CPU and heap are explicitly unavailable
+from these request APIs; database bytes and ingress CF-Ray location are retained. Attach a separate
+Cloudflare observability export when CPU billing evidence is required. DO region and provider cache
+state are not controlled. Polling and persisted instrumentation add harness work to both candidates.
+
+Targets alternate by sample without concurrent inference. Timing remains informational: small
+sample counts and provider/cache/placement variance are not a latency gate. Successful end-to-end
+and lifecycle assertions are a separate pass/fail result. Attach the workflow artifact URL and
+`summary.md` to the PR/release for the reported candidate SHA and configuration; evidence from a
+different SHA or fixture does not validate a changed candidate. This repository's offline workerd
+tests use a scripted transport and are explicitly not live-provider or Cloudflare deployment evidence.
+
+Cleanup runs on success, failure, and interruption. Ownership is persisted before upload, including
+ambiguous partial deployments. The command first deploys a
+[deleted class tombstone](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
+to remove the entire disposable namespace/data, then deletes and verifies removal of the Worker.
+The workflow retries recorded cleanup in an `always()` step. A failed cleanup fails the run and
+leaves its exact resource names in `resources.json`; retry using the same account credentials:
+
+```sh
+vp run perf:cloudflare --cleanup --output-dir .context-continuity-eval/perf-candidate
+```
+
+Hard runner termination can prevent finalizers and the workflow retry; retain the artifact and run
+that cleanup command. Every owned target must have `cleanupComplete: true` before closing the run.
+Downloaded artifacts can be moved to another machine: cleanup resolves the candidate/reference
+folders beneath `--output-dir` and regenerates the fixed deletion configuration from validated
+Worker names, rather than using artifact-supplied executable/configuration content.

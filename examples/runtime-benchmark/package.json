@@ -1,0 +1,24 @@
+{
+  "name": "@effect-agent/example-runtime-benchmark",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
+    "@effect-agent/platform-node": "workspace:*",
+    "@effect-agent/testing": "workspace:*",
+    "@effect-agent/thread": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "effect-agent": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

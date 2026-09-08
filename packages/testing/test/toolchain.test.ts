@@ -125,6 +125,7 @@ const exampleNames = [
   "pr-review-eval",
   "providers",
   "repo-ops",
+  "runtime-benchmark",
   "semantic-memory-eval",
 ] as const;
 

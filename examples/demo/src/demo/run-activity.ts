@@ -93,6 +93,7 @@ export const projectRunActivity = (
   };
 
   let hasToolResult = false;
+  let responseCharacters = 0;
   const tools = new Map<string, ToolActivity>();
 
   for (const event of events) {
@@ -107,6 +108,7 @@ export const projectRunActivity = (
       }
       case "TurnStarted":
       case "ModelStarted": {
+        responseCharacters = 0;
         activity = hasToolResult
           ? {
               phase: "composing",
@@ -129,10 +131,11 @@ export const projectRunActivity = (
         break;
       }
       case "TextDelta": {
+        responseCharacters += event.text.length;
         activity = {
           phase: "composing",
           label: "Writing the response…",
-          detail: "Assistant text stream",
+          detail: `${responseCharacters.toLocaleString("en-US")} response characters received`,
         };
         break;
       }

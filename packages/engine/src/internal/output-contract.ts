@@ -49,6 +49,7 @@ type OutputContract =
       readonly _tag: "rendered";
       /** The complete system-message text: directive plus the derived JSON Schema. */
       readonly message: string;
+      readonly part: Prompt.SystemMessage;
     }
   | {
       readonly _tag: "unrenderable";
@@ -72,44 +73,58 @@ const requiredCompletionDirective = (tool: string): string =>
 
 /**
  * Render the model-visible final-output contract for one definition. The
- * derivation is pure and cheap relative to a model call (providers derive
- * every Tool's JSON Schema per request the same way), so no cache is kept.
+ * derivation and message identity are stable for an immutable definition.
  * An output Schema the Effect AI derivation cannot represent is reported as
  * `unrenderable`; the caller falls back to the prior behavior — the contract
  * is guidance, and a Schema that decodes but does not render must not become
  * a new failure mode.
  */
-export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputContract => {
+const rendered = (message: string): OutputContract => ({
+  _tag: "rendered",
+  message,
+  part: Prompt.makeMessage("system", { content: message }),
+});
+
+const renderOutputSchemaContract = (definition: Agent.AnyDefinition): OutputContract => {
   if (definition.completion?.required === true) {
-    return {
-      _tag: "rendered",
-      message: requiredCompletionDirective(definition.completion.tool),
-    };
+    return rendered(requiredCompletionDirective(definition.completion.tool));
   }
   if (isTextOutput(definition.output)) {
-    return {
-      _tag: "rendered",
-      message:
-        "Final output contract: write the final reply as ordinary assistant text, without JSON wrapping. " +
+    return rendered(
+      "Final output contract: write the final reply as ordinary assistant text, without JSON wrapping. " +
         "An empty reply is valid only when allowed by the output Schema and the task instructions." +
         (definition.completion === undefined
           ? ""
           : ` When calling the "${definition.completion.tool}" completion Tool, follow its parameter schema instead; the engine projects its successful result into the Agent output.`),
-    };
+    );
   }
   try {
     const jsonSchema = Tool.getJsonSchemaFromSchema(definition.output);
 
-    return {
-      _tag: "rendered",
-      message: `${contractDirective(definition)}\n\n${JSON.stringify(jsonSchema, undefined, 2)}`,
-    };
+    return rendered(
+      `${contractDirective(definition)}\n\n${JSON.stringify(jsonSchema, undefined, 2)}`,
+    );
   } catch (cause) {
     return {
       _tag: "unrenderable",
       reason: cause instanceof Error ? cause.message : String(cause),
     };
   }
+};
+
+// Native incremental-response tracking recognizes message objects, not rendered text.
+// Weak keys retain neither discarded definitions nor their Schema graphs.
+const outputContracts = new WeakMap<Agent.AnyDefinition, OutputContract>();
+
+export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputContract => {
+  const cached = outputContracts.get(definition);
+
+  if (cached !== undefined) return cached;
+  const contract = renderOutputSchemaContract(definition);
+
+  outputContracts.set(definition, contract);
+
+  return contract;
 };
 
 /**
@@ -124,7 +139,10 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
  * block keeps author content and contract together on every provider and
  * preserves the author's per-message cache-control annotations.
  */
-export const insertOutputContract = (prompt: Prompt.Prompt, message: string): Prompt.Prompt => {
+export const insertOutputContract = (
+  prompt: Prompt.Prompt,
+  message: Prompt.SystemMessage,
+): Prompt.Prompt => {
   const content = prompt.content;
   let insertAt = 0;
 
@@ -134,9 +152,5 @@ export const insertOutputContract = (prompt: Prompt.Prompt, message: string): Pr
     }
   }
 
-  return Prompt.fromMessages([
-    ...content.slice(0, insertAt),
-    Prompt.makeMessage("system", { content: message }),
-    ...content.slice(insertAt),
-  ]);
+  return Prompt.fromMessages([...content.slice(0, insertAt), message, ...content.slice(insertAt)]);
 };

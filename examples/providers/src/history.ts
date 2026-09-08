@@ -21,11 +21,10 @@ const definition = Agent.make("history-example", {
   output: Schema.String,
   instructions: "Answer using the thread history.",
   toolkit: Toolkit.empty,
-  policy: AgentPolicy.make({
+  policy: AgentPolicy.resolve({
     maxTurns: 2,
     maxToolCalls: 1,
     maxDuration: "30 seconds",
-    toolConcurrency: 1,
   }),
 });
 

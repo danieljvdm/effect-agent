@@ -15,6 +15,11 @@ import { expectTypeOf, it } from "vite-plus/test";
 import { cloudflareDefinition, cloudflareModelSettings } from "../src/cloudflare-contracts.ts";
 import { notesNamespace } from "../src/host-evidence.ts";
 import { makeLiveClient } from "../src/live-model.ts";
+import {
+  performanceDefinition,
+  performanceSettings,
+  performanceToolkit,
+} from "../src/performance-contracts.ts";
 import { manifestLayer } from "../src/pressure.ts";
 import type { RequestAuditSink } from "../src/request-audit.ts";
 
@@ -71,4 +76,28 @@ it("preserves native model, history and durable note requirements in the pressur
     OpenAiClient.OpenAiClient | RequestAuditSink
   >();
   expectTypeOf<Effect.Error<typeof client>>().toEqualTypeOf<never>();
+});
+
+it("preserves the performance fixture's native model and runtime requirements", () => {
+  const run = AgentRuntime.run(
+    Agent.withModel(
+      performanceDefinition,
+      OpenAiLanguageModel.model("gpt-6-astra", performanceSettings),
+    ),
+    "quote",
+  ).pipe(
+    Effect.provide(
+      performanceToolkit.toLayer({
+        read_price: () => Effect.succeed({ unitPriceCents: 1, evidence: "price" }),
+        read_stock: () => Effect.succeed({ availableUnits: 1, evidence: "stock" }),
+      }),
+    ),
+  );
+
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
+    OpenAiClient.OpenAiClient | IdGenerator | ThreadHistory
+  >();
+  expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
+    AgentRuntime.AgentRuntimeFailure<typeof performanceDefinition>
+  >();
 });

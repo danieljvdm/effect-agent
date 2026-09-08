@@ -7,7 +7,15 @@ import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import * as Output from "@effect-agent/engine/Output";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Logger, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  Prompt,
+  type Response,
+  ResponseIdTracker,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import { insertOutputContract, outputSchemaContract } from "../src/internal/output-contract.ts";
 import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
@@ -279,6 +287,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
           LanguageModel.LanguageModel,
           Effect.gen(function* () {
             const turn = yield* Ref.make(0);
+            const tracker = yield* ResponseIdTracker.make;
 
             return yield* LanguageModel.make({
               generateText: () => Effect.succeed([]),
@@ -287,6 +296,31 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
                   Ref.getAndUpdate(turn, (value) => value + 1).pipe(
                     Effect.map((value) => {
                       requests.push(options.prompt);
+                      if (value === 0) {
+                        tracker.markParts(options.prompt.content, "response-1");
+                      } else {
+                        const incremental = tracker.prepareUnsafe(options.prompt);
+
+                        expect(Option.isSome(incremental)).toBe(true);
+                        if (Option.isSome(incremental)) {
+                          expect(incremental.value.previousResponseId).toBe("response-1");
+                          expect(
+                            incremental.value.prompt.content.map((message) => message.role),
+                          ).toEqual(["tool", "user"]);
+                          expect(JSON.stringify(incremental.value.prompt).length).toBeLessThan(
+                            JSON.stringify(options.prompt).length,
+                          );
+                        }
+
+                        const changed = Prompt.fromMessages([
+                          Prompt.makeMessage("system", {
+                            content: "Changed prepared instructions",
+                          }),
+                          ...options.prompt.content.slice(1),
+                        ]);
+
+                        expect(Option.isNone(tracker.prepareUnsafe(changed))).toBe(true);
+                      }
 
                       return Stream.fromIterable<Response.StreamPartEncoded>(
                         value === 0
@@ -703,7 +737,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
   });
 
   it.effect("inserts after the last system message, extending the last contiguous block", () => {
-    const contract = "contract-text";
+    const contract = Prompt.makeMessage("system", { content: "contract-text" });
     const system = (content: string) => Prompt.makeMessage("system", { content });
 
     const user = Prompt.makeMessage("user", {
@@ -714,12 +748,12 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     const empty = insertOutputContract(Prompt.empty, contract);
 
     expect(roles(empty)).toEqual(["system"]);
-    expect(systemText(empty.content[0]!)).toBe(contract);
+    expect(systemText(empty.content[0]!)).toBe(contract.content);
 
     const userOnly = insertOutputContract(Prompt.fromMessages([user]), contract);
 
     expect(roles(userOnly)).toEqual(["system", "user"]);
-    expect(systemText(userOnly.content[0]!)).toBe(contract);
+    expect(systemText(userOnly.content[0]!)).toBe(contract.content);
 
     const doubleSystem = insertOutputContract(
       Prompt.fromMessages([system("a"), system("b"), user]),
@@ -727,7 +761,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     );
 
     expect(roles(doubleSystem)).toEqual(["system", "system", "system", "user"]);
-    expect(systemText(doubleSystem.content[2]!)).toBe(contract);
+    expect(systemText(doubleSystem.content[2]!)).toBe(contract.content);
 
     // Only the last contiguous system group survives on Anthropic (a prior
     // Thread's instructions ahead of this Run's evaluated instructions,
@@ -739,7 +773,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
     );
 
     expect(roles(resumed)).toEqual(["system", "user", "system", "system", "user"]);
-    expect(systemText(resumed.content[3]!)).toBe(contract);
+    expect(systemText(resumed.content[3]!)).toBe(contract.content);
 
     return Effect.void;
   });

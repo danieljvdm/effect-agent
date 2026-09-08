@@ -41,11 +41,10 @@ const TravelPlanner = Agent.make("travel-planner", {
   output: Schema.Struct({ itinerary: Schema.Array(Schema.String) }),
   instructions: "Create a practical travel itinerary.",
   toolkit: Toolkit.make(),
-  policy: AgentPolicy.make({
+  policy: AgentPolicy.resolve({
     maxTurns: 3,
     maxToolCalls: 1,
     maxDuration: "30 seconds",
-    toolConcurrency: 1,
   }),
 });
 

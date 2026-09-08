@@ -162,11 +162,10 @@ export const Definition = Agent.make("answer-question", {
   output: Answer,
   instructions: "Answer the question using the complete tool.",
   toolkit: Tools,
-  policy: AgentPolicy.make({
+  policy: AgentPolicy.resolve({
     maxTurns: 3,
     maxToolCalls: 3,
     maxDuration: "30 seconds",
-    toolConcurrency: 1,
   }),
   completion: {
     tool: "complete",

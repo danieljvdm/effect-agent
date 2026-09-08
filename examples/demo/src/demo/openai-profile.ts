@@ -44,11 +44,10 @@ export const OpenAiChatDefinition = Agent.make("general-chat-openai", {
   output: ChatOutput,
   instructions: GeneralChatInstructions,
   toolkit: OpenAiChatToolkit,
-  policy: AgentPolicy.make({
+  policy: AgentPolicy.resolve({
     maxTurns: 4,
     maxToolCalls: 6,
     maxDuration: "45 seconds",
-    toolConcurrency: 1,
   }),
   description: "General chat with real arithmetic and OpenAI-hosted web research.",
   metadata: {

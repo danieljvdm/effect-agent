@@ -58,6 +58,7 @@ import {
 
 import { boundedValueFootprint } from "../src/internal/bounded-value.ts";
 import { errorMessage, errorTag } from "../src/internal/error-diagnostic.ts";
+import { ownPrimitiveDelta } from "../src/internal/primitive-delta.ts";
 import { boundedJsonSnapshot } from "../src/internal/provider-result-staging.ts";
 import { emitThenAfter, isolateToolDerivative } from "../src/internal/tool-derivative.ts";
 import {
@@ -4194,6 +4195,130 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect((yield* Ref.get(byteEvents)).at(-1)?._tag).toBe("RunFailed");
     }),
   );
+
+  it.effect("keeps tracing bounded when identical output is fragmented into more deltas", () =>
+    Effect.gen(function* () {
+      const answer = "x".repeat(4_096);
+      const text = JSON.stringify({ answer });
+      const counts: Array<number> = [];
+
+      for (const chunks of [1, 512]) {
+        let spans = 0;
+        let textBytes = 0;
+        const width = Math.ceil(text.length / chunks);
+        const parts: Array<Response.StreamPartEncoded> = [{ type: "text-start", id: "answer" }];
+
+        for (let start = 0; start < text.length; start += width) {
+          parts.push({ type: "text-delta", id: "answer", delta: text.slice(start, start + width) });
+        }
+        parts.push({ type: "text-end", id: "answer" }, { type: "finish", reason: "stop", usage });
+
+        const tracer = Tracer.make({
+          span(options) {
+            spans++;
+
+            return new Tracer.NativeSpan(options);
+          },
+        });
+
+        const result = yield* AgentRuntime.stream(makeAgent(parts), {
+          question: "fragmentation",
+        }).pipe(
+          Stream.tap((event) =>
+            Effect.sync(() => {
+              if (event._tag === "TextDelta") textBytes += event.text.length;
+            }),
+          ),
+          Stream.runCollect,
+          Effect.provideService(Tracer.Tracer, tracer),
+        );
+
+        expect(result.at(-1)).toMatchObject({ _tag: "RunCompleted", output: { answer }, turns: 1 });
+        expect(textBytes).toBe(text.length);
+        counts.push(spans);
+      }
+      // A larger transport chunk count must not produce proportional tracing work.
+      expect(counts[1]).toBeLessThanOrEqual(counts[0]! + 4);
+    }),
+  );
+
+  it("owns primitive text and reasoning deltas while preserving source and retained bounds", () => {
+    for (const type of ["text-delta", "reasoning-delta"] as const) {
+      const source = {
+        "~effect/ai/Content/Part": "~effect/ai/Content/Part",
+        type,
+        id: "reply",
+        delta: "é😀\ud800",
+        metadata: {},
+      };
+
+      const sourceBytes = boundedValueFootprint(source, 1_024)!;
+      const encoded = { type, id: source.id, delta: source.delta, metadata: {} };
+      const owned = ownPrimitiveDelta(source, sourceBytes);
+
+      expect(owned?.ownedPart).toEqual(source);
+      expect(owned?.ownedPart).not.toBe(source);
+      expect(owned?.ownedPart.metadata).not.toBe(source.metadata);
+      expect(owned?.retainedBytes).toBe(boundedValueFootprint(encoded, 1_024));
+      expect(ownPrimitiveDelta(source, sourceBytes - 1)).toBeUndefined();
+      source.delta = "changed";
+      expect(owned?.ownedPart.delta).toBe("é😀\ud800");
+      expect(
+        ownPrimitiveDelta({ ...source, metadata: { provider: { value: 1 } } }, 1_024),
+      ).toBeUndefined();
+      expect(
+        ownPrimitiveDelta({ ...source, hidden: new ArrayBuffer(4_096) }, 1_024),
+      ).toBeUndefined();
+      expect(ownPrimitiveDelta({ ...source, delta: 42 }, 1_024)).toBeUndefined();
+      expect(
+        ownPrimitiveDelta({ ...source, "~effect/ai/Content/Part": "invalid" }, 1_024),
+      ).toBeUndefined();
+      let reads = 0;
+
+      Object.defineProperty(source, "delta", {
+        get: () => {
+          reads++;
+
+          return "accessor";
+        },
+      });
+      expect(ownPrimitiveDelta(source, 1_024)).toBeUndefined();
+      expect(reads).toBe(0);
+    }
+  });
+
+  it("rejects disguised indexed storage before materializing its keys", () => {
+    const indexed = [Array.from({ length: 4_096 }, () => 0), new Uint8Array(4_096)];
+    const ownKeys = Reflect.ownKeys;
+    let indexedKeyRequests = 0;
+
+    for (const value of indexed) Object.setPrototypeOf(value, Object.prototype);
+    Reflect.ownKeys = (value) => {
+      if (indexed.some((candidate) => candidate === value)) indexedKeyRequests++;
+
+      return ownKeys(value);
+    };
+    try {
+      for (const value of indexed) {
+        expect(ownPrimitiveDelta(value, 1_024)).toBeUndefined();
+        expect(
+          ownPrimitiveDelta(
+            {
+              "~effect/ai/Content/Part": "~effect/ai/Content/Part",
+              type: "text-delta",
+              id: "reply",
+              delta: "text",
+              metadata: value,
+            },
+            1_024,
+          ),
+        ).toBeUndefined();
+      }
+      expect(indexedKeyRequests).toBe(0);
+    } finally {
+      Reflect.ownKeys = ownKeys;
+    }
+  });
 
   it.effect("reserves one bounded Run event slot for a typed terminal failure", () =>
     Effect.gen(function* () {

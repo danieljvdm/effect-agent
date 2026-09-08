@@ -99,6 +99,7 @@ const analyst = Agent.make("invoice-analyst", {
     maxTurns: 3,
     maxToolCalls: 6,
     maxDuration: "45 seconds",
+    // This sandbox example runs one generated program at a time.
     toolConcurrency: 1,
   }),
 });
