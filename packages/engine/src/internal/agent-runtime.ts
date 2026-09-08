@@ -70,7 +70,12 @@ import {
   unserializableToolResult,
   type ToolResultBounds,
 } from "@effect-agent/core/ToolResult";
-import { InputTokenUsage, ModelCallUsage, OutputTokenUsage } from "@effect-agent/core/Usage";
+import {
+  InputTokenUsage,
+  ModelCallUsage,
+  ModelResponseIdentity,
+  OutputTokenUsage,
+} from "@effect-agent/core/Usage";
 import type { Take } from "effect";
 import {
   Cause,
@@ -268,6 +273,7 @@ import {
   type PreparedRunContext,
   type RunContextPreparationError,
   type RunOptions,
+  type RunCostEstimateRequest,
   type RunSchedulingHook,
   type RunSubagentChildIdentity,
   type RunSubagentEstablishRequest,
@@ -551,6 +557,9 @@ interface TurnTrace {
   finished: boolean;
   finishReason: Response.FinishReason | undefined;
   usage: Response.Usage | undefined;
+  response?: ModelResponseIdentity;
+  finishMetadata?: Response.FinishPart["metadata"];
+  usageConsumed?: boolean;
 }
 
 type ProviderResultEventPayload =
@@ -2775,6 +2784,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
   toolCallCount: number,
   turn: number,
   options: RunOptions<HookError, HookRequirements>,
+  response: Pick<RunCostEstimateRequest, "response" | "finishMetadata" | "purpose"> = {},
 ): Effect.Effect<
   ConsumedUsage,
   AgentPolicyError | ModelProtocolError | HookError,
@@ -2892,7 +2902,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     const estimate =
       options.estimateCostMicrousd === undefined
         ? 0
-        : yield* options.estimateCostMicrousd(usage, { provider, model, usage });
+        : yield* options.estimateCostMicrousd(usage, { provider, model, usage, ...response });
 
     const costMicrousd = typeof estimate === "number" ? estimate : estimate.costMicrousd;
 
@@ -2904,6 +2914,13 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     }
     const serviceTier = typeof estimate === "number" ? undefined : estimate.serviceTier;
     const pricingVersion = typeof estimate === "number" ? undefined : estimate.pricingVersion;
+
+    const pricingStatus =
+      options.estimateCostMicrousd === undefined
+        ? "unknown"
+        : typeof estimate === "number"
+          ? "estimated"
+          : (estimate.pricingStatus ?? "estimated");
 
     const validPricingIdentity = (value: string | undefined): boolean =>
       value === undefined || (value.length > 0 && value.length <= 256);
@@ -2918,6 +2935,24 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     const modelUsage = ModelCallUsage.make({
       provider,
       model,
+      ...(response.response === undefined
+        ? {}
+        : { response: ModelResponseIdentity.make(response.response) }),
+      purpose: response.purpose ?? "turn",
+      usageStatus:
+        Object.values(providerUsage.inputTokens).every((value) => value === undefined) &&
+        Object.values(providerUsage.outputTokens).every((value) => value === undefined)
+          ? "unknown"
+          : [
+                providerUsage.inputTokens.uncached,
+                providerUsage.inputTokens.cacheRead,
+                providerUsage.inputTokens.cacheWrite,
+                providerUsage.outputTokens.text,
+                providerUsage.outputTokens.reasoning,
+              ].every((value) => value !== undefined)
+            ? "complete"
+            : "partial",
+      pricingStatus,
       ...(serviceTier === undefined ? {} : { serviceTier }),
       ...(pricingVersion === undefined ? {} : { pricingVersion }),
       inputTokens: InputTokenUsage.make({
@@ -3001,6 +3036,12 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         return yield* AgentPolicyError.make({
           limit: "cost",
           message: "Agent cost budget requires a model cost estimator",
+        });
+      }
+      if (pricingStatus === "unknown") {
+        return yield* AgentPolicyError.make({
+          limit: "cost",
+          message: "Agent cost budget requires a known model cost estimate",
         });
       }
       if (context.costMicrousd > costBudget) {
@@ -3491,12 +3532,14 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         };
 
         let summaryUsage: Response.Usage | undefined;
+        let summaryResponse: ModelResponseIdentity | undefined;
+        let summaryFinishMetadata: Response.FinishPart["metadata"] | undefined;
         let summaryFinished = false;
         let summaryFailure: ModelProtocolError | undefined;
         const textParts = new Map<string, PartLifecycle>();
         const reasoningParts = new Map<string, PartLifecycle>();
 
-        yield* guardBudgetStream(
+        const summaryExit = yield* guardBudgetStream(
           LanguageModel.streamText({ prompt: summarizerPrompt }),
           options.budget,
         ).pipe(
@@ -3519,7 +3562,12 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
               if (ownedPart.type === "text-delta") {
                 pieces.push(ownedPart.delta);
               } else if (ownedPart.type === "finish") {
-                summaryUsage = ownedPart.usage;
+                if (summaryUsage === undefined) {
+                  summaryUsage = ownedPart.usage;
+                  summaryFinishMetadata = ownedPart.metadata;
+                }
+              } else if (ownedPart.type === "response-metadata") {
+                summaryResponse = yield* responseIdentity(ownedPart, summaryResponse);
               }
               // Drain malformed responses within the buffer bounds so reported usage is charged.
               yield* Effect.gen(function* () {
@@ -3581,25 +3629,48 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
               );
             }),
           ),
+          Effect.exit,
         );
-        if (!summaryFinished) {
-          return yield* ModelProtocolError.make({
-            message: "Compaction response ended without a finish part",
-          });
+
+        if (summaryUsage === undefined) {
+          yield* options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void;
+          if (Exit.isFailure(summaryExit)) return yield* Effect.failCause(summaryExit.cause);
+          if (!summaryFinished)
+            return yield* ModelProtocolError.make({
+              message: "Compaction response ended without a finish part",
+            });
         }
         const wasFinalizing = context.finalizing;
+        const priorSummaryModelCalls = context.modelCalls;
 
         context.finalizing = true;
 
-        const consumed = yield* consumeUsage(agent, context, summaryUsage, 0, turn, options).pipe(
+        const consumedExit = yield* consumeUsage(agent, context, summaryUsage, 0, turn, options, {
+          response: summaryResponse,
+          finishMetadata: summaryFinishMetadata,
+          purpose: "summary",
+        }).pipe(
+          Effect.tapCause(() =>
+            summaryUsage !== undefined && context.modelCalls === priorSummaryModelCalls
+              ? (options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void)
+              : Effect.void,
+          ),
           Effect.ensuring(
             Effect.sync(() => {
               context.finalizing = wasFinalizing;
             }),
           ),
+          Effect.exit,
         );
 
-        events.push(...consumed.warnings);
+        if (Exit.isFailure(summaryExit)) return yield* Effect.failCause(summaryExit.cause);
+        if (Exit.isFailure(consumedExit)) return yield* Effect.failCause(consumedExit.cause);
+        events.push(...consumedExit.value.warnings);
+        if (!summaryFinished) {
+          return yield* ModelProtocolError.make({
+            message: "Compaction response ended without a finish part",
+          });
+        }
         const summary = pieces.join("").trim();
 
         if (summaryFailure !== undefined) return yield* summaryFailure;
@@ -3971,6 +4042,29 @@ const validateProviderPartIdentifiers = Effect.fnUntraced(function* (part: Respo
   }
 });
 
+const responseIdentity = (part: Response.ResponseMetadataPart, previous?: ModelResponseIdentity) =>
+  Schema.decodeUnknownEffect(ModelResponseIdentity)({
+    ...previous,
+    ...(part.id === undefined ? {} : { id: part.id }),
+    ...(part.modelId === undefined ? {} : { model: part.modelId }),
+  }).pipe(
+    Effect.mapError(() =>
+      ModelProtocolError.make({ message: "Invalid provider response identity" }),
+    ),
+    Effect.flatMap((identity) =>
+      (previous?.id !== undefined && part.id !== undefined && previous.id !== part.id) ||
+      (previous?.model !== undefined &&
+        part.modelId !== undefined &&
+        previous.model !== part.modelId)
+        ? Effect.fail(
+            ModelProtocolError.make({
+              message: "Provider response identity changed within one call",
+            }),
+          )
+        : Effect.succeed(identity),
+    ),
+  );
+
 const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
   (value: unknown, label: string): Effect.Effect<Schema.Json, ModelProtocolError> =>
     Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
@@ -4055,6 +4149,11 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
   | Tool.ParametersSchema<ToolUnion<Tools>>["EncodingServices"]
 > {
   yield* consumeModelResponsePart(trace, retainedBytes, context.bufferLimits);
+  // Capture reported accounting before lifecycle validation can reject the response.
+  if (part.type === "finish" && trace.usage === undefined) {
+    trace.usage = part.usage;
+    trace.finishMetadata = part.metadata;
+  }
   if (trace.finished) {
     return yield* ModelProtocolError.make({
       message: "Model response emitted content after its finish part",
@@ -4063,6 +4162,8 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
   // Provider/model identifiers are untrusted correlation keys. Reject them before they enter
   // the Turn trace, lifecycle maps, canonical event stream, diagnostics, or Tool scheduler.
   yield* validateProviderPartIdentifiers(part);
+  if (part.type === "response-metadata")
+    trace.response = yield* responseIdentity(part, trace.response);
   if (part.type !== "tool-call" && part.type !== "tool-result") trace.parts.push(part);
   switch (part.type) {
     case "text-start": {
@@ -5338,6 +5439,36 @@ const makeTurn = <
         return Prompt.fromMessages(prepared);
       };
 
+      const consumeTurnUsage = (toolCallCount: number) =>
+        Effect.suspend(() => {
+          trace.usageConsumed = true;
+          const priorModelCalls = context.modelCalls;
+
+          return consumeUsage(agent, context, trace.usage, toolCallCount, turn, options, {
+            response: trace.response,
+            finishMetadata: trace.finishMetadata,
+            purpose: "turn",
+          }).pipe(
+            withCallModel,
+            Effect.tapCause(() =>
+              context.modelCalls === priorModelCalls
+                ? (options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void)
+                : Effect.void,
+            ),
+          );
+        });
+
+      // Failure accounting observes the already-selected failure; a secondary
+      // budget/estimator failure must not replace that native outcome.
+      const retainFailedUsage = Effect.fn("AgentRuntime.retainFailedUsage")(function* () {
+        if (trace.usageConsumed) return;
+        trace.usageConsumed = true;
+        if (trace.usage === undefined) {
+          return yield* options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void;
+        }
+        yield* consumeTurnUsage(0).pipe(Effect.exit);
+      });
+
       const attempt = (basis: Prompt.Prompt) =>
         Stream.unwrap(
           outgoingModelPrompt(
@@ -5394,6 +5525,11 @@ const makeTurn = <
                     }),
                     options.budget,
                   ).pipe(
+                    Stream.onStart(
+                      Effect.sync(() => {
+                        trace.usageConsumed = false;
+                      }),
+                    ),
                     Stream.mapEffect((part) =>
                       ownModelResponsePart(
                         part,
@@ -5415,6 +5551,7 @@ const makeTurn = <
                       ),
                     ),
                     Stream.flatMap(Stream.fromIterable),
+                    Stream.tapCause(() => retainFailedUsage()),
                   ),
                 ),
               );
@@ -5694,14 +5831,7 @@ const makeTurn = <
               Stream.concat(
                 Stream.unwrap(
                   Effect.gen(function* () {
-                    const consumed = yield* consumeUsage(
-                      agent,
-                      context,
-                      trace.usage,
-                      trace.toolCalls.size,
-                      turn,
-                      options,
-                    );
+                    const consumed = yield* consumeTurnUsage(trace.toolCalls.size);
 
                     const pre: Array<RunEvent> = [...consumed.warnings];
 
@@ -6059,7 +6189,7 @@ const makeTurn = <
       const events = Stream.fromIterable(preEvents).pipe(
         Stream.concat(started),
         Stream.concat(response),
-        Stream.concat(continuation),
+        Stream.concat(continuation.pipe(Stream.tapCause(() => retainFailedUsage()))),
       );
 
       return modelServices === undefined ? events : Stream.provideContext(events, modelServices);

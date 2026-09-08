@@ -217,3 +217,29 @@ History retention waits for run-local cleanup, result validation, and commit bef
 `RunCompleted`. Interrupting a waiter for durable accepted work only detaches that waiter. Abort a
 durable Submission with an explicit persisted command. See
 [Persistence & durability](../concepts/durability).
+
+## Provider usage and cost evidence
+
+A cost estimator receives the configured binding name in `request.model` and the actual
+provider-reported identity in `request.response`. Use the latter for response-sensitive pricing.
+`request.finishMetadata` carries native Effect AI finish metadata only during estimation; the
+engine never persists provider HTTP details or raw metadata in accounting records. A summarizer
+uses the same estimator with `purpose: "summary"`.
+
+Calls retain `usageStatus` and `pricingStatus`. Missing legacy status is unknown, and a numeric
+zero without an estimate is not evidence of free execution. Run summaries distinguish complete,
+partial, and unknown coverage; `unobservedModelCalls` counts observed calls without retained accounting,
+which are excluded from numeric token and call totals. A canonical `ModelResponseInterrupted`
+can indicate additional unquantified provider work beyond this count.
+
+An explicitly configured `costBudgetMicrousd` fails with a typed cost-policy error when the
+estimator reports unknown pricing, after retaining the call's usage. Uncapped Runs may continue;
+legacy numeric estimates and estimates without a status remain trusted host estimates.
+
+Response records also retain each Turn's missing-call count, so approval and child suspension
+preserve incomplete accounting when a fresh runtime resumes the Run.
+
+Canonical response records own committed per-call usage. Terminal settlement
+`uncommittedModelUsage` retains only staged calls not already present in a response record;
+its charges are already included in `usageSummary`, so do not add them a second time. An isolate
+loss before either response or settlement commit cannot prove the lost call's usage or cost.

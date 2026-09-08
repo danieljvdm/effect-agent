@@ -704,7 +704,7 @@ export class DurableRuntimeConfig extends Context.Service<
 }
 
 /** Terminal outcome an Attempt decided before terminalization (DUR-011). */
-type AttemptOutcome =
+type AttemptOutcome = { readonly uncommittedModelUsage?: ReadonlyArray<ModelCallUsage> } & (
   | {
       readonly _tag: "completed";
       readonly result: PersistedJson;
@@ -723,7 +723,8 @@ type AttemptOutcome =
       readonly policyLimit?: PolicyLimit;
       readonly usageSummary?: RunUsageSummary;
     }
-  | { readonly _tag: "aborted"; readonly usageSummary?: RunUsageSummary };
+  | { readonly _tag: "aborted"; readonly usageSummary?: RunUsageSummary }
+);
 
 /**
  * What one `runModel` pass produced: a terminal `AttemptOutcome` for terminalization, a
@@ -2571,6 +2572,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ? { policyLimit: outcome.policyLimit }
           : {}),
         ...(outcome.usageSummary === undefined ? {} : { usageSummary: outcome.usageSummary }),
+        ...(includeRunId && outcome.uncommittedModelUsage !== undefined
+          ? { uncommittedModelUsage: outcome.uncommittedModelUsage }
+          : {}),
       }),
     ).pipe(Effect.orDie);
 
@@ -3861,6 +3865,34 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         }
       >();
 
+      // Staging also backs the cumulative summary; keep it intact and track canonical prefixes.
+      const committedUsageLengths = new Map<number, number>();
+
+      const recordCommittedUsage = (batch: CanonicalBatch) => {
+        for (const record of batch.records) {
+          if (record.payload._tag !== "ModelResponseRecorded") continue;
+          const payload = record.payload;
+
+          committedUsageLengths.set(
+            payload.turn,
+            Math.max(committedUsageLengths.get(payload.turn) ?? 0, payload.modelUsage?.length ?? 0),
+          );
+        }
+      };
+
+      const uncommittedModelUsage = () =>
+        [...stagedUsage.entries()].flatMap(([turn, usage]) =>
+          usage.modelUsage.slice(committedUsageLengths.get(turn) ?? 0),
+        );
+
+      // Like stagedUsage, these counts remain relative to the initial journal snapshot.
+      const stagedUnobservedCalls = new Map<number, number>();
+
+      let interruptedUsage = records.some(
+        ({ record }) =>
+          record.payload._tag === "ModelResponseInterrupted" && record.payload.runId === runId,
+      );
+
       const checkedUsageTotal = (
         field: string,
         value: number,
@@ -3883,6 +3915,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const currentUsageSummary = (): Effect.Effect<RunUsageSummary, RunJournalError> =>
         Effect.gen(function* () {
           const stagedCalls = [...stagedUsage.values()].flatMap((usage) => usage.modelUsage);
+          let unobservedModelCalls = journal.usage.unobservedModelCalls ?? 0;
+
+          for (const count of stagedUnobservedCalls.values()) {
+            unobservedModelCalls = yield* addUsageTotal(
+              "unobservedModelCalls",
+              unobservedModelCalls,
+              count,
+            );
+          }
           const detailedCalls = [...journal.usage.modelUsage, ...stagedCalls];
 
           const detailed = yield* summarizeModelUsage(detailedCalls).pipe(
@@ -3946,6 +3987,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               (group) =>
                 group.provider === "unknown" &&
                 group.model === "legacy-record" &&
+                group.responseModel === undefined &&
                 group.serviceTier === undefined &&
                 group.pricingVersion === undefined,
             );
@@ -4026,6 +4068,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             }),
             costMicrousd,
             byModel,
+            unobservedModelCalls,
+            usageStatus:
+              legacyCalls > 0 || unobservedModelCalls > 0 || interruptedUsage
+                ? detailed.usageStatus === "unknown"
+                  ? "unknown"
+                  : "partial"
+                : detailed.usageStatus,
+            pricingStatus:
+              legacyCalls > 0 || unobservedModelCalls > 0 || interruptedUsage
+                ? detailed.pricingStatus === "unknown"
+                  ? "unknown"
+                  : "partial"
+                : detailed.pricingStatus,
           });
         });
 
@@ -4459,10 +4514,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     ? { runScopedPrefixLength: pendingSlice.length }
                     : {}),
                   usage: stagedUsage.get(canonicalTurn),
+                  unobservedModelCalls: stagedUnobservedCalls.get(canonicalTurn),
                 }),
               );
 
               yield* appendBatch(ctx, batch);
+              recordCommittedUsage(batch);
               for (const record of batch.records) knownIds.add(record.recordId);
               yield* hit("turn:after-response-append");
             }),
@@ -4596,6 +4653,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               costMicrousd: (prior?.costMicrousd ?? 0) + usage.usage.costMicrousd,
               modelUsage: [...(prior?.modelUsage ?? []), usage.usage],
             });
+          }),
+        noteIncompleteUsage: (turn) =>
+          Effect.sync(() => {
+            stagedUnobservedCalls.set(turn, (stagedUnobservedCalls.get(turn) ?? 0) + 1);
           }),
         commitCompaction: (commit) =>
           Effect.gen(function* () {
@@ -5935,10 +5996,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               ...(runScopedPrefixLength > 0 ? { runScopedPrefixLength } : {}),
               ...(completedRun === undefined ? {} : { runCompletion: completedRun }),
               usage: stagedUsage.get(canonicalTurn),
+              unobservedModelCalls: stagedUnobservedCalls.get(canonicalTurn),
             }),
           );
 
           yield* appendBatch(ctx, batch);
+          recordCommittedUsage(batch);
           for (const record of batch.records) knownIds.add(record.recordId);
           yield* hit("turn:after-canonical-append");
         }
@@ -6148,6 +6211,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         lineage.supersededEpoch < ctx.producerEpoch
       ) {
         yield* appendInterruptedAudit(ctx, runId, lineage, knownIds);
+        interruptedUsage = true;
       }
 
       const consume = Stream.runForEach(
@@ -6303,12 +6367,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       if (result._tag === "suspendedRun") return approvalSuspension(result.toolCallId);
       if (result._tag === "suspendedChildRun") return childSuspension(result.children);
       if (result._tag === "aborted") {
-        return abortedRunPhase(yield* currentUsageSummary());
+        return {
+          ...abortedRunPhase(yield* currentUsageSummary()),
+          uncommittedModelUsage: uncommittedModelUsage(),
+        };
       }
       if (result._tag === "failedRun") {
         const failed: RunPhaseOutcome = {
           ...result.outcome,
           usageSummary: yield* currentUsageSummary(),
+          uncommittedModelUsage: uncommittedModelUsage(),
         };
 
         return failed;
@@ -6335,6 +6403,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ? {}
           : { exhausted: state.completedExhausted }),
         usageSummary: yield* currentUsageSummary(),
+        uncommittedModelUsage: uncommittedModelUsage(),
       };
 
       return completed;

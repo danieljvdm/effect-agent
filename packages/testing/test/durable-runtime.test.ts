@@ -5367,6 +5367,114 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
 });
 
 layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
+  // Explicit limits remain enforceable while ordinary work stays uncapped:
+  // https://linear.app/reve-ai/issue/KOM-127
+  it.effect(
+    "requires a known price only for an explicit cost budget and retains unknown evidence",
+    () =>
+      Effect.gen(function* () {
+        const configured = yield* DurableRuntimeConfig;
+
+        const cases = [
+          {
+            capped: true,
+            estimate: { costMicrousd: 0, pricingStatus: "unknown" as const },
+            failed: true,
+            pricingStatus: "unknown",
+          },
+          {
+            capped: false,
+            estimate: { costMicrousd: 0, pricingStatus: "unknown" as const },
+            failed: false,
+            pricingStatus: "unknown",
+          },
+          { capped: true, estimate: 0, failed: false, pricingStatus: "estimated" },
+          {
+            capped: true,
+            estimate: { costMicrousd: 0 },
+            failed: false,
+            pricingStatus: "estimated",
+          },
+        ];
+
+        for (const [index, scenario] of cases.entries()) {
+          const runtime = yield* DurableAgentRuntime.pipe(
+            Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+            Effect.provideService(DurableRuntimeConfig, {
+              ...configured,
+              estimateCostMicrousd: () => Effect.succeed(scenario.estimate),
+            }),
+          );
+
+          const definition = Agent.make("explicit-price-coverage", {
+            input: Schema.Struct({ question: Schema.String }),
+            output: Schema.Struct({ answer: Schema.String }),
+            instructions: "Answer.",
+            toolkit: Toolkit.empty,
+            policy: AgentPolicy.make({
+              maxTurns: 3,
+              maxToolCalls: 2,
+              maxDuration: "30 seconds",
+              toolConcurrency: 1,
+              ...(scenario.capped ? { costBudgetMicrousd: 1 } : {}),
+            }),
+          });
+
+          const scripted = yield* makeScriptedModel(() => [
+            ...finalParts('{"answer":"done"}').slice(0, -1),
+            {
+              type: "finish",
+              reason: "stop",
+              usage: {
+                inputTokens: { total: 10, uncached: 10, cacheRead: 0, cacheWrite: 0 },
+                outputTokens: { total: 5, text: 5, reasoning: 0 },
+              },
+            },
+          ]);
+
+          const agent = Agent.withModel(definition, scripted.model);
+          const thread = `explicit-price-coverage-${index}`;
+
+          yield* runtime.submit(
+            agent,
+            { question: "price?" },
+            submitOptions(thread, `price-${index}`),
+          );
+          const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
+          expect(settlements[0]?.outcome).toBe(scenario.failed ? "failed" : "completed");
+          const records = yield* readLog(thread);
+
+          const terminal = records
+            .map(({ record }) => record.payload)
+            .find((payload) => payload._tag === "SubmissionSettled");
+
+          expect(terminal?.policyLimit).toBe(scenario.failed ? "cost" : undefined);
+          expect(terminal?.usageSummary).toMatchObject({
+            modelCalls: 1,
+            costMicrousd: 0,
+            pricingStatus: scenario.pricingStatus === "unknown" ? "unknown" : "complete",
+          });
+
+          const calls = records.flatMap(({ record }) =>
+            record.payload._tag === "ModelResponseRecorded"
+              ? (record.payload.modelUsage ?? [])
+              : [],
+          );
+
+          expect([...calls, ...(terminal?.uncommittedModelUsage ?? [])]).toMatchObject([
+            {
+              pricingStatus: scenario.pricingStatus,
+              costMicrousd: 0,
+              inputTokens: { total: 10 },
+              outputTokens: { total: 5 },
+            },
+          ]);
+          yield* runtime.processThread(agent, decodeThreadId(thread));
+          expect(yield* readLog(thread)).toEqual(records);
+        }
+      }),
+  );
   it.effect(
     "persists cache splits and pricing identity, enforces cost, and settles with usage",
     () =>
@@ -5434,6 +5542,9 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
           {
             provider: "scripted",
             model: "durable-test",
+            purpose: "turn",
+            usageStatus: "complete",
+            pricingStatus: "estimated",
             serviceTier: "priority",
             pricingVersion: "prices-2026-08-24",
             inputTokens: meteredUsage.inputTokens,
