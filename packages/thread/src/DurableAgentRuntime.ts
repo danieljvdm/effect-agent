@@ -53,6 +53,7 @@ import {
   ModelUsageAccounting,
   RunContextPreparation,
   RunToolAuthorization,
+  RunToolScheduling,
   RunContextPreparationPassthrough,
   type RunContextPreparationError,
   type ChildEstablishStatus,
@@ -984,6 +985,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   );
 
   const runToolAuthorization = yield* RunToolAuthorization;
+  const runToolScheduling = yield* RunToolScheduling;
 
   const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
     Effect.flatMap(
@@ -6663,6 +6665,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               : messagingRuntime.forTool(source, submission.principal),
           ),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
+          Stream.provideService(RunToolScheduling, runToolScheduling),
           Stream.provideService(ContextCompactor, compactor),
           Stream.provideService(RunContextPreparation, runContextPreparation),
         ),

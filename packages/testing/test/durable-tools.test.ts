@@ -10,6 +10,7 @@ import {
   RunContextPreparation,
   RunContextPreparationPassthrough,
   RunToolAuthorization,
+  RunToolScheduling,
   toolFailureObserverLayer,
   type ToolFailureObservation,
   type RunToolAuthorizationDecision,
@@ -483,6 +484,79 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
+  it.effect("captures host scheduling barriers while independent durable reads overlap", () =>
+    Effect.gen(function* () {
+      const bothReading = yield* Deferred.make<void>();
+      const active = yield* Ref.make(0);
+      const finished = yield* Ref.make(0);
+      const events: Array<string> = [];
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? toolTurn(
+              toolCall("read-1", "search", { query: "one" }),
+              toolCall("read-2", "search", { query: "two" }),
+              toolCall("write-1", "book", { ref: "reservation" }),
+            )
+          : finalParts('{"answer":"done"}'),
+      );
+
+      const agent = Agent.withModel(mixedDefinition, scripted.model);
+
+      const runtime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithServices.pipe(
+            Layer.provide(
+              Layer.succeed(RunToolScheduling, {
+                toolRequiresSequential: (name) => name === "book",
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const thread = "thread-host-tool-scheduling";
+
+      yield* runtime.submit(
+        agent,
+        { question: "read then write" },
+        submitOptions(thread, "schedule-1"),
+      );
+
+      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread)).pipe(
+        // A caller cannot replace the policy captured when the durable host was constructed.
+        Effect.provideService(RunToolScheduling, { runOverride: { mode: "sequential" } }),
+        Effect.provide(
+          mixedTools.toLayer({
+            search: ({ query }) =>
+              Effect.gen(function* () {
+                events.push(`start:${query}`);
+                if ((yield* Ref.updateAndGet(active, (count) => count + 1)) === 2)
+                  yield* Deferred.succeed(bothReading, undefined);
+                yield* Deferred.await(bothReading);
+                yield* Ref.update(active, (count) => count - 1);
+                yield* Ref.update(finished, (count) => count + 1);
+                events.push(`finish:${query}`);
+
+                return { available: true };
+              }),
+            book: () =>
+              Effect.gen(function* () {
+                expect(yield* Ref.get(active)).toBe(0);
+                expect(yield* Ref.get(finished)).toBe(2);
+                events.push("write");
+
+                return { confirmation: "saved" };
+              }),
+          }),
+        ),
+      );
+
+      expect(settlements[0]?.outcome).toBe("completed");
+      expect(events.slice(0, 2)).toEqual(["start:one", "start:two"]);
+      expect(events.at(-1)).toBe("write");
+    }),
+  );
   it.effect("builds captured Tool services once per Attempt and finalizes before replacement", () =>
     Effect.gen(function* () {
       const lifecycle: Array<string> = [];

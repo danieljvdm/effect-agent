@@ -821,6 +821,17 @@ export interface RunSchedulingHook {
 }
 
 /**
+ * Host Tool scheduling, captured by durable runtimes across replacement Attempts.
+ * The Agent's admitted concurrency remains the upper bound. A sequential Tool
+ * forms a barrier around neighboring parallel batches, including on recovery.
+ * Ephemeral Runs may override this reference with `RunOptions.scheduling`.
+ */
+export const RunToolScheduling = Context.Reference<RunSchedulingHook>(
+  "@effect-agent/engine/RunToolScheduling",
+  { defaultValue: () => ({}) },
+);
+
+/**
  * Tightening-only memory limits for one Run. The engine supplies finite ceilings for every field;
  * callers may lower them for a deployment or test but cannot widen the engine defaults.
  */

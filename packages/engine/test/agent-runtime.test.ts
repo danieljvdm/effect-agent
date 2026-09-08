@@ -16,6 +16,7 @@ import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { AgentResultSchema, withTerminalDefectEvent } from "@effect-agent/engine/AgentRuntime";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import {
+  RunToolScheduling,
   type RunBudgetHook,
   type RunToolAuthorizationRequest,
   type RunTurnResume,
@@ -5896,6 +5897,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
           },
         },
       ).pipe(
+        Effect.provideService(RunToolScheduling, { runOverride: { mode: "sequential" } }),
         Effect.provide(
           tools.toLayer({
             ordinary: ({ value }) => enter().pipe(Effect.ensuring(leave), Effect.as(value)),
@@ -5916,7 +5918,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
-  it.effect("applies a sequential Run override to the entire Tool batch", () =>
+  it.effect("applies the host sequential scheduling policy to the entire Tool batch", () =>
     Effect.gen(function* () {
       const active = yield* Ref.make(0);
       const maximum = yield* Ref.make(0);
@@ -5981,11 +5983,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         }),
       });
 
-      yield* AgentRuntime.run(
-        Agent.withModel(definition, model),
-        { question: "work" },
-        { scheduling: { runOverride: { mode: "sequential" } } },
-      ).pipe(
+      yield* AgentRuntime.run(Agent.withModel(definition, model), { question: "work" }).pipe(
+        Effect.provideService(RunToolScheduling, { runOverride: { mode: "sequential" } }),
         Effect.provide(
           tools.toLayer({
             work: ({ value }) =>
