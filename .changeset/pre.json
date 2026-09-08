@@ -123,6 +123,7 @@
     "node-host-workers",
     "normalize-overlapping-cache-writes",
     "observed-browser-actions",
+    "older-context-matches",
     "optional-semantic-memory",
     "original-provider-tool-schemas",
     "owned-progress-budget",
