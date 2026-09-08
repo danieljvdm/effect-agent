@@ -131,6 +131,11 @@ const retainedEvidence = Effect.fn("ThreadContextHistoryProjection.evidence")(fu
  * and watermark atomically. Validate nondecreasing coversThrough across rollover boundaries.
  * Filter both evidence and committing boundary sequences to the operation's captured tail.
  * Authorization and canonical verification of index candidates remain the host's responsibility.
+ * For search pagination, resolve and canonically verify `beforeRecordId` as eligible evidence
+ * in the same Thread and captured tail, then select matching evidence with sequence strictly
+ * below that anchor, in descending sequence order. The anchor need not match the new query.
+ * Do not restrict rollover boundaries to the anchor: later commits may assign older evidence
+ * to a window. An ID or an index row alone does not establish existence, eligibility, or access.
  */
 export const project = Effect.fn("ThreadContextHistoryProjection.project")(function* (
   envelope: CanonicalRecordEnvelope,

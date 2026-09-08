@@ -1151,12 +1151,42 @@ Merge `tools` into the Agent's toolkit and provide `toolHandlers` when building 
 where the registered Agent's tool services are provided. It depends on the host's `ThreadStore`;
 an ephemeral application can implement the `ContextHistory` port over its retained transcript.
 
-| Tool                                                    | Behavior                                                                                 |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `new_context({ handoff? })`                             | Requests a rollover before the next turn. Call it alone, after saving notes.             |
-| `get_context_remaining({})`                             | Returns window identity and estimated live tokens. Unconfigured capacity is `null`.      |
-| `search_context_windows({ query, limit? })`             | Searches retained evidence in the current thread; returns at most three record snippets. |
-| `read_context_window({ recordId, offset?, maxChars? })` | Reads up to 5,000 characters; use `nextOffset` to continue.                              |
+| Tool                                                         | Behavior                                                                                 |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `new_context({ handoff? })`                                  | Requests a rollover before the next turn. Call it alone, after saving notes.             |
+| `get_context_remaining({})`                                  | Returns window identity and estimated live tokens. Unconfigured capacity is `null`.      |
+| `search_context_windows({ query, limit?, beforeRecordId? })` | Searches retained evidence newest first; returns at most three record snippets per page. |
+| `read_context_window({ recordId, offset?, maxChars? })`      | Reads up to 5,000 characters; use `nextOffset` to continue.                              |
+
+History search matches **one literal substring**, after trimming surrounding whitespace and
+JavaScript case folding. It does not interpret multiple keywords, AND/OR, wildcards, regular
+expressions, or quotes as query syntax. Search for a short exact phrase, document label, or
+identifier: `"RECEIPTS dock-03"` only finds those characters together; `"dock-03"` finds that label
+wherever it occurs in eligible text.
+
+Recent search calls and notes can themselves match. To reach older records, repeat the query
+with `beforeRecordId` set to the **last hit's** `recordId`. The anchor and every newer canonical
+position are excluded. Continue until the result contains fewer than the requested limit
+(default three), including an empty array. A full final page needs one more request to see the
+empty page. For example, these model tool calls use an illustrative returned ID:
+
+```ts
+search_context_windows({ query: "dock-03", limit: 3 });
+// If the last hit has recordId "record:42":
+search_context_windows({ query: "dock-03", limit: 3, beforeRecordId: "record:42" });
+// Once an original source is found, read its recordId with read_context_window.
+```
+
+`ContextHistory.search` keeps its existing hit-array result and one-to-twenty result limit;
+existing callers can omit the new optional field. IDs are opaque, not sortable positions or
+authorization capabilities. An anchor must be eligible retained evidence in the current Thread,
+but need not match the query. An unknown, removed, foreign, or non-evidence anchor returns
+`ContextHistoryError` with reason `not-found`; malformed parameters return `invalid-input`.
+Each request captures a fresh tail and checks current authorization. New appends cannot push
+older matches out of a continued page, but pages do not share a retained snapshot or bypass
+retention. A scan, deadline, or index-work limit is an explicit failure, never an exhausted page.
+Search snippets remain at most 2,000 UTF-16 characters each; text reads use their existing bounds.
+Every continuation is another Tool call charged to the Run's ordinary cumulative limits.
 
 Both the default compactor and `layerRollover` honor an explicit `new_context` request. Custom
 strategies must emit its requested rollover and cutoff. The engine recognizes the trusted Tool
@@ -1202,6 +1232,20 @@ boundary records to it. Do not return partial results when the index has not cov
 The index supplies candidate identities and sequences; recheck host authorization and reread each
 selected canonical record before returning evidence. A known sequence permits a single
 `ThreadStore.read` with `afterSequence: sequence - 1` and `limit: 1`, followed by identity checks.
+
+Custom `ContextHistory` adapters, including application-owned Cloudflare indexes, must implement
+`beforeRecordId` before using the updated native search tool. Resolve the anchor in the authorized
+Thread and captured tail, reread its canonical record, and check its identity and evidence
+eligibility. Then select literal matches with `sequence < anchor.sequence`, ordered by descending
+sequence, up to the requested limit. Keep boundary lookup bounded by the captured tail, **not**
+the anchor: a later rollover commit can assign older evidence to a window. Reverify each selected
+source and its literal match. Bound index catch-up, candidate work, result bytes, and deadlines;
+fail explicitly when a complete page cannot be established. Do not emulate this with an offset
+into a changing result set, silently ignore the anchor, or truncate candidates before matching.
+An adapter awaiting this update must reject anchored requests with `unavailable` rather than
+returning the first page again. The built-in `ThreadContextHistory.layer` implements the contract
+over every `ThreadStore`; its default scan ceiling and deadline are unchanged, and storage
+adapters need no persisted-format migration.
 
 An evidence index does not replace durable recovery. Journal and recovery-control reconstruction
 still traverse historical canonical records after rollover. Measure that host path separately
