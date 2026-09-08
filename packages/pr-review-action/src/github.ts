@@ -464,12 +464,10 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     });
   });
 
-  /** Never truncate feedback used to authorize clearing an entire change request. */
+  /** Revisit unresolved feedback independently of the delta; never truncate its blockers. */
   const loadReviewFollowUps = Effect.fn("GitHubClient.loadReviewFollowUps")(function* (input: {
     readonly reviewAuthor: string;
     readonly history: ReadonlyArray<ReviewHistoryItem>;
-    readonly scope: "full" | "incremental";
-    readonly changedPaths: ReadonlySet<string>;
   }) {
     const followUps: Array<ReviewFollowUp> = [];
 
@@ -507,11 +505,6 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
         );
         if (batch.length < 100) break;
       }
-      if (
-        input.scope === "incremental" &&
-        !comments.some((comment) => input.changedPaths.has(comment.path))
-      )
-        continue;
 
       const candidate = Schema.decodeUnknownOption(ReviewFollowUp)({
         id: String(review.id),
@@ -584,8 +577,6 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     const [currentFollowUp] = yield* loadReviewFollowUps({
       reviewAuthor: input.reviewAuthor,
       history: [currentReview],
-      scope: "full",
-      changedPaths: new Set(),
     });
 
     if (currentFollowUp?.description !== input.followUp.description) {

@@ -1080,6 +1080,8 @@ describe("review provider boundary", () => {
 
   it.effect.each([
     "addressed",
+    "earlier-path",
+    "body-only",
     "omitted",
     "incomplete",
     "new-blocker",
@@ -1087,25 +1089,29 @@ describe("review provider boundary", () => {
     "publish-failure",
     "dismiss-failure",
   ] as const)(
-    "rechecks a blocker after two automatic attempts without widening the delta: %s",
+    "rechecks unresolved blockers from earlier automatic reviews without widening the delta: %s",
     (mode) =>
       Effect.gen(function* () {
         let modelCalls = 0;
         let dismissed = false;
+        let readPriorSource = false;
         const mutations: Array<string> = [];
         const published: Array<string> = [];
         const user = { login: "github-actions[bot]", type: "Bot" };
+        const outsideDelta = mode === "earlier-path" || mode === "body-only";
+        const addressed = mode === "addressed" || outsideDelta;
+        const priorPath = outsideDelta ? "src/profile.ts" : "src/value.ts";
 
         const prior = {
           id: 2,
-          body: `One blocking defect.\n${reviewMarker(true)}`,
-          commit_id: "reviewed-head",
+          body: `${priorPath}: ${finding.body}\n${reviewMarker(true)}`,
+          commit_id: outsideDelta ? "initial-head" : "reviewed-head",
           submitted_at: "2026-08-25T01:00:00Z",
           state: "CHANGES_REQUESTED",
           user,
         };
 
-        const evidence = "src/value.ts now returns the saved value instead of zero.";
+        const evidence = `${priorPath} now returns the saved value instead of zero.`;
 
         const client = HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
@@ -1119,6 +1125,14 @@ describe("review provider boundary", () => {
               expect(input).toContain("reviewed-head");
               expect(input).toContain("incremental");
               expect(input).toContain("Returning zero loses the acknowledged value");
+
+              if (outsideDelta && modelCalls === 1)
+                return sse(
+                  httpRequest,
+                  modelCalls,
+                  [{ ...read, parameters: { ...read.parameters, path: priorPath } }],
+                  rawUsage(1_000, 100),
+                );
 
               if (mode === "new-blocker" && modelCalls === 1)
                 return sse(httpRequest, modelCalls, [record], rawUsage(1_000, 100));
@@ -1160,9 +1174,20 @@ describe("review provider boundary", () => {
                   submitted_at: "2026-08-25T00:00:00Z",
                 },
                 { ...prior, state: dismissed ? "DISMISSED" : "CHANGES_REQUESTED" },
+                ...(outsideDelta
+                  ? [
+                      {
+                        ...prior,
+                        id: 3,
+                        state: "DISMISSED",
+                        commit_id: "reviewed-head",
+                        submitted_at: "2026-08-25T01:30:00Z",
+                      },
+                    ]
+                  : []),
                 {
                   ...prior,
-                  id: 3,
+                  id: 4,
                   state: "COMMENTED",
                   body: reviewPauseMarker(2),
                   commit_id: "head",
@@ -1170,14 +1195,19 @@ describe("review provider boundary", () => {
                 },
               ]);
             if (url.pathname.endsWith("/reviews/2/comments"))
-              return json(httpRequest, [
-                {
-                  pull_request_review_id: 2,
-                  path: "src/value.ts",
-                  body: finding.body,
-                  user,
-                },
-              ]);
+              return json(
+                httpRequest,
+                mode === "body-only"
+                  ? []
+                  : [
+                      {
+                        pull_request_review_id: 2,
+                        path: priorPath,
+                        body: finding.body,
+                        user,
+                      },
+                    ],
+              );
             if (url.pathname.endsWith("/reviews/2")) return json(httpRequest, prior);
             if (url.pathname.endsWith("/reviews/2/dismissals")) {
               expect(httpRequest.method).toBe("PUT");
@@ -1232,6 +1262,18 @@ describe("review provider boundary", () => {
                 sha: tree,
                 truncated: false,
                 tree: [
+                  ...(outsideDelta
+                    ? [
+                        {
+                          path: priorPath,
+                          type: "blob",
+                          mode: "100644",
+                          // The original fix is already in the last reviewed baseline.
+                          sha: "fixed-profile-blob",
+                          size: 43,
+                        },
+                      ]
+                    : []),
                   {
                     path: "src/value.ts",
                     type: "blob",
@@ -1245,6 +1287,8 @@ describe("review provider boundary", () => {
             if (url.pathname.includes("/git/blobs/")) {
               const sha = url.pathname.split("/").at(-1);
               const source = `export const value = 1;\nreturn ${sha?.startsWith("reviewed-head") ? "0" : "value"};\n`;
+
+              if (sha === "fixed-profile-blob") readPriorSource = true;
 
               return json(httpRequest, {
                 sha,
@@ -1299,16 +1343,20 @@ describe("review provider boundary", () => {
           Effect.exit,
         );
 
-        expect(modelCalls).toBe(mode === "new-blocker" ? 2 : 1);
-        expect(Exit.isSuccess(exit)).toBe(mode === "addressed");
-        expect(dismissed).toBe(mode === "addressed" || mode === "publish-failure");
+        expect(modelCalls).toBe(mode === "new-blocker" || outsideDelta ? 2 : 1);
+        expect(readPriorSource).toBe(outsideDelta);
+        expect(Exit.isSuccess(exit)).toBe(addressed);
+        expect(dismissed).toBe(addressed || mode === "publish-failure");
         expect(mutations).toEqual(
           dismissed || mode === "dismiss-failure" ? ["dismiss", "publish"] : ["publish"],
         );
-        if (mode === "addressed") {
+        if (addressed) {
           expect(published[0]).toContain("**Incremental**");
+          expect(published[0]).toContain("1 reviewed");
           expect(published[0]).toContain("✅ None");
-          expect(published[0]).toContain("2 automatic reviews remain");
+          expect(published[0]).toContain(
+            outsideDelta ? "1 automatic review remains" : "2 automatic reviews remain",
+          );
         } else if (mode === "omitted")
           expect(published[0]).toContain("1 earlier change request remains unresolved");
         else if (mode === "stale" || mode === "incomplete" || mode === "dismiss-failure")

@@ -69,9 +69,10 @@ The dismissal records the inspected commit and the fixing evidence. A clean delt
 resolved conversation, or commit message alone does not clear earlier feedback. Human and other
 bots' reviews are never dismissed.
 
-Incremental passes select prior reviews with an inline finding on an admitted changed path.
-They verify those specific blockers without expanding new-defect discovery beyond the delta.
-Use `@effect-agent review full` for body-only findings, fixes in other paths, or a manual same-head retry.
+Incremental passes revisit unresolved reviews, including body-only findings and findings on paths
+outside the latest delta. A fix retained because its pass found a new blocker can be verified again
+on a later pass even when the original path no longer changes. This verification does not expand
+new-defect discovery beyond the delta. Use `@effect-agent review full` for a manual same-head retry.
 At most eight prior reviews are considered, each with its complete review body and bot comments
 within 32,000 characters. Oversized feedback stays blocking; it is never truncated for verification.
 Follow-up verification shares the same conversation and spending and execution
