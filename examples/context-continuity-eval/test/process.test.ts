@@ -1,7 +1,8 @@
 import { NodeServices } from "@effect/platform-node";
-import { ConfigProvider, Effect, FileSystem, Layer, Path } from "effect";
+import { ConfigProvider, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { expect, it } from "vite-plus/test";
 
+import { RecoveryCheckpointEvidence } from "../src/contracts.ts";
 import { pressureInstructions, pressureScenario, pressureToolkit } from "../src/pressure.ts";
 import { supervise } from "../src/process-host.ts";
 
@@ -13,7 +14,7 @@ it("keeps the oracle out of the pressure script and removes model-directed rollo
 });
 
 it("recovers the real SQLite runtime after two SIGKILLs with pressure and cumulative accounting", async () => {
-  const report = await Effect.runPromise(
+  const { report, checkpoint } = await Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -22,7 +23,7 @@ it("recovers the real SQLite runtime after two SIGKILLs with pressure and cumula
         prefix: "continuity-kill-test-",
       });
 
-      return yield* supervise(
+      const report = yield* supervise(
         {
           model: "gpt-6-astra",
           reasoningEffort: "low",
@@ -35,6 +36,12 @@ it("recovers the real SQLite runtime after two SIGKILLs with pressure and cumula
         },
         yield* path.fromFileUrl(new URL("./scripted-worker.ts", import.meta.url)),
       );
+
+      const checkpoint = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(RecoveryCheckpointEvidence),
+      )(yield* fs.readFileString(path.join(outputDirectory, "recovery-checkpoint.json")));
+
+      return { report, checkpoint };
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -47,6 +54,10 @@ it("recovers the real SQLite runtime after two SIGKILLs with pressure and cumula
   );
 
   expect(report.status).toBe("passed");
+  expect(checkpoint.status).toBe("present");
+  if (checkpoint.status !== "present") throw new Error("Native SQLite checkpoint absent");
+  expect(checkpoint.throughSequence).toBeGreaterThanOrEqual(report.windows.at(-1)?.sequence ?? 1);
+
   expect(report.windows.length).toBeGreaterThanOrEqual(12);
   expect(report.restarts.map((r) => r.killConfirmed)).toEqual([true, true]);
   expect(report.usage.calls).toBe(report.phases.reduce((n, p) => n + p.modelCalls, 0));

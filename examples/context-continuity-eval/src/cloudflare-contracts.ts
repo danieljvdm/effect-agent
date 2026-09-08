@@ -3,7 +3,13 @@ import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { Schema } from "effect";
 
-import { CompactionEvidence, ModelUsage, ProjectStatus, RestartEvidence } from "./contracts.ts";
+import {
+  CompactionEvidence,
+  ModelUsage,
+  ProjectStatus,
+  RestartEvidence,
+  RecoveryCheckpointEvidence,
+} from "./contracts.ts";
 import { ModelId, MAX_OUTPUT_TOKENS } from "./live-model.ts";
 import { pressureInstructions, pressureToolkit } from "./pressure.ts";
 import { RequestAudit } from "./request-audit.ts";
@@ -27,6 +33,7 @@ export const CloudflareSnapshot = Schema.Struct({
   audits: Schema.Array(RequestAudit),
   compactions: Schema.Array(CompactionEvidence),
   restarts: Schema.Array(RestartEvidence),
+  recoveryCheckpoint: RecoveryCheckpointEvidence,
 });
 
 export const cloudflareDefinition = Agent.make("context-continuity-cloudflare", {

@@ -24,9 +24,25 @@ induced pressure, not a claim that a production conversation naturally accumulat
 The compactor, estimator, original history, and notes implementations remain native. Recovery
 boundaries occur immediately before and after a canonical rollover append. Process recovery
 reuses persisted usage and refuses any unsettled provider reservation. Cloudflare confirms its
-checkpoint writes before eviction; the next incarnation reads the same native notes revision.
-This suite does not close the large-history startup and checkpoint-scaling work in
-[#356](https://github.com/danieljvdm/effect-agent/issues/356).
+evaluator-state writes before eviction; the next incarnation reads the same native notes revision.
+
+The follow-up includes the native [recovery checkpoint capability from #380](https://github.com/danieljvdm/effect-agent/pull/380).
+`ThreadStore.recoveryCheckpoints` is an optional, latest-only cache bound to a canonical batch tail;
+it is separate from this evaluator's `resume.json` and Cloudflare audit/phase bookkeeping. Native
+recovery validates the cache and replays its suffix, or falls back to complete canonical replay
+when the cache is absent, rejected or incompatible. The canonical log and submission ledger
+remain authoritative. The evaluator observes public cache metadata in `recovery-checkpoint.json`
+(SQLite) or `host-snapshot.json` (Cloudflare), distinguishing missing/rejected caches from storage
+failures. It keeps the full canonical transcript and original-source oracle independent of that cache.
+
+The deterministic SIGKILL and workerd tests require a valid native checkpoint covering the last
+committed rollover, alongside the existing recovery, usage and original-history checks. Checkpoint
+presence does not establish fast-path selection, bounded startup work, or latency/CPU improvement.
+Actual hosted Cloudflare invocation latency and CPU remain open under
+[#356](https://github.com/danieljvdm/effect-agent/issues/356). The green live baseline in #372 is tied
+to `ad4b70a557b6e561e8471eae2fd3b57373bfdb3b`, before #380, and provides no live acceptance claim
+for this newer source. Workspace-source verification does not establish beta64 publication; the
+release coordinator owns that receipt. No paid profile runs solely because a runtime merge lands.
 
 Run `vp run context-continuity-eval --help` for configuration. One bounded live attempt:
 

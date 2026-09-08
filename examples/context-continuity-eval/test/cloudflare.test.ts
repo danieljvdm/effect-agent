@@ -1,12 +1,13 @@
 import { fileURLToPath } from "node:url";
 
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
-import { ConfigProvider, Effect, FileSystem, Layer } from "effect";
+import { ConfigProvider, Effect, FileSystem, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { expect, it } from "vite-plus/test";
 
+import { CloudflareSnapshot } from "../src/cloudflare-contracts.ts";
 import { runCloudflareEvaluation } from "../src/cloudflare.ts";
 import { scriptedResponse } from "./scripted-model.ts";
 
@@ -96,7 +97,7 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
       });
     };
 
-    const report = await Effect.runPromise(
+    const { report, snapshot } = await Effect.runPromise(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
 
@@ -104,7 +105,7 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
           prefix: "continuity-cloudflare-test-",
         });
 
-        return yield* runCloudflareEvaluation(
+        const report = yield* runCloudflareEvaluation(
           {
             model: "gpt-6-astra",
             reasoningEffort: "low",
@@ -116,6 +117,12 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
           },
           "https://eval.test",
         );
+
+        const snapshot = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(CloudflareSnapshot),
+        )(yield* fs.readFileString(`${outputDirectory}/host-snapshot.json`));
+
+        return { report, snapshot };
       }).pipe(
         Effect.scoped,
         Effect.provide(
@@ -135,6 +142,13 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
     expect(report.phases.flatMap((p) => p.checks.filter((c) => !c.passed))).toEqual([]);
     expect(report.checks.filter((c) => !c.passed)).toEqual([]);
     expect(report.status).toBe("passed");
+    expect(snapshot.recoveryCheckpoint.status).toBe("present");
+    if (snapshot.recoveryCheckpoint.status !== "present")
+      throw new Error("Native Cloudflare checkpoint absent");
+    expect(snapshot.recoveryCheckpoint.throughSequence).toBeGreaterThanOrEqual(
+      report.windows.at(-1)?.sequence ?? 1,
+    );
+
     expect(report.restarts.map((r) => r.mechanism)).toEqual([
       "durable-object-eviction",
       "durable-object-eviction",

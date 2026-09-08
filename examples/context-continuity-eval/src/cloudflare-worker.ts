@@ -34,7 +34,7 @@ import {
   CloudflareSnapshot,
 } from "./cloudflare-contracts.ts";
 import { CompactionEvidence, EvaluationError, ModelUsage, RestartEvidence } from "./contracts.ts";
-import { notesNamespace, readLog, readNotes } from "./host-evidence.ts";
+import { notesNamespace, readLog, readNotes, readRecoveryCheckpoint } from "./host-evidence.ts";
 import { makeLiveClient } from "./live-model.ts";
 import { manifestLayer, observedCompactor } from "./pressure.ts";
 import { RequestAudit, RequestAuditSink } from "./request-audit.ts";
@@ -356,6 +356,7 @@ const application = Layer.unwrap(
               failure: yield* live.failure,
               compactions: state.compactions,
               restarts: state.restarts,
+              recoveryCheckpoint: yield* readRecoveryCheckpoint(threadId),
             };
           }).pipe(
             Effect.provide(services),

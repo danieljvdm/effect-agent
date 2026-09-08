@@ -35,6 +35,7 @@ import {
   check,
   EvaluationError,
   EvaluationReport,
+  RecoveryCheckpointEvidence,
   ProjectStatus,
   ResumeCheckpoint,
   KillWitness,
@@ -44,7 +45,7 @@ import {
   type RestartEvidence,
 } from "./contracts.ts";
 import { gradePhase } from "./grade.ts";
-import { readLog, readNotes, notesNamespace } from "./host-evidence.ts";
+import { readLog, readNotes, readRecoveryCheckpoint, notesNamespace } from "./host-evidence.ts";
 import {
   makeLiveClient,
   MAX_INPUT_TOKENS,
@@ -541,6 +542,12 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
       );
 
       yield* fs.writeFileString(canonicalPath, `${encoded.join("\n")}\n`);
+      yield* fs.writeFileString(
+        path.join(options.outputDirectory, "recovery-checkpoint.json"),
+        yield* Schema.encodeEffect(Schema.fromJsonString(RecoveryCheckpointEvidence))(
+          yield* readRecoveryCheckpoint(threadId),
+        ),
+      );
       const notes = yield* readNotes(key);
 
       report = {

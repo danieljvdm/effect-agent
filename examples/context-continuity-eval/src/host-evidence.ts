@@ -4,10 +4,15 @@ import type { MemoryKey } from "@effect-agent/core/MemoryStore";
 import { MemoryReader } from "@effect-agent/core/MemoryStore";
 import type { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
 import { CanonicalSequence } from "@effect-agent/thread/Records";
-import { ThreadRead, ThreadStore, ThreadTailRequest } from "@effect-agent/thread/ThreadStore";
-import { Effect, Schema, Stream } from "effect";
+import {
+  LoadCheckpointRequest,
+  ThreadRead,
+  ThreadStore,
+  ThreadTailRequest,
+} from "@effect-agent/thread/ThreadStore";
+import { Effect, Option, Schema, Stream } from "effect";
 
-import { EvaluationError } from "./contracts.ts";
+import { EvaluationError, type RecoveryCheckpointEvidence } from "./contracts.ts";
 
 export const notesNamespace = MemoryNamespace.define({
   name: "example/context-continuity-notes",
@@ -61,3 +66,33 @@ export const readNotes = Effect.fn("ContextContinuity.readNotes")(function* (key
 
   return { revision: document?.source.revision ?? null, text: document?.content.text ?? "" };
 });
+
+/** Read only public cache metadata. Canonical evidence remains independently captured in full. */
+export const readRecoveryCheckpoint = Effect.fn("ContextContinuity.readRecoveryCheckpoint")(
+  function* (threadId: ThreadId) {
+    const store = yield* ThreadStore;
+
+    if (store.recoveryCheckpoints === undefined) {
+      const result: RecoveryCheckpointEvidence = { status: "unsupported" };
+
+      return result;
+    }
+
+    return yield* store.recoveryCheckpoints.load(LoadCheckpointRequest.make({ threadId })).pipe(
+      Effect.map((checkpoint): RecoveryCheckpointEvidence =>
+        Option.isSome(checkpoint)
+          ? {
+              status: "present",
+              throughSequence: checkpoint.value.throughSequence,
+              tailDigest: checkpoint.value.tailDigest,
+            }
+          : { status: "missing" },
+      ),
+      Effect.catchTag("CheckpointRejected", (error) => {
+        const result: RecoveryCheckpointEvidence = { status: "rejected", reason: error.reason };
+
+        return Effect.succeed(result);
+      }),
+    );
+  },
+);

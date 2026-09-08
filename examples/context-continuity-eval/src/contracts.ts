@@ -90,6 +90,19 @@ export const RestartEvidence = Schema.Struct({
 
 export type RestartEvidence = typeof RestartEvidence.Type;
 
+/** Observation of the optional native cache, not proof that recovery selected its fast path. */
+export const RecoveryCheckpointEvidence = Schema.Union([
+  Schema.Struct({ status: Schema.Literals(["unsupported", "missing"]) }),
+  Schema.Struct({ status: Schema.Literal("rejected"), reason: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("present"),
+    throughSequence: Schema.Natural,
+    tailDigest: Schema.String,
+  }),
+]);
+
+export type RecoveryCheckpointEvidence = typeof RecoveryCheckpointEvidence.Type;
+
 export const ModelUsage = Schema.Struct({
   calls: Schema.Natural,
   completedCalls: Schema.Natural,
