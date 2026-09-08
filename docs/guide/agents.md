@@ -186,6 +186,32 @@ controls the last available turn.
 `completion` decides how a run finishes. `runDisposition` labels its successful output for
 durable readers.
 
+Use `completionFromTools` for an action whose committed result can satisfy the whole request,
+while retaining a separate `completion` tool for ordinary replies. Each declaration names a tool
+and provides a pure projector returning `Option.some(output)` or `Option.none()`:
+
+```ts
+completionFromTools: [{
+  tool: "complete_action",
+  project: ({ parameters, result }) =>
+    parameters.wholeRequestSatisfied && result.status === "committed"
+      ? Option.some(`Created [${result.name}](${result.href}).`)
+      : Option.none(),
+}],
+```
+
+Import `Option` from `effect`. The tool's schemas define the parameters and result in this example.
+Only opt in tools with an explicit whole-request contract; completing the first step of a larger
+request must not end the run. Return `None` for pending approval, partial, or otherwise insufficient
+results. A declared tool failure also continues normally. Invalid output or a throwing projector
+fails the run, rather than treating an unconfirmed result as success.
+
+These action tools must be the only call in their batch and obey ordinary tool, turn, and token
+budgets. They cannot execute in the reserved finalization turn; the existing `completion` tool
+retains that role. Authorization, approvals, cancellation, and durable tool replay rules remain
+unchanged. Recovery re-evaluates the projector from canonical parameters and results, so it must
+be deterministic and perform no effects. Tool names must be distinct across completion declarations.
+
 ## Declare application completion explicitly
 
 Use `runDisposition` when durable readers need an application-defined classification in addition

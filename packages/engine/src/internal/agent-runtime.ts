@@ -1,6 +1,7 @@
 import type * as Agent from "@effect-agent/core/Agent";
 import {
   type CompletionToolDeclaration,
+  type CompletionFromToolDeclaration,
   type Definition,
   type InputPromptSource,
   type InstructionSource,
@@ -4528,18 +4529,18 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
 const encodeOutputCandidate = Effect.fn("AgentRuntime.encodeOutputCandidate")(function* <
   AgentValue extends Agent.Any,
 >(agent: AgentValue, candidate: unknown) {
-  const decoded = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidate).pipe(
+  const encoded = yield* Schema.encodeUnknownEffect(agent.definition.output)(candidate).pipe(
     Effect.mapError((cause) =>
       AgentOutputError.make({
-        message: cause.message,
+        message: `Completion Tool output failed Schema encoding: ${cause.message}`,
       }),
     ),
   );
 
-  const encoded = yield* Schema.encodeUnknownEffect(agent.definition.output)(decoded).pipe(
+  const decoded = yield* Schema.decodeUnknownEffect(agent.definition.output)(encoded).pipe(
     Effect.mapError((cause) =>
       AgentOutputError.make({
-        message: `Completion Tool output failed Schema encoding: ${cause.message}`,
+        message: `Completion Tool output failed canonical decoding: ${cause.message}`,
       }),
     ),
   );
@@ -4555,15 +4556,15 @@ const encodeOutputCandidate = Effect.fn("AgentRuntime.encodeOutputCandidate")(fu
   return { encoded: json, decoded };
 });
 
-const projectCompletionOutput = Effect.fn("AgentRuntime.projectCompletionOutput")(function* <
+const projectToolResult = Effect.fn("AgentRuntime.projectToolResult")(function* <
   AgentValue extends Agent.Any,
 >(
   agent: AgentValue,
-  declaration: CompletionToolDeclaration,
+  declaration: CompletionToolDeclaration | CompletionFromToolDeclaration,
   parameters: unknown,
   result: unknown,
 ): Effect.fn.Return<
-  { readonly encoded: Schema.Json; readonly decoded: Agent.Output<AgentValue> },
+  unknown,
   AgentOutputError | ModelProtocolError,
   AgentCompletionProjectionRequirements<AgentValue>
 > {
@@ -4601,8 +4602,38 @@ const projectCompletionOutput = Effect.fn("AgentRuntime.projectCompletionOutput"
       }),
   });
 
-  return yield* encodeOutputCandidate(agent, projected);
+  return projected;
 });
+
+const projectCompletionOutput = Effect.fn("AgentRuntime.projectCompletionOutput")(function* <
+  AgentValue extends Agent.Any,
+>(agent: AgentValue, declaration: CompletionToolDeclaration, parameters: unknown, result: unknown) {
+  return yield* encodeOutputCandidate(
+    agent,
+    yield* projectToolResult(agent, declaration, parameters, result),
+  );
+});
+
+/** Reconstruct optional action completion identically for live execution and canonical recovery. */
+const projectCompletionFromToolOutput = Effect.fn("AgentRuntime.projectCompletionFromToolOutput")(
+  function* <AgentValue extends Agent.Any>(
+    agent: AgentValue,
+    declaration: CompletionFromToolDeclaration,
+    parameters: unknown,
+    result: unknown,
+  ) {
+    const projected = yield* projectToolResult(agent, declaration, parameters, result);
+
+    if (!Option.isOption(projected)) {
+      return yield* AgentOutputError.make({
+        message: "Action completion projector did not return an Option",
+      });
+    }
+    if (Option.isNone(projected)) return Option.none();
+
+    return Option.some(yield* encodeOutputCandidate(agent, projected.value));
+  },
+);
 
 const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDisposition")(function* <
   Output,
@@ -5725,6 +5756,12 @@ const makeTurn = <
             completionTool !== undefined &&
             trace.applicationToolCalls.some((call) => call.name === completionTool);
 
+          const declaresActionCompletion = trace.applicationToolCalls.some((call) =>
+            agent.definition.completionFromTools?.some(
+              (declaration) => declaration.tool === call.name,
+            ),
+          );
+
           const declaresRollover = trace.applicationToolCalls.some(
             (call) =>
               hasTool(agent.definition.toolkit.tools, call.name) &&
@@ -5734,7 +5771,10 @@ const makeTurn = <
               ),
           );
 
-          if (declaresRollover && (trace.toolCalls.size !== 1 || declaresCompletion)) {
+          if (
+            declaresRollover &&
+            (trace.toolCalls.size !== 1 || declaresCompletion || declaresActionCompletion)
+          ) {
             return failRunEventStream(
               ModelProtocolError.make({
                 message:
@@ -5743,10 +5783,12 @@ const makeTurn = <
             );
           }
 
-          if (declaresCompletion && trace.toolCalls.size !== 1) {
+          if ((declaresCompletion || declaresActionCompletion) && trace.toolCalls.size !== 1) {
             return failRunEventStream(
               ModelProtocolError.make({
-                message: `Completion Tool ${completionTool} must be the only Tool Call in its batch`,
+                message: declaresCompletion
+                  ? `Completion Tool ${completionTool} must be the only Tool Call in its batch`
+                  : "An action completion Tool must be the only Tool Call in its batch",
               }),
             );
           }
@@ -6342,33 +6384,56 @@ const toolBatchContinuation = <
 
       const completion = agent.definition.completion;
 
-      const completionResult =
-        completion !== undefined &&
+      const successfulResult =
         trace.applicationToolCalls.length === 1 &&
         orderedResults.length === 1 &&
-        orderedResults[0]?.name === completion.tool &&
-        orderedResults[0].isFailure === false
+        orderedResults[0]?.isFailure === false
           ? orderedResults[0]
           : undefined;
 
-      if (completion !== undefined && completionResult !== undefined) {
+      const actionCompletion = agent.definition.completionFromTools?.find(
+        (declaration) => declaration.tool === successfulResult?.name,
+      );
+
+      let selectedOutput: Option.Option<{
+        readonly encoded: Schema.Json;
+        readonly decoded: Agent.Output<typeof agent>;
+      }> = Option.none();
+
+      if (
+        successfulResult !== undefined &&
+        (successfulResult.name === completion?.tool || actionCompletion !== undefined)
+      ) {
         const call = trace.applicationCallDescriptors[0];
 
         if (call === undefined) {
           return failRunEventStream(
             ModelProtocolError.make({
-              message: `Completion Tool ${completion.tool} has no canonical call descriptor`,
+              message: "Completion Tool has no canonical call descriptor",
             }),
           );
         }
+        if (actionCompletion !== undefined) {
+          selectedOutput = yield* projectCompletionFromToolOutput(
+            agent,
+            actionCompletion,
+            call.parameters,
+            successfulResult.encodedResult,
+          );
+        } else if (completion !== undefined) {
+          selectedOutput = Option.some(
+            yield* projectCompletionOutput(
+              agent,
+              completion,
+              call.parameters,
+              successfulResult.encodedResult,
+            ),
+          );
+        }
+      }
 
-        const output = yield* projectCompletionOutput(
-          agent,
-          completion,
-          call.parameters,
-          completionResult.encodedResult,
-        );
-
+      if (Option.isSome(selectedOutput)) {
+        const output = selectedOutput.value;
         const bounds = effectiveRunBounds(agent.definition.policy, options);
 
         const exhausted = context.tokenExhausted
@@ -6556,9 +6621,14 @@ const makeResumeTurn = <
       }
       const completionTool = agent.definition.completion?.tool;
 
+      const actionCompletionCall = trace.applicationToolCalls.find((call) =>
+        agent.definition.completionFromTools?.some((declaration) => declaration.tool === call.name),
+      );
+
       if (
-        completionTool !== undefined &&
-        trace.applicationToolCalls.some((call) => call.name === completionTool) &&
+        (actionCompletionCall !== undefined ||
+          (completionTool !== undefined &&
+            trace.applicationToolCalls.some((call) => call.name === completionTool))) &&
         trace.toolCalls.size !== 1
       ) {
         return failRunEventStream(
@@ -6574,9 +6644,11 @@ const makeResumeTurn = <
         trace.applicationToolCalls[0]?.name === completionTool;
 
       if (
-        completionBatch &&
-        completionTool !== undefined &&
-        Context.get(tools[completionTool].annotations, ContextRolloverTool)
+        (completionBatch &&
+          completionTool !== undefined &&
+          Context.get(tools[completionTool].annotations, ContextRolloverTool)) ||
+        (actionCompletionCall !== undefined &&
+          Context.get(tools[actionCompletionCall.name].annotations, ContextRolloverTool))
       ) {
         return failRunEventStream(
           ModelProtocolError.make({ message: "A context rollover Tool cannot complete the Run" }),
@@ -9171,6 +9243,7 @@ export {
   decodeFinalOutput,
   encodeRunDisposition,
   projectCompletionOutput,
+  projectCompletionFromToolOutput,
   run,
   runUnknown,
   start,

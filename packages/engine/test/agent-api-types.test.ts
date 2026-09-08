@@ -15,7 +15,7 @@ import {
   type RunContextHook,
 } from "@effect-agent/engine/RunOptions";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
+import { Context, Effect, Layer, Option, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { expectTypeOf, it } from "vite-plus/test";
 
@@ -285,7 +285,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
     inputPrompt: ({ topic }) => Effect.map(TopicInstructions, (prefix) => `${prefix}: ${topic}`),
     toolkit: topicTools,
     policy: planner.policy,
-    completion: { tool: "complete", project: ({ result }) => result },
+    completionFromTools: [{ tool: "complete", project: ({ result }) => Option.some(result) }],
   });
 
   type Selected = typeof planner | typeof topic;

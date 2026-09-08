@@ -1056,6 +1056,256 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       }),
   );
 
+  // https://linear.app/reve-ai/issue/KOM-144
+  it.effect.each(["committed", "pending", "failure"] as const)(
+    "action completion settles only a committed whole-request result: %s",
+    (outcome) =>
+      Effect.gen(function* () {
+        class ActionFailure extends Schema.TaggedError<ActionFailure>()("ActionFailure", {}) {}
+
+        const Create = Tool.make("complete_action", {
+          parameters: Schema.Struct({ name: Schema.String, wholeRequestSatisfied: Schema.Boolean }),
+          success: Schema.Struct({
+            status: Schema.Literals(["committed", "pending"]),
+            href: Schema.String,
+          }),
+          failure: ActionFailure,
+          failureMode: "return",
+        });
+
+        const tools = Toolkit.make(Create, PostMessageTool);
+
+        const definition = Agent.make("action-completion", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Complete one requested action or explain what remains.",
+          toolkit: tools,
+          policy: { maxTurns: 3, maxToolCalls: 3 },
+          completion: {
+            tool: "post_message",
+            required: true,
+            project: ({ parameters }) => parameters.message,
+          },
+          completionFromTools: [
+            {
+              tool: "complete_action",
+              project: ({ parameters, result }) =>
+                parameters.wholeRequestSatisfied && result.status === "committed"
+                  ? Option.some(`Created [${parameters.name}](${result.href}).`)
+                  : Option.none(),
+            },
+          ],
+        });
+
+        const { model, requests } = scriptedModel([
+          toolCallParts("create-1", "complete_action", {
+            name: "Project",
+            wholeRequestSatisfied: true,
+          }),
+          toolCallParts("reply-1", "post_message", { message: "Action needs attention." }),
+        ]);
+
+        const handlerStarts = yield* Ref.make(0);
+
+        const result = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          "Create Project",
+        ).pipe(
+          Effect.provide(
+            tools.toLayer({
+              complete_action: () =>
+                Ref.update(handlerStarts, (count) => count + 1).pipe(
+                  Effect.andThen(
+                    outcome === "failure"
+                      ? ActionFailure.make({})
+                      : Effect.succeed({ status: outcome, href: "/project/1" }),
+                  ),
+                ),
+              post_message: () => Effect.succeed({ messageId: "reply-1" }),
+            }),
+          ),
+        );
+
+        expect(result.output).toBe(
+          outcome === "committed" ? "Created [Project](/project/1)." : "Action needs attention.",
+        );
+        expect(requests).toHaveLength(outcome === "committed" ? 1 : 2);
+        expect(yield* Ref.get(handlerStarts)).toBe(1);
+        expect(promptText(requests[0]!.prompt)).toContain("satisfies the whole request");
+      }),
+  );
+
+  it.effect.each(["mixed", "tokens", "tool-calls", "turns"] as const)(
+    "action completion cannot bypass ordinary admission: %s",
+    (boundary) =>
+      Effect.gen(function* () {
+        const tools = Toolkit.make(PostMessageTool, SearchTool);
+
+        const definition = Agent.make("bounded-action-completion", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Use search for the action and post_message to finish.",
+          toolkit: tools,
+          policy: {
+            maxTurns: boundary === "turns" ? 1 : 4,
+            maxToolCalls: boundary === "tool-calls" ? 1 : 4,
+            tokenBudget: 10_000,
+          },
+          completion: {
+            tool: "post_message",
+            required: true,
+            project: ({ parameters }) => parameters.message,
+          },
+          completionFromTools: [{ tool: "search", project: ({ result }) => Option.some(result) }],
+        });
+
+        const action = toolCallParts(
+          "action-1",
+          "search",
+          {},
+          boundary === "tokens" ? usageOf(9_000, 4_000) : emptyUsage,
+        );
+
+        const first =
+          boundary === "mixed"
+            ? [
+                ...action.slice(0, -1),
+                {
+                  type: "tool-call" as const,
+                  id: "reply-mixed",
+                  name: "post_message",
+                  params: { message: "invalid" },
+                  providerExecuted: false,
+                },
+                { type: "finish" as const, reason: "tool-calls" as const, usage: emptyUsage },
+              ]
+            : action;
+
+        const { model, requests } = scriptedModel([
+          ...(boundary === "tool-calls" || boundary === "turns"
+            ? [toolCallParts("ordinary-1", "post_message", { message: "ordinary failure" })]
+            : []),
+          first,
+          toolCallParts("reply-final", "post_message", { message: "No action performed." }),
+        ]);
+
+        // A failed required completion consumes the first turn/call without ending the Run.
+        class DeliveryFailure extends Schema.TaggedError<DeliveryFailure>()(
+          "DeliveryFailure",
+          {},
+        ) {}
+
+        const failingPost = Tool.make("post_message", {
+          parameters: PostMessageTool.parametersSchema,
+          success: PostMessageTool.successSchema,
+          failure: DeliveryFailure,
+          failureMode: "return",
+        });
+
+        const executable = Toolkit.make(failingPost, SearchTool);
+        const starts = yield* Ref.make(0);
+        const posts = yield* Ref.make(0);
+
+        const result = yield* AgentRuntime.run(
+          Agent.withModel({ ...definition, toolkit: executable }, model),
+          "act",
+        ).pipe(
+          Effect.provide(
+            executable.toLayer({
+              search: () =>
+                Ref.update(starts, (count) => count + 1).pipe(Effect.as("must not happen")),
+              post_message: () =>
+                Ref.updateAndGet(posts, (count) => count + 1).pipe(
+                  Effect.flatMap((count) =>
+                    count === 1 && (boundary === "tool-calls" || boundary === "turns")
+                      ? DeliveryFailure.make({})
+                      : Effect.succeed({ messageId: "reply" }),
+                  ),
+                ),
+            }),
+          ),
+          Effect.exit,
+        );
+
+        expect(yield* Ref.get(starts)).toBe(0);
+        if (boundary === "mixed" || boundary === "turns")
+          expect(failureFrom(result)).toBeInstanceOf(ModelProtocolError);
+        else {
+          expect(Exit.isSuccess(result)).toBe(true);
+          if (Exit.isSuccess(result)) expect(result.value.output).toBe("No action performed.");
+        }
+        expect(requests.length).toBeLessThanOrEqual(3);
+      }),
+  );
+
+  it.effect.each(["completion", "completionFromTools"] as const)(
+    "completion projectors encode decoded output before canonical validation: %s",
+    (kind) =>
+      Effect.gen(function* () {
+        const definition = Agent.make("transformed-completion", {
+          input: Schema.String,
+          output: Schema.NumberFromString,
+          instructions: "Return the committed numeric result.",
+          toolkit: searchToolkit,
+          ...(kind === "completion"
+            ? { completion: { tool: "search" as const, project: () => 42 } }
+            : {
+                completionFromTools: [{ tool: "search" as const, project: () => Option.some(42) }],
+              }),
+        });
+
+        const { model, requests } = scriptedModel([
+          toolCallParts("transformed-action", "search", {}),
+        ]);
+
+        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), "act").pipe(
+          Effect.provide(searchToolkit.toLayer({ search: () => Effect.succeed("committed") })),
+        );
+
+        expect(result.output).toBe(42);
+        expect(requests).toHaveLength(1);
+      }),
+  );
+
+  it.effect.each(["throws", "invalid-output"] as const)(
+    "action completion rejects an invalid projector after the action: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const definition = Agent.make("invalid-action-completion", {
+          input: Schema.String,
+          output: Schema.String.check(Schema.isMinLength(1)),
+          instructions: "Act once.",
+          toolkit: searchToolkit,
+          completionFromTools: [
+            {
+              tool: "search",
+              project: () => {
+                if (mode === "throws") throw new Error("projection failed");
+
+                return Option.some("");
+              },
+            },
+          ],
+        });
+
+        const { model, requests } = scriptedModel([toolCallParts("action-invalid", "search", {})]);
+        const starts = yield* Ref.make(0);
+
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "act").pipe(
+          Effect.provide(
+            searchToolkit.toLayer({
+              search: () => Ref.update(starts, (n) => n + 1).pipe(Effect.as("done")),
+            }),
+          ),
+          Effect.exit,
+        );
+
+        expect(failureFrom(exit)).toMatchObject({ _tag: "AgentOutputError" });
+        expect(yield* Ref.get(starts)).toBe(1);
+        expect(requests).toHaveLength(1);
+      }),
+  );
+
   it.effect(
     "RUN-032: required completion uses native required Tool choice until the completion Tool settles",
     () =>

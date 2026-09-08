@@ -3,6 +3,7 @@ export {
   decodeFinalOutput,
   encodeRunDisposition,
   projectCompletionOutput,
+  projectCompletionFromToolOutput,
   run,
   runUnknown,
   start,

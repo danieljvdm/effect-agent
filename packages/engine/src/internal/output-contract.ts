@@ -66,8 +66,8 @@ const contractDirective = (definition: Agent.AnyDefinition): string =>
       "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
       `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
 
-const requiredCompletionDirective = (tool: string): string =>
-  `Final output contract: complete only by calling the required completion Tool ${JSON.stringify(tool)} ` +
+const requiredCompletionDirective = (tool: string, hasAlternatives: boolean): string =>
+  `Final output contract: ${hasAlternatives ? "otherwise complete" : "complete only"} by calling the required completion Tool ${JSON.stringify(tool)} ` +
   "as the sole Tool Call in its batch. Do not emit an ordinary final assistant text answer. " +
   "The Tool's canonical parameters and successful result are projected and validated as the Agent output.";
 
@@ -87,7 +87,12 @@ const rendered = (message: string): OutputContract => ({
 
 const renderOutputSchemaContract = (definition: Agent.AnyDefinition): OutputContract => {
   if (definition.completion?.required === true) {
-    return rendered(requiredCompletionDirective(definition.completion.tool));
+    return rendered(
+      requiredCompletionDirective(
+        definition.completion.tool,
+        (definition.completionFromTools?.length ?? 0) > 0,
+      ),
+    );
   }
   if (isTextOutput(definition.output)) {
     return rendered(
@@ -120,7 +125,18 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
   const cached = outputContracts.get(definition);
 
   if (cached !== undefined) return cached;
-  const contract = renderOutputSchemaContract(definition);
+  const base = renderOutputSchemaContract(definition);
+  const alternatives = definition.completionFromTools ?? [];
+
+  const contract =
+    base._tag === "rendered" && alternatives.length > 0
+      ? rendered(
+          `The following action Tools may complete the Run from their successful canonical result: ${alternatives.map((declaration) => JSON.stringify(declaration.tool)).join(", ")}. ` +
+            "Call such a Tool alone, following its parameter schema. It may complete the Run only when it satisfies the whole request. " +
+            "An incomplete or pending result continues the Run. These actions are unavailable during finalization after budget exhaustion.\n\n" +
+            base.message,
+        )
+      : base;
 
   outputContracts.set(definition, contract);
 
