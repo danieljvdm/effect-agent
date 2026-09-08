@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.68
+
+### Patch Changes
+
+- [#389](https://github.com/danieljvdm/effect-agent/pull/389) [`4ca6361`](https://github.com/danieljvdm/effect-agent/commit/4ca6361c2085b5b77d1835c2b61ca1e67d2f8e6c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose host tool scheduling through `RunToolScheduling` so durable agents can run independent tools concurrently while preserving barriers around sequential tools. Capture the host policy across replacement attempts and retain the agent's admitted concurrency bound.
+
+- Updated dependencies [[`4ca6361`](https://github.com/danieljvdm/effect-agent/commit/4ca6361c2085b5b77d1835c2b61ca1e67d2f8e6c)]:
+  - @effect-agent/engine@0.1.0-beta.68
+  - @effect-agent/core@0.1.0-beta.68
+
 ## 0.1.0-beta.67
 
 ### Patch Changes
