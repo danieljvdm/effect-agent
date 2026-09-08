@@ -107,6 +107,7 @@ import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { boundedValueFootprint, utf8ByteLength } from "./bounded-value.ts";
 import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
+import { ownPrimitiveDelta } from "./primitive-delta.ts";
 import {
   boundedCanonicalJsonSnapshot,
   boundedJsonSnapshot,
@@ -794,7 +795,7 @@ const modelResponseCodecFor = (toolkit: Toolkit.Any) => {
   return codec;
 };
 
-const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
+const ownModelResponsePartGeneral = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
   Tools extends Record<string, Tool.Any>,
 >(
   part: unknown,
@@ -860,6 +861,23 @@ const ownModelResponsePart = Effect.fn("AgentRuntime.ownModelResponsePart")(func
 
   return { ownedPart, retainedBytes };
 });
+
+const ownModelResponsePart = <Tools extends Record<string, Tool.Any>>(
+  part: unknown,
+  toolkit: Toolkit.Toolkit<Tools>,
+  usage: ModelResponseBufferUsage,
+  limits: EffectiveRunBufferLimits,
+): ReturnType<typeof ownModelResponsePartGeneral> =>
+  Effect.suspend((): ReturnType<typeof ownModelResponsePartGeneral> => {
+    const primitive =
+      usage.responsePartCount < limits.maxModelResponseParts
+        ? ownPrimitiveDelta(part, limits.maxModelResponseBytes - usage.responsePartBytes)
+        : undefined;
+
+    return primitive === undefined
+      ? ownModelResponsePartGeneral(part, toolkit, usage, limits)
+      : Effect.succeed(primitive);
+  });
 
 const consumeModelResponsePart = (
   usage: ModelResponseBufferUsage,
@@ -5491,9 +5509,9 @@ const makeTurn = <
           ).pipe(
             Effect.flatMap((outgoing) => {
               const providerPrompt =
-                outputContractMessage === undefined
+                outputContract._tag !== "rendered"
                   ? outgoing
-                  : insertOutputContract(outgoing, outputContractMessage);
+                  : insertOutputContract(outgoing, outputContract.part);
 
               // Prepared and transient context can change at every Turn. A
               // final full-prompt check closes the per-call boundary for grace

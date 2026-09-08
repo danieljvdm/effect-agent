@@ -1,0 +1,99 @@
+name: Runtime performance comment
+
+on:
+  workflow_run:
+    workflows: [Runtime performance]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: runtime-performance
+          path: runtime-performance
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Trusted publisher: never check out candidate code, import its report
+      # renderer, install its dependencies, or execute an artifact.
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const read = (name, limit) => {
+              const file = `runtime-performance/${name}`;
+              const stat = fs.lstatSync(file);
+              if (!stat.isFile() || stat.size > limit) throw new Error('Invalid performance artifact');
+              return fs.readFileSync(file, 'utf8');
+            };
+            const number = read('pr-number.txt', 20).trim();
+            if (!/^[1-9][0-9]{0,9}$/.test(number)) throw new Error('Invalid PR number');
+            const report = JSON.parse(read('report.json', 3000000));
+            if (report.fixture !== 'runtime-v1' || report.profile !== 'pr' ||
+                !/^[a-f0-9]{64}$/.test(report.fixtureSha256) ||
+                !Array.isArray(report.revisions) || report.revisions.length !== 3 ||
+                !Array.isArray(report.batches) || report.batches.length !== 18) {
+              throw new Error('Invalid report contract');
+            }
+            const revision = role => report.revisions.find(value => value.role === role);
+            for (const role of ['base', 'head', 'reference']) {
+              if (!/^[a-f0-9]{40}$/.test(revision(role)?.revision) || revision(role).dirty !== false) throw new Error('Invalid revision');
+            }
+            if (revision('reference').revision !== '596cffba70716b1211ac02de949c4d0f31734b2f') throw new Error('Unexpected reference');
+            const run = context.payload.workflow_run;
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(number) });
+            if (pr.state !== 'open' || pr.head.sha !== run.head_sha || pr.head.sha !== revision('head').revision ||
+                pr.head.repo?.id !== run.head_repository.id || pr.base.sha !== revision('base').revision ||
+                pr.base.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) return;
+            const med = values => {
+              values.sort((a, b) => a - b);
+              const i = (values.length - 1) / 2;
+              return (values[Math.floor(i)] + values[Math.ceil(i)]) / 2;
+            };
+            const expected = ['small-run', 'small-stream', ...[1,64,1024,4096].map(n => `stream-64k-${n}`),
+              'history-65536', 'history-1048576', 'parallel-tools-8', 'tool-rounds-4',
+              ...[0,256,2048].flatMap(n => [`durable-fresh-${n}`, `checkpoint-recovery-${n}`, `settled-ledger-${n}`])];
+            const samples = [];
+            const identities = new Set();
+            for (const batch of report.batches) {
+              const key = `${batch.role}:${batch.cohort}:${batch.cold}`;
+              if (!['base','head','reference'].includes(batch.role) || ![0,1,2].includes(batch.cohort) ||
+                  typeof batch.cold !== 'boolean' || identities.has(key) || batch.exitCode !== 0 || !batch.complete ||
+                  !Array.isArray(batch.report?.samples)) throw new Error('Invalid cohort');
+              identities.add(key);
+              if (batch.cold) continue;
+              if (batch.report.samples.length !== expected.length * 5) throw new Error('Incomplete cohort');
+              const unique = new Set();
+              for (const sample of batch.report.samples) {
+                const id = `${sample.case}:${sample.ordinal}`;
+                if (!expected.includes(sample.case) || ![0,1,2,3,4].includes(sample.ordinal) || unique.has(id) ||
+                    sample.status !== 'passed' || sample.warmup !== (sample.ordinal < 2) ||
+                    !Number.isFinite(sample.totalMs) || sample.totalMs < 0 || sample.totalMs > 180000) throw new Error('Invalid sample');
+                unique.add(id);
+                if (!sample.warmup) samples.push({ role: batch.role, name: sample.case, ms: sample.totalMs });
+              }
+            }
+            const rows = expected.map(name => {
+              const values = role => samples.filter(s => s.name === name && s.role === role).map(s => s.ms);
+              const base = med(values('base')), head = med(values('head')), reference = med(values('reference'));
+              const change = before => before === 0 ? 'n/a' : `${((head / before - 1) * 100).toFixed(1)}%`;
+              return `| ${name} | ${base.toFixed(2)} | ${head.toFixed(2)} | ${reference.toFixed(2)} | ${change(base)} | ${change(reference)} |`;
+            });
+            const marker = '<!-- effect-agent:runtime-performance -->';
+            const body = `${marker}\n### Runtime performance\n\n` +
+              'Informational medians in milliseconds, nine samples per workload and revision. Same fixture bytes and Node runtime; separate lockfiles and public builds.\n\n' +
+              '| Workload | Base | Head | Reference | Head/base | Head/reference |\n| --- | ---: | ---: | ---: | ---: | ---: |\n' + rows.join('\n') +
+              `\n\n[Raw samples, spread, cold process totals, failures, environment, and immutable reference](${run.html_url}) for \`${run.head_sha.slice(0,12)}\`. Timing deltas are not a merge threshold.`;
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: pr.number, per_page: 100 });
+            const previous = comments.find(comment => comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
+            if (previous) await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            else await github.rest.issues.createComment({ ...context.repo, issue_number: pr.number, body });

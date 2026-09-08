@@ -15,6 +15,5 @@ export const Researcher = Agent.make("activity-researcher", {
   toolkit: TravelTools,
   policy: {
     maxToolCalls: 8,
-    toolConcurrency: 1,
   },
 });

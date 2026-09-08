@@ -46,6 +46,8 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | ----------------------------------- | ----------------------------------------------------- |
 | `packages/*`                        | Framework and private PR-review integration packages  |
 | `examples/demo`                     | Local browser app                                     |
+| `examples/runtime-benchmark`        | Deterministic public-package runtime comparisons      |
+| `examples/context-continuity-eval`  | Continuity gates and opt-in deployed performance      |
 | `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
 | `examples/providers`                | Provider bindings, persistent history, Workflow host  |
 | `examples/repo-ops`                 | Repository evidence auditor                           |
@@ -356,6 +358,42 @@ an esbuild `meta.json`, and `modules.txt` with module contributions. The metafil
 in [esbuild's analyzer](https://esbuild.github.io/analyze/). CI attaches these as `bundle-stats`
 and `bundle-analysis` artifacts and updates one PR comment through a separate trusted workflow.
 The comment workflow becomes active after it is merged into the default branch.
+
+## Runtime performance comparisons
+
+Pull requests run the **Runtime performance** workflow against the exact base, head, and retained
+release reference. The [scripted benchmark](../examples/runtime-benchmark/README.md) runs identical
+fixture bytes against production builds and each revision's own lockfile on the same Node runtime.
+Run `vp run perf:compare --help` for local reproduction. Timing tasks bypass the task cache; keep
+other builds, tests, and benchmarks idle during measurement.
+
+The PR profile covers small runs and streams, fixed-size responses with increasing fragmentation,
+growing prompts, parallel tools and repeated rounds, file-backed SQLite history, checkpoint
+recovery, and settled Submission ledgers. Fresh durable startup includes reopening the host and
+admission; recovery of an existing Run is a separate case. First-model timing ends in the actual
+provider callback. A separate subprocess measurement includes startup and fixture imports.
+Retain raw samples, failures, environment metadata, fixture and artifact hashes, and exact SHAs.
+The trusted comment workflow becomes active after it reaches the default branch.
+
+Latency reports are informational until repeated CI runs establish variance and useful absolute
+and relative thresholds. Deterministic call, concurrency, ownership, tracing, and history-work
+budgets remain correctness gates. The fresh-submission history guard currently permits three
+linear scans plus fixed work; these changes do not claim to eliminate that cost. Checkpoint
+recovery bounds do not establish constant-time fresh admission. Fairness, lock contention, optional
+memory/MCP publication, and large settled-ledger indexing require their own controlled evidence
+before changing those paths.
+
+The separate [manual Cloudflare evaluation](../examples/context-continuity-eval/README.md#manual-deployed-performance-evaluation)
+deploys real model-and-tool workloads through the public HTTP/DO host. Use `vp run perf:cloudflare
+--dry-run` to inspect the deployment plan without credentials. The workflow accepts exact commits
+and runs only on explicit dispatch with its dedicated environment credentials. Its bounded fresh,
+warm, and recovery cases assert consumed tool results, validated output, canonical settlement,
+same-thread continuity, and cleanup. Preserve failure artifacts and retry any recorded cleanup
+before closing an attempt. Offline workerd tests validate the harness, not deployed latency.
+
+Compare matched workloads and clock domains. Local scripted timings do not measure provider
+latency, Cloudflare CPU billing, or provider cache effects. A live report identifies what it can
+observe and must accompany claims about the exact candidate and configuration it measured.
 
 ## CI and hooks
 

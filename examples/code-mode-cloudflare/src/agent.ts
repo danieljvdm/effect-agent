@@ -97,6 +97,8 @@ export const codeModeAgent = Agent.make("warehouse-analyst", {
     maxTurns: 3,
     maxToolCalls: 6,
     maxDuration: "45 seconds",
+    // This fixture exercises one sandbox program at a time. Independent application Tools
+    // normally use the engine default of four concurrent handlers.
     toolConcurrency: 1,
   }),
 });

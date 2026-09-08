@@ -166,6 +166,18 @@ export default defineConfig({
       scripts: true,
     },
     tasks: {
+      "perf:compare": {
+        cache: false,
+        command: "bun scripts/runtime-benchmark.ts",
+      },
+      "perf:cloudflare": {
+        cache: false,
+        command: "bun examples/context-continuity-eval/src/performance-main.ts",
+      },
+      "perf:cloudflare:build": {
+        cache: false,
+        command: "bun examples/context-continuity-eval/src/build-performance-cloudflare.ts",
+      },
       "bundle:compare": {
         cache: false,
         command: "bun scripts/bundle-size.ts",

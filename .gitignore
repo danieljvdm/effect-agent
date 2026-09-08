@@ -29,3 +29,7 @@ docs/.vitepress/dist
 # .d.ts under src is hand-written; source is always .ts.
 packages/*/src/**/*.d.ts
 scripts/*.d.ts
+test/fixtures/*.d.ts
+.performance-base/
+.performance-reference/
+.performance-report/

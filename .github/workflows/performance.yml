@@ -1,0 +1,128 @@
+name: Runtime performance
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Scripted measurement size (archive includes 100k retained records)
+        type: choice
+        options: [pr, extended, archive]
+        default: extended
+      base_sha:
+        description: Exact 40-character comparison base SHA
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  VP_GIT_HOOKS: "0"
+
+jobs:
+  compare:
+    name: Compare scripted runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 30 || 180 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Validate manual base identity
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: '[[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]'
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || inputs.base_sha }}
+          path: .performance-base
+          persist-credentials: false
+
+      # Immutable audited beta67 release, rerun on this machine rather than
+      # comparing historical stopwatch values from another runner.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 596cffba70716b1211ac02de949c4d0f31734b2f
+          path: .performance-reference
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.20.0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      # Bootstrap vp exactly as ordinary CI. Each checkout owns its lockfile;
+      # installs and builds are sequential and finish before the first sample.
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Install base dependencies
+        working-directory: .performance-base
+        run: ../node_modules/.bin/vp install --frozen-lockfile --ignore-scripts
+
+      - name: Install immutable reference dependencies
+        working-directory: .performance-reference
+        run: ../node_modules/.bin/vp install --frozen-lockfile --ignore-scripts
+
+      - name: Build candidate public packages
+        run: |
+          ./node_modules/.bin/vp run patch:tsgo
+          ./node_modules/.bin/vp run --no-cache -F './packages/*' build
+
+      - name: Build base public packages
+        working-directory: .performance-base
+        run: |
+          ./node_modules/.bin/vp run patch:tsgo
+          ./node_modules/.bin/vp run --no-cache -F './packages/*' build
+
+      - name: Build reference public packages
+        working-directory: .performance-reference
+        run: |
+          ./node_modules/.bin/vp run patch:tsgo
+          ./node_modules/.bin/vp run --no-cache -F './packages/*' build
+
+      - name: Compare sequential cohorts
+        timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 165 }}
+        # Older releases do not ignore these known declaration artifacts emitted
+        # by their package build. Remove only those generated scratch files.
+        # The subsequent --require-clean check rejects every other modification.
+        shell: bash
+        env:
+          PROFILE: ${{ github.event_name == 'pull_request' && 'pr' || inputs.profile }}
+        run: |
+          for checkout in .performance-base .performance-reference; do
+            rm -f "$checkout/test/fixtures/checkpoints.d.ts" "$checkout/test/fixtures/storage-upgrade.d.ts" "$checkout/test/fixtures/storage-v2.d.ts"
+          done
+          ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --reference-dir .performance-reference --profile "$PROFILE" --require-clean
+
+      - name: Preserve run identity and readable evidence
+        if: always()
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p .performance-report
+          echo "$PR_NUMBER" > .performance-report/pr-number.txt
+          if test -f .performance-report/report.md; then cat .performance-report/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Upload all samples and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-performance
+          path: .performance-report
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90

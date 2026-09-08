@@ -15,6 +15,18 @@ Every entry point also requires `ThreadHistory`. Use
 `PersistentHistory.layer` with a store to [retain completed runs](./threads#retain-completed-runs).
 History commits before a successful result or `RunCompleted` event becomes visible.
 
+A valid no-tool answer needs one model call. A designated completion Tool can complete without a
+follow-up model call. Independent application Tools default to four concurrent handlers, behind
+the batch's authorization and approval barrier. Use one when execution must be serial or a fixture
+deliberately measures a sequential workflow. Continuity fixtures serialize changes to shared notes;
+Code Mode examples bound generated programs separately. Node host worker concurrency is a separate
+setting.
+
+The immutable output contract retains its message identity across turns, allowing opt-in native
+`ResponseIdTracker` reuse when the rest of the prompt prefix is unchanged. Prepared context,
+compaction, and a resumed Run can still invalidate that prefix. Provider caching and billing depend
+on the selected provider and configuration.
+
 Context preparation is optional. Provide `RunContextPreparation` to load extra context;
 without it, Runs use their normal prompt and compaction behavior. See
 [context management](./context-management#recall-memory) for service-based recall and tagged errors.
@@ -56,6 +68,13 @@ const program = events.pipe(
 
 Events cover run and turn lifecycle, text and reasoning deltas, tool activity, approval requests,
 and one terminal classification. Provider SDK chunks do not enter this stable union.
+
+For structured output, treat text deltas as provisional wire data. Show activity or received-character
+progress until the terminal output passes its Schema; do not display partial JSON as an answer.
+The demo follows this pattern. Plain-text output can render provisional text directly.
+Primitive text and reasoning deltas are copied into owned, Schema-validated values; their transport
+fragmentation does not create one ownership tracing span per delta. Complex metadata retains the
+general bounded ownership path.
 
 The stream uses bounded backpressure. Completion, failure, and interruption close its resources.
 Interrupting the only ephemeral consumer interrupts the run.

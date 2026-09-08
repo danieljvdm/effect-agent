@@ -1,0 +1,123 @@
+name: Manual Cloudflare performance
+
+# Paid, deployed pre-merge/pre-release evidence. Deliberately no PR, push, or schedule trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Exact 40-character candidate commit SHA
+        required: true
+        type: string
+      reference:
+        description: Optional exact 40-character reference commit SHA
+        required: false
+        type: string
+      model:
+        description: Real provider model
+        type: choice
+        default: gpt-6-astra
+        options: [gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4-mini]
+      samples:
+        description: Threads per target; each reserves at most $2 (maximum $12 with both targets)
+        type: choice
+        default: "1"
+        options: ["1", "2", "3"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-cloudflare-performance
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    # Six bounded samples can consume 48 minutes; leave room for deployment and cleanup.
+    timeout-minutes: 90
+    environment: performance-cloudflare
+    env:
+      CI: "true"
+      VP_GIT_HOOKS: "0"
+      CANDIDATE_SHA: ${{ inputs.candidate }}
+      REFERENCE_SHA: ${{ inputs.reference }}
+      PERFORMANCE_MODEL: ${{ inputs.model }}
+      PERFORMANCE_SAMPLES: ${{ inputs.samples }}
+    steps:
+      - name: Validate immutable revisions
+        shell: bash
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ -z "$REFERENCE_SHA" || "$REFERENCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+      - name: Check out candidate and fixture
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate }}
+          path: candidate
+          persist-credentials: false
+      - name: Check out optional reference
+        if: inputs.reference != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.reference }}
+          path: reference
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Install each exact lockfile
+        shell: bash
+        run: |
+          cd candidate
+          bunx --package vite-plus@0.3.0 vp install --frozen-lockfile --ignore-scripts
+          if [[ -n "$REFERENCE_SHA" ]]; then
+            cd ../reference
+            ../candidate/node_modules/.bin/vp install --frozen-lockfile --ignore-scripts
+          fi
+      - name: Deploy, evaluate, preserve evidence, and retire resources
+        working-directory: candidate
+        shell: bash
+        env:
+          EFFECT_AGENT_LIVE: "1"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+        run: |
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          args=(--model "$PERFORMANCE_MODEL" --samples "$PERFORMANCE_SAMPLES")
+          if [[ -n "$REFERENCE_SHA" ]]; then args+=(--reference-root ../reference); fi
+          vp run --no-cache perf:cloudflare "${args[@]}"
+      - name: Retry recorded cleanup after failure or cancellation
+        if: always()
+        working-directory: candidate
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+        run: |
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          if [[ -f .context-continuity-eval/performance/resources.json ]]; then
+            vp run --no-cache perf:cloudflare --cleanup
+          fi
+      - name: Attach readable result
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f candidate/.context-continuity-eval/performance/summary.md ]]; then
+            cat candidate/.context-continuity-eval/performance/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Preserve exact-candidate evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cloudflare-performance-${{ inputs.candidate }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/.context-continuity-eval/performance/
+          if-no-files-found: warn
+          retention-days: 30

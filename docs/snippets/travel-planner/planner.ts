@@ -13,11 +13,10 @@ export const TravelPlanner = Agent.make("travel-planner", {
   instructions: ({ city, days }) =>
     `Find activities with search_activities, then plan ${days} days in ${city}.`,
   toolkit: TravelTools,
-  policy: AgentPolicy.make({
+  policy: AgentPolicy.resolve({
     maxTurns: 6,
     maxToolCalls: 10,
     maxDuration: "2 minutes",
-    toolConcurrency: 1,
   }),
 });
 

@@ -208,11 +208,10 @@ export const FixtureChatDefinition = Agent.make("general-chat-fixture", {
   output: ChatOutput,
   instructions: GeneralChatInstructions,
   toolkit: FixtureChatToolkit,
-  policy: AgentPolicy.make({
+  policy: AgentPolicy.resolve({
     maxTurns: 2,
     maxToolCalls: 2,
     maxDuration: "30 seconds",
-    toolConcurrency: 1,
   }),
   description: "General chat with deterministic offline application tools.",
   metadata: {

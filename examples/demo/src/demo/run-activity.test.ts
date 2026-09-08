@@ -56,7 +56,7 @@ describe("run activity projection", () => {
     ).toEqual({
       phase: "composing",
       label: "Writing the response…",
-      detail: "Assistant text stream",
+      detail: "5 response characters received",
     });
   });
 

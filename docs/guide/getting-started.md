@@ -41,11 +41,10 @@ const triage = Agent.make("triage", {
   }),
   instructions: "Classify the bug report by severity. Explain your reasoning in one sentence.",
   toolkit: Toolkit.empty,
-  policy: AgentPolicy.make({
+  policy: AgentPolicy.resolve({
     maxTurns: 2,
     maxToolCalls: 1,
     maxDuration: "30 seconds",
-    toolConcurrency: 1,
   }),
 });
 

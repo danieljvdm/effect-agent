@@ -89,6 +89,13 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
   readonly maxCostMicrousd: number;
   readonly phase: Ref.Ref<number>;
   readonly initialUsage?: ModelUsage;
+  readonly maxModelCalls?: number;
+  readonly maxInputTokens?: number;
+  /** Optional example-owned instrumentation; dispatch itself is observed at Fetch. */
+  readonly observe?: (
+    kind: "preflight-start" | "preflight-end" | "first-provider-delta",
+    request: number,
+  ) => Effect.Effect<void>;
 }) {
   const native = yield* OpenAiClient.OpenAiClient;
   const auditSink = yield* RequestAuditSink;
@@ -155,11 +162,16 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
     }
     const before = yield* Ref.get(state);
 
-    if (before.closed || before.calls >= MAX_MODEL_CALLS)
+    if (
+      before.closed ||
+      before.calls >= Math.min(options.maxModelCalls ?? MAX_MODEL_CALLS, MAX_MODEL_CALLS)
+    )
       return yield* refuse("Evaluation stopped or reached its model-call limit");
     const payload: Payload = { ...original, truncation: "disabled" };
 
     // Count the actual native request before paid inference, including Tool/output schemas.
+    yield* options.observe?.("preflight-start", before.calls + 1) ?? Effect.void;
+
     const tokens = yield* native.client
       .post("/responses/input_tokens", {
         body: HttpBody.jsonUnsafe({
@@ -180,8 +192,9 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
         Effect.catch(() => refuse("Input-token preflight failed; no inference dispatched")),
       );
 
-    if (tokens > MAX_INPUT_TOKENS)
-      return yield* refuse("Outgoing input exceeded the evaluation's 32000-token bound");
+    yield* options.observe?.("preflight-end", before.calls + 1) ?? Effect.void;
+    if (tokens > Math.min(options.maxInputTokens ?? MAX_INPUT_TOKENS, MAX_INPUT_TOKENS))
+      return yield* refuse("Outgoing input exceeded the evaluation's configured token bound");
     const cost = Math.ceil(tokens * price.input + MAX_OUTPUT_TOKENS * price.output);
 
     if (before.cost + outstanding(before) + cost > options.maxCostMicrousd)
@@ -266,6 +279,7 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       refuse("Unexpected non-streaming request in the durable continuity evaluation"),
     createResponseStream: Effect.fn("ContextContinuity.createResponseStream")(function* (original) {
       const { payload, reservation } = yield* admit(original);
+      let firstDelta = true;
 
       const [response, stream] = yield* native.createResponseStream(payload).pipe(
         Effect.timeout("3 minutes"),
@@ -281,8 +295,15 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
               event.type !== "response.completed" &&
               event.type !== "response.incomplete" &&
               event.type !== "response.failed"
-            )
+            ) {
+              if (firstDelta && event.type.endsWith(".delta")) {
+                firstDelta = false;
+
+                return options.observe?.("first-provider-delta", reservation.id) ?? Effect.void;
+              }
+
               return Effect.void;
+            }
 
             return Schema.decodeUnknownEffect(OpenAiSchema.Response)(event.response).pipe(
               Effect.catch(() => refuse("Invalid provider completion")),

@@ -276,6 +276,24 @@
         "vite-plus": "catalog:",
       },
     },
+    "examples/runtime-benchmark": {
+      "name": "@effect-agent/example-runtime-benchmark",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
+        "@effect-agent/platform-node": "workspace:*",
+        "@effect-agent/testing": "workspace:*",
+        "@effect-agent/thread": "workspace:*",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+        "effect-agent": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
     "examples/semantic-memory-eval": {
       "name": "@effect-agent/example-semantic-memory-eval",
       "version": "0.0.0",
@@ -299,7 +317,7 @@
     },
     "packages/capabilities": {
       "name": "@effect-agent/capabilities",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -318,7 +336,7 @@
     },
     "packages/core": {
       "name": "@effect-agent/core",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -330,7 +348,7 @@
     },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -347,7 +365,7 @@
     },
     "packages/engine": {
       "name": "@effect-agent/engine",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
       },
@@ -363,7 +381,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -401,7 +419,7 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -424,7 +442,7 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -459,7 +477,7 @@
     },
     "packages/sandbox": {
       "name": "@effect-agent/sandbox",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "devDependencies": {
         "effect": "catalog:",
         "typescript": "catalog:",
@@ -471,7 +489,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/sandbox": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -489,7 +507,7 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -512,7 +530,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -531,7 +549,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -550,7 +568,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -575,7 +593,7 @@
     },
     "packages/thread": {
       "name": "@effect-agent/thread",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -593,7 +611,7 @@
     },
     "packages/workflow": {
       "name": "@effect-agent/workflow",
-      "version": "0.1.0-beta.59",
+      "version": "0.1.0-beta.68",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/thread": "workspace:*",
@@ -908,6 +926,8 @@
     "@effect-agent/example-providers": ["@effect-agent/example-providers@workspace:examples/providers"],
 
     "@effect-agent/example-repo-ops": ["@effect-agent/example-repo-ops@workspace:examples/repo-ops"],
+
+    "@effect-agent/example-runtime-benchmark": ["@effect-agent/example-runtime-benchmark@workspace:examples/runtime-benchmark"],
 
     "@effect-agent/example-semantic-memory-eval": ["@effect-agent/example-semantic-memory-eval@workspace:examples/semantic-memory-eval"],
 
