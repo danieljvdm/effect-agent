@@ -83,6 +83,7 @@ import {
   WorkerBudgetAuthorizer,
   WorkerHostAuthorizer,
   WorkerHostConfig,
+  WorkerPolicyResolver,
 } from "../src/WorkerHost.ts";
 
 class ReportService extends Context.Service<ReportService, string>()("test/ReportService") {}
@@ -173,6 +174,11 @@ const reportWith = (
 const harness = Effect.fn("workerHostHarness")(function* (
   options: {
     readonly independentBudget?: boolean;
+    readonly sourceRevisions?: ReadonlyArray<{
+      readonly definition: Agent.AnyDefinition;
+      readonly digests: DefinitionDigests;
+      readonly reporting?: ReadonlyArray<WorkerReporting<WorkerReportPreparationFailure>>;
+    }>;
     readonly sourceReports?: ReadonlyArray<WorkerReporting<WorkerReportPreparationFailure>>;
     readonly targetReports?: ReadonlyArray<WorkerReporting<WorkerReportPreparationFailure>>;
   } = {},
@@ -229,13 +235,24 @@ const harness = Effect.fn("workerHostHarness")(function* (
     deploymentId: Schema.decodeSync(DeploymentId)("test"),
     producerId: Schema.decodeSync(ProducerId)("test"),
     settlementPollInterval: Duration.millis(5),
-    bindings: [sourceAgent, target].map((definition) => ({
+    bindings: [
+      sourceAgent,
+      target,
+      ...(options.sourceRevisions ?? []).map((revision) => revision.definition),
+    ].map((definition) => ({
       definition,
       agentId: definition.id,
-      digests: definitions,
+      digests:
+        options.sourceRevisions?.find((revision) => revision.definition === definition)?.digests ??
+        definitions,
       attempt: () => Effect.succeed(Option.none()),
       reporting:
-        definition === sourceAgent ? (options.sourceReports ?? []) : (options.targetReports ?? []),
+        definition === sourceAgent
+          ? (options.sourceReports ?? [])
+          : (options.sourceRevisions?.find((revision) => revision.definition === definition)
+              ?.reporting ??
+            options.targetReports ??
+            []),
     })),
   }).pipe(
     Effect.provideService(WorkerBudgetAuthorizer, {
@@ -424,11 +441,20 @@ const harness = Effect.fn("workerHostHarness")(function* (
           };
 
           yield* runtime
-            .validateAdmission(metadata, options, envelope.agentId, envelope.inputDigest)
+            .validateAdmission(
+              metadata,
+              options,
+              envelope.agentId,
+              envelope.inputDigest,
+              envelope.input,
+            )
             .pipe(
               Effect.mapError((error) =>
                 AdmissionPolicyError.make({
-                  reason: error.reason === "storage" ? "unavailable" : "refused",
+                  reason:
+                    error.reason === "storage" || error.reason === "unavailable"
+                      ? "unavailable"
+                      : "refused",
                   code: `worker-${error.reason}`,
                 }),
               ),
@@ -578,6 +604,308 @@ const harness = Effect.fn("workerHostHarness")(function* (
 });
 
 layer(NodeCrypto.layer)((it) => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+  it.effect(
+    "pins captured owner reporting across later owner revisions while preserving legacy context and reports",
+    () =>
+      Effect.gen(function* () {
+        const ownerId = Schema.decodeSync(SubmissionId)("source-owner");
+        const revisedDigest = Schema.decodeSync(Digest)("b".repeat(64));
+        const revisedDigests = DefinitionDigests.make({ ...definitions, agent: revisedDigest });
+
+        const revised = Agent.make(sourceAgent.id, {
+          input: sourceAgent.input,
+          output: sourceAgent.output,
+          instructions: "Revised source",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({ ...sourceAgent.policy, maxTurns: 30 }),
+        });
+
+        const snapshot = SubmissionSnapshot.make({
+          submissionId: ownerId,
+          threadId: sourceId,
+          queueSequence: Schema.decodeSync(QueueSequence)(1),
+          principal,
+          idempotencyKey: Schema.decodeSync(IdempotencyKey)("source-owner"),
+          agentId: sourceAgent.id,
+          agentDigests: revisedDigests,
+          deploymentId: Schema.decodeSync(DeploymentId)("test"),
+          inputPayload: "immutable capture",
+          inputDigest: digest,
+          receiptId: Schema.decodeSync(ReceiptId)("source-owner"),
+          state: "ready",
+          createdAt: DateTime.makeUnsafe(0),
+        });
+
+        const reportsA = [reportWith(() => Effect.succeed({ encodedInput: "report:A" }))];
+        const legacy = yield* harness({ sourceReports: reportsA });
+
+        legacy.submissions.set(ownerId, snapshot);
+
+        const context = {
+          source: { _tag: "programmatic" as const, threadId: sourceId, agentId: sourceAgent.id },
+          policy: revised.policy,
+          depth: 0,
+        };
+
+        const legacyFacet = legacy.runtime.facet(context, principal, ownerId);
+
+        expect((yield* legacyFacet.context).policy).toEqual(revised.policy);
+        const started = yield* legacyFacet.start(request("legacy-owner"));
+
+        expect(started.receipt.threadId).toBe(started.worker.threadId);
+        yield* legacy.settle(started.receipt);
+        expect(
+          [...legacy.deliveries.values()]
+            .filter((row) => row.envelope.threadId === sourceId)
+            .map((row) => row.envelope),
+        ).toEqual([expect.objectContaining({ definitions, input: "report:A" })]);
+
+        const laterOwnerId = Schema.decodeSync(SubmissionId)("later-source-owner");
+
+        const laterDigests = DefinitionDigests.make({
+          ...definitions,
+          agent: Schema.decodeSync(Digest)("c".repeat(64)),
+        });
+
+        const laterDefinition = Agent.make(sourceAgent.id, {
+          input: sourceAgent.input,
+          output: sourceAgent.output,
+          instructions: "Later source",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({ ...sourceAgent.policy, maxTurns: 40 }),
+        });
+
+        let reportsB = 0;
+        let reportsC = 0;
+
+        const opted = yield* harness({
+          sourceReports: reportsA,
+          sourceRevisions: [
+            {
+              definition: revised,
+              digests: revisedDigests,
+              reporting: [
+                reportWith((report) =>
+                  Effect.sync(() => {
+                    reportsB++;
+                    expect(report.context.policy).toEqual(revised.policy);
+
+                    return { encodedInput: "report:B" };
+                  }),
+                ),
+              ],
+            },
+            {
+              definition: laterDefinition,
+              digests: laterDigests,
+              reporting: [
+                reportWith(() =>
+                  Effect.sync(() => {
+                    reportsC++;
+
+                    return { encodedInput: "report:C" };
+                  }),
+                ),
+              ],
+            },
+          ],
+        }).pipe(
+          Effect.provideService(WorkerPolicyResolver, {
+            resolveSource: (request) =>
+              Effect.gen(function* () {
+                if (request.submission === undefined)
+                  return yield* WorkerError.make({ operation: "start", reason: "unavailable" });
+                if (request.submission.submissionId === laterOwnerId) {
+                  expect(request.definition).toBe(laterDefinition);
+                  expect(request.definitions).toEqual(laterDigests);
+
+                  return Option.some(laterDefinition.policy);
+                }
+                expect(request.definition).toBe(revised);
+                expect(request.definitions).toEqual(revisedDigests);
+                expect(request.submission.inputPayload).toBe("immutable capture");
+
+                return Option.some(revised.policy);
+              }),
+            resolveTarget: () => Effect.succeed(Option.none()),
+          }),
+        );
+
+        opted.submissions.set(ownerId, snapshot);
+        expect((yield* opted.host.context.pipe(Effect.flip)).reason).toBe("unavailable");
+        expect(
+          yield* opted.host.list({ target, delegationId: request("list").delegationId, limit: 10 }),
+        ).toEqual({ items: [], next: null });
+
+        const selected = yield* opted.runtime.acquire({
+          sourceThreadId: sourceId,
+          principal,
+          sourceSubmissionId: ownerId,
+        });
+
+        expect((yield* selected.context).policy).toEqual(revised.policy);
+        const worker = yield* selected.start(request("owner-B-worker"));
+        const origin = opted.submissions.get(worker.receipt.submissionId)!.workerAdmission!.origin;
+
+        expect(origin.reporting?.sourceDigests).toEqual(revisedDigests);
+        yield* opted.settle(worker.receipt);
+        opted.submissions.set(
+          laterOwnerId,
+          SubmissionSnapshot.make({
+            ...snapshot,
+            submissionId: laterOwnerId,
+            agentDigests: laterDigests,
+            inputPayload: "later immutable capture",
+          }),
+        );
+
+        const laterSource = yield* opted.runtime.acquire({
+          sourceThreadId: sourceId,
+          principal,
+          sourceSubmissionId: laterOwnerId,
+        });
+
+        const next = yield* laterSource.followUp({
+          worker: worker.worker,
+          target,
+          idempotencyKey: Schema.decodeSync(IdempotencyKey)("owner-C-followup"),
+          encodedInput: { text: "next" },
+          encodedParameters: { note: "next" },
+        });
+
+        yield* opted.settle(next);
+        expect(opted.submissions.get(next.submissionId)!.workerAdmission!.origin).toEqual(origin);
+        expect(reportsB).toBe(2);
+        expect(reportsC).toBe(0);
+        expect(
+          [...opted.deliveries.values()]
+            .filter((row) => row.envelope.threadId === sourceId)
+            .map((row) => row.envelope),
+        ).toEqual([
+          expect.objectContaining({ definitions: revisedDigests, input: "report:B" }),
+          expect.objectContaining({ definitions: revisedDigests, input: "report:B" }),
+        ]);
+      }),
+  );
+
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+  it.effect(
+    "revalidates captured authority across a reserved admission retry and freezes later worker policy",
+    () =>
+      Effect.gen(function* () {
+        const captured = AgentPolicy.make({
+          ...policy,
+          maxTurns: 7,
+          maxToolCalls: 6,
+          maxDuration: "4 seconds",
+        });
+
+        let unavailable = false;
+        let replaceRetained = false;
+        let initialCalls = 0;
+
+        const h = yield* harness({ independentBudget: true }).pipe(
+          Effect.provideService(WorkerPolicyResolver, {
+            resolveSource: () => Effect.succeed(Option.none()),
+            resolveTarget: (input) =>
+              Effect.gen(function* () {
+                if (unavailable)
+                  return yield* WorkerError.make({ operation: "start", reason: "unavailable" });
+                if (input._tag === "RetainedWorker")
+                  return Option.some(replaceRetained ? policy : input.origin.policy);
+                initialCalls++;
+                expect(input.input).toEqual({ text: "captured" });
+                expect(input.definition).toBe(target);
+
+                return Option.some(captured);
+              }),
+          }),
+        );
+
+        const base = request("captured");
+
+        const start: StartWorkerRequest = {
+          ...base,
+          policy: captured,
+          budgetScope: "worker-run",
+          budget: {
+            caps: SubagentDelegationCaps.make({
+              maxTotalChildInvocations: 1,
+              maxConcurrentChildren: 1,
+              maxTurns: 8,
+              maxToolCalls: 7,
+              maxDurationMillis: 5_000,
+            }),
+            allocation: SubagentReservationAmounts.make({
+              ...base.budget.allocation,
+              turns: 8,
+              toolCalls: 7,
+              durationMillis: 5_000,
+            }),
+            descendantInvocations: 1,
+          },
+        };
+
+        h.fail("worker:after-source-append");
+        yield* h.host.start(start).pipe(Effect.flip);
+        h.fail(undefined);
+        const delivery = [...h.deliveries.values()][0]!;
+        const metadata = delivery.envelope.workerAdmission!;
+
+        const admissionOptions = {
+          threadId: delivery.envelope.threadId,
+          definitions: delivery.envelope.definitions,
+          principal,
+          idempotencyKey: delivery.envelope.admissionKey,
+        };
+
+        unavailable = true;
+        expect(
+          (yield* h.runtime
+            .validateAdmission(
+              metadata,
+              admissionOptions,
+              target.id,
+              delivery.envelope.inputDigest,
+              delivery.envelope.input,
+            )
+            .pipe(Effect.flip)).reason,
+        ).toBe("unavailable");
+        expect(h.submissions.size).toBe(0);
+        unavailable = false;
+        yield* TestClock.adjust("1 second");
+        const started = yield* h.host.start(start);
+
+        expect(initialCalls).toBeGreaterThanOrEqual(4);
+        const origin = h.submissions.get(started.receipt.submissionId)!.workerAdmission!.origin;
+
+        expect(origin.policy).toEqual(captured);
+        expect(
+          h.logs
+            .get(sourceId)!
+            .filter(({ record }) => record.payload._tag === "WorkerInputRequested"),
+        ).toHaveLength(1);
+        yield* h.settle(started.receipt);
+
+        const followup = {
+          worker: started.worker,
+          target,
+          idempotencyKey: Schema.decodeSync(IdempotencyKey)("later"),
+          encodedInput: { text: "different later input" },
+          encodedParameters: { note: "later" },
+        };
+
+        replaceRetained = true;
+        expect((yield* h.host.followUp(followup).pipe(Effect.flip)).reason).toBe("worker-mismatch");
+        expect(h.deliveries.size).toBe(1);
+        replaceRetained = false;
+        const next = yield* h.host.followUp(followup);
+
+        expect(h.submissions.get(next.submissionId)!.workerAdmission!.origin).toEqual(origin);
+      }),
+  );
+
   // Regression: https://github.com/danieljvdm/effect-agent/pull/358
   it.effect(
     "requires host funding authority and preserves worker identity and structural limits",
@@ -1741,12 +2069,14 @@ layer(NodeCrypto.layer)((it) => {
           options,
           report.envelope.agentId,
           report.envelope.inputDigest,
+          report.envelope.input,
         );
         yield* h.runtime.validateAdmission(
           metadata,
           options,
           report.envelope.agentId,
           report.envelope.inputDigest,
+          report.envelope.input,
         );
 
         const charged = h.logs

@@ -8272,7 +8272,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       options.workerAdmission === undefined
         ? undefined
         : yield* workerRuntime
-            .validateAdmission(options.workerAdmission, options, agent.definition.id, inputDigest)
+            .validateAdmission(
+              options.workerAdmission,
+              options,
+              agent.definition.id,
+              inputDigest,
+              inputPayload,
+            )
             .pipe(
               Effect.mapError((cause) =>
                 AdmissionPolicyError.make({
@@ -9272,6 +9278,8 @@ export class DurableAgentRuntime extends Context.Service<
     readonly workerHost: (request: {
       readonly sourceThreadId: ThreadId;
       readonly principal: Principal;
+      /** Exact retained owner input for captured source policy; never selects the latest input. */
+      readonly sourceSubmissionId?: SubmissionId;
     }) => Effect.Effect<SubagentHost["Service"], WorkerError>;
     readonly messagingHost: (request: {
       readonly sourceThreadId: ThreadId;
