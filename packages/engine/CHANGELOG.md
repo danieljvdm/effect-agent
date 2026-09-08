@@ -1,5 +1,16 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.55
+
+### Minor Changes
+
+- [#357](https://github.com/danieljvdm/effect-agent/pull/357) [`2259fc0`](https://github.com/danieljvdm/effect-agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resolve model routing and context admission from the same per-turn configuration, and allow trusted hosts to request native rollover. Expose retained-history projections and lexical matching for authorized indexed history adapters, and the existing Thread Object SQL client for optional owner-local repositories.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.55
+
 ## 0.1.0-beta.54
 
 ### Patch Changes
