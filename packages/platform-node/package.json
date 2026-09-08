@@ -28,8 +28,7 @@
   },
   "scripts": {
     "build": "vp pack",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test --passWithNoTests"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@effect-agent/core": "workspace:*",

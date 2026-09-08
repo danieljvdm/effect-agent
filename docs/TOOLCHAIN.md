@@ -102,8 +102,11 @@ the ordinary test command.
 
 Vite Task caches successful results against their inputs. Vitest's mutable result cache is
 disabled so it does not invalidate task caching. CI transfers `node_modules/.vite/task-cache`.
-Direct Vitest tasks exclude generated Vite files and dependency directory listings, but track
-imported dependency files and the lockfile. Failed tasks are never cached.
+Direct Vitest tasks and the Node platform test task exclude generated Vite files and dependency
+directory listings, but track imported dependency files and the lockfile. Failed tasks are never
+cached. Vite Task fingerprints whole files, including package manifests: a version-only change
+can invalidate tests even when their source is unchanged. Keep manifests tracked because exports,
+module type, and dependency declarations also affect execution.
 
 Use `vp run -v test` for cache decisions, `vp run --last-details` for the previous run,
 or `vp run --no-cache test` to rerun every suite.
@@ -371,7 +374,9 @@ the reviewer reads untrusted source through GitHub's API instead.
 Each test-matrix job has its own task-cache key. Successful task results are saved even when
 another task fails. Main pushes run static checks, tests, and builds to populate shared caches
 and validate Action releases. The `ready` fan-in runs only on PRs. Main runs are not cancelled
-by newer pushes.
+by newer pushes. GitHub scopes PR caches to each PR's merge ref, so another PR cannot reuse them.
+A new release PR can restore the latest main results only after those jobs finish saving their
+caches; a release PR created while main CI is still running may restore an older baseline.
 Tests are reused only when task inputs match, never solely because paths did not change.
 
 The pre-commit hook runs `vp check --fix` on staged JavaScript and TypeScript.
