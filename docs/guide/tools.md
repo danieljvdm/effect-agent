@@ -63,6 +63,12 @@ const options = {
 Use sequential execution for mutating tools whose effects depend on order. Every other batch still
 has a finite concurrency limit.
 
+Durable hosts provide `RunToolScheduling` from `@effect-agent/engine/RunOptions` when constructing
+the runtime. Its `toolRequiresSequential` predicate inserts barriers around those tools while
+independent neighboring calls run concurrently. The runtime captures this host choice across
+replacement attempts; a worker's ambient reference cannot replace it. Ephemeral runs use the same
+reference unless `RunOptions.scheduling` is explicitly supplied.
+
 ## Approve before execution {#approval}
 
 Effect AI's `needsApproval` marks a tool for approval. The capabilities package turns its native

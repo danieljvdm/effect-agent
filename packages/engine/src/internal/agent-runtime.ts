@@ -272,6 +272,7 @@ import {
   RunResumeUsageSchema,
   RunContextPreparation,
   RunToolAuthorization,
+  RunToolScheduling,
   type PreparedRunContext,
   type RunContextPreparationError,
   type RunOptions,
@@ -6917,6 +6918,8 @@ function streamWithCompletion<
         Effect.map(Option.getOrUndefined),
       );
 
+      const scheduling = yield* RunToolScheduling;
+
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);
@@ -6948,6 +6951,7 @@ function streamWithCompletion<
         context: runOptions.context ?? preparation.hook,
         transientContext: runOptions.transientContext ?? preparation.transientContext,
         toolAuthorization: runOptions.toolAuthorization ?? authorization,
+        scheduling: runOptions.scheduling ?? scheduling,
         threadId,
         runId,
         ...(retained === undefined
