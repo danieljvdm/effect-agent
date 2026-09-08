@@ -1,3 +1,4 @@
+export * as SqliteMessageDeliveryStore from "./SqliteMessageDeliveryStore.ts";
 export * as SqliteActivityStore from "./SqliteActivityStore.ts";
 export * as SqliteScheduleStore from "./SqliteScheduleStore.ts";
 export * as SqliteStorageConfig from "./SqliteStorageConfig.ts";

@@ -159,6 +159,75 @@ describe("subagent budget reservations", () => {
     expect(left).not.toBe(right);
   });
 
+  it.effect("reserves descendant slots atomically and holds their concurrency permits", () =>
+    Effect.gen(function* () {
+      const reservations = yield* SubagentReservations;
+
+      yield* reservations.registerParent(
+        runId,
+        SubagentDelegationCaps.make({
+          maxTotalChildInvocations: 2,
+          maxConcurrentChildren: 2,
+          maxTurns: 4,
+        }),
+      );
+
+      const tree = SubagentReservationRequest.make({
+        ...request(0, amounts({ turns: 4 })),
+        descendantInvocations: 1,
+      });
+
+      yield* reservations.reserve(tree);
+      yield* reservations.reserve(tree);
+      expect((yield* reservations.parentSnapshot(runId)).totalChildInvocations).toBe(2);
+      const rejected = yield* reservations.reserve(request(1, amounts())).pipe(Effect.flip);
+
+      expect(rejected).toMatchObject({
+        _tag: "SubagentBudgetExhausted",
+        dimension: "total-child-invocations",
+        observedValue: 3,
+      });
+
+      const changed = yield* reservations
+        .reserve(request(0, amounts({ turns: 4 })))
+        .pipe(Effect.flip);
+
+      expect(changed._tag).toBe("SubagentReservationConflict");
+
+      const overConcurrency = yield* reservations
+        .acquireChildSlot(runId, 3)
+        .pipe(Effect.scoped, Effect.flip);
+
+      expect(overConcurrency).toMatchObject({
+        _tag: "SubagentBudgetExhausted",
+        dimension: "concurrent-children",
+      });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+
+      const holder = yield* Effect.gen(function* () {
+        yield* reservations.acquireChildSlot(runId, 2);
+        yield* Deferred.succeed(entered, undefined);
+        yield* Deferred.await(release);
+      }).pipe(Effect.scoped, Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      const successor = yield* Deferred.make<void>();
+
+      const waiter = yield* Effect.gen(function* () {
+        yield* reservations.acquireChildSlot(runId);
+        yield* Deferred.succeed(successor, undefined);
+      }).pipe(Effect.scoped, Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      expect(yield* Deferred.isDone(successor)).toBe(false);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      yield* Fiber.join(waiter);
+      expect(yield* Deferred.isDone(successor)).toBe(true);
+    }).pipe(Effect.provide(SubagentReservationsMemoryLive)),
+  );
+
   it.effect("reserves idempotently by stable identity and rejects a changed allocation", () =>
     Effect.gen(function* () {
       const reservations = yield* SubagentReservations;

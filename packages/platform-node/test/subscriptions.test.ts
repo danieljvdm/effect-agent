@@ -3,11 +3,6 @@ import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
 import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
 import { NodeSubscriptions } from "@effect-agent/platform-node/NodeSubscriptions";
-import {
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
-import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
 import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import {
@@ -43,7 +38,6 @@ import {
 } from "@effect-agent/thread/SubscriptionInput";
 import { Subscriptions } from "@effect-agent/thread/Subscriptions";
 import { NodeFileSystem } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import {
@@ -91,20 +85,6 @@ const authorizerLayer = Layer.succeed(SubscriptionAuthorizer)({
   reconcile: () => Effect.void,
   prepare: () => Effect.succeed({ policyId: "node-subscription-policy", decisionId: "allow" }),
 });
-
-const sqliteInfrastructure = (filename: string) =>
-  Layer.mergeAll(
-    SqliteClient.layer({ filename }),
-    Layer.succeed(SqliteStorageConfig)(
-      SqliteStorageConfigValue.make({
-        observationPollInterval: 0,
-        busyTimeout: 5_000,
-        ownershipLeaseDuration: 30_000,
-        verifyOnOpen: false,
-      }),
-    ),
-    SqliteStorageFailpoint.layer,
-  );
 
 const sourceLayer = (calls: Ref.Ref<number>, completed: Ref.Ref<boolean>) =>
   Layer.merge(
@@ -154,10 +134,8 @@ interface DeadlineDefectProbe {
   readonly attempts: Ref.Ref<number>;
 }
 
-const storeLayer = (filename: string, probe?: DeadlineDefectProbe) => {
-  const sqliteStore = subscriptionStoreLayer(partition).pipe(
-    Layer.provide(sqliteInfrastructure(filename)),
-  );
+const storeLayer = (probe?: DeadlineDefectProbe) => {
+  const sqliteStore = subscriptionStoreLayer(partition);
 
   if (probe === undefined) return sqliteStore;
 
@@ -189,16 +167,21 @@ const subscriptionLayer = (
   deadlineDefectProbe?: DeadlineDefectProbe,
 ) => {
   const dependencies = Layer.mergeAll(
-    NodeDurableHost.layerStack({
-      filename,
-      deploymentId: "node-subscription-deployment",
-      producerId: "node-subscription-producer",
-      wakeScanInterval: 1_000,
-      ...(runtimeFailpoint === undefined ? {} : { runtimeFailpoint }),
-    }),
-    storeLayer(filename, deadlineDefectProbe),
+    storeLayer(deadlineDefectProbe),
     authorizerLayer,
     sourceLayer(calls, completed),
+  ).pipe(
+    // Share the host's serialized connection, including startup recovery writes.
+    Layer.provideMerge(
+      NodeDurableHost.layerStack({
+        filename,
+        deploymentId: "node-subscription-deployment",
+        producerId: "node-subscription-producer",
+        wakeScanInterval: 1_000,
+        observationPollInterval: 0,
+        ...(runtimeFailpoint === undefined ? {} : { runtimeFailpoint }),
+      }),
+    ),
   );
 
   return NodeSubscriptions.layer({ limits }).pipe(Layer.provideMerge(dependencies));

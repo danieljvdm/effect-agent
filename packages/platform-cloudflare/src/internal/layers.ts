@@ -10,6 +10,7 @@ import {
   RunToolAuthorization,
   toolFailureObserverLayer,
 } from "@effect-agent/engine/RunOptions";
+import { doMessageDeliveryStoreLayer } from "@effect-agent/storage-cloudflare/DoMessageDeliveryStore";
 import {
   type DoStorageFailpointHandler,
   type DoStorageFailpoint,
@@ -42,6 +43,11 @@ import {
   DurableRuntimeFailpoint,
   type DurableRuntimeFailpointHandler,
 } from "@effect-agent/thread/DurableFailpoint";
+import {
+  type MessageDeliveryStore,
+  MessageDeliveryDriver,
+  type MessageDeliveryError,
+} from "@effect-agent/thread/MessageDelivery";
 import {
   operationAuthorizerLayer,
   type OperationAuthorizerService,
@@ -76,7 +82,13 @@ import {
   CloudflareDurableRuntimeConfigValue,
   CloudflarePlatformConfigError,
 } from "../CloudflareConfig.ts";
+import { CloudflareThreadClient } from "../CloudflareThreadClient.ts";
 import { cloudflareWakeSchedulerLayer } from "../WakeScheduler.ts";
+import {
+  guardedMessageDeliveryStoreLayer,
+  threadMessageDeliveryLayer,
+} from "./message-delivery.ts";
+import { cloudflarePreparedInputAdmissionLayer } from "./prepared-admission.ts";
 import { ProgressWaitRegistry } from "./progress-wait.ts";
 import { threadPortTransportLayer } from "./transport.ts";
 
@@ -161,6 +173,7 @@ export type CloudflareBootstrapServices =
 export type CloudflareDurableRuntimeInitializationError =
   | CloudflarePlatformConfigError
   | DigestError
+  | MessageDeliveryError
   | DoStorageInitializationError;
 
 /** The services `ThreadObject.layer` provides. */
@@ -168,6 +181,7 @@ export type CloudflareDurableRuntimeServices =
   | DurableAgentRuntime
   | SubmissionLedger
   | ThreadStore
+  | MessageDeliveryStore
   | WakeScheduler
   | DurableAlarmService
   | ThreadMaintenance
@@ -355,7 +369,7 @@ export const layerFromBindings = <E = never, R = never>(
   options: ThreadPublicationOptions<E, R> = {},
 ): Layer.Layer<
   CloudflareDurableRuntimeServices,
-  DoStorageInitializationError | E,
+  DoStorageInitializationError | MessageDeliveryError | E,
   | DurableObjectContext
   | ThreadObjectNamespace
   | CloudflareBootstrapServices
@@ -384,6 +398,19 @@ export const layerFromBindings = <E = never, R = never>(
       // The RPC executor must never receive routed ports and bounce requests between Objects.
       const rawLocalPorts = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
         Layer.provide(infrastructure),
+      );
+
+      const messageStore = guardedMessageDeliveryStoreLayer.pipe(
+        Layer.provide(doMessageDeliveryStoreLayer().pipe(Layer.provide(infrastructure))),
+      );
+
+      const messageRecovery = threadMessageDeliveryLayer.pipe(
+        // A single wave stays within the alarm event budget even at the policy's five-minute
+        // attempt ceiling. More due rows retain their indexed deadline for the next alarm.
+        Layer.provide(MessageDeliveryDriver.layer({ batchSize: 4, concurrency: 4 })),
+        Layer.provide(cloudflarePreparedInputAdmissionLayer),
+        Layer.provide(CloudflareThreadClient.layer),
+        Layer.provide(messageStore),
       );
 
       const publication = (options.publication ?? ThreadPublication.layer).pipe(
@@ -461,6 +488,10 @@ export const layerFromBindings = <E = never, R = never>(
       const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
 
       const runtimeStack = DurableAgentRuntime.layerWithBindings(bindings).pipe(
+        Layer.provide(
+          cloudflarePreparedInputAdmissionLayer.pipe(Layer.provide(CloudflareThreadClient.layer)),
+        ),
+        Layer.provideMerge(messageStore),
         Layer.provideMerge(routedPorts),
         Layer.provideMerge(cloudflareWakeSchedulerLayer),
         Layer.provideMerge(base),
@@ -468,8 +499,9 @@ export const layerFromBindings = <E = never, R = never>(
 
       return Layer.mergeAll(
         runtimeStack,
-        ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack)),
+        ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack), Layer.provide(messageRecovery)),
         portsEndpointLayer,
+        messageStore,
       ).pipe(Layer.provideMerge(publication), Layer.provideMerge(ThreadMutationGate.layer));
     }),
   );

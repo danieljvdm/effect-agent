@@ -1,15 +1,6 @@
-import { type AgentId } from "@effect-agent/core/Identifiers";
-import { type DurableSubmitAgent } from "@effect-agent/thread/DurableAgentRuntime";
 import { type EventSources } from "@effect-agent/thread/EventSource";
 import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
-import { PersistedJson } from "@effect-agent/thread/Records";
-import {
-  type ScheduledEnvelope,
-  ScheduledInputAdmission,
-  ScheduledInputRetryable,
-  ScheduledInputRefused,
-  ScheduleStorageError,
-} from "@effect-agent/thread/Schedule";
+import { type ScheduledEnvelope, ScheduledInputAdmission } from "@effect-agent/thread/Schedule";
 import {
   type PreparedInput,
   type SubscriptionAuthorizer,
@@ -28,17 +19,8 @@ import {
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Duration, Effect, Exit, Layer, Option } from "effect";
 
+import { makeNodePreparedInputAdmission } from "./internal/prepared-admission.ts";
 import { NodeDurableHost } from "./NodeDurableHost.ts";
-
-const passthroughSubmitAgent = (agentId: AgentId): DurableSubmitAgent<typeof PersistedJson> => ({
-  definition: { id: agentId, input: PersistedJson },
-});
-
-const ambiguous = (): ScheduledInputRetryable =>
-  ScheduledInputRetryable.make({ reason: "ambiguous" });
-
-const corrupt = (operation: string): ScheduleStorageError =>
-  ScheduleStorageError.make({ operation, reason: "corrupt" });
 
 /** Ordinary prepared admission through the Scope-owned Node host gate. */
 export const nodePreparedInputAdmissionLayer: Layer.Layer<
@@ -47,51 +29,7 @@ export const nodePreparedInputAdmissionLayer: Layer.Layer<
   NodeDurableHost
 > = Layer.effect(
   PreparedInputAdmission,
-  Effect.gen(function* () {
-    const host = yield* NodeDurableHost;
-
-    return PreparedInputAdmission.of({
-      submissionStatus: (receipt) =>
-        host
-          .submissionStatus(receipt)
-          .pipe(Effect.mapError(() => ScheduledInputRetryable.make({ reason: "storage" }))),
-      submit: (envelope) =>
-        host
-          .submit(passthroughSubmitAgent(envelope.agentId), envelope.input, {
-            threadId: envelope.threadId,
-            principal: envelope.deliveryPrincipal,
-            idempotencyKey: envelope.admissionKey,
-            ...(envelope.admissionGroup === undefined
-              ? {}
-              : { admissionGroup: envelope.admissionGroup }),
-            ...(envelope.admissionFence === undefined
-              ? {}
-              : { admissionFence: envelope.admissionFence }),
-            definitions: envelope.definitions,
-          })
-          .pipe(
-            Effect.catchTags({
-              AdmissionClosed: () =>
-                Effect.fail(ScheduledInputRetryable.make({ reason: "host-closed" })),
-              AgentInputError: () => Effect.fail(corrupt("prepared admission input")),
-              AdmissionConflict: () => Effect.fail(corrupt("prepared admission conflict")),
-              DigestError: () => Effect.fail(ambiguous()),
-              AdmissionPolicyError: (error) =>
-                error.reason === "refused"
-                  ? ScheduledInputRefused.make({ code: error.code })
-                  : ScheduledInputRetryable.make({
-                      reason: error.reason === "occupied" ? "capacity" : "storage",
-                    }),
-              LedgerError: () => ScheduledInputRetryable.make({ reason: "storage" }),
-              ThreadStoreError: () => Effect.fail(ambiguous()),
-              ThreadNotMaterialized: () => Effect.fail(ambiguous()),
-              AppendConflict: () => Effect.fail(ambiguous()),
-              FenceRejected: () => Effect.fail(ambiguous()),
-              DurableRuntimeFailpointError: () => Effect.fail(ambiguous()),
-            }),
-          ),
-    });
-  }),
+  Effect.map(NodeDurableHost, makeNodePreparedInputAdmission),
 );
 
 const preparedFromSchedule = (envelope: ScheduledEnvelope): PreparedInput => ({

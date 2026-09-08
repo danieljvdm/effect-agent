@@ -33,7 +33,10 @@
     "./SubagentContract": "./src/SubagentContract.ts",
     "./ToolResult": "./src/ToolResult.ts",
     "./Usage": "./src/Usage.ts",
-    "./RememberingStore": "./src/RememberingStore.ts"
+    "./RememberingStore": "./src/RememberingStore.ts",
+    "./Receipt": "./src/Receipt.ts",
+    "./Worker": "./src/Worker.ts",
+    "./Messaging": "./src/Messaging.ts"
   },
   "publishConfig": {
     "access": "public"

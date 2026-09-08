@@ -2,7 +2,9 @@ import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const CurrentSqliteStorageVersion = 8;
+import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
+
+export const CurrentSqliteStorageVersion = 9;
 
 /** Initialize empty storage with the complete current schema. */
 export const sqliteMigrations = SqliteMigrator.fromRecord({
@@ -98,6 +100,8 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
         parent_tool_call_id TEXT,
         admission_group TEXT,
         admission_fence_json TEXT,
+        worker_admission_json TEXT,
+        message_admission_json TEXT,
         UNIQUE (thread_id, principal, idempotency_key),
         UNIQUE (thread_id, queue_sequence)
       )
@@ -331,6 +335,7 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       .withoutTransform;
     yield* sql`CREATE INDEX effect_agent_subscription_deliveries_registration ON effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, delivery_key)`
       .withoutTransform;
-    yield* sql`PRAGMA user_version = 8`.withoutTransform;
+    yield* createMessageDeliveryTables;
+    yield* sql`PRAGMA user_version = 9`.withoutTransform;
   }),
 });

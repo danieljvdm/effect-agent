@@ -16,6 +16,7 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
+    "./MemoryMessageDeliveryStore": "./src/MemoryMessageDeliveryStore.ts",
     "./MemoryScheduleStore": "./src/MemoryScheduleStore.ts",
     "./MemorySemanticIndex": "./src/MemorySemanticIndex.ts",
     "./MemorySubmissionLedger": "./src/MemorySubmissionLedger.ts",

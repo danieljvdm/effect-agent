@@ -2,6 +2,11 @@ import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import {
+  SubagentGrant,
+  BackgroundSpawnTool,
+  DelegationTool,
+} from "@effect-agent/core/SubagentContract";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { type RunOptions } from "@effect-agent/engine/RunOptions";
@@ -191,6 +196,70 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
+  it.effect("applies inherited name, depth, and lifetime limits to broker calls", () =>
+    Effect.gen(function* () {
+      const nested = Tool.make("nested", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(DelegationTool, true);
+
+      const background = Tool.make("background", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(BackgroundSpawnTool, true);
+
+      const forbidden = Tool.make("forbidden", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+
+      const inner = Toolkit.make(nested, background, forbidden);
+      const starts = yield* Ref.make(0);
+      const invoke = () => Ref.update(starts, (count) => count + 1).pipe(Effect.as("unexpected"));
+      const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
+
+      yield* runOrchestrated({
+        innerToolkit: inner,
+        innerHandlers: inner.toLayer({ nested: invoke, background: invoke, forbidden: invoke }),
+        runOptions: {
+          delegationDepth: 2,
+          subagentGrant: SubagentGrant.make({
+            allowedToolNames: ["orchestrate", "nested", "background"],
+            maxDepth: 2,
+            childLifetimes: ["attached"],
+          }),
+        },
+        program: (pass) =>
+          Effect.gen(function* () {
+            for (const toolName of ["nested", "background", "forbidden"]) {
+              const outcome = yield* pass.invoke({ toolName, encodedArguments: {} });
+
+              yield* Ref.update(outcomes, (all) => [...all, outcome]);
+            }
+
+            return null;
+          }),
+      });
+      expect(yield* Ref.get(starts)).toBe(0);
+      expect(yield* Ref.get(outcomes)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            _tag: "ProgrammaticCallError",
+            errorTag: "ProgrammaticToolAuthorizationDenied",
+            index: undefined,
+          }),
+        ]),
+      );
+      expect(
+        (yield* Ref.get(outcomes)).every(
+          (outcome) =>
+            outcome._tag === "ProgrammaticCallError" &&
+            outcome.errorTag === "ProgrammaticToolAuthorizationDenied",
+        ),
+      ).toBe(true);
+    }),
+  );
+
   it.effect("serializes cumulative reservations across concurrent outer handlers", () =>
     Effect.gen(function* () {
       const Orchestrate = Tool.make("orchestrate", {

@@ -1,4 +1,8 @@
 import { type ThreadId } from "@effect-agent/core/Identifiers";
+import type { MessagingError } from "@effect-agent/core/Messaging";
+import type { WorkerError } from "@effect-agent/core/Worker";
+import type { MessagingHost } from "@effect-agent/engine/MessagingHost";
+import type { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import { type DurableBindingFailure } from "@effect-agent/thread/AgentRegistration";
 import {
   type DurableAgentRuntime,
@@ -6,7 +10,7 @@ import {
   type DurableWorkerFailure,
   type RecoveryReport,
 } from "@effect-agent/thread/DurableAgentRuntime";
-import { type Settlement } from "@effect-agent/thread/SubmissionLedger";
+import { type Settlement, type Principal } from "@effect-agent/thread/SubmissionLedger";
 import { type SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
 import { expectTypeOf, it } from "@effect/vitest";
 import type { DateTime, Effect, Option } from "effect";
@@ -18,6 +22,15 @@ type Inspection = ReturnType<Runtime["inspectSubmissionStatus"]>;
 type Recovery = ReturnType<Runtime["recoverSubmission"]>;
 
 it("keeps bounded worker operations and status reads typed without hidden requirements", () => {
+  expectTypeOf<Parameters<Runtime["workerHost"]>>().toEqualTypeOf<
+    [request: { readonly sourceThreadId: ThreadId; readonly principal: Principal }]
+  >();
+  expectTypeOf<ReturnType<Runtime["workerHost"]>>().toEqualTypeOf<
+    Effect.Effect<SubagentHost["Service"], WorkerError>
+  >();
+  expectTypeOf<ReturnType<Runtime["messagingHost"]>>().toEqualTypeOf<
+    Effect.Effect<MessagingHost["Service"], MessagingError>
+  >();
   expectTypeOf<Parameters<Runtime["processThreadHead"]>>().toEqualTypeOf<
     [threadId: ThreadId, options?: { readonly yieldAfter?: DateTime.Utc }]
   >();

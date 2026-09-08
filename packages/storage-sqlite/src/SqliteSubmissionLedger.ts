@@ -1,3 +1,4 @@
+import { MessageAdmission } from "@effect-agent/core/Messaging";
 import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
 import {
   ApprovalDecision,
@@ -5,6 +6,7 @@ import {
   DefinitionDigests,
   Digest,
   PersistedJson,
+  WorkerAdmission,
   ProducerEpoch,
   RecordEnvelope,
   SettlementOutcome,
@@ -145,6 +147,8 @@ class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   parent_tool_call_id: Schema.NullOr(BoundedIdentifier),
   admission_group: Schema.NullOr(AdmissionGroup),
   admission_fence_json: Schema.NullOr(BoundedStoredText),
+  worker_admission_json: Schema.NullOr(BoundedStoredText),
+  message_admission_json: Schema.NullOr(BoundedStoredText),
 }) {}
 
 class ChildReservationRow extends Schema.Class<ChildReservationRow>("ChildReservationRow")({
@@ -250,7 +254,9 @@ const SUBMISSION_COLUMNS = `
   parent_submission_id,
   parent_tool_call_id,
   admission_group,
-  admission_fence_json
+  admission_fence_json,
+  worker_admission_json,
+  message_admission_json
 `;
 
 const CHILD_RESERVATION_COLUMNS = `
@@ -569,6 +575,20 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         state: row.state,
         createdAt: row.created_at,
         ...(row.admission_group === null ? {} : { admissionGroup: row.admission_group }),
+        ...(row.worker_admission_json === null
+          ? {}
+          : {
+              workerAdmission: yield* parseStoredJsonText(row.worker_admission_json).pipe(
+                Effect.mapError(internalFailure(operation)),
+              ),
+            }),
+        ...(row.message_admission_json === null
+          ? {}
+          : {
+              messageAdmission: yield* parseStoredJsonText(row.message_admission_json).pipe(
+                Effect.mapError(internalFailure(operation)),
+              ),
+            }),
         ...(row.admission_fence_json === null
           ? {}
           : {
@@ -983,6 +1003,40 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         Effect.mapError(internalFailure(operation)),
       );
 
+      const workerAdmissionJson =
+        validated.workerAdmission === undefined
+          ? null
+          : yield* Schema.encodeEffect(Schema.fromJsonString(WorkerAdmission))(
+              validated.workerAdmission,
+            ).pipe(Effect.mapError(internalFailure(operation)));
+
+      if (
+        workerAdmissionJson !== null &&
+        new TextEncoder().encode(workerAdmissionJson).byteLength > 16 * 1024 * 1024
+      ) {
+        return yield* LedgerError.make({
+          operation,
+          message: "Worker admission metadata exceeds the stored value bound",
+        });
+      }
+
+      const messageAdmissionJson =
+        validated.messageAdmission === undefined
+          ? null
+          : yield* Schema.encodeEffect(Schema.fromJsonString(MessageAdmission))(
+              validated.messageAdmission,
+            ).pipe(Effect.mapError(internalFailure(operation)));
+
+      if (
+        messageAdmissionJson !== null &&
+        new TextEncoder().encode(messageAdmissionJson).byteLength > 16 * 1024 * 1024
+      ) {
+        return yield* LedgerError.make({
+          operation,
+          message: "Message admission metadata exceeds the stored value bound",
+        });
+      }
+
       const agentDigestsJson = yield* encodeDefinitionDigestsText(validated.agentDigests).pipe(
         Effect.mapError(internalFailure(operation)),
       );
@@ -1035,6 +1089,20 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               });
             }
 
+            const retainedWorkerAdmission =
+              existing[0].worker_admission_json === null
+                ? undefined
+                : yield* Schema.decodeEffect(Schema.fromJsonString(WorkerAdmission))(
+                    existing[0].worker_admission_json,
+                  ).pipe(Effect.mapError(internalFailure(operation)));
+
+            const retainedMessageAdmission =
+              existing[0].message_admission_json === null
+                ? undefined
+                : yield* Schema.decodeEffect(Schema.fromJsonString(MessageAdmission))(
+                    existing[0].message_admission_json,
+                  ).pipe(Effect.mapError(internalFailure(operation)));
+
             const retainedFence =
               existing[0].admission_fence_json === null
                 ? undefined
@@ -1044,6 +1112,14 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
 
             if (
               (existing[0].admission_group ?? undefined) !== validated.admissionGroup ||
+              !Schema.toEquivalence(Schema.optional(WorkerAdmission))(
+                retainedWorkerAdmission,
+                validated.workerAdmission,
+              ) ||
+              !Schema.toEquivalence(Schema.optional(MessageAdmission))(
+                retainedMessageAdmission,
+                validated.messageAdmission,
+              ) ||
               !Schema.toEquivalence(Schema.optional(AdmissionFence))(
                 retainedFence,
                 validated.admissionFence,
@@ -1064,6 +1140,41 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               state: existing[0].state,
               replayed: true,
             }).pipe(Effect.mapError(internalFailure(operation)));
+          }
+
+          // The first accepted input fixes ordinary/worker lane identity atomically with admission.
+          // Canonical origin materialization can lag admission; a log scan cannot fence that race.
+          const firstRows = yield* sql<Record<string, unknown>>`
+            SELECT worker_admission_json FROM effect_agent_submissions
+            WHERE thread_id=${validated.threadId} ORDER BY queue_sequence LIMIT 1
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+
+          const first = yield* Schema.decodeUnknownEffect(
+            Schema.Array(
+              Schema.Struct({
+                worker_admission_json: Schema.NullOr(BoundedStoredText),
+              }),
+            ),
+          )(firstRows).pipe(Effect.mapError(internalFailure(operation)));
+
+          if (first[0] !== undefined) {
+            const previous =
+              first[0].worker_admission_json === null
+                ? undefined
+                : yield* Schema.decodeEffect(Schema.fromJsonString(WorkerAdmission))(
+                    first[0].worker_admission_json,
+                  ).pipe(Effect.mapError(internalFailure(operation)));
+
+            if (
+              !Schema.toEquivalence(Schema.optional(WorkerAdmission.fields.origin))(
+                previous?.origin,
+                validated.workerAdmission?.origin,
+              )
+            )
+              return yield* AdmissionPolicyError.make({
+                reason: "refused",
+                code: "worker-origin-conflict",
+              });
           }
 
           yield* admissionFence.check(validated);
@@ -1117,7 +1228,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               parent_submission_id,
               parent_tool_call_id,
               admission_group,
-              admission_fence_json
+              admission_fence_json,
+  worker_admission_json,
+  message_admission_json
             ) VALUES (
               ${mintedSubmissionId},
               ${validated.threadId},
@@ -1135,7 +1248,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               ${validated.parentLinkage?.parentSubmissionId ?? null},
               ${validated.parentLinkage?.parentToolCallId ?? null},
               ${validated.admissionGroup ?? null},
-              ${validated.admissionFence === undefined ? null : JSON.stringify(validated.admissionFence)}
+              ${validated.admissionFence === undefined ? null : JSON.stringify(validated.admissionFence)},
+              ${workerAdmissionJson},
+              ${messageAdmissionJson}
             )
           `.pipe(Effect.mapError(sqlFailure(operation)));
 

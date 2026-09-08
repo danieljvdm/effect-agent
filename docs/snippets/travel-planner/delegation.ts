@@ -8,7 +8,7 @@ export class ResearchFailed extends Schema.TaggedError<ResearchFailed>()("Resear
   reason: Schema.String,
 }) {}
 
-export const Research = Subagent.define("delegate_research_activities", {
+export const Research = Subagent.make("delegate_research_activities", {
   description: "Delegate activity research for one city and focus. Returns a shortlist.",
   target: Researcher,
   success: Schema.Struct({

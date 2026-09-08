@@ -33,6 +33,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/DoMessageDeliveryStore.ts",
       "src/DoMemoryStore.ts",
       "src/DoScheduleStore.ts",
       "src/DoStorageConfig.ts",

@@ -85,6 +85,8 @@ export class SubagentReservationRequest extends Schema.Class<SubagentReservation
   parentRunId: RunId,
   parentToolCallId: ToolCallId,
   allocation: SubagentReservationAmounts,
+  /** Additional invocation slots held for this child's entire subtree. */
+  descendantInvocations: Schema.optionalKey(Natural),
 }) {}
 
 /** Accounting snapshot of one reservation: allocated, observed, covered, released, and overrun. */
@@ -193,7 +195,7 @@ export class SubagentReservations extends Context.Service<
      * remaining delegable budget, checking every dimension before committing
      * any. The same key with the same allocation is idempotent and never
      * double-reserves; a distinct key charges the monotonic total-invocation
-     * counter, which release never refunds.
+     * counter by one plus its reserved descendant slots, which release never refunds.
      */
     readonly reserve: (
       request: SubagentReservationRequest,
@@ -228,15 +230,17 @@ export class SubagentReservations extends Context.Service<
       reservationId: BudgetReservationId,
     ) => Effect.Effect<SubagentReservationView, SubagentReservationUnknown>;
     /**
-     * Acquire one bounded child execution slot as a Scope-owned resource, so
+     * Acquire bounded child execution slots as a Scope-owned resource, so
      * an interrupted child always frees its slot. The Semaphore bounds only
-     * concurrent children; total invocations are enforced separately by
+     * concurrent children; a subtree holds one plus its possible descendants up front.
+     * Total invocations are enforced separately by
      * `reserve`'s monotonic counter. A configured cap of zero fails closed
      * instead of queueing forever; an unconfigured cap leaves execution
      * ungated by this service.
      */
     readonly acquireChildSlot: (
       parentRunId: RunId,
+      slots?: number,
     ) => Effect.Effect<void, SubagentParentBudgetUnknown | SubagentBudgetExhausted, Scope.Scope>;
     /**
      * Reclaim one terminal parent registration and all of its released child
@@ -287,6 +291,7 @@ const zeroAmounts: Amounts = {
 interface ReservationState {
   readonly parentRunId: RunId;
   readonly parentToolCallId: ToolCallId;
+  readonly descendantInvocations: number;
   readonly status: SubagentReservationStatus;
   readonly allocated: Amounts;
   readonly observed: PartialAmounts;
@@ -475,7 +480,8 @@ const reserveTransition = (
   const existing = ledger.reservations.get(reservationId);
 
   if (existing !== undefined) {
-    return sameAmounts(existing.allocated, request.allocation)
+    return sameAmounts(existing.allocated, request.allocation) &&
+      existing.descendantInvocations === (request.descendantInvocations ?? 0)
       ? [ok(reservationView(reservationId, existing)), ledger]
       : [
           fail(
@@ -489,15 +495,16 @@ const reserveTransition = (
         ];
   }
   const maxInvocations = parent.caps.maxTotalChildInvocations;
+  const slots = 1 + (request.descendantInvocations ?? 0);
 
-  if (maxInvocations !== undefined && parent.totalChildInvocations + 1 > maxInvocations) {
+  if (maxInvocations !== undefined && parent.totalChildInvocations + slots > maxInvocations) {
     return [
       fail(
         SubagentBudgetExhausted.make({
           parentRunId: request.parentRunId,
           dimension: "total-child-invocations",
           limitValue: maxInvocations,
-          observedValue: parent.totalChildInvocations + 1,
+          observedValue: parent.totalChildInvocations + slots,
         }),
       ),
       ledger,
@@ -544,6 +551,7 @@ const reserveTransition = (
   const reservation: ReservationState = {
     parentRunId: request.parentRunId,
     parentToolCallId: request.parentToolCallId,
+    descendantInvocations: request.descendantInvocations ?? 0,
     status: "reserved",
     allocated: request.allocation,
     observed: {},
@@ -554,7 +562,7 @@ const reserveTransition = (
   const next: ReservationLedger = {
     parents: new Map(ledger.parents).set(request.parentRunId, {
       ...parent,
-      totalChildInvocations: parent.totalChildInvocations + 1,
+      totalChildInvocations: parent.totalChildInvocations + slots,
       available: nextAvailable,
     }),
     reservations: new Map(ledger.reservations).set(reservationId, reservation),
@@ -791,7 +799,10 @@ export const SubagentReservationsMemoryLive: Layer.Layer<SubagentReservations> =
 
         return yield* resolve(result);
       }),
-      acquireChildSlot: Effect.fn("SubagentReservations.acquireChildSlot")(function* (parentRunId) {
+      acquireChildSlot: Effect.fn("SubagentReservations.acquireChildSlot")(function* (
+        parentRunId,
+        slots = 1,
+      ) {
         const ledger = yield* Ref.get(state);
         const parent = ledger.parents.get(parentRunId);
 
@@ -803,18 +814,18 @@ export const SubagentReservationsMemoryLive: Layer.Layer<SubagentReservations> =
         if (cap === undefined) {
           return;
         }
-        if (cap === 0 || parent.gate === undefined) {
+        if (!Number.isSafeInteger(slots) || slots < 1 || slots > cap || parent.gate === undefined) {
           return yield* SubagentBudgetExhausted.make({
             parentRunId,
             dimension: "concurrent-children",
             limitValue: cap,
-            observedValue: 1,
+            observedValue: Number.isSafeInteger(slots) && slots > 0 ? slots : 0,
           });
         }
         const gate = parent.gate;
 
         yield* Effect.acquireRelease(
-          gate.take(1),
+          gate.take(slots),
           (permits) => gate.release(permits).pipe(Effect.asVoid),
           { interruptible: true },
         );

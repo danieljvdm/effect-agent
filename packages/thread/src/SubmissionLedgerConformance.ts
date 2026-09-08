@@ -1,5 +1,18 @@
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { type ReceiptId } from "@effect-agent/core/Identifiers";
-import { AgentId, ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
+import {
+  AgentId,
+  ThreadId,
+  SubmissionId,
+  ToolCallId,
+  DelegationId,
+} from "@effect-agent/core/Identifiers";
+import { MessageAdmission } from "@effect-agent/core/Messaging";
+import {
+  SubagentDelegationCaps,
+  SubagentGrant,
+  SubagentReservationAmounts,
+} from "@effect-agent/core/SubagentContract";
 import type { Crypto } from "effect";
 import { Clock, DateTime, Duration, Effect, Option, Result, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -15,6 +28,7 @@ import {
   SubmissionSettled,
   SubmissionSettledRecord,
   PersistedJson,
+  WorkerAdmission,
   type SettlementFailureDiagnostic,
 } from "./Records.ts";
 import {
@@ -528,6 +542,299 @@ const admissionIdempotency = conformanceCase(
         second.submissionId !== first.submissionId && second.queueSequence !== first.queueSequence,
         "A different key on the same lane must mint fresh identities and a fresh queue sequence",
       );
+    }),
+);
+
+const workerAdmissionIdentity = conformanceCase(
+  "retains immutable worker admission metadata and rejects same-key changes or omission",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      const base = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-worker"),
+        "worker-message",
+        { text: "first" },
+      );
+
+      const metadata = WorkerAdmission.make({
+        messageId: base.idempotencyKey,
+        sourceSubmissionId: Schema.decodeSync(SubmissionId)("source-input"),
+        deliveryPrincipal: base.principal,
+        parameters: { prompt: "original projection parameters" },
+        createdAtMillis: 1,
+        origin: {
+          worker: {
+            schemaVersion: 1,
+            threadId: base.threadId,
+            targetAgentId: CONFORMANCE_AGENT,
+            delegationId: Schema.decodeSync(DelegationId)("worker-research"),
+          },
+          source: {
+            _tag: "programmatic",
+            threadId: decodeThreadId("worker-source"),
+            agentId: CONFORMANCE_AGENT,
+          },
+          targetDigests: CONFORMANCE_DIGESTS,
+          policy: AgentPolicy.resolve(),
+          budget: {
+            caps: SubagentDelegationCaps.make({
+              maxConcurrentChildren: 1,
+              maxTotalChildInvocations: 2,
+            }),
+            allocation: SubagentReservationAmounts.make({
+              turns: 12,
+              toolCalls: 24,
+              durationMillis: 300_000,
+              inputTokens: 0,
+              outputTokens: 0,
+              costMicrousd: 0,
+              resultBytes: 1_000,
+            }),
+          },
+          grant: SubagentGrant.make({ maxDepth: 1, allowedToolNames: [] }),
+          depth: 1,
+          firstMessageId: base.idempotencyKey,
+          createdAtMillis: 1,
+          expiresAtMillis: 1_000_000,
+        },
+      });
+
+      const admitted = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, workerAdmission: metadata }),
+      );
+
+      const saved = yield* expectSome(
+        "worker admission lookup",
+        yield* lookupById(admitted.submissionId),
+      );
+
+      yield* ensure(
+        saved.workerAdmission !== undefined &&
+          Schema.toEquivalence(WorkerAdmission)(saved.workerAdmission, metadata),
+        "Worker origin and per-input parameters must survive admission lookup",
+      );
+      yield* ensure(
+        saved.parentLinkage === undefined,
+        "Background work must not acquire attached-parent semantics",
+      );
+      const recovery = yield* recoverySnapshot(admitted.submissionId);
+
+      yield* ensure(
+        recovery.submission.workerAdmission !== undefined &&
+          Schema.toEquivalence(WorkerAdmission)(recovery.submission.workerAdmission, metadata),
+        "Recovery must retain the exact worker envelope",
+      );
+
+      const replayed = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, workerAdmission: metadata }),
+      );
+
+      yield* ensure(
+        replayed.replayed && replayed.receiptId === admitted.receiptId,
+        "Identical metadata must replay the original receipt",
+      );
+      for (const changed of [
+        undefined,
+        WorkerAdmission.make({ ...metadata, parameters: { prompt: "changed" } }),
+        WorkerAdmission.make({
+          ...metadata,
+          sourceSubmissionId: Schema.decodeSync(SubmissionId)("other-source-input"),
+        }),
+        WorkerAdmission.make({
+          ...metadata,
+          origin: { ...metadata.origin, expiresAtMillis: 2_000_000 },
+        }),
+      ]) {
+        const conflict = yield* expectFailure(
+          "different or omitted worker metadata",
+          ledger.admit(
+            AdmissionRequest.make({
+              ...base,
+              ...(changed === undefined ? {} : { workerAdmission: changed }),
+            }),
+          ),
+        );
+
+        yield* ensure(
+          isAdmissionConflict(conflict),
+          "Worker metadata changes must produce AdmissionConflict even when input is unchanged",
+        );
+      }
+
+      const nextKey = decodeIdempotencyKey("worker-follow-up");
+
+      const next = AdmissionRequest.make({
+        ...base,
+        idempotencyKey: nextKey,
+        workerAdmission: { ...metadata, messageId: nextKey, parameters: { prompt: "next" } },
+      });
+
+      const followed = yield* ledger.admit(next);
+
+      yield* ensure(
+        followed.queueSequence > admitted.queueSequence,
+        "Matching worker origins must admit later inputs",
+      );
+      for (const changed of [
+        undefined,
+        WorkerAdmission.make({
+          ...metadata,
+          origin: { ...metadata.origin, expiresAtMillis: 3_000_000 },
+        }),
+      ]) {
+        const conflict = yield* expectFailure(
+          "worker lane origin replacement",
+          ledger.admit(
+            AdmissionRequest.make({
+              ...base,
+              idempotencyKey: decodeIdempotencyKey("worker-lane-replacement"),
+              ...(changed === undefined ? {} : { workerAdmission: changed }),
+            }),
+          ),
+        );
+
+        yield* ensure(
+          conflict._tag === "AdmissionPolicyError" && conflict.reason === "refused",
+          "New keys cannot remove or replace an established worker origin",
+        );
+      }
+
+      const ordinary = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-ordinary-lane"),
+        "ordinary",
+        { text: "ordinary" },
+      );
+
+      yield* ledger.admit(ordinary);
+
+      const takeover = yield* expectFailure(
+        "ordinary lane takeover",
+        ledger.admit(
+          AdmissionRequest.make({
+            ...ordinary,
+            idempotencyKey: decodeIdempotencyKey("takeover"),
+            workerAdmission: {
+              ...metadata,
+              origin: {
+                ...metadata.origin,
+                worker: { ...metadata.origin.worker, threadId: ordinary.threadId },
+              },
+            },
+          }),
+        ),
+      );
+
+      yield* ensure(
+        takeover._tag === "AdmissionPolicyError" && takeover.reason === "refused",
+        "A worker cannot take over an ordinary lane before canonical materialization",
+      );
+
+      const racing = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-lane-race"),
+        "ordinary-race",
+        { text: "race" },
+      );
+
+      const raced = yield* Effect.forEach(
+        [
+          racing,
+          AdmissionRequest.make({
+            ...racing,
+            idempotencyKey: decodeIdempotencyKey("worker-race"),
+            workerAdmission: {
+              ...metadata,
+              origin: {
+                ...metadata.origin,
+                worker: { ...metadata.origin.worker, threadId: racing.threadId },
+              },
+            },
+          }),
+        ],
+        (request) => ledger.admit(request).pipe(Effect.result),
+        { concurrency: 2 },
+      );
+
+      yield* ensure(
+        raced.filter((result) => result._tag === "Success").length === 1 &&
+          raced.filter(
+            (result) => result._tag === "Failure" && result.failure._tag === "AdmissionPolicyError",
+          ).length === 1,
+        "Concurrent ordinary/worker admissions must atomically choose exactly one lane identity",
+      );
+    }),
+);
+
+const messageAdmissionIdentity = conformanceCase(
+  "retains authenticated peer provenance and rejects same-key changes or omission",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      const base = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-peer"),
+        "peer-message",
+        { text: "hello" },
+      );
+
+      const metadata = Schema.decodeUnknownSync(MessageAdmission)({
+        schemaVersion: 1,
+        message: { ownerThreadId: "peer-source", messageId: "peer-message" },
+        peerName: "reviewer",
+        sender: { threadId: "peer-source", agentId: "peer-agent" },
+        returnAddress: { threadId: "peer-source", agentId: "peer-agent" },
+      });
+
+      const admitted = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      const saved = yield* expectSome(
+        "peer admission lookup",
+        yield* lookupById(admitted.submissionId),
+      );
+
+      yield* ensure(
+        saved.messageAdmission !== undefined &&
+          Schema.toEquivalence(MessageAdmission)(saved.messageAdmission, metadata),
+        "Peer sender and return address must survive lookup without becoming application input",
+      );
+      const recovery = yield* recoverySnapshot(admitted.submissionId);
+
+      yield* ensure(
+        recovery.submission.messageAdmission !== undefined &&
+          Schema.toEquivalence(MessageAdmission)(recovery.submission.messageAdmission, metadata),
+        "Recovery must retain peer provenance",
+      );
+
+      const replayed = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      yield* ensure(
+        replayed.replayed && replayed.receiptId === admitted.receiptId,
+        "Identical peer metadata must replay its receipt",
+      );
+      for (const changed of [
+        undefined,
+        MessageAdmission.make({ ...metadata, peerName: "other" }),
+        MessageAdmission.make({ ...metadata, inReplyTo: metadata.message }),
+      ]) {
+        const conflict = yield* expectFailure(
+          "different or omitted peer metadata",
+          ledger.admit(
+            AdmissionRequest.make({
+              ...base,
+              ...(changed === undefined ? {} : { messageAdmission: changed }),
+            }),
+          ),
+        );
+
+        yield* ensure(
+          isAdmissionConflict(conflict),
+          "Peer provenance changes must produce AdmissionConflict",
+        );
+      }
     }),
 );
 
@@ -4057,6 +4364,8 @@ const abortedSettledRowIsNotAJoiningGap = conformanceCase(
  */
 export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerConformanceCase> = [
   admissionIdempotency,
+  workerAdmissionIdentity,
+  messageAdmissionIdentity,
   admissionGroupRace,
   admissionGroupSettlement,
   crossPrincipalAdmissionScoping,

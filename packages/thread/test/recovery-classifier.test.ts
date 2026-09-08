@@ -313,6 +313,31 @@ const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence =>
  * classification per persisted crash shape.
  */
 describe("recovery classifier crash matrix", () => {
+  it("re-enters persisted orchestration calls without routing them through attached-child repair", () => {
+    const pending = RecoveryEvidence.make({
+      ...evidence({ inputRecorded: true }),
+      openWorkerCalls: [openCall(CALL_ONE, 2, "launch_research")],
+    });
+
+    expect(
+      classifyRecovery(snapshot("input-applied", { inputApplied: inputMarker }), pending),
+    ).toMatchObject({
+      _tag: "ResumePendingToolBatch",
+      turn: 2,
+    });
+    expect(
+      classifyRecovery(
+        snapshot("input-applied", { inputApplied: inputMarker }),
+        RecoveryEvidence.make({ ...pending, openToolCalls: [openCall(CALL_TWO)] }),
+      )._tag,
+    ).toBe("MarkUnknown");
+    expect(
+      classifyRecovery(
+        snapshot("input-applied", { inputApplied: inputMarker, abortIntent }),
+        pending,
+      )._tag,
+    ).toBe("SettleAborted");
+  });
   it("kill submit:after-admit — admitted without a Thread completes materialization", () => {
     const decision = classifyRecovery(
       snapshot("admitted"),

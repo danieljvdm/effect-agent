@@ -28,7 +28,8 @@
     "./MemoryProtocol": "./src/MemoryProtocol.ts",
     "./PortProtocol": "./src/PortProtocol.ts",
     "./PortRouting": "./src/PortRouting.ts",
-    "./testing/DoStorageFailpointTesting": "./src/DoStorageFailpointTesting.ts"
+    "./testing/DoStorageFailpointTesting": "./src/DoStorageFailpointTesting.ts",
+    "./DoMessageDeliveryStore": "./src/DoMessageDeliveryStore.ts"
   },
   "publishConfig": {
     "access": "public"

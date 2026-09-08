@@ -7,8 +7,10 @@ import {
   type ThreadId,
   type SettlementId,
 } from "@effect-agent/core/Identifiers";
+import { MessageAdmission } from "@effect-agent/core/Messaging";
 import {
   PersistedJson,
+  WorkerAdmission,
   ProducerEpoch,
   type DefinitionDigests,
   type DeploymentId,
@@ -147,6 +149,8 @@ interface SubmissionRow {
   readonly parentLinkage: ParentLinkage | undefined;
   readonly admissionGroup?: string;
   readonly admissionFence?: AdmissionRequest["admissionFence"];
+  readonly workerAdmissionJson?: string;
+  readonly messageAdmissionJson?: string;
 }
 
 interface StoredOwnership {
@@ -290,6 +294,20 @@ const toSnapshot = (row: SubmissionRow): SubmissionSnapshot =>
     createdAt: utc(row.createdAtMillis),
     ...(row.admissionGroup === undefined ? {} : { admissionGroup: row.admissionGroup }),
     ...(row.admissionFence === undefined ? {} : { admissionFence: row.admissionFence }),
+    ...(row.workerAdmissionJson === undefined
+      ? {}
+      : {
+          workerAdmission: Schema.decodeSync(Schema.fromJsonString(WorkerAdmission))(
+            row.workerAdmissionJson,
+          ),
+        }),
+    ...(row.messageAdmissionJson === undefined
+      ? {}
+      : {
+          messageAdmission: Schema.decodeSync(Schema.fromJsonString(MessageAdmission))(
+            row.messageAdmissionJson,
+          ),
+        }),
     ...(row.settledOutcome === undefined ? {} : { settledOutcome: row.settledOutcome }),
     ...(row.readyAtMillis === undefined ? {} : { readyAt: utc(row.readyAtMillis) }),
     ...(row.parentLinkage === undefined ? {} : { parentLinkage: row.parentLinkage }),
@@ -414,6 +432,24 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
         Effect.gen(function* () {
           const request = yield* validate(AdmissionRequest, "admit", unvalidated);
 
+          const workerAdmissionJson =
+            request.workerAdmission === undefined
+              ? undefined
+              : yield* Schema.encodeEffect(Schema.fromJsonString(WorkerAdmission))(
+                  request.workerAdmission,
+                ).pipe(
+                  Effect.mapError(() => ledgerError("admit", "Invalid worker admission metadata")),
+                );
+
+          const messageAdmissionJson =
+            request.messageAdmission === undefined
+              ? undefined
+              : yield* Schema.encodeEffect(Schema.fromJsonString(MessageAdmission))(
+                  request.messageAdmission,
+                ).pipe(
+                  Effect.mapError(() => ledgerError("admit", "Invalid message admission metadata")),
+                );
+
           const nowMillis = yield* Clock.currentTimeMillis;
           const services = yield* Effect.context<never>();
 
@@ -448,6 +484,22 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   existing.row.inputDigest !== request.inputDigest ||
                   !sameParentLinkage(existing.row.parentLinkage, request.parentLinkage) ||
                   existing.row.admissionGroup !== request.admissionGroup ||
+                  !Schema.toEquivalence(Schema.optional(WorkerAdmission))(
+                    existing.row.workerAdmissionJson === undefined
+                      ? undefined
+                      : Schema.decodeSync(Schema.fromJsonString(WorkerAdmission))(
+                          existing.row.workerAdmissionJson,
+                        ),
+                    request.workerAdmission,
+                  ) ||
+                  !Schema.toEquivalence(Schema.optional(MessageAdmission))(
+                    existing.row.messageAdmissionJson === undefined
+                      ? undefined
+                      : Schema.decodeSync(Schema.fromJsonString(MessageAdmission))(
+                          existing.row.messageAdmissionJson,
+                        ),
+                    request.messageAdmission,
+                  ) ||
                   !Schema.toEquivalence(Schema.optional(Schema.Json))(
                     existing.row.admissionFence,
                     request.admissionFence,
@@ -479,6 +531,36 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   ),
                   current,
                 ];
+              }
+
+              // A Thread's first admission fixes its worker origin before canonical materialization.
+              const first = [...current.submissions.values()].find(
+                ({ row }) => row.threadId === request.threadId,
+              );
+
+              if (first !== undefined) {
+                const previous =
+                  first.row.workerAdmissionJson === undefined
+                    ? undefined
+                    : Schema.decodeSync(Schema.fromJsonString(WorkerAdmission))(
+                        first.row.workerAdmissionJson,
+                      );
+
+                if (
+                  !Schema.toEquivalence(Schema.optional(WorkerAdmission.fields.origin))(
+                    previous?.origin,
+                    request.workerAdmission?.origin,
+                  )
+                )
+                  return [
+                    failure(
+                      AdmissionPolicyError.make({
+                        reason: "refused",
+                        code: "worker-origin-conflict",
+                      }),
+                    ),
+                    current,
+                  ];
               }
               // A memory policy and the ledger mutation share one synchronous critical section.
               // An asynchronous policy cannot fence this Ref and therefore fails closed.
@@ -535,6 +617,8 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 createdAtMillis: nowMillis,
                 readyAtMillis: undefined,
                 parentLinkage: request.parentLinkage,
+                ...(workerAdmissionJson === undefined ? {} : { workerAdmissionJson }),
+                ...(messageAdmissionJson === undefined ? {} : { messageAdmissionJson }),
                 ...(request.admissionGroup === undefined
                   ? {}
                   : { admissionGroup: request.admissionGroup }),

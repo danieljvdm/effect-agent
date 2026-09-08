@@ -27,6 +27,11 @@ import { OtlpExporter } from "effect/unstable/observability";
 import { ThreadMaintenance } from "../src/Alarm.ts";
 import { layerFromBindings } from "../src/internal/layers.ts";
 import {
+  backgroundWorkerBindings,
+  backgroundWorkerAuthority,
+  backgroundWakeDropPrefixes,
+} from "./background-worker-fixture.ts";
+import {
   THREADS_BINDING,
   DEPLOYMENT_ID,
   PRODUCER_PREFIX,
@@ -55,6 +60,7 @@ import {
   memoryRecallLimits,
   MemoryProjects,
 } from "./memory-fixtures.ts";
+import { droppedMessageWakes, messageDeliveryFaultLayer } from "./message-delivery-fixture.ts";
 import {
   failNextFlush,
   flushCount,
@@ -331,9 +337,26 @@ export class PublicationThreadObject extends ThreadObject.make(
 ) {}
 
 export class TestThreadObject extends ThreadObject.make(
-  testRuntimeLayer.pipe(Layer.provideMerge(maintenanceClockLayer)),
+  Layer.unwrap(
+    Effect.map(Effect.all([makeTestBindings, backgroundWorkerBindings]), ([existing, workers]) =>
+      layerFromBindings([...existing, ...workers]),
+    ),
+  ).pipe(
+    Layer.provide(backgroundWorkerAuthority),
+    Layer.provide(messageDeliveryFaultLayer),
+    Layer.provideMerge(maintenanceClockLayer),
+  ),
   baseOptions,
 ) {
+  override wake(): Promise<void> {
+    const name = this.ctx.id.name ?? "";
+
+    return droppedMessageWakes.has(name) ||
+      [...backgroundWakeDropPrefixes].some((prefix) => name.startsWith(prefix))
+      ? Promise.resolve()
+      : super.wake();
+  }
+
   memoryChange(project: string, encoded: unknown) {
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {

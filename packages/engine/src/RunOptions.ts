@@ -1,3 +1,4 @@
+import { type AnyDefinition } from "@effect-agent/core/Agent";
 import { type AgentInputError } from "@effect-agent/core/AgentError";
 import { type AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
@@ -16,6 +17,7 @@ import {
   type SubagentBudgetReservation,
   type DelegationDepth,
   type SubagentParentLink,
+  type SubagentGrant,
   type ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
 import { type ModelCallUsage } from "@effect-agent/core/Usage";
@@ -24,6 +26,8 @@ import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { CompactionError } from "./ContextCompactor.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
+import type { MessagingHost } from "./MessagingHost.ts";
+import type { SubagentHost } from "./SubagentHost.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
 interface ToolFailureIdentity {
@@ -500,8 +504,8 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
 /**
  * `DefinitionDigests`-shaped digests of one child Agent Binding in plain
  * string form. The durable coordinator's thread-owned digest Schema never
- * crosses inward: the delegation capability computes these exact digests at
- * handler-Layer construction and the coordinator stores and verifies them
+ * crosses inward: the coordinator resolves these digests from the exact
+ * registered target and stores and verifies them
  * byte-for-byte (SUB-023 exact-digest binding resolution).
  */
 export interface RunSubagentDigests {
@@ -531,8 +535,10 @@ export interface RunSubagentEstablishRequest {
   readonly targetAgentId: AgentId;
   /** The child Run's root-relative delegation depth (S2 fixes the ceiling at 1). */
   readonly depth: DelegationDepth;
-  /** Exact child Binding digests computed at handler-Layer construction. */
-  readonly targetDigests: RunSubagentDigests;
+  /** Exact target Definition from the capability; the host resolves its existing registration. */
+  readonly target?: AnyDefinition | undefined;
+  /** Explicit low-level binding override. If a target is supplied, this must match its registration. */
+  readonly targetDigests?: RunSubagentDigests | undefined;
   /** The prepared child input in encoded (wire) form; it rides the canonical request record so recovery admission never needs a live handler. */
   readonly encodedChildInput: unknown;
   /** The delegation's authority ceiling in encoded form. */
@@ -798,6 +804,12 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * `AgentSpawner`, and future durable work persists it as child lineage.
    */
   readonly parentLink?: SubagentParentLink | undefined;
+  /** Durable background provenance supplies depth independently of attached parent linkage. */
+  readonly delegationDepth?: number | undefined;
+  /** Immutable narrowed authority restored for every delegated Attempt. */
+  readonly subagentGrant?: SubagentGrant | undefined;
+  /** Reserved subtree frame; descendants may spend only the residual after this Run's own ceiling. */
+  readonly subagentBudget?: SubagentBudgetReservation | undefined;
   /**
    * Explicit initial Prompt data, not a retention policy. With ThreadHistory.layerTransient,
    * the engine preserves this exact prefix, then appends this Run's evaluated instructions and
@@ -860,6 +872,10 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * delegation Tools keep their S1 in-process spawn semantics unchanged.
    */
   readonly subagent?: RunSubagentHook<HookError, HookRequirements> | undefined;
+  /** Trusted host facet bound to each actual Tool Call; omitted hosts fail background operations closed. */
+  readonly subagentHost?: ((toolCallId: ToolCallId) => SubagentHost["Service"]) | undefined;
+  /** Per-call peer authority; source identity never comes from Tool parameters. */
+  readonly messagingHost?: ((toolCallId: ToolCallId) => MessagingHost["Service"]) | undefined;
   /**
    * Resume a declared, canonically committed Tool batch without re-invoking
    * the model (durable batch-resume seam). Consumed by the Run's first Turn.

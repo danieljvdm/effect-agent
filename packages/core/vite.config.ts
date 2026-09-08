@@ -5,6 +5,9 @@ export default defineConfig({
     entry: [
       "src/index.ts",
       "src/RememberingStore.ts",
+      "src/Receipt.ts",
+      "src/Worker.ts",
+      "src/Messaging.ts",
       "src/Agent.ts",
       "src/AgentError.ts",
       "src/AgentPolicy.ts",

@@ -107,10 +107,18 @@ export const assertPreserved = Effect.fn("StorageUpgradeFixture.assertPreserved"
       const row = current[index];
 
       if (table === "effect_agent_submissions") {
-        const { admission_group, admission_fence_json, ...retained } = row;
+        const {
+          admission_group,
+          admission_fence_json,
+          worker_admission_json,
+          message_admission_json,
+          ...retained
+        } = row;
 
         expect(admission_group).toBeNull();
         expect(admission_fence_json).toBeNull();
+        expect(worker_admission_json).toBeNull();
+        expect(message_admission_json).toBeNull();
         expect(retained).toEqual(old);
       } else if (
         table === "effect_agent_schedules" ||

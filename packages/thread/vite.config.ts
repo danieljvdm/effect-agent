@@ -5,6 +5,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/SqlMessageDeliveryStore.ts",
       "src/ThreadContextHistory.ts",
       "src/ActivityStore.ts",
       "src/Admin.ts",
@@ -18,6 +19,9 @@ export default defineConfig({
       "src/OperationAuthorizer.ts",
       "src/PersistentHistory.ts",
       "src/PreparedInputAdmission.ts",
+      "src/MessageDelivery.ts",
+      "src/MessagingHost.ts",
+      "src/MessageDeliveryStoreConformance.ts",
       "src/Records.ts",
       "src/Recovery.ts",
       "src/RunJournal.ts",
@@ -45,6 +49,7 @@ export default defineConfig({
       "src/ThreadStore.ts",
       "src/ToolReconciler.ts",
       "src/WakeScheduler.ts",
+      "src/WorkerHost.ts",
     ],
     dts: true,
     sourcemap: true,

@@ -1,6 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { type ThreadId } from "@effect-agent/core/Identifiers";
+import { DelegationId, type ThreadId } from "@effect-agent/core/Identifiers";
 import { type IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { type AgentRuntimeFailure } from "@effect-agent/engine/AgentRuntime";
@@ -74,6 +74,10 @@ class LookupDependency extends Context.Service<LookupDependency, string>()(
 
 class AuditDependency extends Context.Service<AuditDependency, string>()(
   "@effect-agent/thread/test/AuditDependency",
+) {}
+
+class ReportDependency extends Context.Service<ReportDependency, string>()(
+  "@effect-agent/thread/test/ReportDependency",
 ) {}
 
 const ServiceString = Schema.String.pipe(
@@ -236,6 +240,35 @@ const proveRegistrationRequirements = (
   ]);
 
   const empty = compileRegistrations([]);
+
+  const withReporting = compileRegistrations([
+    {
+      agent: first,
+      definitions: DefinitionDigestInput.make({ agent: "reporting", model: "first", tools: [] }),
+      reporting: [
+        {
+          delegationId: Schema.decodeSync(DelegationId)("report"),
+          target: definition,
+          input: definition.input,
+          prepare: () => Effect.map(ReportDependency, (encodedInput) => ({ encodedInput })),
+        },
+      ],
+      // Per-Attempt services do not satisfy report preparation, which has no fenced Claim.
+      attemptLayer: () => Layer.succeed(ReportDependency)("attempt-only"),
+    },
+  ]);
+
+  const reportRequirements: Assert<
+    Equal<
+      Effect.Services<typeof withReporting>,
+      Crypto.Crypto | DurableWorkerRequirements<typeof first> | ReportDependency
+    >
+  > = true;
+
+  const reportErrors: Assert<Equal<Effect.Error<typeof withReporting>, DigestError>> = true;
+
+  void reportRequirements;
+  void reportErrors;
 
   const rejectedMixedModel = compileRegistrations([
     // @ts-expect-error An existing Binding cannot also select a different model.

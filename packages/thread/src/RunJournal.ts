@@ -496,6 +496,13 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
   "SubagentStarted",
   "SubagentJoined",
   "SubagentLineageRecorded",
+  "WorkerInputRequested",
+  "WorkerOriginRecorded",
+  "WorkerInputCompleted",
+  "WorkerReportPrepared",
+  "WorkerReportRefused",
+  "PeerMessagePrepared",
+  "SubtreeBudgetReserved",
 ]);
 
 /**

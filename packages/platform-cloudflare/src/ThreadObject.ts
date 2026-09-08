@@ -317,6 +317,12 @@ const submitEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoin
             ...(request.admissionFence === undefined
               ? {}
               : { admissionFence: request.admissionFence }),
+            ...(request.workerAdmission === undefined
+              ? {}
+              : { workerAdmission: request.workerAdmission }),
+            ...(request.messageAdmission === undefined
+              ? {}
+              : { messageAdmission: request.messageAdmission }),
             definitions: request.definitions,
           }),
         );

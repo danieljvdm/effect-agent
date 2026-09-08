@@ -19,6 +19,7 @@ export default defineConfig({
       "src/RunHooks.ts",
       "src/SemanticMemory.ts",
       "src/Subagent.ts",
+      "src/Messaging.ts",
       "src/SubagentReservations.ts",
       "src/WebCapture.ts",
     ],

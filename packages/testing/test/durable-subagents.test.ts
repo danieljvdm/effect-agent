@@ -361,10 +361,13 @@ const submitParentWith =
 /**
  * One durable parent/child fixture: the parent coordinator delegates
  * `delegate_research` to the scripted child; both bindings register with the
- * binding array under their exact digests (the child optionally under WRONG
- * digests to force the compatibility path).
+ * binding array under their exact digests. The capability derives child digests
+ * from registration without repeating durable setup in its handler Layer.
  */
-const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionDigests }) =>
+const makeHarness = (options?: {
+  readonly registration?: "missing" | "ambiguous" | "different-definition";
+  readonly declaredDigests?: DefinitionDigests;
+}) =>
   Effect.gen(function* () {
     const { childScripted, childBinding } = yield* makeChildFixture;
 
@@ -378,7 +381,9 @@ const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionD
 
     const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
       mapChildFailure,
-      durable: { targetDigests: CHILD_DIGEST_STRINGS },
+      ...(options?.declaredDigests === undefined
+        ? {}
+        : { durable: { targetDigests: options.declaredDigests } }),
     }).pipe(Layer.provide(delegationSupport));
 
     const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
@@ -388,14 +393,36 @@ const makeHarness = (options?: { readonly childRegistrationDigests?: DefinitionD
 
     const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
-      options?.childRegistrationDigests ?? CHILD_DIGESTS,
+      CHILD_DIGESTS,
     );
 
+    const bindings = [
+      parentResolved,
+      ...(options?.registration === "missing"
+        ? []
+        : options?.registration === "ambiguous"
+          ? [childResolved, childResolved]
+          : options?.registration === "different-definition"
+            ? [
+                {
+                  ...childResolved,
+                  definition: Agent.make(childDefinition.id, {
+                    input: childDefinition.input,
+                    output: childDefinition.output,
+                    instructions: childDefinition.instructions,
+                    toolkit: childDefinition.toolkit,
+                    policy: childDefinition.policy,
+                  }),
+                },
+              ]
+            : [childResolved]),
+    ];
+
     return {
-      bindings: [parentResolved, childResolved],
+      bindings,
       runtime: yield* DurableAgentRuntime.pipe(
         Effect.provide(
-          DurableAgentRuntime.layerWithBindings([parentResolved, childResolved]).pipe(
+          DurableAgentRuntime.layerWithBindings(bindings).pipe(
             Layer.provide(RunToolAuthorization.allowAll),
           ),
         ),
@@ -556,6 +583,37 @@ const payloadsOf = <Tag extends string>(
   records.filter((envelope) => envelope.record.payload._tag === tag);
 
 layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
+  it.effect(
+    "refuses missing, ambiguous or different target registrations before reserving work",
+    () =>
+      Effect.gen(function* () {
+        for (const registration of ["missing", "ambiguous", "different-definition"] as const) {
+          const harness = yield* makeHarness({ registration });
+          const parent = yield* harness.submitParent(`registration-${registration}`, "parent");
+
+          expect((yield* drive(harness)(parent.threadId)).map((entry) => entry.outcome)).toEqual([
+            "failed",
+          ]);
+          expect(yield* harness.childInvocations).toBe(0);
+          expect(yield* parentReservations(parent.submissionId)).toEqual([]);
+          expect(payloadsOf(yield* readLog(parent.threadId), "SubagentRequested")).toHaveLength(0);
+        }
+      }),
+  );
+
+  it.effect("rejects an explicit digest override that differs from the registered target", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ declaredDigests: WRONG_CHILD_DIGESTS });
+      const parent = yield* harness.submitParent("registration-wrong-override", "parent");
+
+      expect((yield* drive(harness)(parent.threadId)).map((entry) => entry.outcome)).toEqual([
+        "failed",
+      ]);
+      expect(yield* harness.childInvocations).toBe(0);
+      expect(yield* parentReservations(parent.submissionId)).toEqual([]);
+    }),
+  );
+
   it.effect(
     "selects the exact root Binding version and releases claims after strict registration refusals",
     () =>
@@ -1979,14 +2037,29 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
     () =>
       Effect.gen(function* () {
         yield* clearFailpoint;
-        const harness = yield* makeHarness({ childRegistrationDigests: WRONG_CHILD_DIGESTS });
-        const run = drive(harness);
+        const harness = yield* makeHarness();
         const thread = "thread-s2-compat";
         const parent = yield* harness.submitParent(thread, "compat-1");
         const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
 
-        yield* run(parent.threadId);
+        yield* drive(harness)(parent.threadId);
         expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
+
+        // A redeploy loses the exact child version after admission. Recovery must
+        // honor the pinned launch request rather than substituting registered code.
+        const runtime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(
+            DurableAgentRuntime.layerWithBindings(
+              harness.bindings.map((binding) =>
+                binding.agentId === childDefinition.id
+                  ? { ...binding, digests: WRONG_CHILD_DIGESTS }
+                  : binding,
+              ),
+            ).pipe(Layer.provide(RunToolAuthorization.allowAll)),
+          ),
+        );
+
+        const run = drive({ ...harness, runtime });
 
         // The child lane's claimed head cannot resolve its exact stored Binding: framework
         // code writes the Schema-stable ChildCompatibilityFailure Settlement (SUB-023/SUB-032).

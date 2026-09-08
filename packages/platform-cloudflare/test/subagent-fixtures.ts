@@ -120,7 +120,7 @@ export const siblingLookupInvocations = (ref: string): number =>
 
 /**
  * The child Binding digest strings the delegation declares
- * (`SubagentRuntimeOptions.durable.targetDigests`) AND the researcher Binding is registered
+ * through its exact target Definition AND the researcher Binding is registered
  * under — stored and verified byte-for-byte by the coordinator (SUB-023).
  */
 export const SUBAGENT_CHILD_DIGEST_STRINGS = {
@@ -277,7 +277,7 @@ export class CfDelegationFailed extends Schema.TaggedError<CfDelegationFailed>()
   { childErrorTag: Schema.String },
 ) {}
 
-const researchDelegation = Subagent.define("delegate_research", {
+const researchDelegation = Subagent.make("delegate_research", {
   description: "Research one bounded question and return findings.",
   target: researcherDefinition,
   parameters: Schema.Struct({ topic: Schema.String }),
@@ -349,7 +349,6 @@ export const makeSubagentTestBindings: Effect.Effect<ReadonlyArray<ResolvedBindi
 
     const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
       mapChildFailure,
-      durable: { targetDigests: SUBAGENT_CHILD_DIGEST_STRINGS },
     }).pipe(Layer.provide([delegationSupport, bookToolLayer]));
 
     const siblingLookupLayer = Toolkit.make(SiblingLookup).toLayer({

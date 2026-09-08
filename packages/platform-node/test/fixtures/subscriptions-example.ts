@@ -1,11 +1,6 @@
 import { type NodeDurableAgentRuntimeOptions } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
 import { NodeSubscriptions } from "@effect-agent/platform-node/NodeSubscriptions";
-import {
-  SqliteStorageConfig,
-  SqliteStorageConfigValue,
-} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
-import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
 import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
 import { EventSources, type EventSource } from "@effect-agent/thread/EventSource";
 import {
@@ -28,22 +23,7 @@ import {
 } from "@effect-agent/thread/SubscriptionInput";
 import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
 import { NodeHttpClient } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Effect, Layer, Schema, type Redacted } from "effect";
-
-const sqliteSubscriptionInfrastructure = (filename: string) =>
-  Layer.mergeAll(
-    SqliteClient.layer({ filename }),
-    Layer.succeed(SqliteStorageConfig)(
-      SqliteStorageConfigValue.make({
-        observationPollInterval: 25,
-        busyTimeout: 5_000,
-        ownershipLeaseDuration: 30_000,
-        verifyOnOpen: false,
-      }),
-    ),
-    SqliteStorageFailpoint.layer,
-  );
 
 const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
   readonly runtime: NodeDurableAgentRuntimeOptions;
@@ -52,12 +32,12 @@ const subscriptionRuntimeFromSourcesLayer = <E, R>(options: {
   readonly authorizer: SubscriptionAuthorizer["Service"];
 }) => {
   const dependencies = Layer.mergeAll(
-    NodeDurableHost.layerStack(options.runtime),
-    subscriptionStoreLayer(options.partition).pipe(
-      Layer.provide(sqliteSubscriptionInfrastructure(options.runtime.filename)),
-    ),
+    subscriptionStoreLayer(options.partition),
     options.sources,
     Layer.succeed(SubscriptionAuthorizer)(options.authorizer),
+  ).pipe(
+    // All live storage operations share the host's serialized SQLite connection.
+    Layer.provideMerge(NodeDurableHost.layerStack(options.runtime)),
   );
 
   return NodeSubscriptions.layer().pipe(Layer.provideMerge(dependencies));
