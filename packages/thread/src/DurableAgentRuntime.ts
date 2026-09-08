@@ -6466,7 +6466,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const handleEvent = (event: RunEvent): Effect.Effect<void, DurableWorkerFailure> => {
         switch (event._tag) {
           case "TurnStarted": {
-            return commitPendingTurn;
+            // Suspension owns only this Turn's siblings. Earlier results are already canonical
+            // under their original Turn and must never be re-recorded with a later Turn id.
+            return commitPendingTurn.pipe(
+              Effect.andThen(Effect.sync(() => siblingResults.clear())),
+            );
           }
           case "TurnCompleted": {
             const turnId = event.turnId ?? turnIdForRun(runId, event.turn);

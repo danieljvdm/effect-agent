@@ -941,11 +941,22 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     }
   });
 
+  let pendingToolOrder = new Map<string, number>();
+
   const flushTools = Effect.fn("RunJournal.flushTools")(function* (
     current: FoldState,
   ): Effect.fn.Return<FoldState, RunJournalError> {
     if (current.pendingTools.length === 0) return current;
-    const toolMessage = yield* toolMessageFromSettled(current.pendingTools);
+
+    // Suspension can persist an ordinary sibling before a delegated call joins. Model context
+    // still uses declaration order, matching the live interpreter's completed results batch.
+    const ordered = current.pendingTools.toSorted(
+      (left, right) =>
+        (pendingToolOrder.get(left.record.toolCallId) ?? Number.MAX_SAFE_INTEGER) -
+        (pendingToolOrder.get(right.record.toolCallId) ?? Number.MAX_SAFE_INTEGER),
+    );
+
+    const toolMessage = yield* toolMessageFromSettled(ordered);
 
     current.all.push(toolMessage);
     if (!current.pendingToolsForRun) current.before.push(toolMessage);
@@ -1068,6 +1079,10 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       if (payload._tag !== "ModelResponseRecorded") return;
       const messages = yield* decodePromptMessages(payload.messages);
       const forRun = payload.runId === ownerRunId;
+
+      pendingToolOrder = new Map(
+        declaredApplicationToolCallIds(messages).map((id, index) => [id, index]),
+      );
 
       yield* accountResponse(envelope, payload, messages);
 
