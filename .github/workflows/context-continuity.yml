@@ -5,6 +5,11 @@ on:
     - cron: "23 7 * * *"
   workflow_dispatch:
     inputs:
+      profile:
+        description: One bounded profile (not a matrix)
+        type: choice
+        default: explicit-rollover-sqlite-v1
+        options: [explicit-rollover-sqlite-v1, pressure-restart-sqlite-v1]
       model:
         description: Model to evaluate
         type: choice
@@ -42,8 +47,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Run the live continuity gate
-        run: ./node_modules/.bin/vp run --no-cache context-continuity-eval --require-clean
+        run: ./node_modules/.bin/vp run --no-cache context-continuity-eval --require-clean --profile "$CONTEXT_EVAL_PROFILE" --max-cost-usd 10
         env:
+          CONTEXT_EVAL_PROFILE: ${{ inputs.profile || 'explicit-rollover-sqlite-v1' }}
           EFFECT_AGENT_LIVE: "1"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXT_EVAL_MODEL: ${{ inputs.model || vars.CONTEXT_EVAL_MODEL || 'gpt-6-astra' }}
@@ -52,9 +58,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: context-continuity-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .context-continuity-eval/run/report.json
-            .context-continuity-eval/run/requests.ndjson
-            .context-continuity-eval/run/canonical.ndjson
+          path: .context-continuity-eval/run/
           if-no-files-found: warn
           retention-days: 30

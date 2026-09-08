@@ -842,6 +842,33 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
+  it.effect("keeps paid continuity opt-in on PRs and pins one bounded automatic profile", () =>
+    Effect.gen(function* () {
+      const continuity = yield* readWorkflow(".github/workflows/context-continuity.yml");
+      const release = yield* readWorkflow(".github/workflows/release.yml");
+      const wrapper = yield* readRepositoryFile("scripts/release-publish.ts");
+      const tasks = yield* readRepositoryFile("vite.config.ts");
+
+      expect(Object.keys(continuity.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+      const gate = workflowStep(continuity, "evaluate", "Run the live continuity gate");
+
+      expect(gate?.run).toContain("--require-clean");
+      expect(gate?.run).toContain("--max-cost-usd 10");
+      expect(gate?.env?.CONTEXT_EVAL_PROFILE).toBe(
+        "${{ inputs.profile || 'explicit-rollover-sqlite-v1' }}",
+      );
+      expect(wrapper).toContain('"--profile",\n          "explicit-rollover-sqlite-v1"');
+      expect(wrapper).toContain('"--max-cost-usd",\n          "10"');
+      expect(tasks).toContain('"context-continuity-eval": {\n        cache: false');
+      expect(workflowStep(continuity, "evaluate", "Preserve this attempt's evidence")?.if).toBe(
+        "always()",
+      );
+      expect(
+        workflowStep(release, "release", "Preserve continuity gate evidence")?.with?.path,
+      ).toBe(".context-continuity-eval/run/");
+    }),
+  );
+
   it.effect("publishes without flags and requires an explicit dry-run opt-in", () =>
     Effect.gen(function* () {
       const modes: Array<boolean> = [];

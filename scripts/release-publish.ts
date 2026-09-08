@@ -392,6 +392,10 @@ export const command = CliCommand.make(
           "--no-cache",
           "context-continuity-eval",
           "--require-clean",
+          "--profile",
+          "explicit-rollover-sqlite-v1",
+          "--max-cost-usd",
+          "10",
         ]);
       yield* runCommand(root, "vp", ["run", "build"]);
       yield* withPublishManifests(root, (directories) =>

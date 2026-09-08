@@ -171,8 +171,10 @@ stop the attempt before inference. A pending release requires a fresh, uncached
 candidate checkout. Missing credentials, incomplete runs, model failures, or failed assertions stop
 publication. Configure `OPENAI_API_KEY` as a repository secret and optionally `CONTEXT_EVAL_MODEL`
 as a repository variable; the workflow explicitly selects `gpt-6-astra` by default. Each suite has a
-conservative $10 spending limit. The same evaluation runs nightly or by manual dispatch. Its PR
-checks are deterministic and never call a model.
+conservative $10 spending limit. Nightly and release jobs select one existing explicit-rollover
+profile; manual dispatch may select one bounded SQLite pressure/restart profile. Cloudflare and
+full-capacity coverage require separate explicit preparation. PR checks are deterministic and
+never call a model.
 Each attempt preserves its own evidence artifact, including failures. This gate proves the
 documented continuity scenario; it does not certify large-history startup or Cloudflare host
 performance.

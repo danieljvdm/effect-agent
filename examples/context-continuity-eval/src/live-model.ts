@@ -4,6 +4,7 @@ import { AiError } from "effect/unstable/ai";
 import { HttpBody, HttpClientResponse } from "effect/unstable/http";
 
 import { type ModelUsage } from "./contracts.ts";
+import { MAX_COST_MICROUSD } from "./profiles.ts";
 import { RequestAuditSink, type RequestAudit } from "./request-audit.ts";
 
 export const MODEL_IDS = [
@@ -32,6 +33,16 @@ const prices: Readonly<Record<ModelId, { input: number; cached: number; output: 
 export const MAX_OUTPUT_TOKENS = 4_096;
 export const MAX_INPUT_TOKENS = 32_000;
 export const MAX_MODEL_CALLS = 200;
+
+/** Planning only: uncached 80%-full requests, one per window, excluding output and repeated reads. */
+export const productionCostPlan = (contextTokens: number) => ({
+  assumedUncachedInputTokens: 12 * Math.floor(contextTokens * 0.8),
+  estimateIsInvoice: false,
+  models: MODEL_IDS.map((model) => ({
+    model,
+    inputOnlyMicrousd: Math.ceil(12 * Math.floor(contextTokens * 0.8) * prices[model].input),
+  })),
+});
 
 const TokenCount = Schema.Struct({
   object: Schema.Literal("response.input_tokens"),
@@ -77,28 +88,37 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
   readonly model: ModelId;
   readonly maxCostMicrousd: number;
   readonly phase: Ref.Ref<number>;
+  readonly initialUsage?: ModelUsage;
 }) {
   const native = yield* OpenAiClient.OpenAiClient;
   const auditSink = yield* RequestAuditSink;
   const price = prices[options.model];
 
   const state = yield* Ref.make<Spending>({
-    closed: false,
-    failure: null,
-    calls: 0,
-    completedCalls: 0,
-    input: 0,
-    output: 0,
-    maxInput: 0,
-    cost: 0,
+    closed:
+      (options.initialUsage?.reservedCostMicrousd ?? 0) > 0 ||
+      options.initialUsage?.calls !== options.initialUsage?.completedCalls,
+    failure:
+      (options.initialUsage?.reservedCostMicrousd ?? 0) > 0
+        ? "Unresolved provider reservation survived recovery"
+        : null,
+    calls: options.initialUsage?.calls ?? 0,
+    completedCalls: options.initialUsage?.completedCalls ?? 0,
+    input: options.initialUsage?.inputTokens ?? 0,
+    output: options.initialUsage?.outputTokens ?? 0,
+    maxInput: options.initialUsage?.maxInputTokens ?? 0,
+    cost: options.initialUsage?.estimatedCostMicrousd ?? 0,
     pending: new Map(),
-    models: new Set(),
+    models: new Set(options.initialUsage?.returnedModels),
   });
 
   const semaphore = yield* Semaphore.make(1);
 
   const outstanding = (value: Spending) =>
-    [...value.pending.values()].reduce((sum, r) => sum + r.cost, 0);
+    [...value.pending.values()].reduce(
+      (sum, r) => sum + r.cost,
+      options.initialUsage?.reservedCostMicrousd ?? 0,
+    );
 
   const refuse = (description: string) =>
     Ref.update(state, (s) => ({ ...s, closed: true, failure: s.failure ?? description })).pipe(
@@ -117,6 +137,8 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       .pipe(Effect.catch(() => refuse("Could not preserve evaluation request evidence")));
 
   const admit = Effect.fn("ContextContinuity.admit")(function* (original: Payload) {
+    if (options.maxCostMicrousd > MAX_COST_MICROUSD || options.maxCostMicrousd <= 0)
+      return yield* refuse("Evaluation spending ceiling must be positive and no greater than $10");
     if (options.model === "gpt-5.6-sol" && (yield* Clock.currentTimeMillis) >= 1_795_305_600_000)
       return yield* refuse("Refresh the Sol pricing card after its guaranteed promotional period");
     if (

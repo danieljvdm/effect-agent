@@ -14,9 +14,13 @@ import { Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { runCloudflareEvaluation } from "./cloudflare.ts";
 import { EvaluationError, EvaluationReport } from "./contracts.ts";
 import { runEvaluation } from "./evaluate.ts";
-import { ModelId, MODEL_IDS } from "./live-model.ts";
+import { ModelId, MODEL_IDS, productionCostPlan } from "./live-model.ts";
+import { pressureScenario } from "./pressure.ts";
+import { supervise } from "./process-host.ts";
+import { DEFAULT_PROFILE, PROFILE_IDS, profilePlan } from "./profiles.ts";
 import {
   makeScenario,
   REQUIRED_ROLLOVERS,
@@ -32,6 +36,21 @@ const provider = OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_
 export const command = Command.make(
   "context-continuity-eval",
   {
+    cloudflareUrl: Flag.string("cloudflare-url").pipe(
+      Flag.optional,
+      Flag.withDescription(
+        "Already deployed Cloudflare evaluation host; requires CONTEXT_EVAL_TOKEN.",
+      ),
+    ),
+    profile: Flag.choice("profile", PROFILE_IDS).pipe(
+      Flag.withDefault(DEFAULT_PROFILE),
+      Flag.withDescription("One profile per attempt; production-capacity is preparation-only."),
+    ),
+    productionContextTokens: Flag.integer("production-context-tokens").pipe(
+      Flag.withDefault(200_000),
+      Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 32_001, maximum: 1_000_000 }))),
+      Flag.withDescription("Planning target only; specify the actual application/model limit."),
+    ),
     model: Flag.choice("model", MODEL_IDS).pipe(
       Flag.optional,
       Flag.withDescription("Required model, or CONTEXT_EVAL_MODEL. No model fallback."),
@@ -46,7 +65,7 @@ export const command = Command.make(
       Flag.withDescription("Seed for the frozen conversation and receipt codes."),
     ),
     maxCostUsd: Flag.float("max-cost-usd").pipe(
-      Flag.withSchema(Schema.Finite.check(Schema.isBetween({ minimum: 0.1, maximum: 100 }))),
+      Flag.withSchema(Schema.Finite.check(Schema.isBetween({ minimum: 0.1, maximum: 10 }))),
       Flag.withDefault(10),
       Flag.withDescription(
         "Suite-wide conservative USD ceiling; reserve each request before inference.",
@@ -76,7 +95,9 @@ export const command = Command.make(
   Effect.fn("ContextContinuity.command")(function* (options) {
     if (options.validate) {
       const phases = yield* Schema.decodeUnknownEffect(Schema.Array(ScenarioPhase))(
-        makeScenario(options.seed),
+        options.profile === DEFAULT_PROFILE
+          ? makeScenario(options.seed)
+          : pressureScenario(options.seed),
       );
 
       yield* Console.log(
@@ -86,6 +107,10 @@ export const command = Command.make(
           requiredNativeRollovers: REQUIRED_ROLLOVERS,
           recoveryBoundaries: RESTARTS,
           liveEvaluation: false,
+          plan: profilePlan(options.profile, options.productionContextTokens),
+          ...(options.profile === "production-capacity-v1"
+            ? { costPlanning: productionCostPlan(options.productionContextTokens) }
+            : {}),
         }),
       );
 
@@ -93,6 +118,18 @@ export const command = Command.make(
     }
 
     const run = Effect.gen(function* () {
+      if (options.profile === "production-capacity-v1")
+        return yield* EvaluationError.make({
+          stage: "configuration",
+          message:
+            "Production-capacity coverage is preparation-only. Use --validate with the real production-context-tokens and budget the full workload before enabling inference.",
+        });
+      if (options.profile === "pressure-cloudflare-v1" && Option.isNone(options.cloudflareUrl))
+        return yield* EvaluationError.make({
+          stage: "configuration",
+          message:
+            "The Cloudflare profile requires --cloudflare-url for its already deployed evaluation host.",
+        });
       const enabled = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault("0"));
 
       if (enabled !== "1")
@@ -142,7 +179,7 @@ export const command = Command.make(
         });
       yield* fs.makeDirectory(outputDirectory, { recursive: true });
 
-      const report = yield* runEvaluation({
+      const evaluationOptions = {
         model,
         reasoningEffort: options.effort,
         seed: options.seed,
@@ -150,7 +187,36 @@ export const command = Command.make(
         sourceCommit,
         dirtyWorkingTree,
         maxCostMicrousd: Math.floor(options.maxCostUsd * 1_000_000),
-      }).pipe(Effect.provide(provider));
+      };
+
+      let report =
+        options.profile === "pressure-restart-sqlite-v1"
+          ? yield* supervise({ ...evaluationOptions, profile: options.profile })
+          : options.profile === "pressure-cloudflare-v1" && Option.isSome(options.cloudflareUrl)
+            ? yield* runCloudflareEvaluation(evaluationOptions, options.cloudflareUrl.value).pipe(
+                Effect.provide(FetchHttpClient.layer),
+              )
+            : yield* runEvaluation({ ...evaluationOptions, profile: options.profile }).pipe(
+                Effect.provide(provider),
+              );
+
+      const finalCommit = (yield* spawner.string(
+        ChildProcess.make("git", ["rev-parse", "HEAD"], { cwd: root }),
+      )).trim();
+
+      const finalStatus = yield* spawner.string(
+        ChildProcess.make("git", ["status", "--porcelain", "--untracked-files=normal"], {
+          cwd: root,
+        }),
+      );
+
+      if (finalCommit !== sourceCommit || (options.requireClean && finalStatus.trim().length > 0)) {
+        report = { ...report, status: "failed", failure: "Candidate changed during evaluation" };
+        yield* fs.writeFileString(
+          path.join(outputDirectory, "report.json"),
+          yield* Schema.encodeEffect(Schema.fromJsonString(EvaluationReport))(report),
+        );
+      }
 
       yield* Console.log(
         yield* Schema.encodeEffect(Schema.fromJsonString(EvaluationReport))(report),

@@ -3,26 +3,18 @@ import * as MemoryNotes from "@effect-agent/capabilities/MemoryNotes";
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId } from "@effect-agent/core/Identifiers";
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import { MemoryKey, MemoryReader } from "@effect-agent/core/MemoryStore";
 import { contextWindowId } from "@effect-agent/engine/Compaction";
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import { ContextHistoryPage } from "@effect-agent/engine/ContextHistory";
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import { digestDefinitions, digestDefinition } from "@effect-agent/thread/Digest";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
-import {
-  CanonicalRecordEnvelope,
-  CanonicalSequence,
-  DefinitionDigestInput,
-} from "@effect-agent/thread/Records";
+import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
 import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
 import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
 import * as ThreadContextHistory from "@effect-agent/thread/ThreadContextHistory";
-import { project } from "@effect-agent/thread/ThreadContextHistoryProjection";
-import { ThreadRead, ThreadStore, ThreadTailRequest } from "@effect-agent/thread/ThreadStore";
+import { ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
   Clock,
@@ -36,7 +28,6 @@ import {
   Path,
   Ref,
   Schema,
-  Stream,
 } from "effect";
 import { IdGenerator, Toolkit } from "effect/unstable/ai";
 
@@ -44,12 +35,17 @@ import {
   check,
   EvaluationError,
   EvaluationReport,
+  RecoveryCheckpointEvidence,
   ProjectStatus,
+  ResumeCheckpoint,
+  KillWitness,
+  type CompactionEvidence,
   type Check,
   type PhaseResult,
   type RestartEvidence,
 } from "./contracts.ts";
-import { originalArchiveRecord, hasSearchPathToRead } from "./evidence.ts";
+import { gradePhase } from "./grade.ts";
+import { readLog, readNotes, readRecoveryCheckpoint, notesNamespace } from "./host-evidence.ts";
 import {
   makeLiveClient,
   MAX_INPUT_TOKENS,
@@ -57,9 +53,21 @@ import {
   MAX_OUTPUT_TOKENS,
   type ModelId,
 } from "./live-model.ts";
+import {
+  manifestLayer,
+  observedCompactor,
+  pressureInstructions,
+  pressureScenario,
+  pressureToolkit,
+} from "./pressure.ts";
+import {
+  DEFAULT_PROFILE,
+  MAX_COST_MICROUSD,
+  REDUCED_CONTEXT_TOKENS,
+  type ProfileId,
+} from "./profiles.ts";
 import { RequestAudit, RequestAuditSink } from "./request-audit.ts";
 import {
-  gradeStatus,
   instructions,
   makeScenario,
   REQUIRED_ROLLOVERS,
@@ -68,18 +76,14 @@ import {
   type ScenarioPhase,
 } from "./scenario.ts";
 
-export const CONTEXT_TOKEN_LIMIT = 16_000;
+export const CONTEXT_TOKEN_LIMIT = REDUCED_CONTEXT_TOKENS;
 
-const notesNamespace = MemoryNamespace.define({
-  name: "example/context-continuity-notes",
-  version: 1,
-  identity: Schema.Struct({ threadId: Schema.String }),
-});
-
-const toolkit = Toolkit.merge(ContextTools.toolkit, MemoryNotes.toolkit);
+const explicitToolkit = Toolkit.merge(ContextTools.toolkit, MemoryNotes.toolkit);
 
 export interface EvaluationOptions {
   readonly model: ModelId;
+  readonly profile?: ProfileId;
+  readonly processId?: number;
   readonly reasoningEffort: "low" | "medium" | "high";
   readonly seed: number;
   readonly outputDirectory: string;
@@ -87,53 +91,6 @@ export interface EvaluationOptions {
   readonly dirtyWorkingTree: boolean;
   readonly maxCostMicrousd: number;
 }
-
-const readLog = Effect.fn("ContextContinuity.readLog")(function* (threadId: ThreadId) {
-  const store = yield* ThreadStore;
-  const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
-  const records: Array<CanonicalRecordEnvelope> = [];
-  let cursor = 0;
-
-  while (cursor < tail.tailSequence) {
-    const limit = Math.min(64, tail.tailSequence - cursor);
-
-    const page = yield* store
-      .read(
-        ThreadRead.make({
-          threadId,
-          afterSequence: yield* Schema.decodeEffect(CanonicalSequence)(cursor),
-          limit,
-        }),
-      )
-      .pipe(Stream.runCollect);
-
-    if (
-      page.length !== limit ||
-      page.some((record, index) => record.sequence !== cursor + index + 1)
-    )
-      return yield* EvaluationError.make({
-        stage: "evidence",
-        message: "Canonical evidence was not contiguous",
-      });
-    records.push(...page);
-    cursor += page.length;
-  }
-
-  return records;
-});
-
-const readNotes = Effect.fn("ContextContinuity.readNotes")(function* (key: MemoryKey) {
-  const reader = yield* MemoryReader;
-  const document = yield* reader.get(key);
-
-  if (document?._tag === "WithdrawnMemoryDocument")
-    return yield* EvaluationError.make({
-      stage: "notes",
-      message: "Evaluation notes were unexpectedly withdrawn",
-    });
-
-  return { revision: document?.source.revision ?? null, text: document?.content.text ?? "" };
-});
 
 /** Independent gate: missing phases, duplicate boundaries, unmetered calls, and partial runs fail. */
 export const gateChecks = (report: EvaluationReport): ReadonlyArray<Check> => [
@@ -194,6 +151,53 @@ export const gateChecks = (report: EvaluationReport): ReadonlyArray<Check> => [
     report.usage.estimatedCostMicrousd <= report.maxCostMicrousd,
     true,
   ),
+  check("hard-spending-ceiling", report.maxCostMicrousd <= MAX_COST_MICROUSD, true),
+  check("profile-is-live", report.profile !== "production-capacity-v1", true),
+  ...(report.profile === "pressure-restart-sqlite-v1"
+    ? [
+        check(
+          "actual-process-kills",
+          report.restarts.every(
+            (r) =>
+              r.mechanism === "SIGKILL" &&
+              r.killConfirmed &&
+              r.processBefore !== null &&
+              r.processAfter !== null &&
+              r.processBefore !== r.processAfter,
+          ),
+          true,
+        ),
+      ]
+    : []),
+  ...(report.profile === "pressure-cloudflare-v1"
+    ? [
+        check(
+          "native-cloudflare-evictions",
+          report.restarts.every(
+            (r) => r.mechanism === "durable-object-eviction" && r.killConfirmed,
+          ),
+          true,
+        ),
+      ]
+    : []),
+  ...(report.profile !== DEFAULT_PROFILE
+    ? [
+        check(
+          "pressure-caused-committed-windows",
+          report.windows.every((w) =>
+            report.compactions.some(
+              (c) =>
+                contextWindowId(c.runId, c.turn) === w.id &&
+                c.kind === "rollover" &&
+                c.trigger === "pressure" &&
+                c.targetTokens !== null &&
+                c.estimatedTokens > c.targetTokens,
+            ),
+          ),
+          true,
+        ),
+      ]
+    : []),
   check("no-operational-failure", report.failure, null),
 ];
 
@@ -202,15 +206,56 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const scenario = makeScenario(options.seed);
+  const profile = options.profile ?? DEFAULT_PROFILE;
+  const pressure = profile !== DEFAULT_PROFILE;
+  const hardRestart = profile === "pressure-restart-sqlite-v1";
+  const scenario = pressure ? pressureScenario(options.seed) : makeScenario(options.seed);
+  const toolkit = pressure ? pressureToolkit : explicitToolkit;
+  const agentInstructions = pressure ? pressureInstructions : instructions;
+  const checkpointPath = path.join(options.outputDirectory, "resume.json");
+
+  const checkpoint =
+    hardRestart && (yield* fs.exists(checkpointPath))
+      ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ResumeCheckpoint))(
+          yield* fs.readFileString(checkpointPath),
+        )
+      : undefined;
+
+  if (
+    checkpoint !== undefined &&
+    (checkpoint.report.sourceCommit !== options.sourceCommit ||
+      checkpoint.report.seed !== options.seed ||
+      checkpoint.report.profile !== profile ||
+      checkpoint.report.model !== options.model ||
+      checkpoint.report.maxCostMicrousd !== options.maxCostMicrousd ||
+      checkpoint.report.usage.reservedCostMicrousd !== 0 ||
+      checkpoint.report.usage.calls !== checkpoint.report.usage.completedCalls)
+  )
+    return yield* EvaluationError.make({
+      stage: "restart",
+      message: "Recovery candidate/configuration changed or provider accounting is unresolved",
+    });
   const phaseIndex = yield* Ref.make(0);
+  const compactions: Array<CompactionEvidence> = [...(checkpoint?.report.compactions ?? [])];
   const started = yield* Clock.currentTimeMillis;
 
   const scenarioDigest = yield* digestDefinition({
     version: SCENARIO_VERSION,
-    instructions,
+    instructions: agentInstructions,
+    profile,
     phases: scenario,
   });
+
+  if (
+    checkpoint !== undefined &&
+    (checkpoint.report.scenarioDigest !== scenarioDigest ||
+      checkpoint.report.reasoningEffort !== options.reasoningEffort ||
+      checkpoint.report.dirtyWorkingTree !== options.dirtyWorkingTree)
+  )
+    return yield* EvaluationError.make({
+      stage: "restart",
+      message: "Recovery scenario or model settings changed",
+    });
 
   const auditPath = path.join(options.outputDirectory, "requests.ndjson");
   const canonicalPath = path.join(options.outputDirectory, "canonical.ndjson");
@@ -219,11 +264,12 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
   const live = yield* makeLiveClient({
     model: options.model,
     maxCostMicrousd: options.maxCostMicrousd,
+    ...(checkpoint === undefined ? {} : { initialUsage: checkpoint.report.usage }),
     phase: phaseIndex,
   }).pipe(Effect.provide(RequestAuditSink.file(auditPath)));
 
   let report: EvaluationReport = {
-    version: 2,
+    version: 3,
     status: "running",
     sourceCommit: options.sourceCommit,
     dirtyWorkingTree: options.dirtyWorkingTree,
@@ -238,7 +284,8 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     maxOutputTokens: MAX_OUTPUT_TOKENS,
     maxCostMicrousd: options.maxCostMicrousd,
     maxModelCalls: MAX_MODEL_CALLS,
-    profile: "explicit-rollover-sqlite-v1",
+    profile,
+    compactions: [],
     startedAt: DateTime.formatIso(yield* DateTime.now),
     elapsedMillis: 0,
     phases: [],
@@ -249,10 +296,14 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     failure: null,
   };
 
+  if (checkpoint !== undefined) report = checkpoint.report;
+
   const flush = Effect.fn("ContextContinuity.flush")(function* () {
     report = {
       ...report,
-      elapsedMillis: (yield* Clock.currentTimeMillis) - started,
+      elapsedMillis:
+        (checkpoint?.report.elapsedMillis ?? 0) + (yield* Clock.currentTimeMillis) - started,
+      compactions: [...compactions],
       usage: yield* live.snapshot,
     };
     const json = yield* Schema.encodeEffect(Schema.fromJsonString(EvaluationReport))(report);
@@ -285,16 +336,22 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     strictJsonSchema: true,
   } as const;
 
-  const definition = Agent.make("context-continuity-eval", {
-    input: Schema.String,
-    output: ProjectStatus,
-    instructions,
-    toolkit,
-    policy: AgentPolicy.make(policy),
-  });
+  const makeDefinition = <T extends Toolkit.Any>(selectedToolkit: T) =>
+    Agent.make("context-continuity-eval", {
+      input: Schema.String,
+      output: ProjectStatus,
+      instructions: agentInstructions,
+      toolkit: selectedToolkit,
+      policy: AgentPolicy.make(policy),
+    });
 
   const agent = Agent.withModel(
-    definition,
+    makeDefinition(explicitToolkit),
+    OpenAiLanguageModel.model(options.model, modelSettings),
+  );
+
+  const pressureAgent = Agent.withModel(
+    makeDefinition(pressureToolkit),
     OpenAiLanguageModel.model(options.model, modelSettings),
   );
 
@@ -313,15 +370,69 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
     restart: (typeof RESTARTS)[number] | undefined,
     previousNotes: { revision: string | null; text: string } | undefined,
   ) {
+    let atKill: Effect.Effect<void> = Effect.die("Kill services not acquired");
+
+    const pauseForKill = Effect.gen(function* () {
+      if (options.processId === undefined)
+        return yield* Effect.die("Missing supervised process identity");
+      const notes = yield* readNotes(key);
+      const log = yield* readLog(threadId);
+
+      const startedRun = log.findLast(({ record }) => record.payload._tag === "RunStarted")?.record
+        .payload;
+
+      if (startedRun?._tag !== "RunStarted") return yield* Effect.die("No run at kill barrier");
+
+      const encodedLog = yield* Effect.forEach(log, (record) =>
+        Schema.encodeEffect(Schema.fromJsonString(CanonicalRecordEnvelope))(record),
+      );
+
+      yield* fs.writeFileString(
+        path.join(options.outputDirectory, `canonical-barrier-${phase.index}.ndjson`),
+        `${encodedLog.join("\n")}\n`,
+      );
+      yield* fs.writeFileString(canonicalPath, `${encodedLog.join("\n")}\n`);
+      yield* flush();
+      if (
+        report.usage.reservedCostMicrousd !== 0 ||
+        report.usage.calls !== report.usage.completedCalls
+      )
+        return yield* Effect.die("Cannot restart an unmetered provider call");
+
+      const saved: ResumeCheckpoint = {
+        version: 1,
+        report,
+        phase: phase.index,
+        runId: startedRun.runId,
+        processId: options.processId,
+        notes,
+      };
+
+      const json = yield* Schema.encodeEffect(Schema.fromJsonString(ResumeCheckpoint))(saved);
+
+      yield* fs.writeFileString(`${checkpointPath}.tmp`, json);
+      yield* fs.rename(`${checkpointPath}.tmp`, checkpointPath);
+      yield* fs.writeFileString(
+        path.join(options.outputDirectory, `barrier-${phase.index}.json`),
+        json,
+      );
+
+      // No scope closes and no failure is returned. Only the supervisor's SIGKILL ends this attempt.
+      return yield* Effect.never;
+    }).pipe(Effect.orDie);
+
     const host = NodeDurableAgentRuntime.layer({
       filename: path.join(options.outputDirectory, "thread.sqlite"),
       deploymentId: "context-continuity-eval-v1",
       producerId: `context-eval-${phase.index}-${previousNotes === undefined ? "initial" : "resumed"}`,
+      ...(hardRestart ? { ownershipLeaseDuration: 2_000, leaseRenewalInterval: 500 } : {}),
       runtimeFailpoint: (location) =>
         location === restart?.location
-          ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+          ? hardRestart
+            ? Effect.suspend(() => atKill)
+            : Effect.fail(DurableRuntimeFailpointError.make({ location }))
           : Effect.void,
-    }).pipe(Layer.provide(ContextCompactor.layerRollover));
+    }).pipe(Layer.provide(observedCompactor((evidence) => compactions.push(evidence))));
 
     const memory = memoryStoreLayer.pipe(Layer.provide(host));
 
@@ -349,20 +460,30 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
       memory,
       handlers,
       ContextTools.layer,
+      manifestLayer(CONTEXT_TOKEN_LIMIT),
       ThreadContextHistory.layer({ maxRecords: 16_384 }).pipe(Layer.provide(host)),
     );
 
     return yield* Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+
+      atKill = pauseForKill.pipe(
+        Effect.provideService(ThreadStore, yield* ThreadStore),
+        Effect.provideService(MemoryReader, yield* MemoryReader),
+      );
       // Reacquisition reads the same persisted document before any resumed model call.
       const reopenedNotes = yield* readNotes(key);
 
-      const receipt = yield* runtime.submit(agent, phase.message, {
-        threadId,
-        principal: yield* Schema.decodeEffect(Principal)("context-eval"),
-        idempotencyKey: yield* Schema.decodeEffect(IdempotencyKey)(`phase-${phase.index}`),
-        definitions,
-      });
+      const receipt = yield* runtime.submit(
+        { definition: pressure ? pressureAgent.definition : agent.definition },
+        phase.message,
+        {
+          threadId,
+          principal: yield* Schema.decodeEffect(Principal)("context-eval"),
+          idempotencyKey: yield* Schema.decodeEffect(IdempotencyKey)(`phase-${phase.index}`),
+          definitions,
+        },
+      );
 
       const runId = runIdForSubmission(receipt.submissionId);
 
@@ -375,19 +496,44 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
             message: "Unexpected recovery phase",
           });
 
-        const evidence: RestartEvidence = {
+        let evidence: RestartEvidence = {
           phase: phase.index,
           location: boundary.location,
           runId,
           notesRevisionBefore: previousNotes.revision,
           notesRevisionAfter: reopenedNotes.revision,
           notesTextUnchanged: previousNotes.text === reopenedNotes.text,
+          mechanism: hardRestart ? "SIGKILL" : "service-reacquisition",
+          processBefore: hardRestart ? (checkpoint?.processId ?? null) : null,
+          processAfter: hardRestart ? (options.processId ?? null) : null,
+          killConfirmed: false,
         };
 
+        if (hardRestart) {
+          const witness = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(KillWitness))(
+            yield* fs.readFileString(
+              path.join(options.outputDirectory, `kill-${phase.index}.json`),
+            ),
+          );
+
+          if (
+            witness.processId !== evidence.processBefore ||
+            witness.phase !== phase.index ||
+            checkpoint?.runId !== runId
+          )
+            return yield* EvaluationError.make({
+              stage: "restart",
+              message: "Kill witness does not match the recovered run",
+            });
+          evidence = { ...evidence, killConfirmed: true };
+        }
         report = { ...report, restarts: [...report.restarts, evidence] };
         yield* runtime.runRecovery;
       }
-      const exit = yield* runtime.processThread(agent, threadId).pipe(Effect.exit);
+
+      const exit = pressure
+        ? yield* runtime.processThread(pressureAgent, threadId).pipe(Effect.exit)
+        : yield* runtime.processThread(agent, threadId).pipe(Effect.exit);
 
       records = yield* readLog(threadId);
 
@@ -396,6 +542,12 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
       );
 
       yield* fs.writeFileString(canonicalPath, `${encoded.join("\n")}\n`);
+      yield* fs.writeFileString(
+        path.join(options.outputDirectory, "recovery-checkpoint.json"),
+        yield* Schema.encodeEffect(Schema.fromJsonString(RecoveryCheckpointEvidence))(
+          yield* readRecoveryCheckpoint(threadId),
+        ),
+      );
       const notes = yield* readNotes(key);
 
       report = {
@@ -464,11 +616,17 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
   });
 
   const evaluate = Effect.gen(function* () {
-    for (const phase of scenario) {
+    for (const phase of scenario.filter((phase) => phase.index >= (checkpoint?.phase ?? 0))) {
       yield* Ref.set(phaseIndex, phase.index);
       yield* Console.error(`Context continuity: update ${phase.index + 1}/${scenario.length}`);
       const restart = RESTARTS.find((item) => item.phase === phase.index);
-      let result = yield* attempt(phase, restart, undefined);
+      const resuming = checkpoint?.phase === phase.index;
+
+      let result = yield* attempt(
+        phase,
+        resuming ? undefined : restart,
+        resuming ? checkpoint.notes : undefined,
+      );
 
       if (result.kind === "restart") result = yield* attempt(phase, undefined, result.notes);
       if (result.kind !== "completed")
@@ -477,136 +635,25 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
           message: "Recovered attempt did not finish",
         });
 
-      const runRecords = records.filter(
-        ({ record }) => "runId" in record.payload && record.payload.runId === result.runId,
+      const requestEvidence = yield* Effect.forEach(
+        (yield* fs.readFileString(auditPath)).trim().split("\n"),
+        (line) => Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(line),
       );
 
-      const boundaries = runRecords.filter(
-        ({ record }) => record.payload._tag === "CompactionCreated",
+      const firstRequest = requestEvidence.find(
+        (event) => event.kind === "request" && event.phase === phase.index,
       );
 
-      const windows = boundaries.filter(
-        ({ record }) =>
-          record.payload._tag === "CompactionCreated" && record.payload.kind === "rollover",
+      const checks = yield* gradePhase(
+        phase,
+        result,
+        records,
+        report.windows,
+        firstRequest !== undefined &&
+          !firstRequest.json.includes(phase.receipt?.code ?? "missing-receipt"),
+        pressure,
+        scenario[1]?.message ?? "",
       );
-
-      const lastWindow = windows.at(-1);
-
-      const settledTool = (name: string) =>
-        runRecords.filter(
-          ({ record }) =>
-            record.payload._tag === "ToolCallSettled" &&
-            record.payload.toolName === name &&
-            !record.payload.isFailure,
-        );
-
-      const checks: Array<Check> = [
-        ...gradeStatus(phase, result.output),
-        check(`phase-${phase.index}/no-summary-or-pruning`, boundaries.length, windows.length),
-        check(`phase-${phase.index}/notes-bounded`, result.notes.text.length <= 2_000, true),
-        check(`phase-${phase.index}/notes-written`, settledTool("write_notes").length > 0, true),
-        check(
-          `phase-${phase.index}/single-logical-run`,
-          runRecords.filter(({ record }) => record.payload._tag === "RunStarted").length,
-          1,
-        ),
-      ];
-
-      if (phase.index > 0)
-        checks.push(
-          check(`phase-${phase.index}/native-rollover`, windows.length >= 1, true),
-          check(
-            `phase-${phase.index}/single-rollover-request`,
-            settledTool("new_context").length,
-            1,
-          ),
-          check(
-            `phase-${phase.index}/notes-saved-before-rollover`,
-            settledTool("write_notes").some(
-              (record) => record.sequence < (lastWindow?.sequence ?? 0),
-            ),
-            true,
-          ),
-          check(
-            `phase-${phase.index}/notes-read-after-rollover`,
-            settledTool("read_notes").some(
-              (record) => record.sequence > (lastWindow?.sequence ?? Number.MAX_SAFE_INTEGER),
-            ),
-            true,
-          ),
-        );
-      if (phase.receipt !== null) {
-        const firstRequests = yield* Effect.forEach(
-          (yield* fs.readFileString(auditPath)).trim().split("\n"),
-          (line) => Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(line),
-        );
-
-        const answer = result.output.receipts[0];
-        const source = originalArchiveRecord(records, scenario[1]?.message ?? "", answer?.recordId);
-        const evidence = source === undefined ? undefined : (yield* project(source)).evidence;
-
-        const searched =
-          answer !== undefined &&
-          source !== undefined &&
-          hasSearchPathToRead(
-            runRecords,
-            lastWindow?.sequence ?? Number.MAX_SAFE_INTEGER,
-            source.record.recordId,
-            phase.receipt.code,
-          );
-
-        const read = settledTool("read_context_window").some(({ record, sequence }) => {
-          if (
-            record.payload._tag !== "ToolCallSettled" ||
-            sequence <= (lastWindow?.sequence ?? Number.MAX_SAFE_INTEGER)
-          )
-            return false;
-          const page = Schema.decodeUnknownOption(ContextHistoryPage)(record.payload.result);
-
-          return (
-            Option.isSome(page) &&
-            page.value.recordId === source?.record.recordId &&
-            page.value.text.includes(phase.receipt?.code ?? "")
-          );
-        });
-
-        const closedWindows =
-          source === undefined
-            ? 0
-            : report.windows.filter((window) => window.coversThrough >= source.sequence).length;
-
-        checks.push(
-          check(
-            `phase-${phase.index}/answer-absent-before-retrieval`,
-            firstRequests
-              .find((event) => event.kind === "request" && event.phase === phase.index)
-              ?.json.includes(phase.receipt.code) === false,
-            true,
-          ),
-          check(`phase-${phase.index}/search-path-to-original-read`, searched, true),
-          check(`phase-${phase.index}/successful-read-after-rollover`, read, true),
-          check(
-            `phase-${phase.index}/cites-original-evidence`,
-            evidence !== undefined &&
-              source?.record.recordId === answer?.recordId &&
-              evidence.text.includes(phase.receipt.label) &&
-              evidence.text.includes(phase.receipt.code) &&
-              source !== undefined &&
-              source.sequence < (lastWindow?.sequence ?? 0),
-            true,
-          ),
-          check(
-            `phase-${phase.index}/archive-distance`,
-            closedWindows >= (phase.index === 12 ? 10 : 4),
-            true,
-          ),
-          check(
-            `phase-${phase.index}/receipt-not-copied-into-notes`,
-            result.notes.text.includes(phase.receipt.code),
-            false,
-          ),
-        );
-      }
 
       const phaseResult: PhaseResult = {
         index: phase.index,
