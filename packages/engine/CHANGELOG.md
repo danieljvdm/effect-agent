@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.67
+
+### Patch Changes
+
+- [#387](https://github.com/danieljvdm/effect-agent/pull/387) [`8c0fe3b`](https://github.com/danieljvdm/effect-agent/commit/8c0fe3bf4f5a2ff84bd3ae6a44abd18b89f6bc1f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve the canonical assistant response when resuming a durable Tool batch so provider metadata and assistant content survive recovery and subsequent context rollover.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.67
+
 ## 0.1.0-beta.66
 
 ### Patch Changes
