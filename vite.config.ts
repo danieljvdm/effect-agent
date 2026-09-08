@@ -182,6 +182,15 @@ export default defineConfig({
         cache: false,
         command: "node --experimental-transform-types examples/semantic-memory-eval/src/main.ts",
       },
+      "context-continuity-eval": {
+        cache: false,
+        command: "node --experimental-transform-types examples/context-continuity-eval/src/main.ts",
+      },
+      "release:checked-publish": {
+        cache: false,
+        command:
+          "vp run --no-cache context-continuity-eval --require-clean && vp run --no-cache release:publish",
+      },
     },
   },
 });
