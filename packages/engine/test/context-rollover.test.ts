@@ -555,6 +555,110 @@ layer(testLayer)("native context windows", (it) => {
 
 // Regression seam: https://linear.app/reve/issue/KOM-125
 layer(testLayer)("resolved model context", (it) => {
+  it.effect.each(["oversized-default", "fitting-default", "separate-model", "legacy"] as const)(
+    "admits the complete compaction prompt for %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const main = scriptedModel(scenario === "separate-model" ? [done] : [done, done], "small");
+
+        const separate = scriptedModel([done], "large-compactor");
+        const compactor = yield* ContextCompactor;
+        let resolutions = 0;
+
+        const result = yield* driveRun({
+          script: scenario === "legacy" ? [done, done] : [],
+          history: Prompt.make([
+            ...Array.from({ length: scenario === "fitting-default" ? 5 : 10 }, () => ({
+              role: "assistant" as const,
+              content: "historical fact ".repeat(160),
+            })),
+            { role: "user", content: "recent evidence ".repeat(400) },
+          ]),
+          policy: AgentPolicy.make({
+            ...basePolicy,
+            contextTokenLimit: 3_500,
+            compaction: { mode: "summarize", keepRecentTokens: 1_500 },
+          }),
+          ...(scenario === "legacy"
+            ? {}
+            : {
+                context: {
+                  prepare: (request) =>
+                    Effect.sync(() => {
+                      resolutions += 1;
+
+                      return {
+                        prompt: request.source,
+                        modelCall: {
+                          model: main.model,
+                          context: ModelCallContext.make({
+                            contextCapacity: 6_000,
+                            maxInputTokens: 4_000,
+                            outputReserveTokens: 2_000,
+                            uncountedOverheadTokens: 500,
+                          }),
+                        },
+                      };
+                    }),
+                } satisfies RunContextHook,
+              }),
+        }).pipe(
+          Effect.provide(
+            scenario === "separate-model"
+              ? ContextCompactor.layerWithModel(separate.model)
+              : ContextCompactor.layer,
+          ),
+        );
+
+        if (scenario === "oversized-default") {
+          expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+          expect(failureFrom(result.exit)).toMatchObject({
+            message: "Compaction summary request exceeds the resolved model input limit",
+          });
+          expect(main.requests).toHaveLength(0);
+          expect(result.compactions).toHaveLength(0);
+          expect(result.usageDeltas).toHaveLength(0);
+          expect(resolutions).toBe(1);
+
+          return;
+        }
+
+        expect(Exit.isSuccess(result.exit)).toBe(true);
+        expect(resolutions).toBe(scenario === "legacy" ? 0 : 1);
+        expect(result.compactions.map((event) => event.kind)).toEqual(["summarize"]);
+        expect(result.usageDeltas.map((entry) => entry.modelUsage?.model)).toEqual(
+          scenario === "legacy"
+            ? ["context-rollover", "context-rollover"]
+            : scenario === "separate-model"
+              ? ["large-compactor", "small"]
+              : ["small", "small"],
+        );
+        expect(result.usageDeltas.map((entry) => entry.inputTokens)).toEqual([100, 100]);
+        expect(result.usageDeltas.map((entry) => entry.outputTokens)).toEqual([5, 5]);
+
+        const summary =
+          scenario === "legacy"
+            ? result.requests[0]
+            : scenario === "separate-model"
+              ? separate.requests[0]
+              : main.requests[0];
+
+        if (summary === undefined) throw new Error("Expected a compaction model request");
+        expect(summary.toolCount).toBe(0);
+        expect(promptText(summary.prompt)).toContain("<transcript>");
+        expect(compactor.estimate(summary.prompt.content) > 3_000).toBe(
+          scenario !== "fitting-default",
+        );
+        if (scenario !== "legacy") {
+          expect(result.requests).toHaveLength(0);
+          expect(main.requests).toHaveLength(scenario === "separate-model" ? 1 : 2);
+          expect(
+            main.requests.every((request) => compactor.estimate(request.prompt.content) <= 3_000),
+          ).toBe(true);
+        }
+      }),
+  );
+
   it.effect("freezes routing before transient preparation and admits a smaller next model", () =>
     Effect.gen(function* () {
       const large = scriptedModel([call("switch-model", "search")], "large");

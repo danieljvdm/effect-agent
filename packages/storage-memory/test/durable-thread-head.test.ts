@@ -3,6 +3,7 @@ import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ReceiptId, ThreadId } from "@effect-agent/core/Identifiers";
 import { CompactionError, ContextCompactor } from "@effect-agent/engine/ContextCompactor";
 import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
+import { DurableStep, ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { RunContextPreparation, RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
@@ -28,7 +29,12 @@ import {
   SubmissionLedger,
 } from "@effect-agent/thread/SubmissionLedger";
 import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { ThreadExportRequest, ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import {
+  ThreadExportRequest,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
+} from "@effect-agent/thread/ThreadStore";
 import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
@@ -280,8 +286,16 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
   );
 
   // Regression seam: https://linear.app/reve/issue/KOM-125
-  it.effect("restores a smaller model from canonical profile evidence after ownership loss", () =>
+  it.effect.each([
+    "live",
+    "append-failure",
+    "append-interruption",
+    "after-append-failure",
+    "failed-tool",
+  ] as const)("prepares from canonical profile evidence after %s", (scenario) =>
     Effect.gen(function* () {
+      const restart = scenario !== "live" && scenario !== "failed-tool";
+
       const profileReceipt = Schema.Struct({
         profile: Schema.Literal("small"),
         evidence: Schema.String,
@@ -290,7 +304,10 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       const selectModel = Tool.make("select_model", {
         parameters: Schema.Struct({}),
         success: profileReceipt,
-      });
+        failure: Schema.Struct({ message: Schema.String }),
+        failureMode: "return",
+        dependencies: [DurableStep],
+      }).annotate(ToolExecutionClass, "idempotent");
 
       const tools = Toolkit.make(selectModel);
 
@@ -308,7 +325,31 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
       const store = yield* ThreadStore;
       const requests: Array<{ model: string; prompt: Prompt.Prompt }> = [];
+      const preparations: Array<string> = [];
       let handlerCalls = 0;
+      let appendFault = scenario === "append-failure" || scenario === "append-interruption";
+
+      const faultingStore = ThreadStore.of({
+        ...store,
+        append: (request) =>
+          Effect.suspend(() => {
+            if (
+              appendFault &&
+              request.batch.records.some((record) => record.payload._tag === "ToolCallSettled")
+            ) {
+              appendFault = false;
+
+              return scenario === "append-interruption"
+                ? Effect.interrupt
+                : ThreadStoreError.make({
+                    operation: "append",
+                    message: "Profile result append failed",
+                  });
+            }
+
+            return store.append(request);
+          }),
+      });
 
       const nativeModel = (name: "large" | "small") =>
         Model.make(
@@ -322,7 +363,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
                 requests.push({ model: name, prompt: request.prompt });
 
                 return Stream.fromIterable<Response.StreamPartEncoded>(
-                  name === "large"
+                  requests.length === 1
                     ? [
                         {
                           type: "tool-call",
@@ -355,7 +396,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
       const freshRuntime = Effect.gen(function* () {
         // Each runtime has fresh host services. The only route state crosses the restart
-        // in an ordinary canonical Tool result, not an incarnation-local Ref.
+        // in a successful canonical Tool result, not an incarnation-local Ref.
         const preparation = RunContextPreparation.of({
           hook: {
             prepare: (request) =>
@@ -373,7 +414,8 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
                   (entry) =>
                     entry.record.payload._tag === "ToolCallSettled" &&
                     entry.record.payload.runId === request.runId &&
-                    entry.record.payload.toolName === "select_model",
+                    entry.record.payload.toolName === "select_model" &&
+                    !entry.record.payload.isFailure,
                 )?.record.payload;
 
                 const profile =
@@ -384,6 +426,8 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
                         ),
                       )).profile
                     : "large";
+
+                preparations.push(profile);
 
                 return {
                   prompt: request.source,
@@ -405,13 +449,27 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
           Effect.provide(
             tools.toLayer({
               select_model: () =>
-                Effect.sync(() => {
-                  handlerCalls += 1;
+                Effect.gen(function* () {
+                  const steps = yield* DurableStep;
 
-                  return {
-                    profile: "small" as const,
-                    evidence: "completed action evidence ".repeat(600),
-                  };
+                  const selected = yield* steps.do(
+                    "select-profile",
+                    profileReceipt,
+                    Effect.sync(() => {
+                      handlerCalls += 1;
+
+                      return {
+                        profile: "small" as const,
+                        evidence: "completed action evidence ".repeat(600),
+                      };
+                    }),
+                  );
+
+                  if (scenario === "failed-tool") {
+                    return yield* Effect.fail({ message: "Profile selection was rejected" });
+                  }
+
+                  return selected;
                 }),
             }),
           ),
@@ -419,6 +477,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
 
         return yield* makeRuntime([binding]).pipe(
           Effect.provideService(RunContextPreparation, preparation),
+          Effect.provideService(ThreadStore, faultingStore),
           Effect.provide(ContextCompactor.layerRollover),
         );
       });
@@ -428,36 +487,42 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       const receipt = yield* first.submit(
         agent,
         "CURRENT REQUEST: investigate the connection pool",
-        options("routed-restart", "first"),
+        options(`routed-${scenario}`, "first"),
       );
 
       const failpoints = yield* DurableRuntimeFailpointTestControl;
 
-      yield* failpoints.setHandler((location) =>
-        location === "turn:after-results-append"
-          ? DurableRuntimeFailpointError.make({ location })
-          : Effect.void,
-      );
-      const interrupted = yield* Effect.exit(first.processThreadHead(receipt.threadId));
+      if (restart) {
+        yield* failpoints.setHandler((location) =>
+          scenario === "after-append-failure" && location === "turn:after-results-append"
+            ? DurableRuntimeFailpointError.make({ location })
+            : Effect.void,
+        );
+        const interrupted = yield* Effect.exit(first.processThreadHead(receipt.threadId));
 
-      expect(Exit.isFailure(interrupted)).toBe(true);
-      expect(requests.map((request) => request.model)).toEqual(["large"]);
-      expect((yield* snapshot(receipt)).ownership).toBeUndefined();
+        expect(Exit.isFailure(interrupted)).toBe(true);
+        expect(preparations).toEqual(["large"]);
+        expect(requests.map((request) => request.model)).toEqual(["large"]);
+        expect((yield* snapshot(receipt)).ownership).toBeUndefined();
+      }
       const before = yield* store.export(ThreadExportRequest.make({ threadId: receipt.threadId }));
 
       const startedBefore = before.records.filter(
         (entry) => entry.record.payload._tag === "RunStarted",
       );
 
-      expect(startedBefore).toHaveLength(1);
+      expect(startedBefore).toHaveLength(restart ? 1 : 0);
 
       yield* failpoints.clear;
-      yield* TestClock.adjust("5 seconds");
-      const resumed = yield* freshRuntime;
+      if (restart) yield* TestClock.adjust("5 seconds");
+      const resumed = restart ? yield* freshRuntime : first;
       const settled = yield* resumed.processThreadHead(receipt.threadId);
 
       expect(Option.isSome(settled)).toBe(true);
-      expect(requests.map((request) => request.model)).toEqual(["large", "small"]);
+      const selected = scenario === "failed-tool" ? "large" : "small";
+
+      expect(preparations).toEqual(["large", selected]);
+      expect(requests.map((request) => request.model)).toEqual(["large", selected]);
       expect(handlerCalls).toBe(1);
       const second = requests[1];
 
@@ -465,23 +530,43 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       const text = JSON.stringify(second.prompt);
 
       expect(text).toContain("CURRENT REQUEST: investigate the connection pool");
-      expect(text).toContain("A fresh context window has started.");
-      expect(text).toContain("turn 2/2");
-      expect(text).toContain("tool-calls 1/2");
-      expect(text).toContain("tokens 110/5000");
-      expect(text).toContain("elapsed 5s/30s");
+      if (selected === "small") {
+        expect(text).toContain("A fresh context window has started.");
+        expect(text).toContain("turn 2/2");
+        expect(text).toContain("tool-calls 1/2");
+        expect(text).toContain("tokens 110/5000");
+        expect(text).toContain(`elapsed ${restart ? 5 : 0}s/30s`);
+      }
       const after = yield* store.export(ThreadExportRequest.make({ threadId: receipt.threadId }));
 
-      expect(after.records.filter((entry) => entry.record.payload._tag === "RunStarted")).toEqual(
-        startedBefore,
+      const startedAfter = after.records.filter(
+        (entry) => entry.record.payload._tag === "RunStarted",
       );
+
+      expect(startedAfter).toHaveLength(1);
+      if (restart) expect(startedAfter).toEqual(startedBefore);
+      expect(
+        after.records.filter((entry) => entry.record.payload._tag === "ToolStepSettled"),
+      ).toHaveLength(1);
+
+      const profileResults = after.records.filter(
+        (entry) => entry.record.payload._tag === "ToolCallSettled",
+      );
+
+      expect(profileResults).toHaveLength(1);
+      expect(profileResults[0]?.record.payload).toMatchObject({
+        toolName: "select_model",
+        isFailure: scenario === "failed-tool",
+      });
 
       const rollovers = after.records.filter(
         (entry) => entry.record.payload._tag === "CompactionCreated",
       );
 
-      expect(rollovers).toHaveLength(1);
-      expect(rollovers[0]?.record.payload).toMatchObject({ kind: "rollover", turn: 2 });
+      expect(rollovers).toHaveLength(selected === "small" ? 1 : 0);
+      if (selected === "small") {
+        expect(rollovers[0]?.record.payload).toMatchObject({ kind: "rollover", turn: 2 });
+      }
 
       const terminal = after.records.find(
         (entry) => entry.record.payload._tag === "SubmissionSettled",
@@ -493,10 +578,13 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
           modelCalls: 2,
           inputTokens: { total: 175 },
           outputTokens: { total: 15 },
-          byModel: [
-            { model: "large", modelCalls: 1 },
-            { model: "small", modelCalls: 1 },
-          ],
+          byModel:
+            selected === "small"
+              ? [
+                  { model: "large", modelCalls: 1 },
+                  { model: "small", modelCalls: 1 },
+                ]
+              : [{ model: "large", modelCalls: 2 }],
         },
       });
     }),

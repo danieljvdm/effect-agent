@@ -3264,7 +3264,8 @@ interface CompactionOutcome {
 /**
  * Consume the installed strategy under engine-owned bounds. Validate each decision, commit it,
  * then update the disposable view. Summary model calls retain the Run's response-buffer and
- * budget guards; pricing reads the selected Model's identity inside the same provision scope.
+ * budget guards; default summaries also obey the captured Model's input allowance. Pricing
+ * reads the selected Model's identity inside the same provision scope.
  */
 const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirements>(
   agent: AgentValue,
@@ -3272,6 +3273,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   source: Prompt.Prompt,
   turn: number,
   options: RunOptions<HookError, HookRequirements>,
+  resolvedModelInputLimit: number | undefined,
   targetTokens: number | undefined,
   trigger: "pressure" | "overflow" | "requested",
   modelCallAllowed = true,
@@ -3401,6 +3403,15 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         if (allowance.summaryCalls++ > 0 || !modelCallAllowed) {
           return yield* CompactionError.make({
             message: "Compaction exceeded its summary-call allowance",
+          });
+        }
+        if (
+          model === undefined &&
+          resolvedModelInputLimit !== undefined &&
+          (yield* estimateContextTokens(summarizerPrompt.content)) > resolvedModelInputLimit
+        ) {
+          return yield* CompactionError.make({
+            message: "Compaction summary request exceeds the resolved model input limit",
           });
         }
         const pieces: Array<string> = [];
@@ -4887,6 +4898,7 @@ const makeTurn = <
           modelContext.prompt,
           turn,
           options,
+          callContext === undefined ? undefined : contextTokenLimit,
           contextTokenLimit === undefined
             ? undefined
             : Math.max(0, contextTokenLimit - canonicalDecorationTokens()),
@@ -4953,6 +4965,7 @@ const makeTurn = <
             modelContext.prompt,
             turn,
             options,
+            callContext === undefined ? undefined : contextTokenLimit,
             contextTokenLimit === undefined
               ? undefined
               : Math.max(0, contextTokenLimit - canonicalDecorationTokens()),
@@ -5011,6 +5024,7 @@ const makeTurn = <
             modelContext.prompt,
             turn,
             options,
+            callContext === undefined ? undefined : contextTokenLimit,
             sourceTarget,
             "pressure",
             !tokenPressure,
@@ -5147,6 +5161,7 @@ const makeTurn = <
             modelContext.prompt,
             turn,
             options,
+            callContext === undefined ? undefined : contextTokenLimit,
             sourceTarget,
             "pressure",
             !tokenPressure,
@@ -5350,6 +5365,7 @@ const makeTurn = <
                   modelContext.prompt,
                   turn,
                   options,
+                  callContext === undefined ? undefined : contextTokenLimit,
                   Math.max(0, contextTokenLimit - derivedPromptTokens()),
                   "overflow",
                 )

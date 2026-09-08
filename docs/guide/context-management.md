@@ -41,7 +41,9 @@ At run start, the runtime evaluates instructions and the definition's optional
 [`inputPrompt`](/guide/agents#choose-model-visible-input). Without `inputPrompt`, the model receives
 the full encoded input as a JSON user message.
 
-Before each turn, `RunContextPreparation.hook.prepare` transforms the source prompt. The engine
+Before each turn, the durable runtime commits the previous completed Tool batch, then
+`RunContextPreparation.hook.prepare` transforms the source prompt. A host resolving the next model
+from successful Tool receipts can therefore read their canonical records during preparation. The engine
 compacts the prepared history, then loads optional references through
 `RunContextPreparation.transientContext.load`. If the references exceed the remaining budget,
 the engine can compact canonical history further while keeping the same reference snapshot.
@@ -98,7 +100,8 @@ provider configuration and build both its native Model Layer and `ModelCallConte
 configuration. The engine acquires the Layer once for the turn and reuses it for admission,
 dispatch, usage accounting, and bounded overflow recovery. Its resources close at the turn
 boundary, including when preparation or admission fails. A separately configured compaction
-model retains its own binding.
+model retains its own binding. A summary using the captured model must also fit its input
+allowance; an oversized summary fails with `CompactionError` before provider I/O.
 
 `ModelCallContext` carries the model's full `contextCapacity`, optional `maxInputTokens`, its
 configured `outputReserveTokens`, and `uncountedOverheadTokens`. The effective input allowance is
