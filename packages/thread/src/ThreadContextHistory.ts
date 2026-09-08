@@ -45,6 +45,8 @@ const invalid = (message: string) => ContextHistoryError.make({ reason: "invalid
  * Each operation captures one tail and scans at most `maxRecords` (default 16,384), in pages of
  * 64, with a `timeoutMillis` deadline (default 10 seconds). An oversized history fails explicitly
  * instead of returning an incomplete search. No index, mutable archive, or background work is created.
+ * Search resolves `beforeRecordId` against eligible canonical evidence in that same scan and
+ * returns only older matches. It still verifies the entire captured tail and its boundaries.
  *
  * Rollover coverage boundaries assign subsequent records to the new window, including later Runs.
  * Before the first rollover, each Run uses its initial `context:<runId>:0` identity. Pruning and
@@ -130,6 +132,7 @@ export const layer = (
 
           const query = yield* normalizeQuery(request.query);
           const matches: Array<ContextHistoryEvidence> = [];
+          let anchorFound = false;
 
           const boundaries = yield* scan(
             request.threadId,
@@ -137,6 +140,10 @@ export const layer = (
               const item = (yield* project(record)).evidence;
 
               if (item === undefined) return;
+              if (item.recordId === request.beforeRecordId) anchorFound = true;
+              // The scan is ascending: retain older candidates until the exclusive anchor.
+              // Continue scanning to verify the captured tail and all window boundaries.
+              if (anchorFound) return;
               const text = matchText(item.text, query);
 
               if (text === undefined) return;
@@ -144,6 +151,12 @@ export const layer = (
               if (matches.length > request.limit) matches.shift();
             }),
           );
+
+          if (request.beforeRecordId !== undefined && !anchorFound)
+            return yield* ContextHistoryError.make({
+              reason: "not-found",
+              message: "Retained context record was not found in this Thread",
+            });
 
           return matches.reverse().map((item) =>
             ContextHistoryHit.make({

@@ -158,8 +158,13 @@ describe("context window tools", () => {
         .handle("read_context_window", { recordId: "evidence", maxChars: 5_001 }, "read")
         .pipe(Effect.flip);
 
+      const cursorFailure = yield* tools
+        .handle("search_context_windows", { query: "saved", beforeRecordId: "" }, "cursor")
+        .pipe(Effect.flip);
+
       expect(searchFailure).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
       expect(readFailure).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
+      expect(cursorFailure).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
     }).pipe(
       Effect.provide(ContextTools.layer),
       Effect.provideService(ContextWindow, { status: Effect.die("Unexpected status read") }),
@@ -232,6 +237,17 @@ describe("context window tools", () => {
           }),
         );
 
+        const untrustedContinuation = {
+          query: "saved",
+          limit: 1,
+          beforeRecordId: "evidence",
+          threadId: "another-thread",
+        };
+
+        yield* tools
+          .handle("search_context_windows", untrustedContinuation, "older")
+          .pipe(Effect.flatMap(Stream.runCollect));
+
         const remaining = yield* tools
           .handle("get_context_remaining", {}, "status")
           .pipe(Effect.flatMap(Stream.runCollect));
@@ -250,7 +266,11 @@ describe("context window tools", () => {
         Effect.provideService(ContextWindow, { status: Ref.get(current) }),
         Effect.provideService(ContextHistory, archive),
       );
-      expect(searches).toMatchObject([{ threadId: "current-thread", query: "saved", limit: 3 }]);
+      expect(searches).toMatchObject([
+        { threadId: "current-thread", query: "saved", limit: 3 },
+        { threadId: "next-thread", query: "saved", limit: 1, beforeRecordId: "evidence" },
+      ]);
+      expect(searches[0]?.beforeRecordId).toBeUndefined();
       expect(reads).toMatchObject([
         { threadId: "next-thread", recordId: "evidence", offset: 0, maxChars: 5_000 },
       ]);
