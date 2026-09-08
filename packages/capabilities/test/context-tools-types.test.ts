@@ -41,6 +41,14 @@ const contextAgent = Agent.make("context-tools-types", {
   policy,
 });
 
+const legacyContextAgent = Agent.make("legacy-context-tools-types", {
+  input: Schema.String,
+  output: Schema.String,
+  instructions: "Use historical evidence when needed.",
+  toolkit: ContextTools.legacyToolkit,
+  policy,
+});
+
 const notesAgent = Agent.make("notes-tools-types", {
   input: Schema.String,
   output: Schema.String,
@@ -79,6 +87,19 @@ type NativeRuntimeServices =
   | ThreadHistory;
 
 it("keeps history and storage dependencies visible while the engine owns its local services", () => {
+  expectTypeOf<Tool.Parameters<typeof ContextTools.LegacySearchContextWindows>>().toEqualTypeOf<{
+    readonly query: string;
+    readonly limit?: number;
+  }>();
+  expectTypeOf<
+    Tool.HandlerServices<typeof ContextTools.LegacySearchContextWindows>
+  >().toEqualTypeOf<ContextWindow | ContextHistory>();
+  expectTypeOf<
+    Tool.Failure<typeof ContextTools.LegacySearchContextWindows>
+  >().toEqualTypeOf<ContextHistoryError>();
+  expectTypeOf<
+    Tool.HandlerError<typeof ContextTools.LegacySearchContextWindows>
+  >().toEqualTypeOf<never>();
   expectTypeOf<Tool.Parameters<typeof ContextTools.SearchContextWindows>>().toEqualTypeOf<{
     readonly query: string;
     readonly limit?: number;
@@ -113,6 +134,17 @@ it("keeps history and storage dependencies visible while the engine owns its loc
   >();
   expectTypeOf<
     Extract<Effect.Error<typeof contextRun>, ContextHistoryError>
+  >().toEqualTypeOf<never>();
+
+  const legacyContextRun = AgentRuntime.run(legacyContextAgent, "continue").pipe(
+    Effect.provide(ContextTools.legacyLayer),
+  );
+
+  expectTypeOf<Effect.Services<typeof legacyContextRun>>().toEqualTypeOf<
+    NativeRuntimeServices | ContextHistory
+  >();
+  expectTypeOf<
+    Extract<Effect.Error<typeof legacyContextRun>, ContextHistoryError>
   >().toEqualTypeOf<never>();
 
   const notesRun = AgentRuntime.run(notesAgent, "continue").pipe(Effect.provide(notesLayer));

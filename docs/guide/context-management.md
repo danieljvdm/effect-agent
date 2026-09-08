@@ -1151,6 +1151,17 @@ Merge `tools` into the Agent's toolkit and provide `toolHandlers` when building 
 where the registered Agent's tool services are provided. It depends on the host's `ThreadStore`;
 an ephemeral application can implement the `ContextHistory` port over its retained transcript.
 
+For Agent definitions admitted with the pre-pagination contracts shipped through beta62, use
+`ContextTools.legacyToolkit` and `ContextTools.legacyLayer`. They retain the original search
+parameters (`query`, optional `limit`), description, and the other three tool contracts;
+`LegacySearchContextWindows` is also available when assembling a toolkit explicitly. Keep these
+exports on retained definition revisions so a dependency update does not silently change their
+model-facing tools under unchanged digests. Select the matching handler Layer per definition,
+rather than merging both versions, because their tool names and handler identities are the same.
+The current `toolkit` and `layer` continue to expose pagination. Adopt them with a new definition
+contract after its history adapter supports `beforeRecordId`; no persisted-format migration is
+needed to keep executing the legacy definitions.
+
 | Tool                                                         | Behavior                                                                                 |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | `new_context({ handoff? })`                                  | Requests a rollover before the next turn. Call it alone, after saving notes.             |
