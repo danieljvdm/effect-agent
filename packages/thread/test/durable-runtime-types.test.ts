@@ -1,4 +1,5 @@
-import { type ThreadId } from "@effect-agent/core/Identifiers";
+import type { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { type ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import type { MessagingError } from "@effect-agent/core/Messaging";
 import type { WorkerError } from "@effect-agent/core/Worker";
 import type { MessagingHost } from "@effect-agent/engine/MessagingHost";
@@ -18,11 +19,12 @@ import {
 import { type SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
 import type { ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { expectTypeOf, it } from "@effect/vitest";
-import type { Crypto, DateTime, Effect, Option } from "effect";
+import { Context, Effect, Layer, Option, type Crypto, type DateTime } from "effect";
 
 import type { DurableRuntimeFailpoint } from "../src/DurableFailpoint.ts";
 import type { makeMessagingRuntime } from "../src/internal/messaging-host.ts";
 import type { makeWorkerRuntime, WorkerInputControl } from "../src/internal/worker-host.ts";
+import { WorkerPolicyResolver } from "../src/WorkerHost.ts";
 
 type Runtime = DurableAgentRuntime["Service"];
 type Head = ReturnType<Runtime["processThreadHead"]>;
@@ -30,7 +32,27 @@ type Status = ReturnType<Runtime["submissionStatus"]>;
 type Inspection = ReturnType<Runtime["inspectSubmissionStatus"]>;
 type Recovery = ReturnType<Runtime["recoverSubmission"]>;
 
+class PolicyEvidence extends Context.Service<PolicyEvidence, { readonly policy: AgentPolicy }>()(
+  "test/PolicyEvidence",
+) {}
+
+const capturedPolicyLayer = Layer.effect(
+  WorkerPolicyResolver,
+  Effect.gen(function* () {
+    const evidence = yield* PolicyEvidence;
+
+    return {
+      resolveSource: () => Effect.succeed(Option.some(evidence.policy)),
+      resolveTarget: () => Effect.succeed(Option.some(evidence.policy)),
+    };
+  }),
+);
+
 it("keeps bounded worker operations and status reads typed without hidden requirements", () => {
+  expectTypeOf<Layer.Services<typeof capturedPolicyLayer>>().toEqualTypeOf<PolicyEvidence>();
+  expectTypeOf<ReturnType<SubagentHost["Service"]["resolveTargetPolicy"]>>().toEqualTypeOf<
+    Effect.Effect<Option.Option<AgentPolicy>, WorkerError>
+  >();
   expectTypeOf<Effect.Services<ReturnType<typeof makeWorkerRuntime>>>().toEqualTypeOf<
     ThreadStore | SubmissionLedger | Crypto.Crypto | DurableRuntimeFailpoint | WorkerInputControl
   >();
@@ -38,7 +60,13 @@ it("keeps bounded worker operations and status reads typed without hidden requir
     ThreadStore | Crypto.Crypto
   >();
   expectTypeOf<Parameters<Runtime["workerHost"]>>().toEqualTypeOf<
-    [request: { readonly sourceThreadId: ThreadId; readonly principal: Principal }]
+    [
+      request: {
+        readonly sourceThreadId: ThreadId;
+        readonly principal: Principal;
+        readonly sourceSubmissionId?: SubmissionId;
+      },
+    ]
   >();
   expectTypeOf<ReturnType<Runtime["workerHost"]>>().toEqualTypeOf<
     Effect.Effect<SubagentHost["Service"], WorkerError>

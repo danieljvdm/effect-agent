@@ -22,7 +22,7 @@ import {
 } from "@effect-agent/engine/SubagentHost";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
 
@@ -104,6 +104,7 @@ const settled: WorkerObservation = {
 const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["Service"] => ({
   ...SubagentHost.unavailable,
   context: Effect.succeed(caller),
+  resolveTargetPolicy: () => Effect.succeed(Option.none()),
   start: () => Effect.succeed(started),
   followUp: () => Effect.succeed(nextReceipt),
   inspect: () => Effect.succeed(settled),
@@ -120,6 +121,80 @@ const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["S
 class ProjectionDenied extends Schema.TaggedError<ProjectionDenied>()("ProjectionDenied", {}) {}
 
 describe("Subagent background authoring", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+  it.effect(
+    "resolves captured target policy after preparation and applies only explicit declaration narrowing",
+    () =>
+      Effect.gen(function* () {
+        const events: Array<string> = [];
+
+        const captured = AgentPolicy.make({
+          maxTurns: 9,
+          maxToolCalls: 12,
+          maxDuration: "2 minutes",
+          toolConcurrency: 3,
+        });
+
+        const declared = Subagent.make("research", {
+          target,
+          parameters: target.input,
+          prepareInput: (input) =>
+            Effect.sync(() => {
+              events.push("prepare");
+
+              return input;
+            }),
+          policy: Subagent.SubagentPolicy.make({
+            maxChildren: 1,
+            maxConcurrency: 1,
+            descendantInvocations: 1,
+            maxTurns: 7,
+            maxToolCalls: 10,
+            maxDuration: "3 minutes",
+          }),
+        });
+
+        yield* Subagent.start(
+          declared,
+          { amount: 7 },
+          { idempotencyKey: key, budgetScope: "worker-run" },
+        ).pipe(
+          Effect.provideService(
+            SubagentHost,
+            host({
+              resolveTargetPolicy: (request) =>
+                Effect.sync(() => {
+                  events.push("resolve");
+                  expect(request.target).toBe(target);
+                  expect(request.encodedInput).toEqual({ amount: "7" });
+
+                  return Option.some(captured);
+                }),
+              start: (request) =>
+                Effect.sync(() => {
+                  events.push("start");
+                  expect(request.target).toBe(target);
+                  expect(request.policy).toMatchObject({
+                    maxTurns: 7,
+                    maxToolCalls: 10,
+                    toolConcurrency: 3,
+                  });
+                  expect(request.policy.tokenBudget).toBeUndefined();
+                  expect(request.policy.costBudgetMicrousd).toBeUndefined();
+                  expect(request.budget).toMatchObject({
+                    allocation: { turns: 7, toolCalls: 10 },
+                    descendantInvocations: 1,
+                  });
+
+                  return started;
+                }),
+            }),
+          ),
+        );
+        expect(events).toEqual(["prepare", "resolve", "start"]);
+      }),
+  );
+
   it.effect(
     "encodes typed starts and same-thread follow-ups, and projects saved parameters and target output",
     () =>

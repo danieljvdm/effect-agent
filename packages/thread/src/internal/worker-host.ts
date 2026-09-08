@@ -89,7 +89,13 @@ import {
   ThreadRead,
   ThreadTailRequest,
 } from "../ThreadStore.ts";
-import { WorkerBudgetAuthorizer, WorkerHostAuthorizer, WorkerHostConfig } from "../WorkerHost.ts";
+import {
+  WorkerBudgetAuthorizer,
+  WorkerHostAuthorizer,
+  WorkerHostConfig,
+  WorkerPolicyResolver,
+  type WorkerPolicyTarget,
+} from "../WorkerHost.ts";
 import {
   definitionDigestsEqual,
   resolveDefinitionBinding,
@@ -115,6 +121,7 @@ const sameAdmission = Schema.toEquivalence(WorkerAdmission);
 const sameReporting = Schema.toEquivalence(Schema.UndefinedOr(WorkerReportingIntent));
 const sameJson = Schema.toEquivalence(PersistedJson);
 const sameCaps = Schema.toEquivalence(SubagentDelegationCaps);
+const samePolicy = Schema.toEquivalence(AgentPolicy);
 
 const amountCaps = [
   ["turns", "maxTurns"],
@@ -234,6 +241,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     crypto: yield* Crypto.Crypto,
     authorizer: yield* WorkerHostAuthorizer,
     budgetAuthorizer: yield* WorkerBudgetAuthorizer,
+    policyResolver: yield* WorkerPolicyResolver,
     limits: yield* WorkerHostConfig,
     failpoint: yield* DurableRuntimeFailpoint,
     status: Option.getOrUndefined(admission)?.submissionStatus ?? control.status,
@@ -388,6 +396,8 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     const nested =
       worker?._tag === "WorkerOriginRecorded" || attached?._tag === "SubagentLineageRecorded";
 
+    let ownerSubmission: SubmissionSnapshot | undefined;
+
     if (nested && submissionId === undefined) return yield* failure("start", "denied");
     if (submissionId !== undefined) {
       const submission = yield* deps.ledger
@@ -400,6 +410,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         submission.value.agentId !== created.agentId
       )
         return yield* failure("start", "denied");
+      ownerSubmission = submission.value;
       if (
         worker?._tag === "WorkerOriginRecorded" &&
         (submission.value.workerAdmission === undefined ||
@@ -417,6 +428,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (worker?._tag === "WorkerOriginRecorded")
       return {
         current,
+        binding,
+        submission: ownerSubmission,
+        policyOverride: Option.none<AgentPolicy>(),
         policy: worker.origin.policy,
         budget: worker.origin.budget,
         budgetScope: worker.origin.budgetScope,
@@ -433,6 +447,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       return {
         current,
+        binding,
+        submission: ownerSubmission,
+        policyOverride: Option.none<AgentPolicy>(),
         policy: attached.policy,
         budget: attached.budget,
         budgetScope: undefined,
@@ -441,18 +458,61 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       };
     }
 
-    const policy = binding?.definition.policy;
+    const ownerBinding =
+      ownerSubmission === undefined
+        ? undefined
+        : deps.bindings.find(
+            (entry) =>
+              entry.agentId === ownerSubmission.agentId &&
+              definitionDigestsEqual(entry.digests, ownerSubmission.agentDigests),
+          );
 
-    if (policy === undefined) return yield* failure("start", "declaration-unavailable");
+    const selectedBinding = ownerBinding ?? binding;
+
+    if (selectedBinding === undefined) return yield* failure("start", "declaration-unavailable");
+
+    const selected = yield* deps.policyResolver.resolveSource({
+      threadId,
+      definition: selectedBinding.definition,
+      definitions: ownerSubmission?.agentDigests ?? selectedBinding.digests,
+      ...(ownerSubmission === undefined ? {} : { submission: ownerSubmission }),
+    });
+
+    if (Option.isSome(selected) && ownerSubmission !== undefined && ownerBinding === undefined)
+      return yield* failure("start", "declaration-unavailable");
+    const effectiveBinding = Option.isSome(selected) ? selectedBinding : binding;
+
+    if (effectiveBinding === undefined) return yield* failure("start", "declaration-unavailable");
+
+    const policy = Option.isNone(selected)
+      ? effectiveBinding.definition.policy
+      : yield* decode(AgentPolicy, selected.value, "start");
 
     return {
       current,
+      binding: effectiveBinding,
+      submission: ownerSubmission,
+      policyOverride: Option.map(selected, () => policy),
       policy,
       budget: undefined,
       budgetScope: undefined,
       grant: undefined,
       depth: 0,
     };
+  });
+
+  const resolveTargetPolicy = Effect.fn("WorkerHost.resolveTargetPolicy")(function* (
+    request: WorkerPolicyTarget,
+  ) {
+    const selected = yield* deps.policyResolver.resolveTarget(request);
+
+    if (Option.isNone(selected)) return selected;
+    const policy = yield* decode(AgentPolicy, selected.value, "start");
+
+    if (request._tag === "RetainedWorker" && !samePolicy(policy, request.origin.policy))
+      return yield* failure("start", "worker-mismatch");
+
+    return Option.some(policy);
   });
 
   const reserveSubtree = Effect.fn("WorkerHost.reserveSubtree")(function* (
@@ -639,6 +699,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
   const reservation = Effect.fn("WorkerHost.reserveInput")(function* (
     admission: WorkerAdmission,
     inputDigest: Digest,
+    input: PersistedJson,
   ): Effect.fn.Return<void, WorkerError> {
     const origin = admission.origin;
     const id = `worker-input:${admission.messageId}`;
@@ -656,12 +717,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           !sameAdmission(existing.admission, admission)
         )
           return yield* failure("start", "idempotency-conflict");
-
-        return;
       }
-      const now = yield* Clock.currentTimeMillis;
-
-      if (now >= origin.expiresAtMillis) return yield* failure("start", "capacity");
       const first = current.records[0]?.record.payload;
 
       if (first?._tag !== "ThreadCreated" || first.agentId !== origin.source.agentId)
@@ -681,18 +737,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         return yield* failure("start", "worker-mismatch");
       if (prior === undefined && admission.messageId !== origin.firstMessageId)
         return yield* failure("start", "not-found");
-      if (
-        (prior === undefined && origins.size >= deps.limits.maxWorkersPerSource) ||
-        own.length >= deps.limits.maxInputsPerWorker
-      )
-        return yield* failure("start", "capacity");
       const caps = origin.budget.caps;
 
-      const sourceBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === first.agentId &&
-          definitionDigestsEqual(entry.digests, first.definitions),
-      );
+      const sourceBinding = source.binding;
 
       const targetBinding = deps.bindings.find(
         (entry) =>
@@ -702,6 +749,55 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       if (sourceBinding === undefined || targetBinding === undefined)
         return yield* failure("start", "declaration-unavailable");
+      yield* Schema.decodeUnknownEffect(Schema.toEncoded(targetBinding.definition.input))(
+        input,
+      ).pipe(Effect.mapError(() => failure("start", "corrupt")));
+
+      const targetRequest = {
+        definition: targetBinding.definition,
+        definitions: targetBinding.digests,
+        source: origin.source,
+      };
+
+      const selected = yield* resolveTargetPolicy(
+        admission.messageId === origin.firstMessageId
+          ? {
+              ...targetRequest,
+              _tag: "InitialInput",
+              input,
+              inputDigest,
+              ...(source.submission === undefined ? {} : { sourceSubmission: source.submission }),
+            }
+          : { ...targetRequest, _tag: "RetainedWorker", origin: prior ?? origin },
+      );
+
+      const independent = origin.budgetScope === "worker-run";
+
+      const targetPolicy = Option.isSome(selected)
+        ? selected.value
+        : independent
+          ? targetBinding.definition.policy
+          : AgentPolicy.resolve(
+              targetBinding.definition.policyOverrides ?? targetBinding.definition.policy,
+              source.policy,
+            );
+
+      // Captured authority is checked on replay too, before the retained reservation returns.
+      // Static callers retain the old idempotent-return behavior.
+      if (
+        (existing === undefined || Option.isSome(selected)) &&
+        !withinPolicy(origin, independent ? targetPolicy : source.policy, targetPolicy)
+      )
+        return yield* failure("start", "capacity");
+      if (existing !== undefined) return;
+      const now = yield* Clock.currentTimeMillis;
+
+      if (now >= origin.expiresAtMillis) return yield* failure("start", "capacity");
+      if (
+        (prior === undefined && origins.size >= deps.limits.maxWorkersPerSource) ||
+        own.length >= deps.limits.maxInputsPerWorker
+      )
+        return yield* failure("start", "capacity");
       if (
         prior === undefined &&
         !sameReporting(
@@ -710,19 +806,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         )
       )
         return yield* failure("start", "denied");
-      const independent = origin.budgetScope === "worker-run";
-
       if (independent && source.depth !== 0) return yield* failure("start", "denied");
-
-      const targetPolicy = independent
-        ? targetBinding.definition.policy
-        : AgentPolicy.resolve(
-            targetBinding.definition.policyOverrides ?? targetBinding.definition.policy,
-            source.policy,
-          );
-
-      if (!withinPolicy(origin, independent ? targetPolicy : source.policy, targetPolicy))
-        return yield* failure("start", "capacity");
       const ceilings = sourceCaps(source.policy);
 
       const conservedRows = rows.filter((row) => row.admission.origin.budgetScope !== "worker-run");
@@ -865,11 +949,15 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     options: DurableSubmitOptions,
     agentId: Agent.AnyDefinition["id"],
     inputDigest: Digest,
+    input: PersistedJson,
   ) {
     const admission = yield* decode(WorkerAdmission, unvalidated, "start");
 
     yield* deps.authorizer.authorize({
       sourceThreadId: admission.origin.source.threadId,
+      ...(admission.sourceSubmissionId === undefined
+        ? {}
+        : { sourceSubmissionId: admission.sourceSubmissionId }),
       principal: options.principal,
       operation: "start",
       access: "send",
@@ -885,7 +973,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         admission.deliveryPrincipal !== options.principal)
     )
       return yield* failure("start", "worker-mismatch");
-    yield* reservation(admission, inputDigest);
+    yield* reservation(admission, inputDigest, input);
 
     return admission;
   });
@@ -979,16 +1067,25 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const hostSubmission = selected.value;
       const hostAdmission = selected.value.workerAdmission;
 
-      const source = yield* sourceAuthority(
-        origin.source.threadId,
-        hostAdmission.sourceSubmissionId,
+      const sourceHistory = yield* read(origin.source.threadId, "inspect");
+
+      const firstInput = requests(sourceHistory.records).find(
+        (row) => row.admission.messageId === origin.firstMessageId,
       );
 
-      const created = source.current.records[0]?.record.payload;
+      if (firstInput === undefined || !sameOrigin(firstInput.admission.origin, origin))
+        return yield* failure("inspect", "corrupt");
+
+      // Reporting stays with the original owner even when a later input came from another
+      // source revision. Per-input parameters still belong to the settled Run.
+      const source = yield* sourceAuthority(
+        origin.source.threadId,
+        firstInput.admission.sourceSubmissionId,
+      );
 
       if (
-        created?._tag !== "ThreadCreated" ||
-        !definitionDigestsEqual(created.definitions, intent.sourceDigests)
+        source.binding === undefined ||
+        !definitionDigestsEqual(source.binding.digests, intent.sourceDigests)
       )
         return refused("declaration-unavailable");
 
@@ -1284,6 +1381,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     ) =>
       deps.authorizer.authorize({
         sourceThreadId: context.source.threadId,
+        ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
         principal,
         operation,
         access,
@@ -1294,6 +1392,36 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       resolveDefinitionBinding(deps.bindings, target).pipe(
         Effect.mapError(() => failure(operation, "declaration-unavailable")),
       );
+
+    const preparedTarget = Effect.fn("WorkerHost.preparedTarget")(function* (
+      target: Agent.AnyDefinition,
+      encodedInput: unknown,
+    ) {
+      const resolved = yield* binding(target, "start");
+
+      yield* Schema.decodeUnknownEffect(Schema.toEncoded(target.input))(encodedInput).pipe(
+        Effect.mapError(() => failure("start", "corrupt")),
+      );
+      const input = yield* decode(PersistedJson, encodedInput, "start");
+
+      const inputDigest = yield* withCrypto(digestJson(input)).pipe(
+        Effect.mapError(storageFailure("start")),
+      );
+
+      const source = yield* sourceAuthority(context.source.threadId, sourceSubmissionId);
+
+      const policy = yield* resolveTargetPolicy({
+        _tag: "InitialInput",
+        definition: resolved.definition,
+        definitions: resolved.digests,
+        source: context.source,
+        ...(source.submission === undefined ? {} : { sourceSubmission: source.submission }),
+        input,
+        inputDigest,
+      });
+
+      return { resolved, source, policy };
+    });
 
     const findOrigin = Effect.fn("WorkerHost.findOrigin")(function* (
       worker: WorkerRef,
@@ -1604,17 +1732,29 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     });
 
     return {
-      context: authorize("context", "context").pipe(Effect.as(context)),
+      context: Effect.gen(function* () {
+        yield* authorize("context", "context");
+        if (context.depth !== 0) return context;
+        const source = yield* sourceAuthority(context.source.threadId, sourceSubmissionId);
+
+        return {
+          ...context,
+          policy: Option.getOrElse(source.policyOverride, () => context.policy),
+        };
+      }),
+      resolveTargetPolicy: Effect.fn("WorkerHost.resolvePreparedTargetPolicy")(function* (request) {
+        yield* authorize("start", "send");
+
+        return (yield* preparedTarget(request.target, request.encodedInput)).policy;
+      }),
       start: Effect.fn("WorkerHost.start")(function* (request) {
         const principal = yield* authorize("start", "send");
 
         if (context.depth !== 0 && sourceSubmissionId === undefined)
           return yield* failure("start", "denied");
-        const resolved = yield* binding(request.target, "start");
-
-        yield* Schema.decodeUnknownEffect(Schema.toEncoded(request.target.input))(
-          request.encodedInput,
-        ).pipe(Effect.mapError(() => failure("start", "corrupt")));
+        const prepared = yield* preparedTarget(request.target, request.encodedInput);
+        const resolved = prepared.resolved;
+        const sourcePolicy = Option.getOrElse(prepared.source.policyOverride, () => context.policy);
 
         const grant = yield* Schema.decodeUnknownEffect(SubagentGrant)(request.encodedGrant).pipe(
           Effect.mapError(() => failure("start", "corrupt")),
@@ -1634,17 +1774,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         const now = yield* Clock.currentTimeMillis;
         const previousOrigin = existing?.envelope.workerAdmission?.origin;
-        const source = yield* read(context.source.threadId, "start");
-        const created = source.records[0]?.record.payload;
-
-        const sourceBinding =
-          created?._tag === "ThreadCreated"
-            ? deps.bindings.find(
-                (entry) =>
-                  entry.agentId === created.agentId &&
-                  definitionDigestsEqual(entry.digests, created.definitions),
-              )
-            : undefined;
+        const sourceBinding = prepared.source.binding;
 
         if (sourceBinding === undefined) return yield* failure("start", "declaration-unavailable");
 
@@ -1684,18 +1814,19 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         yield* authorizeBudget(origin, principal);
 
-        const targetPolicy =
-          origin.budgetScope === "worker-run"
+        const targetPolicy = Option.isSome(prepared.policy)
+          ? prepared.policy.value
+          : origin.budgetScope === "worker-run"
             ? resolved.definition.policy
             : AgentPolicy.resolve(
                 resolved.definition.policyOverrides ?? resolved.definition.policy,
-                context.policy,
+                sourcePolicy,
               );
 
         if (
           !withinPolicy(
             origin,
-            origin.budgetScope === "worker-run" ? targetPolicy : context.policy,
+            origin.budgetScope === "worker-run" ? targetPolicy : sourcePolicy,
             targetPolicy,
           )
         )
@@ -1715,6 +1846,14 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       followUp: Effect.fn("WorkerHost.followUp")(function* (request) {
         const principal = yield* authorize("followUp", "send", request.worker);
         const origin = yield* findOrigin(request.worker, request.target, "followUp");
+
+        yield* resolveTargetPolicy({
+          _tag: "RetainedWorker",
+          definition: request.target,
+          definitions: origin.targetDigests,
+          source: origin.source,
+          origin,
+        });
 
         yield* Schema.decodeUnknownEffect(Schema.toEncoded(request.target.input))(
           request.encodedInput,
@@ -1890,11 +2029,15 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
   const acquire = Effect.fn("WorkerHost.acquire")(function* (request: {
     readonly sourceThreadId: ThreadId;
     readonly principal: Principal;
+    readonly sourceSubmissionId?: SubmissionId;
   }) {
     const { sourceThreadId, principal } = request;
 
     yield* deps.authorizer.authorize({
       sourceThreadId,
+      ...(request.sourceSubmissionId === undefined
+        ? {}
+        : { sourceSubmissionId: request.sourceSubmissionId }),
       principal,
       operation: "context",
       access: "context",
@@ -1940,6 +2083,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         ...(retained?.grant === undefined ? {} : { grant: retained.grant }),
       },
       principal,
+      request.sourceSubmissionId,
     );
   });
 

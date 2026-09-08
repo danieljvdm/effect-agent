@@ -20,16 +20,16 @@ export const resolveSubagentPolicy = (
   parent: AgentPolicy,
   parentCaps?: SubagentDelegationCaps,
   mode: "root-attached" | "conserved" = "conserved",
+  resolvedTarget?: AgentPolicy,
 ) => {
   // A root attached declaration has its own explicit pool. Child overrides retain
   // that established behavior; background and inherited subtree launches also obey
   // the source's own ceilings, before their shared reservation checks the residual.
   const parentCeiling = mode === "conserved" ? parent : undefined;
 
-  const inherited = AgentPolicy.resolve(
-    delegation.target.policyOverrides ?? delegation.target.policy,
-    parent,
-  );
+  const inherited =
+    resolvedTarget ??
+    AgentPolicy.resolve(delegation.target.policyOverrides ?? delegation.target.policy, parent);
 
   const policy =
     delegation.policy ??
