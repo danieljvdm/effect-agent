@@ -7,6 +7,7 @@ import {
   WorkerError,
   type WorkerHistoryEntry,
   type WorkerContext,
+  type WorkerBudgetScope,
   type WorkerSource,
   type WorkerPage,
   type WorkerRef,
@@ -27,6 +28,8 @@ export interface StartWorkerRequest {
   readonly budget: SubagentBudgetReservation;
   readonly encodedGrant: unknown;
   readonly toolCallAllowance?: number;
+  /** Author-owned request; the durable host must separately authorize worker-run funding. */
+  readonly budgetScope?: WorkerBudgetScope;
 }
 
 export interface FollowUpWorkerRequest {

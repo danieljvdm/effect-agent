@@ -21,6 +21,7 @@ import {
   type ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
 import { type ModelCallUsage } from "@effect-agent/core/Usage";
+import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
 
@@ -847,6 +848,8 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly subagentGrant?: SubagentGrant | undefined;
   /** Reserved subtree frame; descendants may spend only the residual after this Run's own ceiling. */
   readonly subagentBudget?: SubagentBudgetReservation | undefined;
+  /** Native host funding provenance; never inferred from absent allocation amounts. */
+  readonly subagentBudgetScope?: WorkerBudgetScope | undefined;
   /**
    * Explicit initial Prompt data, not a retention policy. With ThreadHistory.layerTransient,
    * the engine preserves this exact prefix, then appends this Run's evaluated instructions and

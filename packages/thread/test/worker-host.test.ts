@@ -79,7 +79,11 @@ import {
 } from "../src/SubmissionLedger.ts";
 import { PendingSubmission, SettledSubmission } from "../src/SubmissionStatus.ts";
 import { PreparedInput } from "../src/Subscription.ts";
-import { WorkerHostAuthorizer, WorkerHostConfig } from "../src/WorkerHost.ts";
+import {
+  WorkerBudgetAuthorizer,
+  WorkerHostAuthorizer,
+  WorkerHostConfig,
+} from "../src/WorkerHost.ts";
 
 class ReportService extends Context.Service<ReportService, string>()("test/ReportService") {}
 class PrivateReportFailure extends Schema.TaggedError<PrivateReportFailure>()(
@@ -168,6 +172,7 @@ const reportWith = (
 
 const harness = Effect.fn("workerHostHarness")(function* (
   options: {
+    readonly independentBudget?: boolean;
     readonly sourceReports?: ReadonlyArray<WorkerReporting<WorkerReportPreparationFailure>>;
     readonly targetReports?: ReadonlyArray<WorkerReporting<WorkerReportPreparationFailure>>;
   } = {},
@@ -233,6 +238,12 @@ const harness = Effect.fn("workerHostHarness")(function* (
         definition === sourceAgent ? (options.sourceReports ?? []) : (options.targetReports ?? []),
     })),
   }).pipe(
+    Effect.provideService(WorkerBudgetAuthorizer, {
+      authorize: () =>
+        options.independentBudget === true
+          ? Effect.void
+          : WorkerError.make({ operation: "start", reason: "denied" }),
+    }),
     Effect.provideService(WorkerHostConfig, {
       maxWorkersPerSource: 2,
       maxInputsPerWorker: 3,
@@ -567,6 +578,69 @@ const harness = Effect.fn("workerHostHarness")(function* (
 });
 
 layer(NodeCrypto.layer)((it) => {
+  // Regression: https://github.com/danieljvdm/effect-agent/pull/358
+  it.effect(
+    "requires host funding authority and preserves worker identity and structural limits",
+    () =>
+      Effect.gen(function* () {
+        const denied = yield* harness();
+        const base = request("independent");
+
+        const independent: StartWorkerRequest = {
+          ...base,
+          budgetScope: "worker-run",
+          budget: {
+            ...base.budget,
+            caps: SubagentDelegationCaps.make({
+              maxTotalChildInvocations: 1,
+              maxConcurrentChildren: 1,
+              maxTurns: 2,
+              maxToolCalls: 2,
+              maxDurationMillis: 1_000,
+            }),
+          },
+        };
+
+        expect((yield* denied.host.start(independent).pipe(Effect.flip)).reason).toBe("denied");
+        expect(denied.deliveries.size).toBe(0);
+        const h = yield* harness({ independentBudget: true });
+        const started = yield* h.host.start(independent);
+
+        expect(yield* h.host.start(independent)).toEqual(started);
+        const original = h.submissions.get(started.receipt.submissionId)?.workerAdmission?.origin;
+
+        yield* h.settle(started.receipt);
+        for (const name of ["second", "third"]) {
+          const next = yield* h.host.followUp({
+            worker: started.worker,
+            target,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)(name),
+            encodedInput: { text: name },
+            encodedParameters: { note: name },
+          });
+
+          expect(h.submissions.get(next.submissionId)?.workerAdmission?.origin).toEqual(original);
+          yield* h.settle(next);
+        }
+        expect(original).toMatchObject({ budgetScope: "worker-run", depth: 1 });
+        expect(
+          h.logs
+            .get(sourceId)
+            ?.filter(({ record }) => record.payload._tag === "SubtreeBudgetReserved"),
+        ).toHaveLength(0);
+        expect(
+          (yield* h.host
+            .followUp({
+              worker: started.worker,
+              target,
+              idempotencyKey: Schema.decodeSync(IdempotencyKey)("fourth"),
+              encodedInput: { text: "fourth" },
+              encodedParameters: {},
+            })
+            .pipe(Effect.flip)).reason,
+        ).toBe("capacity");
+      }),
+  );
   it.effect("concurrent launches cannot oversubscribe one canonical source slot", () =>
     Effect.gen(function* () {
       const h = yield* harness();

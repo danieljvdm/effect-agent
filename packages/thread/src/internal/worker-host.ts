@@ -89,7 +89,7 @@ import {
   ThreadRead,
   ThreadTailRequest,
 } from "../ThreadStore.ts";
-import { WorkerHostAuthorizer, WorkerHostConfig } from "../WorkerHost.ts";
+import { WorkerBudgetAuthorizer, WorkerHostAuthorizer, WorkerHostConfig } from "../WorkerHost.ts";
 import {
   definitionDigestsEqual,
   resolveDefinitionBinding,
@@ -151,15 +151,16 @@ const withinPolicy = (origin: WorkerOrigin, source: AgentPolicy, target: AgentPo
   const caps = origin.budget.caps;
   const ceilings = sourceCaps(source);
 
-  for (const [, name] of amountCaps) {
+  for (const [, name] of origin.budgetScope === "worker-run" ? [] : amountCaps) {
     if (caps[name] !== undefined && ceilings[name] !== undefined && caps[name] > ceilings[name])
       return false;
   }
   if (
-    (caps.maxTotalChildInvocations !== undefined &&
+    origin.budgetScope !== "worker-run" &&
+    ((caps.maxTotalChildInvocations !== undefined &&
       caps.maxTotalChildInvocations > source.maxToolCalls) ||
-    (caps.maxConcurrentChildren !== undefined &&
-      caps.maxConcurrentChildren > source.toolConcurrency)
+      (caps.maxConcurrentChildren !== undefined &&
+        caps.maxConcurrentChildren > source.toolConcurrency))
   )
     return false;
   const tokenCeiling = Math.min(source.tokenBudget ?? Infinity, target.tokenBudget ?? Infinity);
@@ -232,6 +233,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     deliveries: yield* Effect.serviceOption(MessageDeliveryStore),
     crypto: yield* Crypto.Crypto,
     authorizer: yield* WorkerHostAuthorizer,
+    budgetAuthorizer: yield* WorkerBudgetAuthorizer,
     limits: yield* WorkerHostConfig,
     failpoint: yield* DurableRuntimeFailpoint,
     status: Option.getOrUndefined(admission)?.submissionStatus ?? control.status,
@@ -239,6 +241,23 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, deps.crypto);
+
+  const authorizeBudget = Effect.fn("WorkerHost.authorizeBudget")(function* (
+    origin: WorkerOrigin,
+    principal: Principal,
+  ) {
+    if (origin.budgetScope !== "worker-run") return;
+    // Independence changes accounting ownership, never delegation generations.
+    if (origin.depth !== 1) return yield* failure("start", "denied");
+
+    yield* deps.budgetAuthorizer.authorize({
+      source: origin.source,
+      principal,
+      worker: origin.worker,
+      policy: origin.policy,
+      budget: origin.budget,
+    });
+  });
 
   const read = (threadId: ThreadId, operation: WorkerError["operation"]) =>
     deps.store
@@ -400,6 +419,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         current,
         policy: worker.origin.policy,
         budget: worker.origin.budget,
+        budgetScope: worker.origin.budgetScope,
         grant: worker.origin.grant,
         depth: worker.origin.depth,
       };
@@ -415,6 +435,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         current,
         policy: attached.policy,
         budget: attached.budget,
+        budgetScope: undefined,
         grant: attached.grant,
         depth: attached.parentLink.depth,
       };
@@ -428,6 +449,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       current,
       policy,
       budget: undefined,
+      budgetScope: undefined,
       grant: undefined,
       depth: 0,
     };
@@ -544,6 +566,25 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       if (chargedSlots > slotLimit) return yield* failure("start", "capacity");
       for (const [amount, cap] of amountCaps) {
+        // Zero is the encoded absence of an allocation when this dimension is unconfigured.
+        // It must not become a new cumulative token or dollar ceiling in a descendant.
+        if (
+          source.budgetScope === "worker-run" &&
+          (amount === "inputTokens" || amount === "outputTokens" || amount === "costMicrousd") &&
+          source.budget !== undefined &&
+          source.budget.caps[cap] === undefined &&
+          source.budget.allocation[amount] === 0 &&
+          ceilings[cap] === undefined
+        ) {
+          const charged = rows.reduce(
+            (sum, row) => sum + row.budget.allocation[amount],
+            allocation[amount],
+          );
+
+          if (charged > (caps[cap] ?? Infinity)) return yield* failure("start", "capacity");
+          continue;
+        }
+
         const residual =
           source.budget === undefined
             ? (ceilings[cap] ?? Infinity)
@@ -669,34 +710,48 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         )
       )
         return yield* failure("start", "denied");
-      if (
-        !withinPolicy(
-          origin,
-          source.policy,
-          AgentPolicy.resolve(
+      const independent = origin.budgetScope === "worker-run";
+
+      if (independent && source.depth !== 0) return yield* failure("start", "denied");
+
+      const targetPolicy = independent
+        ? targetBinding.definition.policy
+        : AgentPolicy.resolve(
             targetBinding.definition.policyOverrides ?? targetBinding.definition.policy,
             source.policy,
-          ),
-        )
-      )
+          );
+
+      if (!withinPolicy(origin, independent ? targetPolicy : source.policy, targetPolicy))
         return yield* failure("start", "capacity");
       const ceilings = sourceCaps(source.policy);
 
+      const conservedRows = rows.filter((row) => row.admission.origin.budgetScope !== "worker-run");
+
       const chargedRows =
         source.depth === 0
-          ? rows
-          : rows.filter((row) => row.admission.sourceSubmissionId === admission.sourceSubmissionId);
+          ? conservedRows
+          : conservedRows.filter(
+              (row) => row.admission.sourceSubmissionId === admission.sourceSubmissionId,
+            );
 
-      if (rows.some((row) => !sameCaps(row.admission.origin.budget.caps, caps)))
+      // Independent origins do not belong to this pool. Preserve the retained conserved
+      // origins' cap identity check separately from the current input's charge selection.
+      if (
+        !independent &&
+        conservedRows.some((row) => !sameCaps(row.admission.origin.budget.caps, caps))
+      )
         return yield* failure("start", "capacity");
       if (
+        !independent &&
         chargedRows.reduce(
           (sum, row) => sum + 1 + (row.admission.origin.budget.descendantInvocations ?? 0),
           1 + (origin.budget.descendantInvocations ?? 0),
         ) > Math.min(caps.maxTotalChildInvocations ?? Infinity, source.policy.maxToolCalls)
       )
         return yield* failure("start", "capacity");
-      for (const [amount, cap] of amountCaps) {
+      // Worker-owned Run usage is already durable in the destination's Run journal. Each
+      // Receipt may join an existing Run, so admitting input must never mint an allowance.
+      for (const [amount, cap] of independent ? [] : amountCaps) {
         const limit = Math.min(caps[cap] ?? Infinity, ceilings[cap] ?? Infinity);
 
         if (
@@ -727,26 +782,32 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         pendingOwn >= deps.limits.maxPendingInputsPerWorker ||
         (!activeWorkers.has(origin.worker.threadId) &&
           activeWorkers.size >=
-            Math.min(caps.maxConcurrentChildren ?? Infinity, source.policy.toolConcurrency))
+            Math.min(
+              deps.limits.maxActiveWorkersPerSource ?? source.policy.toolConcurrency,
+              independent
+                ? Infinity
+                : Math.min(caps.maxConcurrentChildren ?? Infinity, source.policy.toolConcurrency),
+            ))
       )
         return yield* failure("start", "capacity");
-      yield* reserveSubtree(
-        origin.source.threadId,
-        SubtreeBudgetReserved.make({
-          reservationId: Schema.decodeSync(SubtreeBudgetReserved.fields.reservationId)(
-            admission.messageId,
-          ),
-          ...(admission.sourceSubmissionId === undefined
-            ? {}
-            : { sourceSubmissionId: admission.sourceSubmissionId }),
-          childThreadId: origin.worker.threadId,
-          lifetime: "background",
-          depth: origin.depth,
-          policy: origin.policy,
-          grant: origin.grant,
-          budget: origin.budget,
-        }),
-      );
+      if (!independent)
+        yield* reserveSubtree(
+          origin.source.threadId,
+          SubtreeBudgetReserved.make({
+            reservationId: Schema.decodeSync(SubtreeBudgetReserved.fields.reservationId)(
+              admission.messageId,
+            ),
+            ...(admission.sourceSubmissionId === undefined
+              ? {}
+              : { sourceSubmissionId: admission.sourceSubmissionId }),
+            childThreadId: origin.worker.threadId,
+            lifetime: "background",
+            depth: origin.depth,
+            policy: origin.policy,
+            grant: origin.grant,
+            budget: origin.budget,
+          }),
+        );
       if (
         yield* append(
           origin.source.threadId,
@@ -814,6 +875,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       access: "send",
       worker: admission.origin.worker,
     });
+    yield* authorizeBudget(admission.origin, options.principal);
     if (
       admission.origin.worker.threadId !== options.threadId ||
       admission.origin.worker.targetAgentId !== agentId ||
@@ -1604,6 +1666,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             targetDigests: resolved.digests,
             policy: request.policy,
             budget: request.budget,
+            ...(request.budgetScope === undefined ? {} : { budgetScope: request.budgetScope }),
             grant,
             depth: context.depth + 1,
             firstMessageId: messageId,
@@ -1619,14 +1682,21 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           "start",
         );
 
+        yield* authorizeBudget(origin, principal);
+
+        const targetPolicy =
+          origin.budgetScope === "worker-run"
+            ? resolved.definition.policy
+            : AgentPolicy.resolve(
+                resolved.definition.policyOverrides ?? resolved.definition.policy,
+                context.policy,
+              );
+
         if (
           !withinPolicy(
             origin,
-            context.policy,
-            AgentPolicy.resolve(
-              request.target.policyOverrides ?? request.target.policy,
-              context.policy,
-            ),
+            origin.budgetScope === "worker-run" ? targetPolicy : context.policy,
+            targetPolicy,
           )
         )
           return yield* failure("start", "capacity");
