@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.66
+
+### Patch Changes
+
+- [#385](https://github.com/danieljvdm/effect-agent/pull/385) [`05f105d`](https://github.com/danieljvdm/effect-agent/commit/05f105dba7ee6ea5d605ef41bb39db913dc08254) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve earlier tool results when attached subagents suspend a later turn, and restore completed result batches in declaration order so context rollover can continue after recovery.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.66
+  - @effect-agent/engine@0.1.0-beta.66
+
 ## 0.1.0-beta.65
 
 ### Patch Changes
