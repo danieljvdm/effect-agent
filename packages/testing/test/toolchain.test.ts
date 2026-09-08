@@ -117,6 +117,7 @@ const exampleNames = [
   "browser-run-worker-proof",
   "cloudflare-memory",
   "code-mode-cloudflare",
+  "context-continuity-eval",
   "demo",
   "durable-orchestration",
   "pr-review-eval",
@@ -780,7 +781,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       const changesets = workflowStep(release, "release", "Create release pull request or publish");
 
       expect(changesets?.env?.GITHUB_TOKEN).toBe("${{ steps.app-token.outputs.token }}");
-      expect(changesets?.with?.publish).toBe("./node_modules/.bin/vp run release:publish");
+      expect(changesets?.with?.publish).toBe(
+        "./node_modules/.bin/vp run --no-cache release:checked-publish",
+      );
       expect(release.jobs.release?.permissions?.["id-token"]).toBe("write");
     }),
   );
