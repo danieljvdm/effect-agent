@@ -1,1 +1,3 @@
 DEMO_TOKEN=local-orchestration-demo
+OPENAI_API_KEY=
+# OPENAI_MODEL=gpt-4.1-mini

@@ -169,6 +169,7 @@
         "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/thread": "workspace:*",
+        "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
         "effect-cf": "catalog:",

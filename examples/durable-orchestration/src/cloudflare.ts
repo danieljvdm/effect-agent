@@ -1,82 +1,38 @@
-import { ThreadMaintenance } from "@effect-agent/platform-cloudflare/Alarm";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { Effect, Layer, Schema } from "effect";
-import { DurableObject } from "effect-cf";
+import { ConfigProvider, Effect, Layer } from "effect";
+import { WorkerEnvironment } from "effect-cf";
 
-import { authority, handlers, registrations, rootThread } from "./agents.ts";
-import { Command, CommandResult, execute, Snapshot, snapshot } from "./application.ts";
+import { makeOrchestrationThread, threadLayer } from "./cloudflare-host.ts";
+import { openAiModels } from "./openai.ts";
+
+export { default } from "./cloudflare-host.ts";
 
 declare global {
   namespace Cloudflare {
     interface Env {
       THREADS: DurableObjectNamespace<OrchestrationThread>;
       DEMO_TOKEN: string;
+      OPENAI_API_KEY: string;
+      OPENAI_MODEL?: string;
     }
   }
 }
 
-export class OrchestrationThread extends ThreadObject.make(
-  ThreadObject.layer(registrations).pipe(Layer.provide([authority, handlers])),
-  {
-    namespaceBinding: "THREADS",
-    deploymentId: "durable-orchestration-v1",
-    producerPrefix: "cloudflare-orchestration",
-    wakeScanInterval: 100,
-    settlementPollInterval: 25,
-    alarmBackoffBase: 25,
-    alarmBackoffCap: 1_000,
-  },
-) {
-  command(encoded: unknown) {
-    return this[DurableObject.RunSymbol](
-      Effect.gen(function* () {
-        const command = yield* Schema.decodeUnknownEffect(Command)(encoded);
-        const maintenance = yield* ThreadMaintenance;
-        const result = yield* maintenance.withMutation(execute(command));
+export class OrchestrationThread extends makeOrchestrationThread(
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const env = yield* WorkerEnvironment;
 
-        return JSON.stringify(yield* Schema.encodeEffect(CommandResult)(result));
-      }),
-    );
-  }
-  status() {
-    return this[DurableObject.RunSymbol](
-      snapshot.pipe(Effect.flatMap(Schema.encodeEffect(Snapshot)), Effect.map(JSON.stringify)),
-    );
-  }
-}
-
-/** Authenticated ingress; models never choose destination Thread IDs or authorization. */
-export default {
-  fetch(request: Request, env: Cloudflare.Env): Promise<Response> {
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        if (!env.DEMO_TOKEN || request.headers.get("authorization") !== `Bearer ${env.DEMO_TOKEN}`)
-          return new Response("Unauthorized", { status: 401 });
-        const object = env.THREADS.getByName(rootThread);
-        const path = new URL(request.url).pathname;
-
-        if (path === "/status" && request.method === "GET")
-          return new Response(yield* Effect.tryPromise(() => object.status()), {
-            headers: { "content-type": "application/json" },
-          });
-        if (path === "/command" && request.method === "POST") {
-          const body = yield* Effect.tryPromise(() => request.json());
-          const command = yield* Schema.decodeUnknownEffect(Command)(body);
-
-          return new Response(yield* Effect.tryPromise(() => object.command(command)), {
-            status: 202,
-            headers: { "content-type": "application/json" },
-          });
-        }
-
-        return new Response("Not found", { status: 404 });
-      }).pipe(
-        Effect.catchTag("SchemaError", () =>
-          Effect.succeed(new Response("Invalid request", { status: 400 })),
+      const { models, modelVersion } = yield* openAiModels.pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({
+            OPENAI_API_KEY: env.OPENAI_API_KEY,
+            OPENAI_MODEL: env.OPENAI_MODEL,
+          }),
         ),
-        Effect.tapError((error) => Effect.logError(error)),
-        Effect.catch(() => Effect.succeed(new Response("Request failed", { status: 500 }))),
-      ),
-    );
-  },
-};
+      );
+
+      return threadLayer(models, modelVersion);
+    }),
+  ),
+) {}

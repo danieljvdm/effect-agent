@@ -1,3 +1,3 @@
-orchestration.sqlite
-orchestration.sqlite-wal
-orchestration.sqlite-shm
+orchestration*.sqlite
+orchestration*.sqlite-wal
+orchestration*.sqlite-shm

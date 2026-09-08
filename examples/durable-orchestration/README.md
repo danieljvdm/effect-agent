@@ -1,8 +1,10 @@
 # Durable orchestration on Node and Cloudflare
 
 Run the same Agent declarations on a bounded Node worker pool or SQLite-backed Cloudflare Durable
-Objects. The example uses deterministic native Effect AI models, so it needs no model API key.
-Replace the `Model` bindings in [agents.ts](src/agents.ts) to use an Effect AI provider.
+Objects. Both entrypoints use OpenAI through native Effect AI model Layers. The default model is
+`gpt-4.1-mini`; set `OPENAI_MODEL` to select another Responses API model with tool calling.
+The agents propose plans and verification steps using real model calls; they have no filesystem
+or shell tools. Deterministic models live only in the tests.
 
 ```mermaid
 flowchart LR
@@ -32,20 +34,36 @@ From the repository root:
 
 ```sh
 vp install
+export OPENAI_API_KEY='your-openai-api-key'
 vp run @effect-agent/example-durable-orchestration#node
 ```
 
+The key is read from the environment at startup. Missing or empty keys fail before opening the
+host. Requests use OpenAI's Responses API with `store: false`; the key is not part of agent inputs
+or registration digests. Model calls use your OpenAI API account.
+
 This starts a scoped host with **three execution workers**, runs the demonstration, prints its
-final state, and closes the host. Expect two idle worker Threads, depths `[0, 1, 2]`, three
-reports, one recommendation, and completed coordinator inputs. The follow-up is sent after
+final state, and closes the host. Progress goes to stderr and final JSON to stdout. Allow up to
+five minutes for live calls. A recorded Run failure ends the demo early with its failure details.
+Expect two idle worker Threads, depths `[0, 1, 2]`, three reports, one recommendation, and completed coordinator inputs. The follow-up is sent after
 the first reports so it has a separate worker Run.
 The Node boundary observes `NodeHost.run` alongside the interaction, so a worker-pool failure
 ends the demonstration immediately with that failure.
 
-State persists in `examples/durable-orchestration/orchestration.sqlite`. Running the command
+State persists in `examples/durable-orchestration/orchestration-openai.sqlite`. Running the command
 again uses the same explicit idempotency keys and reconnects to those admissions. The host
-recovers accepted work after interruption. Use a different database filename in
-[node-main.ts](src/node-main.ts) for an independent demonstration.
+recovers accepted work after interruption. For an independent demonstration or a different model,
+choose a new database:
+
+```sh
+ORCHESTRATION_DATABASE=orchestration-second.sqlite \
+  vp run @effect-agent/example-durable-orchestration#node
+```
+
+Model identity is pinned in durable registrations. Reopening a completed demonstration reuses
+its results; accepted unfinished work resumes. Reopening does not reset failures. Keep a failed
+database for inspection and use a new filename to try again. The OpenAI default uses a separate file from the earlier
+scripted example.
 
 ## Cloudflare
 
@@ -55,6 +73,7 @@ accepted work and message delivery. There is no process-local worker loop to kee
 
 ```sh
 cp examples/durable-orchestration/.dev.vars.example examples/durable-orchestration/.dev.vars
+# Set OPENAI_API_KEY in the untracked .dev.vars file (OPENAI_MODEL is optional).
 vp run @effect-agent/example-durable-orchestration#dev
 ```
 
@@ -94,10 +113,12 @@ To validate the deployment bundle without uploading:
 vp run @effect-agent/example-durable-orchestration#build
 ```
 
-To deploy to your Cloudflare account, configure a private token and deploy from the example:
+To deploy to your Cloudflare account, configure the API key and a private token, then deploy
+from the example:
 
 ```sh
 cd examples/durable-orchestration
+vp exec wrangler secret put OPENAI_API_KEY
 vp exec wrangler secret put DEMO_TOKEN
 vp run deploy
 ```
@@ -107,7 +128,10 @@ vp run deploy
 `maxDepth: 2` is root-relative. Each builder's `childLifetimes: ["attached"]` permits attached
 scouts while prohibiting background grandchildren. A builder reserves four turns and two
 tool calls while its own policy permits two turns and one call. The residual budget and one
-reserved descendant invocation fund its scout. Ancestors conserve these allocations.
+reserved descendant invocation fund its scout. Each allocation reserves three minutes: two for
+the builder and one for the scout. The coordinator's 30-minute policy accommodates the declared
+pool of eight allocations; the command itself stops waiting after five minutes. Ancestors
+conserve these allocations.
 
 Reporting is declared on the existing coordinator registration with `Subagent.reporting`.
 The host freezes the projected coordinator input before retrying delivery. Joined child
@@ -131,8 +155,10 @@ vp run @effect-agent/example-durable-orchestration#test
 vp run @effect-agent/example-durable-orchestration#build
 ```
 
-The tests run the public Node host and the deployable Worker under real workerd, exercise
-native tools and reply provenance, and verify that peer access grants no retry or worker
-control. Platform regression suites additionally restart Node after a report is frozen and
+The tests inject deterministic native models into the same Node and Cloudflare host assembly,
+run the Worker under real workerd, exercise native tools and reply provenance, and verify that
+peer access grants no retry or worker control. The OpenAI host is exercised separately at its
+HTTP boundary, including provider failure reporting; these automated tests make no billed
+requests. Platform regression suites additionally restart Node after a report is frozen and
 evict Cloudflare source/child Objects with wake hints dropped, checking that joined Receipts
 produce one recovered report.

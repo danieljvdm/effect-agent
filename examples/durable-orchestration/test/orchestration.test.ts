@@ -20,7 +20,8 @@ import {
   rootThread,
 } from "../src/agents.ts";
 import { snapshot, Snapshot } from "../src/application.ts";
-import { nodeDemonstration, nodeHost } from "../src/node.ts";
+import { nodeDemonstration, nodeHostWithModels } from "../src/node.ts";
+import { models } from "./fixtures/models.ts";
 
 const verify = (state: typeof Snapshot.Type) => {
   expect(state.depths).toEqual([0, 1, 2]);
@@ -86,9 +87,9 @@ it.each([false, true])(
             : []),
           { role: "user", content: "Current Run status: 1 turn used." },
         ],
-        toolkit: coordinator.definition.toolkit,
+        toolkit: coordinator.toolkit,
         disableToolCallResolution: true,
-      }).pipe(Stream.runCollect, Effect.provide(coordinator.model)),
+      }).pipe(Stream.runCollect, Effect.provide(models.coordinator)),
     );
 
     expect(response.find((part) => part.type === "tool-call")).toMatchObject({
@@ -188,7 +189,9 @@ it("runs builders, scouts, later reports and native peer replies with a bounded 
           ).toMatchObject({ _tag: "Failure", failure: { reason: "denied" } });
 
           return state;
-        }).pipe(Effect.provide(nodeHost(`${directory}/runtime.sqlite`)));
+        }).pipe(
+          Effect.provide(nodeHostWithModels(`${directory}/runtime.sqlite`, models, "scripted-v1")),
+        );
       }),
     ).pipe(
       Effect.provide(NodeFileSystem.layer),
@@ -201,7 +204,7 @@ it("runs builders, scouts, later reports and native peer replies with a bounded 
 
 it("runs the same declarations through the deployable workerd host", async () => {
   const bundle = await build({
-    entryPoints: [join(import.meta.dirname, "../src/cloudflare.ts")],
+    entryPoints: [join(import.meta.dirname, "fixtures/cloudflare.ts")],
     bundle: true,
     write: false,
     format: "esm",

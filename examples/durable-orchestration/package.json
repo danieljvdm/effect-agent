@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",
-    "node": "node --experimental-transform-types src/node-main.ts",
     "dev": "wrangler dev",
     "build": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy"
@@ -17,6 +16,7 @@
     "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/thread": "workspace:*",
+    "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "effect-cf": "catalog:"

@@ -9,7 +9,15 @@ import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { Effect, Schema } from "effect";
 
-import { advisorPeer, buildA, buildB, coordinator, principal, rootThread } from "./agents.ts";
+import {
+  advisorPeer,
+  advisorThread,
+  buildA,
+  buildB,
+  coordinator,
+  principal,
+  rootThread,
+} from "./agents.ts";
 
 export const Command = Schema.Union([
   Schema.Struct({
@@ -42,7 +50,15 @@ export const Snapshot = Schema.Struct({
   workers: Schema.Array(WorkerSummary),
   depths: Schema.Array(Schema.Natural),
   outcomes: Schema.Array(Schema.Literals(["completed", "failed", "aborted"])),
+  failures: Schema.Array(Schema.Struct({ threadId: Schema.String, detail: Schema.String })),
 });
+
+export class DemonstrationFailed extends Schema.TaggedError<DemonstrationFailed>()(
+  "DemonstrationFailed",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /** Both hosts execute the same Effects; only persistence, transport and lifecycle differ. */
 export const execute = Effect.fn("Orchestration.execute")(function* (command: Command) {
@@ -59,7 +75,7 @@ export const execute = Effect.fn("Orchestration.execute")(function* (command: Co
   }
 
   return yield* runtime.submitRegistered(
-    coordinator,
+    { definition: coordinator },
     command.action === "launch"
       ? { _tag: "Launch", mission: command.mission }
       : { _tag: "Continue", note: command.note },
@@ -104,17 +120,31 @@ export const snapshot = Effect.gen(function* () {
   const b = yield* Subagent.list(buildB).pipe(Effect.provideService(SubagentHost, host));
   const workers = [...a.items, ...b.items];
   const depths = [0];
+  const failures: Array<{ threadId: string; detail: string }> = [];
 
-  for (const worker of workers) {
+  const threads = new Set([
+    rootThread,
+    advisorThread,
+    ...workers.map((worker) => worker.worker.threadId),
+  ]);
+
+  for (const threadId of threads) {
     const log = yield* store
-      .export(ThreadExportRequest.make({ threadId: worker.worker.threadId }))
+      .export(ThreadExportRequest.make({ threadId }))
       .pipe(Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(undefined)));
 
     if (log === undefined) continue;
     for (const { record } of log.records) {
       if (record.payload._tag === "WorkerOriginRecorded") depths.push(record.payload.origin.depth);
-      if (record.payload._tag === "SubagentRequested" && record.payload.depth !== undefined)
-        depths.push(record.payload.depth);
+      if (record.payload._tag === "SubagentRequested") {
+        threads.add(record.payload.childThreadId);
+        if (record.payload.depth !== undefined) depths.push(record.payload.depth);
+      }
+      if (record.payload._tag === "SubmissionSettled" && record.payload.outcome !== "completed")
+        failures.push({
+          threadId,
+          detail: JSON.stringify(record.payload.result ?? record.payload.outcome),
+        });
     }
   }
 
@@ -129,15 +159,28 @@ export const snapshot = Effect.gen(function* () {
     workers,
     depths: [...new Set(depths)].sort(),
     outcomes: settlements.map((value) => value.outcome),
+    failures,
   };
 });
+
+const checkedSnapshot = snapshot.pipe(
+  Effect.flatMap((state) =>
+    state.failures.length > 0 || state.outcomes.some((outcome) => outcome !== "completed")
+      ? Effect.fail(
+          new DemonstrationFailed({
+            message: `A demo Run failed: ${JSON.stringify(state.failures)}. Inspect the saved thread before retrying.`,
+          }),
+        )
+      : Effect.succeed(state),
+  ),
+);
 
 /** A finite demonstration. Reusing its explicit keys safely reconnects to existing admissions. */
 export const demonstration = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
 
   const launch = yield* runtime.submitRegistered(
-    coordinator,
+    { definition: coordinator },
     { _tag: "Launch", mission: "Design a small durable feature" },
     {
       threadId: rootThread,
@@ -147,25 +190,34 @@ export const demonstration = Effect.gen(function* () {
   );
 
   yield* runtime.awaitSettlement(launch);
+  const launched = yield* checkedSnapshot;
+
+  if (launched.workers.length !== 2)
+    return yield* new DemonstrationFailed({
+      message:
+        "The coordinator did not start both builders. Inspect its saved output or try another model with a new ORCHESTRATION_DATABASE.",
+    });
+  yield* Effect.logInfo("Builders accepted; requesting the advisor's recommendation.");
   yield* execute({
     action: "recommend",
     key: Schema.decodeSync(IdempotencyKey)("recommend-v1"),
     question: "What should the builders prioritize?",
   });
   for (;;) {
-    const state = yield* snapshot;
+    const state = yield* checkedSnapshot;
 
     if (state.reports.length >= 2 && state.workers.every((worker) => worker.state === "idle"))
       break;
     yield* Effect.sleep("25 millis");
   }
+  yield* Effect.logInfo("Both builder reports arrived; sending Builder A a follow-up.");
   yield* execute({
     action: "continue",
     key: Schema.decodeSync(IdempotencyKey)("continue-v1"),
     note: "Also verify the restart path",
   });
   for (;;) {
-    const state = yield* snapshot;
+    const state = yield* checkedSnapshot;
 
     if (
       state.reports.length >= 3 &&
@@ -176,4 +228,4 @@ export const demonstration = Effect.gen(function* () {
       return state;
     yield* Effect.sleep("25 millis");
   }
-}).pipe(Effect.timeout("60 seconds"));
+}).pipe(Effect.timeout("5 minutes"));
