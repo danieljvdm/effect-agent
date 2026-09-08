@@ -1,5 +1,18 @@
 # effect-agent
 
+## 0.1.0-beta.57
+
+### Minor Changes
+
+- [#358](https://github.com/danieljvdm/effect-agent/pull/358) [`4ff21e2`](https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Construct subagent capabilities with `Subagent.make`, application-chosen names, and exact host registration resolution. Start and control durable background workers with typed follow-up, completion reporting, authorized history, and bounded nested delegation.
+
+### Patch Changes
+
+- Updated dependencies [[`4ff21e2`](https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81)]:
+  - @effect-agent/capabilities@0.1.0-beta.57
+  - @effect-agent/core@0.1.0-beta.57
+  - @effect-agent/engine@0.1.0-beta.57
+
 ## 0.1.0-beta.56
 
 ### Patch Changes
