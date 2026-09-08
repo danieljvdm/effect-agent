@@ -137,6 +137,7 @@
     "protect-prepared-context",
     "protected-browser-credentials",
     "protected-browser-ordinary-controls",
+    "provider-call-accounting",
     "pure-session-boundaries",
     "quick-memory-pages",
     "quiescent-conversation-maintenance",

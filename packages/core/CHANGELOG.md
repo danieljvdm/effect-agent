@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.61
+
+### Patch Changes
+
+- [#369](https://github.com/danieljvdm/effect-agent/pull/369) [`21431ae`](https://github.com/danieljvdm/effect-agent/commit/21431ae6cacd78e6330b1017c2768f4f9c347b7a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose actual provider response identity and finish metadata to cost estimators, and retain per-call accounting completeness alongside canonical usage. Preserve reported failed-call usage in settlements and distinguish unobserved calls from zero-cost work.
+
 ## 0.1.0-beta.60
 
 ## 0.1.0-beta.59
