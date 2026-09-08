@@ -49,6 +49,7 @@ import {
 import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import {
   CurrentToolFailureObserver,
+  ModelUsageAccounting,
   RunContextPreparation,
   RunToolAuthorization,
   RunContextPreparationPassthrough,
@@ -4656,10 +4657,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               modelUsage: [...(prior?.modelUsage ?? []), usage.usage],
             });
           }),
-        noteIncompleteUsage: (turn) =>
-          Effect.sync(() => {
-            stagedUnobservedCalls.set(turn, (stagedUnobservedCalls.get(turn) ?? 0) + 1);
-          }),
         commitCompaction: (commit) =>
           Effect.gen(function* () {
             const canonicalTurn = commit.turn;
@@ -6223,7 +6220,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }
 
       const consume = Stream.runForEach(
-        AgentRuntime.streamUnknown(agent, submission.inputPayload, options).pipe(
+        AgentRuntime.streamWithUsageAccountingUnknown(agent, submission.inputPayload, options).pipe(
+          Stream.provideService(ModelUsageAccounting, {
+            noteIncompleteUsage: (turn) =>
+              Effect.sync(() => {
+                stagedUnobservedCalls.set(turn, (stagedUnobservedCalls.get(turn) ?? 0) + 1);
+              }),
+          }),
           Stream.provide(ThreadHistory.layerTransient),
           Stream.provideService(SubagentHost.forTool, (source) =>
             source.threadId !== submission.threadId ||

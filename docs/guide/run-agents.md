@@ -239,6 +239,12 @@ legacy numeric estimates and estimates without a status remain trusted host esti
 Response records also retain each Turn's missing-call count, so approval and child suspension
 preserve incomplete accounting when a fresh runtime resumes the Run.
 
+Runtime hosts use `AgentRuntime.streamWithUsageAccountingUnknown` with the inward
+`ModelUsageAccounting` service from `RunOptions` to stage missing usage for each Attempt.
+The host entry exposes this dependency in `R`; ordinary `stream`, `run`, and `start` entry
+points provide ephemeral accounting themselves. The native durable runtime supplies its
+canonical Turn accumulator at composition, without adding a callback to durability options.
+
 Canonical response records own committed per-call usage. Terminal settlement
 `uncommittedModelUsage` retains only staged calls not already present in a response record;
 its charges are already included in `usageSummary`, so do not add them a second time. An isolate

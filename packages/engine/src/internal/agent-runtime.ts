@@ -259,6 +259,7 @@ import {
 } from "../RunEventSink.ts";
 import {
   CurrentToolFailureObserver,
+  ModelUsageAccounting,
   type ModelToolFailure,
   type ProgrammaticToolFailure,
   type RunToolFailureObserver,
@@ -422,6 +423,7 @@ type InterpreterRequirements<
   | IdGenerator
   | ThreadHistory
   | ContextCompactor
+  | ModelUsageAccounting
   | HookRequirements
   | InstructionRequirements;
 
@@ -3389,11 +3391,13 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   AgentPolicyError | ModelProtocolError | AiError.AiError | CompactionError | HookError,
   | HookRequirements
   | ContextCompactor
+  | ModelUsageAccounting
   | LanguageModel.LanguageModel
   | Model.ProviderName
   | Model.ModelName
 > =>
   Effect.gen(function* () {
+    const usageAccounting = yield* ModelUsageAccounting;
     const state = context.compaction;
     const events: Array<RunEvent> = [];
     const messages = source.content;
@@ -3634,7 +3638,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         );
 
         if (summaryUsage === undefined) {
-          yield* options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void;
+          yield* usageAccounting.noteIncompleteUsage(turn);
           if (Exit.isFailure(summaryExit)) return yield* Effect.failCause(summaryExit.cause);
           if (!summaryFinished)
             return yield* ModelProtocolError.make({
@@ -3653,7 +3657,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         }).pipe(
           Effect.tapCause(() =>
             summaryUsage !== undefined && context.modelCalls === priorSummaryModelCalls
-              ? (options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void)
+              ? usageAccounting.noteIncompleteUsage(turn)
               : Effect.void,
           ),
           Effect.ensuring(
@@ -4750,6 +4754,7 @@ const makeTurn = <
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const usageAccounting = yield* ModelUsageAccounting;
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
 
@@ -5453,7 +5458,7 @@ const makeTurn = <
             withCallModel,
             Effect.tapCause(() =>
               context.modelCalls === priorModelCalls
-                ? (options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void)
+                ? usageAccounting.noteIncompleteUsage(turn)
                 : Effect.void,
             ),
           );
@@ -5465,7 +5470,7 @@ const makeTurn = <
         if (trace.usageConsumed) return;
         trace.usageConsumed = true;
         if (trace.usage === undefined) {
-          return yield* options.durability?.noteIncompleteUsage?.(turn) ?? Effect.void;
+          return yield* usageAccounting.noteIncompleteUsage(turn);
         }
         yield* consumeTurnUsage(0).pipe(Effect.exit);
       });
@@ -6821,7 +6826,7 @@ function streamWithCompletion<
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<A, H> | CompletionError,
-  AgentRuntimeRequirements<A, R> | CompletionRequirements
+  AgentRuntimeRequirements<A, R> | CompletionRequirements | ModelUsageAccounting
 >;
 function streamWithCompletion<
   InputSchema extends Schema.Top,
@@ -6897,6 +6902,7 @@ function streamWithCompletion<
         | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
         | CompletionRequirements
         | ModelRequires
+        | ModelUsageAccounting
       >,
       ThreadHistoryError,
       ThreadHistory | IdGenerator
@@ -7363,6 +7369,7 @@ function streamWithCompletion<
         | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
         | ToolSpanTelemetry
         | ModelRequires
+        | ModelUsageAccounting
       > = model === undefined ? finalized : finalized.pipe(Stream.provide(model, { local: true }));
 
       const events = modeled.pipe(
@@ -7623,7 +7630,24 @@ const streamUnknown = <A extends ExecutableAgent, H = never, R = never>(
   input: unknown,
   options?: RunOptions<H, R>,
 ): Stream.Stream<RunEvent, AgentRuntimeFailure<A, H>, AgentRuntimeRequirements<A, R>> =>
-  streamWithCompletion(agent, input, options);
+  streamWithCompletion(agent, input, options).pipe(
+    Stream.provide(ModelUsageAccounting.layerEphemeral),
+  );
+
+/**
+ * Host interpreter entry point with explicit Attempt-local usage accounting in R.
+ * Durable coordinators provide this service alongside their recovery hooks;
+ * ordinary callers use streamUnknown's ephemeral accounting composition.
+ */
+const streamWithUsageAccountingUnknown = <A extends ExecutableAgent, H = never, R = never>(
+  agent: A,
+  input: unknown,
+  options?: RunOptions<H, R>,
+): Stream.Stream<
+  RunEvent,
+  AgentRuntimeFailure<A, H>,
+  AgentRuntimeRequirements<A, R> | ModelUsageAccounting
+> => streamWithCompletion(agent, input, options);
 
 /** Accept schema-encoded input, retaining runtime validation. Use streamUnknown for external data. */
 const stream = <A extends ExecutableAgent, H = never, R = never>(
@@ -7651,7 +7675,9 @@ function runUnknown<H = never, R = never>(
   const program = "definition" in agent ? agent : { definition: agent };
 
   return runProgram(program, (onCompleted) =>
-    streamWithCompletion(agent, input, options, onCompleted),
+    streamWithCompletion(agent, input, options, onCompleted).pipe(
+      Stream.provide(ModelUsageAccounting.layerEphemeral),
+    ),
   );
 }
 
@@ -7686,7 +7712,9 @@ function startUnknown<H = never, R = never>(
   return startProgram(
     program,
     (executionOptions, onCompleted) =>
-      streamWithCompletion(agent, input, executionOptions, onCompleted),
+      streamWithCompletion(agent, input, executionOptions, onCompleted).pipe(
+        Stream.provide(ModelUsageAccounting.layerEphemeral),
+      ),
     options,
   );
 }
@@ -9125,4 +9153,5 @@ export {
   startUnknown,
   stream,
   streamUnknown,
+  streamWithUsageAccountingUnknown,
 };

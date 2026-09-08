@@ -496,6 +496,21 @@ export interface RunTurnUsage {
 }
 
 /**
+ * Attempt-local accounting for provider invocations without retained usage.
+ * Staging is infallible and does not itself persist records. Durable runtime
+ * composition supplies the canonical Turn accumulator; ephemeral entry points
+ * explicitly supply the no-op implementation.
+ */
+export class ModelUsageAccounting extends Context.Service<
+  ModelUsageAccounting,
+  { readonly noteIncompleteUsage: (turn: number) => Effect.Effect<void> }
+>()("@effect-agent/engine/ModelUsageAccounting") {
+  static readonly layerEphemeral = Layer.succeed(ModelUsageAccounting, {
+    noteIncompleteUsage: () => Effect.void,
+  });
+}
+
+/**
  * Dependency-neutral durability seam implemented by a durable coordinator.
  *
  * Invocation ordering inside one Tool-declaring Turn is normative:
@@ -550,10 +565,6 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
    * token budgets instead of failing closed.
    */
   readonly noteTurnUsage: (usage: RunTurnUsage) => Effect.Effect<void, Error, Requirements>;
-  /** Stage a missing-accounting invocation with its canonical Turn until response or settlement. */
-  readonly noteIncompleteUsage?:
-    | ((turn: number) => Effect.Effect<void, Error, Requirements>)
-    | undefined;
 }
 
 /**
