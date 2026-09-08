@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.64
+
+### Patch Changes
+
+- [#380](https://github.com/danieljvdm/effect-agent/pull/380) [`620d7d3`](https://github.com/danieljvdm/effect-agent/commit/620d7d38dd94b95c29d2e07a79b445a6fbccd648) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resume durable runs from disposable recovery checkpoints while preserving canonical side-effect obligations and cumulative accounting. Support up to 131,072 canonical records in storage, exports, and verification, with preserving upgrades for supported SQLite and Durable Object stores.
+
 ## 0.1.0-beta.63
 
 ## 0.1.0-beta.62
