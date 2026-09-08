@@ -55,7 +55,8 @@
     "./ThreadStore": "./src/ThreadStore.ts",
     "./ToolReconciler": "./src/ToolReconciler.ts",
     "./WakeScheduler": "./src/WakeScheduler.ts",
-    "./ThreadContextHistory": "./src/ThreadContextHistory.ts"
+    "./ThreadContextHistory": "./src/ThreadContextHistory.ts",
+    "./ThreadContextHistoryProjection": "./src/ThreadContextHistoryProjection.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -8,7 +8,8 @@ import {
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
 } from "@effect-agent/engine/AgentRuntime";
-import { type RunBufferLimits } from "@effect-agent/engine/RunOptions";
+import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
+import { type RunBufferLimits, type RunContextHook } from "@effect-agent/engine/RunOptions";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { Context, Effect, Layer, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
@@ -495,4 +496,49 @@ it("text output preserves Schema transformations, errors and decoder requirement
   Output.text(Schema.Struct({ answer: Schema.String }));
   // @ts-expect-error A decoded string is insufficient when its encoded form is numeric.
   Output.text(Schema.flip(Schema.NumberFromString));
+});
+
+// Regression seam: https://linear.app/reve/issue/KOM-125
+it("resolved-call preparation preserves host and provider requirements and typed failure", () => {
+  const preparation: RunContextHook<TurnHostError, TurnHost | ProviderClient> = {
+    prepare: (request) =>
+      Effect.gen(function* () {
+        const host = yield* TurnHost;
+
+        if (host === "") return yield* TurnHostError.make({});
+        const captured = yield* model.captureRequirements;
+
+        return {
+          prompt: request.source,
+          modelCall: {
+            model: captured,
+            context: ModelCallContext.make({
+              contextCapacity: 4_000,
+              maxInputTokens: 3_000,
+              outputReserveTokens: 500,
+              uncountedOverheadTokens: 100,
+            }),
+          },
+        };
+      }),
+  };
+
+  const run = AgentRuntime.run(
+    Agent.withModel(planner, model),
+    { city: "Lisbon", days: "2" },
+    {
+      context: preparation,
+    },
+  );
+
+  expectTypeOf<Extract<Effect.Services<typeof run>, TurnHost | ProviderClient>>().toEqualTypeOf<
+    TurnHost | ProviderClient
+  >();
+  expectTypeOf<Extract<Effect.Error<typeof run>, TurnHostError>>().toEqualTypeOf<TurnHostError>();
+  expectTypeOf<
+    Extract<
+      Effect.Services<typeof run>,
+      LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
+    >
+  >().toEqualTypeOf<never>();
 });

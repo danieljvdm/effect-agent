@@ -5,6 +5,7 @@ import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { Cause, Clock, Context, Effect, Exit, Layer, Schema } from "effect";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import type { DurableAlarmError, ThreadMutationGate } from "../src/Alarm.ts";
@@ -370,6 +371,7 @@ it("preserves publication setup E/R/Scope and releases resources on typed initia
       yield* Destination;
       yield* ThreadStore;
       yield* SubmissionLedger;
+      yield* SqlClient;
       yield* ThreadObjectIdentity;
       yield* DurableObjectContext;
       yield* Effect.acquireRelease(

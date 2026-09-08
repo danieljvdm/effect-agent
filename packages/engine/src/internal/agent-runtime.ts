@@ -68,7 +68,7 @@ import {
   type ToolResultBounds,
 } from "@effect-agent/core/ToolResult";
 import { InputTokenUsage, ModelCallUsage, OutputTokenUsage } from "@effect-agent/core/Usage";
-import type { Layer, Take } from "effect";
+import type { Take } from "effect";
 import {
   Cause,
   Channel,
@@ -80,6 +80,7 @@ import {
   Equal,
   Exit,
   Fiber,
+  Layer,
   Metric,
   Option,
   PubSub,
@@ -90,15 +91,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import {
-  type Tool,
-  AiError,
-  LanguageModel,
-  Model,
-  Prompt,
-  Response,
-  Toolkit,
-} from "effect/unstable/ai";
+import { Tool, AiError, LanguageModel, Model, Prompt, Response, Toolkit } from "effect/unstable/ai";
 
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { boundedValueFootprint, utf8ByteLength } from "./bounded-value.ts";
@@ -229,12 +222,15 @@ import {
   CompactionError,
   ContextCompactor,
   type CompactionModelLayer,
+  type ContextMessageTokenEstimator,
 } from "../ContextCompactor.ts";
 import {
   ContextRolloverRequest,
   ContextRolloverTool,
   ContextWindow,
   ContextWindowStatus,
+  ContextRolloverSelection,
+  ModelCallContext,
 } from "../ContextWindow.ts";
 import {
   DurableStep,
@@ -264,6 +260,7 @@ import {
   RunResumeUsageSchema,
   RunContextPreparation,
   RunToolAuthorization,
+  type PreparedRunContext,
   type RunContextPreparationError,
   type RunOptions,
   type RunSchedulingHook,
@@ -290,6 +287,8 @@ import {
   buildCompactedView,
   contextWindowId,
   collectCoveredMessages,
+  estimatePromptTokens,
+  evaluateMessageTokenEstimates,
   initialCompactionState,
   isContextOverflowMessage,
   type ContextCompactionState,
@@ -456,6 +455,7 @@ interface RunContext {
     | undefined;
   windowId: string;
   windowTokens: number;
+  windowContextTokenLimit: number | undefined;
   pendingContextToolCallId: string | undefined;
   /** One allowance shared by threshold compaction and the same Turn's overflow retry. */
   readonly compactionTurn: {
@@ -3210,10 +3210,24 @@ const stampProviderResultEvent = (
  */
 const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(function* (
   messages: ReadonlyArray<Prompt.Message>,
+  messageTokenEstimator?: ContextMessageTokenEstimator,
 ) {
   const compactor = yield* ContextCompactor;
 
-  return yield* Schema.decodeUnknownEffect(Schema.Natural)(compactor.estimate(messages)).pipe(
+  const estimate =
+    messageTokenEstimator === undefined
+      ? Option.some(compactor.estimate(messages))
+      : evaluateMessageTokenEstimates(messageTokenEstimator, (estimate) =>
+          estimatePromptTokens(messages, estimate),
+        );
+
+  if (Option.isNone(estimate)) {
+    return yield* CompactionError.make({
+      message: "Message token estimator returned an invalid token count",
+    });
+  }
+
+  return yield* Schema.decodeUnknownEffect(Schema.Natural)(estimate.value).pipe(
     Effect.mapError((cause) =>
       CompactionError.make({ message: "Compactor returned an invalid token estimate", cause }),
     ),
@@ -3267,7 +3281,8 @@ interface CompactionOutcome {
 /**
  * Consume the installed strategy under engine-owned bounds. Validate each decision, commit it,
  * then update the disposable view. Summary model calls retain the Run's response-buffer and
- * budget guards; pricing reads the selected Model's identity inside the same provision scope.
+ * budget guards; default summaries also obey the captured Model's input allowance. Pricing
+ * reads the selected Model's identity inside the same provision scope.
  */
 const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirements>(
   agent: AgentValue,
@@ -3275,10 +3290,12 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   source: Prompt.Prompt,
   turn: number,
   options: RunOptions<HookError, HookRequirements>,
+  resolvedModelInputLimit: number | undefined,
+  messageTokenEstimator: ContextMessageTokenEstimator | undefined,
   targetTokens: number | undefined,
   trigger: "pressure" | "overflow" | "requested",
   modelCallAllowed = true,
-  requested?: ContextRolloverRequest & { readonly through: number },
+  requested?: ContextRolloverSelection,
 ): Effect.Effect<
   CompactionOutcome,
   AgentPolicyError | ModelProtocolError | AiError.AiError | CompactionError | HookError,
@@ -3372,6 +3389,21 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       state.protectSystemMessages = true;
     }
 
+    const resolvedRequest =
+      requested === undefined
+        ? undefined
+        : { ...requested, through: requested.through ?? Math.max(0, state.protectedStart) };
+
+    if (
+      requested !== undefined &&
+      requested.through === undefined &&
+      resolvedRequest !== undefined &&
+      (resolvedRequest.through <= (state.replacement?.through ?? 0) ||
+        collectCoveredMessages(messages, state, resolvedRequest.through).length === 0)
+    ) {
+      return { events };
+    }
+
     if (allowance.turn !== turn) {
       allowance.turn = turn;
       allowance.summaryCalls = 0;
@@ -3382,13 +3414,27 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         message: "Compaction already replaced this Turn's context",
       });
     }
-    const before = yield* estimateContextTokens(buildCompactedView(messages, state));
+
+    const before = yield* estimateContextTokens(
+      buildCompactedView(messages, state),
+      messageTokenEstimator,
+    );
 
     const summarize = (summarizerPrompt: Prompt.Prompt, model?: CompactionModelLayer) => {
       const generate = Effect.gen(function* () {
         if (allowance.summaryCalls++ > 0 || !modelCallAllowed) {
           return yield* CompactionError.make({
             message: "Compaction exceeded its summary-call allowance",
+          });
+        }
+        if (
+          model === undefined &&
+          resolvedModelInputLimit !== undefined &&
+          (yield* estimateContextTokens(summarizerPrompt.content, messageTokenEstimator)) >
+            resolvedModelInputLimit
+        ) {
+          return yield* CompactionError.make({
+            message: "Compaction summary request exceeds the resolved model input limit",
           });
         }
         const pieces: Array<string> = [];
@@ -3542,7 +3588,10 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         turn,
         trigger,
         modelCallAllowed,
-        ...(requested === undefined ? {} : { requested }),
+        ...(messageTokenEstimator === undefined
+          ? {}
+          : { estimateMessageTokens: messageTokenEstimator }),
+        ...(resolvedRequest === undefined ? {} : { requested: resolvedRequest }),
         summarize,
       })
       .pipe(
@@ -3562,11 +3611,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
             const next = { ...state, lastViewLength: -1 };
 
             if (
-              requested !== undefined &&
-              (decision.kind !== "rollover" || decision.through !== requested.through)
+              resolvedRequest !== undefined &&
+              (decision.kind !== "rollover" || decision.through !== resolvedRequest.through)
             ) {
               return yield* CompactionError.make({
-                message: "Requested rollover must cover exactly its settled Tool batch",
+                message: "Requested rollover must cover exactly its selected source boundary",
               });
             }
             if (decision.kind === "rollover") {
@@ -3619,7 +3668,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
               }
               next.clearedThrough = decision.through;
             }
-            const after = yield* estimateContextTokens(buildCompactedView(messages, next));
+
+            const after = yield* estimateContextTokens(
+              buildCompactedView(messages, next),
+              messageTokenEstimator,
+            );
 
             if (decision.kind === "rollover" && trigger !== "requested" && after >= before) {
               return yield* CompactionError.make({
@@ -4608,8 +4661,46 @@ const makeTurn = <
         ...(outputContractMessage === undefined ? {} : { outputContract: outputContractMessage }),
       };
 
-      const modelContext =
+      const modelContext: PreparedRunContext =
         options.context === undefined ? { prompt } : yield* options.context.prepare(contextRequest);
+
+      const callContext =
+        modelContext.modelCall === undefined
+          ? undefined
+          : yield* Schema.decodeUnknownEffect(ModelCallContext)(
+              modelContext.modelCall.context,
+            ).pipe(
+              Effect.mapError((cause) =>
+                CompactionError.make({ message: "Invalid resolved model context bounds", cause }),
+              ),
+            );
+
+      const contextTokenLimit =
+        callContext === undefined
+          ? policy.contextTokenLimit
+          : Math.max(
+              0,
+              Math.min(
+                policy.contextTokenLimit ?? Infinity,
+                callContext.maxInputTokens ?? Infinity,
+                callContext.contextCapacity - callContext.outputReserveTokens,
+              ) - callContext.uncountedOverheadTokens,
+            );
+
+      context.windowContextTokenLimit = contextTokenLimit;
+      const toolSchemaTransformer = modelContext.modelCall?.toolSchemaTransformer;
+      const messageTokenEstimator = modelContext.modelCall?.estimateMessageTokens;
+
+      const estimateCallTokens = (messages: ReadonlyArray<Prompt.Message>) =>
+        estimateContextTokens(messages, messageTokenEstimator);
+
+      const modelServices =
+        modelContext.modelCall === undefined
+          ? undefined
+          : yield* Layer.build(Layer.fresh(modelContext.modelCall.model));
+
+      const withCallModel = <A, E, R>(operation: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+        modelServices === undefined ? operation : Effect.provide(operation, modelServices);
 
       const priorCompactionPrefix = context.preparedCompactionSource?.prefix;
 
@@ -4688,6 +4779,24 @@ const makeTurn = <
           priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls ||
           context.tokenExhausted);
 
+      const modelToolChoice = (): LanguageModel.ToolChoice<string> | undefined => {
+        const terminalToolChoiceOnly =
+          finalAnswerOnly ||
+          (agent.definition.completion?.required === true &&
+            policy.onExhaustion === "fail" &&
+            turn === bounds.maxTurns);
+
+        return terminalToolChoiceOnly
+          ? agent.definition.completion === undefined
+            ? "none"
+            : agent.definition.completion.required === true
+              ? { tool: agent.definition.completion.tool }
+              : { mode: "auto", oneOf: [agent.definition.completion.tool] }
+          : agent.definition.completion?.required === true
+            ? "required"
+            : undefined;
+      };
+
       if (finalAnswerOnly && context.exhaustedDimension === undefined) {
         // First-cause dimension marker (the RUN-021 grant-flow marker).
         context.exhaustedDimension =
@@ -4713,13 +4822,13 @@ const makeTurn = <
       // compaction, so the view must fit the limit with the contract the
       // engine will append.
       const admissionRequired =
-        policy.contextTokenLimit !== undefined ||
+        contextTokenLimit !== undefined ||
         (!context.finalizing && !finalAnswerOnly && policy.tokenBudget !== undefined);
 
       const outputContractTokens =
         !admissionRequired || outputContractMessage === undefined
           ? 0
-          : yield* estimateContextTokens([
+          : yield* estimateCallTokens([
               Prompt.makeMessage("system", { content: outputContractMessage }),
             ]);
 
@@ -4727,9 +4836,50 @@ const makeTurn = <
         ? Prompt.empty
         : yield* outgoingModelPrompt(policy, context, Prompt.empty, turn, priorToolCalls);
 
-      const canonicalDecorationTokens = !admissionRequired
+      const estimateToolSchemaTokens = Effect.suspend(() => {
+        const choice = modelToolChoice();
+
+        const tools = Object.values(agent.definition.toolkit.tools).filter((tool) =>
+          typeof choice === "object" && "oneOf" in choice ? choice.oneOf.includes(tool.name) : true,
+        );
+
+        return callContext === undefined || tools.length === 0
+          ? Effect.succeed(0)
+          : Effect.try({
+              try: () =>
+                JSON.stringify(
+                  tools.map((tool) =>
+                    Tool.isProviderDefined(tool)
+                      ? { type: tool.providerName, args: tool.args }
+                      : {
+                          name: tool.name,
+                          description: Tool.getDescription(tool),
+                          parameters: Tool.getJsonSchema(
+                            tool.setParameters(Schema.toEncoded(tool.parametersSchema)),
+                            { transformer: toolSchemaTransformer },
+                          ),
+                        },
+                  ),
+                ),
+              catch: (cause) =>
+                CompactionError.make({
+                  message: "Could not estimate native Tool schemas",
+                  cause,
+                }),
+            }).pipe(
+              Effect.flatMap((content) =>
+                estimateCallTokens([Prompt.makeMessage("system", { content })]),
+              ),
+            );
+      });
+
+      let toolSchemaTokens = yield* estimateToolSchemaTokens;
+
+      const canonicalDecorationPromptTokens = !admissionRequired
         ? 0
-        : outputContractTokens + (yield* estimateContextTokens(canonicalDecoration.content));
+        : outputContractTokens + (yield* estimateCallTokens(canonicalDecoration.content));
+
+      const canonicalDecorationTokens = () => toolSchemaTokens + canonicalDecorationPromptTokens;
 
       // Preparation may replace an existing prefix, and transient context may
       // change independently of history. Only ordinary append-only history can
@@ -4737,7 +4887,7 @@ const makeTurn = <
       const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
         options.context === undefined && options.transientContext === undefined
           ? nextContextEstimate(context, view)
-          : estimateContextTokens(view);
+          : estimateCallTokens(view);
 
       let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
       let sourceTokens: number | undefined;
@@ -4760,6 +4910,43 @@ const makeTurn = <
       };
 
       let preEvents: ReadonlyArray<RunEvent> = [];
+
+      if (modelContext.rollover !== undefined) {
+        if (context.pendingContextToolCallId !== undefined) {
+          return yield* CompactionError.make({
+            message: "Host and Tool rollover requests cannot share a Turn",
+          });
+        }
+
+        const requested = yield* Schema.decodeUnknownEffect(ContextRolloverSelection)(
+          modelContext.rollover,
+        ).pipe(
+          Effect.mapError((cause) =>
+            CompactionError.make({ message: "Invalid host context rollover", cause }),
+          ),
+        );
+
+        const outcome = yield* compactContext(
+          agent,
+          context,
+          modelContext.prompt,
+          turn,
+          options,
+          callContext === undefined ? undefined : contextTokenLimit,
+          messageTokenEstimator,
+          contextTokenLimit === undefined
+            ? undefined
+            : Math.max(0, contextTokenLimit - canonicalDecorationTokens()),
+          "requested",
+          false,
+          requested,
+        ).pipe(withCallModel);
+
+        if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
+          context.compaction.lastCompactionTurn = turn;
+        preEvents = outcome.events;
+        refreshPrepared();
+      }
 
       const lastToolIndex =
         context.pendingContextToolCallId === undefined
@@ -4813,13 +5000,15 @@ const makeTurn = <
             modelContext.prompt,
             turn,
             options,
-            policy.contextTokenLimit === undefined
+            callContext === undefined ? undefined : contextTokenLimit,
+            messageTokenEstimator,
+            contextTokenLimit === undefined
               ? undefined
-              : Math.max(0, policy.contextTokenLimit - canonicalDecorationTokens),
+              : Math.max(0, contextTokenLimit - canonicalDecorationTokens()),
             "requested",
             false,
             { ...request, through: lastToolIndex + 1 },
-          );
+          ).pipe(withCallModel);
 
           context.compaction.lastCompactionTurn = turn;
           preEvents = outcome.events;
@@ -4836,7 +5025,7 @@ const makeTurn = <
             ? undefined
             : Math.max(0, policy.tokenBudget - consumedTokens - policy.completionReserveTokens);
 
-        const contextCallTarget = policy.contextTokenLimit;
+        const contextCallTarget = contextTokenLimit;
 
         const fullTarget =
           tokenCallTarget === undefined
@@ -4848,9 +5037,9 @@ const makeTurn = <
         const sourceTarget =
           fullTarget === undefined
             ? undefined
-            : Math.max(0, fullTarget - canonicalDecorationTokens);
+            : Math.max(0, fullTarget - canonicalDecorationTokens());
 
-        const estimate = (yield* preparedSourceTokens) + canonicalDecorationTokens;
+        const estimate = (yield* preparedSourceTokens) + canonicalDecorationTokens();
         const contextPressure = contextCallTarget !== undefined && estimate > contextCallTarget;
         const tokenPressure = tokenCallTarget !== undefined && estimate > tokenCallTarget;
 
@@ -4871,23 +5060,24 @@ const makeTurn = <
             modelContext.prompt,
             turn,
             options,
+            callContext === undefined ? undefined : contextTokenLimit,
+            messageTokenEstimator,
             sourceTarget,
             "pressure",
             !tokenPressure,
-          );
+          ).pipe(withCallModel);
 
           preEvents = [...preEvents, ...outcome.events];
           if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
             refreshPrepared();
         }
 
-        const preparedEstimate = (yield* preparedSourceTokens) + canonicalDecorationTokens;
-
         // A summarizing compaction is itself a priced model call. Recompute
         // admission from its reported usage instead of carrying the stale
         // pre-compaction balance into the research call that follows.
         if (context.tokenExhausted) {
           finalAnswerOnly = true;
+          toolSchemaTokens = yield* estimateToolSchemaTokens;
         }
 
         const preparedTokenCallTarget =
@@ -4900,15 +5090,15 @@ const makeTurn = <
                   policy.completionReserveTokens,
               );
 
-        if (contextCallTarget !== undefined && preparedEstimate > contextCallTarget) {
-          return yield* ContextBudgetError.make({
-            message: `Compaction could not fit the next model prompt inside the ${contextCallTarget} token context target`,
-            estimatedTokens: preparedEstimate,
-            targetTokens: contextCallTarget,
-            completionReserveTokens: policy.completionReserveTokens,
-          });
-        }
-        if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
+        let preparedEstimate = (yield* preparedSourceTokens) + canonicalDecorationTokens();
+
+        if (
+          (callContext !== undefined ||
+            contextCallTarget === undefined ||
+            preparedEstimate <= contextCallTarget) &&
+          preparedTokenCallTarget !== undefined &&
+          preparedEstimate > preparedTokenCallTarget
+        ) {
           const error = AgentPolicyError.make({
             limit: "tokens",
             message: `The next research call would consume this Run's ${policy.completionReserveTokens} token completion reserve`,
@@ -4920,6 +5110,16 @@ const makeTurn = <
           context.tokenExhausted = true;
           context.exhaustedDimension ??= "tokens";
           finalAnswerOnly = true;
+          toolSchemaTokens = yield* estimateToolSchemaTokens;
+          preparedEstimate = (yield* preparedSourceTokens) + canonicalDecorationTokens();
+        }
+        if (contextCallTarget !== undefined && preparedEstimate > contextCallTarget) {
+          return yield* ContextBudgetError.make({
+            message: `Compaction could not fit the next model prompt inside the ${contextCallTarget} token context target`,
+            estimatedTokens: preparedEstimate,
+            targetTokens: contextCallTarget,
+            completionReserveTokens: policy.completionReserveTokens,
+          });
         }
       }
 
@@ -4935,15 +5135,15 @@ const makeTurn = <
           ? canonicalDecoration
           : yield* outgoingModelPrompt(policy, context, transientContext, turn, priorToolCalls);
 
-      const derivedPromptTokens = !admissionRequired
+      const derivedPromptContentTokens = !admissionRequired
         ? 0
         : options.transientContext === undefined
-          ? canonicalDecorationTokens
-          : outputContractTokens + (yield* estimateContextTokens(derivedPrompt.content));
+          ? canonicalDecorationPromptTokens
+          : outputContractTokens + (yield* estimateCallTokens(derivedPrompt.content));
+
+      const derivedPromptTokens = () => toolSchemaTokens + derivedPromptContentTokens;
 
       if (!context.finalizing && admissionRequired && options.transientContext !== undefined) {
-        const contextTokenLimit = policy.contextTokenLimit;
-
         const tokenCallTarget =
           policy.tokenBudget === undefined || finalAnswerOnly
             ? undefined
@@ -4962,9 +5162,9 @@ const makeTurn = <
               : Math.min(tokenCallTarget, contextTokenLimit);
 
         const sourceTarget =
-          fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens);
+          fullTarget === undefined ? undefined : Math.max(0, fullTarget - derivedPromptTokens());
 
-        let preparedEstimate = (yield* preparedSourceTokens) + derivedPromptTokens;
+        let preparedEstimate = (yield* preparedSourceTokens) + derivedPromptTokens();
 
         const contextPressure =
           contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit;
@@ -4998,18 +5198,21 @@ const makeTurn = <
             modelContext.prompt,
             turn,
             options,
+            callContext === undefined ? undefined : contextTokenLimit,
+            messageTokenEstimator,
             sourceTarget,
             "pressure",
             !tokenPressure,
-          );
+          ).pipe(withCallModel);
 
           preEvents = [...preEvents, ...outcome.events];
           if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
             refreshPrepared();
-          preparedEstimate = (yield* preparedSourceTokens) + derivedPromptTokens;
+          preparedEstimate = (yield* preparedSourceTokens) + derivedPromptTokens();
         }
         if (context.tokenExhausted) {
           finalAnswerOnly = true;
+          toolSchemaTokens = yield* estimateToolSchemaTokens;
         }
 
         const preparedTokenCallTarget =
@@ -5022,15 +5225,13 @@ const makeTurn = <
                   policy.completionReserveTokens,
               );
 
-        if (contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit) {
-          return yield* ContextBudgetError.make({
-            message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
-            estimatedTokens: preparedEstimate,
-            targetTokens: contextTokenLimit,
-            completionReserveTokens: policy.completionReserveTokens,
-          });
-        }
-        if (preparedTokenCallTarget !== undefined && preparedEstimate > preparedTokenCallTarget) {
+        if (
+          (callContext !== undefined ||
+            contextTokenLimit === undefined ||
+            preparedEstimate <= contextTokenLimit) &&
+          preparedTokenCallTarget !== undefined &&
+          preparedEstimate > preparedTokenCallTarget
+        ) {
           const error = AgentPolicyError.make({
             limit: "tokens",
             message: `The next research call would consume this Run's ${policy.completionReserveTokens} token completion reserve`,
@@ -5042,6 +5243,16 @@ const makeTurn = <
           context.tokenExhausted = true;
           context.exhaustedDimension ??= "tokens";
           finalAnswerOnly = true;
+          toolSchemaTokens = yield* estimateToolSchemaTokens;
+        }
+        preparedEstimate = (yield* preparedSourceTokens) + derivedPromptTokens();
+        if (contextTokenLimit !== undefined && preparedEstimate > contextTokenLimit) {
+          return yield* ContextBudgetError.make({
+            message: `Transient context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+            estimatedTokens: preparedEstimate,
+            targetTokens: contextTokenLimit,
+            completionReserveTokens: policy.completionReserveTokens,
+          });
         }
       }
       if (finalAnswerOnly) {
@@ -5075,12 +5286,6 @@ const makeTurn = <
             priorToolCalls,
           ).pipe(
             Effect.flatMap((outgoing) => {
-              const terminalToolChoiceOnly =
-                finalAnswerOnly ||
-                (agent.definition.completion?.required === true &&
-                  policy.onExhaustion === "fail" &&
-                  turn === bounds.maxTurns);
-
               const providerPrompt =
                 outputContractMessage === undefined
                   ? outgoing
@@ -5091,9 +5296,9 @@ const makeTurn = <
               // finalization and any future path that bypasses research
               // compaction admission. Runs without either hook keep their
               // provider-reported incremental estimate.
-              const contextTokenLimit = policy.contextTokenLimit;
 
-              return estimateContextTokens(providerPrompt.content).pipe(
+              return estimateCallTokens(providerPrompt.content).pipe(
+                Effect.map((tokens) => tokens + toolSchemaTokens),
                 Effect.tap((estimatedTokens) =>
                   contextTokenLimit !== undefined &&
                   (options.context !== undefined || options.transientContext !== undefined) &&
@@ -5123,20 +5328,7 @@ const makeTurn = <
                       disableToolCallResolution: true,
                       // Exact required Tool selection preserves the toolkit. A oneOf
                       // subset can drop other schemas and break the cached prefix.
-                      ...(terminalToolChoiceOnly
-                        ? agent.definition.completion === undefined
-                          ? { toolChoice: "none" as const }
-                          : agent.definition.completion.required === true
-                            ? { toolChoice: { tool: agent.definition.completion.tool } }
-                            : {
-                                toolChoice: {
-                                  mode: "auto" as const,
-                                  oneOf: [agent.definition.completion.tool],
-                                },
-                              }
-                        : agent.definition.completion?.required === true
-                          ? { toolChoice: "required" as const }
-                          : {}),
+                      ...(modelToolChoice() === undefined ? {} : { toolChoice: modelToolChoice() }),
                     }),
                     options.budget,
                   ).pipe(
@@ -5188,7 +5380,6 @@ const makeTurn = <
               return Stream.fail(error);
             }
             const message = overflowText(error);
-            const contextTokenLimit = policy.contextTokenLimit;
 
             if (trace.parts.length > 0 || contextTokenLimit === undefined) {
               return Stream.fail(ContextOverflowError.make({ message, retried: false }));
@@ -5212,25 +5403,29 @@ const makeTurn = <
                   modelContext.prompt,
                   turn,
                   options,
-                  Math.max(0, contextTokenLimit - derivedPromptTokens),
+                  callContext === undefined ? undefined : contextTokenLimit,
+                  messageTokenEstimator,
+                  Math.max(0, contextTokenLimit - derivedPromptTokens()),
                   "overflow",
-                ).pipe(
-                  Effect.mapError(
-                    (inner): AgentRuntimeFailure<typeof agent, HookError, InstructionError> =>
-                      inner instanceof AiError.AiError &&
-                      isContextOverflowMessage(overflowText(inner))
-                        ? ContextOverflowError.make({
-                            message: overflowText(inner),
-                            retried: true,
-                          })
-                        : inner,
-                  ),
-                );
+                )
+                  .pipe(withCallModel)
+                  .pipe(
+                    Effect.mapError(
+                      (inner): AgentRuntimeFailure<typeof agent, HookError, InstructionError> =>
+                        inner instanceof AiError.AiError &&
+                        isContextOverflowMessage(overflowText(inner))
+                          ? ContextOverflowError.make({
+                              message: overflowText(inner),
+                              retried: true,
+                            })
+                          : inner,
+                    ),
+                  );
 
                 if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
                   refreshPrepared();
 
-                const retryEstimate = (yield* preparedSourceTokens) + derivedPromptTokens;
+                const retryEstimate = (yield* preparedSourceTokens) + derivedPromptTokens();
 
                 if (retryEstimate > contextTokenLimit) {
                   return yield* ContextBudgetError.make({
@@ -5291,7 +5486,9 @@ const makeTurn = <
 
           if (hasProviderCalls && turnCompletion === undefined) {
             return failRunEventStream(
-              ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }),
+              ModelProtocolError.make({
+                message: "Model response omitted staged Turn completion",
+              }),
             );
           }
           const completionTool = agent.definition.completion?.tool;
@@ -5797,11 +5994,13 @@ const makeTurn = <
         }),
       );
 
-      return Stream.fromIterable(preEvents).pipe(
+      const events = Stream.fromIterable(preEvents).pipe(
         Stream.concat(started),
         Stream.concat(response),
         Stream.concat(continuation),
       );
+
+      return modelServices === undefined ? events : Stream.provideContext(events, modelServices);
     }),
   );
 
@@ -6633,6 +6832,7 @@ function streamWithCompletion<
             compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
             windowId: options.initialContextWindowId ?? contextWindowId(runId, 0),
             windowTokens: resumeUsage?.lastInputTokens ?? 0,
+            windowContextTokenLimit: agent.definition.policy.contextTokenLimit,
             pendingContextToolCallId: options.pendingContextToolCallId,
             bufferLimits: effectiveRunBufferLimits(options.bufferLimits),
             sequence: 0,
@@ -6880,7 +7080,7 @@ function streamWithCompletion<
                   context.windowTokens + context.lastOutputTokens,
                 );
 
-                const contextTokenLimit = agent.definition.policy.contextTokenLimit ?? null;
+                const contextTokenLimit = context.windowContextTokenLimit ?? null;
 
                 return ContextWindowStatus.make({
                   threadId: context.threadId,

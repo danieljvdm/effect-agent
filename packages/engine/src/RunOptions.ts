@@ -20,9 +20,10 @@ import {
 } from "@effect-agent/core/SubagentContract";
 import { type ModelCallUsage } from "@effect-agent/core/Usage";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
-import type { Prompt, Response } from "effect/unstable/ai";
+import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
 
-import type { CompactionError } from "./ContextCompactor.ts";
+import type { CompactionError, ContextMessageTokenEstimator } from "./ContextCompactor.ts";
+import type { ContextRolloverSelection, ModelCallContext } from "./ContextWindow.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
@@ -208,9 +209,47 @@ export interface RunContextRequest {
   readonly outputContract?: string | undefined;
 }
 
+/**
+ * One captured provider configuration and its context bounds. Build the native Model Layer
+ * from the same resolved values as context; do not defer route selection inside its requests.
+ * Capture provider requirements in the preparation Layer. The engine acquires this closed
+ * Layer once per Turn and keeps it through compaction, dispatch, accounting, and overflow retry.
+ */
+export interface ResolvedModelCall {
+  readonly model: Layer.Layer<LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName>;
+  readonly context: ModelCallContext;
+  /**
+   * The selected provider's native Tool schema transformer, such as toCodecOpenAI or
+   * toCodecAnthropic. Omission uses generic JSON Schema and is suitable only when the provider
+   * does not rewrite schemas. Select it from the same captured configuration as the Model Layer.
+   * Provider-defined Tools count their native name/configuration arguments instead; their
+   * provider-generated call parameter schemas are never transformed into function declarations.
+   */
+  readonly toolSchemaTransformer?: LanguageModel.CodecTransformer | undefined;
+  /**
+   * Replace the entire estimate of a message, including its framing, with a non-negative finite
+   * integer. Undefined uses the native structural estimate for that message. Capture any model
+   * or content-specific reservation before returning this callback; it must be deterministic for
+   * copied message content and same-Turn retries, without consulting mutable provider state.
+   * The engine shares it across admission, built-in compaction sizing, and default summaries.
+   * Do not also charge a replaced message through uncountedOverheadTokens.
+   */
+  readonly estimateMessageTokens?: ContextMessageTokenEstimator | undefined;
+}
+
 /** Prepared model-only context returned by a context adapter. */
 export interface PreparedRunContext {
   readonly prompt: Prompt.Prompt;
+  /** Resolves actual model selection and admission together, once at this Turn boundary. */
+  readonly modelCall?: ResolvedModelCall | undefined;
+  /**
+   * Start a fresh native context window even below capacity. Coverage must map to a complete
+   * canonical prefix for durable Runs and cannot discard protected input or split Tool pairs.
+   * Omit through to select prior history before this Run's protected instructions/input; this
+   * is a no-op when no prior prefix remains, including after a committed reset is recovered.
+   * Leave the source prefix intact; the engine commits and applies the selected rollover.
+   */
+  readonly rollover?: ContextRolloverSelection | undefined;
 }
 
 /**

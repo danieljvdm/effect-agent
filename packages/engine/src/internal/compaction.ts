@@ -1,5 +1,7 @@
+import { Option, Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
+import type { ContextMessageTokenEstimator } from "../ContextCompactor.ts";
 import { boundedCanonicalJsonSnapshot } from "./provider-result-staging.ts";
 
 /**
@@ -98,14 +100,38 @@ export const estimateMessageTokens = (message: Prompt.Message): number => {
 };
 
 /** Sum of `estimateMessageTokens` over a message array. */
-export const estimatePromptTokens = (messages: ReadonlyArray<Prompt.Message>): number => {
+export const estimatePromptTokens = (
+  messages: ReadonlyArray<Prompt.Message>,
+  estimate: (message: Prompt.Message) => number = estimateMessageTokens,
+): number => {
   let total = 0;
 
   for (const message of messages) {
-    total += estimateMessageTokens(message);
+    total += estimate(message);
   }
 
   return total;
+};
+
+const isTokenEstimate = Schema.is(Schema.Natural);
+
+/** Validate each replacement at the Effect caller's boundary without throwing from arithmetic. */
+export const evaluateMessageTokenEstimates = <A>(
+  override: ContextMessageTokenEstimator | undefined,
+  operation: (estimate: (message: Prompt.Message) => number) => A,
+): Option.Option<A> => {
+  let valid = true;
+
+  const value = operation((message) => {
+    const replacement = override?.(message);
+    const estimate = replacement === undefined ? estimateMessageTokens(message) : replacement;
+
+    if (!isTokenEstimate(estimate)) valid = false;
+
+    return estimate;
+  });
+
+  return valid ? Option.some(value) : Option.none();
 };
 
 /**
@@ -283,6 +309,7 @@ export const choosePruneBound = (
   state: ContextCompactionState,
   keepRecentTokens: number,
   targetTokens?: number,
+  estimate: (message: Prompt.Message) => number = estimateMessageTokens,
 ): number => {
   const toolIndices: Array<number> = [];
 
@@ -309,10 +336,10 @@ export const choosePruneBound = (
 
     if (message === undefined) continue;
     if (position === toolIndices.length - 1) {
-      budget -= estimateMessageTokens(message);
+      budget -= estimate(message);
       continue;
     }
-    const cost = estimateMessageTokens(message);
+    const cost = estimate(message);
 
     if (budget - cost >= 0 && index >= state.clearedThrough) {
       budget -= cost;
@@ -329,6 +356,7 @@ export const choosePruneBound = (
 
   let estimated = estimatePromptTokens(
     buildCompactedView(source, { ...state, clearedThrough: through }),
+    estimate,
   );
 
   for (
@@ -343,8 +371,7 @@ export const choosePruneBound = (
 
     if (message === undefined) continue;
     through = index + 1;
-    estimated -=
-      estimateMessageTokens(message) - estimateMessageTokens(clearedToolMessage(message));
+    estimated -= estimate(message) - estimate(clearedToolMessage(message));
   }
 
   return through;
@@ -361,6 +388,7 @@ export const chooseSummarizeCut = (
   source: ReadonlyArray<Prompt.Message>,
   state: ContextCompactionState,
   keepRecentTokens: number,
+  estimate: (message: Prompt.Message) => number = estimateMessageTokens,
 ): number => {
   let kept = 0;
   let cut = 0;
@@ -369,7 +397,7 @@ export const chooseSummarizeCut = (
     const message = source[index];
 
     if (message === undefined) continue;
-    kept += estimateMessageTokens(renderMessage(state, message, index));
+    kept += estimate(renderMessage(state, message, index));
     if (kept >= keepRecentTokens) {
       cut = index;
       break;
@@ -486,9 +514,11 @@ export const buildRolloverHandoff = (
   state: ContextCompactionState,
   targetTokens: number | undefined,
   through = source.length,
+  estimate: (message: Prompt.Message) => number = estimateMessageTokens,
 ): string | undefined => {
   const protectedTokens = estimatePromptTokens(
     source.filter((_, index) => index >= through || isProtected(state, source, index)),
+    estimate,
   );
 
   const maxChars = Math.min(

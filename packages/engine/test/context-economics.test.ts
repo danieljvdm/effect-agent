@@ -1,5 +1,9 @@
 import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicyError, ModelProtocolError } from "@effect-agent/core/AgentError";
+import {
+  AgentPolicyError,
+  ContextBudgetError,
+  ModelProtocolError,
+} from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
@@ -10,10 +14,12 @@ import {
   UnserializableToolResult,
 } from "@effect-agent/core/ToolResult";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
 import {
   type RunDurabilityHook,
   type RunTurnResume,
   type RunUsageDelta,
+  type RunContextHook,
 } from "@effect-agent/engine/RunOptions";
 import { expect, layer } from "@effect/vitest";
 import { Cause, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -26,6 +32,8 @@ import {
   Tool,
   Toolkit,
 } from "effect/unstable/ai";
+import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput";
+import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import { formatRunStatus } from "../src/internal/agent-runtime.ts";
 import { RunContextPreparationPassthrough } from "../src/RunOptions.ts";
@@ -3075,4 +3083,241 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         expect(deliveries).toEqual(required ? ["delivered"] : []);
       }),
   );
+  // Regression seam: https://linear.app/reve/issue/KOM-125
+  for (const [provider, transformer] of [
+    ["OpenAI", toCodecOpenAI],
+    ["Anthropic", toCodecAnthropic],
+  ] as const) {
+    it.effect(`accounts for ${provider} native Tool schema expansion before dispatch`, () =>
+      Effect.gen(function* () {
+        const lookup = Tool.make("expanded_lookup", {
+          parameters: Schema.Struct(
+            Object.fromEntries(
+              Array.from({ length: 10 }, (_, index) => [
+                `record${index}`,
+                Schema.Record(Schema.String, Schema.String),
+              ]),
+            ),
+          ),
+          success: Schema.String,
+        });
+
+        const tools = Toolkit.make(lookup);
+
+        const definition = Agent.make("provider-schema-expansion", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Return a JSON string.",
+          toolkit: tools,
+          policy: { maxTurns: 2, maxToolCalls: 2, maxDuration: "30 seconds", runStatus: "off" },
+        });
+
+        const run = (toolSchemaTransformer?: LanguageModel.CodecTransformer) =>
+          Effect.gen(function* () {
+            const { model, requests } = scriptedModel([finalParts('"done"')]);
+
+            const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+              context: {
+                prepare: (request) =>
+                  Effect.succeed({
+                    prompt: request.source,
+                    modelCall: {
+                      model,
+                      toolSchemaTransformer,
+                      context: ModelCallContext.make({
+                        contextCapacity: 1_200,
+                        outputReserveTokens: 100,
+                        uncountedOverheadTokens: 0,
+                      }),
+                    },
+                  }),
+              },
+            }).pipe(
+              Effect.provide(tools.toLayer({ expanded_lookup: () => Effect.succeed("done") })),
+              Effect.exit,
+            );
+
+            return { exit, requests };
+          });
+
+        const generic = yield* run();
+        const native = yield* run(transformer);
+
+        expect(Exit.isSuccess(generic.exit)).toBe(true);
+        expect(generic.requests).toHaveLength(1);
+        expect(failureFrom(native.exit)).toBeInstanceOf(ContextBudgetError);
+        expect(native.requests).toHaveLength(0);
+      }),
+    );
+  }
+
+  for (const timing of ["initial", "canonical-late", "transient-late"] as const) {
+    it.effect(`accounts only selected completion tools after ${timing} finalization`, () =>
+      Effect.gen(function* () {
+        const research = Tool.make("expensive_research", {
+          description: "Research-only schema detail. ".repeat(220),
+          parameters: Schema.Struct({ query: Schema.String }),
+          success: Schema.String,
+        });
+
+        const finish = Tool.make("finish", {
+          parameters: Schema.Struct({ reason: Schema.String }),
+          success: Schema.String,
+        });
+
+        const tools = Toolkit.make(research, finish);
+
+        const definition = Agent.make("selected-completion-schema", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Return a JSON string or finish.",
+          toolkit: tools,
+          policy: {
+            maxTurns: 4,
+            maxToolCalls: 4,
+            maxDuration: "30 seconds",
+            runStatus: "off",
+            tokenBudget: timing === "transient-late" ? 3_000 : 500,
+            completionReserveTokens: timing === "canonical-late" ? 400 : 100,
+          },
+          completion: { tool: "finish", project: ({ result }) => result },
+        });
+
+        const { model, requests } = scriptedModel([finalParts('"done"')]);
+
+        const context: RunContextHook = {
+          prepare: (request) =>
+            Effect.succeed({
+              prompt: request.source,
+              modelCall: {
+                model,
+                toolSchemaTransformer: toCodecOpenAI,
+                context: ModelCallContext.make({
+                  contextCapacity: timing === "transient-late" ? 2_200 : 900,
+                  outputReserveTokens: 100,
+                  uncountedOverheadTokens: 0,
+                }),
+              },
+            }),
+        };
+
+        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+          context,
+          ...(timing === "initial"
+            ? { resumeUsage: { ...emptyResumeUsage, inputTokens: 501 } }
+            : {}),
+          ...(timing === "transient-late"
+            ? { transientContext: { load: () => Effect.succeed("fresh reference ".repeat(300)) } }
+            : {}),
+        }).pipe(
+          Effect.provide(
+            tools.toLayer({
+              expensive_research: () => Effect.die("Research must not run during finalization"),
+              finish: () => Effect.succeed("done"),
+            }),
+          ),
+        );
+
+        expect(result.output).toBe("done");
+        expect(result.finishReason).toBe("budget-exhausted");
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.toolCount).toBe(1);
+        expect(requests[0]?.toolChoice).toEqual({ mode: "auto", oneOf: ["finish"] });
+      }),
+    );
+  }
+  // Regression seam: https://linear.app/reve/issue/KOM-125
+  for (const [kind, parameters] of [
+    ["unknown", Schema.Unknown],
+    ["void", Schema.Void],
+  ] as const) {
+    it.effect(`counts native provider Tool configuration with ${kind} call parameters`, () =>
+      Effect.gen(function* () {
+        const builtin = Tool.providerDefined({
+          id: "provider.builtin",
+          customName: "Builtin",
+          providerName: "builtin",
+          args: Schema.Struct({ configuration: Schema.String }),
+          parameters,
+          success: Schema.String,
+        });
+
+        const user = Tool.make("user_tool", {
+          parameters: Schema.Struct({ query: Schema.String }),
+          success: Schema.String,
+        });
+
+        const dynamic = Tool.dynamic("dynamic_json", {
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+          success: Schema.String,
+        });
+
+        const run = (configuration: string) =>
+          Effect.gen(function* () {
+            const tools = Toolkit.make(builtin({ configuration }), user, dynamic);
+
+            const definition = Agent.make("provider-tool-configuration", {
+              input: Schema.String,
+              output: Schema.String,
+              instructions: "Return a JSON string.",
+              toolkit: tools,
+              policy: { maxTurns: 2, maxToolCalls: 2, maxDuration: "30 seconds", runStatus: "off" },
+            });
+
+            const { model, requests } = scriptedModel([finalParts('"done"')]);
+            let transformations = 0;
+
+            const transformer: LanguageModel.CodecTransformer = (schema) => {
+              transformations += 1;
+
+              return toCodecOpenAI(schema);
+            };
+
+            const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), "input", {
+              context: {
+                prepare: (request) =>
+                  Effect.succeed({
+                    prompt: request.source,
+                    modelCall: {
+                      model,
+                      toolSchemaTransformer: transformer,
+                      context: ModelCallContext.make({
+                        contextCapacity: 1_200,
+                        outputReserveTokens: 100,
+                        uncountedOverheadTokens: 0,
+                      }),
+                    },
+                  }),
+              },
+            }).pipe(
+              Effect.provide(
+                tools.toLayer({
+                  user_tool: () => Effect.succeed("done"),
+                  dynamic_json: () => Effect.succeed("done"),
+                }),
+              ),
+              Effect.exit,
+            );
+
+            return { exit, requests, transformations };
+          });
+
+        const bounded = yield* run("small provider configuration");
+
+        expect(Exit.isSuccess(bounded.exit)).toBe(true);
+        expect(bounded.requests).toHaveLength(1);
+        expect(bounded.requests[0]?.toolCount).toBe(3);
+        // Raw dynamic JSON and provider-generated call parameters bypass function transformers.
+        expect(bounded.transformations).toBe(1);
+        const oversized = yield* run("provider configuration ".repeat(500));
+
+        expect(failureFrom(oversized.exit)).toBeInstanceOf(ContextBudgetError);
+        expect(oversized.requests).toHaveLength(0);
+      }),
+    );
+  }
 });

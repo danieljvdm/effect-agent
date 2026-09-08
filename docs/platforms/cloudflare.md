@@ -348,6 +348,13 @@ while retaining the same hard totals. Authorize that capability only for cleanup
 Limits are captured when the Layer is built; providing different limits around an existing
 writer call does not change them. Do not create a second independently locked DO SQL client.
 
+`ThreadObject.layer` exposes its existing generic Effect `SqlClient` through `ThreadObject.Services`.
+Build optional owner-local repositories after that Layer and reuse this client. For local Memory,
+provide `memoryStoreLayer` with explicit `SqlMemoryLimits`, using `defaultDoMemoryStorageLimits`
+from `@effect-agent/storage-cloudflare/DoMemoryStore` or stricter validated limits. The generic SQL
+Memory defaults are not Durable Object limits. Thread Objects install no Memory tables unless
+the host composes the Memory store.
+
 Expected failures cross RPC in Schema-defined envelopes. `MemoryRpcError` distinguishes denied,
 protocol, budget, timeout, and unavailable failures; source and write errors retain their domain tags.
 `cloudflareMemoryWriterLayer(access, principal)` adapts the client for an application's committed

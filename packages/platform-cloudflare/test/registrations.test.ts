@@ -7,9 +7,11 @@ import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/Cloudf
 import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
 import { digestDefinitions } from "@effect-agent/thread/Digest";
 import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runInDurableObject } from "cloudflare:test";
-import { Cause, Context, Crypto, Effect, Exit, Layer, Schema } from "effect";
+import { Cause, Context, Crypto, Effect, Exit, Layer, Option, Schema } from "effect";
 import { DurableObjectState, WorkerEnvironment } from "effect-cf";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
 import {
@@ -32,6 +34,51 @@ const dynamicStub = (thread: string) =>
   env.DYNAMIC_BINDINGS.get(env.DYNAMIC_BINDINGS.idFromName(thread));
 
 describe("Cloudflare Agent registrations", () => {
+  // Regression seam: https://linear.app/reve-ai/issue/KOM-125
+  it("exposes the existing owner SQL client without installing Memory tables", () =>
+    runInDurableObject(stubFor("registration-owner-sql"), (_instance, state) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const tablesBefore = state.storage.sql
+            .exec<{ name: string }>(
+              "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+            )
+            .toArray();
+
+          const runtime = ThreadObject.layer([]).pipe(
+            Layer.provide(ThreadObject.layerConfig(options)),
+            Layer.provide([
+              DurableObjectContext.layer(state, env),
+              ThreadObjectNamespace.layer(env.THREADS),
+            ]),
+          );
+
+          expectTypeOf<Extract<ThreadObject.Services, SqlClient>>().toEqualTypeOf<SqlClient>();
+          expectTypeOf<
+            Extract<Layer.Success<typeof runtime>, SqlClient>
+          >().toEqualTypeOf<SqlClient>();
+
+          const built = yield* Layer.build(runtime);
+          const sql = Context.get(built, SqlClient);
+
+          // Both native tags come from the one memoized infrastructure Layer shared with ports.
+          expect(Context.getOption(built, SqliteClient.SqliteClient)).toEqual(Option.some(sql));
+          expect(yield* sql<{ value: number }>`SELECT 1 AS value`).toEqual([{ value: 1 }]);
+
+          const tablesAfter = state.storage.sql
+            .exec<{ name: string }>(
+              "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+            )
+            .toArray();
+
+          expect(tablesAfter).toEqual(tablesBefore);
+          expect(tablesAfter.some(({ name }) => name.startsWith("effect_agent_memory_"))).toBe(
+            false,
+          );
+        }).pipe(Effect.scoped),
+      ),
+    ));
+
   it("acquires once with each incarnation's yielded host services and identities", async () => {
     const firstThread = `binding-source-first-${crypto.randomUUID()}`;
     const secondThread = `binding-source-second-${crypto.randomUUID()}`;

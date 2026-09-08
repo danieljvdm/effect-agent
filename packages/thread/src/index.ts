@@ -28,3 +28,4 @@ export * as ThreadStore from "./ThreadStore.ts";
 export * as ToolReconciler from "./ToolReconciler.ts";
 export * as WakeScheduler from "./WakeScheduler.ts";
 export * as ThreadContextHistory from "./ThreadContextHistory.ts";
+export * as ThreadContextHistoryProjection from "./ThreadContextHistoryProjection.ts";
