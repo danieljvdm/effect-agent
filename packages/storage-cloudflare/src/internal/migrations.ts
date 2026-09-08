@@ -3,9 +3,10 @@ import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
+import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 /** The current storage version recorded in `effect_agent_meta`. */
-export const CurrentDoStorageVersion = 4;
+export const CurrentDoStorageVersion = 5;
 
 /**
  * The Thread Durable Object schema shares its thread and ledger tables with Node/SQLite.
@@ -257,6 +258,7 @@ export const doMigrations = SqliteMigrator.fromRecord({
     `.withoutTransform;
 
     yield* createMessageDeliveryTables;
+    yield* createRecoveryCheckpointTable;
     yield* sql`
       CREATE TABLE effect_agent_meta (
         key TEXT PRIMARY KEY NOT NULL,

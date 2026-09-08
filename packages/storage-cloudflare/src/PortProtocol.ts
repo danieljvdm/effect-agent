@@ -50,9 +50,9 @@ import { Schema } from "effect";
  *   `recordChildSettled`;
  * - store: `materialize`, `append`, `read` (one page), `inspectTail`, `export`.
  *
- * Every other port operation is lane-local by construction and is NOT given an envelope:
- * honesty over accidental distribution — the routing layer fails such calls fast and typed
- * instead of quietly widening the distributed surface.
+ * Every other port operation is lane-local and has no envelope. A foreign disposable
+ * recovery-cache load returns a miss so the caller can replay canonical history. Other
+ * foreign operations fail fast and typed instead of widening the distributed surface.
  *
  * Failures cross the boundary as the `PortFailure` union and re-decode on the caller side to
  * the SAME tagged error types the local facet would have produced, so routed calls keep

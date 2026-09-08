@@ -12,6 +12,7 @@ import {
   DurableStepError,
   ToolExecutionClass,
 } from "@effect-agent/engine/DurableStep";
+import { RunContextPreparation } from "@effect-agent/engine/RunOptions";
 import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
 import { Receipt, type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
 import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
@@ -64,6 +65,7 @@ export const CrashEnv = {
  * - `submit` — durably submit one Submission and print its Receipt.
  * - `abort-ready` — submit, then durably abort the still-unclaimed Submission.
  * - `run` — submit, then drain the lane to Settlement with a single-turn model.
+ * - `run-checkpoint` — roll over before Turn 3 and kill around the recovery-cache write.
  * - `run-two` — submit two FIFO Submissions, then drain the lane.
  * - `run-blocked` — submit, commit Turn 1 (a tool call), then block Turn 2's model stream until
  *   `EFFECT_AGENT_RELEASE_FILE` appears (writing `EFFECT_AGENT_MARKER_FILE` first).
@@ -101,6 +103,7 @@ export const CrashScenario = Schema.Literals([
   "abort-ready",
   "abort-queued",
   "run",
+  "run-checkpoint",
   "run-two",
   "run-blocked",
   "abort-active",
@@ -339,6 +342,68 @@ export const searchDefinition = Agent.make("crash-search", {
 export const searchToolLayer = searchTools.toLayer({
   search: () => Effect.succeed({ available: true }),
 });
+
+export const CHECKPOINT_INSTRUCTIONS = "Keep original checkpoint instructions.";
+export const CHECKPOINT_HANDOFF = "Keep the checkpoint continuation.";
+
+export const checkpointDefinition = Agent.make("crash-checkpoint", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: CHECKPOINT_INSTRUCTIONS,
+  toolkit: searchTools,
+  policy: AgentPolicy.make({
+    maxTurns: 4,
+    maxToolCalls: 3,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+    runStatus: "appended",
+  }),
+});
+
+/** The real host asks for native rollover after two committed tool Turns. */
+export const checkpointContextLayer = Layer.succeed(RunContextPreparation, {
+  hook: {
+    prepare: (request) =>
+      Effect.succeed({
+        prompt: request.source,
+        ...(request.turn === 3 && !JSON.stringify(request.source).includes(CHECKPOINT_HANDOFF)
+          ? { rollover: { handoff: CHECKPOINT_HANDOFF, through: request.source.content.length } }
+          : {}),
+      }),
+  },
+});
+
+export const checkpointParts = (turn: number): ReadonlyArray<Response.StreamPartEncoded> => {
+  const finish = {
+    type: "finish",
+    reason: turn <= 3 ? "tool-calls" : "stop",
+    usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
+  } satisfies Response.StreamPartEncoded;
+
+  return turn <= 3
+    ? [
+        {
+          type: "tool-call",
+          id: `checkpoint-call-${turn}`,
+          name: "search",
+          params: { query: `checkpoint-read-${turn}` },
+          providerExecuted: false,
+        },
+        finish,
+      ]
+    : [...finalParts(CHILD_ANSWER).slice(0, -1), finish];
+};
+
+/** File markers count actual handler invocations across process loss. */
+export const makeCheckpointToolLayer = (dir: string) =>
+  searchTools.toLayer({
+    search: ({ query }) =>
+      Effect.sync(() => {
+        recordSupplierCall(dir, "checkpoint-read", query, "available");
+
+        return { available: true };
+      }),
+  });
 
 const bookPolicy = AgentPolicy.make({
   maxTurns: 3,

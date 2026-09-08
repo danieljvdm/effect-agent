@@ -1,3 +1,4 @@
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
 import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
 import { ScheduleFailpoint, ScheduleFailpointError } from "@effect-agent/thread/Schedule";
 import {
@@ -9,6 +10,13 @@ import {
   SubscriptionFailpoint,
   SubscriptionFailpointError,
 } from "@effect-agent/thread/Subscription";
+import {
+  MAX_THREAD_EXPORT_RECORDS,
+  CheckpointRejected,
+  FenceRejected,
+  ThreadNotMaterialized,
+  type SaveRecoveryCheckpointRequest,
+} from "@effect-agent/thread/ThreadStore";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Exit, Schema } from "effect";
@@ -30,11 +38,13 @@ import {
 import { SqliteStorageFailpoint } from "../SqliteStorageFailpoint.ts";
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { CurrentSqliteStorageVersion, sqliteMigrations } from "./migrations.ts";
+import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
 const BoundedIdentifier = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
-const MAX_RECORDS_PER_THREAD = 65_536;
+const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;
+const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const MAX_STORED_TEXT_BYTES = 16 * 1024 * 1024;
 const MAX_IDENTIFIER_LENGTH = 1_024;
 
@@ -370,10 +380,32 @@ const predecessorColumns = {
   ],
 } as const;
 
-const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")(function* () {
+const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")(function* (
+  version: 8 | 9,
+) {
   const sql = yield* SqlClient.SqlClient;
 
-  for (const [table, expected] of Object.entries(predecessorColumns)) {
+  const expectedColumns =
+    version === 8
+      ? predecessorColumns
+      : {
+          ...predecessorColumns,
+          effect_agent_submissions: [
+            ...predecessorColumns.effect_agent_submissions,
+            "worker_admission_json",
+            "message_admission_json",
+          ],
+          effect_agent_message_deliveries: [
+            "owner_thread_id",
+            "message_id",
+            "version",
+            "state",
+            "deadline_at_millis",
+            "record_json",
+          ],
+        };
+
+  for (const [table, expected] of Object.entries(expectedColumns)) {
     const columns = yield* decodeRows(
       Schema.Array(Schema.Struct({ name: BoundedIdentifier })),
       table,
@@ -385,9 +417,9 @@ const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")
 
     if (columns.length !== names.size || columns.some((column) => !names.has(column.name)))
       return yield* SqliteStorageCompatibilityError.make({
-        actualVersion: 8,
+        actualVersion: version,
         supportedVersion: CurrentSqliteStorageVersion,
-        message: `The v8 ${table} columns do not match the supported predecessor; no upgrade was committed.`,
+        message: `The v${version} ${table} columns do not match the supported predecessor; no upgrade was committed.`,
       });
   }
 });
@@ -439,6 +471,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     version.user_version !== 0 &&
     version.user_version !== 7 &&
     version.user_version !== 8 &&
+    version.user_version !== 9 &&
     version.user_version !== CurrentSqliteStorageVersion
   ) {
     return yield* SqliteStorageCompatibilityError.make({
@@ -447,11 +480,11 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       message:
         `The SQLite file uses unsupported storage version ${version.user_version}; ` +
         `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
-        "Only supported v7 and v8 can be upgraded automatically. Keep the original file and use a compatible library version.",
+        "Only supported v7, v8 and v9 can be upgraded automatically. Keep the original file and use a compatible library version.",
     });
   }
 
-  if (version.user_version === 7 || version.user_version === 8) {
+  if (version.user_version === 7 || version.user_version === 8 || version.user_version === 9) {
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -461,7 +494,9 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             return;
           if (
             current.length !== 1 ||
-            (current[0].user_version !== 7 && current[0].user_version !== 8)
+            (current[0].user_version !== 7 &&
+              current[0].user_version !== 8 &&
+              current[0].user_version !== 9)
           )
             return yield* SqliteStorageCompatibilityError.make({
               actualVersion: -1,
@@ -486,6 +521,16 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
                 "The predecessor store is missing required tables; no upgrade was committed.",
             });
 
+          const recoveryTables =
+            yield* sql`SELECT name FROM sqlite_master WHERE type='table' AND name='effect_agent_recovery_checkpoints'`;
+
+          if (recoveryTables.length !== 0)
+            return yield* SqliteStorageCompatibilityError.make({
+              actualVersion: current[0].user_version,
+              supportedVersion: CurrentSqliteStorageVersion,
+              message:
+                "The predecessor already contains recovery checkpoint storage; refusing ambiguous data without mutation.",
+            });
           if (current[0].user_version === 7) {
             yield* checkV2ThreadLayout();
             for (const statement of [
@@ -516,18 +561,24 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               }),
             );
           }
-          if (current[0].user_version === 8) yield* checkPredecessorLayout();
+          if (current[0].user_version === 8 || current[0].user_version === 9)
+            yield* checkPredecessorLayout(current[0].user_version);
+          if (current[0].user_version !== 9) {
+            yield* failpoint("upgrade:before-mutation");
+            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
+            yield* failpoint("upgrade:after-mutation");
+            yield* failpoint("upgrade:before-mutation");
+            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN message_admission_json TEXT`;
+            yield* failpoint("upgrade:after-mutation");
+            yield* failpoint("upgrade:before-mutation");
+            yield* createMessageDeliveryTables;
+            yield* failpoint("upgrade:after-mutation");
+          }
           yield* failpoint("upgrade:before-mutation");
-          yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
-          yield* failpoint("upgrade:after-mutation");
-          yield* failpoint("upgrade:before-mutation");
-          yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN message_admission_json TEXT`;
-          yield* failpoint("upgrade:after-mutation");
-          yield* failpoint("upgrade:before-mutation");
-          yield* createMessageDeliveryTables;
+          yield* createRecoveryCheckpointTable;
           yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
-          yield* sql`PRAGMA user_version = 9`;
+          yield* sql`PRAGMA user_version = 10`;
           yield* failpoint("upgrade:after-version");
         }),
       )
@@ -618,7 +669,8 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         'effect_agent_approval_decisions',
         'effect_agent_unknown_resolutions',
         'effect_agent_schedules',
-        'effect_agent_message_deliveries'
+        'effect_agent_message_deliveries',
+        'effect_agent_recovery_checkpoints'
       )
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
@@ -630,7 +682,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     requiredRows,
   );
 
-  if (required.length !== 13) {
+  if (required.length !== 14) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,
@@ -1119,27 +1171,52 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
 
         yield* failpoint("export:after-thread-read");
 
-        const recordRows = yield* sql<Record<string, unknown>>`
-            SELECT
-              thread_id,
-              sequence,
-              record_id,
-              batch_id,
-              record_json
-            FROM effect_agent_canonical_records
-            WHERE thread_id = ${threadId}
-            ORDER BY sequence
-          `.pipe(Effect.mapError(storageError("export canonical records")));
+        if (thread.tail_sequence > MAX_RECORDS_PER_THREAD)
+          return yield* SqliteStorageError.make({
+            operation: "export thread",
+            message: "The thread exceeds the current export record limit.",
+          });
+        const records: Array<RecordRow> = [];
+        let afterSequence = ZERO_SEQUENCE;
 
-        return RawThreadExport.make({
-          thread,
-          records: yield* decodeRows(
-            Schema.Array(RecordRow),
-            "effect_agent_canonical_records",
+        while (afterSequence < thread.tail_sequence) {
+          const limit = Math.min(1_024, thread.tail_sequence - afterSequence);
+
+          const request = RawReadRequest.make({
             threadId,
-            recordRows,
-          ),
-        });
+            fromSequenceExclusive: afterSequence,
+            limit,
+          });
+
+          const page = yield* read(request);
+
+          if (
+            page.length !== limit ||
+            page.some((record, index) => record.sequence !== afterSequence + index + 1)
+          ) {
+            return yield* SqliteStorageCorruptionError.make({
+              table: "effect_agent_canonical_records",
+              rowKey: threadId,
+              message: "The exported canonical prefix is not contiguous through its captured tail.",
+            });
+          }
+          records.push(...page);
+          afterSequence = page[page.length - 1].sequence;
+        }
+
+        const beyondTail =
+          yield* sql`SELECT sequence FROM effect_agent_canonical_records WHERE thread_id=${threadId} AND sequence > ${thread.tail_sequence} LIMIT 1`.pipe(
+            Effect.mapError(storageError("verify export tail")),
+          );
+
+        if (beyondTail.length !== 0)
+          return yield* SqliteStorageCorruptionError.make({
+            table: "effect_agent_canonical_records",
+            rowKey: threadId,
+            message: "Canonical records exist beyond the captured thread tail.",
+          });
+
+        return RawThreadExport.make({ thread, records });
       }),
     );
   });
@@ -1236,6 +1313,83 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           )
         `.pipe(Effect.mapError(storageError("insert checkpoint")));
       }),
+    );
+  });
+
+  const saveRecoveryCheckpoint = Effect.fn("SqliteJournal.saveRecoveryCheckpoint")(function* (
+    request: SaveRecoveryCheckpointRequest,
+    checkpointJson: string,
+  ) {
+    const { checkpoint } = request;
+
+    if (
+      checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH ||
+      storedTextBytes(checkpointJson) > MAX_STORED_TEXT_BYTES
+    ) {
+      return yield* SqliteStorageError.make({
+        operation: "save recovery checkpoint",
+        message: "Checkpoint identity or encoded JSON exceeds the SQLite storage bounds.",
+      });
+    }
+    yield* withWriteTransaction("recovery checkpoint transaction")(
+      Effect.gen(function* () {
+        const threads = yield* getThread(checkpoint.threadId);
+        const thread = threads[0];
+
+        if (thread === undefined)
+          return yield* ThreadNotMaterialized.make({ threadId: checkpoint.threadId });
+        if (request.producerEpoch !== thread.producer_epoch)
+          return yield* FenceRejected.make({
+            threadId: checkpoint.threadId,
+            actualEpoch: thread.producer_epoch,
+            attemptedEpoch: request.producerEpoch,
+          });
+        if (checkpoint.throughSequence > thread.tail_sequence)
+          return yield* CheckpointRejected.make({
+            threadId: checkpoint.threadId,
+            reason: "ahead-of-tail",
+          });
+
+        const digests =
+          checkpoint.throughSequence === 0
+            ? [EMPTY_TAIL_DIGEST]
+            : yield* getTailDigestAt(checkpoint.threadId, checkpoint.throughSequence);
+
+        if (digests.length !== 1 || digests[0] !== checkpoint.tailDigest)
+          return yield* CheckpointRejected.make({
+            threadId: checkpoint.threadId,
+            reason: "digest-mismatch",
+          });
+
+        yield* failpoint("save-recovery-checkpoint:before");
+        yield* sql`
+          INSERT INTO effect_agent_recovery_checkpoints (thread_id, through_sequence, tail_digest, checkpoint_json)
+          VALUES (${checkpoint.threadId}, ${checkpoint.throughSequence}, ${checkpoint.tailDigest}, ${checkpointJson})
+          ON CONFLICT (thread_id) DO UPDATE SET
+            through_sequence = excluded.through_sequence,
+            tail_digest = excluded.tail_digest,
+            checkpoint_json = excluded.checkpoint_json
+          WHERE excluded.through_sequence >= effect_agent_recovery_checkpoints.through_sequence
+        `.pipe(Effect.mapError(storageError("save recovery checkpoint")));
+      }),
+    );
+    yield* failpoint("save-recovery-checkpoint:after");
+  });
+
+  const loadRecoveryCheckpoint = Effect.fn("SqliteJournal.loadRecoveryCheckpoint")(function* (
+    threadId: string,
+  ) {
+    const rows = yield* sql<Record<string, unknown>>`
+      SELECT thread_id, through_sequence, tail_digest, checkpoint_json
+      FROM effect_agent_recovery_checkpoints
+      WHERE thread_id = ${threadId}
+    `.pipe(Effect.mapError(storageError("load recovery checkpoint")));
+
+    return yield* decodeRows(
+      Schema.Array(CheckpointRow),
+      "effect_agent_recovery_checkpoints",
+      threadId,
+      rows,
     );
   });
 
@@ -1386,6 +1540,8 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     getThread,
     getTailDigestAt,
     loadCheckpoint,
+    loadRecoveryCheckpoint,
+    saveRecoveryCheckpoint,
     materialize,
     read,
     saveCheckpoint,

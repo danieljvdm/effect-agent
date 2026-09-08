@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.63
+
+### Patch Changes
+
+- [#376](https://github.com/danieljvdm/effect-agent/pull/376) [`d0f36bf`](https://github.com/danieljvdm/effect-agent/commit/d0f36bfc21e821fcc34caacf3c39f1e904a5d1c9) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add bounded older-match pagination with optional `beforeRecordId` to context history search and explain literal queries in the native tool. BEHAVIOR CHANGE: update custom `ContextHistory` adapters to honor the exclusive canonical anchor or explicitly reject anchored requests before adopting the updated tool.
+
+- Updated dependencies [[`d0f36bf`](https://github.com/danieljvdm/effect-agent/commit/d0f36bfc21e821fcc34caacf3c39f1e904a5d1c9)]:
+  - @effect-agent/engine@0.1.0-beta.63
+  - @effect-agent/core@0.1.0-beta.63
+
 ## 0.1.0-beta.62
 
 ### Patch Changes

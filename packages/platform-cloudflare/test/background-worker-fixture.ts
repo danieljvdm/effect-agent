@@ -2,12 +2,16 @@ import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import type { ThreadId, SubmissionId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { MessagingError } from "@effect-agent/core/Messaging";
 import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import { WorkerError } from "@effect-agent/core/Worker";
 import { DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
+import { PeerAuthorizer, PeerRoutes } from "@effect-agent/thread/MessagingHost";
 import {
   WorkerBudgetAuthorizer,
+  WorkerConcurrencyResolver,
   WorkerHostAuthorizer,
   WorkerHostConfig,
   WorkerPolicyResolver,
@@ -224,6 +228,14 @@ export const capturedPolicyWorkers = (policy: AgentPolicy) =>
 
 export const capturedPolicyOutages = new Set<string>();
 
+export const capturedConcurrency = new Map<
+  string,
+  { readonly owner: SubmissionId; readonly limit: number }
+>();
+
+export const privateProgressRoutes = new Map<string, ThreadId>();
+export const customRuntimeThreads = new Set<string>();
+
 export const independentBudgetGrants = new Set<string>();
 /** A source authorization succeeds before the destination's next admission loses its dependency. */
 export const independentBudgetAdmissionOutages = new Set<string>();
@@ -312,6 +324,32 @@ export const backgroundWorkerBindings = Effect.all([
 ]);
 
 export const backgroundWorkerAuthority = Layer.mergeAll(
+  Layer.succeed(PeerRoutes)({
+    resolve: (request) => {
+      const destination = privateProgressRoutes.get(request.source.threadId);
+
+      return destination === undefined
+        ? MessagingError.make({ operation: "send", reason: "route-unavailable" })
+        : Effect.succeed(destination);
+    },
+  }),
+  Layer.succeed(PeerAuthorizer)({
+    authorize: (request) =>
+      request.principal === TEST_PRINCIPAL && privateProgressRoutes.has(request.source.threadId)
+        ? Effect.succeed(TEST_PRINCIPAL)
+        : MessagingError.make({ operation: request.operation, reason: "denied" }),
+  }),
+  Layer.succeed(WorkerConcurrencyResolver)({
+    resolve: (request) => {
+      const capture = capturedConcurrency.get(request.source.threadId);
+
+      if (capture === undefined) return Effect.succeed(Option.none());
+
+      return request.sourceSubmission?.submissionId === capture.owner
+        ? Effect.succeed(Option.some({ maxActiveWorkersPerSource: capture.limit }))
+        : WorkerError.make({ operation: "start", reason: "denied" });
+    },
+  }),
   Layer.succeed(WorkerPolicyResolver)({
     resolveSource: (request) =>
       Effect.gen(function* () {

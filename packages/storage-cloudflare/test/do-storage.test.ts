@@ -2,6 +2,7 @@ import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/DoStorage
 import {
   DoStorageCompatibilityError,
   DoStorageError,
+  DoStorageFailpointError,
   DoValueBoundExceeded,
 } from "@effect-agent/storage-cloudflare/DoStorageError";
 import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
@@ -20,6 +21,8 @@ import {
 } from "@effect-agent/thread/testing/ThreadStoreConformance";
 import {
   ThreadCheckpoint,
+  ThreadTailRequest,
+  ThreadExportRequest,
   ThreadMaterialization,
   ThreadObservation,
   ThreadRead,
@@ -28,11 +31,24 @@ import {
   FencedAppendRequest,
   LoadCheckpointRequest,
   SaveCheckpointRequest,
+  SaveRecoveryCheckpointRequest,
 } from "@effect-agent/thread/ThreadStore";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Option, Schema, Stream, Tracer } from "effect";
+import {
+  Cause,
+  Deferred,
+  Fiber,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+  Tracer,
+} from "effect";
+import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -95,7 +111,319 @@ const batch = (
     records,
   });
 
+let recoveryCase = 0;
+
 describe("DoThreadStore", () => {
+  it("rejects canonical records beyond the captured export tail", () =>
+    withThreadStorage("bad-export-tail", (storage) =>
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const threadId = thread("bad-export-tail");
+
+        yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }));
+        yield* store.append(
+          FencedAppendRequest.make({
+            threadId,
+            producerEpoch: epoch(1),
+            expectedTailSequence: sequence(0),
+            expectedTailDigest: EMPTY_TAIL_DIGEST,
+            batch: batch("bad-export-tail", [inputRecord("bad-export-tail", "Kyoto")]),
+          }),
+        );
+        yield* Effect.sync(() =>
+          storage.sql.exec(
+            "UPDATE effect_agent_threads SET tail_sequence=0 WHERE thread_id=?",
+            threadId,
+          ),
+        );
+        expect(
+          yield* store.export(ThreadExportRequest.make({ threadId })).pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "ThreadStoreError",
+          message: expect.stringContaining("beyond the captured thread tail"),
+        });
+      }).pipe(Effect.provide(layer({ storage }))),
+    ));
+
+  it("isolates, fences and replaces one durable recovery checkpoint across reopen", () =>
+    withThreadStorage(`recovery-store:${++recoveryCase}`, (storage) =>
+      Effect.gen(function* () {
+        const checkpoint = yield* Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const threadId = thread("recovery-store");
+
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+          );
+
+          const empty = ThreadCheckpoint.make({
+            schemaVersion: 1,
+            threadId,
+            throughSequence: sequence(0),
+            tailDigest: EMPTY_TAIL_DIGEST,
+            engineVersion: "recovery-test",
+            agentDefinitionDigest: EMPTY_TAIL_DIGEST,
+            modelDigest: EMPTY_TAIL_DIGEST,
+            toolDigest: EMPTY_TAIL_DIGEST,
+            state: {},
+            createdAt: at(2),
+          });
+
+          yield* store.checkpoints!.save(SaveCheckpointRequest.make({ checkpoint: empty }));
+          yield* store.recoveryCheckpoints!.save(
+            SaveRecoveryCheckpointRequest.make({ checkpoint: empty, producerEpoch: epoch(1) }),
+          );
+
+          const appended = yield* store.append(
+            FencedAppendRequest.make({
+              threadId,
+              producerEpoch: epoch(1),
+              expectedTailSequence: sequence(0),
+              expectedTailDigest: EMPTY_TAIL_DIGEST,
+              batch: batch("recovery-batch", [
+                inputRecord("recovery-1", "Kyoto"),
+                inputRecord("recovery-2", "Nara"),
+              ]),
+            }),
+          );
+
+          const checkpoint = ThreadCheckpoint.make({
+            ...empty,
+            throughSequence: appended.lastSequence,
+            tailDigest: appended.tailDigest,
+            state: { version: 1 },
+          });
+
+          const save = (checkpoint: ThreadCheckpoint, producerEpoch = epoch(1)) =>
+            store.recoveryCheckpoints!.save(
+              SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch }),
+            );
+
+          yield* save(checkpoint);
+          yield* save(empty);
+          expect(
+            yield* store.recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId })),
+          ).toEqual(Option.some(checkpoint));
+          expect(
+            Option.isNone(
+              yield* store.recoveryCheckpoints!.load(
+                LoadCheckpointRequest.make({ threadId, atOrBeforeSequence: sequence(0) }),
+              ),
+            ),
+          ).toBe(true);
+          expect(
+            yield* save(
+              ThreadCheckpoint.make({ ...checkpoint, throughSequence: sequence(1) }),
+            ).pipe(Effect.flip),
+          ).toMatchObject({ _tag: "CheckpointRejected", reason: "digest-mismatch" });
+          expect(
+            yield* save(
+              ThreadCheckpoint.make({ ...checkpoint, throughSequence: sequence(3) }),
+            ).pipe(Effect.flip),
+          ).toMatchObject({ _tag: "CheckpointRejected", reason: "ahead-of-tail" });
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(2) }),
+          );
+          expect(yield* save(checkpoint).pipe(Effect.flip)).toMatchObject({
+            _tag: "FenceRejected",
+            actualEpoch: 2,
+            attemptedEpoch: 1,
+          });
+
+          const replacement = ThreadCheckpoint.make({
+            ...checkpoint,
+            state: { version: 2 },
+            createdAt: at(3),
+          });
+
+          yield* save(replacement, epoch(2));
+          expect(yield* store.checkpoints!.load(LoadCheckpointRequest.make({ threadId }))).toEqual(
+            Option.some(empty),
+          );
+          expect(
+            (yield* store.export(ThreadExportRequest.make({ threadId }))).records,
+          ).toHaveLength(2);
+
+          return replacement;
+        }).pipe(Effect.provide(layer({ storage })));
+
+        const restored = yield* ThreadStore.pipe(
+          Effect.flatMap((store) =>
+            store.recoveryCheckpoints!.load(
+              LoadCheckpointRequest.make({ threadId: checkpoint.threadId }),
+            ),
+          ),
+          Effect.provide(layer({ storage })),
+        );
+
+        expect(restored).toEqual(Option.some(checkpoint));
+
+        const rows = yield* Effect.sync(() =>
+          storage.sql
+            .exec("SELECT COUNT(*) AS count FROM effect_agent_recovery_checkpoints")
+            .toArray(),
+        );
+
+        expect(rows).toEqual([{ count: 1 }]);
+      }),
+    ));
+
+  for (const corruption of ["json", "version", "thread", "sequence", "digest", "row"] as const) {
+    it(`rejects ${corruption} recovery cache corruption and permits same-tail repair`, () =>
+      withThreadStorage(`recovery-store:${++recoveryCase}`, (storage) =>
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const threadId = thread("recovery-store");
+
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+          );
+
+          const checkpoint = ThreadCheckpoint.make({
+            schemaVersion: 1,
+            threadId,
+            throughSequence: sequence(0),
+            tailDigest: EMPTY_TAIL_DIGEST,
+            engineVersion: "recovery-test",
+            agentDefinitionDigest: EMPTY_TAIL_DIGEST,
+            modelDigest: EMPTY_TAIL_DIGEST,
+            toolDigest: EMPTY_TAIL_DIGEST,
+            state: {},
+            createdAt: at(2),
+          });
+
+          const save = store.recoveryCheckpoints!.save(
+            SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch: epoch(1) }),
+          );
+
+          yield* save;
+          const encoded = yield* Schema.encodeEffect(ThreadCheckpoint)(checkpoint);
+
+          const json =
+            corruption === "json"
+              ? "{"
+              : JSON.stringify({
+                  ...encoded,
+                  ...(corruption === "version" ? { schemaVersion: 99 } : {}),
+                  ...(corruption === "thread" ? { threadId: "foreign" } : {}),
+                  ...(corruption === "sequence" ? { throughSequence: 1 } : {}),
+                  ...(corruption === "digest" ? { tailDigest: "a".repeat(64) } : {}),
+                });
+
+          const storedSequence = corruption === "row" ? -1 : 0;
+
+          yield* Effect.sync(() =>
+            storage.sql.exec(
+              "UPDATE effect_agent_recovery_checkpoints SET checkpoint_json=?, through_sequence=? WHERE thread_id=?",
+              json,
+              storedSequence,
+              threadId,
+            ),
+          );
+          expect(
+            yield* store
+              .recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId }))
+              .pipe(Effect.flip),
+          ).toMatchObject({ _tag: "CheckpointRejected", reason: "corrupt" });
+          yield* save;
+          expect(
+            yield* store.recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId })),
+          ).toEqual(Option.some(checkpoint));
+          expect(
+            (yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).tailSequence,
+          ).toBe(0);
+        }).pipe(Effect.provide(layer({ storage }))),
+      ));
+  }
+
+  for (const location of [
+    "save-recovery-checkpoint:before",
+    "save-recovery-checkpoint:after",
+  ] as const) {
+    for (const mode of ["failure", "defect", "interrupt", "timeout"] as const) {
+      it(`reopens safely after ${mode} at ${location}`, () =>
+        withThreadStorage(`recovery-store:${++recoveryCase}`, (storage) =>
+          Effect.gen(function* () {
+            const threadId = thread("recovery-store");
+
+            const save = Effect.gen(function* () {
+              const store = yield* ThreadStore;
+
+              yield* store.materialize(
+                ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+              );
+
+              const checkpoint = ThreadCheckpoint.make({
+                schemaVersion: 1,
+                threadId,
+                throughSequence: sequence(0),
+                tailDigest: EMPTY_TAIL_DIGEST,
+                engineVersion: "recovery-test",
+                agentDefinitionDigest: EMPTY_TAIL_DIGEST,
+                modelDigest: EMPTY_TAIL_DIGEST,
+                toolDigest: EMPTY_TAIL_DIGEST,
+                state: {},
+                createdAt: at(2),
+              });
+
+              yield* store.recoveryCheckpoints!.save(
+                SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch: epoch(1) }),
+              );
+            });
+
+            const entered = yield* Deferred.make<void>();
+
+            const failed = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const fiber = yield* save.pipe(
+                  Effect.provide(
+                    layer({
+                      storage,
+                      failpoint: (point) =>
+                        point !== location
+                          ? Effect.void
+                          : Deferred.succeed(entered, undefined).pipe(
+                              Effect.andThen(
+                                mode === "failure"
+                                  ? DoStorageFailpointError.make({ location })
+                                  : mode === "defect"
+                                    ? Effect.die("injected checkpoint defect")
+                                    : mode === "interrupt"
+                                      ? Effect.interrupt
+                                      : Effect.never,
+                              ),
+                            ),
+                    }),
+                  ),
+                  Effect.timeout("1 second"),
+                  Effect.forkChild,
+                );
+
+                yield* Deferred.await(entered);
+                if (mode === "timeout") yield* TestClock.adjust("1 second");
+
+                return yield* Fiber.await(fiber);
+              }),
+            );
+
+            expect(Exit.isFailure(failed)).toBe(true);
+            yield* Effect.gen(function* () {
+              const store = yield* ThreadStore;
+
+              expect(
+                Option.isSome(
+                  yield* store.recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId })),
+                ),
+              ).toBe(location === "save-recovery-checkpoint:after");
+              expect(
+                (yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).tailSequence,
+              ).toBe(0);
+            }).pipe(Effect.provide(layer({ storage })));
+          }),
+        ));
+    }
+  }
+
   for (const corruption of ["thread", "sequence", "digest"] as const) {
     it(`rejects checkpoint ${corruption} metadata that disagrees with its row`, () =>
       withThreadStorage(`checkpoint-metadata:${corruption}`, (storage) =>

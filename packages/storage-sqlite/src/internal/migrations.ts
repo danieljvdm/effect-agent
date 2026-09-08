@@ -3,8 +3,9 @@ import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
+import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
-export const CurrentSqliteStorageVersion = 9;
+export const CurrentSqliteStorageVersion = 10;
 
 /** Initialize empty storage with the complete current schema. */
 export const sqliteMigrations = SqliteMigrator.fromRecord({
@@ -336,6 +337,7 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
     yield* sql`CREATE INDEX effect_agent_subscription_deliveries_registration ON effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, delivery_key)`
       .withoutTransform;
     yield* createMessageDeliveryTables;
-    yield* sql`PRAGMA user_version = 9`.withoutTransform;
+    yield* createRecoveryCheckpointTable;
+    yield* sql`PRAGMA user_version = 10`.withoutTransform;
   }),
 });

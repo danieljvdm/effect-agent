@@ -21,9 +21,32 @@ records, exports history, and inspects the tail. Appends must be atomic, digest-
 batch ID, checked against the expected tail, and fenced by producer epoch. Reads decode stored
 values through schemas.
 
-Checkpoint support is optional and used only by explicit projection consumers. Retained history
-and durable recovery do not read it. An adapter with checkpoints must also run the checkpoint
-conformance suite.
+`ThreadStore.checkpoints` is optional storage for application projections. An adapter offering it
+must run the generic checkpoint conformance suite. Retained-history execution does not use it.
+
+The separate optional `ThreadStore.recoveryCheckpoints` capability stores one latest recovery
+snapshot per Thread. `SaveRecoveryCheckpointRequest` carries the checkpoint and producer epoch.
+In one transaction, validate epoch equality and the canonical batch tail sequence and digest,
+then replace the cached value. An older snapshot must not replace a newer one; equal-tail
+replacement permits repair. Keep generic projection checkpoints independent of this slot.
+
+Decode stored recovery checkpoints and verify their canonical binding on load. Invalid cache data
+returns `CheckpointRejected`; infrastructure failures remain `ThreadStoreError`. A lookup before
+the latest checkpoint may return no checkpoint. The runtime validates its versioned continuation
+state and falls back to canonical replay when the cache is absent or incompatible. Neither a
+checkpoint nor an evidence index grants ownership or replaces canonical tool and Durable Step
+evidence. See [recovery checkpoints](../concepts/durability#recovery-checkpoints) for eligibility
+and suffix bounds.
+
+Test recovery checkpoint replacement, stale producers, corruption, absence, and reopen after failure,
+interruption, and timeout. Persistent format upgrades must preserve supported stored data in one
+transaction, advance the version marker last, and refuse unsupported or ambiguous layouts without
+resetting them.
+
+The supplied adapters and `ThreadExport` support 131,072 canonical records per Thread. Keep each
+`ThreadRead` page at or below 1,024 records and each `CanonicalBatch` at or below 256. An export
+must preserve one captured snapshot while paging its payload reads; it returns the full record
+array and must not silently truncate history.
 
 Implement `SubmissionLedger.readAbortIntent` as a strongly consistent read of one submission's
 abort intent. The runtime polls this method during execution, so its work must stay independent

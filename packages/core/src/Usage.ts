@@ -211,17 +211,66 @@ const checkedAdd = (
       );
 };
 
-/** Deterministically aggregate canonical per-call usage without making cached tokens free. */
+/**
+ * Deterministically aggregate canonical per-call usage without making cached tokens free.
+ * A validated seed retains earlier call totals and pricing groups without retaining those calls.
+ * Empty contributions do not change completeness; the seed is never mutated.
+ */
 export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
   calls: ReadonlyArray<ModelCallUsage>,
+  seed?: RunUsageSummary,
 ): Effect.fn.Return<RunUsageSummary, UsageAggregationError> {
-  const inputTokens = emptyInputTokens();
-  const outputTokens = emptyOutputTokens();
+  const initial =
+    seed === undefined
+      ? undefined
+      : yield* Schema.decodeUnknownEffect(RunUsageSummary)(seed).pipe(
+          Effect.mapError(
+            () =>
+              new UsageAggregationError({
+                field: "seed",
+                message: "Canonical usage seed does not satisfy the RunUsageSummary Schema",
+              }),
+          ),
+        );
+
+  const inputTokens = initial === undefined ? emptyInputTokens() : { ...initial.inputTokens };
+  const outputTokens = initial === undefined ? emptyOutputTokens() : { ...initial.outputTokens };
   const groups = new Map<string, MutableUsageGroup>();
-  let modelCalls = 0;
-  let costMicrousd = 0;
+  let modelCalls = initial?.modelCalls ?? 0;
+  let costMicrousd = initial?.costMicrousd ?? 0;
+  const hasSeedCalls = modelCalls > 0;
+
+  let allUsageUnknown =
+    !hasSeedCalls || initial?.usageStatus === undefined || initial.usageStatus === "unknown";
+
+  let allUsageComplete = !hasSeedCalls || initial?.usageStatus === "complete";
+
+  let allPricingUnknown =
+    !hasSeedCalls || initial?.pricingStatus === undefined || initial.pricingStatus === "unknown";
+
+  let allPricingComplete = !hasSeedCalls || initial?.pricingStatus === "complete";
+
+  for (const group of initial?.byModel ?? []) {
+    const key = JSON.stringify([
+      group.provider,
+      group.model,
+      group.responseModel ?? null,
+      group.serviceTier ?? null,
+      group.pricingVersion ?? null,
+    ]);
+
+    groups.set(key, {
+      ...group,
+      inputTokens: { ...group.inputTokens },
+      outputTokens: { ...group.outputTokens },
+    });
+  }
 
   for (const call of calls) {
+    allUsageUnknown &&= call.usageStatus === undefined || call.usageStatus === "unknown";
+    allUsageComplete &&= call.usageStatus === "complete";
+    allPricingUnknown &&= call.pricingStatus !== "estimated";
+    allPricingComplete &&= call.pricingStatus === "estimated";
     modelCalls = yield* checkedAdd("modelCalls", modelCalls, 1);
     inputTokens.total = yield* checkedAdd(
       "inputTokens.total",
@@ -332,18 +381,11 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
     inputTokens: InputTokenUsage.make(inputTokens),
     outputTokens: OutputTokenUsage.make(outputTokens),
     costMicrousd,
-    usageStatus: calls.every(
-      (call) => call.usageStatus === undefined || call.usageStatus === "unknown",
-    )
-      ? "unknown"
-      : calls.every((call) => call.usageStatus === "complete")
-        ? "complete"
-        : "partial",
-    pricingStatus: calls.every((call) => call.pricingStatus !== "estimated")
-      ? "unknown"
-      : calls.every((call) => call.pricingStatus === "estimated")
-        ? "complete"
-        : "partial",
+    usageStatus: allUsageUnknown ? "unknown" : allUsageComplete ? "complete" : "partial",
+    pricingStatus: allPricingUnknown ? "unknown" : allPricingComplete ? "complete" : "partial",
+    ...(initial?.unobservedModelCalls === undefined
+      ? {}
+      : { unobservedModelCalls: initial.unobservedModelCalls }),
     byModel: [...groups.values()].map((group) =>
       ModelUsageGroup.make({
         provider: group.provider,

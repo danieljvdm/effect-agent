@@ -161,8 +161,8 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
 
 /**
  * Coordinator failpoint locations that none of the six scenario shapes can reach, recorded
- * honestly instead of silently claimed: all three sit on operator/abort paths the shapes do
- * not take. They are pinned in-process by the P5/S2 suites
+ * honestly instead of silently claimed. These require operator, compaction, reservation, or
+ * background-worker paths the shapes do not take. They are pinned in-process by the P5/S2 suites
  * (`packages/testing/test/durable-tools.test.ts` "resolveUnknown is idempotent across the
  * intent failpoint", `durable-runtime.test.ts` abort rows,
  * `durable-subagents.test.ts` abort propagation) and by the process-kill/eviction crash
@@ -170,6 +170,9 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
  * protocol change that silently stops exercising a location fails the certification.
  */
 export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLocation> = [
+  // Tier 2 has no native compaction; dedicated checkpoint process-loss tests cover these.
+  "checkpoint:before-save",
+  "checkpoint:after-save",
   "abort:after-intent",
   // Compaction requires a `contextTokenLimit` policy plus prior-Run history
   // none of the six scenario shapes carries; pinned in-process by the

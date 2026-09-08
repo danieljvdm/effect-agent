@@ -60,6 +60,35 @@ export const WorkerPolicyResolver = Context.Reference<{
 
 const Positive = Schema.Int.check(Schema.isGreaterThan(0));
 
+/** A host-authorized ceiling on active background workers, not retained workers or Run usage. */
+export const WorkerConcurrencyLimit = Schema.Struct({
+  maxActiveWorkersPerSource: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+
+export type WorkerConcurrencyLimit = typeof WorkerConcurrencyLimit.Type;
+
+/**
+ * Optional source-aware operational authority. Resolution occurs inside every new source
+ * reservation attempt, against the same canonical history used for the append CAS. None
+ * preserves WorkerHostConfig; Some can only narrow it. The selected submission is exact,
+ * never the latest input. Implementations must authorize that immutable capture and retain
+ * construction dependencies in Layer R. Unavailable authority must return WorkerError(unavailable).
+ *
+ * One worker occupies a slot while any of its inputs remain unacknowledged. Steering an active
+ * worker does not acquire another slot. Decreases (including zero) do not cancel incumbents;
+ * an idle worker needs a slot again. Idempotent retained reservations do not reacquire slots.
+ */
+export const WorkerConcurrencyResolver = Context.Reference<{
+  readonly resolve: (request: {
+    readonly source: WorkerSource;
+    readonly sourceSubmission?: SubmissionSnapshot;
+    readonly worker: WorkerRef;
+    readonly principal: Principal;
+  }) => Effect.Effect<Option.Option<WorkerConcurrencyLimit>, WorkerError>;
+}>("@effect-agent/thread/WorkerConcurrencyResolver", {
+  defaultValue: () => ({ resolve: () => Effect.succeed(Option.none()) }),
+});
+
 /** Host ceilings apply across all declarations owned by one source Thread. */
 export const WorkerHostLimits = Schema.Struct({
   maxWorkersPerSource: Positive.check(Schema.isLessThanOrEqualTo(100)),

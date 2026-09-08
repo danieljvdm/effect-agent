@@ -35,6 +35,30 @@ ID. Decode checkpoint state with its Schema before replaying a suffix. Earlier p
 including empty views, fail decoding and must be discarded and rebuilt from canonical records.
 The canonical record and checkpoint envelope versions remain unchanged.
 
+## Resume through a recovery checkpoint {#recovery-checkpoints}
+
+After a durable compaction or context rollover commits its replacement, the runtime can save a
+recovery checkpoint through `ThreadStore.recoveryCheckpoints`. The checkpoint preserves the
+replacement context, protected instructions and input, cumulative usage and policy accounting,
+the latest replayable tool batch, and required control and Durable Step evidence. Completed Step
+results remain available for reuse after an ownership change.
+
+This optional cache holds one latest snapshot per Thread. Saves require the current producer
+epoch and bind the snapshot to a canonical batch tail. It is separate from the generic
+`ThreadStore.checkpoints` slot used by application projections. Neither slot changes canonical
+history or owns a submission.
+
+Recovery checks the checkpoint's versions, state digest, agent/model/tool definitions, retained
+submissions, and canonical binding before replaying the suffix. The suffix is limited to 4,096
+records, read in pages of at most 1,024. Missing, corrupt, incompatible, or ineligible checkpoints
+fall back to the captured canonical prefix. A longer or incompatible suffix also uses full replay;
+cache capacity never justifies dropping control or Step evidence. Storage infrastructure failures
+remain typed failures.
+
+The canonical log and submission ledger remain authoritative. A history-search index supplies
+retrieval candidates and cannot stand in for this recovery state. Ordinary unresolved tools keep
+the same reconciliation and unknown-outcome rules with or without a checkpoint.
+
 ## Track unfinished work {#operational-obligation}
 
 The submission ledger owns admission, FIFO readiness, attempt ownership, abort intent, recovery,

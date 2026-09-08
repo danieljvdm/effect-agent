@@ -14,6 +14,7 @@ import { DurableObjectState, WorkerEnvironment } from "effect-cf";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
+import { ThreadMessageDelivery } from "../src/Alarm.ts";
 import {
   PRODUCER_PREFIX,
   plannerDefinition,
@@ -60,6 +61,12 @@ describe("Cloudflare Agent registrations", () => {
 
           const built = yield* Layer.build(runtime);
           const sql = Context.get(built, SqlClient);
+
+          // Regression: https://github.com/danieljvdm/effect-agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
+          // References carry no required R, but the host must still supply this actual instance.
+          expect(Context.get(built, ThreadMessageDelivery)).not.toBe(
+            Context.get(Context.empty(), ThreadMessageDelivery),
+          );
 
           // Both native tags come from the one memoized infrastructure Layer shared with ports.
           expect(Context.getOption(built, SqliteClient.SqliteClient)).toEqual(Option.some(sql));
