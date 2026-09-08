@@ -30,7 +30,7 @@ import {
   SubagentProjectionFailure,
 } from "./subagent-contract.ts";
 import { resolveSubagentPolicy, resolveToolCallAllowance } from "./subagent-policy.ts";
-import { utf8ByteLength } from "./utf8.ts";
+import { utf8ByteLength, utf8Bytes } from "./utf8.ts";
 
 export type Declaration<
   Name extends string,
@@ -822,7 +822,7 @@ const modelKey = Effect.fn("Subagent.workerToolKey")(function* (operation: "star
   const source = caller.source;
   const crypto = yield* Crypto.Crypto;
 
-  const bytes = new TextEncoder().encode(
+  const bytes = utf8Bytes(
     JSON.stringify([
       "worker-tool-v1",
       operation,

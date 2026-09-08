@@ -12,6 +12,8 @@ import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import { Crypto, Effect, Encoding, Option, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import { utf8Bytes } from "./internal/utf8.ts";
+
 export {
   InboxPage,
   MessageAdmission,
@@ -143,7 +145,7 @@ const modelKey = Effect.fn("Messaging.modelKey")(function* () {
   const crypto = yield* Crypto.Crypto;
 
   const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(JSON.stringify(source)))
+    .digest("SHA-256", utf8Bytes(JSON.stringify(source)))
     .pipe(Effect.mapError(() => MessagingError.make({ operation: "send", reason: "unavailable" })));
 
   return Schema.decodeSync(IdempotencyKey)(`peer-tool:${Encoding.encodeHex(digest)}`);

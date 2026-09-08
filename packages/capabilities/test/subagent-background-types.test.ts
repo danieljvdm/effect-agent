@@ -178,11 +178,11 @@ const proofs: [
 
 const rejectInvalidCalls = () => {
   // @ts-expect-error Starts require an explicit idempotency key.
-  Subagent.start(declaration, "input");
+  void Subagent.start(declaration, "input");
   // @ts-expect-error Idempotency keys must be Schema-validated.
-  Subagent.start(declaration, "input", { idempotencyKey: "raw" });
+  void Subagent.start(declaration, "input", { idempotencyKey: "raw" });
   // @ts-expect-error Parameter inference is retained.
-  Subagent.start(declaration, 42, { idempotencyKey: key });
+  void Subagent.start(declaration, 42, { idempotencyKey: key });
   const other = Subagent.make("other", { target });
 
   const otherWorker = Schema.decodeSync(Subagent.Worker(other))({
@@ -191,7 +191,7 @@ const rejectInvalidCalls = () => {
   });
 
   // @ts-expect-error Worker identities retain their declaration correlation.
-  Subagent.cancel(declaration, otherWorker, receipt);
+  void Subagent.cancel(declaration, otherWorker, receipt);
   // @ts-expect-error Unselected operations are not in the Tool record.
   void selected.tools.research_follow_up;
   // @ts-expect-error Models cannot wait through a background tool.
