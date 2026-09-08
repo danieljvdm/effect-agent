@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.59
+
+### Patch Changes
+
+- [#365](https://github.com/danieljvdm/effect-agent/pull/365) [`cb1d297`](https://github.com/danieljvdm/effect-agent/commit/cb1d297d3464850b5e4645a0d3b3a5062a1ba71b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add host-authorized independent allowances for background worker Runs while preserving delegation lineage and bounded attached descendants. Keep joined inputs and replacement Attempts on the same durable allowance.
+
+- Updated dependencies [[`cb1d297`](https://github.com/danieljvdm/effect-agent/commit/cb1d297d3464850b5e4645a0d3b3a5062a1ba71b)]:
+  - @effect-agent/core@0.1.0-beta.59
+
 ## 0.1.0-beta.58
 
 ### Patch Changes

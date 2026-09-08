@@ -97,6 +97,7 @@
     "host-browser-viewport",
     "incremental-retained-history",
     "independent-run-authority",
+    "independent-worker-run-budgets",
     "initial-live-test-release",
     "interactive-browser-host-controls",
     "kom-durable-recovery-authorization",
