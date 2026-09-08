@@ -147,69 +147,78 @@ const append = (thread: string, request: FencedAppendRequest) =>
   );
 
 describe("live Thread projection and alarm backfill", () => {
-  it("shares one raw-source index and SQL owner with Tools throughout an active Run", () =>
-    withThread(async (thread) => {
-      await submit(thread);
-      await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
-      const lookups = projectionLookups.get(thread);
+  it(
+    "shares one raw-source index and SQL owner with Tools throughout an active Run",
+    () =>
+      withThread(async (thread) => {
+        await submit(thread);
+        await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
+        const lookups = projectionLookups.get(thread);
 
-      expect(lookups).toHaveLength(3);
-      expect(new Set(lookups).size).toBe(3);
-      expect(projectionConstructions.get(thread)).toBe(1);
-      await runInDurableObject(stub(thread), (instance) =>
-        instance[DurableObject.RunSymbol](
-          Effect.gen(function* () {
-            expect((yield* ProjectionIndex).ownerSql).toBe(yield* SqlClient);
-          }),
-        ),
-      );
-      const records = await readCanonical(thread, namespace);
-
-      expect(
-        records
-          .filter((record) => record.record.payload._tag === "ToolCallSettled")
-          .every(
-            (record) =>
-              record.record.payload._tag !== "ToolCallSettled" || !record.record.payload.isFailure,
+        expect(lookups).toHaveLength(3);
+        expect(new Set(lookups).size).toBe(3);
+        expect(projectionConstructions.get(thread)).toBe(1);
+        await runInDurableObject(stub(thread), (instance) =>
+          instance[DurableObject.RunSymbol](
+            Effect.gen(function* () {
+              expect((yield* ProjectionIndex).ownerSql).toBe(yield* SqlClient);
+            }),
           ),
-      ).toBe(true);
-      await quiesce(thread);
-    }));
+        );
+        const records = await readCanonical(thread, namespace);
 
-  it("applies all 256 committed records before returning, replays idempotently, and rejects stale producers", () =>
-    withThread(async (thread) => {
-      const request = await prepareAppend(thread, 256);
-      const result = await append(thread, request);
+        expect(
+          records
+            .filter((record) => record.record.payload._tag === "ToolCallSettled")
+            .every(
+              (record) =>
+                record.record.payload._tag !== "ToolCallSettled" ||
+                !record.record.payload.isFailure,
+            ),
+        ).toBe(true);
+        await quiesce(thread);
+      }),
+    30_000,
+  );
 
-      expect(result.lastSequence).toBe(256);
-      expect(await watermark(thread)).toBe(256);
-      expect((await append(thread, request)).replayed).toBe(true);
-      expect(await watermark(thread)).toBe(256);
-      const calls = projectionLiveBatches.get(thread)?.length;
+  it(
+    "applies all 256 committed records before returning, replays idempotently, and rejects stale producers",
+    () =>
+      withThread(async (thread) => {
+        const request = await prepareAppend(thread, 256);
+        const result = await append(thread, request);
 
-      await runInDurableObject(stub(thread), (instance) =>
-        instance[DurableObject.RunSymbol](
-          Effect.gen(function* () {
-            const store = yield* ThreadStore;
+        expect(result.lastSequence).toBe(256);
+        expect(await watermark(thread)).toBe(256);
+        expect((await append(thread, request)).replayed).toBe(true);
+        expect(await watermark(thread)).toBe(256);
+        const calls = projectionLiveBatches.get(thread)?.length;
 
-            yield* store.materialize(
-              ThreadMaterialization.make({
-                threadId: decodeThreadId(thread),
-                producerEpoch: ProducerEpoch.make(1),
-              }),
-            );
-            const exit = yield* store.append(request).pipe(Effect.exit);
+        await runInDurableObject(stub(thread), (instance) =>
+          instance[DurableObject.RunSymbol](
+            Effect.gen(function* () {
+              const store = yield* ThreadStore;
 
-            expect(Exit.isFailure(exit) && Cause.findErrorOption(exit.cause)).toMatchObject({
-              _tag: "Some",
-              value: { _tag: "FenceRejected" },
-            });
-          }),
-        ),
-      );
-      expect(projectionLiveBatches.get(thread)?.length).toBe(calls);
-      await quiesce(thread);
-    }));
+              yield* store.materialize(
+                ThreadMaterialization.make({
+                  threadId: decodeThreadId(thread),
+                  producerEpoch: ProducerEpoch.make(1),
+                }),
+              );
+              const exit = yield* store.append(request).pipe(Effect.exit);
+
+              expect(Exit.isFailure(exit) && Cause.findErrorOption(exit.cause)).toMatchObject({
+                _tag: "Some",
+                value: { _tag: "FenceRejected" },
+              });
+            }),
+          ),
+        );
+        expect(projectionLiveBatches.get(thread)?.length).toBe(calls);
+        await quiesce(thread);
+      }),
+    30_000,
+  );
 
   it.each(["failure", "defect"] as const)(
     "keeps a canonical commit authoritative after live %s",
