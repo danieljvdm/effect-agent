@@ -1782,6 +1782,8 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
 
   // https://github.com/danieljvdm/effect-agent/commit/c1a6e6a915be73a49b2c266e2df74256f44c25e2
   // A later suspension duplicated prior Turn results and broke rollover after recovery.
+  // https://linear.app/reve-ai/issue/KOM-127
+  // Real provider metadata and assistant content must also survive the resumed declaration.
   it.effect("preserves prior Turn results when a later delegation suspends before rollover", () =>
     Effect.gen(function* () {
       const { childBinding } = yield* makeChildFixture;
@@ -1817,12 +1819,21 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         }),
       });
 
-      const model = yield* makeScriptedModel((call) => {
+      const model = yield* makeScriptedModel((index) => {
+        if (index === 0) return finalParts('{"report":"prior task"}');
+        const call = index - 1;
+
         if (call === 0) return toolTurn(toolCall("prior-failure", "fail_lookup", {}));
         if (call === 1) return toolTurn(toolCall("prior-success", "lookup", { key: "prior" }));
         if (call === 2)
           return toolTurn(
-            toolCall("delegate-1", "delegate_research", { topic: "paris" }),
+            { type: "text-start", id: "delegation-note" },
+            { type: "text-delta", id: "delegation-note", delta: "Delegating the retained task." },
+            { type: "text-end", id: "delegation-note" },
+            {
+              ...toolCall("delegate-1", "delegate_research", { topic: "paris" }),
+              metadata: { openai: { itemId: "fc_provider_item" } },
+            },
             toolCall("current-sibling", "lookup", { key: "current" }),
           );
         if (call === 3)
@@ -1866,26 +1877,36 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         ),
       );
 
+      const prior = yield* runtime.submit(
+        parentBinding,
+        { mission: "prior task" },
+        submitOptions("suspension-prior-results", "prior"),
+      );
+
+      const run = drive({ runtime });
+
+      expect((yield* run(prior.threadId)).map((settlement) => settlement.outcome)).toEqual([
+        "completed",
+      ]);
+
       const receipt = yield* runtime.submit(
         parentBinding,
         { mission: "regression" },
         submitOptions("suspension-prior-results", "one"),
       );
 
-      const run = drive({ runtime });
-
       yield* run(receipt.threadId);
       expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
       const suspended = yield* readLog(receipt.threadId);
 
-      const prior = suspended.filter(
+      const priorResults = suspended.filter(
         ({ record }) =>
           record.payload._tag === "ToolCallSettled" &&
           ["prior-failure", "prior-success"].includes(record.payload.toolCallId),
       );
 
-      expect(prior).toHaveLength(2);
-      expect(prior[0]?.record.payload).toMatchObject({
+      expect(priorResults).toHaveLength(2);
+      expect(priorResults[0]?.record.payload).toMatchObject({
         result: { _tag: "LookupFailure", detail: "Original typed failure" },
       });
       yield* run(childThreadIdFor(receipt.submissionId, DELEGATE_CALL));
@@ -1895,6 +1916,25 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         completed.map((settlement) => settlement.outcome),
         JSON.stringify(completed),
       ).toEqual(["completed"]);
+
+      const resumedAssistant = model.prompts[4]?.content.find(
+        (message) =>
+          message.role === "assistant" &&
+          message.content.some((part) => part.type === "tool-call" && part.id === "delegate-1"),
+      );
+
+      expect(resumedAssistant).toMatchObject({
+        role: "assistant",
+        content: [
+          { type: "text", text: "Delegating the retained task." },
+          {
+            type: "tool-call",
+            id: "delegate-1",
+            options: { openai: { itemId: "fc_provider_item" } },
+          },
+          { type: "tool-call", id: "current-sibling" },
+        ],
+      });
       expect(yield* Ref.get(lookups)).toBe(2);
       const final = yield* readLog(receipt.threadId);
 

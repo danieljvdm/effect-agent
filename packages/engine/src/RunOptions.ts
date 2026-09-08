@@ -794,6 +794,13 @@ export interface RunTurnResume {
    * tool-call message. Optional: absent keeps the prior behavior byte-for-byte.
    */
   readonly leadingMessages?: Prompt.Prompt | undefined;
+  /**
+   * The pending Turn's canonical assistant response, including text, reasoning and provider
+   * options. Durable hosts pass the decoded response after its leading messages. Execution
+   * still uses the independently validated `calls`; this exact response enters history instead
+   * of reconstructing it from call descriptors that cannot preserve every provider field.
+   */
+  readonly responseMessages?: Prompt.Prompt | undefined;
 }
 
 /** Run-level scheduler override; it may only make the Agent's finite bound stricter. */
