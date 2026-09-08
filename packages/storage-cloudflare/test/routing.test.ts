@@ -207,6 +207,7 @@ describe("cross-DO port routing", () => {
         const store = yield* ThreadStore;
 
         expect(store.checkpoints).toBeUndefined();
+        expect(store.recoveryCheckpoints).toBeUndefined();
 
         const missing = yield* store
           .export(
@@ -910,6 +911,12 @@ describe("cross-DO port routing", () => {
         const checkpointFailure = yield* store
           .checkpoints!.load(LoadCheckpointRequest.make({ threadId: thread(foreignConv) }))
           .pipe(Effect.flip);
+
+        const recoveryCheckpointFailure = yield* store
+          .recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId: thread(foreignConv) }))
+          .pipe(Effect.flip);
+
+        expect(recoveryCheckpointFailure).toBeInstanceOf(ThreadStoreError);
 
         expect(checkpointFailure).toBeInstanceOf(ThreadStoreError);
         if (isThreadStoreError(checkpointFailure)) {

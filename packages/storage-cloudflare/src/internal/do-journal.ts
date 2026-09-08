@@ -1,5 +1,13 @@
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
 import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
 import { checkV2ThreadLayout } from "@effect-agent/thread/SqlStorageV2Upgrade";
+import {
+  MAX_THREAD_EXPORT_RECORDS,
+  CheckpointRejected,
+  FenceRejected,
+  ThreadNotMaterialized,
+  type SaveRecoveryCheckpointRequest,
+} from "@effect-agent/thread/ThreadStore";
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -18,6 +26,7 @@ import {
 } from "../DoStorageError.ts";
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { CurrentDoStorageVersion, doMigrations } from "./migrations.ts";
+import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 /**
  * Static schema ceiling for stored text columns. Writes are bounded in BYTES by the
@@ -27,7 +36,8 @@ import { CurrentDoStorageVersion, doMigrations } from "./migrations.ts";
  */
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(2_000_000));
 const BoundedIdentifier = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
-const MAX_RECORDS_PER_THREAD = 65_536;
+const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;
+const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const MAX_IDENTIFIER_LENGTH = 1_024;
 const MAX_READ_PAGE_JSON_BYTES = 4 * 1024 * 1024;
 /** Durable Object SQL storage allows at most 100 bound parameters per statement. */
@@ -338,10 +348,32 @@ const predecessorColumns = {
   ],
 } as const;
 
-const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(function* () {
+const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(function* (
+  version: 3 | 4,
+) {
   const sql = yield* SqlClient.SqlClient;
 
-  for (const [table, expected] of Object.entries(predecessorColumns)) {
+  const expectedColumns =
+    version === 3
+      ? predecessorColumns
+      : {
+          ...predecessorColumns,
+          effect_agent_submissions: [
+            ...predecessorColumns.effect_agent_submissions,
+            "worker_admission_json",
+            "message_admission_json",
+          ],
+          effect_agent_message_deliveries: [
+            "owner_thread_id",
+            "message_id",
+            "version",
+            "state",
+            "deadline_at_millis",
+            "record_json",
+          ],
+        };
+
+  for (const [table, expected] of Object.entries(expectedColumns)) {
     const columns = yield* decodeRows(
       Schema.Array(Schema.Struct({ name: BoundedIdentifier })),
       table,
@@ -353,9 +385,9 @@ const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(fun
 
     if (columns.length !== names.size || columns.some((column) => !names.has(column.name)))
       return yield* DoStorageCompatibilityError.make({
-        actualVersion: 3,
+        actualVersion: version,
         supportedVersion: CurrentDoStorageVersion,
-        message: `The v3 ${table} columns do not match the supported predecessor; no upgrade was committed.`,
+        message: `The v${version} ${table} columns do not match the supported predecessor; no upgrade was committed.`,
       });
   }
 });
@@ -454,7 +486,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       versionRows,
     );
 
-    if (version.value === "2" || version.value === "3") {
+    if (version.value === "2" || version.value === "3" || version.value === "4") {
       yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -464,7 +496,10 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
 
             if (current.length === 1 && current[0].value === String(CurrentDoStorageVersion))
               return;
-            if (current.length !== 1 || (current[0].value !== "2" && current[0].value !== "3"))
+            if (
+              current.length !== 1 ||
+              (current[0].value !== "2" && current[0].value !== "3" && current[0].value !== "4")
+            )
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: -1,
                 supportedVersion: CurrentDoStorageVersion,
@@ -485,6 +520,17 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
                 message:
                   "The predecessor store is missing required tables. Retain the original store for inspection; no upgrade was committed.",
               });
+
+            const recoveryTables =
+              yield* sql`SELECT name FROM sqlite_master WHERE type='table' AND name='effect_agent_recovery_checkpoints'`;
+
+            if (recoveryTables.length !== 0)
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: Number(current[0].value),
+                supportedVersion: CurrentDoStorageVersion,
+                message:
+                  "The predecessor already contains recovery checkpoint storage; refusing ambiguous data without mutation.",
+              });
             if (current[0].value === "2") {
               yield* checkV2ThreadLayout();
               for (const statement of [
@@ -497,18 +543,24 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
                 yield* failpoint("upgrade:after-mutation");
               }
             }
-            if (current[0].value === "3") yield* checkPredecessorLayout();
+            if (current[0].value === "3") yield* checkPredecessorLayout(3);
+            if (current[0].value === "4") yield* checkPredecessorLayout(4);
+            if (current[0].value !== "4") {
+              yield* failpoint("upgrade:before-mutation");
+              yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
+              yield* failpoint("upgrade:after-mutation");
+              yield* failpoint("upgrade:before-mutation");
+              yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN message_admission_json TEXT`;
+              yield* failpoint("upgrade:after-mutation");
+              yield* failpoint("upgrade:before-mutation");
+              yield* createMessageDeliveryTables;
+              yield* failpoint("upgrade:after-mutation");
+            }
             yield* failpoint("upgrade:before-mutation");
-            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
-            yield* failpoint("upgrade:after-mutation");
-            yield* failpoint("upgrade:before-mutation");
-            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN message_admission_json TEXT`;
-            yield* failpoint("upgrade:after-mutation");
-            yield* failpoint("upgrade:before-mutation");
-            yield* createMessageDeliveryTables;
+            yield* createRecoveryCheckpointTable;
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* sql`UPDATE effect_agent_meta SET value='4' WHERE key='storage_version'`;
+            yield* sql`UPDATE effect_agent_meta SET value='5' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -538,7 +590,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         message:
           `The Durable Object uses unsupported storage version ${version.value}; ` +
           `this build supports exactly version ${CurrentDoStorageVersion}. ` +
-          "Only supported v2 and v3 can be upgraded automatically. Keep the original store and use a compatible library version.",
+          "Only supported v2, v3 and v4 can be upgraded automatically. Keep the original store and use a compatible library version.",
       });
     }
   }
@@ -547,7 +599,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     SELECT name
     FROM sqlite_master
     WHERE type = 'table'
-      AND name IN ${sql.in([...REQUIRED_TABLES, "effect_agent_message_deliveries"])}
+      AND name IN ${sql.in([...REQUIRED_TABLES, "effect_agent_message_deliveries", "effect_agent_recovery_checkpoints"])}
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
 
@@ -558,7 +610,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     requiredRows,
   );
 
-  if (required.length !== REQUIRED_TABLES.length + 1) {
+  if (required.length !== REQUIRED_TABLES.length + 2) {
     return yield* DoStorageCompatibilityError.make({
       actualVersion: CurrentDoStorageVersion,
       supportedVersion: CurrentDoStorageVersion,
@@ -1069,27 +1121,54 @@ const makeJournal = (
 
           yield* failpoint("export:after-thread-read");
 
-          const recordRows = yield* sql<Record<string, unknown>>`
-            SELECT
-              thread_id,
-              sequence,
-              record_id,
-              batch_id,
-              record_json
-            FROM effect_agent_canonical_records
-            WHERE thread_id = ${threadId}
-            ORDER BY sequence
-          `.pipe(Effect.mapError(storageError("export canonical records")));
+          if (thread.tail_sequence > MAX_RECORDS_PER_THREAD)
+            return yield* DoStorageError.make({
+              operation: "export thread",
+              message: "The thread exceeds the current export record limit.",
+            });
+          const records: Array<RecordRow> = [];
+          let afterSequence = ZERO_SEQUENCE;
 
-          return RawThreadExport.make({
-            thread,
-            records: yield* decodeRows(
-              Schema.Array(RecordRow),
-              "effect_agent_canonical_records",
+          while (afterSequence < thread.tail_sequence) {
+            const limit = Math.min(1_024, thread.tail_sequence - afterSequence);
+
+            const request = RawReadRequest.make({
               threadId,
-              recordRows,
-            ),
-          });
+              fromSequenceExclusive: afterSequence,
+              limit,
+            });
+
+            const plan = yield* read(request);
+            const page = yield* Stream.runCollect(plan.records);
+
+            if (
+              page.length !== limit ||
+              page.some((record, index) => record.sequence !== afterSequence + index + 1)
+            ) {
+              return yield* DoStorageCorruptionError.make({
+                table: "effect_agent_canonical_records",
+                rowKey: threadId,
+                message:
+                  "The exported canonical prefix is not contiguous through its captured tail.",
+              });
+            }
+            records.push(...page);
+            afterSequence = page[page.length - 1].sequence;
+          }
+
+          const beyondTail =
+            yield* sql`SELECT sequence FROM effect_agent_canonical_records WHERE thread_id=${threadId} AND sequence > ${thread.tail_sequence} LIMIT 1`.pipe(
+              Effect.mapError(storageError("verify export tail")),
+            );
+
+          if (beyondTail.length !== 0)
+            return yield* DoStorageCorruptionError.make({
+              table: "effect_agent_canonical_records",
+              rowKey: threadId,
+              message: "Canonical records exist beyond the captured thread tail.",
+            });
+
+          return RawThreadExport.make({ thread, records });
         }),
       )
       .pipe(
@@ -1189,6 +1268,82 @@ const makeJournal = (
           )
         `.pipe(Effect.mapError(storageError("insert checkpoint")));
       }),
+    );
+  });
+
+  const saveRecoveryCheckpoint = Effect.fn("DoJournal.saveRecoveryCheckpoint")(function* (
+    request: SaveRecoveryCheckpointRequest,
+    checkpointJson: string,
+  ) {
+    const { checkpoint } = request;
+
+    if (checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH) {
+      return yield* DoStorageError.make({
+        operation: "save recovery checkpoint",
+        message: "Checkpoint identity exceeds the Durable Object storage bounds.",
+      });
+    }
+    yield* checkValueBound("save recovery checkpoint", checkpointJson);
+    // Keep injected waits outside the storage-backed transaction callback.
+    yield* failpoint("save-recovery-checkpoint:before");
+    yield* withWriteTransaction("recovery checkpoint transaction")(
+      Effect.gen(function* () {
+        const threads = yield* getThread(checkpoint.threadId);
+        const thread = threads[0];
+
+        if (thread === undefined)
+          return yield* ThreadNotMaterialized.make({ threadId: checkpoint.threadId });
+        if (request.producerEpoch !== thread.producer_epoch)
+          return yield* FenceRejected.make({
+            threadId: checkpoint.threadId,
+            actualEpoch: thread.producer_epoch,
+            attemptedEpoch: request.producerEpoch,
+          });
+        if (checkpoint.throughSequence > thread.tail_sequence)
+          return yield* CheckpointRejected.make({
+            threadId: checkpoint.threadId,
+            reason: "ahead-of-tail",
+          });
+
+        const digests =
+          checkpoint.throughSequence === 0
+            ? [EMPTY_TAIL_DIGEST]
+            : yield* getTailDigestAt(checkpoint.threadId, checkpoint.throughSequence);
+
+        if (digests.length !== 1 || digests[0] !== checkpoint.tailDigest)
+          return yield* CheckpointRejected.make({
+            threadId: checkpoint.threadId,
+            reason: "digest-mismatch",
+          });
+
+        yield* sql`
+          INSERT INTO effect_agent_recovery_checkpoints (thread_id, through_sequence, tail_digest, checkpoint_json)
+          VALUES (${checkpoint.threadId}, ${checkpoint.throughSequence}, ${checkpoint.tailDigest}, ${checkpointJson})
+          ON CONFLICT (thread_id) DO UPDATE SET
+            through_sequence = excluded.through_sequence,
+            tail_digest = excluded.tail_digest,
+            checkpoint_json = excluded.checkpoint_json
+          WHERE excluded.through_sequence >= effect_agent_recovery_checkpoints.through_sequence
+        `.pipe(Effect.mapError(storageError("save recovery checkpoint")));
+      }),
+    );
+    yield* failpoint("save-recovery-checkpoint:after");
+  });
+
+  const loadRecoveryCheckpoint = Effect.fn("DoJournal.loadRecoveryCheckpoint")(function* (
+    threadId: string,
+  ) {
+    const rows = yield* sql<Record<string, unknown>>`
+      SELECT thread_id, through_sequence, tail_digest, checkpoint_json
+      FROM effect_agent_recovery_checkpoints
+      WHERE thread_id = ${threadId}
+    `.pipe(Effect.mapError(storageError("load recovery checkpoint")));
+
+    return yield* decodeRows(
+      Schema.Array(CheckpointRow),
+      "effect_agent_recovery_checkpoints",
+      threadId,
+      rows,
     );
   });
 
@@ -1346,6 +1501,8 @@ const makeJournal = (
     getThread,
     getTailDigestAt,
     loadCheckpoint,
+    loadRecoveryCheckpoint,
+    saveRecoveryCheckpoint,
     materialize,
     read,
     saveCheckpoint,

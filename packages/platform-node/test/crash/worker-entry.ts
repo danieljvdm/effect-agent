@@ -48,6 +48,10 @@ import {
   approvalDefinition,
   approvalTools,
   coordinatorSubmitSlice,
+  checkpointContextLayer,
+  checkpointDefinition,
+  checkpointParts,
+  makeCheckpointToolLayer,
   crashSubmitOptions,
   decodeThreadId,
   decodeToolCallId,
@@ -181,6 +185,7 @@ const options: NodeDurableAgentRuntimeOptions = {
   wakeScanInterval: 1_000,
   runtimeFailpoint: runtimeKill,
   storageFailpoint: storageKill,
+  ...(env.EFFECT_AGENT_SCENARIO === "run-checkpoint" ? { runContext: checkpointContextLayer } : {}),
 };
 
 const emit = (message: ChildMessage): Effect.Effect<void> =>
@@ -378,6 +383,25 @@ const scenario = Effect.gen(function* () {
       const agent = Agent.withModel(plannerDefinition, model);
 
       yield* emitSettlements(yield* runtime.processThread(agent, threadId));
+
+      return;
+    }
+    case "run-checkpoint": {
+      const model = yield* makeScriptedModel((call) => checkpointParts(call + 1));
+      const agent = Agent.withModel(checkpointDefinition, model);
+
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: CRASH_QUESTION },
+        crashSubmitOptions(env.EFFECT_AGENT_THREAD, idempotencyKey),
+      );
+
+      yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
+      yield* emitSettlements(
+        yield* runtime
+          .processThread(agent, threadId)
+          .pipe(Effect.provide(makeCheckpointToolLayer(requireSupplierDir()))),
+      );
 
       return;
     }

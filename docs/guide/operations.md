@@ -407,13 +407,20 @@ uncertainty, payloads and transactional prearming; this extension defines no pro
 ### Adopting these contracts
 
 The persistent adapters automatically upgrade supported predecessor formats on acquisition:
-Cloudflare Thread stores move from version 2 or 3 to 4; Schedule and Subscription stores move
-from version 2 to 3; the combined SQLite file moves from version 7 or 8 to 9. Thread and SQLite
-stores add independently discoverable message delivery storage. Each owning store upgrades in one native transaction and advances
-its version marker last. Reopening after interruption retries the entire uncommitted upgrade.
+Cloudflare Thread stores move from version 2, 3, or 4 to 5; Schedule and Subscription stores move
+from version 2 to 3; the combined SQLite file moves from version 7, 8, or 9 to 10. Thread and SQLite
+stores add a separate slot for the latest recovery checkpoint and, where needed, independently discoverable
+message delivery storage. Each owning store upgrades in one native transaction and advances its
+version marker last. Reopening after interruption retries the entire uncommitted upgrade.
 Namespaces, canonical history and digests, receipts, pending work, ownership, deadlines, alarm
 generations and scan cursors are preserved. Keep the existing namespace/file and the old source
 versions, input bindings and agent registrations needed to finish retained work.
+
+Recovery checkpoints are disposable: missing or incompatible cache state rebuilds from canonical
+history. Upgrades preserve existing generic projection checkpoints. The optional `verifyOnOpen`
+audit checks canonical history and generic projection checkpoints; recovery caches are validated
+when loaded. See [recovery checkpoints](../concepts/durability#recovery-checkpoints) for the bounded
+resume path and its fallback rules.
 
 Legacy subscription configurations become revision 1 and remain the immutable configuration for
 already selected deliveries. Retry counts become the initial generation's automatic attempt count;

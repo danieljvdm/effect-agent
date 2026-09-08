@@ -77,6 +77,67 @@ const withFixture = <A, E>(
   );
 
 describe("supported beta50 storage upgrade", () => {
+  for (const point of [
+    "upgrade:before-mutation",
+    "upgrade:after-mutation",
+    "upgrade:before-version",
+    "upgrade:after-version",
+  ] as const) {
+    it.effect(`preserves v9 data and atomically adds recovery checkpoints at ${point}`, () => {
+      let armed = false;
+
+      return withFixture(
+        (open) =>
+          Effect.gen(function* () {
+            yield* open;
+            const sql = yield* SqlClient.SqlClient;
+
+            yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
+            yield* sql`PRAGMA user_version = 9`;
+            const before = yield* snapshotStore;
+
+            armed = true;
+            expect(Exit.isFailure(yield* open.pipe(Effect.exit))).toBe(true);
+            expect(yield* snapshotStore).toEqual(before);
+            expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 9 }]);
+            armed = false;
+            yield* open;
+            yield* assertPreserved("sqlite");
+            expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 10 }]);
+            expect(yield* sql`SELECT * FROM effect_agent_recovery_checkpoints`).toEqual([]);
+            const upgraded = yield* snapshotStore;
+
+            yield* open;
+            expect(yield* snapshotStore).toEqual(upgraded);
+          }),
+        (location) =>
+          armed && location === point
+            ? SqliteStorageFailpointError.make({ location })
+            : Effect.void,
+      );
+    });
+  }
+
+  it.effect("rejects an ambiguous v9 layout without resetting or changing retained data", () =>
+    withFixture((open) =>
+      Effect.gen(function* () {
+        yield* open;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
+        yield* sql`ALTER TABLE effect_agent_submissions RENAME COLUMN message_admission_json TO malformed_column`;
+        yield* sql`PRAGMA user_version = 9`;
+        const before = yield* snapshotStore;
+
+        expect(yield* open.pipe(Effect.result)).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "SqliteStorageCompatibilityError", actualVersion: 9 },
+        });
+        expect(yield* snapshotStore).toEqual(before);
+      }),
+    ),
+  );
+
   for (const [table, column] of [
     ["effect_agent_submissions", "admission_fence_json"],
     ["effect_agent_subscriptions", "recovery_present"],
@@ -91,6 +152,7 @@ describe("supported beta50 storage upgrade", () => {
             yield* open;
             const sql = yield* SqlClient.SqlClient;
 
+            yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
             yield* sql`DROP TABLE effect_agent_message_deliveries`;
             yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN worker_admission_json`;
             yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN message_admission_json`;
@@ -124,6 +186,7 @@ describe("supported beta50 storage upgrade", () => {
           yield* open;
           const sql = yield* SqlClient.SqlClient;
 
+          yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
           yield* sql`DROP TABLE effect_agent_message_deliveries`;
           yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN worker_admission_json`;
           yield* sql`ALTER TABLE effect_agent_submissions DROP COLUMN message_admission_json`;
@@ -137,7 +200,7 @@ describe("supported beta50 storage upgrade", () => {
           armed = false;
           yield* open;
           yield* assertPreserved("sqlite");
-          expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 9 }]);
+          expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 10 }]);
           expect(yield* sql`SELECT * FROM effect_agent_message_deliveries`).toEqual([]);
         }),
       (location) =>
@@ -171,7 +234,7 @@ describe("supported beta50 storage upgrade", () => {
         );
         const sql = yield* SqlClient.SqlClient;
 
-        expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 9 }]);
+        expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 10 }]);
       }),
     ),
   );

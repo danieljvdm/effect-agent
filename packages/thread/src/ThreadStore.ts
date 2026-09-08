@@ -74,7 +74,7 @@ export class ThreadTail extends Schema.Class<ThreadTail>("@effect-agent/thread/T
 }) {}
 
 /** Maximum canonical records represented by one Thread export. */
-export const MAX_THREAD_EXPORT_RECORDS = 65_536;
+export const MAX_THREAD_EXPORT_RECORDS = 131_072;
 
 export class ThreadExport extends Schema.Class<ThreadExport>("@effect-agent/thread/ThreadExport")({
   format: Schema.Literal("effect-agent/thread@1"),
@@ -105,6 +105,14 @@ export class SaveCheckpointRequest extends Schema.Class<SaveCheckpointRequest>(
   "@effect-agent/thread/SaveCheckpointRequest",
 )({
   checkpoint: ThreadCheckpoint,
+}) {}
+
+/** Replace the disposable recovery view only under the current canonical producer fence. */
+export class SaveRecoveryCheckpointRequest extends Schema.Class<SaveRecoveryCheckpointRequest>(
+  "@effect-agent/thread/SaveRecoveryCheckpointRequest",
+)({
+  checkpoint: ThreadCheckpoint,
+  producerEpoch: ProducerEpoch,
 }) {}
 
 export class LoadCheckpointRequest extends Schema.Class<LoadCheckpointRequest>(
@@ -148,7 +156,7 @@ export class CheckpointRejected extends Schema.TaggedError<CheckpointRejected>()
   "CheckpointRejected",
   {
     threadId: ThreadId,
-    reason: Schema.Literals(["ahead-of-tail", "digest-mismatch", "unsupported-version"]),
+    reason: Schema.Literals(["ahead-of-tail", "digest-mismatch", "unsupported-version", "corrupt"]),
   },
 ) {}
 
@@ -172,6 +180,23 @@ export interface ThreadCheckpoints {
     Option.Option<ThreadCheckpoint>,
     ThreadStoreError | ThreadNotMaterialized | CheckpointRejected
   >;
+}
+
+/**
+ * Optional latest-only recovery cache, independent of application projection checkpoints.
+ * Saves atomically validate the producer epoch and canonical batch tail. An older snapshot
+ * cannot replace a newer one; equal-tail replacement repairs disposable state. Invalid cached
+ * data fails with CheckpointRejected, while infrastructure failures remain ThreadStoreError.
+ * Loading at an earlier tail may return none. Canonical records and the ledger remain authority.
+ */
+export interface ThreadRecoveryCheckpoints {
+  readonly save: (
+    request: SaveRecoveryCheckpointRequest,
+  ) => Effect.Effect<
+    void,
+    ThreadStoreError | ThreadNotMaterialized | CheckpointRejected | FenceRejected
+  >;
+  readonly load: ThreadCheckpoints["load"];
 }
 
 export class ThreadStore extends Context.Service<
@@ -200,5 +225,6 @@ export class ThreadStore extends Context.Service<
     ) => Effect.Effect<ThreadTail, ThreadStoreError | ThreadNotMaterialized>;
     /** Absent when this adapter does not support disposable checkpoints. */
     readonly checkpoints?: ThreadCheckpoints | undefined;
+    readonly recoveryCheckpoints?: ThreadRecoveryCheckpoints | undefined;
   }
 >()("@effect-agent/thread/ThreadStore") {}

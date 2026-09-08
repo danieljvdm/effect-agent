@@ -116,6 +116,8 @@ export const DoStorageFailpointLocation = Schema.Literals([
   "export:after-thread-read",
   "save-checkpoint:before",
   "save-checkpoint:after",
+  "save-recovery-checkpoint:before",
+  "save-recovery-checkpoint:after",
   "ledger:admit:before",
   "ledger:admit:after",
   "ledger:mark-ready:before",

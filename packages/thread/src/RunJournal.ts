@@ -7,7 +7,11 @@ import {
 } from "@effect-agent/core/Identifiers";
 import { type ExhaustedLimit } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
-import { ModelCallUsage, summarizeModelUsage } from "@effect-agent/core/Usage";
+import {
+  ModelCallUsage,
+  summarizeModelUsage,
+  type RunUsageSummary,
+} from "@effect-agent/core/Usage";
 import {
   CLEARED_TOOL_RESULT,
   COMPACTION_SUMMARY_PREFIX,
@@ -18,10 +22,11 @@ import { type Crypto, Effect, Schema, Stream, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { digestJson, type DigestError } from "./Digest.ts";
+import { type JournalCheckpointSeed } from "./internal/journal-checkpoint.ts";
 import {
   BatchId,
   CanonicalBatch,
-  type CompactionCreated,
+  CompactionCreated,
   ModelResponseRecorded,
   PersistedJson,
   RecordEnvelope,
@@ -360,6 +365,8 @@ export interface RunJournalUsage {
   readonly costMicrousd: number;
   /** Canonical per-call detail used for settlement aggregation and recovery. */
   readonly modelUsage: ReadonlyArray<ModelCallUsage>;
+  /** Detailed usage of retired records, grouped without retaining per-call payloads. */
+  readonly summarizedModelUsage?: RunUsageSummary | undefined;
 }
 
 export interface RunJournalProjection {
@@ -549,13 +556,17 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   records: Stream.Stream<CanonicalRecordEnvelope, E, R>,
   ownerRunId: RunId | undefined,
   onBoundary?: (boundary: JournalBoundary) => void,
+  seed?: JournalCheckpointSeed,
 ): Effect.fn.Return<RunJournalProjection, RunJournalError | E, R> {
+  if (seed !== undefined && seed.runId !== ownerRunId)
+    return yield* journalError("Recovery checkpoint belongs to another Run");
+
   let state: FoldState = {
     all: [],
     before: [],
     pendingTools: [],
     pendingToolsForRun: false,
-    committedTurns: 0,
+    committedTurns: seed?.committedTurns ?? 0,
   };
 
   // RUN-026 pre-scan: the widest VALID compaction bounds govern the fold. A
@@ -572,6 +583,8 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   // settleds (filtered later by the fold) still contribute spans —
   // over-invalidating is the fail-safe direction.
   const firstSequenceByRun = new Map<string, number>();
+
+  if (seed?.firstSequence !== undefined) firstSequenceByRun.set(seed.runId, seed.firstSequence);
   const lastResponseSequenceByRun = new Map<string, number>();
   const terminalSequenceByRun = new Map<string, number>();
   const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
@@ -648,8 +661,12 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   const incompleteResponseSequences: Array<{ readonly sequence: number; readonly runId: RunId }> =
     [];
 
-  let ownerPrefixSequence = Number.POSITIVE_INFINITY;
-  let protectedContext: Prompt.Prompt | undefined;
+  let ownerPrefixSequence = seed?.firstSequence ?? Number.POSITIVE_INFINITY;
+
+  let protectedContext: Prompt.Prompt | undefined =
+    seed?.protectedContext === undefined
+      ? undefined
+      : yield* decodePromptMessages(seed.protectedContext);
 
   if (settledCoverage > 0) {
     yield* Stream.runForEach(records, (envelope) =>
@@ -694,6 +711,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     const { runId, coversThrough } = payload;
 
     if (coversThrough <= 0 || coversThrough >= ownSequence) return false;
+    if (seed !== undefined && ownSequence === seed.compaction.sequence)
+      return (
+        seed.compaction.record.payload._tag === "CompactionCreated" &&
+        Schema.toEquivalence(CompactionCreated)(payload, seed.compaction.record.payload)
+      );
     const ownerFirst = firstSequenceByRun.get(runId);
 
     if (payload.kind === "summarize" && ownerFirst !== undefined && coversThrough >= ownerFirst)
@@ -718,8 +740,8 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   let replacement: CompactionCreated | undefined;
   let summarizeSequence = -1;
   let clearBound = 0;
-  let latestWindowId: string | undefined;
-  let latestWindowSequence = -1;
+  let latestWindowId: string | undefined = seed?.contextWindowId;
+  let latestWindowSequence = seed?.throughSequence ?? -1;
   let rolloverCoveredThrough = 0;
 
   for (const { payload, sequence } of compactions) {
@@ -755,6 +777,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
   const replacementLength = replacement === undefined ? 0 : retainedPrefix.length + 1;
 
+  if (seed?.frontier !== undefined)
+    onBoundary?.({ ...seed.frontier, promptLength: replacementLength });
+
   const emitSummary = () => {
     if (summaryEmitted || replacement === undefined) return;
     summaryEmitted = true;
@@ -779,19 +804,20 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   };
 
   const modelUsage: Array<ModelCallUsage> = [];
-  let unobservedModelCalls = 0;
+  let unobservedModelCalls = seed?.unobservedModelCalls ?? 0;
 
   const usage = {
-    modelCalls: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    lastInputTokens: 0,
-    lastOutputTokens: 0,
-    costMicrousd: 0,
+    modelCalls: seed?.modelCalls ?? 0,
+    inputTokens: seed?.inputTokens ?? 0,
+    outputTokens: seed?.outputTokens ?? 0,
+    lastInputTokens: seed?.lastInputTokens ?? 0,
+    lastOutputTokens: seed?.lastOutputTokens ?? 0,
+    costMicrousd: seed?.costMicrousd ?? 0,
     modelUsage,
+    ...(seed === undefined ? {} : { summarizedModelUsage: seed.summarizedModelUsage }),
   };
 
-  let usageTurn = 0;
+  let usageTurn = seed?.committedTurns ?? 0;
 
   const incompleteToolTurns = new Set<string>();
   const incompleteToolCalls = new Set<string>();
@@ -799,11 +825,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   let ownerTerminated = false;
 
   const policyUsage = {
-    committedTurns: 0,
-    toolCalls: 0,
-    programmaticToolCalls: 0,
-    consecutiveToolFailures: 0,
-    finalizationUsed: false,
+    committedTurns: seed?.policyUsage.committedTurns ?? 0,
+    toolCalls: seed?.policyUsage.toolCalls ?? 0,
+    programmaticToolCalls: seed?.policyUsage.programmaticToolCalls ?? 0,
+    consecutiveToolFailures: seed?.policyUsage.consecutiveToolFailures ?? 0,
+    finalizationUsed: seed?.policyUsage.finalizationUsed ?? false,
   };
 
   const accountResponse = Effect.fn("RunJournal.accountResponse")(function* (
@@ -829,6 +855,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
     }
     if (payload.runId !== ownerRunId) return;
+    if (seed !== undefined && envelope.sequence <= seed.throughSequence) return;
     if (payload.turn === 1 && payload.runScopedPrefixLength !== undefined) {
       protectedContext = Prompt.fromMessages(
         messages.content.slice(0, payload.runScopedPrefixLength),
@@ -943,6 +970,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         ownerTerminated = true;
 
       if (payload._tag === "RunPolicyUsageReserved" && payload.runId === ownerRunId) {
+        if (seed !== undefined && envelope.sequence <= seed.throughSequence) return;
         if (
           payload.programmaticToolCalls < policyUsage.programmaticToolCalls ||
           (policyUsage.finalizationUsed && !payload.finalizationUsed)
@@ -957,6 +985,12 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       // message of its own; records at or below the summarize bound render as
       // the one summary message emitted at the covered/kept transition.
       if (payload._tag === "CompactionCreated") return;
+      if (
+        seed !== undefined &&
+        envelope.sequence <= seed.throughSequence &&
+        (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled")
+      )
+        return;
       if (envelope.sequence <= summarizeBound) {
         // Projecting an earlier Run after a later summary still accounts for its covered responses.
         if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {

@@ -258,7 +258,8 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
     const expectedInputs = ordered.map((row) => submissionInputRecordId(row.submissionId));
     const expectedSet = new Set<string>(expectedInputs);
     const inputOrder = recordIds.filter((recordId) => expectedSet.has(recordId));
-    const expectedPresent = expectedInputs.filter((expected) => inputOrder.includes(expected));
+    const presentInputs = new Set(inputOrder);
+    const expectedPresent = expectedInputs.filter((expected) => presentInputs.has(expected));
 
     const matches =
       inputOrder.length === expectedPresent.length &&
@@ -302,8 +303,10 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
     const expectedSet = new Set<string>(expectedSettlements);
     const settlementOrder = recordIds.filter((recordId) => expectedSet.has(recordId));
 
+    const presentSettlements = new Set(settlementOrder);
+
     const expectedPresent = expectedSettlements.filter((expected) =>
-      settlementOrder.includes(expected),
+      presentSettlements.has(expected),
     );
 
     const matches =

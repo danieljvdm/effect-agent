@@ -720,6 +720,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
 ) {
   const local = yield* ThreadStore;
   const checkpoints = local.checkpoints;
+  const recoveryCheckpoints = local.recoveryCheckpoints;
   const transport = yield* ThreadPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
 
@@ -856,6 +857,27 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
         ? local.observe(request)
         : Stream.unwrap(Effect.fail(crossThreadStoreError("thread observe", request.threadId))),
 
+    ...(recoveryCheckpoints === undefined
+      ? {}
+      : {
+          recoveryCheckpoints: {
+            save: (request) =>
+              request.checkpoint.threadId === options.localThreadId
+                ? recoveryCheckpoints.save(request)
+                : Effect.fail(
+                    crossThreadStoreError(
+                      "thread save recovery checkpoint",
+                      request.checkpoint.threadId,
+                    ),
+                  ),
+            load: (request) =>
+              request.threadId === options.localThreadId
+                ? recoveryCheckpoints.load(request)
+                : Effect.fail(
+                    crossThreadStoreError("thread load recovery checkpoint", request.threadId),
+                  ),
+          },
+        }),
     ...(checkpoints === undefined
       ? {}
       : {
