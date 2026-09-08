@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.60
+
+### Patch Changes
+
+- [#370](https://github.com/danieljvdm/effect-agent/pull/370) [`bed4e71`](https://github.com/danieljvdm/effect-agent/commit/bed4e7170ab2d9b2ef3fbf3c7c3a8fa16e0d803d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add typed Thread projection maintenance with live committed-batch hooks and bounded background backfill. Share host index services with Cloudflare Tools while preserving canonical commits and independent approval publication.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.60
+  - @effect-agent/engine@0.1.0-beta.60
+
 ## 0.1.0-beta.59
 
 ### Patch Changes

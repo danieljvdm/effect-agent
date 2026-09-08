@@ -1,5 +1,12 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.60
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.60
+
 ## 0.1.0-beta.59
 
 ### Patch Changes
