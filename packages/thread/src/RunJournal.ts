@@ -350,6 +350,8 @@ const toolMessageFromSettled = Effect.fn("RunJournal.toolMessageFromSettled")(
 /** Cumulative committed usage of the projected Run (RUN-023 resume re-seed). */
 export interface RunJournalUsage {
   readonly modelCalls: number;
+  /** Known accounting gaps retained across Attempts without changing numeric usage totals. */
+  readonly unobservedModelCalls?: number | undefined;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly lastInputTokens: number;
@@ -777,6 +779,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   };
 
   const modelUsage: Array<ModelCallUsage> = [];
+  let unobservedModelCalls = 0;
 
   const usage = {
     modelCalls: 0,
@@ -833,6 +836,12 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     }
 
     const responseUsage = yield* projectedResponseUsage(payload);
+
+    unobservedModelCalls = yield* addProjectedUsage(
+      "unobservedModelCalls",
+      unobservedModelCalls,
+      payload.unobservedModelCalls ?? 0,
+    );
 
     usage.modelCalls = yield* addProjectedUsage(
       "modelCalls",
@@ -1073,7 +1082,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     prompt: Prompt.fromMessages(state.all),
     historyBefore: Prompt.fromMessages(state.before),
     committedTurns: state.committedTurns,
-    usage,
+    usage: unobservedModelCalls === 0 ? usage : { ...usage, unobservedModelCalls },
     ...(latestWindowId === undefined ? {} : { contextWindowId: latestWindowId }),
     ...(protectedContext === undefined ? {} : { protectedContext }),
     ...(ownerTerminated || pendingContextToolCallId === undefined
@@ -1144,6 +1153,8 @@ export interface TurnCommitInput {
         readonly exhausted?: ExhaustedLimit | undefined;
       }
     | undefined;
+  /** Known missing-accounting invocations staged before this canonical response. */
+  readonly unobservedModelCalls?: number | undefined;
   /** Per-call provider usage staged by the engine's `noteTurnUsage` (RUN-023). */
   readonly usage?:
     | {
@@ -1263,6 +1274,14 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
       messagesDigest,
       ...(runScopedPrefixLength === undefined ? {} : { runScopedPrefixLength }),
       ...(modelUsage === undefined ? {} : { modelUsage }),
+      ...(input.unobservedModelCalls === undefined || input.unobservedModelCalls === 0
+        ? {}
+        : {
+            unobservedModelCalls: yield* validStagedUsage(
+              "unobservedModelCalls",
+              input.unobservedModelCalls,
+            ),
+          }),
       ...(input.usage === undefined
         ? {}
         : {
