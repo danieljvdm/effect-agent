@@ -11,6 +11,7 @@ import {
   type SubmissionId,
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { ContextRolloverRequest, ContextRolloverTool } from "@effect-agent/engine/ContextWindow";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import {
@@ -1776,6 +1777,140 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         expect(yield* harness.lookupInvocations).toBe(1);
         expect(yield* harness.childInvocations).toBe(1);
       }
+    }),
+  );
+
+  // https://github.com/danieljvdm/effect-agent/commit/c1a6e6a915be73a49b2c266e2df74256f44c25e2
+  // A later suspension duplicated prior Turn results and broke rollover after recovery.
+  it.effect("preserves prior Turn results when a later delegation suspends before rollover", () =>
+    Effect.gen(function* () {
+      const { childBinding } = yield* makeChildFixture;
+      const Failure = Schema.TaggedStruct("LookupFailure", { detail: Schema.String });
+
+      const toolkit = Toolkit.make(
+        researchDelegation.tool,
+        Lookup,
+        Tool.make("fail_lookup", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+          failure: Failure,
+          failureMode: "return",
+        }),
+        Tool.make("new_context", {
+          parameters: ContextRolloverRequest,
+          success: ContextRolloverRequest,
+        })
+          .annotate(ToolExecutionClass, "readonly")
+          .annotate(ContextRolloverTool, true),
+      );
+
+      const definition = Agent.make("suspension-after-prior-results", {
+        input: coordinatorDefinition.input,
+        output: coordinatorDefinition.output,
+        instructions: "Preserve completed results, delegate, roll over, then finish.",
+        toolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 8,
+          maxToolCalls: 8,
+          maxDuration: "30 seconds",
+          toolConcurrency: 2,
+        }),
+      });
+
+      const model = yield* makeScriptedModel((call) => {
+        if (call === 0) return toolTurn(toolCall("prior-failure", "fail_lookup", {}));
+        if (call === 1) return toolTurn(toolCall("prior-success", "lookup", { key: "prior" }));
+        if (call === 2)
+          return toolTurn(
+            toolCall("delegate-1", "delegate_research", { topic: "paris" }),
+            toolCall("current-sibling", "lookup", { key: "current" }),
+          );
+        if (call === 3)
+          return toolTurn(
+            toolCall("reset", "new_context", { handoff: "Research and both lookups completed." }),
+          );
+
+        return finalParts('{"report":"done"}');
+      });
+
+      const lookups = yield* Ref.make(0);
+
+      const handlers = Toolkit.make(
+        toolkit.tools.lookup,
+        toolkit.tools.fail_lookup,
+        toolkit.tools.new_context,
+      ).toLayer({
+        lookup: ({ key }) => Ref.update(lookups, (n) => n + 1).pipe(Effect.as({ value: key })),
+        fail_lookup: () => Effect.fail(Failure.make({ detail: "Original typed failure" })),
+        new_context: Effect.succeed,
+      });
+
+      const delegation = SubagentRuntime.layer(researchDelegation, childBinding, {
+        mapChildFailure,
+      }).pipe(Layer.provide(delegationSupport));
+
+      const parentBinding = Agent.withModel(definition, model.model);
+
+      const bindings = [
+        yield* DurableWorkerBinding.make(parentBinding, PARENT_DIGESTS).pipe(
+          Effect.provide(Layer.merge(handlers, delegation)),
+        ),
+        yield* DurableWorkerBinding.make(childBinding, CHILD_DIGESTS),
+      ];
+
+      const runtime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithBindings(bindings).pipe(
+            Layer.provide(RunToolAuthorization.allowAll),
+          ),
+        ),
+      );
+
+      const receipt = yield* runtime.submit(
+        parentBinding,
+        { mission: "regression" },
+        submitOptions("suspension-prior-results", "one"),
+      );
+
+      const run = drive({ runtime });
+
+      yield* run(receipt.threadId);
+      expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
+      const suspended = yield* readLog(receipt.threadId);
+
+      const prior = suspended.filter(
+        ({ record }) =>
+          record.payload._tag === "ToolCallSettled" &&
+          ["prior-failure", "prior-success"].includes(record.payload.toolCallId),
+      );
+
+      expect(prior).toHaveLength(2);
+      expect(prior[0]?.record.payload).toMatchObject({
+        result: { _tag: "LookupFailure", detail: "Original typed failure" },
+      });
+      yield* run(childThreadIdFor(receipt.submissionId, DELEGATE_CALL));
+      const completed = yield* run(receipt.threadId);
+
+      expect(
+        completed.map((settlement) => settlement.outcome),
+        JSON.stringify(completed),
+      ).toEqual(["completed"]);
+      expect(yield* Ref.get(lookups)).toBe(2);
+      const final = yield* readLog(receipt.threadId);
+
+      expect(
+        final.filter(
+          ({ record }) =>
+            record.payload._tag === "CompactionCreated" && record.payload.kind === "rollover",
+        ),
+      ).toHaveLength(1);
+      expect(
+        final.filter(
+          ({ record }) =>
+            record.payload._tag === "ToolCallSettled" &&
+            ["prior-failure", "prior-success"].includes(record.payload.toolCallId),
+        ),
+      ).toHaveLength(2);
     }),
   );
 
