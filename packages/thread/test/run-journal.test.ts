@@ -1134,6 +1134,130 @@ describe("engine compaction records and projection (RUN-026)", () => {
           }),
       );
 
+    it.effect.each(["before", "after", "absent", "current", "response-after-terminal"] as const)(
+      "compacts invisible incomplete prior batches only after their canonical termination: %s",
+      (position) =>
+        Effect.gen(function* () {
+          const batch = yield* turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 100, outputTokens: 10 }),
+          );
+
+          const incomplete = envelopesOf([batch]).slice(0, 2);
+
+          const next = yield* turnCanonicalBatch(
+            turnInput(secondToolTurn, 1, LATER_RUN_ID, { inputTokens: 200, outputTokens: 20 }),
+          );
+
+          const postTerminalResponse = yield* turnResponseBatch(
+            turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 300, outputTokens: 30 }),
+          );
+
+          for (const kind of ["rollover", "clear-tool-results"] as const) {
+            for (const terminal of ["RunFailed", "RunCompleted", "SubmissionSettled"] as const) {
+              const records = [...incomplete];
+              const owner = position === "current" ? RUN_ID : LATER_RUN_ID;
+
+              const terminalRecord = auditRecord(
+                `terminal-${terminal}`,
+                terminal === "RunFailed"
+                  ? { _tag: terminal, runId: RUN_ID, failure: { message: "failed" } }
+                  : terminal === "RunCompleted"
+                    ? { _tag: terminal, runId: RUN_ID, output: "done" }
+                    : {
+                        _tag: terminal,
+                        submissionId: SUBMISSION_ID,
+                        settlementId: "terminal",
+                        receiptId: "receipt",
+                        runId: RUN_ID,
+                        outcome: "aborted",
+                      },
+              );
+
+              if (
+                position === "before" ||
+                position === "current" ||
+                position === "response-after-terminal"
+              )
+                records.push(envelopeAt(records.length + 1, terminalRecord));
+              if (position === "response-after-terminal") {
+                for (const record of postTerminalResponse.records)
+                  records.push(envelopeAt(records.length + 1, record));
+              }
+              for (const record of next.records)
+                records.push(envelopeAt(records.length + 1, record));
+              const baseline = yield* projectRunJournal(records, owner);
+
+              expect(baseline.usage).toMatchObject(
+                position === "current"
+                  ? { inputTokens: 100, outputTokens: 10 }
+                  : { inputTokens: 200, outputTokens: 20 },
+              );
+              const through = records.length;
+
+              records.push(
+                envelopeAt(
+                  records.length + 1,
+                  auditRecord(
+                    "terminal-prefix-compaction",
+                    compactionPayload({
+                      kind,
+                      runId: owner,
+                      turn: 2,
+                      summary: undefined,
+                      coversThrough: through,
+                      handoff: "Retained handoff",
+                    }),
+                  ),
+                ),
+              );
+              if (position === "after")
+                records.push(envelopeAt(records.length + 1, terminalRecord));
+              const replay = yield* projectRunJournal(records, owner);
+
+              if (position === "before") {
+                if (kind === "rollover") {
+                  expect(replay.contextWindowId).toBe(contextWindowId(owner, 2));
+                  expect(replay.prompt.content).toEqual([
+                    contextWindowMessage(contextWindowId(owner, 2), "Retained handoff"),
+                  ]);
+                  for (const projectionOwner of [RUN_ID, undefined]) {
+                    const otherBaseline = yield* projectRunJournalStream(
+                      Stream.fromIterable(records.slice(0, through)),
+                      projectionOwner,
+                    );
+
+                    const otherView = yield* projectRunJournalStream(
+                      Stream.fromIterable(records),
+                      projectionOwner,
+                    );
+
+                    expect(otherView.contextWindowId).toBe(contextWindowId(owner, 2));
+                    expect(otherView.usage).toEqual(otherBaseline.usage);
+                    expect(otherView.policyUsage).toEqual(otherBaseline.policyUsage);
+                    if (projectionOwner === RUN_ID) {
+                      expect(otherBaseline.usage).toMatchObject({
+                        inputTokens: 100,
+                        outputTokens: 10,
+                      });
+                    }
+                  }
+                } else {
+                  expect(toolResults(replay.prompt)).toEqual([
+                    "[tool result cleared by compaction]",
+                  ]);
+                }
+              } else {
+                expect(replay.prompt).toEqual(baseline.prompt);
+                expect(replay.contextWindowId).toBeUndefined();
+              }
+              expect(replay.usage).toEqual(baseline.usage);
+              expect(replay.policyUsage).toEqual(baseline.policyUsage);
+              expect(records.slice(0, incomplete.length)).toEqual(incomplete);
+            }
+          }
+        }),
+    );
+
     it.effect(
       "prunes fully settled current-Run batches without losing replay usage, prefix or latest result",
       () =>

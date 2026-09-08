@@ -76,6 +76,7 @@ import {
   ModelResponseIdentity,
   OutputTokenUsage,
 } from "@effect-agent/core/Usage";
+import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
 import type { Take } from "effect";
 import {
   Cause,
@@ -6113,13 +6114,21 @@ const makeTurn = <
             if (trace.applicationToolCalls.length === 0) {
               return afterValidatedResponse(
                 Effect.gen(function* () {
+                  const history = historyWithResponse();
+
+                  // Preserve a completed provider Tool batch even when its final outcome
+                  // reaches the failure limit and no following Turn starts.
+                  yield* advanceHistory(context, history, options);
                   yield* applyRepeatedFailurePolicy(
                     context,
                     trace,
                     agent.definition.policy.repeatedFailureLimit,
                   );
 
-                  return yield* continueTurn(historyWithResponse());
+                  const steering = yield* drainInputs(context, options);
+                  const nextPrompt = yield* appendInputs(context, history, steering, options);
+
+                  return nextTurn(nextPrompt, turn + 1, toolCalls);
                 }),
               );
             }
@@ -6261,11 +6270,6 @@ const toolBatchContinuation = <
         }
         orderedResults.push(result);
       }
-      yield* applyRepeatedFailurePolicy(
-        context,
-        trace,
-        agent.definition.policy.repeatedFailureLimit,
-      );
 
       const toolMessage = Prompt.makeMessage("tool", {
         content: orderedResults.map((result) =>
@@ -6284,6 +6288,15 @@ const toolBatchContinuation = <
         ...promptFromTurnParts(trace).content,
         toolMessage,
       ]);
+
+      // Publish the complete batch before enforcing a terminal policy. RunFailed commits
+      // this history through the same durable seam as a subsequent Turn or completion.
+      yield* advanceHistory(context, history, options);
+      yield* applyRepeatedFailurePolicy(
+        context,
+        trace,
+        agent.definition.policy.repeatedFailureLimit,
+      );
 
       const rolloverResult = orderedResults.length === 1 ? orderedResults[0] : undefined;
 
@@ -6328,7 +6341,6 @@ const toolBatchContinuation = <
           completionResult.encodedResult,
         );
 
-        yield* advanceHistory(context, history, options);
         const bounds = effectiveRunBounds(agent.definition.policy, options);
 
         const exhausted = context.tokenExhausted
@@ -6362,7 +6374,6 @@ const toolBatchContinuation = <
           ),
         );
       }
-      yield* advanceHistory(context, history, options);
       const steering = yield* drainInputs(context, options);
       const nextPrompt = yield* appendInputs(context, history, steering, options);
 
@@ -7265,6 +7276,7 @@ function streamWithCompletion<
               agent.definition.policy,
               options.subagentGrant,
               options.subagentBudget,
+              options.subagentBudgetScope,
             ),
           ).pipe(
             Context.add(ContextWindow, {
@@ -8913,6 +8925,7 @@ export interface AgentSpawnerService {
   readonly depth: number;
   readonly grant?: SubagentGrant;
   readonly budget?: SubagentBudgetReservation;
+  readonly budgetScope?: WorkerBudgetScope;
   readonly parent: AgentSpawnerParent;
   readonly spawn: <
     InputSchema extends Schema.Top,
@@ -9015,9 +9028,11 @@ const makeAgentSpawner = (
   policy: AgentPolicy,
   grant?: SubagentGrant,
   budget?: SubagentBudgetReservation,
+  budgetScope?: WorkerBudgetScope,
 ): AgentSpawnerService => ({
   ...(grant === undefined ? {} : { grant }),
   ...(budget === undefined ? {} : { budget }),
+  ...(budgetScope === undefined ? {} : { budgetScope }),
   policy,
   depth,
   parent,

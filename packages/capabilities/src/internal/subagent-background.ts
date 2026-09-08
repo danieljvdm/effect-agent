@@ -9,6 +9,7 @@ import {
 } from "@effect-agent/core/SubagentContract";
 import {
   WorkerContext,
+  type WorkerBudgetScope,
   WorkerError,
   WorkerOperationTool,
   WorkerPage,
@@ -218,7 +219,7 @@ const operations = <
 
   const start = Effect.fn("Subagent.start")(function* (
     parameters: Parameters["Type"],
-    options: { readonly idempotencyKey: IdempotencyKey },
+    options: { readonly idempotencyKey: IdempotencyKey; readonly budgetScope?: WorkerBudgetScope },
   ) {
     const service = yield* host;
     const caller = yield* context;
@@ -242,7 +243,14 @@ const operations = <
         message: "The inherited grant does not permit background children",
       });
     }
-    const resolved = resolveSubagentPolicy(declaration, caller.policy);
+
+    const resolved = resolveSubagentPolicy(
+      declaration,
+      options.budgetScope === "worker-run" ? declaration.target.policy : caller.policy,
+      undefined,
+      options.budgetScope === "worker-run" ? "root-attached" : "conserved",
+    );
+
     const prepared = yield* prepare(parameters, caller);
 
     const encodedGrant = yield* Schema.encodeEffect(SubagentGrant)(grant).pipe(
@@ -254,6 +262,7 @@ const operations = <
       delegationId: declaration.delegationId,
       target: declaration.target,
       idempotencyKey: key,
+      ...(options.budgetScope === undefined ? {} : { budgetScope: options.budgetScope }),
       encodedGrant,
       policy: resolved.childPolicy,
       budget: SubagentBudgetReservation.make({
@@ -474,7 +483,7 @@ export const start = <
 >(
   declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
   parameters: Parameters["Type"],
-  options: { readonly idempotencyKey: IdempotencyKey },
+  options: { readonly idempotencyKey: IdempotencyKey; readonly budgetScope?: WorkerBudgetScope },
 ) => operations(declaration).start(parameters, options);
 
 /** Admit typed follow-up parameters to the same worker Thread. */
@@ -662,9 +671,11 @@ export interface BackgroundOptions {
   readonly summary?: true;
   readonly list?: true;
   readonly cancel?: true;
+  /** Author-owned funding request for starts; every native admission separately authorizes it. */
+  readonly budgetScope?: WorkerBudgetScope;
 }
 
-type Operation = keyof BackgroundOptions;
+type Operation = Exclude<keyof BackgroundOptions, "budgetScope">;
 type Suffix = {
   start: "start";
   followUp: "follow_up";
@@ -957,7 +968,10 @@ export const background = <
           const idempotencyKey = yield* modelKey("start");
 
           return yield* ops
-            .start(parameters, { idempotencyKey })
+            .start(parameters, {
+              idempotencyKey,
+              ...(selected.budgetScope === undefined ? {} : { budgetScope: selected.budgetScope }),
+            })
             .pipe(Effect.provideService(SubagentHost, service), Effect.provide(captured));
         }),
       [followUpTool.name]: (parameters: {

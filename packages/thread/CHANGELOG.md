@@ -1,5 +1,25 @@
 # @effect-agent/session
 
+## 0.1.0-beta.59
+
+### Patch Changes
+
+- [#365](https://github.com/danieljvdm/effect-agent/pull/365) [`cb1d297`](https://github.com/danieljvdm/effect-agent/commit/cb1d297d3464850b5e4645a0d3b3a5062a1ba71b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add host-authorized independent allowances for background worker Runs while preserving delegation lineage and bounded attached descendants. Keep joined inputs and replacement Attempts on the same durable allowance.
+
+- Updated dependencies [[`cb1d297`](https://github.com/danieljvdm/effect-agent/commit/cb1d297d3464850b5e4645a0d3b3a5062a1ba71b)]:
+  - @effect-agent/core@0.1.0-beta.59
+  - @effect-agent/engine@0.1.0-beta.59
+
+## 0.1.0-beta.58
+
+### Patch Changes
+
+- [#364](https://github.com/danieljvdm/effect-agent/pull/364) [`daca525`](https://github.com/danieljvdm/effect-agent/commit/daca52585983bb90b6c43a29e4a44a28c8de1743) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve completed Tool results before repeated-failure termination and allow later context rollover past invisible incomplete batches from canonically terminated prior Runs without rewriting or replaying their evidence.
+
+- Updated dependencies [[`daca525`](https://github.com/danieljvdm/effect-agent/commit/daca52585983bb90b6c43a29e4a44a28c8de1743)]:
+  - @effect-agent/engine@0.1.0-beta.58
+  - @effect-agent/core@0.1.0-beta.58
+
 ## 0.1.0-beta.57
 
 ### Minor Changes

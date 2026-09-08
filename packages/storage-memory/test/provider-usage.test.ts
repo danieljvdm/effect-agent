@@ -184,14 +184,16 @@ for (const failure of ["open-part", "missing-usage", "continuation", "invalid-es
           runId: _runId,
           usageSummary: _summary,
           uncommittedModelUsage: _usage,
-          ...joinedShape
+          ...withoutRunAccounting
         } = Schema.encodeSync(SubmissionSettled)(settlement);
 
-        // Joined settlements lack a Run identity and may not duplicate per-call accounting.
-        expect(Schema.decodeUnknownExit(SubmissionSettled)(joinedShape)._tag).toBe("Success");
+        // A retained accounting suffix requires a Run identity and its aggregate summary.
+        expect(Schema.decodeUnknownExit(SubmissionSettled)(withoutRunAccounting)._tag).toBe(
+          "Success",
+        );
         expect(
           Schema.decodeUnknownExit(SubmissionSettled)({
-            ...joinedShape,
+            ...withoutRunAccounting,
             uncommittedModelUsage: retainedCalls,
           })._tag,
         ).toBe("Failure");

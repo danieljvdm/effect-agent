@@ -128,6 +128,16 @@ Durable admission checks the recorded pool before reserving another child. Recov
 the child's resolved policy and existing reservation. Unknown usage remains charged
 conservatively, and admission fails closed on inconsistent caps or exhausted concurrency.
 
+### Independently funded workers
+
+A root may request `budgetScope: "worker-run"` for a background worker only when the native
+`WorkerBudgetAuthorizer` permits its exact source, target, and allocation. Immutable delegation
+lineage still controls Tool grants and depth; accounting belongs to the worker's logical Run.
+New Runs reuse the configured allowance, while joined input and every recovery Attempt share the
+existing Run's usage. No cumulative token or cost cap is invented when that dimension is omitted.
+Attached descendants remain bounded by the immediate worker Run's reserved subtree. See the
+[subagent guide](../guide/subagents#independently-fund-background-runs) for host configuration.
+
 ### Request a larger child budget {#containment-and-the-extension-flow}
 
 `failureMode: "return"` converts expected child failures into model-visible result data. Engine

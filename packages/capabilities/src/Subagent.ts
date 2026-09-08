@@ -1397,7 +1397,12 @@ const layer = <
       const caps =
         spawner.budget === undefined
           ? resolved.caps
-          : residualSubagentCaps(resolved.caps, spawner.policy, spawner.budget);
+          : residualSubagentCaps(
+              resolved.caps,
+              spawner.policy,
+              spawner.budget,
+              spawner.budgetScope === "worker-run",
+            );
 
       const sink = yield* RunEventSink;
       const reservations = yield* SubagentReservations;

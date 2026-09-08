@@ -346,7 +346,11 @@ export class TestThreadObject extends ThreadObject.make(
     Layer.provide(messageDeliveryFaultLayer),
     Layer.provideMerge(maintenanceClockLayer),
   ),
-  baseOptions,
+  {
+    ...baseOptions,
+    // Scripted providers have no spend; explicit cost-bound scout Runs still require pricing.
+    estimateCostMicrousd: () => Effect.succeed({ costMicrousd: 0 }),
+  },
 ) {
   override wake(): Promise<void> {
     const name = this.ctx.id.name ?? "";

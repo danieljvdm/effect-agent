@@ -24,7 +24,7 @@ import {
   ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
 import { ModelCallUsage, RunUsageSummary } from "@effect-agent/core/Usage";
-import { WorkerRef, WorkerSource } from "@effect-agent/core/Worker";
+import { WorkerBudgetScope, WorkerRef, WorkerSource } from "@effect-agent/core/Worker";
 import { ContextHandoff } from "@effect-agent/engine/ContextWindow";
 import { Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
@@ -761,6 +761,8 @@ export const WorkerReportingIntent = Schema.Struct({
 export const WorkerOrigin = Schema.Struct({
   worker: WorkerRef,
   source: WorkerSource,
+  /** Omitted retains source-subtree funding; worker-run renews only for a new native Run. */
+  budgetScope: Schema.optionalKey(WorkerBudgetScope),
   targetDigests: DefinitionDigests,
   policy: Schema.toCodecJson(AgentPolicy),
   budget: SubagentBudgetReservation,
