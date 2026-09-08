@@ -6,6 +6,7 @@ export default defineConfig({
     entry: [
       "src/index.ts",
       "src/ThreadContextHistory.ts",
+      "src/ThreadContextHistoryProjection.ts",
       "src/ActivityStore.ts",
       "src/Admin.ts",
       "src/AgentRegistration.ts",

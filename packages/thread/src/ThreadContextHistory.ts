@@ -1,5 +1,4 @@
-import type { RunId, ThreadId } from "@effect-agent/core/Identifiers";
-import { contextWindowId } from "@effect-agent/engine/Compaction";
+import type { ThreadId } from "@effect-agent/core/Identifiers";
 import {
   ContextHistory,
   ContextHistoryError,
@@ -9,9 +8,16 @@ import {
   ContextHistorySearch,
 } from "@effect-agent/engine/ContextHistory";
 import { Effect, Layer, Schema, Stream } from "effect";
-import { Prompt } from "effect/unstable/ai";
 
-import { CanonicalRecordEnvelope, CanonicalSequence, PersistedJson } from "./Records.ts";
+import { CanonicalRecordEnvelope, CanonicalSequence } from "./Records.ts";
+import type { ContextHistoryBoundary } from "./ThreadContextHistoryProjection.ts";
+import {
+  ContextHistoryEvidence,
+  project,
+  normalizeQuery,
+  matchText,
+  windowIdFor,
+} from "./ThreadContextHistoryProjection.ts";
 import { ThreadRead, ThreadStore, ThreadTail, ThreadTailRequest } from "./ThreadStore.ts";
 
 /** Bounds each lookup; a larger archive needs an explicitly configured or indexed adapter. */
@@ -33,107 +39,6 @@ const unavailable = () =>
   });
 
 const invalid = (message: string) => ContextHistoryError.make({ reason: "invalid-input", message });
-
-interface WindowBoundary {
-  readonly after: number;
-  readonly windowId: string;
-}
-interface Evidence {
-  readonly recordId: string;
-  readonly sequence: number;
-  readonly runId: RunId;
-  readonly text: string;
-}
-
-const jsonText = Effect.fn("ThreadContextHistory.jsonText")(function* (value: unknown) {
-  const json = yield* Schema.decodeUnknownEffect(PersistedJson)(value).pipe(
-    Effect.mapError(unavailable),
-  );
-
-  return JSON.stringify(json);
-});
-
-const promptText = Effect.fn("ThreadContextHistory.promptText")(function* (value: PersistedJson) {
-  const prompt = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(value).pipe(
-    Effect.mapError(unavailable),
-  );
-
-  const messages: Array<string> = [];
-
-  for (const message of prompt.content) {
-    // Provider options, system instructions, reasoning, and attachment bytes are not recall data.
-    if (message.role === "system") continue;
-    const parts: Array<string> = [];
-
-    for (const part of message.content) {
-      switch (part.type) {
-        case "text":
-          parts.push(part.text);
-          break;
-        case "tool-call":
-          parts.push(`tool call ${part.name} (${part.id}):\n${yield* jsonText(part.params)}`);
-          break;
-        case "tool-result":
-          parts.push(
-            `tool result ${part.name} (${part.id}; ${part.isFailure ? "failure" : "success"}):\n${yield* jsonText(part.result)}`,
-          );
-          break;
-        case "file":
-          parts.push("[attachment omitted]");
-          break;
-        case "reasoning":
-        case "tool-approval-request":
-        case "tool-approval-response":
-          break;
-      }
-    }
-    if (parts.length > 0) messages.push(`${message.role}:\n${parts.join("\n")}`);
-  }
-
-  return messages.join("\n\n");
-});
-
-const evidence = Effect.fn("ThreadContextHistory.evidence")(function* (
-  envelope: CanonicalRecordEnvelope,
-): Effect.fn.Return<Evidence | undefined, ContextHistoryError> {
-  const payload = envelope.record.payload;
-  let text: string;
-
-  if (payload._tag === "ModelResponseRecorded") {
-    text = yield* promptText(payload.messages);
-  } else if (payload._tag === "ModelCompleted") {
-    text =
-      payload.messages === undefined
-        ? `assistant output:\n${yield* jsonText(payload.output)}`
-        : yield* promptText(payload.messages);
-  } else if (payload._tag === "ToolCallSettled") {
-    text = `tool result ${payload.toolName} (${payload.toolCallId}; ${payload.isFailure ? "failure" : "success"}):\n${yield* jsonText(payload.result)}`;
-  } else {
-    // Raw submission input can contain fields excluded by the Agent's input projection.
-    // Step outputs, approvals, failure diagnostics, and operational records stay private.
-    return undefined;
-  }
-
-  return text.length === 0
-    ? undefined
-    : {
-        recordId: envelope.record.recordId,
-        sequence: envelope.sequence,
-        runId: payload.runId,
-        text,
-      };
-});
-
-const windowFor = (record: Evidence, boundaries: ReadonlyArray<WindowBoundary>): string => {
-  let windowId = contextWindowId(record.runId, 0);
-
-  for (const boundary of boundaries) {
-    if (record.sequence <= boundary.after) break;
-    windowId = boundary.windowId;
-  }
-
-  return windowId;
-};
 
 /**
  * Provides bounded lexical search and paged reads over retained canonical transcript evidence.
@@ -182,7 +87,7 @@ export const layer = (
             reason: "limit",
             message: `Context history exceeds the configured ${maxRecords} record scan limit`,
           });
-        const boundaries: Array<WindowBoundary> = [];
+        const boundaries: Array<ContextHistoryBoundary> = [];
         let cursor = Schema.decodeSync(CanonicalSequence)(0);
 
         while (cursor < tail.tailSequence) {
@@ -200,19 +105,14 @@ export const layer = (
 
             if (record.threadId !== threadId || record.sequence !== cursor + 1)
               return yield* unavailable();
-            const payload = record.record.payload;
+            if (record.record.payload._tag === "CompactionCreated") {
+              const { boundary } = yield* project(record);
 
-            if (payload._tag === "CompactionCreated" && payload.kind === "rollover") {
-              if (
-                payload.coversThrough >= record.sequence ||
-                payload.coversThrough < (boundaries.at(-1)?.after ?? 0)
-              ) {
-                return yield* unavailable();
+              if (boundary !== undefined) {
+                if (boundary.coversThrough < (boundaries.at(-1)?.coversThrough ?? 0))
+                  return yield* unavailable();
+                boundaries.push(boundary);
               }
-              boundaries.push({
-                after: payload.coversThrough,
-                windowId: contextWindowId(payload.runId, payload.turn),
-              });
             }
             yield* visit(record);
             cursor = record.sequence;
@@ -228,24 +128,19 @@ export const layer = (
             input,
           ).pipe(Effect.mapError(() => invalid("Invalid context history search")));
 
-          const query = request.query.trim().toLowerCase();
-
-          if (query.length === 0)
-            return yield* invalid("Context history search requires non-whitespace text");
-          const matches: Array<Evidence> = [];
+          const query = yield* normalizeQuery(request.query);
+          const matches: Array<ContextHistoryEvidence> = [];
 
           const boundaries = yield* scan(
             request.threadId,
             Effect.fn(function* (record) {
-              const item = yield* evidence(record);
+              const item = (yield* project(record)).evidence;
 
               if (item === undefined) return;
-              const index = item.text.toLowerCase().indexOf(query);
+              const text = matchText(item.text, query);
 
-              if (index < 0) return;
-              const start = Math.max(0, index - 200);
-
-              matches.push({ ...item, text: item.text.slice(start, start + 2_000) });
+              if (text === undefined) return;
+              matches.push(ContextHistoryEvidence.make({ ...item, text }));
               if (matches.length > request.limit) matches.shift();
             }),
           );
@@ -253,7 +148,7 @@ export const layer = (
           return matches.reverse().map((item) =>
             ContextHistoryHit.make({
               recordId: item.recordId,
-              windowId: windowFor(item, boundaries),
+              windowId: windowIdFor(item, boundaries),
               text: item.text,
             }),
           );
@@ -276,12 +171,13 @@ export const layer = (
             input,
           ).pipe(Effect.mapError(() => invalid("Invalid context history read")));
 
-          let selected: Evidence | undefined;
+          let selected: ContextHistoryEvidence | undefined;
 
           const boundaries = yield* scan(
             request.threadId,
             Effect.fn(function* (record) {
-              if (record.record.recordId === request.recordId) selected = yield* evidence(record);
+              if (record.record.recordId === request.recordId)
+                selected = (yield* project(record)).evidence;
             }),
           );
 
@@ -296,7 +192,7 @@ export const layer = (
 
           return ContextHistoryPage.make({
             recordId: selected.recordId,
-            windowId: windowFor(selected, boundaries),
+            windowId: windowIdFor(selected, boundaries),
             text: selected.text.slice(request.offset, end),
             nextOffset: end < selected.text.length ? end : null,
           });

@@ -1,7 +1,9 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ReceiptId, ThreadId } from "@effect-agent/core/Identifiers";
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { CompactionError, ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
+import { RunContextPreparation, RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
@@ -26,6 +28,7 @@ import {
   SubmissionLedger,
 } from "@effect-agent/thread/SubmissionLedger";
 import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+import { ThreadExportRequest, ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
@@ -42,7 +45,15 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { TestClock } from "effect/testing";
+import {
+  type Prompt,
+  LanguageModel,
+  Model,
+  Tool,
+  Toolkit,
+  type Response,
+} from "effect/unstable/ai";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const digests = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
@@ -128,6 +139,369 @@ const snapshot = Effect.fn(function* (receipt: Receipt) {
 });
 
 layer(baseLayer)("bounded durable Thread processing", (it) => {
+  // Regression seam: https://linear.app/reve/issue/KOM-125
+  it.effect("resets completed Run context below capacity and recovers the canonical reset", () =>
+    Effect.gen(function* () {
+      const store = yield* ThreadStore;
+      const failpoints = yield* DurableRuntimeFailpointTestControl;
+
+      for (const restart of [false, true]) {
+        const requests: Array<Prompt.Prompt> = [];
+
+        const model = Model.make(
+          "scripted",
+          "fresh-request",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                requests.push(request.prompt);
+
+                return Stream.fromIterable<Response.StreamPartEncoded>([
+                  { type: "text-start", id: "answer" },
+                  {
+                    type: "text-delta",
+                    id: "answer",
+                    delta: JSON.stringify(requests.length === 1 ? "OBSOLETE COMPLETION" : "done"),
+                  },
+                  ...finalParts.slice(2),
+                ]);
+              },
+            }),
+          ),
+        );
+
+        const agent = Agent.withModel(
+          Agent.make("fresh-request-reset", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Preserve the current request and return a JSON string.",
+            toolkit: Toolkit.empty,
+            policy: AgentPolicy.make({ ...policy, contextTokenLimit: 20_000 }),
+          }),
+          model,
+        );
+
+        const freshRuntime = Effect.gen(function* () {
+          const binding = yield* DurableWorkerBinding.make(agent, digests);
+
+          return yield* makeRuntime([binding]).pipe(
+            Effect.provideService(
+              RunContextPreparation,
+              RunContextPreparation.of({
+                hook: {
+                  prepare: (request) =>
+                    Effect.succeed({
+                      prompt: request.source,
+                      ...(request.turn === 1 ? { rollover: {} } : {}),
+                    }),
+                },
+              }),
+            ),
+            Effect.provide(ContextCompactor.layerRollover),
+          );
+        });
+
+        const runtime = yield* freshRuntime;
+
+        const first = yield* runtime.submit(
+          agent,
+          "OBSOLETE REQUEST",
+          options(`fresh-reset-${restart}`, "first"),
+        );
+
+        expect(Option.isSome(yield* runtime.processThreadHead(first.threadId))).toBe(true);
+
+        const original = yield* store.export(
+          ThreadExportRequest.make({ threadId: first.threadId }),
+        );
+
+        expect(
+          original.records.some((entry) => entry.record.payload._tag === "CompactionCreated"),
+        ).toBe(false);
+
+        const second = yield* runtime.submit(
+          agent,
+          "CURRENT REQUEST: explain the new result",
+          options(`fresh-reset-${restart}`, "second"),
+        );
+
+        if (restart) {
+          yield* failpoints.setHandler((location) =>
+            location === "compaction:after-canonical-append"
+              ? DurableRuntimeFailpointError.make({ location })
+              : Effect.void,
+          );
+          expect(
+            Exit.isFailure(yield* Effect.exit(runtime.processThreadHead(second.threadId))),
+          ).toBe(true);
+          expect(requests).toHaveLength(1);
+          expect((yield* snapshot(second)).ownership).toBeUndefined();
+
+          const interrupted = yield* store.export(
+            ThreadExportRequest.make({ threadId: second.threadId }),
+          );
+
+          expect(
+            interrupted.records.filter(
+              (entry) => entry.record.payload._tag === "CompactionCreated",
+            ),
+          ).toHaveLength(1);
+          yield* failpoints.clear;
+        }
+
+        const resumed = restart ? yield* freshRuntime : runtime;
+
+        expect(Option.isSome(yield* resumed.processThreadHead(second.threadId))).toBe(true);
+        expect(requests).toHaveLength(2);
+        const outgoing = JSON.stringify(requests[1]);
+
+        expect(outgoing).toContain("CURRENT REQUEST: explain the new result");
+        expect(outgoing).toContain("Preserve the current request and return a JSON string.");
+        expect(outgoing).not.toContain("OBSOLETE REQUEST");
+        expect(outgoing).not.toContain("OBSOLETE COMPLETION");
+        const final = yield* store.export(ThreadExportRequest.make({ threadId: second.threadId }));
+
+        expect(final.records.slice(0, original.records.length)).toEqual(original.records);
+        expect(
+          final.records.filter((entry) => entry.record.payload._tag === "RunStarted"),
+        ).toHaveLength(2);
+
+        const resets = final.records.filter(
+          (entry) => entry.record.payload._tag === "CompactionCreated",
+        );
+
+        expect(resets).toHaveLength(1);
+        expect(resets[0]?.record.payload).toMatchObject({ kind: "rollover", turn: 1 });
+        expect(JSON.stringify(final.records)).toContain("OBSOLETE COMPLETION");
+      }
+    }),
+  );
+
+  // Regression seam: https://linear.app/reve/issue/KOM-125
+  it.effect("restores a smaller model from canonical profile evidence after ownership loss", () =>
+    Effect.gen(function* () {
+      const profileReceipt = Schema.Struct({
+        profile: Schema.Literal("small"),
+        evidence: Schema.String,
+      });
+
+      const selectModel = Tool.make("select_model", {
+        parameters: Schema.Struct({}),
+        success: profileReceipt,
+      });
+
+      const tools = Toolkit.make(selectModel);
+
+      const routedDefinition = Agent.make("recover-routed-context", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Preserve the current request and return a JSON string.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          ...policy,
+          tokenBudget: 5_000,
+          completionReserveTokens: 500,
+        }),
+      });
+
+      const store = yield* ThreadStore;
+      const requests: Array<{ model: string; prompt: Prompt.Prompt }> = [];
+      let handlerCalls = 0;
+
+      const nativeModel = (name: "large" | "small") =>
+        Model.make(
+          "scripted",
+          name,
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                requests.push({ model: name, prompt: request.prompt });
+
+                return Stream.fromIterable<Response.StreamPartEncoded>(
+                  name === "large"
+                    ? [
+                        {
+                          type: "tool-call",
+                          id: "select-small",
+                          name: "select_model",
+                          params: {},
+                          providerExecuted: false,
+                        },
+                        {
+                          type: "finish",
+                          reason: "tool-calls",
+                          usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
+                        },
+                      ]
+                    : [
+                        ...finalParts.slice(0, -1),
+                        {
+                          type: "finish",
+                          reason: "stop",
+                          usage: { inputTokens: { total: 75 }, outputTokens: { total: 5 } },
+                        },
+                      ],
+                );
+              },
+            }),
+          ),
+        );
+
+      const agent = Agent.withModel(routedDefinition, makeModel(Stream.empty));
+
+      const freshRuntime = Effect.gen(function* () {
+        // Each runtime has fresh host services. The only route state crosses the restart
+        // in an ordinary canonical Tool result, not an incarnation-local Ref.
+        const preparation = RunContextPreparation.of({
+          hook: {
+            prepare: (request) =>
+              Effect.gen(function* () {
+                const records = yield* store
+                  .read(ThreadRead.make({ threadId: request.threadId, limit: 128 }))
+                  .pipe(
+                    Stream.runCollect,
+                    Effect.mapError((cause) =>
+                      CompactionError.make({ message: "Profile receipt is unavailable", cause }),
+                    ),
+                  );
+
+                const receipt = records.findLast(
+                  (entry) =>
+                    entry.record.payload._tag === "ToolCallSettled" &&
+                    entry.record.payload.runId === request.runId &&
+                    entry.record.payload.toolName === "select_model",
+                )?.record.payload;
+
+                const profile =
+                  receipt?._tag === "ToolCallSettled"
+                    ? (yield* Schema.decodeUnknownEffect(profileReceipt)(receipt.result).pipe(
+                        Effect.mapError((cause) =>
+                          CompactionError.make({ message: "Invalid profile receipt", cause }),
+                        ),
+                      )).profile
+                    : "large";
+
+                return {
+                  prompt: request.source,
+                  modelCall: {
+                    model: nativeModel(profile),
+                    context: ModelCallContext.make({
+                      contextCapacity: profile === "large" ? 12_000 : 4_000,
+                      maxInputTokens: profile === "large" ? 9_000 : 2_000,
+                      outputReserveTokens: 400,
+                      uncountedOverheadTokens: 100,
+                    }),
+                  },
+                };
+              }),
+          },
+        });
+
+        const binding = yield* DurableWorkerBinding.make(agent, digests).pipe(
+          Effect.provide(
+            tools.toLayer({
+              select_model: () =>
+                Effect.sync(() => {
+                  handlerCalls += 1;
+
+                  return {
+                    profile: "small" as const,
+                    evidence: "completed action evidence ".repeat(600),
+                  };
+                }),
+            }),
+          ),
+        );
+
+        return yield* makeRuntime([binding]).pipe(
+          Effect.provideService(RunContextPreparation, preparation),
+          Effect.provide(ContextCompactor.layerRollover),
+        );
+      });
+
+      const first = yield* freshRuntime;
+
+      const receipt = yield* first.submit(
+        agent,
+        "CURRENT REQUEST: investigate the connection pool",
+        options("routed-restart", "first"),
+      );
+
+      const failpoints = yield* DurableRuntimeFailpointTestControl;
+
+      yield* failpoints.setHandler((location) =>
+        location === "turn:after-results-append"
+          ? DurableRuntimeFailpointError.make({ location })
+          : Effect.void,
+      );
+      const interrupted = yield* Effect.exit(first.processThreadHead(receipt.threadId));
+
+      expect(Exit.isFailure(interrupted)).toBe(true);
+      expect(requests.map((request) => request.model)).toEqual(["large"]);
+      expect((yield* snapshot(receipt)).ownership).toBeUndefined();
+      const before = yield* store.export(ThreadExportRequest.make({ threadId: receipt.threadId }));
+
+      const startedBefore = before.records.filter(
+        (entry) => entry.record.payload._tag === "RunStarted",
+      );
+
+      expect(startedBefore).toHaveLength(1);
+
+      yield* failpoints.clear;
+      yield* TestClock.adjust("5 seconds");
+      const resumed = yield* freshRuntime;
+      const settled = yield* resumed.processThreadHead(receipt.threadId);
+
+      expect(Option.isSome(settled)).toBe(true);
+      expect(requests.map((request) => request.model)).toEqual(["large", "small"]);
+      expect(handlerCalls).toBe(1);
+      const second = requests[1];
+
+      if (second === undefined) throw new Error("Expected the resumed smaller-model call");
+      const text = JSON.stringify(second.prompt);
+
+      expect(text).toContain("CURRENT REQUEST: investigate the connection pool");
+      expect(text).toContain("A fresh context window has started.");
+      expect(text).toContain("turn 2/2");
+      expect(text).toContain("tool-calls 1/2");
+      expect(text).toContain("tokens 110/5000");
+      expect(text).toContain("elapsed 5s/30s");
+      const after = yield* store.export(ThreadExportRequest.make({ threadId: receipt.threadId }));
+
+      expect(after.records.filter((entry) => entry.record.payload._tag === "RunStarted")).toEqual(
+        startedBefore,
+      );
+
+      const rollovers = after.records.filter(
+        (entry) => entry.record.payload._tag === "CompactionCreated",
+      );
+
+      expect(rollovers).toHaveLength(1);
+      expect(rollovers[0]?.record.payload).toMatchObject({ kind: "rollover", turn: 2 });
+
+      const terminal = after.records.find(
+        (entry) => entry.record.payload._tag === "SubmissionSettled",
+      )?.record.payload;
+
+      expect(terminal).toMatchObject({
+        outcome: "completed",
+        usageSummary: {
+          modelCalls: 2,
+          inputTokens: { total: 175 },
+          outputTokens: { total: 15 },
+          byModel: [
+            { model: "large", modelCalls: 1 },
+            { model: "small", modelCalls: 1 },
+          ],
+        },
+      });
+    }),
+  );
+
   it.effect("settles only the FIFO head and closes its provider before returning", () =>
     Effect.gen(function* () {
       const closed = yield* Ref.make(0);

@@ -91,6 +91,45 @@ After compaction, preparation must preserve the content and order of the covered
 equivalent messages is supported; replacing, inserting into, or reordering that prefix fails before
 another model request. Durable reconstruction keeps its canonical coverage checks at commit time.
 
+### Resolve routing and capacity together
+
+A host that routes between models can return `modelCall` from `prepare`. Capture one resolved
+provider configuration and build both its native Model Layer and `ModelCallContext` from that
+configuration. The engine acquires the Layer once for the turn and reuses it for admission,
+dispatch, usage accounting, and bounded overflow recovery. Its resources close at the turn
+boundary, including when preparation or admission fails. A separately configured compaction
+model retains its own binding.
+
+`ModelCallContext` carries the model's full `contextCapacity`, optional `maxInputTokens`, its
+configured `outputReserveTokens`, and `uncountedOverheadTokens`. The effective input allowance is
+the minimum of the definition's optional context limit, the model's input limit, and context
+capacity minus output reserve, less uncounted overhead. An exhausted allowance fails with
+`ContextBudgetError` before dispatch. Capacity remains an estimate when exact token counting is
+unavailable.
+
+The engine counts the prepared prompt, transient references, output contract, run status, and
+the native Tool schemas dispatched for the call. Supply the provider's native
+`toolSchemaTransformer`, such as `toCodecOpenAI` from
+`effect/unstable/ai/OpenAiStructuredOutput`, to include its schema conversion. Reserve additional
+framing or image costs only when they are absent from those estimates. Do not subtract prompt
+text or Tool schemas again as overhead. The output reserve must match the selected provider's
+generation allowance; `completionReserveTokens` instead reserves cumulative Run budget for
+delivery and does not provide this per-call allowance.
+
+Durable hosts must capture resolved model settings in their own schema-validated admission data
+and restore committed routing changes before preparation. Returning a Layer does not persist its
+configuration or register a different Agent revision. Keep the original registration available for
+already-admitted Runs.
+
+Hosts may also return `rollover: {}` to reset prior history below the capacity threshold. The engine
+selects the prefix before the current Run's protected instructions and input; an empty or already
+covered prefix is a no-op, including after recovery. For an explicit selection, return
+`rollover: { through, handoff? }`, where `through` is an exclusive source-message boundary. Leave
+that prefix intact in the prepared prompt. The engine maps it to complete canonical records and
+commits ordinary native rollover. Protected input and pending Tool pairs cannot be discarded. This does not manufacture
+a model Tool Call, start another Run, or reset its deadline and usage. Do not return a host
+rollover while a successful `new_context` request is already pending.
+
 ## Recall application-owned sources {#recall-memory}
 
 `Memory.recall` turns readable, application-selected sources into a bounded transient model view.
@@ -1008,8 +1047,8 @@ is rejected before rendering. These limits change only the model view, leaving c
 intact.
 
 If the provider reports context overflow, the engine may compact and retry once. Transport
-ambiguity can duplicate that model call. A second rejection, or overflow without
-`contextTokenLimit`, fails as `ContextOverflowError`.
+ambiguity can duplicate that model call. A second rejection, or overflow without a definition
+context limit or resolved `modelCall` allowance, fails as `ContextOverflowError`.
 
 ### Replace compaction {#replacing-compaction}
 
@@ -1141,6 +1180,23 @@ calls, and retained tool results, excluding system instructions and operational 
 retrieve evidence removed by compaction, but cannot recover tool bytes discarded by result bounds,
 transient references, or records removed by a separate retention policy. Tightening Tool result
 bounds below these tools' maximum payloads may truncate their results too.
+
+For an indexed adapter, use `@effect-agent/thread/ThreadContextHistoryProjection` to project each
+canonical record into eligible retained text or a rollover boundary. Its query normalization and
+snippet matching preserve the native literal, case-folded search semantics. Operational records
+still consume their canonical sequence even when their projection is empty.
+
+Commit each contiguous projection batch and its watermark atomically. Window membership uses
+`coversThrough`, which may precede the boundary's own record: a later rollover can relabel evidence
+already in the index. Capture one canonical tail for each lookup and restrict both evidence and
+boundary records to it. Do not return partial results when the index has not covered that prefix.
+The index supplies candidate identities and sequences; recheck host authorization and reread each
+selected canonical record before returning evidence. A known sequence permits a single
+`ThreadStore.read` with `afterSequence: sequence - 1` and `limit: 1`, followed by identity checks.
+
+An evidence index does not replace durable recovery. Journal and recovery-control reconstruction
+still traverse historical canonical records after rollover. Measure that host path separately
+before adopting longer histories; a bounded model prompt does not establish bounded startup work.
 
 ### Manage summaries yourself {#explicit-compaction-artifacts}
 

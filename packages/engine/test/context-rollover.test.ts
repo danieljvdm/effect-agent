@@ -1,5 +1,9 @@
 import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicyError, ModelProtocolError } from "@effect-agent/core/AgentError";
+import {
+  AgentPolicyError,
+  ContextBudgetError,
+  ModelProtocolError,
+} from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { RunId, ThreadId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
@@ -11,12 +15,15 @@ import {
   ContextRolloverRequest,
   ContextRolloverTool,
   ContextWindow,
+  ModelCallContext,
   type ContextWindowStatus,
 } from "@effect-agent/engine/ContextWindow";
 import {
   RunContextPreparation,
   RunContextPreparationPassthrough,
   type RunInputHook,
+  type RunContextHook,
+  type RunTransientContextHook,
   type RunUsageDelta,
 } from "@effect-agent/engine/RunOptions";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
@@ -98,12 +105,12 @@ interface CapturedRequest {
   readonly toolCount: number;
 }
 
-const scriptedModel = (script: ReadonlyArray<ScriptEntry>) => {
+const scriptedModel = (script: ReadonlyArray<ScriptEntry>, name = "context-rollover") => {
   const requests: Array<CapturedRequest> = [];
 
   const model = Model.make(
     "scripted",
-    "context-rollover",
+    name,
     Layer.effect(
       LanguageModel.LanguageModel,
       LanguageModel.make({
@@ -167,6 +174,9 @@ interface RunSetup {
   readonly input?: RunInputHook;
   readonly onRollover?: Effect.Effect<void>;
   readonly history?: Prompt.Prompt;
+  readonly context?: RunContextHook;
+  readonly transientContext?: RunTransientContextHook<CompactionError>;
+  readonly agentInput?: string;
 }
 
 const driveRun = Effect.fn("context-rollover.test.driveRun")(function* (setup: RunSetup) {
@@ -203,10 +213,12 @@ const driveRun = Effect.fn("context-rollover.test.driveRun")(function* (setup: R
 
   const exit = yield* AgentRuntime.stream(
     Agent.withModel(definitionWith(setup.policy ?? AgentPolicy.make(basePolicy)), model),
-    originalInput,
+    setup.agentInput ?? originalInput,
     {
       ...(setup.input === undefined ? {} : { input: setup.input }),
       ...(setup.history === undefined ? {} : { history: setup.history }),
+      ...(setup.context === undefined ? {} : { context: setup.context }),
+      ...(setup.transientContext === undefined ? {} : { transientContext: setup.transientContext }),
       onHistory: (history) => Effect.sync(() => void histories.push(history)),
       budget: {
         guard: (effect) => effect,
@@ -537,6 +549,259 @@ layer(testLayer)("native context windows", (it) => {
       expect(result.searchCount).toBe(1);
       expect(result.compactions).toHaveLength(1);
       expect(result.events.some((event) => event._tag === "RunCompleted")).toBe(false);
+    }),
+  );
+});
+
+// Regression seam: https://linear.app/reve/issue/KOM-125
+layer(testLayer)("resolved model context", (it) => {
+  it.effect("freezes routing before transient preparation and admits a smaller next model", () =>
+    Effect.gen(function* () {
+      const large = scriptedModel([call("switch-model", "search")], "large");
+      const small = scriptedModel([call("small-status", "search"), done], "small");
+      const selected = yield* Ref.make("large");
+      const resolved: Array<string> = [];
+
+      const result = yield* driveRun({
+        script: [],
+        searchResults: ["retained search evidence ".repeat(800), "small result"],
+        context: {
+          prepare: (request) =>
+            Effect.gen(function* () {
+              const route = yield* Ref.get(selected);
+
+              resolved.push(route);
+
+              return {
+                prompt: request.source,
+                modelCall: {
+                  model: route === "large" ? large.model : small.model,
+                  context: ModelCallContext.make({
+                    contextCapacity: route === "large" ? 20_000 : 4_000,
+                    maxInputTokens: route === "large" ? 15_000 : 2_000,
+                    outputReserveTokens: 400,
+                    uncountedOverheadTokens: 100,
+                  }),
+                },
+              };
+            }),
+        },
+        transientContext: {
+          load: () => Ref.set(selected, "small").pipe(Effect.as(Prompt.empty)),
+        },
+      }).pipe(Effect.provide(ContextCompactor.layerRollover));
+
+      expect(Exit.isSuccess(result.exit)).toBe(true);
+      expect(result.requests).toHaveLength(0);
+      expect(large.requests).toHaveLength(1);
+      expect(small.requests).toHaveLength(2);
+      expect(resolved).toEqual(["large", "small", "small"]);
+      expect(result.compactions.map((event) => event.kind)).toEqual(["rollover"]);
+      expect(result.statuses.map(({ status }) => status.contextTokenLimit)).toEqual([
+        14_900, 1_900,
+      ]);
+      const firstSmall = small.requests[0];
+
+      if (firstSmall === undefined) throw new Error("Expected the smaller model request");
+      expect(promptText(firstSmall.prompt)).toContain("A fresh context window has started.");
+      expect(promptText(firstSmall.prompt)).toContain(originalInput);
+      expect(toolResults(firstSmall.prompt)).toEqual([]);
+      expect(result.usageDeltas.map((entry) => entry.modelUsage?.model)).toEqual([
+        "large",
+        "small",
+        "small",
+      ]);
+    }),
+  );
+
+  it.effect("commits a host-selected fresh window below pressure without a model Tool Call", () =>
+    Effect.gen(function* () {
+      const history = Prompt.make([
+        { role: "user", content: "obsolete completed request" },
+        { role: "assistant", content: "completed execution evidence" },
+      ]);
+
+      const result = yield* driveRun({
+        script: [done],
+        history,
+        policy: AgentPolicy.make({ ...basePolicy, contextTokenLimit: 20_000 }),
+        context: {
+          prepare: (request) =>
+            Effect.succeed({
+              prompt: request.source,
+              rollover: { through: history.content.length },
+            }),
+        },
+      });
+
+      expect(Exit.isSuccess(result.exit)).toBe(true);
+      expect(result.rolloverCount).toBe(0);
+      expect(result.compactions.map((event) => event.kind)).toEqual(["rollover"]);
+      const first = result.requests[0];
+
+      if (first === undefined) throw new Error("Expected the host rollover request");
+      expect(promptText(first.prompt)).toContain(originalInput);
+      expect(promptText(first.prompt)).not.toContain("completed execution evidence");
+      expect(JSON.stringify(result.histories.at(-1))).toContain("completed execution evidence");
+    }),
+  );
+
+  it.effect("rejects protected input beyond routed capacity before model I/O", () =>
+    Effect.gen(function* () {
+      const routed = scriptedModel([done]);
+
+      const result = yield* driveRun({
+        script: [],
+        agentInput: "protected user content ".repeat(500),
+        context: {
+          prepare: (request) =>
+            Effect.succeed({
+              prompt: request.source,
+              modelCall: {
+                model: routed.model,
+                context: ModelCallContext.make({
+                  contextCapacity: 1_000,
+                  outputReserveTokens: 200,
+                  uncountedOverheadTokens: 100,
+                }),
+              },
+            }),
+        },
+      }).pipe(Effect.provide(ContextCompactor.layerRollover));
+
+      expect(failureFrom(result.exit)).toBeInstanceOf(ContextBudgetError);
+      expect(routed.requests).toHaveLength(0);
+      expect(result.compactions).toHaveLength(0);
+    }),
+  );
+
+  it.effect("keeps pressure rollover available when a default host reset has no prior prefix", () =>
+    Effect.gen(function* () {
+      const result = yield* driveRun({
+        script: [call("current-search", "search"), done],
+        searchResults: ["completed action evidence ".repeat(600)],
+        policy: AgentPolicy.make({ ...basePolicy, contextTokenLimit: 2_000 }),
+        context: {
+          prepare: (request) => Effect.succeed({ prompt: request.source, rollover: {} }),
+        },
+      }).pipe(Effect.provide(ContextCompactor.layerRollover));
+
+      expect(Exit.isSuccess(result.exit)).toBe(true);
+      expect(result.compactions).toHaveLength(1);
+      expect(result.requests).toHaveLength(2);
+      const first = result.requests[0];
+      const fresh = result.requests[1];
+
+      if (first === undefined || fresh === undefined) throw new Error("Expected both model calls");
+      expect(promptText(first.prompt)).not.toContain("A fresh context window has started.");
+      expect(promptText(fresh.prompt)).toContain("A fresh context window has started.");
+      expect(promptText(fresh.prompt)).toContain(originalInput);
+      expect(toolResults(fresh.prompt)).toEqual([]);
+    }),
+  );
+
+  for (const ending of [
+    "completed",
+    "preparation-failed",
+    "interrupted",
+    "reserve-exceeds-capacity",
+    "overhead-exhausts-capacity",
+  ] as const) {
+    it.effect(`owns resolved model resources per Turn when ${ending}`, () =>
+      Effect.gen(function* () {
+        const lifecycle: Array<string> = [];
+        const routed = scriptedModel([call("resource-search", "search"), done]);
+
+        const result = yield* driveRun({
+          script: [],
+          context: {
+            prepare: (request) =>
+              Effect.sync(() => ({
+                prompt: request.source,
+                modelCall: {
+                  model: Layer.merge(
+                    routed.model,
+                    Layer.effectDiscard(
+                      Effect.acquireRelease(
+                        Effect.sync(() => {
+                          lifecycle.push(`open:${request.turn}`);
+                        }),
+                        () =>
+                          Effect.sync(() => {
+                            lifecycle.push(`close:${request.turn}`);
+                          }),
+                      ),
+                    ),
+                  ),
+                  context: ModelCallContext.make({
+                    contextCapacity: 10_000,
+                    outputReserveTokens:
+                      request.turn === 2 && ending === "reserve-exceeds-capacity" ? 10_001 : 400,
+                    uncountedOverheadTokens:
+                      request.turn === 2 && ending === "overhead-exhausts-capacity" ? 9_600 : 0,
+                  }),
+                },
+              })),
+          },
+          transientContext: {
+            load: (request) =>
+              request.turn !== 2
+                ? Effect.succeed(Prompt.empty)
+                : ending === "preparation-failed"
+                  ? CompactionError.make({ message: "transient preparation failed" })
+                  : ending === "interrupted"
+                    ? Effect.interrupt
+                    : Effect.succeed(Prompt.empty),
+          },
+        });
+
+        expect(lifecycle).toEqual(["open:1", "close:1", "open:2", "close:2"]);
+        expect(routed.requests).toHaveLength(ending === "completed" ? 2 : 1);
+        if (ending === "completed") expect(Exit.isSuccess(result.exit)).toBe(true);
+        else if (ending === "interrupted") {
+          expect(Exit.isFailure(result.exit) && Cause.hasInterrupts(result.exit.cause)).toBe(true);
+        } else if (ending === "preparation-failed") {
+          expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+        } else expect(failureFrom(result.exit)).toBeInstanceOf(ContextBudgetError);
+      }),
+    );
+  }
+
+  it.effect("reuses the resolved native model for one provider-overflow retry", () =>
+    Effect.gen(function* () {
+      const routed = scriptedModel([{ overflow: true }, done]);
+      let resolutions = 0;
+
+      const result = yield* driveRun({
+        script: [],
+        history: Prompt.make([
+          { role: "user", content: "old request" },
+          { role: "assistant", content: "old execution evidence ".repeat(100) },
+        ]),
+        context: {
+          prepare: (request) =>
+            Effect.sync(() => {
+              resolutions += 1;
+
+              return {
+                prompt: request.source,
+                modelCall: {
+                  model: routed.model,
+                  context: ModelCallContext.make({
+                    contextCapacity: 10_000,
+                    outputReserveTokens: 200,
+                    uncountedOverheadTokens: 0,
+                  }),
+                },
+              };
+            }),
+        },
+      }).pipe(Effect.provide(ContextCompactor.layerRollover));
+
+      expect(Exit.isSuccess(result.exit)).toBe(true);
+      expect(resolutions).toBe(1);
+      expect(routed.requests).toHaveLength(2);
+      expect(result.compactions.map((event) => event.kind)).toEqual(["rollover"]);
     }),
   );
 });
