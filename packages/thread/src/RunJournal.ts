@@ -526,8 +526,10 @@ export interface JournalBoundary {
   readonly sequence: CanonicalSequence;
   readonly tag: "ModelResponseRecorded" | "ToolCallSettled";
   readonly promptLength: number;
-  /** A canonical declaration without all of its settled results cannot be covered by rollover. */
+  /** A declaration without all settled results requires terminal-prior-Run proof for coverage. */
   readonly incomplete?: true | undefined;
+  /** The Run terminated after its last response and differs from the projection's owner. */
+  readonly terminalPriorRun?: true | undefined;
 }
 
 /**
@@ -569,6 +571,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   // over-invalidating is the fail-safe direction.
   const firstSequenceByRun = new Map<string, number>();
   const lastResponseSequenceByRun = new Map<string, number>();
+  const terminalSequenceByRun = new Map<string, number>();
   const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
   const settledToolCallRecordIds = new Set<string>();
   const settledById = new Map<string, Pick<ToolCallSettled, "isFailure" | "budgetRejected">>();
@@ -578,6 +581,15 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     Effect.sync(() => {
       const payload = envelope.record.payload;
 
+      if (
+        (payload._tag === "RunCompleted" ||
+          payload._tag === "RunFailed" ||
+          payload._tag === "SubmissionSettled") &&
+        payload.runId !== undefined &&
+        !terminalSequenceByRun.has(payload.runId)
+      ) {
+        terminalSequenceByRun.set(payload.runId, envelope.sequence);
+      }
       if (payload._tag === "CompactionCreated") {
         compactions.push({ payload, sequence: envelope.sequence });
 
@@ -614,7 +626,26 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     0,
   );
 
-  const incompleteResponseSequences: Array<number> = [];
+  // Terminality changes only prompt coverage; it never settles or resolves the Tool Call.
+  // Compare against the compaction's Run and sequence, independent of the replay's owner.
+  const isTerminalPriorRun = (
+    candidateRunId: RunId,
+    compactionRunId: RunId | undefined,
+    beforeSequence: number,
+  ): boolean => {
+    const terminal = terminalSequenceByRun.get(candidateRunId);
+
+    return (
+      candidateRunId !== compactionRunId &&
+      terminal !== undefined &&
+      terminal < beforeSequence &&
+      terminal > (lastResponseSequenceByRun.get(candidateRunId) ?? 0)
+    );
+  };
+
+  const incompleteResponseSequences: Array<{ readonly sequence: number; readonly runId: RunId }> =
+    [];
+
   let ownerPrefixSequence = Number.POSITIVE_INFINITY;
   let protectedContext: Prompt.Prompt | undefined;
 
@@ -639,7 +670,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
               toolCallSettledRecordId(payload.runId, payload.turn, callId),
             )
           ) {
-            incompleteResponseSequences.push(envelope.sequence);
+            incompleteResponseSequences.push({ sequence: envelope.sequence, runId: payload.runId });
             break;
           }
         }
@@ -667,7 +698,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       return false;
     if (
       payload.kind !== "summarize" &&
-      incompleteResponseSequences.some((sequence) => sequence <= coversThrough)
+      incompleteResponseSequences.some(
+        (response) =>
+          response.sequence <= coversThrough &&
+          !isTerminalPriorRun(response.runId, runId, ownSequence),
+      )
     )
       return false;
     for (const span of settledSpans) {
@@ -926,6 +961,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
             sequence: envelope.sequence,
             tag: payload._tag,
             promptLength: replacementLength,
+            ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
+              ? { terminalPriorRun: true }
+              : {}),
             ...(incompleteToolTurns.has(envelope.record.recordId) ||
             incompleteToolCalls.has(envelope.record.recordId)
               ? { incomplete: true }
@@ -943,6 +981,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
             tag: payload._tag,
             promptLength: state.all.length + (state.pendingTools.length === 0 ? 0 : 1),
             incomplete: true,
+            ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
+              ? { terminalPriorRun: true }
+              : {}),
           });
 
           return;
@@ -962,6 +1003,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
           sequence: envelope.sequence,
           tag: payload._tag,
           promptLength: state.all.length + 1,
+          ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
+            ? { terminalPriorRun: true }
+            : {}),
           ...(incompleteToolCalls.has(envelope.record.recordId) ? { incomplete: true } : {}),
         });
 
@@ -1008,6 +1052,9 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         sequence: envelope.sequence,
         tag: payload._tag,
         promptLength: state.all.length,
+        ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
+          ? { terminalPriorRun: true }
+          : {}),
         ...(incompleteToolTurns.has(envelope.record.recordId) ? { incomplete: true } : {}),
       });
     }),

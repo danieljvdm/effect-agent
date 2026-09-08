@@ -1085,6 +1085,12 @@ decision. Summarization covers prior-run records. Pruning and rollover can also 
 inside the current run, preserving its original instructions and input. A transform or decision that
 cannot map cleanly fails before the view changes. The canonical log remains append-only.
 
+A completed Tool batch enters official history before the repeated-failure limit ends a Run,
+including provider-executed results. A later Run may cover an incomplete prior-Run batch already
+omitted from its prompt only when canonical records prove that prior Run ended after its final
+response. This changes coverage eligibility without settling, rewriting, or replaying the old call.
+Current-Run, nonterminal, and malformed post-terminal batches remain protected.
+
 <a id="composing-preparation-and-tool-authorization"></a>
 <a id="supplying-a-cloudflare-compactor"></a>
 

@@ -4719,7 +4719,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             if (
               commit.kind !== "summarize" &&
               sourceBoundaries.some(
-                (boundary) => boundary.incomplete === true && boundary.sequence <= coveredSequence,
+                (boundary) =>
+                  boundary.incomplete === true &&
+                  boundary.terminalPriorRun !== true &&
+                  boundary.sequence <= coveredSequence,
               )
             ) {
               return yield* CompactionError.make({

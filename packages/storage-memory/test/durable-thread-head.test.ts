@@ -1,6 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ReceiptId, ThreadId } from "@effect-agent/core/Identifiers";
+import { ReceiptId, RunId, ThreadId } from "@effect-agent/core/Identifiers";
 import { CompactionError, ContextCompactor } from "@effect-agent/engine/ContextCompactor";
 import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
 import { DurableStep, ToolExecutionClass } from "@effect-agent/engine/DurableStep";
@@ -15,7 +15,19 @@ import {
 } from "@effect-agent/thread/DurableAgentRuntime";
 import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
 import { OperationAuthorizer, OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
+import {
+  CanonicalBatch,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  RecordEnvelope,
+} from "@effect-agent/thread/Records";
+import {
+  projectRunJournal,
+  turnIdForRun,
+  turnResponseBatch,
+} from "@effect-agent/thread/RunJournal";
 import {
   AbortCommand,
   IdempotencyKey,
@@ -31,6 +43,8 @@ import {
 import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
 import {
   ThreadExportRequest,
+  FencedAppendRequest,
+  ThreadTailRequest,
   ThreadRead,
   ThreadStore,
   ThreadStoreError,
@@ -40,6 +54,7 @@ import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
+  DateTime,
   Deferred,
   Duration,
   Effect,
@@ -52,14 +67,7 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import {
-  type Prompt,
-  LanguageModel,
-  Model,
-  Tool,
-  Toolkit,
-  type Response,
-} from "effect/unstable/ai";
+import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));
 const digests = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
@@ -145,6 +153,358 @@ const snapshot = Effect.fn(function* (receipt: Receipt) {
 });
 
 layer(baseLayer)("bounded durable Thread processing", (it) => {
+  it.effect.each(["new-failure", "provider-failure", "retained-incomplete"] as const)(
+    "rolls over after terminal Tool failure without rewriting evidence: %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const failpoints = yield* DurableRuntimeFailpointTestControl;
+        const requests: Array<Prompt.Prompt> = [];
+        let failTool = scenario !== "retained-incomplete";
+        const providerFailure = scenario === "provider-failure";
+        let handlerCalls = 0;
+
+        const tools = Toolkit.make(
+          Tool.make("failing_action", {
+            parameters: Tool.EmptyParams,
+            success: Schema.String,
+            failure: Schema.Struct({ message: Schema.String }),
+            failureMode: "return",
+          }),
+          Tool.providerDefined({
+            id: "test.hosted_failure",
+            customName: "HostedFailure",
+            providerName: "hosted_failure",
+            parameters: Tool.EmptyParams,
+            success: Schema.Struct({ message: Schema.String }),
+          })(undefined),
+        );
+
+        const model = Model.make(
+          "scripted",
+          "terminal-history",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                requests.push(request.prompt);
+
+                return Stream.fromIterable<Response.StreamPartEncoded>(
+                  failTool
+                    ? [
+                        {
+                          type: "tool-call",
+                          id: "failed-call",
+                          name: providerFailure ? "HostedFailure" : "failing_action",
+                          params: {},
+                          providerExecuted: providerFailure,
+                        },
+                        ...(providerFailure
+                          ? [
+                              {
+                                type: "tool-result" as const,
+                                id: "failed-call",
+                                name: "HostedFailure",
+                                result: { message: "Provider action failed conclusively" },
+                                isFailure: true,
+                                providerExecuted: true,
+                              },
+                            ]
+                          : []),
+                        {
+                          type: "finish",
+                          reason: "tool-calls",
+                          usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
+                        },
+                      ]
+                    : finalParts,
+                );
+              },
+            }),
+          ),
+        );
+
+        const agent = Agent.withModel(
+          Agent.make("terminal-history", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Preserve current input.",
+            toolkit: tools,
+            policy: AgentPolicy.make({
+              ...policy,
+              repeatedFailureLimit: 1,
+              contextTokenLimit: 20_000,
+            }),
+          }),
+          model,
+        );
+
+        const freshRuntime = Effect.gen(function* () {
+          const binding = yield* DurableWorkerBinding.make(agent, digests).pipe(
+            Effect.provide(
+              tools.toLayer({
+                failing_action: () =>
+                  Effect.suspend(() => {
+                    handlerCalls += 1;
+
+                    return Effect.fail({ message: "Action failed conclusively" });
+                  }),
+              }),
+            ),
+          );
+
+          return yield* makeRuntime([binding]).pipe(
+            Effect.provideService(
+              RunContextPreparation,
+              RunContextPreparation.of({
+                hook: {
+                  prepare: (request) =>
+                    Effect.succeed({
+                      prompt: request.source,
+                      ...(request.turn === 1 && !failTool ? { rollover: {} } : {}),
+                    }),
+                },
+              }),
+            ),
+            Effect.provide(ContextCompactor.layerRollover),
+          );
+        });
+
+        const runtime = yield* freshRuntime;
+        const thread = `terminal-history-${scenario}`;
+
+        if (scenario !== "retained-incomplete") {
+          const first = yield* runtime.submit(agent, "OLD REQUEST", options(thread, "first"));
+
+          yield* runtime.processThreadHead(first.threadId);
+
+          const original = yield* store.export(
+            ThreadExportRequest.make({ threadId: first.threadId }),
+          );
+
+          const terminal = original.records.find(
+            (entry) => entry.record.payload._tag === "SubmissionSettled",
+          );
+
+          expect(terminal?.record.payload).toMatchObject({
+            outcome: "failed",
+            policyLimit: "repeated-failures",
+          });
+
+          const projection = yield* projectRunJournal(
+            original.records,
+            Schema.decodeSync(RunId)(`run:${first.submissionId}`),
+          );
+
+          if (providerFailure) {
+            const assistant = projection.prompt.content.find(
+              (message) => message.role === "assistant",
+            );
+
+            expect(assistant?.content).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  type: "tool-result",
+                  id: "failed-call",
+                  name: "HostedFailure",
+                  isFailure: true,
+                  providerExecuted: true,
+                  result: { message: "Provider action failed conclusively" },
+                }),
+              ]),
+            );
+            expect(
+              original.records.some(
+                (entry) =>
+                  entry.record.payload._tag === "ToolCallPrepared" ||
+                  entry.record.payload._tag === "ToolCallSettled",
+              ),
+            ).toBe(false);
+
+            const response = original.records.find(
+              (entry) => entry.record.payload._tag === "ModelResponseRecorded",
+            );
+
+            expect(response!.sequence).toBeLessThan(terminal!.sequence);
+          } else {
+            const result = original.records.find(
+              (entry) => entry.record.payload._tag === "ToolCallSettled",
+            );
+
+            expect(result?.record.payload).toMatchObject({
+              toolName: "failing_action",
+              isFailure: true,
+            });
+            expect(result!.sequence).toBeLessThan(terminal!.sequence);
+          }
+          expect(projection.policyUsage.consecutiveToolFailures).toBe(1);
+          expect(projection.usage.inputTokens).toBe(100);
+          expect(projection.usage.outputTokens).toBe(10);
+          expect(handlerCalls).toBe(providerFailure ? 0 : 1);
+          expect(requests).toHaveLength(1);
+          failTool = false;
+        }
+        const current = yield* runtime.submit(agent, "CURRENT REQUEST", options(thread, "current"));
+
+        if (scenario === "retained-incomplete") {
+          const tail = yield* store.inspectTail(
+            ThreadTailRequest.make({ threadId: current.threadId }),
+          );
+
+          const record = (id: string, payload: (typeof RecordEnvelope.Encoded)["payload"]) =>
+            Schema.decodeSync(RecordEnvelope)({
+              recordId: id,
+              family: "thread",
+              schemaVersion: 1,
+              createdAt: "2026-09-01T00:00:00.000Z",
+              deploymentId: "head-test",
+              payload,
+            });
+
+          const oldRunId = Schema.decodeSync(RunId)("run:old-submission");
+
+          const response = yield* turnResponseBatch({
+            runId: oldRunId,
+            turn: 1,
+            turnId: turnIdForRun(oldRunId, 1),
+            producerId: Schema.decodeSync(ProducerId)("head-test"),
+            deploymentId: Schema.decodeSync(DeploymentId)("head-test"),
+            createdAt: DateTime.toUtc(DateTime.makeUnsafe(1_000)),
+            appended: Prompt.make([
+              { role: "user", content: "OLD RETAINED EVIDENCE" },
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool-call",
+                    id: "uncertain-call",
+                    name: "failing_action",
+                    params: {},
+                    providerExecuted: false,
+                  },
+                ],
+              },
+            ]).content,
+            usage: { inputTokens: 100, outputTokens: 10 },
+          });
+
+          yield* store.append(
+            FencedAppendRequest.make({
+              threadId: current.threadId,
+              expectedTailSequence: tail.tailSequence,
+              expectedTailDigest: tail.tailDigest,
+              producerEpoch: tail.producerEpoch,
+              batch: CanonicalBatch.make({
+                batchId: Schema.decodeSync(CanonicalBatch.fields.batchId)("retained-history"),
+                producerId: Schema.decodeSync(ProducerId)("head-test"),
+                records: [
+                  ...response.records,
+                  record("prepared-old", {
+                    _tag: "ToolCallPrepared",
+                    runId: "run:old-submission",
+                    turn: 1,
+                    turnId: "turn:run:old-submission:1",
+                    toolCallId: "uncertain-call",
+                    toolName: "failing_action",
+                    parameters: {},
+                    parametersDigest: digest,
+                    executionKind: "ordinary",
+                  }),
+                  record("settled-old", {
+                    _tag: "SubmissionSettled",
+                    submissionId: "old-submission",
+                    settlementId: "settled-old",
+                    receiptId: "receipt-old",
+                    runId: "run:old-submission",
+                    outcome: "failed",
+                    result: { errorTag: "AgentPolicyError", message: "Repeated failure limit" },
+                  }),
+                ],
+              }),
+            }),
+          );
+        }
+
+        const before = yield* store.export(
+          ThreadExportRequest.make({ threadId: current.threadId }),
+        );
+
+        const priorResponse = before.records.find(
+          (entry) => entry.record.payload._tag === "ModelResponseRecorded",
+        )?.record.payload;
+
+        if (priorResponse?._tag !== "ModelResponseRecorded") {
+          throw new Error("Expected the prior Run's canonical response");
+        }
+        const priorJournal = yield* projectRunJournal(before.records, priorResponse.runId);
+
+        const callsBefore = requests.length;
+
+        yield* failpoints.setHandler((location) =>
+          location === "compaction:after-canonical-append"
+            ? DurableRuntimeFailpointError.make({ location })
+            : Effect.void,
+        );
+        const attempt = yield* Effect.exit(runtime.processThreadHead(current.threadId));
+
+        expect(requests).toHaveLength(callsBefore);
+
+        const interrupted = yield* store.export(
+          ThreadExportRequest.make({ threadId: current.threadId }),
+        );
+
+        expect(Exit.isFailure(attempt)).toBe(true);
+        expect(
+          interrupted.records.filter((entry) => entry.record.payload._tag === "CompactionCreated"),
+        ).toHaveLength(1);
+        yield* failpoints.clear;
+        const resumed = yield* freshRuntime;
+
+        yield* resumed.processThreadHead(current.threadId);
+        expect(requests).toHaveLength(callsBefore + 1);
+        expect(JSON.stringify(requests.at(-1))).toContain("CURRENT REQUEST");
+        expect(JSON.stringify(requests.at(-1))).not.toContain("OLD");
+        const after = yield* store.export(ThreadExportRequest.make({ threadId: current.threadId }));
+
+        expect(after.records.slice(0, before.records.length)).toEqual(before.records);
+        expect(
+          after.records.filter((entry) => entry.record.payload._tag === "CompactionCreated"),
+        ).toHaveLength(1);
+        expect(
+          after.records.find(
+            (entry) =>
+              entry.record.payload._tag === "SubmissionSettled" &&
+              entry.record.payload.submissionId === current.submissionId,
+          )?.record.payload,
+        ).toMatchObject({ outcome: "completed" });
+        const retainedJournal = yield* projectRunJournal(after.records, priorResponse.runId);
+
+        expect(retainedJournal.usage).toEqual(priorJournal.usage);
+        expect(retainedJournal.usage).toMatchObject({ inputTokens: 100, outputTokens: 10 });
+        expect(retainedJournal.policyUsage).toEqual(priorJournal.policyUsage);
+        expect(handlerCalls).toBe(scenario === "new-failure" ? 1 : 0);
+        if (providerFailure) {
+          expect(
+            after.records.some(
+              (entry) =>
+                entry.record.payload._tag === "ToolCallPrepared" ||
+                entry.record.payload._tag === "ToolCallSettled",
+            ),
+          ).toBe(false);
+        }
+        if (scenario === "retained-incomplete") {
+          expect(
+            after.records.some(
+              (entry) =>
+                entry.record.payload._tag === "ToolCallSettled" &&
+                entry.record.payload.toolCallId === "uncertain-call",
+            ),
+          ).toBe(false);
+        }
+      }),
+  );
+
   // Regression seam: https://linear.app/reve/issue/KOM-125
   it.effect("resets completed Run context below capacity and recovers the canonical reset", () =>
     Effect.gen(function* () {
