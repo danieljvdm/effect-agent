@@ -24,6 +24,7 @@ import { expect } from "vite-plus/test";
 import { decodeThreadId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
 import type {
   PublicationThreadObject,
+  ProjectionThreadObject,
   ContextCompactorThreadObject,
   DynamicBindingsThreadObject,
   DeniedThreadObject,
@@ -40,6 +41,7 @@ declare global {
     interface Env {
       THREADS: DurableObjectNamespace<TestThreadObject>;
       PUBLICATIONS: DurableObjectNamespace<PublicationThreadObject>;
+      PROJECTIONS: DurableObjectNamespace<ProjectionThreadObject>;
       LIMITED: DurableObjectNamespace<LimitedThreadObject>;
       TINYDB: DurableObjectNamespace<TinyDatabaseThreadObject>;
       DENIED: DurableObjectNamespace<DeniedThreadObject>;
@@ -61,6 +63,7 @@ declare global {
 
 export type TestNamespace =
   | "PUBLICATIONS"
+  | "PROJECTIONS"
   | "THREADS"
   | "LIMITED"
   | "TINYDB"

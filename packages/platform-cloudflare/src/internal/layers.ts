@@ -54,13 +54,14 @@ import {
 } from "@effect-agent/thread/OperationAuthorizer";
 import { ProducerId } from "@effect-agent/thread/Records";
 import { LedgerError, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import { ThreadProjectionMaintenance } from "@effect-agent/thread/ThreadProjectionMaintenance";
 import { ThreadStoreError, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { type WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
-import { Context, Duration, Effect, Layer, Schema } from "effect";
+import { Cause, Context, Duration, Effect, Layer, Schema, Semaphore } from "effect";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import {
@@ -188,6 +189,7 @@ export type CloudflareDurableRuntimeServices =
   | ThreadMaintenance
   | ThreadMutationGate
   | ThreadPublication
+  | ThreadProjectionMaintenance
   | ThreadObjectPorts
   | ProgressWaitRegistry
   | SqlClient;
@@ -332,7 +334,7 @@ export const layerConfig = (
     }),
   );
 
-export interface ThreadPublicationOptions<E = never, R = never> {
+export interface ThreadPublicationOptions<E = never, R = never, P = never> {
   /**
    * Optional host outbox consumer, built once per incarnation with RAW LOCAL ThreadStore and
    * SubmissionLedger services. Yield DurableObjectContext and ThreadObjectIdentity for native
@@ -342,6 +344,14 @@ export interface ThreadPublicationOptions<E = never, R = never> {
    * publication after commit. Custom host facts must use ThreadMaintenance.withMutation.
    */
   readonly publication?: Layer.Layer<ThreadPublication, E, R>;
+  /**
+   * Disposable index maintenance, built once with the raw local ThreadStore and owner
+   * SqlClient. Additional services P are exposed by the returned Layer, allowing Tool
+   * handlers and maintenance to share one index instance. Construction is local-only.
+   * Live committed batches run before append returns; bounded backfill uses the native
+   * alarm without delaying execution behind projection backlog.
+   */
+  readonly projection?: Layer.Layer<ThreadProjectionMaintenance | P, E, R>;
 }
 
 /**
@@ -350,15 +360,75 @@ export interface ThreadPublicationOptions<E = never, R = never> {
  * Tool, Schema, and model requirements remain visible until satisfied by Layer composition.
  * Use Layer.unwrap for registration values that need effectful application setup.
  */
-export const layer = <const Entries extends ReadonlyArray<AgentRegistration>, E = never, R = never>(
+const registeredLayer = <
+  const Entries extends ReadonlyArray<AgentRegistration>,
+  E = never,
+  R = never,
+>(
   registrations: Entries,
   options: ThreadPublicationOptions<E, R> = {},
 ) =>
   Layer.unwrap(
-    Effect.map(compileRegistrations(registrations), (bindings) =>
-      layerFromBindings(bindings, options),
-    ),
+    Effect.map(compileRegistrations(registrations), (bindings) => boundLayer(bindings, options)),
   );
+
+/** Preserve additional index services only when a projection Layer is actually supplied. */
+export function layer<
+  const Entries extends ReadonlyArray<AgentRegistration>,
+  E = never,
+  R = never,
+  P = never,
+  PE = never,
+  PR = never,
+>(
+  registrations: Entries,
+  options: Omit<ThreadPublicationOptions<E, R>, "projection"> & {
+    readonly projection: Layer.Layer<ThreadProjectionMaintenance | P, PE, PR>;
+  },
+): Layer.Layer<
+  Layer.Success<ReturnType<typeof registeredLayer<Entries, E | PE, R | PR>>> | P,
+  Layer.Error<ReturnType<typeof registeredLayer<Entries, E | PE, R | PR>>>,
+  Layer.Services<ReturnType<typeof registeredLayer<Entries, E | PE, R | PR>>>
+>;
+
+export function layer<const Entries extends ReadonlyArray<AgentRegistration>, E = never, R = never>(
+  registrations: Entries,
+  options?: ThreadPublicationOptions<E, R>,
+): ReturnType<typeof registeredLayer<Entries, E, R>>;
+
+export function layer<const Entries extends ReadonlyArray<AgentRegistration>, E = never, R = never>(
+  registrations: Entries,
+  options: ThreadPublicationOptions<E, R> = {},
+) {
+  return registeredLayer(registrations, options);
+}
+
+export function layerFromBindings<E = never, R = never, P = never, PE = never, PR = never>(
+  bindings: ReadonlyArray<ResolvedBinding>,
+  options: Omit<ThreadPublicationOptions<E, R>, "projection"> & {
+    readonly projection: Layer.Layer<ThreadProjectionMaintenance | P, PE, PR>;
+  },
+): Layer.Layer<
+  CloudflareDurableRuntimeServices | P,
+  Layer.Error<ReturnType<typeof boundLayer<E | PE, R | PR>>>,
+  Layer.Services<ReturnType<typeof boundLayer<E | PE, R | PR>>>
+>;
+
+export function layerFromBindings<E = never, R = never>(
+  bindings: ReadonlyArray<ResolvedBinding>,
+  options?: ThreadPublicationOptions<E, R>,
+): ReturnType<typeof boundLayer<E, R>>;
+
+export function layerFromBindings(
+  bindings: ReadonlyArray<ResolvedBinding>,
+): ReturnType<typeof boundLayer<never, never>>;
+
+export function layerFromBindings<E = never, R = never>(
+  bindings: ReadonlyArray<ResolvedBinding>,
+  options: ThreadPublicationOptions<E, R> = {},
+) {
+  return boundLayer(bindings, options);
+}
 
 /**
  * Assemble the durable runtime from already-resolved Agent Bindings.
@@ -366,7 +436,7 @@ export const layer = <const Entries extends ReadonlyArray<AgentRegistration>, E 
  * Supply host services through `ThreadObject.make` or `ThreadObject.layerConfig` and
  * the Durable Object context and namespace Layers when composing a custom host.
  */
-export const layerFromBindings = <E = never, R = never>(
+const boundLayer = <E = never, R = never>(
   bindings: ReadonlyArray<ResolvedBinding>,
   options: ThreadPublicationOptions<E, R> = {},
 ): Layer.Layer<
@@ -419,16 +489,24 @@ export const layerFromBindings = <E = never, R = never>(
         Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))),
       );
 
+      const projection = (options.projection ?? ThreadProjectionMaintenance.layer).pipe(
+        Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))),
+      );
+
       const localPorts =
-        options.publication === undefined
+        options.publication === undefined && options.projection === undefined
           ? rawLocalPorts
           : Layer.effectContext(
               Effect.gen(function* () {
                 const store = yield* ThreadStore;
                 const ledger = yield* SubmissionLedger;
                 const mutations = yield* ThreadMutationGate;
+                const index = yield* ThreadProjectionMaintenance;
                 const publish = yield* Effect.context<ThreadPublication>();
                 const afterCommit = publishCommitted.pipe(Effect.provide(publish));
+                // A later append cannot mistake its still-projecting predecessor for old backlog.
+                // Publication remains outside this local source/index critical section.
+                const sourceCommits = yield* Semaphore.make(1);
 
                 // Every runtime-owned producer prearms too: a crash between commit and invalidation
                 // leaves a NEW, uncertified generation. Source errors keep their native port types.
@@ -436,7 +514,30 @@ export const layerFromBindings = <E = never, R = never>(
                   ...store,
                   append: (request) =>
                     mutations
-                      .withMutation(store.append(request).pipe(Effect.tap(() => afterCommit)))
+                      .withMutation(
+                        sourceCommits
+                          .withPermit(
+                            store
+                              .append(request)
+                              .pipe(
+                                Effect.tap((result) =>
+                                  index
+                                    .applyCommitted(request, result)
+                                    .pipe(
+                                      Effect.catchCause((cause) =>
+                                        Cause.hasInterrupts(cause)
+                                          ? Effect.interrupt
+                                          : Effect.logError(
+                                              "Thread projection deferred after source commit",
+                                              cause,
+                                            ),
+                                      ),
+                                    ),
+                                ),
+                              ),
+                          )
+                          .pipe(Effect.tap(() => afterCommit)),
+                      )
                       .pipe(
                         Effect.catchTag("DurableAlarmError", (cause) =>
                           ThreadStoreError.make({
@@ -506,6 +607,7 @@ export const layerFromBindings = <E = never, R = never>(
         messageStore,
       ).pipe(
         Layer.provideMerge(publication),
+        Layer.provideMerge(projection),
         Layer.provideMerge(ThreadMutationGate.layer),
         Layer.provideMerge(infrastructure),
       );
