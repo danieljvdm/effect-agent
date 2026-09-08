@@ -3,6 +3,7 @@ dist
 .worktrees
 .bundle-base
 .bundle-report
+.context-continuity-eval
 coverage
 .vite
 .playwright-cli/

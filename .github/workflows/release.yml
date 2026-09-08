@@ -14,7 +14,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 70
     permissions:
       contents: write
       pull-requests: write
@@ -64,6 +64,21 @@ jobs:
           title: "chore: version packages"
           commit: "chore: version packages"
           version: ./node_modules/.bin/vp run --no-cache ci:version
-          publish: ./node_modules/.bin/vp run release:publish
+          publish: ./node_modules/.bin/vp run --no-cache release:checked-publish
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          EFFECT_AGENT_LIVE: "1"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXT_EVAL_MODEL: ${{ vars.CONTEXT_EVAL_MODEL || 'gpt-6-astra' }}
+
+      - name: Preserve continuity gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: context-continuity-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .context-continuity-eval/run/report.json
+            .context-continuity-eval/run/requests.ndjson
+            .context-continuity-eval/run/canonical.ndjson
+          if-no-files-found: ignore
+          retention-days: 30

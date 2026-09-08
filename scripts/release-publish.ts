@@ -1,9 +1,10 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Cause, Console, Effect, Exit, FileSystem, Option, Path, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess } from "effect/unstable/process";
 
-// Changesets owns registry checks, publishing, prerelease tags, and Git tags.
+// Changesets owns final registry checks, publishing, prerelease tags, and Git tags.
 // npm needs resolved Bun dependency ranges and built exports in its input manifests.
 class ReleaseError extends Schema.TaggedError<ReleaseError>()("ReleaseError", {
   package: Schema.String,
@@ -76,6 +77,77 @@ const PrereleaseState = Schema.StructWithRest(
 
 const decodeManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(PublishManifest));
 
+const readWorkspacePackages = Effect.fn("releasePublish.readWorkspacePackages")(function* (
+  root: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  return yield* Effect.forEach(
+    (yield* fs.readDirectory(path.join(root, "packages")))
+      .filter((name) => !name.startsWith("."))
+      .sort(),
+    Effect.fn(function* (name) {
+      const directory = path.join(root, "packages", name);
+      const manifestPath = path.join(directory, "package.json");
+      const originalBytes = yield* fs.readFileString(manifestPath);
+
+      return {
+        directory,
+        manifestPath,
+        originalBytes,
+        manifest: yield* decodeManifest(originalBytes),
+      };
+    }),
+  );
+});
+
+const RegistryVersion = Schema.Struct({ name: Schema.String, version: Schema.String });
+
+/** Changesets invokes its publish hook even when nothing remains to publish. */
+export const withUnpublishedRelease = <E, R>(
+  packages: ReadonlyArray<typeof PublishManifest.Type>,
+  release: Effect.Effect<void, E, R>,
+) =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+
+    const pending = yield* Effect.forEach(
+      packages.filter((pkg) => pkg.private !== true),
+      Effect.fn(function* (pkg) {
+        const response = yield* client.get(
+          `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}`,
+        );
+
+        if (response.status === 404) return true;
+        if (response.status !== 200)
+          return yield* ReleaseError.make({
+            package: pkg.name,
+            reason: `Cannot determine release status: npm returned ${response.status}`,
+          });
+        const published = yield* HttpClientResponse.schemaBodyJson(RegistryVersion)(response);
+
+        if (published.name !== pkg.name || published.version !== pkg.version)
+          return yield* ReleaseError.make({
+            package: pkg.name,
+            reason: "npm returned a different package or version",
+          });
+
+        return false;
+      }),
+      { concurrency: 3 },
+    ).pipe(Effect.timeout("30 seconds"));
+
+    if (!pending.some(Boolean)) {
+      yield* Console.log(
+        "All public versions are already published; skipping the live gate and publication.",
+      );
+
+      return;
+    }
+    yield* release;
+  });
+
 export const withTemporaryManifest = <A, E, R>(
   manifestPath: string,
   originalBytes: string,
@@ -143,23 +215,7 @@ export const withPublishManifests = <A, E, R>(
       yield* fs.readFileString(path.join(root, "package.json")),
     );
 
-    const packages = yield* Effect.forEach(
-      (yield* fs.readDirectory(path.join(root, "packages")))
-        .filter((name) => !name.startsWith("."))
-        .sort(),
-      Effect.fn(function* (name) {
-        const directory = path.join(root, "packages", name);
-        const manifestPath = path.join(directory, "package.json");
-        const originalBytes = yield* fs.readFileString(manifestPath);
-
-        return {
-          directory,
-          manifestPath,
-          originalBytes,
-          manifest: yield* decodeManifest(originalBytes),
-        };
-      }),
-    );
+    const packages = yield* readWorkspacePackages(root);
 
     const versions = new Map(packages.map(({ manifest }) => [manifest.name, manifest.version]));
     const publicPackages = packages.filter(({ manifest }) => manifest.private !== true);
@@ -310,12 +366,18 @@ export const command = CliCommand.make(
       Flag.withDescription("Build and inspect npm packages without publishing or creating tags."),
       Flag.withDefault(false),
     ),
+    checkContinuity: Flag.boolean("check-continuity").pipe(
+      Flag.withDescription(
+        "Run the live continuity gate only when a public version needs publishing.",
+      ),
+      Flag.withDefault(false),
+    ),
     otp: Flag.string("otp").pipe(
       Flag.optional,
       Flag.withDescription("npm one-time password for an authenticated manual release."),
     ),
   },
-  Effect.fn("releasePublish.command")(function* ({ dryRun, otp }) {
+  Effect.fn("releasePublish.command")(function* ({ dryRun, otp, checkContinuity }) {
     const path = yield* Path.Path;
 
     const root = path.resolve(
@@ -323,21 +385,40 @@ export const command = CliCommand.make(
       "..",
     );
 
-    yield* runCommand(root, "vp", ["run", "build"]);
-    yield* withPublishManifests(root, (directories) =>
-      dryRun
-        ? Effect.forEach(
-            directories,
-            (directory) => runCommand(directory, "npm", ["pack", "--dry-run", "--ignore-scripts"]),
-            { discard: true },
-          )
-        : runCommand(root, path.join(root, "node_modules", ".bin", "changeset"), [
-            "publish",
-            "--tag",
-            "beta",
-            ...(Option.isSome(otp) ? ["--otp", otp.value] : []),
-          ]),
-    );
+    const publish = Effect.gen(function* () {
+      if (checkContinuity && !dryRun)
+        yield* runCommand(root, "vp", [
+          "run",
+          "--no-cache",
+          "context-continuity-eval",
+          "--require-clean",
+        ]);
+      yield* runCommand(root, "vp", ["run", "build"]);
+      yield* withPublishManifests(root, (directories) =>
+        dryRun
+          ? Effect.forEach(
+              directories,
+              (directory) =>
+                runCommand(directory, "npm", ["pack", "--dry-run", "--ignore-scripts"]),
+              { discard: true },
+            )
+          : runCommand(root, path.join(root, "node_modules", ".bin", "changeset"), [
+              "publish",
+              "--tag",
+              "beta",
+              ...(Option.isSome(otp) ? ["--otp", otp.value] : []),
+            ]),
+      );
+    });
+
+    if (checkContinuity && !dryRun) {
+      const packages = yield* readWorkspacePackages(root);
+
+      yield* withUnpublishedRelease(
+        packages.map((pkg) => pkg.manifest),
+        publish,
+      );
+    } else yield* publish;
     if (dryRun) yield* Console.log("Dry run complete. Nothing published or tagged.");
   }),
 ).pipe(
@@ -348,7 +429,7 @@ export const command = CliCommand.make(
 
 const program = CliCommand.run(command, { version: "1.0.0" }).pipe(
   Effect.scoped,
-  Effect.provide(NodeServices.layer),
+  Effect.provide([NodeServices.layer, FetchHttpClient.layer]),
 );
 
 if (import.meta.main) NodeRuntime.runMain(program);

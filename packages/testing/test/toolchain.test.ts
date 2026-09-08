@@ -15,6 +15,7 @@ import {
 } from "effect";
 import { Command } from "effect/unstable/cli";
 import { Yaml } from "effect/unstable/encoding";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess } from "effect/unstable/process";
 
 import { compareBundles } from "../../../scripts/bundle-size.ts";
@@ -23,6 +24,7 @@ import {
   PublishManifest,
   withTemporaryManifest,
   withPublishManifests,
+  withUnpublishedRelease,
 } from "../../../scripts/release-publish.ts";
 import { verifyPackageExports } from "../../../scripts/verify-package-exports.ts";
 import { verifyPackagePurity } from "../../../scripts/verify-package-purity.ts";
@@ -117,6 +119,7 @@ const exampleNames = [
   "browser-run-worker-proof",
   "cloudflare-memory",
   "code-mode-cloudflare",
+  "context-continuity-eval",
   "demo",
   "durable-orchestration",
   "pr-review-eval",
@@ -556,6 +559,58 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
+  // Changesets calls its publish hook even when all versions are already on npm:
+  // https://github.com/changesets/action/blob/a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d/src/index.ts#L66
+  it.effect("starts paid release work only for a confirmed unpublished public version", () =>
+    Effect.gen(function* () {
+      const packages = [
+        { name: "@effect-agent/core", version: "1.0.0" },
+        { name: "@effect-agent/thread", version: "1.0.0" },
+        { name: "private-fixture", version: "1.0.0", private: true },
+      ];
+
+      for (const scenario of [
+        { status: 200, wrongIdentity: false, starts: 0, fails: false },
+        { status: 404, wrongIdentity: false, starts: 1, fails: false },
+        { status: 503, wrongIdentity: false, starts: 0, fails: true },
+        { status: 200, wrongIdentity: true, starts: 0, fails: true },
+      ]) {
+        const requested: Array<string> = [];
+        let starts = 0;
+
+        const client = HttpClient.make((request, url) => {
+          const name = decodeURIComponent(url.pathname.split("/")[1] ?? "");
+
+          requested.push(name);
+
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                {
+                  name: scenario.wrongIdentity ? "wrong-package" : name,
+                  version: "1.0.0",
+                },
+                { status: name === "@effect-agent/thread" ? scenario.status : 200 },
+              ),
+            ),
+          );
+        });
+
+        const exit = yield* withUnpublishedRelease(
+          packages,
+          Effect.sync(() => {
+            starts += 1;
+          }),
+        ).pipe(Effect.provideService(HttpClient.HttpClient, client), Effect.exit);
+
+        expect(starts).toBe(scenario.starts);
+        expect(Exit.isFailure(exit)).toBe(scenario.fails);
+        expect(requested).not.toContain("private-fixture");
+      }
+    }),
+  );
+
   it.effect("restores the source manifest after a partial temporary-install failure", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -780,7 +835,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       const changesets = workflowStep(release, "release", "Create release pull request or publish");
 
       expect(changesets?.env?.GITHUB_TOKEN).toBe("${{ steps.app-token.outputs.token }}");
-      expect(changesets?.with?.publish).toBe("./node_modules/.bin/vp run release:publish");
+      expect(changesets?.with?.publish).toBe(
+        "./node_modules/.bin/vp run --no-cache release:checked-publish",
+      );
       expect(release.jobs.release?.permissions?.["id-token"]).toBe("write");
     }),
   );
