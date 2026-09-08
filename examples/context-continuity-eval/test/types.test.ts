@@ -8,7 +8,7 @@ import { type ContextHistory } from "@effect-agent/engine/ContextHistory";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import type { OpenAiClient } from "@effect/ai-openai";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
-import { Effect, Ref } from "effect";
+import { Effect, Layer, Ref } from "effect";
 import { type IdGenerator as AiIdGenerator } from "effect/unstable/ai";
 import { expectTypeOf, it } from "vite-plus/test";
 
@@ -43,11 +43,7 @@ it("preserves native model, history and durable note requirements in the pressur
       OpenAiLanguageModel.model("gpt-6-astra", cloudflareModelSettings),
     ),
     "continue",
-  ).pipe(
-    Effect.provide(ContextTools.layer),
-    Effect.provide(manifestLayer(16_000)),
-    Effect.provide(notes),
-  );
+  ).pipe(Effect.provide(Layer.mergeAll(ContextTools.layer, manifestLayer(16_000), notes)));
 
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
     | OpenAiClient.OpenAiClient

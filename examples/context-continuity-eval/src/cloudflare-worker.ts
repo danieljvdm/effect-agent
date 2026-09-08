@@ -491,9 +491,13 @@ export default {
 
         return Response.json(receipt);
       }).pipe(
-        Effect.provide(CloudflareThreadClient.layer),
-        Effect.provide(BrowserCrypto.layer),
-        Effect.provide(ThreadObjectNamespace.layer(env.THREADS)),
+        Effect.provide(
+          CloudflareThreadClient.layer.pipe(
+            Layer.provideMerge(
+              Layer.merge(BrowserCrypto.layer, ThreadObjectNamespace.layer(env.THREADS)),
+            ),
+          ),
+        ),
         Effect.scoped,
         Effect.tapCause(Effect.logError),
         Effect.catch(() => Effect.succeed(new Response("Evaluation host failed", { status: 500 }))),

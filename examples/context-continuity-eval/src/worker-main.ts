@@ -24,11 +24,14 @@ const program = Effect.gen(function* () {
 }).pipe(
   Effect.scoped,
   Effect.provide(
-    OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") }).pipe(
-      Layer.provide(FetchHttpClient.layer),
+    Layer.mergeAll(
+      OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") }).pipe(
+        Layer.provide(FetchHttpClient.layer),
+      ),
+      NodeServices.layer,
+      NodeCrypto.layer,
     ),
   ),
-  Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
 );
 
 NodeRuntime.runMain(program);

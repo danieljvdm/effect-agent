@@ -118,11 +118,15 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
         );
       }).pipe(
         Effect.scoped,
-        Effect.provide(FetchHttpClient.layer),
-        Effect.provideService(FetchHttpClient.Fetch, localFetch),
-        Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
         Effect.provide(
-          ConfigProvider.layer(ConfigProvider.fromUnknown({ CONTEXT_EVAL_TOKEN: "test-token" })),
+          Layer.mergeAll(
+            FetchHttpClient.layer.pipe(
+              Layer.provide(Layer.succeed(FetchHttpClient.Fetch, localFetch)),
+            ),
+            NodeServices.layer,
+            NodeCrypto.layer,
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ CONTEXT_EVAL_TOKEN: "test-token" })),
+          ),
         ),
       ),
     );

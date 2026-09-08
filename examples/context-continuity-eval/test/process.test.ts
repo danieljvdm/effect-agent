@@ -1,5 +1,5 @@
 import { NodeServices } from "@effect/platform-node";
-import { ConfigProvider, Effect, FileSystem, Path } from "effect";
+import { ConfigProvider, Effect, FileSystem, Layer, Path } from "effect";
 import { expect, it } from "vite-plus/test";
 
 import { pressureInstructions, pressureScenario, pressureToolkit } from "../src/pressure.ts";
@@ -37,9 +37,11 @@ it("recovers the real SQLite runtime after two SIGKILLs with pressure and cumula
       );
     }).pipe(
       Effect.scoped,
-      Effect.provide(NodeServices.layer),
       Effect.provide(
-        ConfigProvider.layer(ConfigProvider.fromUnknown({ OPENAI_API_KEY: "test-only" })),
+        Layer.merge(
+          NodeServices.layer,
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ OPENAI_API_KEY: "test-only" })),
+        ),
       ),
     ),
   );
@@ -119,9 +121,11 @@ it.each(["exit", "invalid-barrier", "interruption"] as const)(
       }).pipe(
         Effect.timeout("10 seconds"),
         Effect.scoped,
-        Effect.provide(NodeServices.layer),
         Effect.provide(
-          ConfigProvider.layer(ConfigProvider.fromUnknown({ OPENAI_API_KEY: "test-only" })),
+          Layer.merge(
+            NodeServices.layer,
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ OPENAI_API_KEY: "test-only" })),
+          ),
         ),
       ),
     );
