@@ -166,7 +166,7 @@ const writeCleanupConfig = Effect.fn("Performance.writeCleanupConfig")(function*
   );
 });
 
-/** Wrangler owns remote mutation. Secret file is scoped outside the evidence directory. */
+/** Wrangler owns uploads and namespace retirement. Secret file is scoped outside the evidence directory. */
 export const makePerformanceDeployment = Effect.fn("Performance.deployment")(function* (
   secretsFile: string | undefined,
   sensitiveValues: ReadonlyArray<Redacted.Redacted<string>> = [],
@@ -328,13 +328,33 @@ export const makePerformanceDeployment = Effect.fn("Performance.deployment")(fun
           path.join(target.directory, "cleanup.json"),
           "--no-bundle",
         ]);
-        yield* run(target, "delete-worker", [
-          "delete",
-          target.name,
-          "--config",
-          path.join(target.directory, "cleanup.json"),
-          "--force",
-        ]);
+        // The fixture owns no KV assets. Wrangler's delete command also scans legacy KV
+        // namespaces after deleting the Worker, requiring unrelated account permissions.
+        yield* client
+          .execute(
+            HttpClientRequest.delete(
+              `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/workers/scripts/${target.name}`,
+            ).pipe(HttpClientRequest.bearerToken(config.apiToken)),
+          )
+          .pipe(
+            Effect.timeout("20 seconds"),
+            Effect.flatMap((response) =>
+              response.status === 404 || (response.status >= 200 && response.status < 300)
+                ? Effect.void
+                : Effect.fail(
+                    EvaluationError.make({
+                      stage: "delete-worker",
+                      message: `Worker deletion failed: ${target.name}`,
+                    }),
+                  ),
+            ),
+            Effect.mapError(() =>
+              EvaluationError.make({
+                stage: "delete-worker",
+                message: `Worker deletion failed: ${target.name}; cleanup may need retry`,
+              }),
+            ),
+          );
         if (yield* exists(target))
           return yield* EvaluationError.make({
             stage: "cleanup",
