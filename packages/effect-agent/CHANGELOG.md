@@ -1,5 +1,14 @@
 # effect-agent
 
+## 0.1.0-beta.62
+
+### Patch Changes
+
+- Updated dependencies [[`46e8ad2`](https://github.com/danieljvdm/effect-agent/commit/46e8ad22fa9f436ce155a6696ddf8e11cec2931c)]:
+  - @effect-agent/engine@0.1.0-beta.62
+  - @effect-agent/capabilities@0.1.0-beta.62
+  - @effect-agent/core@0.1.0-beta.62
+
 ## 0.1.0-beta.61
 
 ### Patch Changes

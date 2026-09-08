@@ -52,6 +52,7 @@
     "budget-soft-landing",
     "canonical-run-duration",
     "capped-review-turns",
+    "captured-worker-policy",
     "clear-addressed-pr-reviews",
     "clear-export-ownership",
     "cloudflare-binding-layers",

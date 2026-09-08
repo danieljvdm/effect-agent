@@ -1,5 +1,7 @@
 # @effect-agent/sandbox
 
+## 0.1.0-beta.62
+
 ## 0.1.0-beta.61
 
 ## 0.1.0-beta.60
