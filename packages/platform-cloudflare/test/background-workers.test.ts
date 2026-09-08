@@ -27,6 +27,9 @@ import {
   backgroundReportGates,
   capturedPolicySource,
   capturedPolicyWorkers,
+  capturedConcurrency,
+  privateProgressRoutes,
+  customRuntimeThreads,
 } from "./background-worker-fixture.ts";
 import {
   decodeIdempotencyKey,
@@ -117,6 +120,7 @@ it("admits exact captured policies with one registered target and retains them t
 
   expect(firstDeclaration.target).toBe(secondDeclaration.target);
   independentBudgetGrants.add(source);
+  capturedConcurrency.set(source, { owner: ownerReceipt.submissionId, limit: 2 });
   backgroundWakeDropPrefixes.add("worker:");
   droppedMessageWakes.add(source);
 
@@ -132,8 +136,7 @@ it("admits exact captured policies with one registered target and retains them t
       ownerReceipt.submissionId,
     );
 
-  const first = await launch(firstPolicy, 1);
-  const second = await launch(secondPolicy, 3);
+  const [first, second] = await Promise.all([launch(firstPolicy, 1), launch(secondPolicy, 3)]);
 
   const finish = (thread: string) =>
     drainAlarmsUntil(thread, async () => {
@@ -149,6 +152,8 @@ it("admits exact captured policies with one registered target and retains them t
     });
 
   try {
+    await expect(launch(firstPolicy, 4)).rejects.toThrow();
+    capturedConcurrency.set(source, { owner: ownerReceipt.submissionId, limit: 0 });
     expect(await launch(firstPolicy, 1)).toEqual(first);
     const alarm = runDurableObjectAlarm(stubFor(first.worker.threadId)).catch(() => false);
 
@@ -180,6 +185,7 @@ it("admits exact captured policies with one registered target and retains them t
     await evict(source);
     await evict(first.worker.threadId);
     independentBudgetGates.add(`${source}:task:2`);
+    capturedConcurrency.set(source, { owner: ownerReceipt.submissionId, limit: 2 });
 
     const later = await withOwner(
       source,
@@ -251,9 +257,103 @@ it("admits exact captured policies with one registered target and retains them t
   } finally {
     for (const task of [1, 2, 3]) independentBudgetGates.delete(`${source}:task:${task}`);
     independentBudgetGrants.delete(source);
+    capturedConcurrency.delete(source);
     independentBudgetAuthorityCalls.delete(source);
     droppedMessageWakes.delete(source);
     backgroundWakeDropPrefixes.delete("worker:");
+  }
+});
+
+// Regression: https://github.com/danieljvdm/effect-agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
+it("drains private worker progress through rebuilt runtime maintenance into an idle parent", async () => {
+  const source = `background-cf-custom-${crypto.randomUUID()}`;
+
+  await runClient(
+    Effect.flatMap(CloudflareThreadClient, (client) =>
+      client.submit(
+        { definition: backgroundSource },
+        { question: "initialize" },
+        submitOptions(source, "source"),
+      ),
+    ),
+  );
+  await drainAlarmsUntil(source, allSettled(source));
+
+  const started = await withOwner(source, (host) =>
+    Subagent.start(
+      backgroundWorkers,
+      { question: "private task" },
+      { idempotencyKey: decodeIdempotencyKey("child") },
+    ).pipe(Effect.provideService(SubagentHost, host)),
+  );
+
+  await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
+  customRuntimeThreads.add(started.worker.threadId);
+  privateProgressRoutes.set(started.worker.threadId, decodeThreadId(source));
+  droppedMessageWakes.add(started.worker.threadId);
+  await evict(started.worker.threadId);
+  try {
+    const sent = await runInDurableObject(stubFor(started.worker.threadId), (instance) =>
+      instance[DurableObject.RunSymbol](
+        Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+
+          const host = yield* runtime.messagingHost({
+            sourceThreadId: started.worker.threadId,
+            principal: TEST_PRINCIPAL,
+          });
+
+          return yield* host.send({
+            name: "private_progress",
+            target: backgroundSource,
+            encodedInput: { question: "private bounded progress" },
+            idempotencyKey: decodeIdempotencyKey("progress"),
+          });
+        }),
+      ),
+    );
+
+    expect(sent.status).toBe("pending");
+    // A competing automatic pass can own delivery after a manual alarm returns. Drive the
+    // native owners until the destination has applied this exact message, not merely until
+    // the previously idle parent has no unsettled inputs.
+    await drainAlarmsUntil(started.worker.threadId, async () => {
+      await runDurableObjectAlarm(stubFor(source));
+
+      return (await readCanonical(source)).some(
+        ({ record }) =>
+          record.payload._tag === "UserInputRecorded" &&
+          record.payload.messageAdmission?.sender.threadId === started.worker.threadId &&
+          record.payload.messageAdmission.peerName === "private_progress",
+      );
+    });
+    await drainAlarmsUntil(source, allSettled(source));
+
+    const destination = await readCanonical(source);
+
+    const delivered = destination.filter(
+      ({ record }) =>
+        record.payload._tag === "UserInputRecorded" &&
+        record.payload.messageAdmission !== undefined,
+    );
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.record.payload).toMatchObject({
+      input: { question: "private bounded progress" },
+      messageAdmission: {
+        sender: { threadId: started.worker.threadId },
+        peerName: "private_progress",
+      },
+    });
+    expect(
+      destination.flatMap(({ record }) =>
+        record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
+      ),
+    ).toEqual(["completed", "completed"]);
+  } finally {
+    customRuntimeThreads.delete(started.worker.threadId);
+    privateProgressRoutes.delete(started.worker.threadId);
+    droppedMessageWakes.delete(started.worker.threadId);
   }
 });
 

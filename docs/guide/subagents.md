@@ -218,6 +218,19 @@ input-retention, concurrency, and lifetime limits still apply across the source 
 Set `WorkerHostConfig.maxActiveWorkersPerSource` to bound concurrent background workers separately
 from the root's Tool execution concurrency; omission retains the prior concurrency ceiling.
 
+When each source has an authorized concurrency preference, provide `WorkerConcurrencyResolver`
+from `@effect-agent/thread/WorkerHost` through an Effect Layer. It receives the immutable source,
+worker, principal, and explicitly selected canonical owner submission. Return `Option.some({
+maxActiveWorkersPerSource })` to narrow the fixed host ceiling, or `Option.none()` to retain it.
+The runtime resolves this limit inside the source reservation CAS loop, including retries after
+competing appends. Counted workers have at least one input awaiting canonical completion; queued
+inputs count, and steering an active worker needs no additional slot. An idle worker must acquire
+a slot before a later input. Lowering the ceiling, including to zero, does not cancel incumbents
+or reject replay of an established reservation. Temporarily unavailable authority must return
+`WorkerError` with reason `unavailable`; it must not silently choose a fallback. This operational
+limit never changes an established worker policy, delegation depth, retained-worker limit, or
+Run allowance.
+
 ### Resolve policies from captured input
 
 Supply `WorkerPolicyResolver` from `@effect-agent/thread/WorkerHost` when immutable application

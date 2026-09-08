@@ -81,6 +81,7 @@ import { PendingSubmission, SettledSubmission } from "../src/SubmissionStatus.ts
 import { PreparedInput } from "../src/Subscription.ts";
 import {
   WorkerBudgetAuthorizer,
+  WorkerConcurrencyResolver,
   WorkerHostAuthorizer,
   WorkerHostConfig,
   WorkerPolicyResolver,
@@ -174,6 +175,8 @@ const reportWith = (
 const harness = Effect.fn("workerHostHarness")(function* (
   options: {
     readonly independentBudget?: boolean;
+    readonly limits?: Partial<typeof WorkerHostConfig.Service>;
+    readonly authorize?: (typeof WorkerHostAuthorizer.Service)["authorize"];
     readonly sourceRevisions?: ReadonlyArray<{
       readonly definition: Agent.AnyDefinition;
       readonly digests: DefinitionDigests;
@@ -266,6 +269,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
       maxInputsPerWorker: 3,
       maxPendingInputsPerWorker: 2,
       lifetimeMillis: 60_000,
+      ...options.limits,
     }),
     Effect.provideService(WorkerHostAuthorizer, {
       authorize: (request) =>
@@ -276,7 +280,9 @@ const harness = Effect.fn("workerHostHarness")(function* (
             request.principal !== principal ||
             !logs.has(request.sourceThreadId)
             ? WorkerError.make({ operation: request.operation, reason: "denied" })
-            : Effect.succeed(principal);
+            : options.authorize === undefined
+              ? Effect.succeed(principal)
+              : options.authorize(request);
         }),
     }),
     Effect.provideService(DurableRuntimeFailpoint, {
@@ -606,6 +612,177 @@ const harness = Effect.fn("workerHostHarness")(function* (
 layer(NodeCrypto.layer)((it) => {
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
+    "serializes source-aware active slots across raced starts, steering and idle reactivation",
+    () =>
+      Effect.gen(function* () {
+        let limit = 1;
+
+        const h = yield* harness({
+          independentBudget: true,
+          limits: { maxWorkersPerSource: 10, maxInputsPerWorker: 10, maxPendingInputsPerWorker: 3 },
+        }).pipe(
+          Effect.provideService(WorkerConcurrencyResolver, {
+            resolve: (request) =>
+              Effect.sync(() => {
+                expect(request.source.threadId).toBe(sourceId);
+                expect(request.principal).toBe(principal);
+                expect(request.sourceSubmission).toBeUndefined();
+
+                return Option.some({ maxActiveWorkersPerSource: limit });
+              }),
+          }),
+        );
+
+        const start = (key: string) => h.host.start({ ...request(key), budgetScope: "worker-run" });
+
+        const raced = yield* Effect.all(
+          [start("slot-a"), start("slot-b")].map((effect) =>
+            effect.pipe(
+              Effect.map(Option.some),
+              Effect.catchTag("WorkerError", () => Effect.succeed(Option.none())),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+
+        expect(raced.filter(Option.isSome)).toHaveLength(1);
+        const first = Option.getOrThrow(raced.find(Option.isSome)!);
+
+        limit = 0;
+
+        const follow = (key: string) =>
+          h.host.followUp({
+            worker: first.worker,
+            target,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)(key),
+            encodedInput: { text: key },
+            encodedParameters: { note: key },
+          });
+
+        const steering = yield* follow("active-steering");
+
+        expect(yield* follow("active-steering")).toEqual(steering);
+        expect((yield* start("blocked-zero").pipe(Effect.flip)).reason).toBe("capacity");
+        yield* h.settle(first.receipt);
+        // A queued/steering input still owns the slot after the first receipt settles.
+        expect((yield* start("blocked-pending").pipe(Effect.flip)).reason).toBe("capacity");
+        yield* h.settle(steering, "steered", { host: first.receipt });
+        expect((yield* follow("idle-blocked").pipe(Effect.flip)).reason).toBe("capacity");
+        limit = 1;
+        const later = yield* follow("idle-later");
+
+        expect(later.threadId).toEqual(first.worker.threadId);
+        expect(h.submissions.get(later.submissionId)?.workerAdmission?.origin).toEqual(
+          h.submissions.get(first.receipt.submissionId)?.workerAdmission?.origin,
+        );
+        yield* h.settle(later);
+        limit = 1_000;
+        yield* start("host-one");
+        yield* start("host-two");
+        expect((yield* start("host-three").pipe(Effect.flip)).reason).toBe("capacity");
+      }),
+  );
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+  it.effect(
+    "retries unavailable source capacity with the same exact owner and reservation after append loss",
+    () =>
+      Effect.gen(function* () {
+        let unavailable = true;
+        let calls = 0;
+        const ownerId = Schema.decodeSync(SubmissionId)("capacity-owner");
+
+        const h = yield* harness({ independentBudget: true }).pipe(
+          Effect.provideService(WorkerConcurrencyResolver, {
+            resolve: (request) =>
+              Effect.suspend(() => {
+                calls++;
+                expect(request.source.threadId).toBe(sourceId);
+                expect(request.sourceSubmission?.submissionId).toBe(ownerId);
+                expect(request.sourceSubmission?.inputPayload).toBe("captured concurrency one");
+
+                return unavailable
+                  ? WorkerError.make({ operation: "start", reason: "unavailable" })
+                  : Effect.succeed(Option.some({ maxActiveWorkersPerSource: 1 }));
+              }),
+          }),
+        );
+
+        h.submissions.set(
+          ownerId,
+          SubmissionSnapshot.make({
+            submissionId: ownerId,
+            receiptId: Schema.decodeSync(ReceiptId)("capacity-owner-receipt"),
+            threadId: sourceId,
+            principal,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)("owner"),
+            queueSequence: Schema.decodeSync(QueueSequence)(1),
+            agentId: sourceAgent.id,
+            agentDigests: definitions,
+            deploymentId: Schema.decodeSync(DeploymentId)("test"),
+            inputPayload: "captured concurrency one",
+            inputDigest: digest,
+            state: "settled",
+            createdAt: DateTime.makeUnsafe(yield* Clock.currentTimeMillis),
+          }),
+        );
+
+        const host = yield* h.runtime.acquire({
+          sourceThreadId: sourceId,
+          sourceSubmissionId: ownerId,
+          principal,
+        });
+
+        const start = () => host.start({ ...request("retry-capacity"), budgetScope: "worker-run" });
+
+        // The public host reports the retryable delivery as storage; admission keeps its typed code.
+        expect((yield* start().pipe(Effect.flip)).reason).toBe("storage");
+        expect(calls).toBe(1);
+        expect([...h.deliveries.values()][0]?.status).toBe("pending");
+        const envelope = [...h.deliveries.values()][0]!.envelope;
+
+        expect(
+          (yield* h.runtime
+            .validateAdmission(
+              envelope.workerAdmission!,
+              {
+                threadId: envelope.threadId,
+                principal: envelope.deliveryPrincipal,
+                definitions: envelope.definitions,
+                idempotencyKey: envelope.admissionKey,
+              },
+              envelope.agentId,
+              envelope.inputDigest,
+              envelope.input,
+            )
+            .pipe(Effect.flip)).reason,
+        ).toBe("unavailable");
+        expect(
+          h.logs
+            .get(sourceId)
+            ?.filter(({ record }) => record.payload._tag === "WorkerInputRequested"),
+        ).toHaveLength(0);
+        unavailable = false;
+        yield* TestClock.adjust("1 second");
+        h.fail("worker:after-source-append");
+        expect((yield* start().pipe(Effect.flip)).reason).toBe("storage");
+        h.fail(undefined);
+        unavailable = true;
+        const attempts = calls;
+
+        yield* TestClock.adjust("31 seconds");
+        const recovered = yield* start();
+
+        expect(calls).toBe(attempts);
+        expect(yield* start()).toEqual(recovered);
+        expect(
+          h.logs
+            .get(sourceId)
+            ?.filter(({ record }) => record.payload._tag === "WorkerInputRequested"),
+        ).toHaveLength(1);
+      }),
+  );
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+  it.effect(
     "pins captured owner reporting across later owner revisions while preserving legacy context and reports",
     () =>
       Effect.gen(function* () {
@@ -678,8 +855,24 @@ layer(NodeCrypto.layer)((it) => {
 
         let reportsB = 0;
         let reportsC = 0;
+        const reportOwners: Array<SubmissionId | undefined> = [];
 
         const opted = yield* harness({
+          // Regression: https://github.com/danieljvdm/effect-agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
+          // A strict owner needs the original locator even after its Run is idle.
+          authorize: (request) =>
+            Effect.gen(function* () {
+              if (request.operation === "followUp") {
+                reportOwners.push(request.sourceSubmissionId);
+                if (request.sourceSubmissionId === undefined)
+                  return yield* WorkerError.make({
+                    operation: request.operation,
+                    reason: "denied",
+                  });
+              }
+
+              return principal;
+            }),
           sourceReports: reportsA,
           sourceRevisions: [
             {
@@ -778,6 +971,7 @@ layer(NodeCrypto.layer)((it) => {
         expect(opted.submissions.get(next.submissionId)!.workerAdmission!.origin).toEqual(origin);
         expect(reportsB).toBe(2);
         expect(reportsC).toBe(0);
+        expect(reportOwners).toEqual([ownerId, laterOwnerId, ownerId]);
         expect(
           [...opted.deliveries.values()]
             .filter((row) => row.envelope.threadId === sourceId)

@@ -7,7 +7,7 @@ const run: NonNullable<UserConfig["run"]> = {
   tasks: {
     test: {
       command: "vitest run",
-      env: ["BROWSER_TEST_EXECUTABLE"],
+      env: ["BROWSER_TEST_EXECUTABLE", "VITEST_MAX_WORKERS"],
       input: [
         { auto: true },
         { pattern: "bun.lock", base: "workspace" },

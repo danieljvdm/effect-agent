@@ -24,7 +24,11 @@ import { Context, Effect, Layer, Option, type Crypto, type DateTime } from "effe
 import type { DurableRuntimeFailpoint } from "../src/DurableFailpoint.ts";
 import type { makeMessagingRuntime } from "../src/internal/messaging-host.ts";
 import type { makeWorkerRuntime, WorkerInputControl } from "../src/internal/worker-host.ts";
-import { WorkerPolicyResolver } from "../src/WorkerHost.ts";
+import {
+  WorkerConcurrencyResolver,
+  type WorkerConcurrencyLimit,
+  WorkerPolicyResolver,
+} from "../src/WorkerHost.ts";
 
 type Runtime = DurableAgentRuntime["Service"];
 type Head = ReturnType<Runtime["processThreadHead"]>;
@@ -48,8 +52,24 @@ const capturedPolicyLayer = Layer.effect(
   }),
 );
 
+const sourceConcurrencyLayer = Layer.effect(
+  WorkerConcurrencyResolver,
+  Effect.gen(function* () {
+    const evidence = yield* PolicyEvidence;
+
+    return {
+      resolve: () =>
+        Effect.succeed(Option.some({ maxActiveWorkersPerSource: evidence.policy.toolConcurrency })),
+    };
+  }),
+);
+
 it("keeps bounded worker operations and status reads typed without hidden requirements", () => {
   expectTypeOf<Layer.Services<typeof capturedPolicyLayer>>().toEqualTypeOf<PolicyEvidence>();
+  expectTypeOf<Layer.Services<typeof sourceConcurrencyLayer>>().toEqualTypeOf<PolicyEvidence>();
+  expectTypeOf<ReturnType<(typeof WorkerConcurrencyResolver.Service)["resolve"]>>().toEqualTypeOf<
+    Effect.Effect<Option.Option<WorkerConcurrencyLimit>, WorkerError>
+  >();
   expectTypeOf<ReturnType<SubagentHost["Service"]["resolveTargetPolicy"]>>().toEqualTypeOf<
     Effect.Effect<Option.Option<AgentPolicy>, WorkerError>
   >();

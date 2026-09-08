@@ -239,8 +239,9 @@ export class ThreadPublication extends Context.Service<
 }
 
 /**
- * @internal Host-assembled message recovery. These obligations outlive source Runs and never
- * defer a ready source Attempt while a destination is processing an accepted message.
+ * Host-assembled message recovery, supplied by ThreadObject.layer even when the application
+ * rebuilds ThreadMaintenance. These obligations outlive source Runs and never defer a ready
+ * source Attempt while a destination is processing an accepted message.
  */
 export const ThreadMessageDelivery = Context.Reference<{
   readonly drain: Effect.Effect<void, DurableAlarmError>;
