@@ -82,6 +82,7 @@ import {
   replayThread,
   replayThreadFromCheckpoint,
 } from "@effect-agent/thread/ThreadProjection";
+import { ThreadCheckpoint } from "@effect-agent/thread/ThreadStore";
 import {
   PreparedToolCallEvidence,
   ReconciliationDecision,
@@ -91,6 +92,8 @@ import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Duration, Effect, Schema } from "effect";
+
+import { historicalCheckpointJson } from "../../../test/fixtures/checkpoints.ts";
 
 const SHA_256_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_256_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -122,6 +125,27 @@ const decodeEnvelope = (sequence: number, record: RecordEnvelope): CanonicalReco
   });
 
 describe("thread canonical contracts", () => {
+  it("preserves and validates supplied legacy checkpoint metadata", () => {
+    const codec = Schema.fromJsonString(ThreadCheckpoint);
+    const checkpoint = Schema.decodeSync(codec)(historicalCheckpointJson);
+
+    expect(Schema.encodeSync(codec)(checkpoint)).toBe(historicalCheckpointJson);
+    const encoded = Schema.encodeSync(ThreadCheckpoint)(checkpoint);
+
+    for (const [field, invalidValues] of [
+      ["engineVersion", ["", 1, null, undefined]],
+      ["agentDefinitionDigest", ["", 1, null, undefined, "not-a-digest"]],
+      ["modelDigest", ["", 1, null, undefined, "not-a-digest"]],
+      ["toolDigest", ["", 1, null, undefined, "not-a-digest"]],
+    ] as const) {
+      for (const invalid of invalidValues) {
+        expect(
+          Schema.decodeUnknownExit(ThreadCheckpoint)({ ...encoded, [field]: invalid })._tag,
+        ).toBe("Failure");
+      }
+    }
+  });
+
   it("round-trips the immutable Run duration and rejects invalid allowances", () => {
     const encoded = {
       _tag: "RunStarted",

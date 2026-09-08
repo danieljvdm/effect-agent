@@ -406,6 +406,15 @@ uncertainty, payloads and transactional prearming; this extension defines no pro
 
 ### Adopting these contracts
 
+Compatibility metadata is now optional for application projection checkpoints. Existing checkpoints retain supplied
+`engineVersion`, `agentDefinitionDigest`, `modelDigest`, and `toolDigest` values without a rewrite
+or migration. Older binaries still require these fields and cannot read newly written
+metadata-free checkpoints, including during `verifyOnOpen`. This change does not provide
+bidirectional rollback compatibility. The checkpoint envelope and projection versions remain
+unchanged; consumers remain responsible for validating projection state. Runtime-owned recovery
+checkpoints continue to populate and compare these fields; absent metadata falls back to
+canonical replay.
+
 The persistent adapters automatically upgrade supported predecessor formats on acquisition:
 Cloudflare Thread stores move from version 2, 3, or 4 to 5; Schedule and Subscription stores move
 from version 2 to 3; the combined SQLite file moves from version 7, 8, or 9 to 10. Thread and SQLite

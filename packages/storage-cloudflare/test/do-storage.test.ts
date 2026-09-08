@@ -7,6 +7,7 @@ import {
 } from "@effect-agent/storage-cloudflare/DoStorageError";
 import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
 import { CurrentDoStorageVersion } from "@effect-agent/storage-cloudflare/DoStorageVersion";
+import { ledgerLayer } from "@effect-agent/storage-cloudflare/DoSubmissionLedger";
 import {
   threadStoreLayer,
   layer,
@@ -52,6 +53,8 @@ import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
+import { seedCheckpoint, assertCheckpoint } from "../../../test/fixtures/checkpoints.ts";
+import { snapshotStore } from "../../../test/fixtures/storage-upgrade.ts";
 import {
   thread,
   epoch,
@@ -424,6 +427,29 @@ describe("DoThreadStore", () => {
     }
   }
 
+  for (const historical of [false, true]) {
+    it(`reopens ${historical ? "historical" : "metadata-free"} checkpoints without rewriting storage`, () =>
+      withThreadStorage(`checkpoint-roundtrip:${historical}`, (storage) =>
+        Effect.gen(function* () {
+          yield* seedCheckpoint(historical).pipe(
+            Effect.provide(
+              Layer.mergeAll(layer({ storage }), ledgerLayer({ storage }), BrowserCrypto.layer),
+            ),
+          );
+          const before = yield* snapshotStore;
+
+          for (const verifyOnOpen of [false, true]) {
+            yield* Effect.gen(function* () {
+              yield* ThreadStore;
+              expect(yield* snapshotStore).toEqual(before);
+              yield* assertCheckpoint(historical);
+              expect(yield* snapshotStore).toEqual(before);
+            }).pipe(Effect.provide(layer({ storage, verifyOnOpen })));
+          }
+        }).pipe(Effect.provide(SqliteClient.layer({ storage }))),
+      ));
+  }
+
   for (const corruption of ["thread", "sequence", "digest"] as const) {
     it(`rejects checkpoint ${corruption} metadata that disagrees with its row`, () =>
       withThreadStorage(`checkpoint-metadata:${corruption}`, (storage) =>
@@ -452,10 +478,6 @@ describe("DoThreadStore", () => {
             threadId,
             throughSequence: sequence(0),
             tailDigest: EMPTY_TAIL_DIGEST,
-            engineVersion: "checkpoint-metadata-test",
-            agentDefinitionDigest: EMPTY_TAIL_DIGEST,
-            modelDigest: EMPTY_TAIL_DIGEST,
-            toolDigest: EMPTY_TAIL_DIGEST,
             state: {},
             createdAt: at(2),
           });

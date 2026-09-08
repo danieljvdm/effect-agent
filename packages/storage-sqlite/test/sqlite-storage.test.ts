@@ -11,6 +11,7 @@ import {
   SqliteWriteContention,
 } from "@effect-agent/storage-sqlite/SqliteStorageError";
 import { type SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
+import { ledgerLayer } from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
 import {
   threadStoreLayer,
   layer,
@@ -67,6 +68,9 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
+
+import { seedCheckpoint, assertCheckpoint } from "../../../test/fixtures/checkpoints.ts";
+import { snapshotStore } from "../../../test/fixtures/storage-upgrade.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -516,6 +520,35 @@ describe("SqliteThreadStore", () => {
     }
   }
 
+  for (const historical of [false, true]) {
+    it.effect(
+      `reopens ${historical ? "historical" : "metadata-free"} checkpoints without rewriting storage`,
+      () =>
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            yield* seedCheckpoint(historical).pipe(
+              Effect.provide(
+                Layer.mergeAll(layer({ filename }), ledgerLayer({ filename }), NodeCrypto.layer),
+              ),
+            );
+            const before = yield* snapshotStore;
+            const sql = yield* SqlClientService.SqlClient;
+            const version = yield* sql`PRAGMA user_version`;
+
+            for (const verifyOnOpen of [false, true]) {
+              yield* Effect.gen(function* () {
+                yield* ThreadStore;
+                expect(yield* snapshotStore).toEqual(before);
+                yield* assertCheckpoint(historical);
+                expect(yield* snapshotStore).toEqual(before);
+                expect(yield* sql`PRAGMA user_version`).toEqual(version);
+              }).pipe(Effect.provide(layer({ filename, verifyOnOpen })));
+            }
+          }).pipe(Effect.provide(SqliteClient.layer({ filename }))),
+        ),
+    );
+  }
+
   for (const corruption of ["thread", "sequence", "digest"] as const) {
     it.effect(`rejects checkpoint ${corruption} metadata that disagrees with its row`, () =>
       withTemporaryDatabase((filename) =>
@@ -537,10 +570,6 @@ describe("SqliteThreadStore", () => {
             threadId,
             throughSequence: sequence(0),
             tailDigest: EMPTY_TAIL_DIGEST,
-            engineVersion: "checkpoint-metadata-test",
-            agentDefinitionDigest: EMPTY_TAIL_DIGEST,
-            modelDigest: EMPTY_TAIL_DIGEST,
-            toolDigest: EMPTY_TAIL_DIGEST,
             state: {},
             createdAt: at(2),
           });
@@ -696,10 +725,6 @@ describe("SqliteThreadStore", () => {
                 threadId,
                 throughSequence: appended.lastSequence,
                 tailDigest: appended.tailDigest,
-                engineVersion: "phase-3",
-                agentDefinitionDigest: appended.tailDigest,
-                modelDigest: appended.tailDigest,
-                toolDigest: appended.tailDigest,
                 state: { destination: "Kyoto" },
                 createdAt: at(2),
               });
@@ -1368,10 +1393,6 @@ describe("SqliteThreadStore", () => {
           threadId,
           throughSequence: recoveredAppend.lastSequence,
           tailDigest: recoveredAppend.tailDigest,
-          engineVersion: "phase-3",
-          agentDefinitionDigest: recoveredAppend.tailDigest,
-          modelDigest: recoveredAppend.tailDigest,
-          toolDigest: recoveredAppend.tailDigest,
           state: { destination: "Sapporo" },
           createdAt: at(3),
         });
