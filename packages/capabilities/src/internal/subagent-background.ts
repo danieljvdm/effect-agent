@@ -168,15 +168,15 @@ const operations = <
       Effect.mapError(() => WorkerError.make({ operation, reason: "receipt-mismatch" })),
     );
 
-  const context = (service: SubagentHost["Service"]) =>
-    service.context.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Schema.toType(WorkerContext))),
-      Effect.mapError((error) =>
-        Schema.is(WorkerError)(error)
-          ? error
-          : WorkerError.make({ operation: "context", reason: "corrupt" }),
-      ),
-    );
+  const context: Effect.Effect<WorkerContext, WorkerError, SubagentHost> = host.pipe(
+    Effect.flatMap((service) => service.context),
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.toType(WorkerContext))),
+    Effect.mapError((error) =>
+      Schema.is(WorkerError)(error)
+        ? error
+        : WorkerError.make({ operation: "context", reason: "corrupt" }),
+    ),
+  );
 
   const prepare = Effect.fn("Subagent.prepareWorkerInput")(function* (
     parameters: Parameters["Type"],
@@ -221,7 +221,7 @@ const operations = <
     options: { readonly idempotencyKey: IdempotencyKey },
   ) {
     const service = yield* host;
-    const caller = yield* context(service);
+    const caller = yield* context;
     const key = yield* validateKey(options.idempotencyKey, "start");
 
     const grant = narrowSubagentGrant(declaration.grant, caller.grant);
@@ -285,7 +285,7 @@ const operations = <
   ) {
     const service = yield* host;
     const validated = yield* validateWorker(worker, "followUp");
-    const caller = yield* context(service);
+    const caller = yield* context;
     const key = yield* validateKey(options.idempotencyKey, "followUp");
     const prepared = yield* prepare(parameters, caller);
 
@@ -396,7 +396,7 @@ const operations = <
       Effect.mapError(() => projectionFailure("result")),
     );
 
-    const caller = yield* context(service);
+    const caller = yield* context;
 
     if (
       utf8ByteLength(JSON.stringify(json)) >
