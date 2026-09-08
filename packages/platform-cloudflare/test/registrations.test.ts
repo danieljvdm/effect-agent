@@ -34,7 +34,7 @@ const dynamicStub = (thread: string) =>
   env.DYNAMIC_BINDINGS.get(env.DYNAMIC_BINDINGS.idFromName(thread));
 
 describe("Cloudflare Agent registrations", () => {
-  // Regression seam: https://linear.app/reve/issue/KOM-125
+  // Regression seam: https://linear.app/reve-ai/issue/KOM-125
   it("exposes the existing owner SQL client without installing Memory tables", () =>
     runInDurableObject(stubFor("registration-owner-sql"), (_instance, state) =>
       Effect.runPromise(

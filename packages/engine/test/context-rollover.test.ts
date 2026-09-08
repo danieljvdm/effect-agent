@@ -555,7 +555,7 @@ layer(testLayer)("native context windows", (it) => {
   );
 });
 
-// Regression seam: https://linear.app/reve/issue/KOM-125
+// Regression seam: https://linear.app/reve-ai/issue/KOM-125
 layer(testLayer)("resolved model context", (it) => {
   it.effect.each(["compressed", "binary", "copied-retry"] as const)(
     "accounts for the entire captured image message: %s",
