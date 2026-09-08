@@ -176,6 +176,7 @@
     "subagent-request-bound-projection",
     "subscription-input-bindings",
     "subscription-mixed-causes",
+    "terminal-tool-history",
     "tidy-browsers-roam",
     "tidy-memory-accounting",
     "transient-native-rpc-tracing",

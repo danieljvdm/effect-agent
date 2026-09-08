@@ -1,5 +1,7 @@
 # @effect-agent/core
 
+## 0.1.0-beta.58
+
 ## 0.1.0-beta.57
 
 ### Minor Changes
