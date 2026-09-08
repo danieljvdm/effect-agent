@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.62
+
+### Patch Changes
+
+- [#374](https://github.com/danieljvdm/effect-agent/pull/374) [`46e8ad2`](https://github.com/danieljvdm/effect-agent/commit/46e8ad22fa9f436ce155a6696ddf8e11cec2931c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resolve background worker policies from host-authorized immutable input while retaining each worker's admitted policy across followups and recovery. Preserve static policy defaults and support an explicitly selected owner Submission for captured source policy.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.62
+
 ## 0.1.0-beta.61
 
 ### Patch Changes
