@@ -144,7 +144,7 @@ export const subprocess = Effect.fn("benchmark.subprocess")(function* (
 }, Effect.scoped);
 
 /** Copy only public dist artifacts; external dependencies resolve from this revision's install. */
-const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
+export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
   root: string,
   role: Revision["role"],
   fixtures: string,

@@ -170,6 +170,10 @@ export default defineConfig({
         cache: false,
         command: "bun scripts/runtime-benchmark.ts",
       },
+      "perf:diagnose": {
+        cache: false,
+        command: "bun scripts/runtime-diagnostics.ts",
+      },
       "perf:cloudflare": {
         cache: false,
         command: "bun examples/context-continuity-eval/src/performance-main.ts",

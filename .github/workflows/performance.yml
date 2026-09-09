@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: Scripted measurement size (archive includes 100k retained records)
+        description: Scripted profile (diagnostic runs manual base/head probes)
         type: choice
-        options: [pr, extended, archive]
+        options: [pr, extended, archive, diagnostic]
         default: extended
       base_sha:
         description: Exact 40-character comparison base SHA
@@ -29,7 +29,7 @@ jobs:
   compare:
     name: Compare scripted runtime
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 30 || 180 }}
+    timeout-minutes: ${{ (github.event_name == 'pull_request' || inputs.profile == 'diagnostic') && 30 || 180 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -51,6 +51,7 @@ jobs:
       # Immutable audited beta67 release, rerun on this machine rather than
       # comparing historical stopwatch values from another runner.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: github.event_name != 'workflow_dispatch' || inputs.profile != 'diagnostic'
         with:
           ref: 596cffba70716b1211ac02de949c4d0f31734b2f
           path: .performance-reference
@@ -74,6 +75,7 @@ jobs:
         run: ../node_modules/.bin/vp install --frozen-lockfile --ignore-scripts
 
       - name: Install immutable reference dependencies
+        if: github.event_name != 'workflow_dispatch' || inputs.profile != 'diagnostic'
         working-directory: .performance-reference
         run: ../node_modules/.bin/vp install --frozen-lockfile --ignore-scripts
 
@@ -89,13 +91,14 @@ jobs:
           ./node_modules/.bin/vp run --no-cache -F './packages/*' build
 
       - name: Build reference public packages
+        if: github.event_name != 'workflow_dispatch' || inputs.profile != 'diagnostic'
         working-directory: .performance-reference
         run: |
           ./node_modules/.bin/vp run patch:tsgo
           ./node_modules/.bin/vp run --no-cache -F './packages/*' build
 
       - name: Compare sequential cohorts
-        timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 165 }}
+        timeout-minutes: ${{ (github.event_name == 'pull_request' || inputs.profile == 'diagnostic') && 20 || 165 }}
         # The controller stops at 19m (PR) / 160m (larger profiles), leaving time
         # for bounded child termination and atomic failure evidence before this outer limit.
         # Older releases do not ignore these known declaration artifacts emitted
@@ -108,7 +111,11 @@ jobs:
           for checkout in .performance-base .performance-reference; do
             rm -f "$checkout/test/fixtures/checkpoints.d.ts" "$checkout/test/fixtures/storage-upgrade.d.ts" "$checkout/test/fixtures/storage-v2.d.ts"
           done
-          ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --reference-dir .performance-reference --profile "$PROFILE" --require-clean
+          if [ "$PROFILE" = diagnostic ]; then
+            ./node_modules/.bin/vp run --no-cache perf:diagnose --base-dir .performance-base --require-clean
+          else
+            ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --reference-dir .performance-reference --profile "$PROFILE" --require-clean
+          fi
 
       - name: Preserve run identity and readable evidence
         if: always()
