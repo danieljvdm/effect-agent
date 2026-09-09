@@ -565,7 +565,9 @@ evidence is automatically deleted. Effect spans identify preparation, admission,
 operations; persisted failures contain bounded codes rather than raw application errors.
 
 Node's scoped delivery pump and Cloudflare's persisted alarms rediscover stored obligations even
-after both Runs settle and wake hints are lost. Progress still needs a functioning host and
+after both Runs settle and wake hints are lost. During an active Cloudflare maintenance pass,
+message delivery continues alongside source execution, so a message can reach its destination
+before the source Run finishes. Progress still needs a functioning host and
 available capacity. The complete [Node and Cloudflare orchestration example](https://github.com/danieljvdm/effect-agent/tree/main/examples/durable-orchestration)
 shows builders, attached scouts, later input, automatic reports, and peer request/reply using
 the same platform-independent declarations.
