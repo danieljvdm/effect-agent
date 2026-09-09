@@ -96,12 +96,9 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
       drainUntil: Effect.fn("ThreadMessageDelivery.drainUntil")(function* (
         finished: Deferred.Deferred<void>,
       ) {
-        let initial = true;
-
-        while (initial || !(yield* Deferred.isDone(finished))) {
-          initial = false;
-
-          const changed = yield* Effect.scoped(
+        // Always finish one wave; source completion prevents starting subsequent waves.
+        do {
+          yield* Effect.scoped(
             Effect.gen(function* () {
               // Subscribe before the durable read so an insertion during a wave is retained
               // as a hint for the next one. The scan interval covers dropped notifications.
@@ -123,15 +120,13 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
                       Math.max(1, deadline - (yield* Clock.currentTimeMillis)),
                     );
 
-              return yield* Effect.raceFirst(
-                Deferred.await(finished).pipe(Effect.as(false)),
-                Effect.raceFirst(notified, Effect.sleep(delay)).pipe(Effect.as(true)),
+              yield* Effect.raceFirst(
+                Deferred.await(finished),
+                Effect.raceFirst(notified, Effect.sleep(delay)),
               );
             }),
           );
-
-          if (!changed) return;
-        }
+        } while (!(yield* Deferred.isDone(finished)));
       }),
       pendingDeadline: store
         .nextDeadline(threadId)
