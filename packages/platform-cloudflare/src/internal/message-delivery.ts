@@ -96,42 +96,33 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
       drainUntil: Effect.fn("ThreadMessageDelivery.drainUntil")(function* (
         finished: Deferred.Deferred<void>,
       ) {
-        let initial = true;
+        // Always finish one wave; source completion prevents starting subsequent waves.
+        yield* Effect.gen(function* () {
+          // Subscribe before the durable read so an insertion during a wave is retained
+          // as a hint for the next one. The scan interval covers dropped notifications.
+          const notified = yield* wakes.subscribe(threadId);
 
-        while (initial || !(yield* Deferred.isDone(finished))) {
-          initial = false;
+          yield* drain;
 
-          const changed = yield* Effect.scoped(
-            Effect.gen(function* () {
-              // Subscribe before the durable read so an insertion during a wave is retained
-              // as a hint for the next one. The scan interval covers dropped notifications.
-              const notified = yield* wakes.subscribe(threadId);
+          const deadline = yield* store
+            .nextDeadline(threadId)
+            .pipe(Effect.mapError(failure("read message deadline")));
 
-              yield* drain;
+          // The index includes unfinished waves, lease expiry, retry and settlement polls.
+          // Yield at least one millisecond for an already-due deadline instead of spinning.
+          const delay =
+            deadline === null
+              ? config.wakeScanInterval
+              : Math.min(
+                  config.wakeScanInterval,
+                  Math.max(1, deadline - (yield* Clock.currentTimeMillis)),
+                );
 
-              const deadline = yield* store
-                .nextDeadline(threadId)
-                .pipe(Effect.mapError(failure("read message deadline")));
-
-              // The index includes unfinished waves, lease expiry, retry and settlement polls.
-              // Yield at least one millisecond for an already-due deadline instead of spinning.
-              const delay =
-                deadline === null
-                  ? config.wakeScanInterval
-                  : Math.min(
-                      config.wakeScanInterval,
-                      Math.max(1, deadline - (yield* Clock.currentTimeMillis)),
-                    );
-
-              return yield* Effect.raceFirst(
-                Deferred.await(finished).pipe(Effect.as(false)),
-                Effect.raceFirst(notified, Effect.sleep(delay)).pipe(Effect.as(true)),
-              );
-            }),
+          yield* Effect.raceFirst(
+            Deferred.await(finished),
+            Effect.raceFirst(notified, Effect.sleep(delay)),
           );
-
-          if (!changed) return;
-        }
+        }).pipe(Effect.scoped, Effect.repeat({ until: () => Deferred.isDone(finished) }));
       }),
       pendingDeadline: store
         .nextDeadline(threadId)
