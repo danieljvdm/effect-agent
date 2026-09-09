@@ -1,5 +1,25 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.70
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.70
+
+## 0.1.0-beta.69
+
+### Patch Changes
+
+- [#395](https://github.com/danieljvdm/effect-agent/pull/395) [`e37a126`](https://github.com/danieljvdm/effect-agent/commit/e37a12613f25225c3ae8544dc384f4f7da4adc03) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `completionFromTools` to complete a Run from a successful canonical action result without another model turn. Let pure projectors decline completion while preserving ordinary action budgets, authorization, approvals, and durable recovery.
+
+- [#396](https://github.com/danieljvdm/effect-agent/pull/396) [`9c98161`](https://github.com/danieljvdm/effect-agent/commit/9c98161d5a1026f2dc3d0fb395ea4a0bf6323fdd) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce fresh durable startup work for uncompacted histories and speed up native prompt token estimation while preserving admission and recovery behavior.
+
+- [#393](https://github.com/danieljvdm/effect-agent/pull/393) [`318b442`](https://github.com/danieljvdm/effect-agent/commit/318b4420c5dcd14cbcd36bdfa9dce5abf53b40ad) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce processing and tracing overhead for fragmented text and reasoning responses while preserving ownership and response limits. Preserve stable output-contract messages so opt-in incremental provider requests can reuse an unchanged prompt prefix.
+
+- Updated dependencies [[`e37a126`](https://github.com/danieljvdm/effect-agent/commit/e37a12613f25225c3ae8544dc384f4f7da4adc03)]:
+  - @effect-agent/core@0.1.0-beta.69
+
 ## 0.1.0-beta.68
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @effect-agent/core
 
+## 0.1.0-beta.70
+
+## 0.1.0-beta.69
+
+### Patch Changes
+
+- [#395](https://github.com/danieljvdm/effect-agent/pull/395) [`e37a126`](https://github.com/danieljvdm/effect-agent/commit/e37a12613f25225c3ae8544dc384f4f7da4adc03) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `completionFromTools` to complete a Run from a successful canonical action result without another model turn. Let pure projectors decline completion while preserving ordinary action budgets, authorization, approvals, and durable recovery.
+
 ## 0.1.0-beta.68
 
 ## 0.1.0-beta.67

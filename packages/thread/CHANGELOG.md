@@ -1,5 +1,27 @@
 # @effect-agent/session
 
+## 0.1.0-beta.70
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.70
+  - @effect-agent/engine@0.1.0-beta.70
+
+## 0.1.0-beta.69
+
+### Patch Changes
+
+- [#395](https://github.com/danieljvdm/effect-agent/pull/395) [`e37a126`](https://github.com/danieljvdm/effect-agent/commit/e37a12613f25225c3ae8544dc384f4f7da4adc03) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `completionFromTools` to complete a Run from a successful canonical action result without another model turn. Let pure projectors decline completion while preserving ordinary action budgets, authorization, approvals, and durable recovery.
+
+- [#391](https://github.com/danieljvdm/effect-agent/pull/391) [`f497de2`](https://github.com/danieljvdm/effect-agent/commit/f497de24ad24ba12b2eebf29f4473b4b89f90158) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Omit empty uncommitted model usage from settlements so uninterrupted completion and crash recovery produce equivalent canonical records.
+
+- [#396](https://github.com/danieljvdm/effect-agent/pull/396) [`9c98161`](https://github.com/danieljvdm/effect-agent/commit/9c98161d5a1026f2dc3d0fb395ea4a0bf6323fdd) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce fresh durable startup work for uncompacted histories and speed up native prompt token estimation while preserving admission and recovery behavior.
+
+- Updated dependencies [[`e37a126`](https://github.com/danieljvdm/effect-agent/commit/e37a12613f25225c3ae8544dc384f4f7da4adc03), [`9c98161`](https://github.com/danieljvdm/effect-agent/commit/9c98161d5a1026f2dc3d0fb395ea4a0bf6323fdd), [`318b442`](https://github.com/danieljvdm/effect-agent/commit/318b4420c5dcd14cbcd36bdfa9dce5abf53b40ad)]:
+  - @effect-agent/core@0.1.0-beta.69
+  - @effect-agent/engine@0.1.0-beta.69
+
 ## 0.1.0-beta.68
 
 ### Patch Changes
