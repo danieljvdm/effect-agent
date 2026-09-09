@@ -59,6 +59,8 @@
     "./SubagentReservations": "./src/SubagentReservations.ts",
     "./ThreadHistory": "./src/ThreadHistory.ts",
     "./ToolBroker": "./src/ToolBroker.ts",
+    "./ToolDiscovery": "./src/ToolDiscovery.ts",
+    "./ToolExposure": "./src/ToolExposure.ts",
     "./ToolResult": "./src/ToolResult.ts",
     "./Usage": "./src/Usage.ts",
     "./WebCapture": "./src/WebCapture.ts",

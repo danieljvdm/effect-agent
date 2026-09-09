@@ -20,6 +20,8 @@ import {
   type SubagentGrant,
   type ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
+import type { Snapshot } from "@effect-agent/core/ToolExposure";
+import { Selection } from "@effect-agent/core/ToolExposure";
 import { type ModelCallUsage } from "@effect-agent/core/Usage";
 import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
@@ -28,6 +30,7 @@ import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai"
 import type { CompactionError, ContextMessageTokenEstimator } from "./ContextCompactor.ts";
 import type { ContextRolloverSelection, ModelCallContext } from "./ContextWindow.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
+import type { VisibilityHook } from "./ToolExposure.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
 interface ToolFailureIdentity {
@@ -242,6 +245,8 @@ export interface ResolvedModelCall {
 
 /** Prepared model-only context returned by a context adapter. */
 export interface PreparedRunContext {
+  /** Replace non-pinned registered native Tools at this Turn boundary. */
+  readonly toolSelection?: Selection | undefined;
   readonly prompt: Prompt.Prompt;
   /** Resolves actual model selection and admission together, once at this Turn boundary. */
   readonly modelCall?: ResolvedModelCall | undefined;
@@ -462,6 +467,7 @@ export class RunToolAuthorization extends Context.Service<
  * application Tool Calls; no-tool Turns keep their late single-batch commit.
  */
 export interface RunTurnResponseCommit {
+  readonly toolExposure?: Snapshot | undefined;
   readonly turn: number;
   readonly turnId: TurnId;
   /** The Turn's response messages in official history form (encoded Tool parameters). */
@@ -524,6 +530,10 @@ export class ModelUsageAccounting extends Context.Service<
  * the ephemeral runtime always has.
  */
 export interface RunDurabilityHook<Error = never, Requirements = never> {
+  /** Stage the exact request declarations for the existing canonical response append. */
+  readonly noteToolExposure?:
+    | ((turn: number, snapshot: Snapshot) => Effect.Effect<void, Error, Requirements>)
+    | undefined;
   /**
    * Reserve cumulative programmatic calls and grace finalization before external execution.
    * Calls are serialized across the Run. A committed reservation
@@ -718,6 +728,7 @@ export interface RunTurnResumeCall {
  * carried by the Tool message.
  */
 export const RunTurnResumeSettledCallSchema = Schema.Struct({
+  toolSelection: Schema.optionalKey(Selection),
   id: Schema.NonEmptyString,
   result: Schema.Json,
   isFailure: Schema.Boolean,
@@ -778,6 +789,7 @@ export type RunResumeUsage = typeof RunResumeUsageSchema.Type;
  * proceeds through the normal continuation.
  */
 export interface RunTurnResume {
+  readonly toolExposure?: Snapshot | undefined;
   readonly turn: number;
   readonly turnId: TurnId;
   readonly calls: ReadonlyArray<RunTurnResumeCall>;
@@ -858,6 +870,10 @@ export interface RunBufferLimits {
  * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
+  /** Initial or canonically restored run-scoped native selection. */
+  readonly toolSelection?: Selection | undefined;
+  /** Visibility precedes discovery documentation; action authorization remains independent. */
+  readonly toolVisibility?: VisibilityHook<HookError, HookRequirements> | undefined;
   /**
    * Host preparation boundary before each new model Turn, including its context preparation
    * and compaction calls. The preceding Tool batch and history advance have finished. A resumed

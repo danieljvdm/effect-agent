@@ -8,6 +8,8 @@ import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { ToolBroker } from "@effect-agent/engine/ToolBroker";
+import { CurrentToolCatalog } from "@effect-agent/engine/ToolExposure";
 import {
   CodeExecutionHost,
   CodeExecutionResult,
@@ -16,7 +18,17 @@ import {
 } from "@effect-agent/sandbox/CodeExecutor";
 import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
-import { Context, Duration, Effect, Layer, Ref, Schema, type Scope, Stream } from "effect";
+import {
+  Context,
+  Duration,
+  Effect,
+  Encoding,
+  Layer,
+  Ref,
+  Schema,
+  type Scope,
+  Stream,
+} from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const Query = Tool.make("query_warehouse", {
@@ -130,6 +142,122 @@ describe("CAP-014 CodeMode.make construction", () => {
       /no methods/,
     );
   });
+
+  it.effect("omits upfront declarations and describes only selected encoded schemas", () =>
+    Effect.gen(function* () {
+      const Converted = Tool.make("converted", {
+        parameters: Schema.Struct({ count: Schema.NumberFromString }),
+        success: Schema.Struct({ total: Schema.NumberFromString }),
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const definition = CodeMode.make("selective", {
+        description: "Calculate from selected methods",
+        tools: { conversions: { count: Converted }, warehouse: { query: Query } },
+        includeDeclarations: false,
+      });
+
+      expect(definition.description).not.toContain("Sandbox globals:");
+      expect(definition.description).not.toContain("conversions");
+      expect(definition.description).not.toContain("warehouse");
+      expect(definition.description).toContain("JavaScript async function expression");
+      expect(definition.declarations).toContain("warehouse");
+
+      const documentation = yield* definition.describe(["conversions.count"]);
+
+      expect(documentation).toContain("declare const conversions:");
+      expect(documentation).toContain("readonly count: string;");
+      expect(documentation).toContain("readonly total: string;");
+      expect(documentation).not.toContain("warehouse");
+      expect(definition.namespaces).toHaveLength(2);
+    }),
+  );
+
+  it.effect("rejects unknown, duplicate, empty, and oversized documentation selections", () =>
+    Effect.gen(function* () {
+      const definition = CodeMode.make("selective", {
+        description: "d",
+        tools: { warehouse: { query: Query } },
+      });
+
+      for (const selection of [
+        ["query_warehouse"],
+        ["warehouse.unknown"],
+        ["warehouse.query", "warehouse.unknown"],
+      ]) {
+        const error = yield* definition.describe(selection).pipe(Effect.flip);
+
+        expect(error).toMatchObject({
+          _tag: "CodeModeDescriptionError",
+          reason: "unknown-method",
+        });
+      }
+      for (const selection of [
+        [],
+        ["warehouse.query", "warehouse.query"],
+        Array.from({ length: 65 }, (_, index) => `warehouse.method${index}`),
+      ]) {
+        const error = yield* definition.describe(selection).pipe(Effect.flip);
+
+        expect(error.reason).toBe("invalid-selection");
+      }
+    }),
+  );
+
+  it.effect("enforces exact UTF-8 documentation bounds and rejects non-finite limits", () =>
+    Effect.gen(function* () {
+      const Unicode = Tool.make("unicode", {
+        description: "Read café 東京 😀",
+        parameters: Schema.Struct({ key: Schema.String }),
+        success: Schema.String,
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const definition = CodeMode.make("selective", {
+        description: "d",
+        tools: { records: { read: Unicode } },
+      });
+
+      const documentation = yield* definition.describe(["records.read"]);
+      const bytes = Encoding.encodeHex(documentation).length / 2;
+
+      expect(bytes).toBeGreaterThan(documentation.length);
+      expect(yield* definition.describe(["records.read"], { maxBytes: bytes })).toBe(documentation);
+
+      const tooSmall = yield* definition
+        .describe(["records.read"], { maxBytes: bytes - 1 })
+        .pipe(Effect.flip);
+
+      expect(tooSmall.reason).toBe("limit-exceeded");
+      for (const maxBytes of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 256 * 1024 + 1]) {
+        const error = yield* definition.describe(["records.read"], { maxBytes }).pipe(Effect.flip);
+
+        expect(error.reason).toBe("invalid-bound");
+      }
+    }),
+  );
+
+  it.effect("bounds selective documentation by default without truncating declarations", () =>
+    Effect.gen(function* () {
+      const Verbose = Tool.make("verbose", {
+        description: "Detailed ".repeat(2_000),
+        parameters: Schema.Struct({ key: Schema.String }),
+        success: Schema.String,
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const definition = CodeMode.make("selective", {
+        description: "d",
+        tools: { records: { read: Verbose } },
+        includeDeclarations: false,
+      });
+
+      const error = yield* definition.describe(["records.read"]).pipe(Effect.flip);
+
+      expect(error.reason).toBe("limit-exceeded");
+      const documentation = yield* definition.describe(["records.read"], { maxBytes: 32 * 1024 });
+
+      expect(documentation).toBe(definition.declarations);
+      expect(documentation).toContain("Promise<string>;");
+    }),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -486,6 +614,129 @@ layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) =
       }),
   );
 });
+
+it.effect("filters executor inventory and guessed calls using the live invocation catalogue", () =>
+  Effect.gen(function* () {
+    const Hidden = Tool.make("hidden_records", {
+      parameters: Schema.Struct({ sql: Schema.String }),
+      success: Schema.String,
+    }).annotate(ToolExecutionClass, "readonly");
+
+    const definition = CodeMode.make("run_javascript", {
+      description: "Run a program",
+      includeDeclarations: false,
+      tools: { warehouse: { query: Query, hidden: Hidden }, secrets: { read: Hidden } },
+    });
+
+    const brokerCalls = yield* Ref.make(0);
+
+    const executor = CodeExecutor.of({
+      execute: (request) =>
+        Effect.gen(function* () {
+          const host = yield* CodeExecutionHost;
+
+          const hidden = yield* host.call({
+            namespace: "warehouse",
+            method: "hidden",
+            argument: { sql: "select" },
+          });
+
+          return CodeExecutionResult.make({
+            implementation: scriptedExecutorImplementation,
+            value: {
+              namespaces: request.namespaces.map((namespace) => ({
+                name: namespace.name,
+                methods: namespace.methods,
+              })),
+              hidden,
+            },
+            logs: [],
+            resourceUse: {
+              wallTime: Duration.millis(1),
+              hostCalls: 1,
+              logBytes: 0,
+              resultBytes: 0,
+            },
+          });
+        }),
+    });
+
+    const entries = [
+      {
+        kind: "code-mode" as const,
+        nativeToolName: "run_javascript",
+        namespace: "warehouse",
+        method: "query",
+        tool: Query,
+      },
+      {
+        kind: "code-mode" as const,
+        nativeToolName: "run_javascript",
+        namespace: "warehouse",
+        method: "hidden",
+        tool: Hidden,
+      },
+      {
+        kind: "code-mode" as const,
+        nativeToolName: "run_javascript",
+        namespace: "secrets",
+        method: "read",
+        tool: Hidden,
+      },
+    ];
+
+    const captured = yield* Layer.build(
+      definition.handlers.pipe(
+        Layer.provide(Layer.succeed(CodeExecutor, executor)),
+        Layer.provide(
+          Toolkit.make(Query, Hidden).toLayer({
+            query_warehouse: () => Effect.succeed({ rows: [], truncated: false }),
+            hidden_records: () => Effect.succeed("hidden"),
+          }),
+        ),
+      ),
+    ).pipe(Effect.provideService(CurrentToolCatalog, { entries }));
+
+    const results = yield* Effect.gen(function* () {
+      const toolkit = yield* Toolkit.make(definition.tool);
+      const stream = yield* toolkit.handle("run_javascript", { code: "async () => null" });
+
+      return yield* Stream.runCollect(stream);
+    }).pipe(
+      Effect.provideContext(captured),
+      Effect.provideService(CurrentToolCatalog, {
+        entries: [entries[0], { ...entries[1], nativeToolName: "other_executor" }],
+      }),
+      Effect.provideService(ToolBroker, {
+        openPass: () =>
+          Effect.succeed({
+            invoke: () =>
+              Ref.update(brokerCalls, (count) => count + 1).pipe(
+                Effect.as({
+                  _tag: "ProgrammaticCallSuccess" as const,
+                  index: 0,
+                  encodedResult: "unexpected",
+                }),
+              ),
+          }),
+      }),
+    );
+
+    expect(results[0]?.result).toMatchObject({
+      result: {
+        namespaces: [{ name: "warehouse", methods: ["query"] }],
+        hidden: {
+          _tag: "CodeHostCallFailure",
+          error: {
+            _tag: "UnknownCodeModeMethod",
+            message: "The requested method is not available in this pass",
+          },
+        },
+      },
+    });
+    expect(yield* Ref.get(brokerCalls)).toBe(0);
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Compile-time E/R proofs (change discipline: type tests whenever Agent or

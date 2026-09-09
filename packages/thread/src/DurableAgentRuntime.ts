@@ -25,6 +25,7 @@ import {
   getToolExecutionKind,
   SubagentParentLink,
 } from "@effect-agent/core/SubagentContract";
+import { Selection, type Snapshot } from "@effect-agent/core/ToolExposure";
 import {
   type ModelCallUsage,
   InputTokenUsage,
@@ -72,6 +73,7 @@ import {
 } from "@effect-agent/engine/RunOptions";
 import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { RunToolVisibility } from "@effect-agent/engine/ToolExposure";
 import type { Scope } from "effect";
 import {
   Clock,
@@ -923,6 +925,7 @@ const terminalAssistantText = Effect.fn("DurableAgentRuntime.terminalAssistantTe
  * path). `undefined` when the Run's journal ends at a complete Turn boundary.
  */
 interface PendingToolBatch {
+  readonly toolExposure?: Snapshot | undefined;
   readonly turn: number;
   readonly turnId: TurnId;
   readonly calls: ReadonlyArray<DeclaredApplicationCall>;
@@ -931,6 +934,7 @@ interface PendingToolBatch {
     readonly result: PersistedJson;
     readonly isFailure: boolean;
     readonly budgetRejected?: true;
+    readonly toolSelection?: Selection | undefined;
   }>;
   readonly declaredIds: ReadonlySet<string>;
   readonly responseRecordId: RecordId;
@@ -986,6 +990,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   );
 
   const runToolAuthorization = yield* RunToolAuthorization;
+
+  const runToolVisibility = yield* Effect.serviceOption(RunToolVisibility).pipe(
+    Effect.map(Option.getOrUndefined),
+  );
+
   const runToolScheduling = yield* RunToolScheduling;
 
   const compactor = yield* Effect.serviceOption(ContextCompactor).pipe(
@@ -1483,7 +1492,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const resolvedIds = new Set<string>();
     const requested: Array<PendingApprovalEvidence> = [];
     const decidedIds = new Set<string>();
-    let lastResponse: { readonly turn: number; readonly messages: PersistedJson } | undefined;
+
+    let lastResponse:
+      | {
+          readonly turn: number;
+          readonly messages: PersistedJson;
+          readonly toolExposure?: Snapshot | undefined;
+        }
+      | undefined;
 
     for (const envelope of records) {
       const recordId = envelope.record.recordId;
@@ -1562,7 +1578,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             payload.runId === runId &&
             (lastResponse === undefined || payload.turn > lastResponse.turn)
           ) {
-            lastResponse = { turn: payload.turn, messages: payload.messages };
+            lastResponse = {
+              turn: payload.turn,
+              messages: payload.messages,
+              ...(payload.toolExposure === undefined ? {} : { toolExposure: payload.toolExposure }),
+            };
           }
           if (
             hostRunId !== undefined &&
@@ -1733,7 +1753,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     runId: ReturnType<typeof runIdForSubmission>,
     completionTools: ReadonlyArray<string> = [],
   ): Effect.fn.Return<PendingToolBatch | undefined, RunJournalError> {
-    let lastResponse: { readonly turn: number; readonly messages: PersistedJson } | undefined;
+    let lastResponse:
+      | {
+          readonly turn: number;
+          readonly messages: PersistedJson;
+          readonly toolExposure?: Snapshot | undefined;
+        }
+      | undefined;
 
     const settledByCallId = new Map<
       string,
@@ -1741,6 +1767,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         readonly result: PersistedJson;
         readonly isFailure: boolean;
         readonly budgetRejected?: true;
+        readonly toolSelection?: Selection | undefined;
       }
     >();
 
@@ -1749,7 +1776,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       if (payload._tag === "ModelResponseRecorded" && payload.runId === runId) {
         if (lastResponse === undefined || payload.turn > lastResponse.turn) {
-          lastResponse = { turn: payload.turn, messages: payload.messages };
+          settledByCallId.clear();
+          lastResponse = {
+            turn: payload.turn,
+            messages: payload.messages,
+            ...(payload.toolExposure === undefined ? {} : { toolExposure: payload.toolExposure }),
+          };
         }
         continue;
       }
@@ -1758,6 +1790,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           result: payload.result,
           isFailure: payload.isFailure,
           ...(payload.budgetRejected === true ? { budgetRejected: true } : {}),
+          ...(payload.toolSelection === undefined ? {} : { toolSelection: payload.toolSelection }),
         });
       }
     }
@@ -1782,6 +1815,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       result: PersistedJson;
       isFailure: boolean;
       budgetRejected?: true;
+      toolSelection?: Selection | undefined;
     }> = [];
 
     for (const call of calls) {
@@ -1816,6 +1850,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       declaredIds: new Set(calls.map((call) => call.id)),
       responseRecordId: modelResponseRecordId(runId, lastResponse.turn),
       messages: lastResponse.messages,
+      ...(lastResponse.toolExposure === undefined
+        ? {}
+        : { toolExposure: lastResponse.toolExposure }),
     };
   });
 
@@ -4018,6 +4055,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   throughSequence: retiredThrough,
                   ...(firstSequence === undefined ? {} : { firstSequence }),
                   committedTurns: retired.committedTurns,
+                  ...(retired.toolSelection === undefined
+                    ? {}
+                    : { toolSelection: retired.toolSelection }),
                   policyUsage: retired.policyUsage,
                   modelCalls: retired.usage.modelCalls,
                   unobservedModelCalls: retired.usage.unobservedModelCalls ?? 0,
@@ -4065,6 +4105,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             ) ||
             current.contextWindowId !== candidate.contextWindowId ||
             current.pendingContextToolCallId !== candidate.pendingContextToolCallId ||
+            !Schema.toEquivalence(Schema.optional(Selection))(
+              current.toolSelection,
+              candidate.toolSelection,
+            ) ||
             current.committedTurns !== candidate.committedTurns ||
             !Schema.toEquivalence(RunPolicyUsage)(current.policyUsage, candidate.policyUsage) ||
             (
@@ -4270,6 +4314,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       // RUN-023: per-Turn usage staged by the engine's `noteTurnUsage` for the
       // Turn's canonical response record (keyed by CANONICAL turn number).
+      const stagedToolExposure = new Map<number, Snapshot>();
+      const stagedToolSelections = new Map<string, Selection>();
+
       const stagedUsage = new Map<
         number,
         {
@@ -4897,6 +4944,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             };
 
       const durability: RunDurabilityHook<CoordinatorHalt | CompactionError, never> = {
+        noteToolExposure: (turn, snapshot) =>
+          Effect.sync(() => {
+            stagedToolExposure.set(turn, snapshot);
+          }),
         reservePolicyUsage: (usage) =>
           recordHalt(
             Effect.gen(function* () {
@@ -4953,6 +5004,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
               const batch = yield* withCrypto(
                 turnResponseBatch({
+                  toolExposure: commit.toolExposure,
                   runId,
                   turn: canonicalTurn,
                   turnId: commit.turnId,
@@ -6273,6 +6325,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         input,
         approval,
         toolAuthorization,
+        ...(runToolVisibility === undefined ? {} : { toolVisibility: runToolVisibility }),
+        ...(journal.toolSelection === undefined ? {} : { toolSelection: journal.toolSelection }),
         durability,
         subagent,
         delegationDepth,
@@ -6300,6 +6354,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 turnId: pending.turnId,
                 calls: pending.calls,
                 settled: pending.settled,
+                ...(pending.toolExposure === undefined
+                  ? {}
+                  : { toolExposure: pending.toolExposure }),
                 ...(resumeLeadingMessages === undefined
                   ? {}
                   : { leadingMessages: resumeLeadingMessages }),
@@ -6444,6 +6501,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 : undefined;
 
             const batch = yield* turnResultsBatch({
+              toolSelections: stagedToolSelections,
               budgetRejectedCalls,
               runId,
               turn: canonicalTurn,
@@ -6485,6 +6543,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
           const batch = yield* withCrypto(
             turnCanonicalBatch({
+              toolExposure: stagedToolExposure.get(canonicalTurn),
+              toolSelections: stagedToolSelections,
               budgetRejectedCalls,
               runId,
               turn: canonicalTurn,
@@ -6566,7 +6626,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             // Suspension owns only this Turn's siblings. Earlier results are already canonical
             // under their original Turn and must never be re-recorded with a later Turn id.
             return commitPendingTurn.pipe(
-              Effect.andThen(Effect.sync(() => siblingResults.clear())),
+              Effect.andThen(
+                Effect.sync(() => {
+                  siblingResults.clear();
+                  stagedToolSelections.clear();
+                }),
+              ),
             );
           }
           case "TurnCompleted": {
@@ -6595,6 +6660,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             return commitPendingTurn;
           }
           case "ToolCallSucceeded": {
+            if (!event.providerExecuted && event.toolSelection !== undefined)
+              stagedToolSelections.set(event.toolCallId, event.toolSelection);
             // Collected for the waitingForChild suspension seam: a batch that suspends never
             // reaches its results commit, so each settled sibling result is committed there as
             // a per-call late-settle batch instead (plan §2 step 2).
@@ -6685,6 +6752,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 toolName,
                 result,
                 isFailure: settled.isFailure,
+                ...(stagedToolSelections.get(toolCallId) === undefined
+                  ? {}
+                  : { toolSelection: stagedToolSelections.get(toolCallId) }),
               }),
             );
 

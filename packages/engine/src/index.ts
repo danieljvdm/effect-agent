@@ -11,3 +11,4 @@ export * as ThreadHistory from "./ThreadHistory.ts";
 export * as ToolBroker from "./ToolBroker.ts";
 export * as ContextWindow from "./ContextWindow.ts";
 export * as ContextHistory from "./ContextHistory.ts";
+export * as ToolExposure from "./ToolExposure.ts";

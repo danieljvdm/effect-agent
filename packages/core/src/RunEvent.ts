@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, TurnId } from "./Identifiers.ts";
 import { DelegationDepth } from "./SubagentContract.ts";
+import { Selection } from "./ToolExposure.ts";
 
 const RunEventBase = {
   eventVersion: Schema.Literal(1),
@@ -73,6 +74,7 @@ export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
     ...RunEventBase,
     toolCallId: ToolCallId,
     toolName: Schema.NonEmptyString,
+    toolSelection: Schema.optionalKey(Selection),
     result: Schema.Json,
     providerExecuted: Schema.Boolean,
   },

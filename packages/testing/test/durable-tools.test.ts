@@ -1,6 +1,7 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { DiscoveryTool } from "@effect-agent/core/ToolExposure";
 import {
   DurableStep,
   DurableStepError,
@@ -484,6 +485,271 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
+  for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
+    it.effect(`does not inherit a prior Turn's reused call ID after ${location}`, () =>
+      Effect.gen(function* () {
+        yield* clearFailpoint;
+        const runtime = yield* DurableAgentRuntime;
+
+        const discover = Tool.make("discover", {
+          parameters: Schema.Struct({ tool: Schema.String }),
+          success: Schema.Struct({ toolNames: Schema.Array(Schema.String) }),
+        })
+          .annotate(DiscoveryTool, true)
+          .annotate(ToolExecutionClass, "readonly");
+
+        const firstAction = Tool.make("first_action", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }).annotate(ToolExecutionClass, "readonly");
+
+        const lastAction = Tool.make("last_action", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }).annotate(ToolExecutionClass, "readonly");
+
+        const native = Toolkit.make(discover, firstAction, lastAction);
+        const requests: Array<ReadonlyArray<string>> = [];
+        let modelCalls = 0;
+        let searchCalls = 0;
+        let actionCalls = 0;
+
+        const model = Model.make(
+          "test",
+          "reused-exposure-id",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                requests.push(request.tools.map((tool) => tool.name));
+                const turn = modelCalls++;
+
+                return Stream.fromIterable(
+                  turn === 0
+                    ? toolTurn(toolCall("reused", "discover", { tool: "first_action" }))
+                    : turn === 1
+                      ? toolTurn(toolCall("switch", "discover", { tool: "last_action" }))
+                      : turn === 2
+                        ? toolTurn(toolCall("reused", "last_action", {}))
+                        : finalParts('{"answer":"done"}'),
+                );
+              },
+            }),
+          ),
+        );
+
+        const agent = Agent.withModel(
+          Agent.make("reused-exposure-id", {
+            input: Schema.Struct({ question: Schema.String }),
+            output: Schema.Struct({ answer: Schema.String }),
+            instructions: "Go.",
+            toolkit: native,
+            toolExposure: {},
+            policy: { maxTurns: 5, maxToolCalls: 8 },
+          }),
+          model,
+        );
+
+        const handlers = native.toLayer({
+          discover: ({ tool }) =>
+            Effect.sync(() => {
+              searchCalls++;
+
+              return { toolNames: [tool] };
+            }),
+          first_action: () => Effect.succeed(""),
+          last_action: () =>
+            Effect.sync(() => {
+              actionCalls++;
+
+              return "acted";
+            }),
+        });
+
+        const thread = `reused-exposure-id-${location}`;
+
+        yield* runtime.submit(agent, { question: "go" }, submitOptions(thread, thread));
+        let commits = 0;
+        const control = yield* DurableRuntimeFailpointTestControl;
+
+        yield* control.setHandler((currentLocation) =>
+          currentLocation === location && ++commits === 3
+            ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+            : Effect.void,
+        );
+
+        const interrupted = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.provide(handlers), Effect.exit);
+
+        expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+
+        const settled = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.provide(handlers));
+
+        expect(settled[0]?.outcome).toBe("completed");
+        expect(searchCalls).toBe(2);
+        expect(actionCalls).toBe(1);
+        expect(requests).toEqual([
+          ["discover"],
+          ["discover", "first_action"],
+          ["discover", "last_action"],
+          ["discover", "last_action"],
+        ]);
+        const records = yield* readLog(thread);
+
+        const actionResult = records.find(
+          (entry) =>
+            entry.record.payload._tag === "ToolCallSettled" &&
+            entry.record.payload.toolName === "last_action",
+        );
+
+        expect(actionResult?.record.payload).not.toHaveProperty("toolSelection");
+      }),
+    );
+  }
+
+  for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
+    it.effect(
+      `restores native exposure after ${location} without rerunning committed discovery`,
+      () =>
+        Effect.gen(function* () {
+          yield* resetReconciler;
+          yield* clearFailpoint;
+          const runtime = yield* DurableAgentRuntime;
+
+          const discover = Tool.make("discover_tools", {
+            parameters: Schema.Struct({}),
+            success: Schema.Struct({
+              toolNames: Schema.Array(Schema.String),
+              padding: Schema.String,
+            }),
+          })
+            .annotate(DiscoveryTool, true)
+            .annotate(ToolExecutionClass, "readonly");
+
+          const action = Tool.make("selected_action", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          }).annotate(ToolExecutionClass, "readonly");
+
+          const hidden = Tool.make("unselected_action", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          }).annotate(ToolExecutionClass, "readonly");
+
+          const native = Toolkit.make(discover, action, hidden);
+          const requests: Array<ReadonlyArray<string>> = [];
+          let searchCalls = 0;
+          let actionCalls = 0;
+          let modelCalls = 0;
+
+          const model = Model.make(
+            "test",
+            "durable-exposure",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (request) => {
+                  requests.push(request.tools.map((tool) => tool.name));
+                  const turn = modelCalls++;
+
+                  return Stream.fromIterable(
+                    turn === 0
+                      ? toolTurn(toolCall("discover-1", "discover_tools", {}))
+                      : turn === 1
+                        ? toolTurn(toolCall("action-1", "selected_action", {}))
+                        : finalParts('{"answer":"done"}'),
+                  );
+                },
+              }),
+            ),
+          );
+
+          const definition = Agent.make(`durable-exposure-${location}`, {
+            input: Schema.Struct({ question: Schema.String }),
+            output: Schema.Struct({ answer: Schema.String }),
+            instructions: "Discover then act.",
+            toolkit: native,
+            policy: { maxTurns: 4, maxToolCalls: 5, toolResultBounds: { maxBytes: 256 } },
+            toolExposure: { maxTools: 2 },
+          });
+
+          const agent = Agent.withModel(definition, model);
+
+          const handlers = native.toLayer({
+            discover_tools: () =>
+              Effect.sync(() => {
+                searchCalls++;
+
+                return {
+                  toolNames: [searchCalls === 1 ? "selected_action" : "unselected_action"],
+                  padding: "x".repeat(2_000),
+                };
+              }),
+            selected_action: () =>
+              Effect.sync(() => {
+                actionCalls++;
+
+                return "acted";
+              }),
+            unselected_action: () => Effect.die("Hidden action executed"),
+          });
+
+          const thread = `exposure-${location}`;
+
+          yield* runtime.submit(agent, { question: "go" }, submitOptions(thread, thread));
+          yield* armFailpoint(location);
+
+          const first = yield* runtime
+            .processThread(agent, decodeThreadId(thread))
+            .pipe(Effect.provide(handlers), Effect.exit);
+
+          expect(failureTag(first)).toBe("DurableRuntimeFailpointError");
+          expect(searchCalls).toBe(location === "turn:after-response-append" ? 0 : 1);
+          yield* clearFailpoint;
+          yield* runtime.runRecovery;
+
+          const settled = yield* runtime
+            .processThread(agent, decodeThreadId(thread))
+            .pipe(Effect.provide(handlers));
+
+          expect(settled[0]?.outcome).toBe("completed");
+          expect(searchCalls).toBe(1);
+          expect(actionCalls).toBe(1);
+          expect(requests).toEqual([
+            ["discover_tools"],
+            ["discover_tools", "selected_action"],
+            ["discover_tools", "selected_action"],
+          ]);
+          const records = yield* readLog(thread);
+
+          const response = records.find(
+            (entry) => entry.record.payload._tag === "ModelResponseRecorded",
+          );
+
+          expect(response?.record.payload).toMatchObject({
+            toolExposure: { exposedToolNames: ["discover_tools"], selection: { toolNames: [] } },
+          });
+
+          const result = records.find(
+            (entry) =>
+              entry.record.payload._tag === "ToolCallSettled" &&
+              entry.record.payload.toolCallId === "discover-1",
+          );
+
+          expect(result?.record.payload).toMatchObject({
+            toolSelection: { toolNames: ["selected_action"] },
+            result: { truncatedToolResult: true },
+          });
+        }),
+    );
+  }
+
   it.effect("captures host scheduling barriers while independent durable reads overlap", () =>
     Effect.gen(function* () {
       const bothReading = yield* Deferred.make<void>();

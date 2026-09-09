@@ -66,6 +66,8 @@ import {
   type SubagentBudgetReservation,
   SubagentParentLink,
 } from "@effect-agent/core/SubagentContract";
+import type { Selection } from "@effect-agent/core/ToolExposure";
+import { AdditionalToolCatalog, DiscoveryTool, Snapshot } from "@effect-agent/core/ToolExposure";
 import {
   applyToolResultBounds,
   unserializableToolResult,
@@ -106,6 +108,7 @@ import { Tool, AiError, LanguageModel, Model, Prompt, Response, Toolkit } from "
 import { MessagingHost } from "../MessagingHost.ts";
 import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
+import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
 import { boundedValueFootprint, utf8ByteLength } from "./bounded-value.ts";
 import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
 import { ownPrimitiveDelta } from "./primitive-delta.ts";
@@ -115,6 +118,13 @@ import {
   type BoundedJsonSnapshot,
 } from "./provider-result-staging.ts";
 import { deliverToolFailure, emitThenAfter, isolateToolDerivative } from "./tool-derivative.ts";
+import {
+  decodeSelection,
+  decodeSnapshot,
+  eligibleCatalog,
+  exposureSnapshot,
+  validateSelection,
+} from "./tool-exposure.ts";
 import {
   annotateToolSpanTerminalOutcome,
   restoreToolSpanFailureCause,
@@ -379,7 +389,8 @@ export type EngineProvidedToolServices =
   | MessagingHost
   | ToolBroker
   | ToolSpanTelemetry
-  | ContextWindow;
+  | ContextWindow
+  | CurrentToolCatalog;
 
 /** Schema services needed to reconstruct a completion Tool's canonical Agent output. */
 export type AgentCompletionProjectionRequirements<
@@ -431,6 +442,11 @@ type InterpreterRequirements<
   | InstructionRequirements;
 
 interface RunContext {
+  readonly definition: Agent.AnyDefinition;
+  toolSelection: Selection | undefined;
+  toolCatalog: ReadonlyArray<CatalogEntry>;
+  toolExposure: Snapshot | undefined;
+  toolSchemaTransformer: LanguageModel.CodecTransformer | undefined;
   readonly agentId: Agent.AnyDefinition["id"];
   readonly threadId: ThreadId;
   readonly runId: RunId;
@@ -555,6 +571,7 @@ interface TurnTrace {
   /** Durable-hook view of the application calls, in declaration order (encoded parameters). */
   readonly applicationCallDescriptors: Array<RunToolCallDescriptor>;
   readonly applicationToolResults: Array<{
+    readonly toolSelection?: Selection | undefined;
     readonly id: string;
     readonly name: string;
     readonly encodedResult: unknown;
@@ -1154,6 +1171,10 @@ const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCal
             return descriptor.value;
           };
 
+          const selection = Object.getOwnPropertyDescriptor(input, "toolSelection");
+
+          if (selection !== undefined && !("value" in selection))
+            throw new TypeError("settled Tool selection must be an own data property");
           const rejected = Object.getOwnPropertyDescriptor(input, "budgetRejected");
 
           if (rejected !== undefined && !("value" in rejected)) {
@@ -1165,6 +1186,7 @@ const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCal
             result: readOwnDataProperty("result"),
             isFailure: readOwnDataProperty("isFailure"),
             ...(rejected === undefined ? {} : { budgetRejected: rejected.value }),
+            ...(selection === undefined ? {} : { toolSelection: selection.value }),
           };
         },
         catch: () =>
@@ -1945,6 +1967,42 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
         // and the live success event all carry the same bounded value.
         // Provider-executed results and the final-output path never pass
         // through this seam.
+        let toolSelection: Selection | undefined;
+
+        const projection = context.definition.toolExposure?.fromTools?.find(
+          (entry) => entry.tool === call.name,
+        );
+
+        if (
+          !result.isFailure &&
+          (projection !== undefined || Context.get(prepared.tool.annotations, DiscoveryTool))
+        ) {
+          const projected = yield* Effect.try({
+            try: () =>
+              projection === undefined
+                ? result.encodedResult
+                : {
+                    toolNames: projection.project({
+                      parameters: prepared.decodedParams,
+                      result: result.result,
+                    }),
+                  },
+            catch: () => ModelProtocolError.make({ message: "Tool exposure projection failed" }),
+          });
+
+          toolSelection = yield* validateSelection(
+            projected,
+            context.definition,
+            context.toolCatalog,
+          );
+          // Validate count and rendered-schema bounds before accepting the selection.
+          yield* exposureSnapshot(
+            context.definition,
+            toolSelection,
+            context.toolCatalog,
+            context.toolSchemaTransformer,
+          );
+        }
         const encodedResult = boundEncodedToolResult(result.encodedResult, resultBounds);
 
         const event: RunEvent = result.isFailure
@@ -1963,11 +2021,13 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
               toolCallId,
               toolName: call.name,
               result: yield* decodeEventJson(encodedResult, "Tool result"),
+              ...(toolSelection === undefined ? {} : { toolSelection }),
               providerExecuted: false,
             });
 
         trace.finalToolResultIds.add(call.id);
         trace.applicationToolResults[prepared.declarationIndex] = {
+          ...(toolSelection === undefined ? {} : { toolSelection }),
           id: call.id,
           name: call.name,
           encodedResult,
@@ -2147,6 +2207,30 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const exposed = context.toolExposure?.exposedToolNames;
+
+      const eligible = new Set(
+        context.toolCatalog
+          .filter((entry) => entry.kind === "native")
+          .map((entry) => entry.nativeToolName),
+      );
+
+      if (
+        calls.some(
+          (call) =>
+            (exposed !== undefined && !exposed.includes(call.name)) ||
+            // Preserve the existing typed grant-denial preflight when no host visibility
+            // hook is installed. Both checks still precede every unfinished handler.
+            (options.toolVisibility !== undefined &&
+              !settledCallIds?.has(call.id) &&
+              !eligible.has(call.name)),
+        )
+      ) {
+        return yield* ModelProtocolError.make({
+          message: "Tool batch calls a Tool outside its request exposure or current visibility",
+        });
+      }
+
       // Resolve every name and decode every parameter object before any call stream is constructed.
       const prepared = yield* Effect.forEach(calls, (call, declarationIndex) =>
         prepareToolCall(toolkit, call, declarationIndex),
@@ -2337,6 +2421,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                     // invocations use the handler's fiber and acquire no batch permit;
                     // retained passes cannot outlive the call's scheduling authority.
                     Stream.provideService(ToolBroker, broker.service),
+                    Stream.provideService(CurrentToolCatalog, { entries: context.toolCatalog }),
                     Stream.ensuring(Effect.sync(() => broker.close())),
                   );
                 }),
@@ -4812,21 +4897,6 @@ const makeTurn = <
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
 
-      // Filtering removes tools without changing any remaining schema or handler requirements.
-      const modelToolkit: Toolkit.Toolkit<Tools> =
-        options.subagentGrant === undefined
-          ? agent.definition.toolkit
-          : (Toolkit.make(
-              ...Object.values(agent.definition.toolkit.tools).filter((tool) =>
-                isSubagentToolAllowed(
-                  options.subagentGrant,
-                  options.delegationDepth ?? options.parentLink?.depth ?? 0,
-                  tool.name,
-                  tool.annotations,
-                ),
-              ),
-            ) as unknown as Toolkit.Toolkit<Tools>);
-
       if (options.beforeTurn !== undefined) yield* options.beforeTurn();
       const now = yield* Clock.currentTimeMillis;
 
@@ -4912,6 +4982,61 @@ const makeTurn = <
       context.windowContextTokenLimit = contextTokenLimit;
       const toolSchemaTransformer = modelContext.modelCall?.toolSchemaTransformer;
       const messageTokenEstimator = modelContext.modelCall?.estimateMessageTokens;
+
+      const catalog = yield* eligibleCatalog(
+        agent.definition,
+        { threadId: context.threadId, runId: context.runId, turn, input: context.input },
+        options.toolVisibility,
+        options.subagentGrant,
+        options.delegationDepth ?? options.parentLink?.depth ?? 0,
+      );
+
+      if (modelContext.toolSelection !== undefined)
+        context.toolSelection = yield* validateSelection(
+          modelContext.toolSelection,
+          agent.definition,
+          catalog,
+        );
+
+      let snapshot =
+        agent.definition.toolExposure === undefined &&
+        context.toolSelection === undefined &&
+        options.toolVisibility === undefined
+          ? undefined
+          : yield* exposureSnapshot(
+              agent.definition,
+              context.toolSelection,
+              catalog,
+              toolSchemaTransformer,
+            );
+
+      const selectionSnapshot = snapshot;
+
+      context.toolSchemaTransformer = toolSchemaTransformer;
+      context.toolCatalog = catalog;
+      context.toolExposure = snapshot;
+
+      const modelToolkit = Toolkit.make(
+        ...(snapshot === undefined
+          ? catalog.filter((entry) => entry.kind === "native").map((entry) => entry.tool)
+          : catalog
+              .filter(
+                (entry) =>
+                  entry.kind === "native" &&
+                  snapshot?.exposedToolNames.includes(entry.nativeToolName),
+              )
+              .map((entry) => entry.tool)),
+      ) as unknown as Toolkit.Toolkit<Tools>;
+
+      if (options.durability !== undefined && snapshot !== undefined) {
+        if (
+          options.durability.noteToolExposure === undefined &&
+          context.toolSelection !== undefined
+        )
+          return yield* ModelProtocolError.make({
+            message: "Durable Tool exposure requires a request snapshot staging hook",
+          });
+      }
 
       const estimateCallTokens = (messages: ReadonlyArray<Prompt.Message>) =>
         estimateContextTokens(messages, messageTokenEstimator);
@@ -5061,9 +5186,14 @@ const makeTurn = <
       const estimateToolSchemaTokens = Effect.suspend(() => {
         const choice = modelToolChoice();
 
-        const tools = Object.values(modelToolkit.tools).filter((tool) =>
-          typeof choice === "object" && "oneOf" in choice ? choice.oneOf.includes(tool.name) : true,
-        );
+        const tools =
+          typeof choice === "object" && "oneOf" in choice
+            ? catalog
+                .filter(
+                  (entry) => entry.kind === "native" && choice.oneOf.includes(entry.nativeToolName),
+                )
+                .map((entry) => entry.tool)
+            : Object.values(modelToolkit.tools);
 
         return callContext === undefined || tools.length === 0
           ? Effect.succeed(0)
@@ -5538,84 +5668,133 @@ const makeTurn = <
             turn,
             priorToolCalls,
           ).pipe(
-            Effect.flatMap((outgoing) => {
-              const providerPrompt =
-                outputContract._tag !== "rendered"
-                  ? outgoing
-                  : insertOutputContract(outgoing, outputContract.part);
+            Effect.flatMap((outgoing) =>
+              Effect.gen(function* () {
+                const toolChoice = modelToolChoice();
 
-              // Prepared and transient context can change at every Turn. A
-              // final full-prompt check closes the per-call boundary for grace
-              // finalization and any future path that bypasses research
-              // compaction admission. Runs without either hook keep their
-              // provider-reported incremental estimate.
+                let requestToolkit = modelToolkit;
 
-              return estimateCallTokens(providerPrompt.content).pipe(
-                Effect.map((tokens) => tokens + toolSchemaTokens),
-                Effect.tap((estimatedTokens) =>
-                  contextTokenLimit !== undefined &&
-                  (options.context !== undefined || options.transientContext !== undefined) &&
-                  estimatedTokens > contextTokenLimit
-                    ? ContextBudgetError.make({
-                        message: `Prepared context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
-                        estimatedTokens,
-                        targetTokens: contextTokenLimit,
-                        completionReserveTokens: policy.completionReserveTokens,
-                      })
-                    : Effect.void,
-                ),
-                Effect.tap((tokens) =>
-                  Effect.sync(() => {
-                    context.windowTokens = tokens;
-                  }),
-                ),
-                Effect.as(
-                  guardBudgetStream(
-                    LanguageModel.streamText({
-                      // The contract joins the final outgoing prompt (after
-                      // compaction and the run-status append), so every attempt —
-                      // including the overflow retry — carries it at the last
-                      // system block.
-                      prompt: providerPrompt,
-                      toolkit: modelToolkit,
-                      disableToolCallResolution: true,
-                      // Exact required Tool selection preserves the toolkit. A oneOf
-                      // subset can drop other schemas and break the cached prefix.
-                      ...(modelToolChoice() === undefined ? {} : { toolChoice: modelToolChoice() }),
+                snapshot = selectionSnapshot;
+                if (
+                  selectionSnapshot !== undefined &&
+                  typeof toolChoice === "object" &&
+                  "oneOf" in toolChoice
+                ) {
+                  const finalSelection = yield* validateSelection(
+                    { toolNames: toolChoice.oneOf },
+                    agent.definition,
+                    catalog,
+                  );
+
+                  const selected = yield* exposureSnapshot(
+                    agent.definition,
+                    finalSelection,
+                    catalog,
+                    toolSchemaTransformer,
+                    toolChoice.oneOf,
+                  );
+
+                  requestToolkit = Toolkit.make(
+                    ...catalog
+                      .filter(
+                        (entry) =>
+                          entry.kind === "native" &&
+                          selected.exposedToolNames.includes(entry.nativeToolName),
+                      )
+                      .map((entry) => entry.tool),
+                  ) as unknown as Toolkit.Toolkit<Tools>;
+                  snapshot = Object.freeze(
+                    Snapshot.make({
+                      ...selectionSnapshot,
+                      exposedToolNames: selected.exposedToolNames,
                     }),
-                    options.budget,
-                  ).pipe(
-                    Stream.onStart(
-                      Effect.sync(() => {
-                        trace.usageConsumed = false;
+                  );
+                }
+                context.toolExposure = snapshot;
+
+                const providerPrompt =
+                  outputContract._tag !== "rendered"
+                    ? outgoing
+                    : insertOutputContract(outgoing, outputContract.part);
+
+                // Prepared and transient context can change at every Turn. A
+                // final full-prompt check closes the per-call boundary for grace
+                // finalization and any future path that bypasses research
+                // compaction admission. Runs without either hook keep their
+                // provider-reported incremental estimate.
+
+                return yield* estimateCallTokens(providerPrompt.content).pipe(
+                  Effect.map((tokens) => tokens + toolSchemaTokens),
+                  Effect.tap((estimatedTokens) =>
+                    contextTokenLimit !== undefined &&
+                    (options.context !== undefined || options.transientContext !== undefined) &&
+                    estimatedTokens > contextTokenLimit
+                      ? ContextBudgetError.make({
+                          message: `Prepared context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+                          estimatedTokens,
+                          targetTokens: contextTokenLimit,
+                          completionReserveTokens: policy.completionReserveTokens,
+                        })
+                      : Effect.void,
+                  ),
+                  Effect.tap((tokens) =>
+                    Effect.sync(() => {
+                      context.windowTokens = tokens;
+                    }),
+                  ),
+                  Effect.tap(() =>
+                    snapshot === undefined || options.durability?.noteToolExposure === undefined
+                      ? Effect.void
+                      : options.durability.noteToolExposure(turn, snapshot),
+                  ),
+                  Effect.as(
+                    guardBudgetStream(
+                      LanguageModel.streamText({
+                        // The contract joins the final outgoing prompt (after
+                        // compaction and the run-status append), so every attempt —
+                        // including the overflow retry — carries it at the last
+                        // system block.
+                        prompt: providerPrompt,
+                        toolkit: requestToolkit,
+                        disableToolCallResolution: true,
+                        // Exact required Tool selection preserves the toolkit. A oneOf
+                        // subset can drop other schemas and break the cached prefix.
+                        ...(toolChoice === undefined ? {} : { toolChoice }),
                       }),
-                    ),
-                    Stream.mapEffect((part) =>
-                      ownModelResponsePart(
-                        part,
-                        agent.definition.toolkit,
-                        trace,
-                        context.bufferLimits,
-                      ).pipe(
-                        Effect.flatMap((owned) =>
-                          eventsForPart(
-                            context,
-                            turnId,
-                            turn,
-                            agent.definition.toolkit.tools,
-                            trace,
-                            owned.ownedPart,
-                            owned.retainedBytes,
+                      options.budget,
+                    ).pipe(
+                      Stream.onStart(
+                        Effect.sync(() => {
+                          trace.usageConsumed = false;
+                        }),
+                      ),
+                      Stream.mapEffect((part) =>
+                        ownModelResponsePart(
+                          part,
+                          agent.definition.toolkit,
+                          trace,
+                          context.bufferLimits,
+                        ).pipe(
+                          Effect.flatMap((owned) =>
+                            eventsForPart(
+                              context,
+                              turnId,
+                              turn,
+                              agent.definition.toolkit.tools,
+                              trace,
+                              owned.ownedPart,
+                              owned.retainedBytes,
+                            ),
                           ),
                         ),
                       ),
+                      Stream.flatMap(Stream.fromIterable),
+                      Stream.tapCause(() => retainFailedUsage()),
                     ),
-                    Stream.flatMap(Stream.fromIterable),
-                    Stream.tapCause(() => retainFailedUsage()),
                   ),
-                ),
-              );
-            }),
+                );
+              }),
+            ),
           ),
         );
 
@@ -6222,6 +6401,7 @@ const makeTurn = <
                     turnId,
                     responseMessages: promptFromTurnParts(trace),
                     calls: trace.applicationCallDescriptors,
+                    toolExposure: snapshot,
                   });
                 }
 
@@ -6339,6 +6519,11 @@ const toolBatchContinuation = <
           );
         }
         orderedResults.push(result);
+      }
+
+      for (const result of orderedResults) {
+        if (!result.isFailure && result.toolSelection !== undefined)
+          context.toolSelection = result.toolSelection;
       }
 
       const toolMessage = Prompt.makeMessage("tool", {
@@ -6528,6 +6713,47 @@ const makeResumeTurn = <
       const turn = resume.turn;
       const turnId = resume.turnId;
 
+      if (
+        resume.toolExposure === undefined &&
+        (agent.definition.toolExposure !== undefined ||
+          context.toolSelection !== undefined ||
+          options.toolVisibility !== undefined)
+      )
+        return yield* ModelProtocolError.make({
+          message: "Resumed progressive Turn is missing its original Tool exposure",
+        });
+      context.toolCatalog = yield* eligibleCatalog(
+        agent.definition,
+        { threadId: context.threadId, runId: context.runId, turn, input: context.input },
+        options.toolVisibility,
+        options.subagentGrant,
+        options.delegationDepth ?? options.parentLink?.depth ?? 0,
+      );
+      context.toolExposure =
+        resume.toolExposure === undefined ? undefined : yield* decodeSnapshot(resume.toolExposure);
+      const originalExposure = context.toolExposure;
+
+      if (originalExposure !== undefined) {
+        yield* validateSelection(
+          { toolNames: originalExposure.exposedToolNames },
+          agent.definition,
+          context.toolCatalog,
+          false,
+        );
+        if (originalExposure.selection !== undefined)
+          yield* validateSelection(
+            originalExposure.selection,
+            agent.definition,
+            context.toolCatalog,
+            false,
+          );
+        if (resume.calls.some((call) => !originalExposure.exposedToolNames.includes(call.name)))
+          return yield* ModelProtocolError.make({
+            message: "Resumed Tool call was not exposed in its original model request",
+          });
+        context.toolSelection = originalExposure.selection;
+      }
+
       if (!Number.isInteger(turn) || turn <= 0) {
         return failRunEventStream(
           ModelProtocolError.make({
@@ -6710,6 +6936,16 @@ const makeResumeTurn = <
           continue;
         }
         trace.applicationToolResults[declared.index] = {
+          ...(settledCall.toolSelection === undefined
+            ? {}
+            : {
+                toolSelection: yield* validateSelection(
+                  settledCall.toolSelection,
+                  agent.definition,
+                  context.toolCatalog,
+                  false,
+                ),
+              }),
           id: settledCall.id,
           name: declared.name,
           encodedResult: settledCall.result,
@@ -7013,6 +7249,10 @@ function streamWithCompletion<
         Effect.map(Option.getOrUndefined),
       );
 
+      const visibility = yield* Effect.serviceOption(RunToolVisibility).pipe(
+        Effect.map(Option.getOrUndefined),
+      );
+
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);
@@ -7044,6 +7284,7 @@ function streamWithCompletion<
         context: runOptions.context ?? preparation.hook,
         transientContext: runOptions.transientContext ?? preparation.transientContext,
         toolAuthorization: runOptions.toolAuthorization ?? authorization,
+        toolVisibility: runOptions.toolVisibility ?? visibility,
         threadId,
         runId,
         ...(retained === undefined
@@ -7107,7 +7348,21 @@ function streamWithCompletion<
             ),
           );
 
+          const initialToolSelection =
+            options.toolSelection ??
+            (agent.definition.toolExposure === undefined
+              ? undefined
+              : { toolNames: agent.definition.toolExposure.initialToolNames ?? [] });
+
           const context: RunContext = {
+            definition: agent.definition,
+            toolSelection:
+              initialToolSelection === undefined
+                ? undefined
+                : yield* decodeSelection(initialToolSelection),
+            toolCatalog: [],
+            toolExposure: undefined,
+            toolSchemaTransformer: undefined,
             agentId: agent.definition.id,
             threadId,
             runId,
@@ -7403,6 +7658,7 @@ function streamWithCompletion<
                 });
               }),
             }),
+            Context.add(CurrentToolCatalog, { entries: [] }),
             Context.add(RunEventSink, closedRunEventSink),
             Context.add(DurableStep, closedDurableStep),
             Context.add(SubagentDurability, closedSubagentDurability),
@@ -8132,6 +8388,26 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
               );
             }
             const tool = toolkit.tools[input.toolName] as Tool.Any;
+
+            const advertised = Object.values(binding.context.definition.toolkit.tools).some(
+              (outer) =>
+                Context.get(outer.annotations, AdditionalToolCatalog).some(
+                  (entry) => entry.tool.name === input.toolName,
+                ),
+            );
+
+            if (
+              advertised &&
+              !binding.context.toolCatalog.some(
+                (entry) => entry.kind === "code-mode" && entry.tool.name === input.toolName,
+              )
+            )
+              return yield* preflightFailure(
+                input,
+                "infrastructure",
+                "ProgrammaticToolAuthorizationDenied",
+                "Tool is excluded by the current host visibility policy",
+              );
 
             if (
               !isSubagentToolAllowed(

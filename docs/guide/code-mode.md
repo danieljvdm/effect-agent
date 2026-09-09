@@ -153,6 +153,69 @@ use a read-only database identity where available. The warehouse example's Durab
 application SQL allowlist because its SQLite authorizer blocks `PRAGMA query_only`. That scanner is
 a demo boundary.
 
+## Discover method documentation {#discovery}
+
+For a large allowlist, set `includeDeclarations: false` to keep namespace inventories and full
+declarations out of the initial tool description. Add `ToolDiscovery.make` beside the execution
+tool. Discovery returns only matching, currently eligible methods and their encoded schemas.
+
+```ts twoslash
+import { Agent, CodeMode, ToolDiscovery } from "effect-agent";
+import { ToolExecutionClass } from "effect-agent/DurableStep";
+import { Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
+
+const ListInvoices = Tool.make("list_invoices", {
+  description: "Read invoice amounts for a customer.",
+  parameters: Schema.Struct({ customer: Schema.String }),
+  success: Schema.Array(Schema.Struct({ amountCents: Schema.Int })),
+}).annotate(ToolExecutionClass, "readonly");
+
+export const codeMode = CodeMode.make("run_javascript", {
+  description: "Use discovered methods to compute invoice answers in JavaScript.",
+  includeDeclarations: false,
+  tools: { billing: { invoices: ListInvoices } },
+});
+export const discovery = ToolDiscovery.make();
+
+export const analyst = Agent.make("invoice-discovery", {
+  input: Schema.String,
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: "Discover invoice methods, compute the answer, then return JSON.",
+  toolkit: Toolkit.make(discovery.tool, codeMode.tool),
+  toolExposure: { initialToolNames: [], maxTools: 8, maxSchemaBytes: 32_768 },
+});
+
+// Host-side selective TypeScript declarations; fails with CodeModeDescriptionError.
+export const invoiceDeclarations = codeMode.describe(["billing.invoices"], { maxBytes: 8_192 });
+```
+
+Provide `discovery.handlers` alongside the existing Code Mode executor/handler Layer. A discovery
+call with `{ query: "invoice", namespace: "billing" }` describes `billing.invoices` and selects
+the owning `run_javascript` tool for the next turn. Generated code can then call
+`await billing.invoices({ customer: "Acme" })`. Common native tools can remain pinned alongside
+these two tools.
+
+Each match has a distinct ID such as `code-mode:run_javascript:billing.invoices`, its native tool
+name, namespace and method. This remains unambiguous when one Tool has several aliases or is also
+registered natively. Selecting a Code Mode match exposes its outer execution tool; it does not
+expand the construction-time allowlist. Inner broker calls do not change native exposure.
+
+`describe` is a host API over that fixed allowlist, not a visibility-filtered model tool. It accepts
+one to 64 unique exact method paths and defaults to 16 KiB of complete UTF-8 declarations, with a
+256 KiB maximum. Invalid paths and excessive output fail with `CodeModeDescriptionError`.
+Declarations and discovery results use the native encoded parameter/success schemas; provider
+schema transformations do not change the sandbox wire contract. The full `declarations` string
+remains available to the host even when omitted from the model description.
+
+Use `discover_tools` for model-facing documentation subject to host visibility and inherited
+grants. The runtime filters the sandbox's actual namespaces and methods as well, so generated code
+cannot enumerate hidden methods. If grants or host policy hide an allowlisted method while
+`includeDeclarations` is still true, the runtime refuses the configuration before its full
+description can leak. Use generic shared descriptions and `includeDeclarations: false` for that
+case. Default eager Code Mode behavior remains available when the full allowlist is eligible.
+Readonly, approval, budget and handler authorization constraints continue to apply.
+
 ## Program results and limits
 
 Each generated namespace method returns a Promise. The program must be one

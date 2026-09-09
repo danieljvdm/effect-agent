@@ -1,3 +1,7 @@
+import {
+  AdditionalToolCatalog,
+  IncludesCatalogDocumentation,
+} from "@effect-agent/core/ToolExposure";
 import { getToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import {
   type ToolBrokerConfigurationError,
@@ -6,6 +10,7 @@ import {
   type ProgrammaticCallOutcome,
   type ToolBrokerPass,
 } from "@effect-agent/engine/ToolBroker";
+import { CurrentToolCatalog } from "@effect-agent/engine/ToolExposure";
 import {
   type CodeExecutionError,
   CodeExecutionHost,
@@ -82,6 +87,30 @@ export class CodeModeFailure extends Schema.TaggedError<CodeModeFailure>()("Code
   thrown: Schema.optionalKey(Schema.Json),
 }) {}
 
+/** A selective documentation request is invalid or cannot fit its declared byte budget. */
+export class CodeModeDescriptionError extends Schema.TaggedError<CodeModeDescriptionError>()(
+  "CodeModeDescriptionError",
+  {
+    reason: Schema.Literals([
+      "invalid-selection",
+      "unknown-method",
+      "invalid-bound",
+      "limit-exceeded",
+    ]),
+    message: BoundedFailureText,
+  },
+) {}
+
+const DescriptionMethods = Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(257))).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(64),
+  Schema.isUnique(),
+);
+
+const DescriptionByteLimit = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 256 * 1024 }),
+);
+
 /** The namespace-record shape accepted by `CodeMode.make`. */
 export type CodeModeNamespaces = Record<string, Record<string, Tool.Any>>;
 
@@ -135,8 +164,10 @@ export interface CodeModeOptions<
   Namespaces extends CodeModeNamespaces,
   RedactionRequirements = never,
 > {
-  /** Model-visible description; the builder appends the sandbox contract and declarations. */
+  /** Model-visible description; the builder appends the sandbox contract. */
   readonly description: string;
+  /** Include all sandbox declarations in the model-facing description. Defaults to true. */
+  readonly includeDeclarations?: boolean | undefined;
   /**
    * Explicit allowlist: namespace name → method name → native Effect AI
    * Tool. Every Tool must be annotated `readonly` (`ToolExecutionClass`) and
@@ -183,10 +214,21 @@ export interface CodeModeDefinition<
   RedactionRequirements = never,
 > {
   readonly name: Name;
-  /** The assembled model-facing description including the TypeScript declarations. */
+  /** The assembled model-facing description, optionally including all declarations. */
   readonly description: string;
   /** Rendered TypeScript declarations of the sandbox globals (documentation only). */
   readonly declarations: string;
+  /**
+   * Render complete encoded-schema declarations for 1–64 unique, exact namespace.method names.
+   * The UTF-8 byte limit defaults to 16384 and must be an integer from 1 through 262144.
+   * Oversized documentation fails rather than truncating a declaration. This host operation
+   * does not authorize a model to see the selected methods; filter selections by current
+   * visibility and inherited grants before returning its output to a model.
+   */
+  readonly describe: (
+    methods: ReadonlyArray<string>,
+    options?: { readonly maxBytes?: number | undefined },
+  ) => Effect.Effect<string, CodeModeDescriptionError>;
   /** The executor-facing namespace catalog derived from the allowlist. */
   readonly namespaces: ReadonlyArray<CodeExecutionNamespace>;
   readonly limits: CodeExecutionLimits;
@@ -564,6 +606,61 @@ const make = <
   // on anything the renderer cannot express.
   const declarations = renderDeclarations(methods);
 
+  const methodsByPath = new Map(
+    methods.map((method) => [`${method.namespace}.${method.method}`, method]),
+  );
+
+  const describe = Effect.fn("CodeMode.describe")(function* (
+    selected: ReadonlyArray<string>,
+    options?: { readonly maxBytes?: number | undefined },
+  ) {
+    const paths = yield* Schema.decodeUnknownEffect(DescriptionMethods)(selected).pipe(
+      Effect.mapError(() =>
+        CodeModeDescriptionError.make({
+          reason: "invalid-selection",
+          message:
+            "Select between 1 and 64 unique namespace.method names, each at most 257 characters",
+        }),
+      ),
+    );
+
+    const maxBytes = yield* Schema.decodeUnknownEffect(DescriptionByteLimit)(
+      options?.maxBytes ?? 16 * 1024,
+    ).pipe(
+      Effect.mapError(() =>
+        CodeModeDescriptionError.make({
+          reason: "invalid-bound",
+          message: "The documentation byte limit must be an integer between 1 and 262144",
+        }),
+      ),
+    );
+
+    const selectedMethods: Array<ResolvedMethod> = [];
+
+    for (const path of paths) {
+      const method = methodsByPath.get(path);
+
+      if (method === undefined) {
+        return yield* CodeModeDescriptionError.make({
+          reason: "unknown-method",
+          message: "The selection contains a method outside this Code Mode allowlist",
+        });
+      }
+      selectedMethods.push(method);
+    }
+
+    const documentation = renderDeclarations(selectedMethods);
+
+    if (utf8ByteLength(documentation) > maxBytes) {
+      return yield* CodeModeDescriptionError.make({
+        reason: "limit-exceeded",
+        message: `The selected declarations exceed the ${maxBytes}-byte documentation limit; select fewer methods or raise the limit`,
+      });
+    }
+
+    return documentation;
+  });
+
   const namespaces = [...new Set(methods.map((method) => method.namespace))].map((namespace) =>
     CodeExecutionNamespace.make({
       name: namespace,
@@ -578,11 +675,9 @@ const make = <
     "",
     "The `code` argument must be one JavaScript async function expression; the sandbox invokes it exactly once with no arguments. It runs isolated with no ambient network, filesystem, environment, or secrets. Return one JSON value. `console.log` output is captured within a bounded budget and returned alongside the result.",
     "Namespace methods return Promises. An expected Tool failure rejects with a JSON envelope carrying a stable `_tag`; catch it to branch. Calls are strictly sequential — issue one host call at a time.",
-    "",
-    "Sandbox globals:",
-    "```ts",
-    declarations,
-    "```",
+    ...(options.includeDeclarations === false
+      ? []
+      : ["", "Sandbox globals:", "```ts", declarations, "```"]),
   ].join("\n");
 
   const tool = Tool.make(name, {
@@ -594,6 +689,11 @@ const make = <
   })
     .annotate(Tool.Readonly, true)
     .annotate(ToolExecutionClassAnnotation, "readonly")
+    .annotate(IncludesCatalogDocumentation, options.includeDeclarations !== false)
+    .annotate(
+      AdditionalToolCatalog,
+      Object.freeze(methods.map((method) => Object.freeze({ ...method }))),
+    )
     .addDependency(ToolBroker) as CodeModeTool<Name>;
 
   const outerToolkit = Toolkit.make(tool);
@@ -608,11 +708,14 @@ const make = <
     CodeModeSelectedRecord<Namespaces>
   >;
 
-  const executionRequest = (code: string): CodeExecutionRequest =>
+  const executionRequest = (
+    code: string,
+    visibleNamespaces: ReadonlyArray<CodeExecutionNamespace>,
+  ): CodeExecutionRequest =>
     CodeExecutionRequest.make({
       language: "javascript",
       source: code,
-      namespaces,
+      namespaces: visibleNamespaces,
       network: NetworkDisabled.make({}),
       limits,
     });
@@ -620,16 +723,20 @@ const make = <
   const routeHostCall = (
     pass: ToolBrokerPass,
     hostCall: CodeHostCall,
+    visiblePaths: ReadonlySet<string> | undefined,
   ): Effect.Effect<CodeHostCallResult> =>
     Effect.gen(function* () {
-      const toolName = methodToTool.get(`${hostCall.namespace}.${hostCall.method}`);
+      const path = `${hostCall.namespace}.${hostCall.method}`;
+
+      const toolName =
+        visiblePaths === undefined || visiblePaths.has(path) ? methodToTool.get(path) : undefined;
 
       if (toolName === undefined) {
         return {
           _tag: "CodeHostCallFailure",
           error: {
             _tag: "UnknownCodeModeMethod",
-            message: `${hostCall.namespace}.${hostCall.method} is not an allowlisted method`,
+            message: "The requested method is not available in this pass",
           },
         } as const;
       }
@@ -775,6 +882,34 @@ const make = <
 
     const invoke = Effect.fn(`CodeMode.${name}`)(function* (parameters: { readonly code: string }) {
       const broker = yield* ToolBroker;
+      // Resolve invocation authority before restoring captured construction services. A Layer
+      // built under an older Run must not restore that Run's catalogue or hidden method names.
+      const catalogue = yield* Effect.serviceOption(CurrentToolCatalog);
+
+      const visiblePaths = Option.isNone(catalogue)
+        ? undefined
+        : new Set(
+            catalogue.value.entries.flatMap((entry) =>
+              entry.kind === "code-mode" &&
+              entry.nativeToolName === name &&
+              methodsByPath.get(`${entry.namespace}.${entry.method}`)?.tool.name === entry.tool.name
+                ? [`${entry.namespace}.${entry.method}`]
+                : [],
+            ),
+          );
+
+      const visibleNamespaces =
+        visiblePaths === undefined
+          ? namespaces
+          : namespaces.flatMap((namespace) => {
+              const allowed = namespace.methods.filter((method) =>
+                visiblePaths.has(`${namespace.name}.${method}`),
+              );
+
+              return allowed.length === 0
+                ? []
+                : [CodeExecutionNamespace.make({ name: namespace.name, methods: allowed })];
+            });
 
       const execution = Effect.gen(function* () {
         const pass = yield* broker.openPass(withHandler, {
@@ -782,11 +917,11 @@ const make = <
         });
 
         const host = CodeExecutionHost.of({
-          call: (hostCall) => routeHostCall(pass, hostCall),
+          call: (hostCall) => routeHostCall(pass, hostCall, visiblePaths),
         });
 
         return yield* executor
-          .execute(executionRequest(parameters.code))
+          .execute(executionRequest(parameters.code, visibleNamespaces))
           .pipe(Effect.provideService(CodeExecutionHost, host));
       }).pipe(
         Effect.scoped,
@@ -842,6 +977,7 @@ const make = <
     name,
     description,
     declarations,
+    describe,
     namespaces,
     limits,
     maxEgressBytes,

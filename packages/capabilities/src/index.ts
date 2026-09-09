@@ -1,6 +1,7 @@
 export * as Approval from "./Approval.ts";
 export * as Budget from "./Budget.ts";
 export * as CodeMode from "./CodeMode.ts";
+export * as ToolDiscovery from "./ToolDiscovery.ts";
 export * as Commands from "./Commands.ts";
 export * as EphemeralThreads from "./EphemeralThreads.ts";
 export * as Mcp from "./Mcp.ts";

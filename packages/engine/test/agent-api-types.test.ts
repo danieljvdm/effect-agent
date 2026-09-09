@@ -569,3 +569,54 @@ it("resolved-call preparation preserves host and provider requirements and typed
     >
   >().toEqualTypeOf<never>();
 });
+
+it("preserves full registered Tool E/R and typed exposure projectors", () => {
+  const progressive = Agent.make("typed-exposure", {
+    input: Schema.String,
+    output: Schema.String,
+    instructions: "Answer.",
+    toolkit,
+    toolExposure: {
+      initialToolNames: [],
+      fromTools: [
+        {
+          tool: "lookup",
+          project: ({ parameters, result }) => {
+            expectTypeOf(parameters).toEqualTypeOf<{ readonly city: string }>();
+            expectTypeOf(result).toEqualTypeOf<string>();
+
+            return ["lookup"];
+          },
+        },
+      ],
+    },
+  });
+
+  expectTypeOf<
+    Extract<AgentRuntimeRequirements<typeof progressive>, Catalog>
+  >().toEqualTypeOf<Catalog>();
+  expectTypeOf<
+    Extract<AgentRuntimeFailure<typeof progressive>, ToolError>
+  >().toEqualTypeOf<ToolError>();
+});
+
+it("preserves host visibility requirements and failures", () => {
+  const run = AgentRuntime.run(Agent.withModel(planner, model), { city: "Lisbon", days: "2" });
+
+  const visibleRun = AgentRuntime.run(
+    Agent.withModel(planner, model),
+    { city: "Lisbon", days: "2" },
+    {
+      toolVisibility: {
+        visible: () => TurnHost.pipe(Effect.andThen(Effect.fail(TurnHostError.make({})))),
+      },
+    },
+  );
+
+  expectTypeOf<Effect.Services<typeof visibleRun>>().toEqualTypeOf<
+    Effect.Services<typeof run> | TurnHost
+  >();
+  expectTypeOf<Effect.Error<typeof visibleRun>>().toEqualTypeOf<
+    Effect.Error<typeof run> | TurnHostError
+  >();
+});

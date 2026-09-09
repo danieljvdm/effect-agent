@@ -6,12 +6,19 @@ import {
   type RunDispositionDeclaration,
 } from "@effect-agent/core/Agent";
 import { type ThreadId, AgentId } from "@effect-agent/core/Identifiers";
+import {
+  AdditionalToolCatalog,
+  DiscoveryTool,
+  IncludesCatalogDocumentation,
+  PinnedTool,
+  ToolNamespace,
+} from "@effect-agent/core/ToolExposure";
 import { type RuntimeBinding } from "@effect-agent/engine/AgentRuntime";
 import {
   WorkerReportPreparationFailure,
   type WorkerReporting,
 } from "@effect-agent/engine/SubagentHost";
-import { type Crypto, type Option, type Scope, Effect, Layer, Schema } from "effect";
+import { type Crypto, type Option, type Scope, Context, Effect, Layer, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
 import { digestDefinitions, type DigestError } from "../Digest.ts";
@@ -376,11 +383,52 @@ type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> 
   ? never
   : EntryRequirements<Entries[number]>;
 
+const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInput => {
+  const definition = entry.model === undefined ? entry.agent.definition : entry.agent;
+  const exposure = definition.toolExposure;
+
+  if (
+    exposure === undefined &&
+    !Object.values(definition.toolkit.tools).some(
+      (tool) =>
+        Context.get(tool.annotations, DiscoveryTool) || Context.get(tool.annotations, PinnedTool),
+    )
+  )
+    return entry.definitions;
+
+  return {
+    ...entry.definitions,
+    agent: {
+      declaration: entry.definitions.agent,
+      toolExposure: {
+        initialToolNames: exposure === undefined ? null : [...(exposure.initialToolNames ?? [])],
+        maxTools: exposure?.maxTools ?? 64,
+        maxSchemaBytes: exposure?.maxSchemaBytes ?? 262_144,
+        fromTools: (exposure?.fromTools ?? []).map((entry) => entry.tool),
+        requiredCompletion:
+          definition.completion?.required === true ? definition.completion.tool : null,
+        tools: Object.values(definition.toolkit.tools).map((tool) => ({
+          name: tool.name,
+          pinned: Context.get(tool.annotations, PinnedTool),
+          discovery: Context.get(tool.annotations, DiscoveryTool),
+          namespace: Context.get(tool.annotations, ToolNamespace) ?? null,
+          includesCatalogDocumentation: Context.get(tool.annotations, IncludesCatalogDocumentation),
+          additional: Context.get(tool.annotations, AdditionalToolCatalog).map((entry) => ({
+            name: entry.tool.name,
+            namespace: entry.namespace,
+            method: entry.method,
+          })),
+        })),
+      },
+    },
+  };
+};
+
 const compileRegistration = <Entry extends AgentRegistration>(
   entry: Entry,
 ): Effect.Effect<ResolvedBinding, DigestError, Crypto.Crypto | EntryRequirements<Entry>> =>
   Effect.flatMap(
-    digestDefinitions(entry.definitions),
+    digestDefinitions(registrationDefinitions(entry)),
     (digests) =>
       Effect.gen(function* () {
         const binding = yield* capture(
