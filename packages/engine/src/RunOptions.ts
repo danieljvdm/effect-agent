@@ -392,7 +392,7 @@ export type RunToolAuthorizationDecision =
   | { readonly _tag: "denied"; readonly reason: string };
 
 /**
- * Exact authority presented before one model-declared application Tool Handler may start.
+ * Exact authority presented before one application Tool Handler may start.
  *
  * `input` is the Agent Schema's encoded Run input. Durable coordinators replace it with the exact
  * canonical Submission input admitted for the logical Run on every Attempt.
@@ -406,9 +406,16 @@ export interface RunToolAuthorizationRequest {
   readonly turn: number;
   readonly input: unknown;
   readonly call: RunToolCallDescriptor;
+  /** Present for an ephemeral inner invocation; the outer Tool's approval grants no inner authority. */
+  readonly programmatic?:
+    | {
+        readonly parentToolCallId: ToolCallId;
+        readonly sequenceIndex: number;
+      }
+    | undefined;
 }
 
-/** Host policy invoked for each still-executable model-declared call in an application batch. */
+/** Host policy invoked before each executable native or programmatic application call. */
 export interface RunToolAuthorizationHook<Error = never, Requirements = never> {
   readonly authorize: (
     request: RunToolAuthorizationRequest,
@@ -442,7 +449,7 @@ export const RunContextPreparationPassthrough: Layer.Layer<RunContextPreparation
 )({});
 
 /**
- * Host action-time authority for model-declared application Tools. Implementations close over
+ * Host action-time authority for native and programmatic application Tools. Implementations close over
  * their dependencies at Layer construction and return a denial when execution is not authorized.
  * Durable coordinators capture this service once and retain it across replacement Attempts.
  * Ephemeral Runs also resolve this service at their Run boundary. A typed per-run
@@ -938,7 +945,9 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * It invokes the policy for every still-executable call after complete-batch validation and approval, but
    * before durable preparation or any Handler permit. A resumed durable batch invokes it again
    * with the same canonical Run/Turn/input authority and Tool Call identity. Programmatic
-   * `ToolBroker` calls are outside this hook.
+   * `ToolBroker` calls invoke it after schema/visibility checks and before budget reservation or
+   * execution, with their parent identity in `programmatic`. Inner denials become catchable
+   * outcomes; other independent calls may already have completed.
    */
   readonly toolAuthorization?: RunToolAuthorizationHook<HookError, HookRequirements> | undefined;
   /**

@@ -305,6 +305,7 @@ import {
   ToolBrokerConfigurationError,
   ToolBrokerUnavailableError,
   type ProgrammaticCallOutcome,
+  type ProgrammaticCallRecord,
   type ProgrammaticToolInput,
   type ToolBrokerPass,
   type ToolBrokerService,
@@ -2375,6 +2376,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                     context,
                     turnId,
                     outerToolCallId: call.toolCallId,
+                    turn,
+                    toolAuthorization: options.toolAuthorization,
                     maxToolCalls: brokerAccounting.maxToolCalls,
                     declaredToolCalls: brokerAccounting.declaredToolCalls,
                     budget: options.budget,
@@ -8124,6 +8127,8 @@ interface ToolBrokerBinding<HookError, HookRequirements> {
   readonly context: RunContext;
   readonly turnId: TurnId;
   readonly outerToolCallId: ToolCallId;
+  readonly turn: number;
+  readonly toolAuthorization: RunOptions<HookError, HookRequirements>["toolAuthorization"];
   readonly maxToolCalls: number;
   /** Model-declared Tool Calls committed through this batch (the outer call included). */
   readonly declaredToolCalls: number;
@@ -8277,9 +8282,9 @@ interface LiveToolBroker {
 /**
  * Live per-outer-call `ToolBroker` (runtime spec §12.1; RUN-016, RUN-017).
  * The pass executes under the outer Tool Call's already-held scheduling
- * permit — invocations run inside the outer handler's fiber and acquire no
- * batch permit of their own. Calls are strictly sequential, indices are
- * allocated from broker-owned monotonic state exactly when a handler starts,
+ * permit — invocations run in caller-owned structured fibers and acquire a finite
+ * per-pass Semaphore, never the outer batch permit again. Execution indices are
+ * allocated in invocation order before preflight, with gaps for rejected calls,
  * and every started call consumes the Run's Tool-call budgets before its
  * handler is invoked. Inner calls produce no Run events and no Canonical
  * Records. Trusted applications may explicitly observe non-propagating failures (RUN-036).
@@ -8329,7 +8334,15 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
         // inside business execution can substitute them per invocation. The
         // same private-assertion contract as `provideHookServices` applies.
         const handlerServices = (yield* Effect.context<never>()) as Context.Context<unknown>;
-        const state = { nextIndex: 0, inFlight: false };
+        const concurrency = passOptions.concurrency ?? 4;
+
+        if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 64) {
+          return yield* ToolBrokerConfigurationError.make({
+            message: "concurrency must be an integer between 1 and 64",
+          });
+        }
+        const permits = yield* Semaphore.make(concurrency);
+        const records: Array<ProgrammaticCallRecord> = [];
 
         const preflightFailure = (
           input: ProgrammaticToolInput,
@@ -8360,7 +8373,10 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
           }).pipe(preflightObserver.permits.withPermits(1), Effect.as(outcome));
         };
 
-        const body = (input: ProgrammaticToolInput): Effect.Effect<ProgrammaticCallOutcome> =>
+        const body = (
+          input: ProgrammaticToolInput,
+          sequenceIndex: number,
+        ): Effect.Effect<ProgrammaticCallOutcome> =>
           Effect.gen(function* () {
             if (!hasTool(toolkit.tools, input.toolName)) {
               return yield* preflightFailure(
@@ -8452,6 +8468,52 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
               return invalidParameters;
             }
 
+            const handleId = ToolCallId.make(`${binding.outerToolCallId}#${sequenceIndex}`);
+            const authorization = binding.toolAuthorization;
+
+            if (authorization !== undefined) {
+              const denied = yield* provideHookServices(
+                authorization.authorize({
+                  threadId: binding.context.threadId,
+                  runId: binding.context.runId,
+                  turnId: binding.turnId,
+                  turn: binding.turn,
+                  input: binding.context.input,
+                  programmatic: { parentToolCallId: binding.outerToolCallId, sequenceIndex },
+                  call: {
+                    toolCallId: handleId,
+                    toolName: input.toolName,
+                    parameters: input.encodedArguments,
+                    executionClass: getToolExecutionClass(tool),
+                    executionKind: getToolExecutionKind(tool.annotations),
+                  },
+                }),
+                binding.hookServices,
+              ).pipe(
+                Effect.flatMap((decision) =>
+                  decision._tag === "allowed"
+                    ? Effect.succeed(undefined)
+                    : preflightFailure(
+                        input,
+                        "infrastructure",
+                        "ProgrammaticToolAuthorizationDenied",
+                        decision.reason,
+                      ),
+                ),
+                Effect.catchCauseFilter(Cause.findError, (error, cause) =>
+                  preflightFailure(
+                    input,
+                    "infrastructure",
+                    errorTag(error),
+                    errorMessage(error),
+                    cause,
+                  ),
+                ),
+              );
+
+              if (denied !== undefined) return denied;
+            }
+
             // Serialize admission and durable reservation across outer handlers.
             // Once reserved, a slot is never refunded: ownership may be lost
             // after the append but before the Handler starts.
@@ -8524,8 +8586,13 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
 
             if (rejected !== undefined) return rejected;
 
-            const index = state.nextIndex++;
-            const handleId = `${binding.outerToolCallId}#${index}`;
+            const index = sequenceIndex;
+
+            records[sequenceIndex] = {
+              sequenceIndex,
+              toolName: input.toolName,
+              status: "uncertain",
+            };
             const executionClass = getToolExecutionClass(tool);
             let failureObservation: ProgrammaticToolFailure | undefined;
 
@@ -8756,9 +8823,29 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
             // Fix the broker outcome and terminal telemetry before delivery. Interruption of an
             // observer cannot turn a settled inner failure into an interrupted Handler attempt.
             // This still runs inline under the outer call's permit, before pass.invoke returns.
+            const recorded = execution.pipe(
+              Effect.tap((outcome) =>
+                Effect.sync(() => {
+                  records[sequenceIndex] = {
+                    sequenceIndex,
+                    toolName: input.toolName,
+                    status:
+                      outcome._tag === "ProgrammaticCallSuccess"
+                        ? "succeeded"
+                        : outcome._tag === "ProgrammaticCallFailure"
+                          ? "failed"
+                          : "uncertain",
+                    ...(outcome._tag === "ProgrammaticCallError"
+                      ? { errorTag: outcome.errorTag }
+                      : {}),
+                  };
+                }),
+              ),
+            );
+
             return yield* observer === undefined
-              ? execution
-              : execution.pipe(
+              ? recorded
+              : recorded.pipe(
                   Effect.tap(() =>
                     failureObservation === undefined
                       ? Effect.void
@@ -8768,39 +8855,41 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
           }).pipe(Effect.provideContext(handlerServices)) as Effect.Effect<ProgrammaticCallOutcome>;
 
         const pass: ToolBrokerPass = {
+          snapshot: Effect.sync(() => records.map((record) => ({ ...record }))),
           invoke: (input) =>
             Effect.suspend(() => {
-              // A pass retained past its outer Tool Call cannot execute
-              // Tools outside the batch's scheduling authority.
-              if (lifecycle.closed) {
-                return preflightFailure(
-                  input,
-                  "infrastructure",
-                  "ToolBrokerUnavailableError",
-                  "The outer Tool Call for this pass has already settled",
-                );
-              }
-              // Strict sequentiality (RUN-016): a call issued while another
-              // from this pass is unsettled fails typed without acquiring an
-              // identity or consuming budget; the rejection does not release
-              // the in-flight owner's claim.
-              if (state.inFlight) {
-                return preflightFailure(
-                  input,
-                  "infrastructure",
-                  "ProgrammaticCallConcurrencyError",
-                  `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`,
-                );
-              }
-              state.inFlight = true;
+              const sequenceIndex = records.length;
 
-              return body(input).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    state.inFlight = false;
-                  }),
-                ),
-              );
+              records.push({ sequenceIndex, toolName: input.toolName, status: "not-started" });
+
+              // Check after acquiring the permit too: queued work cannot start after its owner exits.
+              return permits
+                .withPermit(
+                  Effect.suspend(() =>
+                    lifecycle.closed
+                      ? preflightFailure(
+                          input,
+                          "infrastructure",
+                          "ToolBrokerUnavailableError",
+                          "The outer Tool Call for this pass has already settled",
+                        )
+                      : body(input, sequenceIndex),
+                  ),
+                )
+                .pipe(
+                  Effect.tap((outcome) =>
+                    Effect.sync(() => {
+                      if (outcome._tag === "ProgrammaticCallError" && outcome.index === undefined) {
+                        records[sequenceIndex] = {
+                          sequenceIndex,
+                          toolName: input.toolName,
+                          status: "not-started",
+                          errorTag: outcome.errorTag,
+                        };
+                      }
+                    }),
+                  ),
+                );
             }),
         };
 

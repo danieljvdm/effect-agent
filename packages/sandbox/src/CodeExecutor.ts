@@ -120,6 +120,8 @@ export class CodeExecutionLimits extends Schema.Class<CodeExecutionLimits>("Code
   maxLogBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(1024 * 1024)),
   maxResultBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
   maxHostCalls: Schema.Natural.check(Schema.isLessThanOrEqualTo(10_000)),
+  /** Maximum active host calls per pass; defaults to four. Excess calls wait in Scope. */
+  maxHostCallConcurrency: Schema.optionalKey(PositiveInt.check(Schema.isLessThanOrEqualTo(64))),
   maxHostCallArgumentBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(1024 * 1024)),
   maxHostCallResultBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
 }) {}

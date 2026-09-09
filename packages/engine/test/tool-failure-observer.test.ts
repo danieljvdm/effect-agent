@@ -704,7 +704,6 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
             const handler = yield* invoke(pass).pipe(Effect.forkChild);
 
             yield* Deferred.await(entered);
-            yield* burst([pass, pass, pass, pass], "ProgrammaticCallConcurrencyError");
             yield* Deferred.succeed(release, undefined);
             yield* Fiber.join(handler);
 
@@ -718,14 +717,11 @@ layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
           "ToolBrokerUnavailableError",
         );
         expect(observations.map(({ tag }) => tag)).toEqual([
-          "ProgrammaticCallConcurrencyError",
-          "ProgrammaticCallConcurrencyError",
-          "ProgrammaticCallConcurrencyError",
           "ToolBrokerUnavailableError",
           "ToolBrokerUnavailableError",
           "ToolBrokerUnavailableError",
         ]);
-        expect({ peak, finalized }).toEqual({ peak: 1, finalized: 6 });
+        expect({ peak, finalized }).toEqual({ peak: 1, finalized: 3 });
         for (const observation of observations) {
           expect(observation).toMatchObject({
             _tag: "ProgrammaticPreflightFailure",

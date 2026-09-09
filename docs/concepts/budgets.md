@@ -160,7 +160,10 @@ the exhaustion marker for the parent's result projection.
 ## Programmatic calls and Code Mode
 
 Code Mode checks and reserves `maxToolCalls` before each inner handler. Exhaustion becomes that
-call's outcome. The turn boundary then enforces the combined declared and programmatic count.
+call's outcome. Reservations are serialized across concurrent calls and never refunded after
+admission. The turn boundary then enforces the combined declared and programmatic count.
+`CodeExecutionLimits.maxHostCallConcurrency` independently bounds inner calls per pass (default 4,
+maximum 64); the outer `toolConcurrency` still bounds simultaneous generated programs.
 
 ## Sizing guidance
 

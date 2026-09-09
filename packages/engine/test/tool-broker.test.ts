@@ -9,7 +9,7 @@ import {
 } from "@effect-agent/core/SubagentContract";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { type RunOptions } from "@effect-agent/engine/RunOptions";
+import { type RunOptions, type RunToolAuthorizationRequest } from "@effect-agent/engine/RunOptions";
 import {
   ToolBroker,
   ToolBrokerConfigurationError,
@@ -494,6 +494,13 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
                     captured,
                     Option.getOrUndefined(Cause.findErrorOption(exit.cause)),
                   );
+                  for (const concurrency of [0, -1, 1.5, 65, NaN, Infinity]) {
+                    const error = yield* broker
+                      .openPass(inner, { maxResultBytes: 1024, concurrency })
+                      .pipe(Effect.flip, Effect.orDie);
+
+                    expect(error).toBeInstanceOf(ToolBrokerConfigurationError);
+                  }
 
                   return null;
                 }),
@@ -847,58 +854,192 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     }),
   );
 
-  it.effect("RUN-016 a concurrent host call fails typed without consuming an identity", () =>
+  it.effect("authorizes each inner mutation before reserving budget or starting its handler", () =>
     Effect.gen(function* () {
-      const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
-      const started = yield* Deferred.make<void>();
-      const gate = yield* Deferred.make<void>();
       const innerToolkit = Toolkit.make(Query);
+      const requests: Array<RunToolAuthorizationRequest> = [];
+      const started: Array<string> = [];
 
       yield* runOrchestrated({
         innerToolkit,
+        agentPolicy: policy({ maxToolCalls: 2 }),
         innerHandlers: innerToolkit.toLayer({
-          query: () =>
-            Deferred.succeed(started, undefined).pipe(
-              Effect.andThen(Deferred.await(gate)),
-              Effect.as({ rows: [1] }),
+          query: ({ sql }) =>
+            Effect.sync(() => {
+              started.push(sql);
+
+              return { rows: [1] };
+            }),
+        }),
+        runOptions: {
+          toolAuthorization: {
+            authorize: (request) =>
+              Effect.sync(() => {
+                requests.push(request);
+
+                return request.programmatic?.sequenceIndex === 0
+                  ? { _tag: "denied" as const, reason: "No access to this write" }
+                  : { _tag: "allowed" as const };
+              }),
+          },
+        },
+        program: (pass) =>
+          Effect.gen(function* () {
+            const outcomes = yield* Effect.forEach(
+              ["denied", "allowed"],
+              (sql) => pass.invoke({ toolName: "query", encodedArguments: { sql } }),
+              { concurrency: 2 },
+            );
+
+            expect(outcomes).toMatchObject([
+              {
+                _tag: "ProgrammaticCallError",
+                index: undefined,
+                errorTag: "ProgrammaticToolAuthorizationDenied",
+              },
+              { _tag: "ProgrammaticCallSuccess", index: 1 },
+            ]);
+            expect((yield* pass.snapshot).map((call) => call.status)).toEqual([
+              "not-started",
+              "succeeded",
+            ]);
+
+            return null;
+          }),
+      });
+      expect(started).toEqual(["allowed"]);
+      expect(requests).toHaveLength(3);
+      expect(requests[2]).toMatchObject({
+        input: { question: "go" },
+        programmatic: { parentToolCallId: "orchestrate-1", sequenceIndex: 1 },
+        call: {
+          toolCallId: "orchestrate-1#1",
+          toolName: "query",
+          parameters: { sql: "allowed" },
+          executionClass: "uncertain",
+        },
+      });
+    }),
+  );
+
+  it.effect("bounds concurrent calls and records outcomes without delaying dependencies", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      const innerToolkit = Toolkit.make(Query);
+      const starts: Array<string> = [];
+      let active = 0;
+      let peak = 0;
+
+      yield* runOrchestrated({
+        innerToolkit,
+        passOptions: { maxResultBytes: 1024, concurrency: 2 },
+        innerHandlers: innerToolkit.toLayer({
+          query: ({ sql }) =>
+            Effect.gen(function* () {
+              starts.push(sql);
+              active++;
+              peak = Math.max(peak, active);
+              if (sql === "a") {
+                yield* Deferred.succeed(started, undefined);
+                yield* Deferred.await(gate);
+              }
+
+              return { rows: [1] };
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  active--;
+                }),
+              ),
             ),
         }),
         program: (pass) =>
           Effect.gen(function* () {
-            const firstFiber = yield* pass
+            const first = yield* pass
               .invoke({ toolName: "query", encodedArguments: { sql: "a" } })
               .pipe(Effect.forkChild);
 
             yield* Deferred.await(started);
 
+            // b and its dependent c must finish while unrelated a is still blocked.
             const second = yield* pass.invoke({
               toolName: "query",
               encodedArguments: { sql: "b" },
             });
 
+            const third = yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "c" } });
+
+            expect(second).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 1 });
+            expect(third).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 2 });
+            expect((yield* pass.snapshot).map((call) => call.status)).toEqual([
+              "uncertain",
+              "succeeded",
+              "succeeded",
+            ]);
             yield* Deferred.succeed(gate, undefined);
-            const first = yield* Fiber.join(firstFiber);
-
-            const third = yield* pass.invoke({
-              toolName: "query",
-              encodedArguments: { sql: "c" },
-            });
-
-            yield* Ref.set(outcomes, [first, second, third]);
+            yield* Fiber.join(first);
+            expect((yield* pass.snapshot).map((call) => call.sequenceIndex)).toEqual([0, 1, 2]);
 
             return null;
           }),
       });
-      const [first, second, third] = yield* Ref.get(outcomes);
+      expect(starts).toEqual(["a", "b", "c"]);
+      expect(peak).toBe(2);
+      expect(active).toBe(0);
+    }),
+  );
 
-      expect(first).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 0 });
-      expect(second).toMatchObject({
-        _tag: "ProgrammaticCallError",
-        index: undefined,
-        errorTag: "ProgrammaticCallConcurrencyError",
+  it.effect("interrupts active and queued calls without starting queued handlers", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const innerToolkit = Toolkit.make(Query);
+      let starts = 0;
+      let finalized = 0;
+
+      yield* runOrchestrated({
+        innerToolkit,
+        passOptions: { maxResultBytes: 1024, concurrency: 1 },
+        innerHandlers: innerToolkit.toLayer({
+          query: () =>
+            Effect.gen(function* () {
+              starts++;
+              yield* Deferred.succeed(started, undefined);
+
+              return yield* Effect.never;
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  finalized++;
+                }),
+              ),
+            ),
+        }),
+        program: (pass) =>
+          Effect.gen(function* () {
+            const first = yield* pass
+              .invoke({ toolName: "query", encodedArguments: { sql: "a" } })
+              .pipe(Effect.forkChild);
+
+            yield* Deferred.await(started);
+
+            const queued = yield* pass
+              .invoke({ toolName: "query", encodedArguments: { sql: "b" } })
+              .pipe(Effect.forkChild);
+
+            yield* Effect.yieldNow;
+            yield* Fiber.interrupt(queued);
+            yield* Fiber.interrupt(first);
+            expect(yield* pass.snapshot).toEqual([
+              { sequenceIndex: 0, toolName: "query", status: "uncertain" },
+              { sequenceIndex: 1, toolName: "query", status: "not-started" },
+            ]);
+
+            return null;
+          }),
       });
-      // The rejected call consumed no identity: the next sequential call gets index 1.
-      expect(third).toMatchObject({ _tag: "ProgrammaticCallSuccess", index: 1 });
+      expect(starts).toBe(1);
+      expect(finalized).toBe(1);
     }),
   );
 
