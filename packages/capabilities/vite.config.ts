@@ -10,6 +10,7 @@ export default defineConfig({
       "src/Approval.ts",
       "src/Budget.ts",
       "src/CodeMode.ts",
+      "src/ToolDiscovery.ts",
       "src/Commands.ts",
       "src/EphemeralThreads.ts",
       "src/Mcp.ts",

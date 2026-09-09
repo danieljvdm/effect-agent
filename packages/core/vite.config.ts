@@ -4,6 +4,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/ToolExposure.ts",
       "src/RememberingStore.ts",
       "src/Receipt.ts",
       "src/Worker.ts",

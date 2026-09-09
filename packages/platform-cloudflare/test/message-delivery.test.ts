@@ -153,6 +153,7 @@ describe("Thread Object message maintenance", () => {
       const finished = latch();
       const deliveryRelease = latch();
       const messages = ["message", ...Array.from({ length: 8 }, (_, index) => `message-${index}`)];
+      let released = false;
 
       const statuses = () =>
         Promise.all(messages.map(async (message) => (await read(source, message))?.status));
@@ -161,7 +162,10 @@ describe("Thread Object message maintenance", () => {
         location: "claim:after-claim",
         entered: Effect.sync(entered.resolve),
         release: Effect.promise(() => release.promise),
-        finished: Effect.sync(finished.resolve),
+        finished: Effect.sync(() => {
+          released = true;
+          finished.resolve();
+        }),
       });
       await submit(source, "active-source");
       const running = runDurableObjectAlarm(stubFor(source));
@@ -207,14 +211,35 @@ describe("Thread Object message maintenance", () => {
           await advance(1);
         }
         expect(await statuses()).toEqual(messages.map(() => "processed"));
+        // Leave one accepted message for the durable alarm after source execution ends.
+        await enqueue(source, destination, now, "after-source");
+        for (
+          let attempt = 0;
+          attempt < 200 && (await read(source, "after-source"))?.status !== "accepted";
+          attempt += 1
+        ) {
+          await advance(1);
+        }
+        expect((await read(source, "after-source"))?.status).toBe("accepted");
         expect(await allSettled(source)()).toBe(false);
+        expect(released).toBe(false);
       } finally {
         messageDeliveryHolds.delete(source);
         deliveryRelease.resolve();
         release.resolve();
+        // Completion must stop the delivery fiber without another clock tick.
         await running;
         await finished.promise;
       }
+      expect(released).toBe(true);
+      expect(await allSettled(source)()).toBe(true);
+      expect(await scheduledAlarm(source)).not.toBeNull();
+      await drainAlarmsUntil(destination, allSettled(destination));
+      await advance(20);
+      // The completed pass leaves future delivery work to its durable alarm.
+      expect((await read(source, "after-source"))?.status).toBe("accepted");
+      await runDurableObjectAlarm(stubFor(source));
+      expect((await read(source, "after-source"))?.status).toBe("processed");
     }));
 
   it("settles ready source work while delivery is held and finalizes delivery on maintenance interruption", () =>

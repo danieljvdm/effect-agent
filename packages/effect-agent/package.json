@@ -1,6 +1,6 @@
 {
   "name": "effect-agent",
-  "version": "0.1.0-beta.70",
+  "version": "0.1.0-beta.72",
   "description": "Effect-native autonomous agents: the complete pure authoring and running surface of the Effect Agent framework in one package — schema-first definitions, the bounded interpreter, and operational capabilities.",
   "license": "MIT",
   "repository": {
@@ -59,6 +59,8 @@
     "./SubagentReservations": "./src/SubagentReservations.ts",
     "./ThreadHistory": "./src/ThreadHistory.ts",
     "./ToolBroker": "./src/ToolBroker.ts",
+    "./ToolDiscovery": "./src/ToolDiscovery.ts",
+    "./ToolExposure": "./src/ToolExposure.ts",
     "./ToolResult": "./src/ToolResult.ts",
     "./Usage": "./src/Usage.ts",
     "./WebCapture": "./src/WebCapture.ts",

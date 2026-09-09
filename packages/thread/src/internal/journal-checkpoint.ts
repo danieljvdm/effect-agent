@@ -1,5 +1,6 @@
 import { RunId, SubmissionId } from "@effect-agent/core/Identifiers";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
+import { Selection } from "@effect-agent/core/ToolExposure";
 import { RunUsageSummary } from "@effect-agent/core/Usage";
 import { Option, Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
@@ -13,6 +14,7 @@ export class JournalCheckpointSeed extends Schema.Class<JournalCheckpointSeed>(
   runId: RunId,
   throughSequence: CanonicalSequence,
   firstSequence: Schema.optionalKey(CanonicalSequence),
+  toolSelection: Schema.optionalKey(Selection),
   committedTurns: Schema.Natural,
   policyUsage: RunPolicyUsage,
   modelCalls: Schema.Natural,

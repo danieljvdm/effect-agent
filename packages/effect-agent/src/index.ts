@@ -41,6 +41,8 @@ export * as SubagentContract from "./SubagentContract.ts";
 export * as SubagentReservations from "./SubagentReservations.ts";
 export * as ThreadHistory from "./ThreadHistory.ts";
 export * as ToolBroker from "./ToolBroker.ts";
+export * as ToolDiscovery from "./ToolDiscovery.ts";
+export * as ToolExposure from "./ToolExposure.ts";
 export * as ToolResult from "./ToolResult.ts";
 export * as Usage from "./Usage.ts";
 export * as WebCapture from "./WebCapture.ts";

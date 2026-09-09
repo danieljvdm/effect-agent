@@ -8,6 +8,7 @@ import { Clock, Context, Deferred, Effect, Layer, Option, Ref, Semaphore } from 
 
 import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
 import { ThreadObjectIdentity } from "../CloudflareBindings.ts";
+import { CloudflareDurableRuntimeConfig } from "../CloudflareConfig.ts";
 
 /** Every externally requested write prearms the owning Object's maintenance generation. */
 export const guardedMessageDeliveryStoreLayer = Layer.effect(
@@ -73,6 +74,7 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
     const driver = yield* MessageDeliveryDriver;
     const store = yield* MessageDeliveryStore;
     const wakes = yield* WakeScheduler;
+    const config = yield* CloudflareDurableRuntimeConfig;
     const { threadId } = yield* ThreadObjectIdentity;
 
     const failure = (operation: string) => () =>
@@ -102,7 +104,7 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
           const changed = yield* Effect.scoped(
             Effect.gen(function* () {
               // Subscribe before the durable read so an insertion during a wave is retained
-              // as a hint for the next one. Losing the hint still leaves the prearmed outbox.
+              // as a hint for the next one. The scan interval covers dropped notifications.
               const notified = yield* wakes.subscribe(threadId);
 
               yield* drain;
@@ -113,17 +115,17 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
 
               // The index includes unfinished waves, lease expiry, retry and settlement polls.
               // Yield at least one millisecond for an already-due deadline instead of spinning.
-              const next =
+              const delay =
                 deadline === null
-                  ? notified
-                  : Effect.raceFirst(
-                      notified,
-                      Effect.sleep(Math.max(1, deadline - (yield* Clock.currentTimeMillis))),
+                  ? config.wakeScanInterval
+                  : Math.min(
+                      config.wakeScanInterval,
+                      Math.max(1, deadline - (yield* Clock.currentTimeMillis)),
                     );
 
               return yield* Effect.raceFirst(
                 Deferred.await(finished).pipe(Effect.as(false)),
-                next.pipe(Effect.as(true)),
+                Effect.raceFirst(notified, Effect.sleep(delay)).pipe(Effect.as(true)),
               );
             }),
           );

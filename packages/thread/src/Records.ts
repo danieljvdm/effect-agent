@@ -23,6 +23,7 @@ import {
   SubagentParentLink,
   ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
+import { Selection, Snapshot } from "@effect-agent/core/ToolExposure";
 import { ModelCallUsage, RunUsageSummary } from "@effect-agent/core/Usage";
 import { WorkerBudgetScope, WorkerRef, WorkerSource } from "@effect-agent/core/Worker";
 import { ContextHandoff } from "@effect-agent/engine/ContextWindow";
@@ -254,6 +255,7 @@ export class ModelCompleted extends Schema.TaggedClass<ModelCompleted>(
 export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
   "@effect-agent/thread/ToolCallSettled",
 )("ToolCallSettled", {
+  toolSelection: Schema.optionalKey(Selection),
   runId: RunId,
   toolCallId: ToolCallId,
   toolName: BoundedName,
@@ -270,6 +272,7 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
  * `messagesDigest` pins the exact encoded content.
  */
 const ModelResponseRecordedFields = Schema.Struct({
+  toolExposure: Schema.optionalKey(Snapshot),
   runId: RunId,
   turnId: TurnId,
   turn: TurnNumber,

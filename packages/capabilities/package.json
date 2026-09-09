@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/capabilities",
-  "version": "0.1.0-beta.70",
+  "version": "0.1.0-beta.72",
   "description": "Operational capabilities for Effect Agent: approvals, budgets, context management, command queues, MCP, structural redaction, and subagents.",
   "license": "MIT",
   "repository": {
@@ -19,6 +19,7 @@
     "./Approval": "./src/Approval.ts",
     "./Budget": "./src/Budget.ts",
     "./CodeMode": "./src/CodeMode.ts",
+    "./ToolDiscovery": "./src/ToolDiscovery.ts",
     "./Commands": "./src/Commands.ts",
     "./EphemeralThreads": "./src/EphemeralThreads.ts",
     "./Mcp": "./src/Mcp.ts",

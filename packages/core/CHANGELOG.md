@@ -1,5 +1,13 @@
 # @effect-agent/core
 
+## 0.1.0-beta.72
+
+### Minor Changes
+
+- [#401](https://github.com/danieljvdm/effect-agent/pull/401) [`08571ea`](https://github.com/danieljvdm/effect-agent/commit/08571eacf1483fbc0008106e6753138ad75eb011) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add opt-in run-scoped tool exposure and `ToolDiscovery.make` with bounded namespace search and durable selection recovery. Add selective Code Mode documentation; set `includeDeclarations: false` when host visibility or subagent grants hide any allowlisted method.
+
+## 0.1.0-beta.71
+
 ## 0.1.0-beta.70
 
 ## 0.1.0-beta.69

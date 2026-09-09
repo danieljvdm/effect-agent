@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/engine",
-  "version": "0.1.0-beta.70",
+  "version": "0.1.0-beta.72",
   "description": "The Effect Agent ephemeral interpreter: a bounded agent loop over Effect AI with typed run events, budgets, and deterministic tool scheduling.",
   "license": "MIT",
   "repository": {
@@ -28,7 +28,8 @@
     "./ThreadHistory": "./src/ThreadHistory.ts",
     "./ToolBroker": "./src/ToolBroker.ts",
     "./ContextWindow": "./src/ContextWindow.ts",
-    "./ContextHistory": "./src/ContextHistory.ts"
+    "./ContextHistory": "./src/ContextHistory.ts",
+    "./ToolExposure": "./src/ToolExposure.ts"
   },
   "publishConfig": {
     "access": "public"

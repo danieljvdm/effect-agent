@@ -2,4 +2,4 @@
 "@effect-agent/platform-cloudflare": patch
 ---
 
-Deliver new outgoing messages and due retries while their source Run is active on Cloudflare. Preserve bounded delivery, durable recovery, and independent source execution.
+Wake outgoing delivery immediately when messages are inserted during an active Cloudflare Run. Preserve bounded delivery, durable recovery, and periodic scans when wake notifications are lost.

@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/core",
-  "version": "0.1.0-beta.70",
+  "version": "0.1.0-beta.72",
   "description": "Schema-first Agent authoring for Effect Agent: immutable definitions, explicit model bindings, policies, and core domain values.",
   "license": "MIT",
   "repository": {
@@ -36,7 +36,8 @@
     "./RememberingStore": "./src/RememberingStore.ts",
     "./Receipt": "./src/Receipt.ts",
     "./Worker": "./src/Worker.ts",
-    "./Messaging": "./src/Messaging.ts"
+    "./Messaging": "./src/Messaging.ts",
+    "./ToolExposure": "./src/ToolExposure.ts"
   },
   "publishConfig": {
     "access": "public"

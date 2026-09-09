@@ -4,6 +4,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/ToolExposure.ts",
       "src/AgentRuntime.ts",
       "src/SubagentHost.ts",
       "src/MessagingHost.ts",

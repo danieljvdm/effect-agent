@@ -15,6 +15,7 @@ import {
   type RunContextHook,
 } from "@effect-agent/engine/RunOptions";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { RunToolVisibility } from "@effect-agent/engine/ToolExposure";
 import { Context, Effect, Layer, Option, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { expectTypeOf, it } from "vite-plus/test";
@@ -568,4 +569,50 @@ it("resolved-call preparation preserves host and provider requirements and typed
       LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
     >
   >().toEqualTypeOf<never>();
+});
+
+it("preserves full registered Tool E/R under progressive exposure", () => {
+  const progressive = Agent.make("typed-exposure", {
+    input: Schema.String,
+    output: Schema.String,
+    instructions: "Answer.",
+    toolkit,
+    toolExposure: {
+      initialToolNames: [],
+    },
+  });
+
+  expectTypeOf<
+    Extract<AgentRuntimeRequirements<typeof progressive>, Catalog>
+  >().toEqualTypeOf<Catalog>();
+  expectTypeOf<
+    Extract<AgentRuntimeFailure<typeof progressive>, ToolError>
+  >().toEqualTypeOf<ToolError>();
+});
+
+it("preserves visibility Layer dependencies and construction failures", () => {
+  const run = AgentRuntime.run(Agent.withModel(planner, model), { city: "Lisbon", days: "2" });
+
+  const visibility = Layer.effect(
+    RunToolVisibility,
+    Effect.gen(function* () {
+      const allowedName = yield* TurnHost;
+
+      if (allowedName === "") return yield* TurnHostError.make({});
+
+      return {
+        visible: ({ toolNames }) =>
+          Effect.succeed(toolNames.filter((name) => name === allowedName)),
+      };
+    }),
+  );
+
+  const visibleRun = run.pipe(Effect.provide(visibility));
+
+  expectTypeOf<Effect.Services<typeof visibleRun>>().toEqualTypeOf<
+    Effect.Services<typeof run> | TurnHost
+  >();
+  expectTypeOf<Effect.Error<typeof visibleRun>>().toEqualTypeOf<
+    Effect.Error<typeof run> | TurnHostError
+  >();
 });
