@@ -1,5 +1,6 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { expect, it } from "vite-plus/test";
 
 import {
@@ -110,6 +111,7 @@ it.each(["failure", "defect", "timeout"] as const)(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const directory = yield* fs.makeTempDirectoryScoped();
+        const entered = yield* Deferred.make<void>();
 
         const options: DiagnosticWorkerOptions = {
           output: `${directory}/worker.json`,
@@ -118,7 +120,7 @@ it.each(["failure", "defect", "timeout"] as const)(
           timeoutMs: 10,
         };
 
-        const result = yield* runDiagnosticWorker(options).pipe(
+        const fiber = yield* runDiagnosticWorker(options).pipe(
           Effect.provideService(DiagnosticRunner, {
             run: (workload) =>
               workload.name !== diagnosticCases[0]!.name
@@ -133,6 +135,7 @@ it.each(["failure", "defect", "timeout"] as const)(
                       }),
                     );
                     yield* progress.mark({ name: "entered", elapsedMs: 0 });
+                    yield* Deferred.succeed(entered, undefined);
                     if (kind === "failure")
                       return yield* BenchmarkError.make({ message: "expected fixture failure" });
                     if (kind === "defect") return yield* Effect.die("fixture defect");
@@ -140,8 +143,12 @@ it.each(["failure", "defect", "timeout"] as const)(
                     return yield* Effect.never;
                   }).pipe(Effect.scoped),
           }),
-          Effect.exit,
+          Effect.forkChild,
         );
+
+        yield* Deferred.await(entered);
+        if (kind === "timeout") yield* TestClock.adjust(options.timeoutMs);
+        const result = yield* Fiber.await(fiber);
 
         const report = yield* Schema.decodeUnknownEffect(
           Schema.fromJsonString(DiagnosticWorkerReport),
@@ -155,9 +162,19 @@ it.each(["failure", "defect", "timeout"] as const)(
           result: null,
           marks: [{ name: "entered", elapsedMs: 0 }],
         });
-        expect(report.samples.at(-1)?.status).toBe("passed");
+        expect(report.samples[0]?.failure).toContain(
+          kind === "failure"
+            ? "expected fixture failure"
+            : kind === "defect"
+              ? "fixture defect"
+              : "TimeoutError",
+        );
+        expect(report.samples).toHaveLength(diagnosticCases.length);
+        expect(report.samples.slice(1).map(({ status }) => status)).toEqual(
+          diagnosticCases.slice(1).map(() => "passed"),
+        );
         expect(completeDiagnosticBatch(report, options, diagnosticCases)).toBe(false);
-      }).pipe(Effect.scoped, Effect.provide(services)),
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(services, TestClock.layer()))),
     );
   },
 );
