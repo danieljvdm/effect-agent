@@ -38,7 +38,12 @@ jobs:
             const number = read('pr-number.txt', 20).trim();
             if (!/^[1-9][0-9]{0,9}$/.test(number)) throw new Error('Invalid PR number');
             const report = JSON.parse(read('report.json', 3000000));
-            if (report.fixture !== 'runtime-v1' || report.profile !== 'pr' ||
+            if (report.fixture !== 'runtime-v2' || report.profile !== 'pr' ||
+                report.referenceVersion !== 'audit-beta67-node24-v1' ||
+                report.activeBatch !== null || report.failure !== null ||
+                report.settings?.batches !== 3 || report.settings?.warmupsPerBatch !== 2 || report.settings?.samplesPerBatch !== 3 ||
+                report.settings?.production !== true || report.settings?.execution !== 'unbundled published ESM' ||
+                report.environment?.node !== 'v24.20.0' ||
                 !/^[a-f0-9]{64}$/.test(report.fixtureSha256) ||
                 !Array.isArray(report.revisions) || report.revisions.length !== 3 ||
                 !Array.isArray(report.batches) || report.batches.length !== 18) {
@@ -46,7 +51,9 @@ jobs:
             }
             const revision = role => report.revisions.find(value => value.role === role);
             for (const role of ['base', 'head', 'reference']) {
-              if (!/^[a-f0-9]{40}$/.test(revision(role)?.revision) || revision(role).dirty !== false) throw new Error('Invalid revision');
+              if (!/^[a-f0-9]{40}$/.test(revision(role)?.revision) || revision(role).dirty !== false ||
+                  !/^[a-f0-9]{64}$/.test(revision(role).lockfileSha256) ||
+                  !/^[a-f0-9]{64}$/.test(revision(role).builtArtifactsSha256)) throw new Error('Invalid revision');
             }
             if (revision('reference').revision !== '596cffba70716b1211ac02de949c4d0f31734b2f') throw new Error('Unexpected reference');
             const run = context.payload.workflow_run;
@@ -67,19 +74,29 @@ jobs:
             for (const batch of report.batches) {
               const key = `${batch.role}:${batch.cohort}:${batch.cold}`;
               if (!['base','head','reference'].includes(batch.role) || ![0,1,2].includes(batch.cohort) ||
-                  typeof batch.cold !== 'boolean' || identities.has(key) || batch.exitCode !== 0 || !batch.complete ||
+                  typeof batch.cold !== 'boolean' || identities.has(key) || batch.exitCode !== 0 || batch.complete !== true ||
+                  batch.failure !== null || !Number.isFinite(batch.subprocessMs) || batch.subprocessMs < 0 ||
+                  batch.report?.fixture !== report.fixture || batch.report?.profile !== report.profile ||
+                  batch.report?.runtime !== report.environment.node || batch.report?.platform !== report.environment.platform ||
+                  batch.report?.architecture !== report.environment.architecture || batch.report?.active !== null || batch.report?.failure !== null ||
                   !Array.isArray(batch.report?.samples)) throw new Error('Invalid cohort');
               identities.add(key);
-              if (batch.cold) continue;
-              if (batch.report.samples.length !== expected.length * 5) throw new Error('Incomplete cohort');
+              const workloads = batch.cold ? ['small-run'] : expected;
+              const ordinals = batch.cold ? [0] : [0,1,2,3,4];
+              if (batch.report.samples.length !== workloads.length * ordinals.length) throw new Error('Incomplete cohort');
               const unique = new Set();
               for (const sample of batch.report.samples) {
                 const id = `${sample.case}:${sample.ordinal}`;
-                if (!expected.includes(sample.case) || ![0,1,2,3,4].includes(sample.ordinal) || unique.has(id) ||
-                    sample.status !== 'passed' || sample.warmup !== (sample.ordinal < 2) ||
-                    !Number.isFinite(sample.totalMs) || sample.totalMs < 0 || sample.totalMs > 180000) throw new Error('Invalid sample');
+                if (!workloads.includes(sample.case) || !ordinals.includes(sample.ordinal) || unique.has(id) ||
+                    sample.status !== 'passed' || sample.failure !== null || sample.failurePhase !== null ||
+                    sample.warmup !== (!batch.cold && sample.ordinal < 2) ||
+                    !Number.isFinite(sample.totalMs) || sample.totalMs < 0 || sample.totalMs > 180000 ||
+                    !Number.isFinite(sample.attemptMs) || !Number.isFinite(sample.setupMs) || sample.setupMs < 0 ||
+                    sample.attemptMs < sample.setupMs + sample.totalMs ||
+                    !Number.isFinite(sample.modelEntryMs) || sample.modelEntryMs < 0 || sample.modelEntryMs > sample.totalMs ||
+                    !Number.isInteger(sample.modelCalls) || sample.modelCalls < 1 || sample.modelCalls !== sample.finalizers) throw new Error('Invalid sample');
                 unique.add(id);
-                if (!sample.warmup) samples.push({ role: batch.role, name: sample.case, ms: sample.totalMs });
+                if (!batch.cold && !sample.warmup) samples.push({ role: batch.role, name: sample.case, ms: sample.totalMs });
               }
             }
             const rows = expected.map(name => {

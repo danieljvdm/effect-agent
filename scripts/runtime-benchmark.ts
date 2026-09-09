@@ -19,6 +19,7 @@ import {
   WorkerOptions,
   WorkerReport,
 } from "../examples/runtime-benchmark/src/contracts.ts";
+import { writeEvidence } from "../examples/runtime-benchmark/src/evidence.ts";
 import { PublishManifest, withPublishManifests } from "./release-publish.ts";
 
 const Revision = Schema.Struct({
@@ -70,19 +71,35 @@ export const PerformanceReport = Schema.Struct({
   }),
   revisions: Schema.Array(Revision),
   batches: Schema.Array(Batch),
+  activeBatch: Schema.NullOr(
+    Schema.Struct({
+      role: Revision.fields.role,
+      cohort: Schema.Natural,
+      cold: Schema.Boolean,
+    }),
+  ),
+  failure: Schema.NullOr(Schema.String),
 });
 
 type PerformanceReport = typeof PerformanceReport.Type;
 
 const sha256 = (content: string | Uint8Array) => createHash("sha256").update(content).digest("hex");
 
-const subprocess = Effect.fn("benchmark.subprocess")(function* (
+/** Shared raw-byte budget for stdout and stderr, including the retained log prefix. */
+export const MAX_SUBPROCESS_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+export const subprocess = Effect.fn("benchmark.subprocess")(function* (
   executable: string,
   args: ReadonlyArray<string>,
   cwd: string,
   env: Record<string, string> = {},
+  logFile?: string,
 ) {
   const started = yield* Clock.monotonicTimeNanos;
+  const fs = yield* FileSystem.FileSystem;
+  let outputBytes = 0;
+
+  if (logFile !== undefined) yield* fs.writeFileString(logFile, "");
 
   const child = yield* ChildProcess.make(executable, args, {
     cwd,
@@ -90,12 +107,29 @@ const subprocess = Effect.fn("benchmark.subprocess")(function* (
     extendEnv: true,
     stdout: "pipe",
     stderr: "pipe",
+    forceKillAfter: "5 seconds",
   });
+
+  const retain = Effect.fn("benchmark.retainOutput")(function* (chunk: Uint8Array) {
+    // Reserve synchronously across both readers. Finish accepted writes even if the
+    // other reader overflows, so cancellation cannot erase an already retained prefix.
+    const prefix = chunk.subarray(0, MAX_SUBPROCESS_OUTPUT_BYTES - outputBytes);
+
+    outputBytes += prefix.byteLength;
+    if (logFile !== undefined && prefix.byteLength > 0)
+      yield* fs.writeFile(logFile, prefix, { flag: "a" });
+    if (prefix.byteLength !== chunk.byteLength)
+      return yield* BenchmarkError.make({
+        message: `Child output exceeded ${MAX_SUBPROCESS_OUTPUT_BYTES} bytes across stdout and stderr; retained the bounded prefix`,
+      });
+
+    return prefix;
+  }, Effect.uninterruptible);
 
   const [stdout, stderr, exitCode] = yield* Effect.all(
     [
-      Stream.mkString(Stream.decodeText(child.stdout)),
-      Stream.mkString(Stream.decodeText(child.stderr)),
+      Stream.mkString(Stream.decodeText(child.stdout.pipe(Stream.mapEffect(retain)))),
+      Stream.mkString(Stream.decodeText(child.stderr.pipe(Stream.mapEffect(retain)))),
       child.exitCode,
     ],
     { concurrency: 3 },
@@ -285,6 +319,12 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
     "",
     `Correctness failures: ${failures.length}; failed subprocesses: ${failedProcesses}.`,
     `Invalid/incomplete batches: ${incomplete.length}; processes recorded: ${report.batches.length}/${report.settings.batches * 6}. Incomplete batches are excluded from comparison summaries.`,
+    ...(report.activeBatch === null
+      ? []
+      : [
+          `Interrupted active batch: ${report.activeBatch.role}/${report.activeBatch.cohort}/${report.activeBatch.cold ? "cold" : "warm"}.`,
+        ]),
+    ...(report.failure === null ? [] : [`Comparison failure: ${report.failure.split("\n")[0]}`]),
     ...incomplete.map(
       (batch) =>
         `${batch.role}/${batch.cohort}/${batch.cold ? "cold" : "warm"}: ${(batch.failure ?? "Missing or invalid worker report").split("\n")[0]}`,
@@ -297,6 +337,27 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
     lines.push(
       `${revision.role}: ${revision.revision}${revision.dirty ? " (dirty working tree)" : ""}; Effect ${revision.effect}; lock ${revision.lockfileSha256}`,
     );
+  lines.push(
+    "",
+    "Worker wall time includes seed setup, assertions, cleanup, and report writes. Unallocated time includes startup, reporting, shutdown, controller overhead, and any unfinished attempt; these costs are not individually measured:",
+    "",
+    "| Batch | Process ms | Sample attempts ms | Sample setup ms | Unallocated ms | Last active sample |",
+    "| --- | ---: | ---: | ---: | ---: | --- |",
+  );
+  for (const batch of report.batches) {
+    const active = batch.report?.active;
+    const attempts = batch.report?.samples.reduce((sum, sample) => sum + sample.attemptMs, 0) ?? 0;
+    const setup = batch.report?.samples.reduce((sum, sample) => sum + sample.setupMs, 0) ?? 0;
+
+    const lastActive =
+      active === null || active === undefined
+        ? "none"
+        : `${active.case}:${active.ordinal} ${active.phase} at ${active.elapsedMs.toFixed(2)} ms`;
+
+    lines.push(
+      `| ${batch.role}/${batch.cohort}/${batch.cold ? "cold" : "warm"} | ${batch.subprocessMs.toFixed(2)} | ${attempts.toFixed(2)} | ${setup.toFixed(2)} | ${(batch.subprocessMs - attempts).toFixed(2)} | ${lastActive} |`,
+    );
+  }
 
   return lines.join("\n") + "\n";
 };
@@ -325,8 +386,8 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
   yield* Effect.tryPromise({
     try: () =>
       build({
-        entryPoints: ["contracts.ts", "fixture.ts", "worker.ts"].map((file) =>
-          path.join(source, file),
+        entryPoints: ["contracts.ts", "fixture.ts", "worker.ts", "evidence.ts", "seeds.ts"].map(
+          (file) => path.join(source, file),
         ),
         outdir: fixtures,
         bundle: false,
@@ -366,7 +427,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
 
   yield* check(
     node.exitCode === 0 && node.stdout.trim().startsWith("v24."),
-    "runtime-v1 requires Node 24; changing the runtime requires a versioned reference reset",
+    `${FIXTURE_VERSION} requires Node 24; changing the runtime requires a versioned reference reset`,
   );
 
   const sizes =
@@ -381,6 +442,8 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
           };
 
   const batches: Array<Batch> = [];
+  let activeBatch: PerformanceReport["activeBatch"] = null;
+  let failure: string | null = null;
 
   const report: PerformanceReport = {
     fixture: FIXTURE_VERSION,
@@ -405,14 +468,20 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
     },
     revisions: stages.map((stage) => stage.revision),
     batches,
+    get activeBatch() {
+      return activeBatch;
+    },
+    get failure() {
+      return failure;
+    },
   };
 
   const persist = Effect.gen(function* () {
-    yield* fs.writeFileString(
+    yield* writeEvidence(
       path.join(output, "report.json"),
       yield* Schema.encodeEffect(Schema.fromJsonString(PerformanceReport))(report),
     );
-    yield* fs.writeFileString(path.join(output, "report.md"), renderPerformanceReport(report));
+    yield* writeEvidence(path.join(output, "report.md"), renderPerformanceReport(report));
   });
 
   const measure = Effect.gen(function* () {
@@ -425,6 +494,10 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
         for (const stage of ordered) {
           const name = `${cohort}-${stage.revision.role}-${cold ? "cold" : "warm"}`;
           const outputFile = path.join(output, `${name}.json`);
+          const logFile = path.join(output, `${name}.log`);
+
+          activeBatch = { role: stage.revision.role, cohort, cold };
+          yield* persist;
 
           yield* Console.error(`Measuring ${name} (${options.profile})`);
 
@@ -436,90 +509,106 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
             output: outputFile,
           };
 
-          const childStarted = yield* Clock.monotonicTimeNanos;
+          yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const childStarted = yield* Clock.monotonicTimeNanos;
 
-          const childExit = yield* subprocess(
-            "node",
-            [path.join(stage.stage, "fixture/worker.js")],
-            stage.stage,
-            {
-              NODE_ENV: "production",
-              RUNTIME_BENCHMARK_OPTIONS: Schema.encodeSync(Schema.fromJsonString(WorkerOptions))(
-                workerOptions,
-              ),
-            },
-          ).pipe(
-            Effect.timeout(
-              cold
-                ? "30 seconds"
-                : options.profile === "pr" || options.profile === "smoke"
-                  ? "5 minutes"
-                  : "90 minutes",
-            ),
-            Effect.exit,
+              const childExit = yield* restore(
+                subprocess(
+                  "node",
+                  [path.join(stage.stage, "fixture/worker.js")],
+                  stage.stage,
+                  {
+                    NODE_ENV: "production",
+                    RUNTIME_BENCHMARK_OPTIONS: Schema.encodeSync(
+                      Schema.fromJsonString(WorkerOptions),
+                    )(workerOptions),
+                  },
+                  logFile,
+                ).pipe(
+                  Effect.timeout(
+                    cold
+                      ? "30 seconds"
+                      : options.profile === "pr" || options.profile === "smoke"
+                        ? "5 minutes"
+                        : "90 minutes",
+                  ),
+                ),
+              ).pipe(Effect.exit);
+
+              const result = Exit.isSuccess(childExit)
+                ? childExit.value
+                : {
+                    stdout: "",
+                    stderr: Cause.pretty(childExit.cause),
+                    exitCode: -1,
+                    subprocessMs: Number((yield* Clock.monotonicTimeNanos) - childStarted) / 1e6,
+                  };
+
+              const decodedReport = (yield* fs.exists(outputFile))
+                ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerReport))(
+                    yield* fs.readFileString(outputFile),
+                  ).pipe(Effect.exit)
+                : null;
+
+              const childReport =
+                decodedReport !== null && Exit.isSuccess(decodedReport)
+                  ? decodedReport.value
+                  : null;
+
+              const workMatches = childReport !== null && completeBatch(childReport, workerOptions);
+
+              const environmentMatches =
+                childReport !== null &&
+                childReport.runtime === report.environment.node &&
+                childReport.platform === report.environment.platform &&
+                childReport.architecture === report.environment.architecture;
+
+              batches.push({
+                role: stage.revision.role,
+                cohort,
+                cold,
+                subprocessMs: result.subprocessMs,
+                exitCode: result.exitCode,
+                complete: workMatches && environmentMatches,
+                report: childReport,
+                failure:
+                  decodedReport !== null && Exit.isFailure(decodedReport)
+                    ? Cause.pretty(decodedReport.cause)
+                    : result.exitCode !== 0
+                      ? result.stderr
+                      : !workMatches
+                        ? "Missing, duplicated, failed, or unfinalized workload samples"
+                        : !environmentMatches
+                          ? "Worker runtime/platform/architecture differs from the controller"
+                          : null,
+              });
+              activeBatch = null;
+              yield* persist;
+              if (Exit.isFailure(childExit) && Cause.hasInterrupts(childExit.cause))
+                return yield* Effect.failCause(childExit.cause);
+            }),
           );
-
-          const result = Exit.isSuccess(childExit)
-            ? childExit.value
-            : {
-                stdout: "",
-                stderr: Cause.pretty(childExit.cause),
-                exitCode: -1,
-                subprocessMs: Number((yield* Clock.monotonicTimeNanos) - childStarted) / 1e6,
-              };
-
-          yield* fs.writeFileString(
-            path.join(output, `${name}.log`),
-            result.stdout + result.stderr,
-          );
-
-          const decodedReport = (yield* fs.exists(outputFile))
-            ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerReport))(
-                yield* fs.readFileString(outputFile),
-              ).pipe(Effect.exit)
-            : null;
-
-          const childReport =
-            decodedReport !== null && Exit.isSuccess(decodedReport) ? decodedReport.value : null;
-
-          const workMatches = childReport !== null && completeBatch(childReport, workerOptions);
-
-          const environmentMatches =
-            childReport !== null &&
-            childReport.runtime === report.environment.node &&
-            childReport.platform === report.environment.platform &&
-            childReport.architecture === report.environment.architecture;
-
-          batches.push({
-            role: stage.revision.role,
-            cohort,
-            cold,
-            subprocessMs: result.subprocessMs,
-            exitCode: result.exitCode,
-            complete: workMatches && environmentMatches,
-            report: childReport,
-            failure:
-              decodedReport !== null && Exit.isFailure(decodedReport)
-                ? Cause.pretty(decodedReport.cause)
-                : result.exitCode !== 0
-                  ? result.stderr
-                  : !workMatches
-                    ? "Missing, duplicated, failed, or unfinalized workload samples"
-                    : !environmentMatches
-                      ? "Worker runtime/platform/architecture differs from the controller"
-                      : null,
-          });
-          yield* persist;
         }
     }
-  }).pipe(Effect.onExit(() => persist));
+  }).pipe(
+    Effect.timeout(
+      options.profile === "pr" || options.profile === "smoke" ? "19 minutes" : "160 minutes",
+    ),
+    Effect.onExit((exit) => {
+      if (Exit.isFailure(exit)) failure = Cause.pretty(exit.cause);
+
+      return persist;
+    }),
+  );
 
   yield* withPublishManifests(base.stage, () =>
     withPublishManifests(head.stage, () => withPublishManifests(reference.stage, () => measure)),
   );
   yield* Console.log(renderPerformanceReport(report));
   yield* check(
-    batches.every((batch) => batch.exitCode === 0 && batch.complete),
+    batches.length === sizes.batches * 6 &&
+      batches.every((batch) => batch.exitCode === 0 && batch.complete),
     "Benchmark correctness failed; timings are informational but incomplete work is rejected",
   );
 

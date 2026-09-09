@@ -29,6 +29,8 @@ it("reports and excludes an invalid batch even when its process exited successfu
       timingGate: "informational",
     },
     revisions: [],
+    activeBatch: null,
+    failure: null,
     batches: [
       {
         role: "head",
@@ -44,12 +46,17 @@ it("reports and excludes an invalid batch even when its process exited successfu
           runtime: "v22",
           platform: "test",
           architecture: "test",
+          active: null,
+          failure: null,
           samples: [
             {
               case: "small-run",
               ordinal: 0,
               warmup: false,
               totalMs: 0.01,
+              attemptMs: 1,
+              setupMs: 0.5,
+              failurePhase: null,
               modelEntryMs: 0.005,
               checkpointCreationMs: null,
               retainedPromptMessages: 0,
@@ -71,4 +78,31 @@ it("reports and excludes an invalid batch even when its process exited successfu
   expect(rendered).toContain("Invalid/incomplete batches: 1; processes recorded: 1/6");
   expect(rendered).toContain("Worker runtime differs from the controller");
   expect(rendered).toContain("| small-run | n/a | n/a | n/a |");
+
+  const interrupted = renderPerformanceReport({
+    ...report,
+    activeBatch: { role: "reference", cohort: 0, cold: false },
+    failure: "TimeoutException: comparison deadline",
+    batches: report.batches.map((batch) => ({
+      ...batch,
+      exitCode: -1,
+      report:
+        batch.report === null
+          ? null
+          : {
+              ...batch.report,
+              active: {
+                case: "settled-ledger-16",
+                ordinal: 0,
+                warmup: false,
+                phase: "setup",
+                elapsedMs: 1200,
+              },
+            },
+    })),
+  });
+
+  expect(interrupted).toContain("Interrupted active batch: reference/0/warm");
+  expect(interrupted).toContain("Comparison failure: TimeoutException: comparison deadline");
+  expect(interrupted).toContain("settled-ledger-16:0 setup at 1200.00 ms");
 });

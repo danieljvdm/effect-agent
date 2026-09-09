@@ -30,6 +30,12 @@ applied input and terminal outcomes. Projections, checkpoints, indexes, and UI v
 
 Replay rebuilds state from records. It never executes a tool or repeats an external effect.
 
+An Attempt captures a fixed canonical tail and validates contiguous pages. For uncompacted history,
+it gathers control and journal metadata together. Later appends enter through a separately captured
+suffix; a gap or short page fails before that view can drive recovery. Compaction records and
+checkpoint-seeded views use the full journal validation path. Attempt metadata does not replace
+canonical prompt or unresolved-tool validation.
+
 `ThreadProjection` version 2 scopes open tool calls and subagent invocations by Run and Tool Call
 ID. Decode checkpoint state with its Schema before replaying a suffix. Earlier projection states,
 including empty views, fail decoding and must be discarded and rebuilt from canonical records.

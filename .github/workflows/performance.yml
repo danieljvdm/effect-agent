@@ -96,6 +96,8 @@ jobs:
 
       - name: Compare sequential cohorts
         timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 165 }}
+        # The controller stops at 19m (PR) / 160m (larger profiles), leaving time
+        # for bounded child termination and atomic failure evidence before this outer limit.
         # Older releases do not ignore these known declaration artifacts emitted
         # by their package build. Remove only those generated scratch files.
         # The subsequent --require-clean check rejects every other modification.

@@ -10,14 +10,21 @@ import {
   type Sample,
   type WorkerReport,
 } from "../src/contracts.ts";
-import { runSample } from "../src/fixture.ts";
+import { BenchmarkProgress } from "../src/evidence.ts";
+import { runSample, SeedInitializerLive } from "../src/fixture.ts";
+import { SeedTemplates } from "../src/seeds.ts";
 
 it.each(casesFor("smoke"))(
   "validates equivalent completed work in $name",
   async (workload) => {
     const result = await Effect.runPromise(
       runSample(workload, 0, false).pipe(
-        Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+        Effect.provide(
+          Layer.merge(SeedTemplates.layer, BenchmarkProgress.silent).pipe(
+            Layer.provide(SeedInitializerLive),
+            Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+          ),
+        ),
       ),
     );
 
@@ -38,6 +45,9 @@ it("rejects missing, duplicated, or unfinalized samples even if the subprocess e
     ordinal: 0,
     warmup: false,
     totalMs: 2,
+    attemptMs: 3,
+    setupMs: 0.5,
+    failurePhase: null,
     modelEntryMs: 1,
     checkpointCreationMs: null,
     retainedPromptMessages: 0,
@@ -55,6 +65,8 @@ it("rejects missing, duplicated, or unfinalized samples even if the subprocess e
     runtime: "v24",
     platform: "test",
     architecture: "test",
+    active: null,
+    failure: null,
     samples: [sample],
   };
 
