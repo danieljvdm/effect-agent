@@ -189,7 +189,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
           ),
           "go",
           options,
-        ).pipe(Effect.provide(handlers), Effect.provide(visibility));
+        ).pipe(Effect.provide([handlers, visibility]));
 
         expect(result.output).toBe("done");
         expect(requests).toEqual([
@@ -202,7 +202,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
           Agent.withModel(agent, scripted([[call("hidden", "status"), finish]], [])),
           "go",
           options,
-        ).pipe(Effect.provide(handlers), Effect.provide(visibility), Effect.exit);
+        ).pipe(Effect.provide([handlers, visibility]), Effect.exit);
 
         expect(Exit.isFailure(rejected)).toBe(true);
         expect(hiddenStarts).toBe(0);
