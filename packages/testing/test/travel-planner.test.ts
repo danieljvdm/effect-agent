@@ -75,13 +75,10 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
             "search_lodging",
             "search_activities",
           ]);
-          // Guidance system message plus the model-visible output contract
-          // (RUN-028), the encoded trip input, then the derived run-status
-          // line (RUN-024).
+          // Guidance, the model-visible output contract (RUN-028), and encoded trip input.
           expect(request.prompt.content.map((message) => message.role)).toEqual([
             "system",
             "system",
-            "user",
             "user",
           ]);
         },

@@ -99,7 +99,7 @@ export type AgentPolicyInput = Readonly<
     readonly onExhaustion?: typeof OnExhaustion.Type;
     /** Byte bound for each encoded Tool result; defaults to `50 KiB`. */
     readonly toolResultBounds?: ToolResultBounds;
-    /** Whether a derived run-status message is appended to each model call; defaults to `"appended"`. */
+    /** Whether a derived run-status message is appended to each model call; defaults to `"off"` to preserve retained prompt cache boundaries. */
     readonly runStatus?: AgentPolicyFields["runStatus"];
     /** Tokens reserved for final delivery; defaults to 20% of tokenBudget, capped at 4,096. */
     readonly completionReserveTokens?: number;
@@ -145,7 +145,7 @@ export class AgentPolicy extends Schema.Class<AgentPolicy>("AgentPolicy")(AgentP
       repeatedFailureLimit: input.repeatedFailureLimit ?? 3,
       onExhaustion: input.onExhaustion ?? "final-answer",
       toolResultBounds: input.toolResultBounds ?? ToolResultBounds.make({ maxBytes: 50 * 1024 }),
-      runStatus: input.runStatus ?? "appended",
+      runStatus: input.runStatus ?? "off",
       completionReserveTokens,
       compaction: input.compaction ?? CompactionPolicy.make(),
     });

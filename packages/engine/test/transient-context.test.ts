@@ -464,7 +464,7 @@ layer(testLayer)("transient model context", (it) => {
 
       expect(result.output).toBe("done");
       expect(yield* Ref.get(loads)).toBe(3);
-      expect(compactionTargets).toEqual([1_750]);
+      expect(compactionTargets).toEqual([1_800]);
       expect(requests).toHaveLength(3);
       expect(JSON.stringify(requests[2]?.content)).not.toContain("first-result");
       expect(JSON.stringify(requests[2]?.content)).toContain("second-result");
@@ -599,8 +599,8 @@ layer(testLayer)("transient model context", (it) => {
       expect(result.output).toBe("done");
       expect(yield* Ref.get(loads)).toBe(4);
       expect(compactionPasses).toEqual([
-        { sourceLength: 6, targetTokens: 1_450, trigger: "pressure" },
-        { sourceLength: 8, targetTokens: 1_450, trigger: "pressure" },
+        { sourceLength: 6, targetTokens: 1_500, trigger: "pressure" },
+        { sourceLength: 8, targetTokens: 1_500, trigger: "pressure" },
       ]);
       expect(requests).toHaveLength(4);
       expect(JSON.stringify(requests[3]?.content)).toContain("first search summarized");

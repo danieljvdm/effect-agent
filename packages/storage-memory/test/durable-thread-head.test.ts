@@ -678,6 +678,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         toolkit: tools,
         policy: AgentPolicy.make({
           ...policy,
+          runStatus: "appended",
           tokenBudget: 5_000,
           completionReserveTokens: 500,
         }),

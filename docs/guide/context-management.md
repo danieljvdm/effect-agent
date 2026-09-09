@@ -25,7 +25,7 @@ AgentPolicy.make({
   contextTokenLimit: 150_000,
 
   toolResultBounds: ToolResultBounds.make({ maxBytes: 50 * 1024 }),
-  runStatus: "appended",
+  runStatus: "off",
   compaction: CompactionPolicy.make({ keepRecentTokens: 20_000 }),
   onExhaustion: "final-answer",
 });
@@ -997,9 +997,12 @@ At 80 percent of a limit, the line asks the model to wrap up. The token warning 
 balance after reserving completion capacity. The runtime also warns when that balance cannot cover
 another input as large as the last call.
 
-The status line is built for each request and never enters canonical history. Set `runStatus: "off"`
-for prompt-sensitive evaluations. Providers that cache at the last user message may need an
-explicit cache boundary before this changing suffix. The host owns provider cache fields.
+`runStatus` defaults to `"off"`. The optional status line is built for each request and never
+enters canonical history. Providers that write a cache entry at the latest user/tool boundary
+can therefore cache a suffix that disappears on the next turn, repeatedly rewriting growing
+history. Keeping status off preserves the retained conversation's cache boundary; host-enforced
+limits and `BudgetWarning` events remain active. If you opt into appended status, the host must
+account for its provider's cache-boundary behavior.
 
 <a id="warnings-and-the-token-soft-landing"></a>
 

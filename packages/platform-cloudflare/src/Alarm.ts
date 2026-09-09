@@ -246,6 +246,10 @@ export class ThreadPublication extends Context.Service<
  */
 export const ThreadMessageDelivery = Context.Reference<{
   readonly drain: Effect.Effect<void, DurableAlarmError>;
+  /** Drain inserts and due retries during source work, finishing the bounded wave on completion. */
+  readonly drainUntil?: (
+    finished: Deferred.Deferred<void>,
+  ) => Effect.Effect<void, DurableAlarmError>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadMessageDelivery", {
   defaultValue: () => ({ drain: Effect.void, pendingDeadline: Effect.succeed(Option.none()) }),
@@ -630,35 +634,16 @@ export class ThreadMaintenance extends Context.Service<
           }),
         );
 
-        // Keep one bounded delivery wave active beside source work, including messages
-        // created after this pass starts. New writes invalidate the cached deadline; the
-        // wake scan bounds discovery even when this Object's native alarm is already running.
-        const stopDelivery = yield* Deferred.make<void>();
+        // Deliver beside source work, including messages inserted by the running Attempt.
+        // Slow destination RPCs never consume the source execution window. Stop starting
+        // waves when source work ends, then join the bounded current wave before acknowledgement.
+        const deliveryFinished = yield* Deferred.make<void>();
 
         const delivery = yield* Effect.forkChild(
-          Effect.gen(function* () {
-            while (true) {
-              const stopping = yield* Deferred.isDone(stopDelivery);
-
-              yield* messages.drain;
-              if (stopping) return;
-
-              const next = yield* messages.pendingDeadline;
-              const now = yield* Clock.currentTimeMillis;
-
-              const delay = Option.isSome(next)
-                ? Math.min(config.wakeScanInterval, Math.max(1, next.value - now))
-                : config.wakeScanInterval;
-
-              yield* Effect.raceFirst(Deferred.await(stopDelivery), Effect.sleep(delay));
-            }
-          }),
+          messages.drainUntil?.(deliveryFinished) ?? messages.drain,
         );
 
-        // Complete the in-flight wave and one final drain before reading alarm deadlines.
-        // Failures still surface after source work; interruption supervises the child and
-        // leaves the prearmed generation available for durable recovery.
-        const finishDelivery = Deferred.succeed(stopDelivery, undefined).pipe(
+        const finishDelivery = Deferred.succeed(deliveryFinished, undefined).pipe(
           Effect.andThen(Fiber.join(delivery)),
         );
 

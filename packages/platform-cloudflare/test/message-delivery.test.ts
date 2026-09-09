@@ -8,9 +8,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import {
+  alarmAttemptHolds,
   decodeIdempotencyKey,
   decodeThreadId,
-  alarmAttemptHolds,
   maintenanceClocks,
   plannerDefinition,
   submitOptions,
@@ -51,28 +51,28 @@ const submit = (thread: string, key: string) =>
     ),
   );
 
-const keyFor = (source: string) => ({
+const keyFor = (source: string, message = "message") => ({
   ownerThreadId: decodeThreadId(source),
-  messageId: decodeIdempotencyKey("message"),
+  messageId: decodeIdempotencyKey(message),
 });
 
-const read = (source: string) =>
+const read = (source: string, message = "message") =>
   runInDurableObject(stubFor(source), (instance) =>
     instance[DurableObject.RunSymbol](
-      Effect.flatMap(MessageDeliveryStore, (store) => store.get(keyFor(source))),
+      Effect.flatMap(MessageDeliveryStore, (store) => store.get(keyFor(source, message))),
     ),
   );
 
-const enqueue = (source: string, destination: string, now: number) =>
+const enqueue = (source: string, destination: string, now: number, message = "message") =>
   runInDurableObject(stubFor(source), (instance) =>
     instance[DurableObject.RunSymbol](
       Effect.gen(function* () {
         const store = yield* MessageDeliveryStore;
-        const options = submitOptions(destination, `message:${source}`);
+        const options = submitOptions(destination, `message:${source}:${message}`);
         const input = { question: "delivered later", ref: destination };
 
         const record = yield* prepareMessageDelivery({
-          key: keyFor(source),
+          key: keyFor(source, message),
           createdAtMillis: now,
           deadlineAtMillis: now + 60_000,
           policy: {
@@ -142,15 +142,21 @@ const withThreads = (
   );
 
 describe("Thread Object message maintenance", () => {
-  // https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4
-  it("delivers messages created during a running source Attempt before that Attempt finishes", () =>
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
+  it("delivers inserted messages, queued waves and settlement polls while its source Attempt is running", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");
       await drainAlarmsUntil(source, allSettled(source));
 
       const entered = latch();
       const release = latch();
+      const finished = latch();
+      const deliveryRelease = latch();
+      const messages = ["message", ...Array.from({ length: 8 }, (_, index) => `message-${index}`)];
       let released = false;
+
+      const statuses = () =>
+        Promise.all(messages.map(async (message) => (await read(source, message))?.status));
 
       alarmAttemptHolds.set(source, {
         location: "claim:after-claim",
@@ -158,32 +164,72 @@ describe("Thread Object message maintenance", () => {
         release: Effect.promise(() => release.promise),
         finished: Effect.sync(() => {
           released = true;
+          finished.resolve();
         }),
       });
-      await submit(source, "producing-message");
+      await submit(source, "active-source");
       const running = runDurableObjectAlarm(stubFor(source));
 
       try {
         await entered.promise;
-        // Let the pass-start delivery wave finish before new outbound work exists.
-        await advance(100);
-        await enqueue(source, destination, now + 100);
-        await advance(100);
+        expect(await read(source)).toBeNull();
+        messageDeliveryHolds.set(source, {
+          point: "message-delivery:admission:after",
+          entered: () => {},
+          release: deliveryRelease.promise,
+        });
+        await enqueue(source, destination, now);
         for (
           let attempt = 0;
-          attempt < 200 && (await read(source))?.status === "pending";
+          attempt < 200 && messageDeliveryResources.get(source)?.acquired !== 1;
           attempt += 1
         ) {
-          await Promise.resolve();
+          await read(source);
         }
-        expect((await read(source))?.status).toBe("accepted");
-        expect(await laneRows(destination)).toHaveLength(1);
+        expect(messageDeliveryResources.get(source)?.acquired).toBe(1);
+        // Coalesce a backlog behind the first delivery so it exceeds a single native wave.
+        for (const message of messages.slice(1)) await enqueue(source, destination, now, message);
+        messageDeliveryHolds.delete(source);
+        deliveryRelease.resolve();
+        for (
+          let attempt = 0;
+          attempt < 200 && (await statuses()).some((status) => status !== "accepted");
+          attempt += 1
+        ) {
+          await advance(1);
+        }
+        expect(await statuses()).toEqual(messages.map(() => "accepted"));
+        expect(await laneRows(destination)).toHaveLength(messages.length);
+
+        await drainAlarmsUntil(destination, allSettled(destination));
+        await advance(20);
+        for (
+          let attempt = 0;
+          attempt < 200 && (await statuses()).some((status) => status !== "processed");
+          attempt += 1
+        ) {
+          await advance(1);
+        }
+        expect(await statuses()).toEqual(messages.map(() => "processed"));
+        // Leave one accepted message for the durable alarm after source execution ends.
+        await enqueue(source, destination, now, "after-source");
+        for (
+          let attempt = 0;
+          attempt < 200 && (await read(source, "after-source"))?.status !== "accepted";
+          attempt += 1
+        ) {
+          await advance(1);
+        }
+        expect((await read(source, "after-source"))?.status).toBe("accepted");
         expect(await allSettled(source)()).toBe(false);
         expect(released).toBe(false);
       } finally {
+        messageDeliveryHolds.delete(source);
+        deliveryRelease.resolve();
         release.resolve();
         // Completion must stop the delivery fiber without another clock tick.
         await running;
+        await finished.promise;
       }
       expect(released).toBe(true);
       expect(await allSettled(source)()).toBe(true);
@@ -191,9 +237,9 @@ describe("Thread Object message maintenance", () => {
       await drainAlarmsUntil(destination, allSettled(destination));
       await advance(20);
       // The completed pass leaves future delivery work to its durable alarm.
-      expect((await read(source))?.status).toBe("accepted");
+      expect((await read(source, "after-source"))?.status).toBe("accepted");
       await runDurableObjectAlarm(stubFor(source));
-      expect((await read(source))?.status).toBe("processed");
+      expect((await read(source, "after-source"))?.status).toBe("processed");
     }));
 
   it("settles ready source work while delivery is held and finalizes delivery on maintenance interruption", () =>
