@@ -53,6 +53,8 @@ const examples = [
   "Explain what you would need before making a real reservation.",
 ] as const;
 
+const isRunEvent = Schema.is(RunEvent);
+
 const statusForMessage = (
   message: ChatMessage,
   activeAssistantId: string,
@@ -77,10 +79,7 @@ function GeneralChatTrace({
   readonly message: ChatMessage;
   readonly mode: ChatState["mode"];
 }) {
-  const events = useMemo(
-    () => (message.events ?? []).filter((event): event is RunEvent => Schema.is(RunEvent)(event)),
-    [message.events],
-  );
+  const events = useMemo(() => (message.events ?? []).filter(isRunEvent), [message.events]);
 
   const activity = useMemo(() => projectRunActivity(events, mode), [events, mode]);
   const tools = useMemo(() => projectToolTraces(events), [events]);

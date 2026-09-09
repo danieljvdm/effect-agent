@@ -32,8 +32,9 @@ const toolLabels: Readonly<Record<string, string>> = {
   hold_itinerary: "Placing itinerary hold",
 };
 
-const runEventsFrom = (events: ReadonlyArray<DemoOperationalEvent>) =>
-  events.filter((event): event is RunEvent => Schema.is(RunEvent)(event));
+const isRunEvent = Schema.is(RunEvent);
+
+const runEventsFrom = (events: ReadonlyArray<DemoOperationalEvent>) => events.filter(isRunEvent);
 
 const latestByCommand = (events: ReadonlyArray<DemoOperationalEvent>) => {
   const commands = new Map<

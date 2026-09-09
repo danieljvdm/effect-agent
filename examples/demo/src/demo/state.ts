@@ -6,6 +6,7 @@ import { Effect, Schema, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 
 import { decodeErrorDetails } from "./error-details";
+import { eventBatches } from "./event-batches";
 import {
   type DemoApprovalChoice,
   type DemoCommandKind,
@@ -125,7 +126,22 @@ export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scen
       return client.StreamOperationalRun({ scenario });
     }),
   ).pipe(
-    Stream.runForEach(projectEvent),
+    Stream.runForEachArray((events) =>
+      Effect.gen(function* () {
+        for (const batch of eventBatches(events)) {
+          if (batch._tag === "Event") {
+            yield* projectEvent(batch.event);
+          } else {
+            const current = context(demoStateAtom);
+
+            context.set(demoStateAtom, {
+              ...current,
+              events: [...current.events, ...batch.events],
+            });
+          }
+        }
+      }),
+    ),
     Effect.scoped,
     Effect.tap(() =>
       Effect.sync(() => {
