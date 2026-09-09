@@ -142,4 +142,16 @@ describe("CAP-015 CodeExecutor schemas", () => {
       /Schema validation failed/,
     );
   });
+  it("accepts only finite bounded host concurrency", () => {
+    for (const maxHostCallConcurrency of [0, -1, 1.5, 65, NaN, Infinity]) {
+      expect(() => CodeExecutionLimits.make({ ...limits, maxHostCallConcurrency })).toThrow(
+        /Schema validation failed/,
+      );
+    }
+    for (const maxHostCallConcurrency of [1, 4, 64]) {
+      expect(
+        CodeExecutionLimits.make({ ...limits, maxHostCallConcurrency }).maxHostCallConcurrency,
+      ).toBe(maxHostCallConcurrency);
+    }
+  });
 });

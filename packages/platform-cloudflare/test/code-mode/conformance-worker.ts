@@ -17,11 +17,13 @@ import {
   Cause,
   Context,
   Duration,
+  Deferred,
   Effect,
   Exit,
   ManagedRuntime,
   Option,
   Predicate,
+  Schema,
   type Layer,
 } from "effect";
 
@@ -382,6 +384,56 @@ const runDisposalRegression = Effect.gen(function* () {
   return { tag: "success" };
 });
 
+const runConcurrentRegression = (env: WorkerEnv) =>
+  Effect.gen(function* () {
+    const dependentFinished = yield* Deferred.make<void>();
+    let active = 0;
+    let peak = 0;
+    const completed: Array<number> = [];
+
+    const outcome = yield* runOutcome(
+      request(
+        `async () => {
+    const first = example.write({ id: 0 });
+    const second = (async () => {
+      await example.write({ id: 1 });
+      return await example.write({ id: 2 });
+    })();
+    return await Promise.all([first, second]);
+  }`,
+        {
+          namespaces: [CodeExecutionNamespace.make({ name: "example", methods: ["write"] })],
+          limits: CodeExecutionLimits.make({ ...baseLimits, maxHostCallConcurrency: 2 }),
+        },
+      ),
+      executorLayerFor(env),
+      {
+        call: (call) =>
+          Effect.gen(function* () {
+            const { id } = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.Int }))(
+              call.argument,
+            ).pipe(Effect.orDie);
+
+            active++;
+            peak = Math.max(peak, active);
+            if (id === 0) yield* Deferred.await(dependentFinished);
+            completed.push(id);
+            if (id === 2) yield* Deferred.succeed(dependentFinished, undefined);
+
+            return CodeHostCallSuccess.make({ value: id });
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                active--;
+              }),
+            ),
+          ),
+      },
+    );
+
+    return { outcome, completed, peak, active };
+  });
+
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     try {
@@ -400,6 +452,9 @@ export default {
       }
       if (new URL(request.url).pathname === "/host-call-pass-scope") {
         return Response.json(await Effect.runPromise(runHostCallScopeRegression(env)));
+      }
+      if (new URL(request.url).pathname === "/concurrent-host-calls") {
+        return Response.json(await Effect.runPromise(runConcurrentRegression(env)));
       }
       if (new URL(request.url).pathname === "/total-disposal") {
         return Response.json(await Effect.runPromise(runDisposalRegression));

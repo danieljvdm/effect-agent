@@ -100,7 +100,7 @@ implementations.
 | Delegate to another agent                  | [Subagents](../guide/subagents)                                   | Targets, bindings, permissions, budgets                                  |
 | Schedule new input                         | [Scheduling](../guide/operations#scheduled-input)                 | Owner policy, registered inputs, driver                                  |
 | React to external events                   | [Subscriptions](../guide/operations#event-subscriptions)          | Authenticated source, preparation, authorization                         |
-| Run generated JavaScript                   | [Code Mode](../guide/code-mode)                                   | Read-only tools and an isolated executor                                 |
+| Run generated JavaScript                   | [Code Mode](../guide/code-mode)                                   | Authorized tools and an isolated executor                                |
 | Run trusted local commands                 | [Sandbox execution](../guide/sandbox)                             | Executable, environment, output and time limits                          |
 | Capture, crawl, or interact with pages     | [Browser tools](../guide/browser)                                 | Browser binding or credentials, target policy                            |
 | Call tools on an MCP server                | [MCP servers](../guide/tools#mcp)                                 | Transport, `HttpClient` or process spawner, bounds                       |
@@ -159,7 +159,7 @@ MCP, redaction, and subagents to the engine.
 Optional `indexMemorySource` and `querySemanticMemory` use upstream
 Effect AI `EmbeddingModel` with an application-selected index and authoritative reader. See
 [semantic retrieval](../guide/context-management#semantic-memory). [`CodeMode.make`](../guide/code-mode) exposes generated
-JavaScript execution over an explicit read-only Tool allowlist. `WebCapture.make`,
+JavaScript execution over an explicit authorized Tool allowlist with bounded parallel calls. `WebCapture.make`,
 `WebCapture.makeScrape`, and `WebCapture.makeExtract` expose a supplied `PageCapture` service as tools.
 Capture calls have uncertain external outcomes;
 extraction retains its schema's service requirements.

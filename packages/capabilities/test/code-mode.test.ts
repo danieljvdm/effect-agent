@@ -60,14 +60,14 @@ const ArraySchema = Tool.dynamic("array_schema", {
 }).annotate(ToolExecutionClass, "readonly");
 
 describe("CAP-014 CodeMode.make construction", () => {
-  it("builds a readonly-annotated Tool and encoded-side declarations", () => {
+  it("builds an uncertain Tool and encoded-side declarations", () => {
     const definition = CodeMode.make("run_javascript", {
       description: "Run JavaScript over the warehouse",
       tools: { warehouse: { query: Query } },
     });
 
-    expect(Context.get(definition.tool.annotations, Tool.Readonly)).toBe(true);
-    expect(Context.get(definition.tool.annotations, ToolExecutionClass)).toBe("readonly");
+    expect(Context.get(definition.tool.annotations, Tool.Readonly)).toBe(false);
+    expect(Context.get(definition.tool.annotations, ToolExecutionClass)).toBe("uncertain");
     expect(definition.tool.failureMode).toBe("return");
     expect(definition.declarations).toContain("declare const warehouse:");
     expect(definition.declarations).toContain("readonly sql: string");
@@ -78,13 +78,13 @@ describe("CAP-014 CodeMode.make construction", () => {
     expect(definition.namespaces[0]).toMatchObject({ name: "warehouse", methods: ["query"] });
   });
 
-  it("CAP-014 rejects a Tool that is not annotated readonly", () => {
+  it("allows an authorized mutating Tool without a readonly annotation", () => {
     expect(() =>
       CodeMode.make("run_javascript", {
         description: "d",
         tools: { ns: { call: Unannotated } },
       }),
-    ).toThrow(/uncertain/);
+    ).not.toThrow();
   });
 
   it("CAP-014 rejects an approval-requiring Tool at construction", () => {
@@ -710,6 +710,7 @@ it.effect("filters executor inventory and guessed calls using the live invocatio
       Effect.provideService(ToolBroker, {
         openPass: () =>
           Effect.succeed({
+            snapshot: Effect.succeed([]),
             invoke: () =>
               Ref.update(brokerCalls, (count) => count + 1).pipe(
                 Effect.as({
@@ -820,6 +821,24 @@ describe("Code Mode type proofs", () => {
 
     expect(requirements && toolRequirements && errors).toBe(true);
   });
+  it("captures report callback requirements without widening Tool errors or requirements", () => {
+    const reported = CodeMode.make("reported", {
+      description: "d",
+      tools: { ns: { call: Unannotated } },
+      onPassExit: () => Effect.asVoid(RedactionPolicy),
+    });
+
+    const requirements: Equal<
+      Extract<LayerContext<typeof reported.handlers>, RedactionPolicy>,
+      RedactionPolicy
+    > = true;
+
+    const errors: Equal<Layer.Error<typeof reported.handlers>, never> = true;
+    const toolRequirements: Equal<Tool.HandlerServices<typeof reported.tool>, ToolBroker> = true;
+
+    expect(requirements && errors && toolRequirements).toBe(true);
+  });
+
   it("pins the envelope failure, executor requirement, and budgeted success", () => {
     const failureProof: HandlerFailureIsEnvelope = true;
     const executorProof: RequiresExecutor = true;

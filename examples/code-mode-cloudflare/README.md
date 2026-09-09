@@ -123,3 +123,27 @@ binding.
 See Cloudflare's [Dynamic Workers guide](https://developers.cloudflare.com/dynamic-workers/getting-started/)
 for Worker Loader setup. This example runs in deployment class E and makes no durable-execution
 claim. Without `OPENAI_API_KEY` the Worker runs the deterministic scripted profile.
+
+## Compare native calls and Code Mode
+
+Run the local, credential-free benchmark with no other builds or tests running:
+
+```sh
+vp run -F @effect-agent/example-code-mode-cloudflare benchmark
+```
+
+The benchmark uses real Miniflare/workerd Dynamic Workers and a scripted Effect AI model. It
+compares native calls, sequential Code Mode, and concurrent Code Mode for independent customer /
+invoice reads and project creation followed by three task writes. Each model request and Tool I/O
+waits 20 ms. Every answer must consume the actual results; assertions check dependencies, model
+round trips, observed concurrency, call counts, and completed finalizers. Ordinary tests run one
+correctness sample of each combination; the explicit benchmark retains two warmups and 20 samples
+per combination in rotating mode order.
+
+`/tmp/code-mode-benchmark.json` contains all samples and end-to-end p50/p95 latency, model calls,
+and observed Tool concurrency. Set `CODE_MODE_BENCHMARK_OUT` to change the output path. The Node
+monotonic timer starts before dispatch and ends after the complete JSON reply has been consumed,
+including runtime acquisition, generated-worker startup, tools, and final model response. The host
+is warm; every Code Mode pass creates a fresh Dynamic Worker. These are local scripted measurements,
+not live-provider or deployed Cloudflare latency. Partial failure, timeout, interruption, and
+unknown-outcome recovery are covered by framework regression tests.

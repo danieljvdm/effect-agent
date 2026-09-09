@@ -248,7 +248,10 @@ a tool call.
 
 ## Authorize tool calls
 
-Use `RunToolAuthorization` to decide whether a model-declared application tool call may execute.
+Use `RunToolAuthorization` to decide whether a native or programmatic application tool call may execute.
+Code Mode invokes the same policy for each inner call before reserving its budget or starting its
+handler. The request includes `programmatic.parentToolCallId` and `programmatic.sequenceIndex`;
+allowing the outer execution Tool does not grant permission to its inner Tools.
 This policy permits only the `search` tool:
 
 ```ts twoslash
@@ -287,9 +290,10 @@ Omitting both the service and per-run hook allows calls without this additional 
 protected resources. Authenticate callers and authorize runtime operations as described in
 [operations](./operations#authorization-and-isolation).
 
-This hook does not authorize provider-executed calls or [Code Mode](./code-mode)'s inner programmatic calls.
-The Code Mode broker restricts inner calls to its allowlisted toolkit; enforce resource access
-inside those handlers.
+This hook does not authorize provider-executed calls. A denied [Code Mode](./code-mode) inner call
+returns a catchable `ProgrammaticToolAuthorizationDenied` outcome without consuming execution budget;
+other independent calls may already have completed. The broker also restricts calls to the eligible
+allowlist. Keep resource access checks inside handlers as appropriate for the application.
 
 ## Handle uncertain external effects {#durability}
 

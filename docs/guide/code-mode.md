@@ -7,7 +7,7 @@ description: Let an agent run one bounded JavaScript program through an explicit
 
 Code Mode gives an agent one Effect AI Tool for a small JavaScript program. The program can call a
 fixed set of application Tools through named globals, then return one JSON value. It fits questions
-that need a bounded query followed by filtering, aggregation, or calculation.
+that need authorized reads and writes, overlapping independent I/O, and a compact answer.
 
 The [Cloudflare warehouse example](https://github.com/danieljvdm/effect-agent/tree/main/examples/code-mode-cloudflare)
 answers invoice questions this way:
@@ -22,7 +22,7 @@ const code = `async () => {
 ```
 
 `warehouse` is not a database client. It is a generated global that routes through the runtime's
-Tool broker to an application-owned Tool handler. The handler decides what the program can read.
+Tool broker to an application-owned Tool handler. The handler decides which resources the program may read or change.
 
 ## Build an analyst
 
@@ -147,9 +147,13 @@ at construction, capturing the services used by inner calls. Handler constructio
 remaining service requirements stay visible. The runtime supplies its own Tool broker.
 For a custom executor, provide it and the selected handlers directly to `codeMode.handlers`.
 
-Code Mode accepts only Tools annotated `readonly` and without approval requirements. That annotation
-does not make a database connection read-only. Enforce resource and tenant access inside handlers;
-use a read-only database identity where available. The warehouse example's Durable Object uses an
+Code Mode accepts read and mutation Tools without additional approval requirements. The broker
+retains parameter and result schemas, visibility, inherited grants, host action-time authorization,
+and run budgets. `RunToolAuthorization` receives each inner call with its `programmatic` parent
+identity before reservation and execution. Approving the outer Tool does not authorize its inner calls. Already
+authorized calls require no additional approval round trip; Tools declaring `needsApproval` remain
+unsupported and fail closed. Enforce resource and tenant access inside handlers. For read-only
+workloads, use a read-only database identity where available. The warehouse example's Durable Object uses an
 application SQL allowlist because its SQLite authorizer blocks `PRAGMA query_only`. That scanner is
 a demo boundary.
 
@@ -214,7 +218,7 @@ cannot enumerate hidden methods. If grants or host policy hide an allowlisted me
 `includeDeclarations` is still true, the runtime refuses the configuration before its full
 description can leak. Use generic shared descriptions and `includeDeclarations: false` for that
 case. Default eager Code Mode behavior remains available when the full allowlist is eligible.
-Readonly, approval, budget and handler authorization constraints continue to apply.
+Approval, budget and handler authorization constraints continue to apply.
 
 ## Program results and limits
 
@@ -223,9 +227,26 @@ async function expression, runs once with no arguments, and returns JSON. `conso
 returns with the result. Expected inner Tool failures reject the Promise with a JSON failure
 envelope, which generated code can catch and handle.
 
-The Tool broker rejects calls outside the construction-time allowlist. Inner calls are strictly
-sequential. The executor enforces source, wall-clock, log, result, host-call, and per-host-call
-byte limits. Code Mode applies `maxEgressBytes` after optional redaction to the result, logs, and
+The Tool broker rejects calls outside the construction-time allowlist. Use `Promise.all` for
+independent calls and `await` for actual dependencies:
+
+```js
+async () => {
+  const project = await tools.createProject({ name: "Launch" });
+  const tasks = await Promise.all(
+    ["Design", "Build", "Ship"].map((title) => tools.createTask({ projectId: project.id, title })),
+  );
+  return { projectId: project.id, tasksCreated: tasks.length };
+};
+```
+
+Set `limits.maxHostCallConcurrency` from 1 through 64 (default 4). Both the executor and broker
+bound active calls; waiting calls stay in Effect structured concurrency. Independent results return
+when ready, without waiting for earlier calls. `toolConcurrency` limits outer Tool Calls, so several
+simultaneous Code Mode passes can each use their inner concurrency allowance. Set it to 1 when the
+inner bound should also be the run's bound.
+
+The executor enforces source, wall-clock, log, result, host-call, and per-host-call byte limits. Code Mode applies `maxEgressBytes` after optional redaction to the result, logs, and
 thrown value visible to the model. The agent policy's `maxToolCalls` also includes brokered inner
 calls. See [Budgets & bounded autonomy](../concepts/budgets#programmatic-calls-and-code-mode).
 
@@ -236,6 +257,29 @@ result and logs before the aggregate model-visible byte limit.
 Its required services remain in the Code Mode handler Layer's requirements and are captured when
 that Layer is built. Temporary redactor resources close with each invocation. The redactor must
 be total: defects and interruption retain their Effect semantics.
+
+## Partial outcomes
+
+Writes are not transactional. A rejected `Promise.all` ends the program and interrupts outstanding
+calls; completed writes remain completed. Await every call the result depends on, and use
+`Promise.allSettled` when independent failures should not stop the remaining work.
+
+A `CodeModeFailure` includes invocation-ordered `calls` with `succeeded`, `failed`, `uncertain`, or
+`not-started` status. A confirmed failure does not imply rollback. A started call without a confirmed
+outcome is uncertain and must be reconciled with the application before retrying. Calls that cannot
+fit the output budget are counted in `omittedCalls`; do not assume an omitted call never ran.
+Evidence takes priority over logs and thrown values when the budget is tight.
+
+Set `onPassExit` to receive the full ephemeral report after executor fibers and resources close,
+including timeout, defect, and interruption. The host callback's Effect service requirements remain
+visible in the handler Layer. Reports contain tool names and statuses, without copying arguments or
+results. Existing programmatic Tool spans retain per-call timing and execution identity. No inner
+Canonical Records or program checkpoints are created; a process loss also loses these local reports.
+
+The outer Tool is always `uncertain` and `Tool.Readonly` is false. Under a durable host, an unresolved
+program enters the ordinary unknown-outcome protocol; it is never automatically replayed, even if
+its selected Tools happen to be readonly or idempotent. Recovery of a complete JavaScript program
+requires separate checkpoint/resume semantics.
 
 ## Run generated code on Cloudflare
 
@@ -296,5 +340,5 @@ allowed handler should access a particular tenant, table, account, or secret.
 
 [Sandbox execution](./sandbox) covers trusted local commands. Its local adapter is unisolated and
 does not implement the `CodeExecutor` required here. [Browser tools](./browser) cover page capture,
-crawl, and interactive passes; browser capture has uncertain external effects and cannot be added
-to Code Mode's readonly allowlist.
+crawl, and interactive passes. Tools with uncertain external effects still require application
+resource authorization when exposed through Code Mode.
