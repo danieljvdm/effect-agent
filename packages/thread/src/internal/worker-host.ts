@@ -1688,7 +1688,14 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         );
       }
 
-      return yield* failure(operation, "storage");
+      // A live claim or a future delivery deadline is not a storage failure. Keep the
+      // receipt-only success contract: retention alone does not mean the child started.
+      return yield* failure(
+        operation,
+        processed.status === "pending" && processed.retry.lastFailure === null
+          ? "delivery-pending"
+          : "storage",
+      );
     });
 
     const messageIdFor = (parts: ReadonlyArray<string>) =>
