@@ -92,6 +92,7 @@
     "effect-rc110-upgrade",
     "effect-rc111-upgrade",
     "effect-requirements-and-callback-scopes",
+    "eligible-common-tool-pins",
     "engine-preserve-run-policy-compaction",
     "explicit-browser-network-policy",
     "finite-turn-lifetime",

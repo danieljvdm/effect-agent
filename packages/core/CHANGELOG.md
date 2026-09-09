@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.74
+
+### Patch Changes
+
+- [#407](https://github.com/danieljvdm/effect-agent/pull/407) [`cf10ec3`](https://github.com/danieljvdm/effect-agent/commit/cf10ec32e2d94402d417b05358bf96715e8c5401) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep explicit tool pins selected only while authorized, so disabling a common tool does not prevent other work. Omit unavailable optional completion tools from final-answer requests while preserving mandatory tool checks.
+
 ## 0.1.0-beta.73
 
 ### Patch Changes
