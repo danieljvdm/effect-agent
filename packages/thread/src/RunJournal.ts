@@ -23,6 +23,7 @@ import { Prompt } from "effect/unstable/ai";
 
 import { digestJson, type DigestError } from "./Digest.ts";
 import { type JournalCheckpointSeed } from "./internal/journal-checkpoint.ts";
+import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
 import {
   BatchId,
   CanonicalBatch,
@@ -547,6 +548,8 @@ export interface JournalBoundary {
  * rollovers additionally validate covered Tool batches before rebuilding Prompt and usage. Metadata and the
  * live Prompt remain resident; covered historical message/tool payloads do not. An uncompacted Prompt still grows
  * with its conversation, so hosts must configure an appropriate context compaction policy.
+ * Prepared metadata must describe exactly this stream and seed through the same fixed tail;
+ * it skips only the metadata scan, never covered-Tool validation or the canonical fold.
  * @internal
  */
 export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalStream")(function* <
@@ -557,6 +560,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   ownerRunId: RunId | undefined,
   onBoundary?: (boundary: JournalBoundary) => void,
   seed?: JournalCheckpointSeed,
+  preparedMetadata?: JournalMetadata,
 ): Effect.fn.Return<RunJournalProjection, RunJournalError | E, R> {
   if (seed !== undefined && seed.runId !== ownerRunId)
     return yield* journalError("Recovery checkpoint belongs to another Run");
@@ -582,58 +586,30 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   // would orphan the tool message from its declaring response. Orphaned
   // settleds (filtered later by the fold) still contribute spans —
   // over-invalidating is the fail-safe direction.
-  const firstSequenceByRun = new Map<string, number>();
+  if (
+    preparedMetadata !== undefined &&
+    (preparedMetadata.ownerRunId !== ownerRunId || preparedMetadata.seed !== seed)
+  )
+    return yield* journalError("Prepared journal metadata belongs to another replay");
 
-  if (seed?.firstSequence !== undefined) firstSequenceByRun.set(seed.runId, seed.firstSequence);
-  const lastResponseSequenceByRun = new Map<string, number>();
-  const terminalSequenceByRun = new Map<string, number>();
-  const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
-  const settledToolCallRecordIds = new Set<string>();
-  const settledById = new Map<string, Pick<ToolCallSettled, "isFailure" | "budgetRejected">>();
-  const compactions: Array<{ readonly payload: CompactionCreated; readonly sequence: number }> = [];
+  let metadata = preparedMetadata;
 
-  yield* Stream.runForEach(records, (envelope) =>
-    Effect.sync(() => {
-      const payload = envelope.record.payload;
+  if (metadata === undefined) {
+    const collected = makeJournalMetadata(ownerRunId, seed);
 
-      if (
-        (payload._tag === "RunCompleted" ||
-          payload._tag === "RunFailed" ||
-          payload._tag === "SubmissionSettled") &&
-        payload.runId !== undefined &&
-        !terminalSequenceByRun.has(payload.runId)
-      ) {
-        terminalSequenceByRun.set(payload.runId, envelope.sequence);
-      }
-      if (payload._tag === "CompactionCreated") {
-        compactions.push({ payload, sequence: envelope.sequence });
+    yield* Stream.runForEach(records, (envelope) => Effect.sync(() => collected.add(envelope)));
+    metadata = collected.snapshot();
+  }
 
-        return;
-      }
-      if ("runId" in payload && typeof payload.runId === "string") {
-        if (!firstSequenceByRun.has(payload.runId)) {
-          firstSequenceByRun.set(payload.runId, envelope.sequence);
-        }
-      }
-      if (payload._tag === "ModelResponseRecorded") {
-        lastResponseSequenceByRun.set(payload.runId, envelope.sequence);
-      } else if (payload._tag === "ToolCallSettled") {
-        settledToolCallRecordIds.add(envelope.record.recordId);
-        if (payload.runId === ownerRunId)
-          settledById.set(envelope.record.recordId, {
-            isFailure: payload.isFailure,
-            ...(payload.budgetRejected === undefined
-              ? {}
-              : { budgetRejected: payload.budgetRejected }),
-          });
-        const from = lastResponseSequenceByRun.get(payload.runId);
-
-        if (from !== undefined && from < envelope.sequence) {
-          settledSpans.push({ from, to: envelope.sequence });
-        }
-      }
-    }),
-  );
+  const {
+    firstSequenceByRun,
+    lastResponseSequenceByRun,
+    terminalSequenceByRun,
+    settledSpans,
+    settledToolCallRecordIds,
+    settledById,
+    compactions,
+  } = metadata;
 
   const settledCoverage = compactions.reduce(
     (through, { payload }) =>

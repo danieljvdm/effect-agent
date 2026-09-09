@@ -54,6 +54,7 @@ import {
   Cause,
   Clock,
   DateTime,
+  type Duration,
   Effect,
   Exit,
   FileSystem,
@@ -66,10 +67,19 @@ import {
 import { Agent, AgentRuntime } from "effect-agent";
 import { IdGenerator } from "effect-agent/IdGenerator";
 import { ThreadHistory } from "effect-agent/ThreadHistory";
+import type { PlatformError } from "effect/PlatformError";
 import type { LanguageModel } from "effect/unstable/ai";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
-import { BenchmarkError, check, type Case, type Sample } from "./contracts.js";
+import {
+  BenchmarkError,
+  check,
+  type Case,
+  type Sample,
+  type SamplePhase,
+  type SampleProgress,
+} from "./contracts.js";
+import type { SeedTemplates } from "./seeds.js";
 
 const answerSchema = Schema.Struct({ answer: Schema.String });
 
@@ -278,7 +288,16 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
   workload: Case,
   ordinal: number,
   warmup: boolean,
+  options: {
+    readonly seeds?: SeedTemplates;
+    readonly onProgress?: (
+      progress: SampleProgress,
+    ) => Effect.Effect<void, PlatformError, FileSystem.FileSystem>;
+    readonly timeout?: Duration.Input;
+  } = {},
 ) {
+  const attemptStarted = yield* Clock.monotonicTimeNanos;
+  let phase: SamplePhase = "setup";
   let started = 0n;
   let finished = 0n;
   let entered: bigint | undefined;
@@ -314,7 +333,22 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
 
   const expectedBytes = JSON.stringify({ answer }).length;
 
-  const markStart = Clock.monotonicTimeNanos.pipe(
+  const changePhase = Effect.fn("benchmark.samplePhase")(function* (next: SamplePhase) {
+    phase = next;
+    yield* (
+      options.onProgress?.({
+        case: workload.name,
+        ordinal,
+        warmup,
+        phase,
+        elapsedMs: Number((yield* Clock.monotonicTimeNanos) - attemptStarted) / 1e6,
+      }) ?? Effect.void
+    );
+  });
+
+  // Evidence writes happen outside the measured interval, including before the start clock.
+  const markStart = changePhase("operation").pipe(
+    Effect.andThen(Clock.monotonicTimeNanos),
     Effect.tap((time) =>
       Effect.sync(() => {
         started = time;
@@ -328,6 +362,7 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
         finished = time;
       }),
     ),
+    Effect.andThen(changePhase("verification")),
   );
 
   const script = (parts: ReadonlyArray<ScriptedStreamPart>): ScriptedTurnInput => ({
@@ -442,6 +477,7 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
     );
 
   const execute = Effect.gen(function* () {
+    yield* changePhase("setup");
     if (["run", "stream", "tools"].includes(workload.kind)) {
       const turns = [
         ...Array.from({ length: workload.rounds }, (_, round) => script(toolParts(round, 8))),
@@ -512,9 +548,9 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "runtime-benchmark-" });
       const filename = `${directory}/thread.sqlite`;
 
-      const host = (crash: boolean) =>
+      const host = (crash: boolean, database = filename) =>
         NodeDurableAgentRuntime.layer({
-          filename,
+          filename: database,
           deploymentId,
           producerId,
           ...(workload.kind === "recovery"
@@ -552,9 +588,21 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
         }).pipe(Layer.provide(ContextCompactor.layerRollover));
 
       // Setup and seeding never enter the reported warm-operation interval.
-      if (workload.kind === "ledger")
-        yield* seedLedger(workload.records).pipe(Effect.provide(host(false)), Effect.scoped);
-      else yield* seedHistory(workload.records).pipe(Effect.provide(host(false)), Effect.scoped);
+      const initialize = Effect.fn("benchmark.initializeSeed")(
+        function* (_database: string) {
+          if (workload.kind === "ledger") yield* seedLedger(workload.records);
+          else yield* seedHistory(workload.records);
+        },
+        (effect, database) => effect.pipe(Effect.provide(host(false, database)), Effect.scoped),
+      );
+
+      if (options.seeds === undefined) yield* initialize(filename);
+      else
+        yield* options.seeds.copy(
+          `${workload.kind === "ledger" ? "ledger" : "history"}-${workload.records}`,
+          filename,
+          initialize,
+        );
 
       const submit = Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -607,6 +655,7 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
       });
 
       if (workload.kind === "recovery") {
+        yield* changePhase("checkpoint");
         yield* Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
 
@@ -674,19 +723,23 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
     yield* check(entered !== undefined && finished >= started, "Missing timing boundary");
   }).pipe(
     Effect.scoped,
-    Effect.timeout("3 minutes"),
+    Effect.timeout(options.timeout ?? "3 minutes"),
     Effect.provideService(References.MinimumLogLevel, "None"),
   );
 
   const result = yield* execute.pipe(Effect.exit);
 
   if (finished === 0n) finished = yield* Clock.monotonicTimeNanos;
+  const attemptFinished = yield* Clock.monotonicTimeNanos;
 
-  return {
+  const sample: Sample = {
     case: workload.name,
     ordinal,
     warmup,
     totalMs: started === 0n ? 0 : Number(finished - started) / 1e6,
+    attemptMs: Number(attemptFinished - attemptStarted) / 1e6,
+    setupMs: Number((started === 0n ? attemptFinished : started) - attemptStarted) / 1e6,
+    failurePhase: Exit.isFailure(result) ? phase : null,
     modelEntryMs: entered === undefined || started === 0n ? null : Number(entered - started) / 1e6,
     checkpointCreationMs,
     retainedPromptMessages,
@@ -696,5 +749,7 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
     outputBytes: expectedBytes,
     status: Exit.isSuccess(result) ? "passed" : "failed",
     failure: Exit.isFailure(result) ? Cause.pretty(result.cause) : null,
-  } satisfies Sample;
+  };
+
+  return sample;
 });

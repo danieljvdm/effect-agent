@@ -71,19 +71,34 @@ export const isContextOverflowMessage = (text: string): boolean =>
   CONTEXT_OVERFLOW_PATTERN.test(text);
 
 const utf8Length = (text: string): number => {
-  let bytes = 0;
+  let bytes = text.length;
 
-  for (const character of text) {
-    const codePoint = character.codePointAt(0) ?? 0;
+  for (let index = 0; index < text.length; index++) {
+    const codeUnit = text.charCodeAt(index);
 
-    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    if (codeUnit <= 0x7f) continue;
+    if (codeUnit <= 0x7ff) {
+      bytes++;
+      continue;
+    }
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        // The two UTF-16 code units already contributed two of the four UTF-8 bytes.
+        bytes += 2;
+        index++;
+        continue;
+      }
+    }
+    bytes += 2;
   }
 
   return bytes;
 };
 
 /**
- * Deterministic chars/4 token estimate over one message's structural JSON.
+ * Deterministic UTF-8 bytes/4 token estimate over one message's structural JSON.
  * Conservative for prose, slightly generous for dense JSON — the estimate
  * only gates WHEN to compact, never what is preserved.
  */

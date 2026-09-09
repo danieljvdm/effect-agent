@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 
-export const FIXTURE_VERSION = "runtime-v1";
+export const FIXTURE_VERSION = "runtime-v2";
 
 export const REFERENCE = {
   version: "audit-beta67-node24-v1",
@@ -78,11 +78,27 @@ export const WorkerOptions = Schema.Struct({
   output: Schema.String,
 });
 
+export const SamplePhase = Schema.Literals(["setup", "checkpoint", "operation", "verification"]);
+export type SamplePhase = typeof SamplePhase.Type;
+
+export const SampleProgress = Schema.Struct({
+  case: Schema.String,
+  ordinal: Schema.Natural,
+  warmup: Schema.Boolean,
+  phase: SamplePhase,
+  elapsedMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+
+export type SampleProgress = typeof SampleProgress.Type;
+
 export const Sample = Schema.Struct({
   case: Schema.String,
   ordinal: Schema.Natural,
   warmup: Schema.Boolean,
   totalMs: Schema.Finite,
+  attemptMs: Schema.Finite,
+  setupMs: Schema.Finite,
+  failurePhase: Schema.NullOr(SamplePhase),
   modelEntryMs: Schema.NullOr(Schema.Finite),
   checkpointCreationMs: Schema.NullOr(Schema.Finite),
   retainedPromptMessages: Schema.Natural,
@@ -102,6 +118,8 @@ export const WorkerReport = Schema.Struct({
   runtime: Schema.String,
   platform: Schema.String,
   architecture: Schema.String,
+  active: Schema.NullOr(SampleProgress),
+  failure: Schema.NullOr(Schema.String),
   samples: Schema.Array(Sample),
 });
 
@@ -124,17 +142,28 @@ export const completeBatch = (
     ),
   );
 
-  if (report.profile !== options.profile || report.samples.length !== expected.size) return false;
+  if (
+    report.profile !== options.profile ||
+    report.samples.length !== expected.size ||
+    report.active !== null ||
+    report.failure !== null
+  )
+    return false;
 
   return report.samples.every(
     (sample) =>
       expected.delete(`${sample.case}:${sample.ordinal}`) &&
       sample.warmup === sample.ordinal < options.warmups &&
       sample.status === "passed" &&
+      sample.failure === null &&
+      sample.failurePhase === null &&
       sample.totalMs >= 0 &&
+      sample.setupMs >= 0 &&
+      sample.attemptMs >= sample.setupMs + sample.totalMs &&
       sample.modelEntryMs !== null &&
       sample.modelEntryMs >= 0 &&
       sample.modelEntryMs <= sample.totalMs &&
+      sample.modelCalls > 0 &&
       sample.modelCalls === sample.finalizers,
   );
 };

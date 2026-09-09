@@ -32,6 +32,7 @@ import {
   Context,
   Deferred,
   Effect,
+  Encoding,
   Exit,
   Fiber,
   Layer,
@@ -1094,6 +1095,103 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
       expect(one).toBeGreaterThan(0);
       expect(estimateMessageTokens(message)).toBe(one);
       expect(estimatePromptTokens([message, message])).toBe(one * 2);
+    }),
+  );
+
+  it.effect("counts structural JSON UTF-8 bytes across Unicode boundaries and escapes", () =>
+    Effect.sync(() => {
+      const texts = [
+        "",
+        "ASCII text",
+        '\u0000\b\t\n\r"\\',
+        "\u007f\u0080\u07ff\u0800\ud7ff\ue000\uffff",
+        "é漢😀ñΩ",
+        "\ud800",
+        "\udbff",
+        "\udc00",
+        "\udfff",
+        "\ud800\udc00\udbff\udfff",
+        "\ud800\ud800\udc00",
+        "\ud800a\udfff",
+      ];
+
+      let seed = 17;
+
+      for (let sample = 0; sample < 256; sample++) {
+        let text = "";
+
+        for (let index = 0; index < sample % 53; index++) {
+          seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0;
+          text += String.fromCharCode(seed & 0xffff);
+        }
+        texts.push(text);
+      }
+      for (const text of texts) {
+        // Adjacent lengths exercise every remainder in the per-message rounding.
+        for (const suffix of ["", "a", "ab", "abc"]) {
+          const message = Prompt.userMessage({
+            content: [Prompt.textPart({ text: text + suffix })],
+          });
+
+          // Effect's encoder uses native UTF-8 encoding, independently of the estimator.
+          const utf8Bytes = Encoding.encodeHex(JSON.stringify(message)).length / 2;
+
+          expect(estimateMessageTokens(message)).toBe(Math.ceil(utf8Bytes / 4));
+        }
+      }
+    }),
+  );
+
+  it.effect("retains JSON serialization failures, projections, and fresh mutable estimates", () =>
+    Effect.sync(() => {
+      const cyclic = Prompt.systemMessage({ content: "cycle" });
+
+      Object.defineProperty(cyclic, "self", { value: cyclic, enumerable: true });
+
+      for (const message of [
+        cyclic,
+        Object.assign(Prompt.systemMessage({ content: "bigint" }), { value: 1n }),
+        Object.assign(Prompt.systemMessage({ content: "undefined" }), {
+          toJSON: () => undefined,
+        }),
+        Object.assign(Prompt.systemMessage({ content: "throws" }), {
+          toJSON: () => {
+            throw new Error("Cannot serialize message");
+          },
+        }),
+      ]) {
+        expect(estimateMessageTokens(message)).toBe(0);
+      }
+
+      const projected = Object.assign(Prompt.systemMessage({ content: "projection" }), {
+        toJSON: () => ({ values: [null, undefined, Number.NaN, "😀"] }),
+      });
+
+      const projectedBytes = Encoding.encodeHex(JSON.stringify(projected)).length / 2;
+
+      expect(estimateMessageTokens(projected)).toBe(Math.ceil(projectedBytes / 4));
+
+      let content = "brief";
+      let reads = 0;
+      const mutable = Prompt.systemMessage({ content });
+
+      Object.defineProperty(mutable, "content", {
+        enumerable: true,
+        get: () => {
+          reads++;
+
+          return content;
+        },
+      });
+      for (const next of ["brief", "growth é漢😀".repeat(100)]) {
+        content = next;
+
+        const utf8Bytes =
+          Encoding.encodeHex(JSON.stringify(Prompt.systemMessage({ content }))).length / 2;
+
+        expect(estimateMessageTokens(mutable)).toBe(Math.ceil(utf8Bytes / 4));
+      }
+      expect(reads).toBe(2);
     }),
   );
 

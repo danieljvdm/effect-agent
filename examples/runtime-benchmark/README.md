@@ -41,8 +41,10 @@ comment workflow validates artifact data and current PR identity without executi
 `--profile smoke` exercises every workload family with one sample and 16 retained records;
 it checks the command, not statistical confidence. `extended` takes 30 samples per revision and
 adds 8,192 records. `archive` adds 100,000 records with nine measured samples. Larger profiles
-are manual workflow-dispatch options and can take substantial time. Individual samples are bounded
-to three minutes; PR child processes to five minutes and the PR job to 30 minutes. Timeouts retain
+are manual workflow-dispatch options and can take substantial time. Individual sample attempts,
+including setup, are bounded to three minutes; PR child processes to five minutes. The controller
+stops after 19 minutes, before the comparison step's 20-minute limit and the job's 30-minute limit,
+and gives interrupted children five seconds to stop before forceful termination. Timeouts retain
 partial evidence and fail correctness. No scheduled or paid execution is configured here.
 
 | Case                      | Completed work and timing boundary                                                                                                                                                                                                                                                                                                                        |
@@ -69,6 +71,15 @@ SQLite uses the production Node assembly and its default scheduling, lease, and 
 configuration; checkpoint cases additionally install the documented host rollover preparation.
 Database teardown and evidence reads are outside the warm-operation interval.
 
+Fixture `runtime-v2` builds worker-local seed templates through those same public adapter
+operations, once per history/ledger size and revision. It closes the full seed runtime and rejects
+any remaining WAL or SHM sidecar before copying the database to each sample's fresh directory.
+Copies share no mutable database state. Fresh submission and checkpoint recovery can reuse the
+same retained-history seed; every recovery sample still constructs and saves its own checkpoint,
+injects the fault, closes the runtime, and resumes its own Submission. Templates are discarded
+when the worker closes and never cross a cohort or revision. This removes repeated fixture setup;
+it does not measure or change the cost of production mutations. The reference SHA is unchanged.
+
 `modelEntryMs` ends inside `ScriptedModel.assertRequest`, where Effect AI invokes the actual
 normalized provider callback. It does not use ModelStarted events. `totalMs` ends after run/stream
 completion or durable settlement; it includes the operation's correctness checks where those
@@ -80,6 +91,16 @@ It includes checkpoint scans/encoding/save but excludes the already committed co
 and is never added to the later recovery interval. Raw samples include observed retained prompt
 message counts. Incomplete or mismatched-runtime batches are explicitly reported and excluded
 from comparison summaries.
+
+`attemptMs` includes setup, the operation, verification, and scope cleanup; `setupMs` ends at the
+operation's start clock and includes initial checkpoint preparation for recovery. Neither is added
+to `totalMs`. The worker atomically replaces its report before a sample and at setup, checkpoint,
+operation, and verification boundaries, retaining the active case, ordinal, warmup flag, and elapsed
+time at the last boundary if it is killed. These filesystem writes happen outside `totalMs`.
+Controller reports identify the active batch and comparison failure; child logs are written as
+output arrives. Stdout and stderr share an 8 MiB raw-byte limit; exceeding it preserves the log
+prefix, terminates the child, and fails the batch. Controller failure details remain in the report.
+A partial report is evidence of an incomplete attempt, never a passing cohort.
 
 Cold measurements launch a separate Node process for one small run. Their wall time includes
 Node startup, all fixture imports (including the durable fixture), one run, assertions, and process

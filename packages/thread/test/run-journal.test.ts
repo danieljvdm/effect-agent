@@ -8,6 +8,7 @@ import {
   ObservationOffset,
   ProducerId,
   RecordEnvelope,
+  RecordId,
   type CanonicalBatch,
 } from "@effect-agent/thread/Records";
 import {
@@ -41,6 +42,8 @@ import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { DateTime, Effect, Schema, Stream } from "effect";
 import { Prompt } from "effect/unstable/ai";
+
+import { makeJournalMetadata } from "../src/internal/journal-metadata.ts";
 
 const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
 const RUN_ID = runIdForSubmission(SUBMISSION_ID);
@@ -1131,6 +1134,29 @@ describe("engine compaction records and projection (RUN-026)", () => {
             expect(promptText(projection.prompt)).not.toContain("Uncommitted handoff");
             expect(projection.prompt.content.slice(0, 2)).toEqual(toolTurnAppended.slice(0, 2));
             expect(toolResults(projection.prompt)).toEqual([{ bookingRef: "flight-42" }]);
+
+            const metadata = makeJournalMetadata(RUN_ID);
+
+            for (const record of [...records, rollover]) metadata.add(record);
+            let traversals = 0;
+
+            const source = Stream.suspend(() => {
+              traversals++;
+
+              return Stream.fromIterable([...records, rollover]);
+            });
+
+            const prepared = yield* projectRunJournalStream(
+              source,
+              RUN_ID,
+              undefined,
+              undefined,
+              metadata.snapshot(),
+            );
+
+            expect(prepared).toEqual(projection);
+            // Reusing metadata retains covered-Tool validation before the final fold.
+            expect(traversals).toBe(2);
           }),
       );
 
@@ -1582,6 +1608,63 @@ describe("engine compaction records and projection (RUN-026)", () => {
           ).pipe(Effect.flip);
 
           expect(failure._tag).toBe("RunJournalError");
+        }),
+    );
+
+    it.effect(
+      "keeps prepared metadata bound to its captured prefix when later evidence arrives",
+      () =>
+        Effect.gen(function* () {
+          const batch = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const records = envelopesOf([batch]);
+
+          const replacement = envelopeAt(
+            records.length + 1,
+            auditRecord("captured-summary", compactionPayload({ coversThrough: records.length })),
+          );
+
+          const prefix = [...records, replacement];
+          const metadata = makeJournalMetadata(LATER_RUN_ID);
+
+          for (const record of prefix) metadata.add(record);
+          const captured = metadata.snapshot();
+          const settled = records.find(({ record }) => record.payload._tag === "ToolCallSettled");
+
+          if (settled === undefined) return yield* Effect.die("Expected a settled Tool fixture");
+
+          // Late settlement evidence would invalidate the summary in a newer prefix.
+          const late = envelopeAt(
+            prefix.length + 1,
+            RecordEnvelope.make({
+              ...settled.record,
+              recordId: RecordId.make("late-settlement"),
+            }),
+          );
+
+          metadata.add(late);
+
+          const projected = yield* projectRunJournalStream(
+            Stream.fromIterable(prefix),
+            LATER_RUN_ID,
+            undefined,
+            undefined,
+            captured,
+          );
+
+          expect(promptText(projected.prompt)).toContain("Goal: book the Kyoto trip");
+          expect(toolResults(projected.prompt)).toEqual([]);
+          expect(projected).toEqual(yield* projectRunJournal(prefix, LATER_RUN_ID));
+
+          const newer = yield* projectRunJournalStream(
+            Stream.fromIterable([...prefix, late]),
+            LATER_RUN_ID,
+            undefined,
+            undefined,
+            metadata.snapshot(),
+          );
+
+          expect(promptText(newer.prompt)).not.toContain("Goal: book the Kyoto trip");
+          expect(newer).toEqual(yield* projectRunJournal([...prefix, late], LATER_RUN_ID));
         }),
     );
 

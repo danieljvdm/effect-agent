@@ -38,6 +38,9 @@ it("rejects missing, duplicated, or unfinalized samples even if the subprocess e
     ordinal: 0,
     warmup: false,
     totalMs: 2,
+    attemptMs: 3,
+    setupMs: 0.5,
+    failurePhase: null,
     modelEntryMs: 1,
     checkpointCreationMs: null,
     retainedPromptMessages: 0,
@@ -55,6 +58,8 @@ it("rejects missing, duplicated, or unfinalized samples even if the subprocess e
     runtime: "v24",
     platform: "test",
     architecture: "test",
+    active: null,
+    failure: null,
     samples: [sample],
   };
 

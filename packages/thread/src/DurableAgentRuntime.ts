@@ -134,6 +134,7 @@ import {
   RECOVERY_ENGINE_VERSION,
   checkpointSuffixCompatible,
 } from "./internal/journal-checkpoint.ts";
+import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
 import {
@@ -3853,6 +3854,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     canonical: Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>,
     canonicalThrough: CanonicalSequence,
     journalSeed: JournalCheckpointSeed | undefined,
+    journalMetadata: JournalMetadata | undefined,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
     runTiming: { readonly startedAt: DateTime.Utc; readonly deadline: DateTime.Utc },
@@ -3868,6 +3870,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         runId,
         (boundary) => boundaries.push(boundary),
         journalSeed,
+        journalMetadata,
       );
 
       const saveRecoveryCheckpoint = Effect.fn("DurableAgentRuntime.saveRecoveryCheckpoint")(
@@ -6919,8 +6922,24 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const initialThrough = controlThrough;
       const initialView = yield* recoveryView(threadId, initialThrough, [submissionId]);
 
+      let journalMetadata =
+        initialView.seed === undefined
+          ? makeJournalMetadata(runIdForSubmission(submissionId))
+          : undefined;
+
+      const retainControl = controlRecords([submissionId]);
+
+      const collectControl = (record: CanonicalRecordEnvelope): boolean => {
+        // Compaction payloads may carry large summaries or handoffs. Keep their metadata
+        // scoped to ordinary projection, never retained across this Attempt's model waits.
+        if (record.record.payload._tag === "CompactionCreated") journalMetadata = undefined;
+        else journalMetadata?.add(record);
+
+        return retainControl(record);
+      };
+
       let records: ReadonlyArray<CanonicalRecordEnvelope> = yield* Stream.runCollect(
-        initialView.canonical.pipe(Stream.filter(controlRecords([submissionId]))),
+        initialView.canonical.pipe(Stream.filter(collectControl)),
       );
 
       // The append-only prefix remains valid for this Attempt. Retain only this Run's control
@@ -6937,7 +6956,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             threadId,
             controlThrough,
             through,
-            controlRecords([submissionId]),
+            collectControl,
           );
 
           records = [...records, ...suffix];
@@ -7135,6 +7154,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           canonical,
           tail.tailSequence,
           initialView.seed,
+          journalMetadata?.snapshot(),
           lineage,
           approvalDecisionIntents,
           runTiming,

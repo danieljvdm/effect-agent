@@ -377,9 +377,10 @@ The trusted comment workflow becomes active after it reaches the default branch.
 
 Latency reports are informational until repeated CI runs establish variance and useful absolute
 and relative thresholds. Deterministic call, concurrency, ownership, tracing, and history-work
-budgets remain correctness gates. The fresh-submission history guard currently permits three
-linear scans plus fixed work; these changes do not claim to eliminate that cost. Checkpoint
-recovery bounds do not establish constant-time fresh admission. Fairness, lock contention, optional
+budgets remain correctness gates. The fresh-submission history guard permits two linear scans plus
+fixed work for histories without compaction. Compacted and checkpoint-seeded views keep their
+existing validation passes. Checkpoint recovery bounds do not establish constant-time fresh admission.
+Fairness, lock contention, optional
 memory/MCP publication, and large settled-ledger indexing require their own controlled evidence
 before changing those paths.
 
