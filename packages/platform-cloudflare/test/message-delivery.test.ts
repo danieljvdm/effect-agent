@@ -10,6 +10,7 @@ import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import {
   decodeIdempotencyKey,
   decodeThreadId,
+  alarmAttemptHolds,
   maintenanceClocks,
   plannerDefinition,
   submitOptions,
@@ -130,6 +131,7 @@ const withThreads = (
             messageEvictions.delete(thread);
             messageDeliveryHolds.delete(thread);
             messageDeliveryResources.delete(thread);
+            alarmAttemptHolds.delete(thread);
           }
         }),
       );
@@ -140,6 +142,60 @@ const withThreads = (
   );
 
 describe("Thread Object message maintenance", () => {
+  // https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4
+  it("delivers messages created during a running source Attempt before that Attempt finishes", () =>
+    withThreads(async (source, destination, now, advance) => {
+      await submit(source, "initial");
+      await drainAlarmsUntil(source, allSettled(source));
+
+      const entered = latch();
+      const release = latch();
+      let released = false;
+
+      alarmAttemptHolds.set(source, {
+        location: "claim:after-claim",
+        entered: Effect.sync(entered.resolve),
+        release: Effect.promise(() => release.promise),
+        finished: Effect.sync(() => {
+          released = true;
+        }),
+      });
+      await submit(source, "producing-message");
+      const running = runDurableObjectAlarm(stubFor(source));
+
+      try {
+        await entered.promise;
+        // Let the pass-start delivery wave finish before new outbound work exists.
+        await advance(100);
+        await enqueue(source, destination, now + 100);
+        await advance(100);
+        for (
+          let attempt = 0;
+          attempt < 200 && (await read(source))?.status === "pending";
+          attempt += 1
+        ) {
+          await Promise.resolve();
+        }
+        expect((await read(source))?.status).toBe("accepted");
+        expect(await laneRows(destination)).toHaveLength(1);
+        expect(await allSettled(source)()).toBe(false);
+        expect(released).toBe(false);
+      } finally {
+        release.resolve();
+        // Completion must stop the delivery fiber without another clock tick.
+        await running;
+      }
+      expect(released).toBe(true);
+      expect(await allSettled(source)()).toBe(true);
+      expect(await scheduledAlarm(source)).not.toBeNull();
+      await drainAlarmsUntil(destination, allSettled(destination));
+      await advance(20);
+      // The completed pass leaves future delivery work to its durable alarm.
+      expect((await read(source))?.status).toBe("accepted");
+      await runDurableObjectAlarm(stubFor(source));
+      expect((await read(source))?.status).toBe("processed");
+    }));
+
   it("settles ready source work while delivery is held and finalizes delivery on maintenance interruption", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");

@@ -15,6 +15,7 @@ import {
   Clock,
   Context,
   DateTime,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -629,10 +630,37 @@ export class ThreadMaintenance extends Context.Service<
           }),
         );
 
-        // Run one bounded message wave beside source work. Slow destination admission or
-        // status RPCs cannot consume the source Attempt's execution window. Join before
-        // acknowledging the alarm so the final deadline includes all delivery mutations.
-        const delivery = yield* Effect.forkChild(messages.drain);
+        // Keep one bounded delivery wave active beside source work, including messages
+        // created after this pass starts. New writes invalidate the cached deadline; the
+        // wake scan bounds discovery even when this Object's native alarm is already running.
+        const stopDelivery = yield* Deferred.make<void>();
+
+        const delivery = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            while (true) {
+              const stopping = yield* Deferred.isDone(stopDelivery);
+
+              yield* messages.drain;
+              if (stopping) return;
+
+              const next = yield* messages.pendingDeadline;
+              const now = yield* Clock.currentTimeMillis;
+
+              const delay = Option.isSome(next)
+                ? Math.min(config.wakeScanInterval, Math.max(1, next.value - now))
+                : config.wakeScanInterval;
+
+              yield* Effect.raceFirst(Deferred.await(stopDelivery), Effect.sleep(delay));
+            }
+          }),
+        );
+
+        // Complete the in-flight wave and one final drain before reading alarm deadlines.
+        // Failures still surface after source work; interruption supervises the child and
+        // leaves the prearmed generation available for durable recovery.
+        const finishDelivery = Deferred.succeed(stopDelivery, undefined).pipe(
+          Effect.andThen(Fiber.join(delivery)),
+        );
 
         // Capture derived-index failures until canonical work has had its turn. Interruption
         // still stops the event; ordinary failures and defects retain the prearmed generation.
@@ -653,7 +681,7 @@ export class ThreadMaintenance extends Context.Service<
         const pending = yield* publication.pendingDeadline;
 
         if (started._tag === "CaughtUp" || Option.isSome(pending)) {
-          yield* Fiber.join(delivery);
+          yield* finishDelivery;
           if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
           yield* failpoint.hit("maintenance:finish:before");
 
@@ -708,7 +736,7 @@ export class ThreadMaintenance extends Context.Service<
         // soft deadline is reached; queued followers belong to a subsequent alarm.
         const settlement = yield* runtime.processThreadHead(identity.threadId, { yieldAfter });
 
-        yield* Fiber.join(delivery);
+        yield* finishDelivery;
         if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
         // Observe residual state before acknowledging this exact pass-start generation.
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
