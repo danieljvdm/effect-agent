@@ -148,6 +148,7 @@
     "preserve-schema-requirements",
     "preserve-supported-storage",
     "preserve-testing-failures",
+    "progressive-tool-discovery",
     "protect-prepared-context",
     "protected-browser-credentials",
     "protected-browser-ordinary-controls",
