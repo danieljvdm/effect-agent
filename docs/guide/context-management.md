@@ -1167,7 +1167,7 @@ needed to keep executing the legacy definitions.
 
 | Tool                                                         | Behavior                                                                                 |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `new_context({ handoff? })`                                  | Requests a rollover before the next turn. Call it alone, after saving notes.             |
+| `new_context({ handoff? })`                                  | Requests a rollover before the next turn. Call it alone; a short handoff is optional.    |
 | `get_context_remaining({})`                                  | Returns window identity and estimated live tokens. Unconfigured capacity is `null`.      |
 | `search_context_windows({ query, limit?, beforeRecordId? })` | Searches retained evidence newest first; returns at most three record snippets per page. |
 | `read_context_window({ recordId, offset?, maxChars? })`      | Reads up to 5,000 characters; use `nextOffset` to continue.                              |
@@ -1209,9 +1209,11 @@ handlers start. Failed tool results do not trigger rollover. A successful reques
 its canonical result if ownership is lost before the boundary is written; after the boundary is
 written, recovery uses the saved window without replaying covered tools.
 
-The optional handoff is limited to 20,000 characters and 32 KiB of JSON-encoded UTF-8. Automatic
-handoffs are smaller deterministic excerpts of covered user messages and the last tool batch; they
-may omit older progress and do not claim that external actions succeeded. Notes and history are
+The optional handoff is saved with the rollover boundary and included in the next model prompt;
+it does not require separate notes tools. It is limited to 20,000 characters and 32 KiB of
+JSON-encoded UTF-8. Automatic handoffs are smaller deterministic excerpts of covered user messages
+and the last tool batch; they may omit older progress and do not claim that external actions
+succeeded. Notes and history are
 untrusted working evidence. Verify live state before repeating an action.
 
 `MemoryNotes.toolkit` supplies `read_notes` and `write_notes`. Bind `MemoryNotes.layer` to one
@@ -1223,9 +1225,10 @@ reading and merging again. Durable Steps retain the exact write command and oper
 recovery. Notes survive a process restart only when the selected Memory store does. The model cannot
 choose a filesystem path, another memory key, or another thread through these tools.
 
-Tell the Agent to save important state before `new_context`, read its notes after rollover, and use
-history to verify details. Notes are independent of window transitions; the framework does not
-synthesize or overwrite them automatically. This works with any model that can use the native tools.
+When using `MemoryNotes`, tell the Agent to save important state before `new_context`, read its
+notes after rollover, and use history to verify details. Notes are optional and independent of
+window transitions; the framework does not synthesize or overwrite them automatically. This works
+with any model that can use the native tools.
 
 The canonical history adapter scans a fixed tail in bounded pages, with a default 10-second deadline.
 It fails explicitly when the configured scan limit is exceeded. It exposes model-visible text, tool
