@@ -630,7 +630,7 @@ describe("context-economics policy", () => {
 
     expect(policy.toolResultBounds.maxBytes).toBe(50 * 1024);
     expect(policy.onExhaustion).toBe("final-answer");
-    expect(policy.runStatus).toBe("appended");
+    expect(policy.runStatus).toBe("off");
     expect(policy.compaction.keepRecentTokens).toBe(20_000);
     expect(policy.compaction.mode).toBe("prune-then-summarize");
     expect(policy.contextTokenLimit).toBeUndefined();
@@ -644,14 +644,14 @@ describe("context-economics policy", () => {
       contextTokenLimit: 30_000,
       toolResultBounds: ToolResultBounds.make({ maxBytes: 1_024 }),
       onExhaustion: "fail",
-      runStatus: "off",
+      runStatus: "appended",
       compaction: CompactionPolicy.make({ keepRecentTokens: 5_000, mode: "prune" }),
     });
 
     expect(custom.contextTokenLimit).toBe(30_000);
     expect(custom.toolResultBounds.maxBytes).toBe(1_024);
     expect(custom.onExhaustion).toBe("fail");
-    expect(custom.runStatus).toBe("off");
+    expect(custom.runStatus).toBe("appended");
     expect(custom.compaction.keepRecentTokens).toBe(5_000);
     expect(custom.compaction.mode).toBe("prune");
   });

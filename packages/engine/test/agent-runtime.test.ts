@@ -469,10 +469,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(encodedObserved.content.slice(0, encodedPrior.content.length)).toEqual(
         encodedPrior.content,
       );
-      // The outgoing tail is instructions, decoded input, then the derived
-      // run-status message (RUN-020) — official history keeps only the first two.
-      expect(encodedObserved.content.at(-3)?.role).toBe("system");
-      expect(encodedObserved.content.at(-2)?.role).toBe("user");
+      // The outgoing tail retains instructions and decoded input without disposable status.
+      expect(encodedObserved.content.at(-2)?.role).toBe("system");
       expect(encodedObserved.content.at(-1)?.role).toBe("user");
     });
   });

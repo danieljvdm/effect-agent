@@ -3,7 +3,8 @@ import {
   MessageDeliveryError,
   MessageDeliveryStore,
 } from "@effect-agent/thread/MessageDelivery";
-import { Clock, Context, Effect, Layer, Option, Ref, Semaphore } from "effect";
+import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+import { Clock, Context, Deferred, Effect, Layer, Option, Ref, Semaphore } from "effect";
 
 import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
 import { ThreadObjectIdentity } from "../CloudflareBindings.ts";
@@ -14,6 +15,7 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* MessageDeliveryStore;
     const mutations = yield* ThreadMutationGate;
+    const wakes = yield* WakeScheduler;
     const { threadId } = yield* ThreadObjectIdentity;
     // Reconstructed as unknown on every incarnation. The gate prevents a racing read from
     // caching an empty deadline across a write; SQL remains the recovery authority.
@@ -50,7 +52,11 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
     );
 
     return MessageDeliveryStore.of({
-      insert: (record) => local(record.key.ownerThreadId, mutate(store.insert(record))),
+      insert: (record) =>
+        local(
+          record.key.ownerThreadId,
+          mutate(store.insert(record)).pipe(Effect.tap(() => wakes.notify(threadId))),
+        ),
       get: (key) => local(key.ownerThreadId, store.get(key)),
       list: (request) => local(request.ownerThreadId, store.list(request)),
       change: (key, change) => local(key.ownerThreadId, mutate(store.change(key, change))),
@@ -66,6 +72,7 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
   Effect.gen(function* () {
     const driver = yield* MessageDeliveryDriver;
     const store = yield* MessageDeliveryStore;
+    const wakes = yield* WakeScheduler;
     const { threadId } = yield* ThreadObjectIdentity;
 
     const failure = (operation: string) => () =>
@@ -74,14 +81,56 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
         message: "Durable message recovery remains pending",
       });
 
-    return Context.make(ThreadMessageDelivery, {
-      drain: Effect.gen(function* () {
-        const deadline = yield* store.nextDeadline(threadId);
+    const drain = Effect.gen(function* () {
+      const deadline = yield* store.nextDeadline(threadId);
 
-        if (deadline !== null && deadline <= (yield* Clock.currentTimeMillis)) {
-          yield* driver.runDue(threadId);
+      if (deadline !== null && deadline <= (yield* Clock.currentTimeMillis)) {
+        yield* driver.runDue(threadId);
+      }
+    }).pipe(Effect.mapError(failure("drain message delivery")));
+
+    return Context.make(ThreadMessageDelivery, {
+      drain,
+      drainUntil: Effect.fn("ThreadMessageDelivery.drainUntil")(function* (
+        finished: Deferred.Deferred<void>,
+      ) {
+        let initial = true;
+
+        while (initial || !(yield* Deferred.isDone(finished))) {
+          initial = false;
+
+          const changed = yield* Effect.scoped(
+            Effect.gen(function* () {
+              // Subscribe before the durable read so an insertion during a wave is retained
+              // as a hint for the next one. Losing the hint still leaves the prearmed outbox.
+              const notified = yield* wakes.subscribe(threadId);
+
+              yield* drain;
+
+              const deadline = yield* store
+                .nextDeadline(threadId)
+                .pipe(Effect.mapError(failure("read message deadline")));
+
+              // The index includes unfinished waves, lease expiry, retry and settlement polls.
+              // Yield at least one millisecond for an already-due deadline instead of spinning.
+              const next =
+                deadline === null
+                  ? notified
+                  : Effect.raceFirst(
+                      notified,
+                      Effect.sleep(Math.max(1, deadline - (yield* Clock.currentTimeMillis))),
+                    );
+
+              return yield* Effect.raceFirst(
+                Deferred.await(finished).pipe(Effect.as(false)),
+                next.pipe(Effect.as(true)),
+              );
+            }),
+          );
+
+          if (!changed) return;
         }
-      }).pipe(Effect.mapError(failure("drain message delivery"))),
+      }),
       pendingDeadline: store
         .nextDeadline(threadId)
         .pipe(Effect.map(Option.fromNullishOr), Effect.mapError(failure("read message deadline"))),

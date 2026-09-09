@@ -15,6 +15,7 @@ import {
   Clock,
   Context,
   DateTime,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -245,6 +246,10 @@ export class ThreadPublication extends Context.Service<
  */
 export const ThreadMessageDelivery = Context.Reference<{
   readonly drain: Effect.Effect<void, DurableAlarmError>;
+  /** Drain inserts and due retries during source work, finishing the bounded wave on completion. */
+  readonly drainUntil?: (
+    finished: Deferred.Deferred<void>,
+  ) => Effect.Effect<void, DurableAlarmError>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadMessageDelivery", {
   defaultValue: () => ({ drain: Effect.void, pendingDeadline: Effect.succeed(Option.none()) }),
@@ -629,10 +634,18 @@ export class ThreadMaintenance extends Context.Service<
           }),
         );
 
-        // Run one bounded message wave beside source work. Slow destination admission or
-        // status RPCs cannot consume the source Attempt's execution window. Join before
-        // acknowledging the alarm so the final deadline includes all delivery mutations.
-        const delivery = yield* Effect.forkChild(messages.drain);
+        // Deliver beside source work, including messages inserted by the running Attempt.
+        // Slow destination RPCs never consume the source execution window. Stop starting
+        // waves when source work ends, then join the bounded current wave before acknowledgement.
+        const deliveryFinished = yield* Deferred.make<void>();
+
+        const delivery = yield* Effect.forkChild(
+          messages.drainUntil?.(deliveryFinished) ?? messages.drain,
+        );
+
+        const finishDelivery = Deferred.succeed(deliveryFinished, undefined).pipe(
+          Effect.andThen(Fiber.join(delivery)),
+        );
 
         // Capture derived-index failures until canonical work has had its turn. Interruption
         // still stops the event; ordinary failures and defects retain the prearmed generation.
@@ -653,7 +666,7 @@ export class ThreadMaintenance extends Context.Service<
         const pending = yield* publication.pendingDeadline;
 
         if (started._tag === "CaughtUp" || Option.isSome(pending)) {
-          yield* Fiber.join(delivery);
+          yield* finishDelivery;
           if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
           yield* failpoint.hit("maintenance:finish:before");
 
@@ -708,7 +721,7 @@ export class ThreadMaintenance extends Context.Service<
         // soft deadline is reached; queued followers belong to a subsequent alarm.
         const settlement = yield* runtime.processThreadHead(identity.threadId, { yieldAfter });
 
-        yield* Fiber.join(delivery);
+        yield* finishDelivery;
         if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
         // Observe residual state before acknowledging this exact pass-start generation.
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);

@@ -356,6 +356,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           instructions: "Search once, then answer.",
           toolkit: searchToolkit,
           policy: AgentPolicy.make({
+            runStatus: "appended",
             maxTurns: 10,
             maxToolCalls: 10,
             maxDuration: "30 seconds",
@@ -588,6 +589,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           instructions: "Search once, then answer.",
           toolkit: searchToolkit,
           policy: AgentPolicy.make({
+            runStatus: "appended",
             maxTurns: 10,
             maxToolCalls: 10,
             maxDuration: "30 seconds",
@@ -649,6 +651,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         instructions: "Answer.",
         toolkit: Toolkit.empty,
         policy: AgentPolicy.make({
+          runStatus: "appended",
           maxTurns: 10,
           maxToolCalls: 10,
           maxDuration: "30 seconds",
@@ -683,6 +686,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         instructions: "Answer from the restored result.",
         toolkit: searchToolkit,
         policy: AgentPolicy.make({
+          runStatus: "appended",
           maxTurns: 10,
           maxToolCalls: 10,
           maxDuration: "30 seconds",
@@ -725,7 +729,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     }),
   );
 
-  it.effect("RUN-024: omits the run-status message when policy runStatus is off", () =>
+  it.effect("RUN-024: omits the run-status message by default", () =>
     Effect.gen(function* () {
       const definition = Agent.make("status-off", {
         input: Schema.Struct({ question: Schema.String }),
@@ -737,7 +741,6 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           maxToolCalls: 1,
           maxDuration: "30 seconds",
           toolConcurrency: 1,
-          runStatus: "off",
         }),
       });
 
@@ -762,6 +765,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           instructions: "Search once, then answer.",
           toolkit: searchToolkit,
           policy: AgentPolicy.make({
+            runStatus: "appended",
             maxTurns: 10,
             maxToolCalls: 10,
             maxDuration: "30 seconds",

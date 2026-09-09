@@ -1392,6 +1392,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           instructions: "Probe, then answer as JSON.",
           toolkit: probeTools,
           policy: AgentPolicy.make({
+            runStatus: "appended",
             maxTurns: 1,
             maxToolCalls: 5,
             maxDuration: "30 seconds",

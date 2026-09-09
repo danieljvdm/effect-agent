@@ -476,17 +476,22 @@ const boundLayer = <E = never, R = never>(
         Layer.provide(infrastructure),
       );
 
+      const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
+      const wakes = cloudflareWakeSchedulerLayer.pipe(Layer.provide(base));
+
       const messageStore = guardedMessageDeliveryStoreLayer.pipe(
         Layer.provide(doMessageDeliveryStoreLayer().pipe(Layer.provide(infrastructure))),
+        Layer.provide(wakes),
       );
 
       const messageRecovery = threadMessageDeliveryLayer.pipe(
-        // A single wave stays within the alarm event budget even at the policy's five-minute
-        // attempt ceiling. More due rows retain their indexed deadline for the next alarm.
+        // Each wave is bounded even at the policy's five-minute attempt ceiling. Source
+        // completion stops new waves; remaining rows retain their indexed alarm deadline.
         Layer.provide(MessageDeliveryDriver.layer({ batchSize: 4, concurrency: 4 })),
         Layer.provide(cloudflarePreparedInputAdmissionLayer),
         Layer.provide(CloudflareThreadClient.layer),
         Layer.provide(messageStore),
+        Layer.provide(wakes),
       );
 
       const publication = (options.publication ?? ThreadPublication.layer).pipe(
@@ -592,15 +597,13 @@ const boundLayer = <E = never, R = never>(
         routedThreadStoreLayer({ localThreadId: threadId }),
       ).pipe(Layer.provide(localPorts), Layer.provide(threadPortTransportLayer));
 
-      const base = Layer.mergeAll(DurableAlarmService.layer, ProgressWaitRegistry.layer);
-
       const runtimeStack = DurableAgentRuntime.layerWithBindings(bindings).pipe(
         Layer.provide(
           cloudflarePreparedInputAdmissionLayer.pipe(Layer.provide(CloudflareThreadClient.layer)),
         ),
         Layer.provideMerge(messageStore),
         Layer.provideMerge(routedPorts),
-        Layer.provideMerge(cloudflareWakeSchedulerLayer),
+        Layer.provideMerge(wakes),
         Layer.provideMerge(base),
       );
 

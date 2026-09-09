@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import {
+  alarmAttemptHolds,
   decodeIdempotencyKey,
   decodeThreadId,
   maintenanceClocks,
@@ -50,28 +51,28 @@ const submit = (thread: string, key: string) =>
     ),
   );
 
-const keyFor = (source: string) => ({
+const keyFor = (source: string, message = "message") => ({
   ownerThreadId: decodeThreadId(source),
-  messageId: decodeIdempotencyKey("message"),
+  messageId: decodeIdempotencyKey(message),
 });
 
-const read = (source: string) =>
+const read = (source: string, message = "message") =>
   runInDurableObject(stubFor(source), (instance) =>
     instance[DurableObject.RunSymbol](
-      Effect.flatMap(MessageDeliveryStore, (store) => store.get(keyFor(source))),
+      Effect.flatMap(MessageDeliveryStore, (store) => store.get(keyFor(source, message))),
     ),
   );
 
-const enqueue = (source: string, destination: string, now: number) =>
+const enqueue = (source: string, destination: string, now: number, message = "message") =>
   runInDurableObject(stubFor(source), (instance) =>
     instance[DurableObject.RunSymbol](
       Effect.gen(function* () {
         const store = yield* MessageDeliveryStore;
-        const options = submitOptions(destination, `message:${source}`);
+        const options = submitOptions(destination, `message:${source}:${message}`);
         const input = { question: "delivered later", ref: destination };
 
         const record = yield* prepareMessageDelivery({
-          key: keyFor(source),
+          key: keyFor(source, message),
           createdAtMillis: now,
           deadlineAtMillis: now + 60_000,
           policy: {
@@ -130,6 +131,7 @@ const withThreads = (
             messageEvictions.delete(thread);
             messageDeliveryHolds.delete(thread);
             messageDeliveryResources.delete(thread);
+            alarmAttemptHolds.delete(thread);
           }
         }),
       );
@@ -140,6 +142,81 @@ const withThreads = (
   );
 
 describe("Thread Object message maintenance", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
+  it("delivers inserted messages, queued waves and settlement polls while its source Attempt is running", () =>
+    withThreads(async (source, destination, now, advance) => {
+      await submit(source, "initial");
+      await drainAlarmsUntil(source, allSettled(source));
+
+      const entered = latch();
+      const release = latch();
+      const finished = latch();
+      const deliveryRelease = latch();
+      const messages = ["message", ...Array.from({ length: 8 }, (_, index) => `message-${index}`)];
+
+      const statuses = () =>
+        Promise.all(messages.map(async (message) => (await read(source, message))?.status));
+
+      alarmAttemptHolds.set(source, {
+        location: "claim:after-claim",
+        entered: Effect.sync(entered.resolve),
+        release: Effect.promise(() => release.promise),
+        finished: Effect.sync(finished.resolve),
+      });
+      await submit(source, "active-source");
+      const running = runDurableObjectAlarm(stubFor(source));
+
+      try {
+        await entered.promise;
+        expect(await read(source)).toBeNull();
+        messageDeliveryHolds.set(source, {
+          point: "message-delivery:admission:after",
+          entered: () => {},
+          release: deliveryRelease.promise,
+        });
+        await enqueue(source, destination, now);
+        for (
+          let attempt = 0;
+          attempt < 200 && messageDeliveryResources.get(source)?.acquired !== 1;
+          attempt += 1
+        ) {
+          await read(source);
+        }
+        expect(messageDeliveryResources.get(source)?.acquired).toBe(1);
+        // Coalesce a backlog behind the first delivery so it exceeds a single native wave.
+        for (const message of messages.slice(1)) await enqueue(source, destination, now, message);
+        messageDeliveryHolds.delete(source);
+        deliveryRelease.resolve();
+        for (
+          let attempt = 0;
+          attempt < 200 && (await statuses()).some((status) => status !== "accepted");
+          attempt += 1
+        ) {
+          await advance(1);
+        }
+        expect(await statuses()).toEqual(messages.map(() => "accepted"));
+        expect(await laneRows(destination)).toHaveLength(messages.length);
+
+        await drainAlarmsUntil(destination, allSettled(destination));
+        await advance(20);
+        for (
+          let attempt = 0;
+          attempt < 200 && (await statuses()).some((status) => status !== "processed");
+          attempt += 1
+        ) {
+          await advance(1);
+        }
+        expect(await statuses()).toEqual(messages.map(() => "processed"));
+        expect(await allSettled(source)()).toBe(false);
+      } finally {
+        messageDeliveryHolds.delete(source);
+        deliveryRelease.resolve();
+        release.resolve();
+        await running;
+        await finished.promise;
+      }
+    }));
+
   it("settles ready source work while delivery is held and finalizes delivery on maintenance interruption", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");

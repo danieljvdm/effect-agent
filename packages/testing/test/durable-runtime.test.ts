@@ -3076,8 +3076,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       // The resumed Attempt's model request saw the canonical prompt, tool result included,
       // without re-appended instructions or input. The second system message is the
-      // request-time model-visible output contract (RUN-028) and the trailing user
-      // message is the derived run-status line (RUN-024) — neither is canonical.
+      // request-time model-visible output contract (RUN-028), which is not canonical.
       expect(scripted.prompts).toHaveLength(2);
       const resumedPrompt = scripted.prompts[1];
 
@@ -3087,7 +3086,6 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         "user",
         "assistant",
         "tool",
-        "user",
       ]);
 
       const records = yield* readLog(thread);
