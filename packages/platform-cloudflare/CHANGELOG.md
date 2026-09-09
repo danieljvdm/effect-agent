@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.73
+
+### Patch Changes
+
+- [#405](https://github.com/danieljvdm/effect-agent/pull/405) [`da6971d`](https://github.com/danieljvdm/effect-agent/commit/da6971d450c7ed73b88c8ae74ac8376aee6c1254) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Wake outgoing delivery immediately when messages are inserted during an active Cloudflare Run. Preserve bounded delivery, durable recovery, and periodic scans when wake notifications are lost.
+
+- Updated dependencies [[`da6971d`](https://github.com/danieljvdm/effect-agent/commit/da6971d450c7ed73b88c8ae74ac8376aee6c1254)]:
+  - @effect-agent/core@0.1.0-beta.73
+  - @effect-agent/engine@0.1.0-beta.73
+  - @effect-agent/storage-cloudflare@0.1.0-beta.73
+  - @effect-agent/thread@0.1.0-beta.73
+  - @effect-agent/sandbox@0.1.0-beta.73
+
 ## 0.1.0-beta.72
 
 ### Patch Changes
