@@ -73,6 +73,9 @@ storage when changing models; existing registrations retain their original model
 The Worker exports a SQLite Durable Object class and includes its first migration in
 [wrangler.jsonc](wrangler.jsonc). Each Thread has its own Object; persisted alarms drive
 accepted work and message delivery. There is no process-local worker loop to keep alive.
+The host supplies Effect `Config` from Worker vars and secrets, so the same model configuration
+used on Node reads `OPENAI_API_KEY` and `OPENAI_MODEL` without an environment adapter. An unset
+or empty `OPENAI_MODEL` uses the default; a missing or empty API key refuses initialization.
 
 ```sh
 cp examples/durable-orchestration/.dev.vars.example examples/durable-orchestration/.dev.vars

@@ -62,6 +62,10 @@ Required environment:
   to the temporary Worker after its deletion finalizer is registered;
 - `CLOUDFLARE_WORKERS_SUBDOMAIN`: the account's workers.dev subdomain without `.workers.dev`.
 
+Inside the Worker, `effect-cf` supplies Effect `Config` for `CLOUDFLARE_ACCOUNT_ID` and
+`BROWSER_RENDERING_API_TOKEN`; missing or empty values refuse initialization. `WorkerEnvironment`
+supplies the `BROWSER` resource binding.
+
 Run the proof from the repository root:
 
 ```sh

@@ -842,6 +842,8 @@ export interface Class<EventServices = never> {
  * Export a composed application Layer as a native Durable Object class.
  * Bootstrap services are provided to the whole graph before it acquires, so application Layers
  * can yield effect-cf's WorkerEnvironment and DurableObjectState, derived identity, and Crypto.
+ * Effect Config reads scalar Worker vars and secrets through effect-cf's environment provider;
+ * WorkerEnvironment exposes resource bindings without a separate config Layer.
  * Application dependencies remain visible until Layer.provide satisfies them. effect-cf owns the
  * cached ManagedRuntime, native RPC methods, event scopes, and telemetry flushing.
  * Initialization is local and bounded inside the constructor gate. Cloudflare eviction does not

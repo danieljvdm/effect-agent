@@ -15,8 +15,7 @@ bun add @effect-agent/platform-cloudflare@beta
 ```
 
 Also install `effect@4.0.0-rc.112`, `effect-cf@^0.40.0`, `@effect-agent/core@beta`,
-`@effect-agent/thread@beta`, `@effect/ai-openai@4.0.0-rc.112`, and
-`@effect/platform-browser@4.0.0-rc.112` for the examples below.
+`@effect-agent/thread@beta`, and `@effect/ai-openai@4.0.0-rc.112` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
 ## Create the thread object
@@ -25,16 +24,16 @@ Compose agent registrations and application services as a layer, then pass it to
 `ThreadObject.make`. This example expects `OPENAI_API_KEY` and a `THREADS` Durable
 Object namespace in the generated `Cloudflare.Env`.
 
-```ts
+```ts twoslash
+// @types: @cloudflare/workers-types
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
 import { DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Effect, Layer, Redacted, Schema } from "effect";
+import { Config, Layer, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
-import { WorkerEnvironment } from "effect-cf";
 
 const TravelPlanner = Agent.make("travel-planner", {
   input: Schema.Struct({ destination: Schema.String, days: Schema.Number }),
@@ -56,13 +55,9 @@ export const travelDefinitions = DefinitionDigestInput.make({
   tools: [],
 });
 
-const OpenAiLive = Layer.unwrap(
-  Effect.map(WorkerEnvironment, (env) =>
-    OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
-      Layer.provide(FetchHttpClient.layer),
-    ),
-  ),
-);
+const OpenAiLive = OpenAiClient.layerConfig({
+  apiKey: Config.redacted("OPENAI_API_KEY"),
+}).pipe(Layer.provide(FetchHttpClient.layer));
 
 const RuntimeLive = ThreadObject.layer([
   {
@@ -84,7 +79,10 @@ submitter passes `digestDefinitions(travelDefinitions)` through
 change. Version tool implementations and model configuration when they change.
 
 Application layers can use `WorkerEnvironment`, `DurableObjectState`,
-`ThreadObjectIdentity`, and Crypto. Use `Layer.unwrap` for configuration-dependent registrations.
+`ThreadObjectIdentity`, and Crypto. Scalar Worker vars and secrets are available through Effect
+`Config`: `ThreadObject.make` installs `effect-cf`'s environment config provider. Read secrets
+with `Config.redacted`, and use `WorkerEnvironment` for resource bindings such as R2 or Durable
+Object namespaces. Use `Layer.unwrap` when configuration selects registrations or services.
 The application is acquired once per Object instance and rebuilt after eviction. Keep initialization
 local and bounded. Eviction does not guarantee finalizers; acquire resources needing timely cleanup
 inside scoped operations or `options.eventLayer`. Each event runs a bounded recovery pass;
@@ -92,6 +90,53 @@ no worker loop is needed.
 
 Register the exported class as a SQLite Durable Object under `THREADS`.
 `ThreadObject.layer([])` registers no agents and refuses every agent identity.
+
+## Configure the binding
+
+```jsonc
+{
+  "name": "travel-planner",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "THREADS", "class_name": "TravelThread" }],
+  },
+  "exports": {
+    "TravelThread": { "type": "durable-object", "storage": "sqlite" },
+  },
+}
+```
+
+Match `THREADS` to `namespaceBinding` and `TravelThread` to the exported class.
+Enable `nodejs_compat` for the async context support used by `effect-cf`.
+See Cloudflare's [class configuration guide](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
+for Workers using the older `migrations` array.
+
+## Connect from your Worker
+
+```ts twoslash
+// @types: @cloudflare/workers-types
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { type ThreadObjectRpc } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+
+export const threadClientLayer = (env: { THREADS: DurableObjectNamespace<ThreadObjectRpc> }) =>
+  CloudflareThreadClient.layerFromBinding({ namespace: env.THREADS });
+```
+
+This constructor supplies the namespace and platform Crypto. Pass `rpcTracing: "THREADS"` only
+when the receiver also enables native RPC tracing. Keep `CloudflareThreadClient.layer` for
+custom Crypto or namespace composition, and `threadNamespaceLayer` for untyped environment lookup.
+
+In an authenticated handler, call `client.submit(agent, input, options)` with the thread ID,
+principal, idempotency key, and definition digests. Return its receipt after admission.
+
+Use `client.awaitSettlement(receipt)` for completion.
+For updates, call `readPage`, then `awaitProgress`, then read after the last received sequence.
+Scope progress waits so interruption cancels them remotely.
+Cancellation is best effort and waits at most one second for the remote reply, so a lost reply
+does not prevent local shutdown. The Object retains bounded cancellation hints for late retries.
+Expose these Effects through your application's HTTP or RPC API.
 
 ## Configure runtime services
 
@@ -179,53 +224,6 @@ across reconstruction. A projection deadline never gates approval publication or
 Backfill failures are reported after eligible canonical work, retaining the prearmed generation;
 interruption stops the event. Hooks return typed `ThreadProjectionError` failures, own scoped
 resources, and never write the alarm slot or call source mutation ports.
-
-## Configure the binding
-
-```jsonc
-{
-  "name": "travel-planner",
-  "main": "src/worker.ts",
-  "compatibility_date": "2026-08-31",
-  "compatibility_flags": ["nodejs_compat"],
-  "durable_objects": {
-    "bindings": [{ "name": "THREADS", "class_name": "TravelThread" }],
-  },
-  "exports": {
-    "TravelThread": { "type": "durable-object", "storage": "sqlite" },
-  },
-}
-```
-
-Match `THREADS` to `namespaceBinding` and `TravelThread` to the exported class.
-Enable `nodejs_compat` for the async context support used by `effect-cf`.
-See Cloudflare's [class configuration guide](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)
-for Workers using the older `migrations` array.
-
-## Connect from your Worker
-
-```ts twoslash
-// @types: @cloudflare/workers-types
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import { type ThreadObjectRpc } from "@effect-agent/platform-cloudflare/CloudflareBindings";
-
-export const threadClientLayer = (env: { THREADS: DurableObjectNamespace<ThreadObjectRpc> }) =>
-  CloudflareThreadClient.layerFromBinding({ namespace: env.THREADS });
-```
-
-This constructor supplies the namespace and platform Crypto. Pass `rpcTracing: "THREADS"` only
-when the receiver also enables native RPC tracing. Keep `CloudflareThreadClient.layer` for
-custom Crypto or namespace composition, and `threadNamespaceLayer` for untyped environment lookup.
-
-In an authenticated handler, call `client.submit(agent, input, options)` with the thread ID,
-principal, idempotency key, and definition digests. Return its receipt after admission.
-
-Use `client.awaitSettlement(receipt)` for completion.
-For updates, call `readPage`, then `awaitProgress`, then read after the last received sequence.
-Scope progress waits so interruption cancels them remotely.
-Cancellation is best effort and waits at most one second for the remote reply, so a lost reply
-does not prevent local shutdown. The Object retains bounded cancellation hints for late retries.
-Expose these Effects through your application's HTTP or RPC API.
 
 ## Shared memory {#shared-memory}
 

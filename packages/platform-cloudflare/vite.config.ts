@@ -70,6 +70,7 @@ export default defineConfig({
             miniflare: {
               compatibilityDate: "2025-05-01",
               compatibilityFlags: ["nodejs_compat"],
+              bindings: { REGISTRATION_LABEL: "configured-by-worker" },
               durableObjects: {
                 THREADS: { className: "TestThreadObject", useSQLite: true },
                 PUBLICATIONS: { className: "PublicationThreadObject", useSQLite: true },
