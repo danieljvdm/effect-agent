@@ -1,6 +1,16 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node";
-import { Clock, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Schema } from "effect";
-import { expect, it } from "vite-plus/test";
+import {
+  Clock,
+  type Crypto,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Schema,
+} from "effect";
+import { expect, expectTypeOf, it } from "vite-plus/test";
 
 import { MAX_SUBPROCESS_OUTPUT_BYTES, subprocess } from "../../../scripts/runtime-benchmark.ts";
 import {
@@ -10,12 +20,16 @@ import {
   WorkerReport,
   type Sample,
 } from "../src/contracts.ts";
-import { writeEvidence } from "../src/evidence.ts";
-import { runSample } from "../src/fixture.ts";
-import { makeSeedTemplates } from "../src/seeds.ts";
+import { BenchmarkProgress, writeEvidence } from "../src/evidence.ts";
+import { BenchmarkRunner, runSample, SeedInitializerLive } from "../src/fixture.ts";
+import { SeedInitializer, SeedTemplates } from "../src/seeds.ts";
 import { runWorker } from "../src/worker.ts";
 
-const services = Layer.merge(NodeServices.layer, NodeCrypto.layer);
+const services = Layer.mergeAll(
+  NodeServices.layer,
+  SeedInitializerLive.pipe(Layer.provideMerge(NodeCrypto.layer)),
+  BenchmarkProgress.silent,
+);
 
 const sample = (ordinal: number): Sample => ({
   case: "small-run",
@@ -42,12 +56,14 @@ it("keeps phase evidence writes outside the operation clock", async () => {
       const clock = yield* Clock.Clock;
       let nanos = 1n;
 
-      return yield* runSample(casesFor("smoke")[0]!, 0, false, {
-        onProgress: () =>
-          Effect.sync(() => {
-            nanos += 100_000_000n;
-          }),
-      }).pipe(
+      return yield* runSample(casesFor("smoke")[0]!, 0, false).pipe(
+        Effect.provide(SeedTemplates.layer),
+        Effect.provideService(BenchmarkProgress, {
+          record: () =>
+            Effect.sync(() => {
+              nanos += 100_000_000n;
+            }),
+        }),
         Effect.provideService(Clock.Clock, {
           currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
           currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
@@ -113,7 +129,10 @@ it("retains a failed sample and later successes while rejecting the worker", asy
             : sample(ordinal),
         );
 
-      const result = yield* runWorker(options, runner).pipe(Effect.exit);
+      const result = yield* runWorker(options).pipe(
+        Effect.provideService(BenchmarkRunner, { run: runner }),
+        Effect.exit,
+      );
 
       expect(Exit.isFailure(result)).toBe(true);
 
@@ -129,36 +148,80 @@ it("retains a failed sample and later successes while rejecting the worker", asy
   );
 });
 
+it("preserves a worker report when its seed cache cannot be acquired", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped();
+
+      const options = {
+        profile: "smoke" as const,
+        cold: true,
+        warmups: 0,
+        samples: 1,
+        output: `${directory}/worker.json`,
+      };
+
+      const result = yield* runWorker(options).pipe(
+        Effect.provide(BenchmarkRunner.layer),
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          makeTempDirectoryScoped: () => Effect.die("seed cache unavailable"),
+        }),
+        Effect.exit,
+      );
+
+      expect(Exit.isFailure(result)).toBe(true);
+
+      const report = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerReport))(
+        yield* fs.readFileString(options.output),
+      );
+
+      expect(report.samples).toEqual([]);
+      expect(report.active).toBeNull();
+      expect(report.failure).toContain("seed cache unavailable");
+      expect(completeBatch(report, options)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(services)),
+  );
+});
+
 it("clones closed templates once per key without sharing sample mutations and removes its files", async () => {
   let template = "";
 
   const observed = await Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      let initializations = 0;
 
-      yield* Effect.scoped(
+      const initializer = Layer.effect(
+        SeedInitializer,
         Effect.gen(function* () {
-          const seeds = yield* makeSeedTemplates();
-          const directory = yield* fs.makeTempDirectoryScoped();
-          let initializations = 0;
+          const seedFs = yield* FileSystem.FileSystem;
 
-          const initialize = (filename: string) =>
-            Effect.gen(function* () {
-              initializations++;
-              template = filename;
-              yield* fs.writeFileString(filename, "seed");
-            });
-
-          yield* seeds.copy("history-16", `${directory}/one`, initialize);
-          yield* fs.writeFileString(`${directory}/one`, "measured mutation");
-          yield* seeds.copy("history-16", `${directory}/two`, initialize);
-          expect(yield* fs.readFileString(`${directory}/two`)).toBe("seed");
-          expect(yield* fs.readFileString(template)).toBe("seed");
-          expect(initializations).toBe(1);
-          yield* seeds.copy("ledger-16", `${directory}/three`, initialize);
-          expect(initializations).toBe(2);
+          return SeedInitializer.of({
+            initialize: ({ filename }) =>
+              Effect.gen(function* () {
+                initializations++;
+                template = filename;
+                yield* seedFs.writeFileString(filename, "seed");
+              }).pipe(Effect.orDie),
+          });
         }),
       );
+
+      yield* Effect.gen(function* () {
+        const seeds = yield* SeedTemplates;
+        const directory = yield* fs.makeTempDirectoryScoped();
+
+        yield* seeds.copy({ kind: "history", records: 16, filename: `${directory}/one` });
+        yield* fs.writeFileString(`${directory}/one`, "measured mutation");
+        yield* seeds.copy({ kind: "history", records: 16, filename: `${directory}/two` });
+        expect(yield* fs.readFileString(`${directory}/two`)).toBe("seed");
+        expect(yield* fs.readFileString(template)).toBe("seed");
+        expect(initializations).toBe(1);
+        yield* seeds.copy({ kind: "ledger", records: 16, filename: `${directory}/three` });
+        expect(initializations).toBe(2);
+      }).pipe(Effect.provide(SeedTemplates.layer.pipe(Layer.provide(initializer))), Effect.scoped);
 
       return yield* fs.exists(template);
     }).pipe(Effect.provide(services)),
@@ -173,18 +236,29 @@ it.each(["wal", "shm"])(
     await Effect.runPromise(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const seeds = yield* makeSeedTemplates();
         const directory = yield* fs.makeTempDirectoryScoped();
         const destination = `${directory}/copy`;
 
-        const result = yield* seeds
-          .copy("history-16", destination, (filename) =>
-            Effect.gen(function* () {
-              yield* fs.writeFileString(filename, "seed");
-              yield* fs.writeFileString(`${filename}-${sidecar}`, "pending state");
-            }),
-          )
-          .pipe(Effect.exit);
+        const initializer = Layer.effect(
+          SeedInitializer,
+          Effect.gen(function* () {
+            const seedFs = yield* FileSystem.FileSystem;
+
+            return SeedInitializer.of({
+              initialize: ({ filename }) =>
+                Effect.gen(function* () {
+                  yield* seedFs.writeFileString(filename, "seed");
+                  yield* seedFs.writeFileString(`${filename}-${sidecar}`, "pending state");
+                }).pipe(Effect.orDie),
+            });
+          }),
+        );
+
+        const result = yield* Effect.gen(function* () {
+          const seeds = yield* SeedTemplates;
+
+          yield* seeds.copy({ kind: "history", records: 16, filename: destination });
+        }).pipe(Effect.provide(SeedTemplates.layer.pipe(Layer.provide(initializer))), Effect.exit);
 
         expect(Exit.isFailure(result)).toBe(true);
         expect(yield* fs.exists(destination)).toBe(false);
@@ -197,37 +271,49 @@ it("uses a fresh template path after interrupted initialization and closes its r
   await Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const seeds = yield* makeSeedTemplates();
       const directory = yield* fs.makeTempDirectoryScoped();
       let closed = false;
       let abandoned = "";
 
-      const first = yield* seeds
-        .copy("history-16", `${directory}/one`, (filename) =>
-          Effect.gen(function* () {
-            abandoned = filename;
-            yield* fs.writeFileString(filename, "incomplete");
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                closed = true;
-              }),
-            );
-
-            return yield* Effect.interrupt;
-          }).pipe(Effect.scoped),
-        )
-        .pipe(Effect.exit);
-
-      expect(Exit.isFailure(first)).toBe(true);
-      expect(closed).toBe(true);
-      yield* seeds.copy("history-16", `${directory}/two`, (filename) =>
+      const initializer = Layer.effect(
+        SeedInitializer,
         Effect.gen(function* () {
-          expect(filename).not.toBe(abandoned);
-          expect(yield* fs.exists(filename)).toBe(false);
-          yield* fs.writeFileString(filename, "complete");
+          const seedFs = yield* FileSystem.FileSystem;
+
+          return SeedInitializer.of({
+            initialize: ({ filename }) =>
+              Effect.gen(function* () {
+                if (abandoned === "") {
+                  abandoned = filename;
+                  yield* seedFs.writeFileString(filename, "incomplete");
+                  yield* Effect.addFinalizer(() =>
+                    Effect.sync(() => {
+                      closed = true;
+                    }),
+                  );
+
+                  return yield* Effect.interrupt;
+                }
+                expect(filename).not.toBe(abandoned);
+                expect(yield* seedFs.exists(filename)).toBe(false);
+                yield* seedFs.writeFileString(filename, "complete");
+              }).pipe(Effect.scoped, Effect.orDie),
+          });
         }),
       );
-      expect(yield* fs.readFileString(`${directory}/two`)).toBe("complete");
+
+      yield* Effect.gen(function* () {
+        const seeds = yield* SeedTemplates;
+
+        const first = yield* seeds
+          .copy({ kind: "history", records: 16, filename: `${directory}/one` })
+          .pipe(Effect.exit);
+
+        expect(Exit.isFailure(first)).toBe(true);
+        expect(closed).toBe(true);
+        yield* seeds.copy({ kind: "history", records: 16, filename: `${directory}/two` });
+        expect(yield* fs.readFileString(`${directory}/two`)).toBe("complete");
+      }).pipe(Effect.provide(SeedTemplates.layer.pipe(Layer.provide(initializer))));
     }).pipe(Effect.scoped, Effect.provide(services)),
   );
 });
@@ -235,13 +321,11 @@ it("uses a fresh template path after interrupted initialization and closes its r
 it("runs fresh durable and recovery samples on isolated copies while rebuilding every checkpoint", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const seeds = yield* makeSeedTemplates();
-
       for (const workload of casesFor("smoke").filter((entry) =>
         ["durable", "recovery", "ledger"].includes(entry.kind),
       )) {
         for (const ordinal of [0, 1]) {
-          const result = yield* runSample(workload, ordinal, false, { seeds });
+          const result = yield* runSample(workload, ordinal, false);
 
           expect(result.failure).toBeNull();
           expect(result.status).toBe("passed");
@@ -250,7 +334,7 @@ it("runs fresh durable and recovery samples on isolated copies while rebuilding 
           expect(result.attemptMs).toBeGreaterThanOrEqual(result.setupMs + result.totalMs);
         }
       }
-    }).pipe(Effect.scoped, Effect.provide(services)),
+    }).pipe(Effect.provide(SeedTemplates.layer), Effect.scoped, Effect.provide(services)),
   );
 }, 30_000);
 
@@ -261,9 +345,8 @@ it.each(["failure", "defect", "timeout"] as const)(
     const workload = casesFor("smoke").find((entry) => entry.name === "durable-fresh-16")!;
 
     const result = await Effect.runPromise(
-      runSample(workload, 0, false, {
-        timeout: "10 millis",
-        seeds: {
+      runSample(workload, 0, false, { timeout: "10 millis" }).pipe(
+        Effect.provideService(SeedTemplates, {
           copy: () =>
             Effect.gen(function* () {
               yield* Effect.addFinalizer(() =>
@@ -277,8 +360,9 @@ it.each(["failure", "defect", "timeout"] as const)(
 
               return yield* Effect.never;
             }).pipe(Effect.scoped),
-        },
-      }).pipe(Effect.provide(services)),
+        }),
+        Effect.provide(services),
+      ),
     );
 
     expect(result.status).toBe("failed");
@@ -305,24 +389,28 @@ it("persists the active phase and completed samples when the worker is interrupt
         output: `${directory}/worker.json`,
       };
 
-      const runner: typeof runSample = (workload, ordinal, warmup, settings) =>
+      const runner: typeof runSample = (workload, ordinal, warmup) =>
         Effect.gen(function* () {
           if (ordinal === 0) return sample(ordinal);
-          yield* (
-            settings?.onProgress?.({
+          const progress = yield* BenchmarkProgress;
+
+          yield* progress
+            .record({
               case: workload.name,
               ordinal,
               warmup,
               phase: "operation",
               elapsedMs: 7,
-            }) ?? Effect.void
-          ).pipe(Effect.orDie);
+            })
+            .pipe(Effect.orDie);
           yield* Deferred.succeed(entered, undefined);
 
           return yield* Effect.never;
         });
 
-      const fiber = yield* Effect.forkChild(runWorker(options, runner));
+      const fiber = yield* Effect.forkChild(
+        runWorker(options).pipe(Effect.provideService(BenchmarkRunner, { run: runner })),
+      );
 
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
@@ -422,4 +510,18 @@ it("caps combined stdout and stderr, retains their prefix, and terminates a chat
       expect(() => process.kill(child.pid, 0)).toThrow(/ESRCH/);
     }).pipe(Effect.scoped, Effect.provide(services)),
   );
+});
+
+it("keeps sample and worker requirements visible in Effect", () => {
+  expectTypeOf<
+    Extract<Effect.Services<ReturnType<typeof runSample>>, BenchmarkProgress | SeedTemplates>
+  >().toEqualTypeOf<BenchmarkProgress | SeedTemplates>();
+  expectTypeOf<
+    Extract<Effect.Services<ReturnType<typeof runWorker>>, BenchmarkRunner | SeedInitializer>
+  >().toEqualTypeOf<BenchmarkRunner | SeedInitializer>();
+  expectTypeOf<Layer.Services<typeof SeedTemplates.layer>>()
+    .extract<SeedInitializer>()
+    .toEqualTypeOf<SeedInitializer>();
+  expectTypeOf<Layer.Services<typeof SeedInitializerLive>>().toEqualTypeOf<Crypto.Crypto>();
+  expectTypeOf<Effect.Error<ReturnType<typeof runSample>>>().toEqualTypeOf<never>();
 });

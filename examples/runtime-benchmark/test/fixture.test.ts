@@ -10,14 +10,21 @@ import {
   type Sample,
   type WorkerReport,
 } from "../src/contracts.ts";
-import { runSample } from "../src/fixture.ts";
+import { BenchmarkProgress } from "../src/evidence.ts";
+import { runSample, SeedInitializerLive } from "../src/fixture.ts";
+import { SeedTemplates } from "../src/seeds.ts";
 
 it.each(casesFor("smoke"))(
   "validates equivalent completed work in $name",
   async (workload) => {
     const result = await Effect.runPromise(
       runSample(workload, 0, false).pipe(
-        Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+        Effect.provide(
+          Layer.merge(SeedTemplates.layer, BenchmarkProgress.silent).pipe(
+            Layer.provide(SeedInitializerLive),
+            Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+          ),
+        ),
       ),
     );
 

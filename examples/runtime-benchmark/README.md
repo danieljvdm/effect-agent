@@ -80,6 +80,10 @@ injects the fault, closes the runtime, and resumes its own Submission. Templates
 when the worker closes and never cross a cohort or revision. This removes repeated fixture setup;
 it does not measure or change the cost of production mutations. The reference SHA is unchanged.
 
+The worker composes the seed initializer, scoped template cache, sample runner, and progress
+writer as Effect services. Sample arguments contain only workload data and timeout settings;
+tests replace service Layers while retaining the same operation clocks and cleanup boundaries.
+
 `modelEntryMs` ends inside `ScriptedModel.assertRequest`, where Effect AI invokes the actual
 normalized provider callback. It does not use ModelStarted events. `totalMs` ends after run/stream
 completion or durable settlement; it includes the operation's correctness checks where those

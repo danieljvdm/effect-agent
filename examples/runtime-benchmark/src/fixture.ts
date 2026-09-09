@@ -53,6 +53,8 @@ import {
 import {
   Cause,
   Clock,
+  Context,
+  Crypto,
   DateTime,
   type Duration,
   Effect,
@@ -67,19 +69,12 @@ import {
 import { Agent, AgentRuntime } from "effect-agent";
 import { IdGenerator } from "effect-agent/IdGenerator";
 import { ThreadHistory } from "effect-agent/ThreadHistory";
-import type { PlatformError } from "effect/PlatformError";
 import type { LanguageModel } from "effect/unstable/ai";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
-import {
-  BenchmarkError,
-  check,
-  type Case,
-  type Sample,
-  type SamplePhase,
-  type SampleProgress,
-} from "./contracts.js";
-import type { SeedTemplates } from "./seeds.js";
+import { BenchmarkError, check, type Case, type Sample, type SamplePhase } from "./contracts.js";
+import { BenchmarkProgress } from "./evidence.js";
+import { SeedInitializer, SeedTemplates, type SeedRequest } from "./seeds.js";
 
 const answerSchema = Schema.Struct({ answer: Schema.String });
 
@@ -283,16 +278,44 @@ const seedLedger = Effect.fn("benchmark.seedLedger")(function* (count: number) {
   yield* check(pending.length === 0, "Settled fixture contains unfinished submissions");
 });
 
-/** Each sample owns a fresh script; request capture cannot grow between samples. */
+/** Seed construction uses the same public Node assembly as the measured samples. */
+export const SeedInitializerLive = Layer.effect(
+  SeedInitializer,
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+
+    return SeedInitializer.of({
+      initialize: Effect.fn("benchmark.initializeSeed")(
+        function* (request: SeedRequest) {
+          if (request.kind === "ledger") yield* seedLedger(request.records);
+          else yield* seedHistory(request.records);
+        },
+        (effect, request) =>
+          effect.pipe(
+            Effect.provide(
+              NodeDurableAgentRuntime.layer({
+                filename: request.filename,
+                deploymentId,
+                producerId,
+              }).pipe(Layer.provide(ContextCompactor.layerRollover)),
+            ),
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.scoped,
+            Effect.mapError((cause) =>
+              BenchmarkError.make({ message: "Cannot initialize benchmark seed", cause }),
+            ),
+          ),
+      ),
+    });
+  }),
+);
+
+/** Each sample owns a fresh script; its operational dependencies remain visible in R. */
 export const runSample = Effect.fn("benchmark.runSample")(function* (
   workload: Case,
   ordinal: number,
   warmup: boolean,
   options: {
-    readonly seeds?: SeedTemplates;
-    readonly onProgress?: (
-      progress: SampleProgress,
-    ) => Effect.Effect<void, PlatformError, FileSystem.FileSystem>;
     readonly timeout?: Duration.Input;
   } = {},
 ) {
@@ -334,16 +357,16 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
   const expectedBytes = JSON.stringify({ answer }).length;
 
   const changePhase = Effect.fn("benchmark.samplePhase")(function* (next: SamplePhase) {
+    const progress = yield* BenchmarkProgress;
+
     phase = next;
-    yield* (
-      options.onProgress?.({
-        case: workload.name,
-        ordinal,
-        warmup,
-        phase,
-        elapsedMs: Number((yield* Clock.monotonicTimeNanos) - attemptStarted) / 1e6,
-      }) ?? Effect.void
-    );
+    yield* progress.record({
+      case: workload.name,
+      ordinal,
+      warmup,
+      phase,
+      elapsedMs: Number((yield* Clock.monotonicTimeNanos) - attemptStarted) / 1e6,
+    });
   });
 
   // Evidence writes happen outside the measured interval, including before the start clock.
@@ -548,9 +571,9 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "runtime-benchmark-" });
       const filename = `${directory}/thread.sqlite`;
 
-      const host = (crash: boolean, database = filename) =>
+      const host = (crash: boolean) =>
         NodeDurableAgentRuntime.layer({
-          filename: database,
+          filename,
           deploymentId,
           producerId,
           ...(workload.kind === "recovery"
@@ -588,21 +611,13 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
         }).pipe(Layer.provide(ContextCompactor.layerRollover));
 
       // Setup and seeding never enter the reported warm-operation interval.
-      const initialize = Effect.fn("benchmark.initializeSeed")(
-        function* (_database: string) {
-          if (workload.kind === "ledger") yield* seedLedger(workload.records);
-          else yield* seedHistory(workload.records);
-        },
-        (effect, database) => effect.pipe(Effect.provide(host(false, database)), Effect.scoped),
-      );
+      const seeds = yield* SeedTemplates;
 
-      if (options.seeds === undefined) yield* initialize(filename);
-      else
-        yield* options.seeds.copy(
-          `${workload.kind === "ledger" ? "ledger" : "history"}-${workload.records}`,
-          filename,
-          initialize,
-        );
+      yield* seeds.copy({
+        kind: workload.kind === "ledger" ? "ledger" : "history",
+        records: workload.records,
+        filename,
+      });
 
       const submit = Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -753,3 +768,11 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
 
   return sample;
 });
+
+/** Worker execution is replaceable through a Layer without hiding the sample's requirements. */
+export class BenchmarkRunner extends Context.Service<
+  BenchmarkRunner,
+  { readonly run: typeof runSample }
+>()("runtime-benchmark/BenchmarkRunner") {
+  static readonly layer = Layer.succeed(BenchmarkRunner, { run: runSample });
+}
