@@ -4,7 +4,7 @@ import { runInNewContext } from "node:vm";
 import { expect, it } from "vite-plus/test";
 
 import type { PerformanceReport } from "../../../scripts/runtime-benchmark.ts";
-import { casesFor, FIXTURE_VERSION, REFERENCE } from "../src/contracts.ts";
+import { casesFor, FIXTURE_VERSION } from "../src/contracts.ts";
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] extends object ? Mutable<T[K]> : T[K] };
 type Report = Mutable<typeof PerformanceReport.Type>;
@@ -16,7 +16,6 @@ const makeReport = (): Report => ({
   fixtureSha256: "c".repeat(64),
   transpiler: "test",
   profile: "pr",
-  referenceVersion: REFERENCE.version,
   activeBatch: null,
   failure: null,
   environment: {
@@ -36,16 +35,16 @@ const makeReport = (): Report => ({
     execution: "unbundled published ESM",
     timingGate: "informational",
   },
-  revisions: (["base", "head", "reference"] as const).map((role) => ({
+  revisions: (["base", "head"] as const).map((role) => ({
     role,
-    revision: role === "base" ? base : role === "head" ? head : REFERENCE.revision,
+    revision: role === "base" ? base : head,
     dirty: false,
     lockfileSha256: "d".repeat(64),
     builtArtifactsSha256: "e".repeat(64),
     effect: "test",
   })),
   batches: [0, 1, 2].flatMap((cohort) =>
-    (["base", "head", "reference"] as const).flatMap((role) =>
+    (["base", "head"] as const).flatMap((role) =>
       [true, false].map((cold) => ({
         role,
         cohort,
@@ -96,7 +95,7 @@ const workflow = readFileSync(
 
 const script = workflow.split("          script: |\n")[1]!.replace(/^ {12}/gm, "");
 
-const publish = async (report: Report, currentHead = head) => {
+const publish = async (report: unknown, currentHead = head) => {
   const comments: string[] = [];
 
   const files: Record<string, string> = {
@@ -157,16 +156,88 @@ const publish = async (report: Report, currentHead = head) => {
   return comments;
 };
 
-it("publishes all 18 valid cohorts and rejects stale PR identity", async () => {
+it("publishes all 12 valid batches and rejects stale PR identity", async () => {
   const comments = await publish(makeReport());
 
   expect(comments).toHaveLength(1);
   expect(comments[0]).toContain("nine samples per workload and revision");
-  expect(comments[0]).toContain("| settled-ledger-2048 |");
+  expect(comments[0]).toContain(
+    "| Workload | Base | Head | Head/base |\n| --- | ---: | ---: | ---: |\n",
+  );
+  expect(comments[0]).toContain("| settled-ledger-2048 | 2.00 | 2.00 | 0.0% |");
+  expect(comments[0]).not.toMatch(/reference/i);
   expect(await publish(makeReport(), "f".repeat(40))).toEqual([]);
 });
 
+it("computes Head/base from measured warm samples only", async () => {
+  const report = makeReport();
+
+  for (const batch of report.batches) {
+    const worker = batch.report!;
+
+    batch.report = {
+      ...worker,
+      samples: worker.samples.map((sample) => ({
+        ...sample,
+        totalMs: batch.cold || sample.warmup ? 100 : batch.role === "base" ? 4 : 2,
+        attemptMs: 102,
+      })),
+    };
+  }
+
+  const comments = await publish(report);
+
+  expect(comments[0]).toContain("| small-run | 4.00 | 2.00 | -50.0% |");
+  expect(comments[0]).toContain("| settled-ledger-2048 | 4.00 | 2.00 | -50.0% |");
+});
+
+it("rejects historical contracts and reference roles before commenting", async () => {
+  const report = makeReport();
+
+  await expect(publish({ ...report, fixture: "runtime-v2" })).rejects.toThrow(
+    "Invalid report contract",
+  );
+  await expect(
+    publish({
+      ...report,
+      revisions: [...report.revisions, { ...report.revisions[0], role: "reference" }],
+    }),
+  ).rejects.toThrow("Invalid report contract");
+  await expect(
+    publish({
+      ...report,
+      revisions: [report.revisions[0], { ...report.revisions[1], role: "reference" }],
+    }),
+  ).rejects.toThrow("Invalid revision");
+  await expect(
+    publish({
+      ...report,
+      batches: report.batches.map((batch, index) =>
+        index === 0 ? { ...batch, role: "reference" } : batch,
+      ),
+    }),
+  ).rejects.toThrow("Invalid cohort");
+});
+
 const mutations: ReadonlyArray<readonly [string, (report: Report) => void]> = [
+  [
+    "missing revision",
+    (report) => {
+      report.revisions.pop();
+    },
+  ],
+  [
+    "duplicated revision",
+    (report) => {
+      report.revisions[1] = report.revisions[0]!;
+    },
+  ],
+  [
+    "reduced samples",
+    (report) => {
+      report.settings.samplesPerBatch = 2;
+    },
+  ],
   [
     "missing batch",
     (report) => {

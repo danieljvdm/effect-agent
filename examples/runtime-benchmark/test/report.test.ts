@@ -1,8 +1,8 @@
+import { Schema } from "effect";
 import { expect, it } from "vite-plus/test";
 
-import type { PerformanceReport } from "../../../scripts/runtime-benchmark.ts";
-import { renderPerformanceReport } from "../../../scripts/runtime-benchmark.ts";
-import { FIXTURE_VERSION, REFERENCE } from "../src/contracts.ts";
+import { PerformanceReport, renderPerformanceReport } from "../../../scripts/runtime-benchmark.ts";
+import { FIXTURE_VERSION } from "../src/contracts.ts";
 
 it("reports and excludes an invalid batch even when its process exited successfully", () => {
   const report: typeof PerformanceReport.Type = {
@@ -10,7 +10,6 @@ it("reports and excludes an invalid batch even when its process exited successfu
     fixtureSha256: "fixture",
     transpiler: "test",
     profile: "smoke",
-    referenceVersion: REFERENCE.version,
     environment: {
       platform: "test",
       release: "test",
@@ -75,13 +74,24 @@ it("reports and excludes an invalid batch even when its process exited successfu
 
   const rendered = renderPerformanceReport(report);
 
-  expect(rendered).toContain("Invalid/incomplete batches: 1; processes recorded: 1/6");
+  expect(rendered).toContain(
+    "| Workload | Base | Head | Head/base |\n| --- | ---: | ---: | ---: |\n",
+  );
+  expect(rendered).not.toMatch(/reference/i);
+  expect(Schema.is(PerformanceReport)({ ...report, fixture: "runtime-v2" })).toBe(false);
+  expect(
+    Schema.is(PerformanceReport)({
+      ...report,
+      batches: [{ ...report.batches[0], role: "reference" }],
+    }),
+  ).toBe(false);
+  expect(rendered).toContain("Invalid/incomplete batches: 1; processes recorded: 1/4");
   expect(rendered).toContain("Worker runtime differs from the controller");
   expect(rendered).toContain("| small-run | n/a | n/a | n/a |");
 
   const interrupted = renderPerformanceReport({
     ...report,
-    activeBatch: { role: "reference", cohort: 0, cold: false },
+    activeBatch: { role: "base", cohort: 0, cold: false },
     failure: "TimeoutException: comparison deadline",
     batches: report.batches.map((batch) => ({
       ...batch,
@@ -102,7 +112,7 @@ it("reports and excludes an invalid batch even when its process exited successfu
     })),
   });
 
-  expect(interrupted).toContain("Interrupted active batch: reference/0/warm");
+  expect(interrupted).toContain("Interrupted active batch: base/0/warm");
   expect(interrupted).toContain("Comparison failure: TimeoutException: comparison deadline");
   expect(interrupted).toContain("settled-ledger-16:0 setup at 1200.00 ms");
 });

@@ -4,24 +4,21 @@ This leaf consumer measures public production packages with deterministic Effect
 It makes no provider requests. Correctness assertions fail the command; latency changes are
 informational until CI variance supports workload-specific relative and absolute thresholds.
 
-Run from the repository root with Node 24 and the repository's Bun/Vite+ toolchain. Prepare three
+Run from the repository root with Node 24 and the repository's Bun/Vite+ toolchain. Prepare two
 checkouts, install each checkout's own lockfile, and build before measuring:
 
 ```sh
 git worktree add --detach /tmp/effect-agent-base <exact-base-sha>
-git worktree add --detach /tmp/effect-agent-reference 596cffba70716b1211ac02de949c4d0f31734b2f
 vp install --frozen-lockfile
+vp run patch:tsgo
 vp run -F './packages/*' build
 cd /tmp/effect-agent-base
 vp install --frozen-lockfile
-vp run -F './packages/*' build
-rm -f test/fixtures/checkpoints.d.ts test/fixtures/storage-upgrade.d.ts test/fixtures/storage-v2.d.ts
-cd /tmp/effect-agent-reference
-vp install --frozen-lockfile
+vp run patch:tsgo
 vp run -F './packages/*' build
 rm -f test/fixtures/checkpoints.d.ts test/fixtures/storage-upgrade.d.ts test/fixtures/storage-v2.d.ts
 cd <candidate-checkout>
-vp run perf:compare --base-dir /tmp/effect-agent-base --reference-dir /tmp/effect-agent-reference --profile pr --out-dir /tmp/performance-001
+vp run perf:compare --base-dir /tmp/effect-agent-base --profile pr --out-dir /tmp/performance-001
 ```
 
 Use `--require-clean` for exact-commit evidence. A local dirty checkout is labeled in the report;
@@ -31,10 +28,12 @@ measurement. `perf:compare` always bypasses task caching. `--help` describes the
 The cleanup lines remove only declaration artifacts emitted by older package builds in those
 disposable checkouts. Every other modified or untracked file fails clean-checkout validation.
 
-The PR workflow uses exact PR base/head commits, an immutable release reference, Node 24.20.0,
-and sequential production builds. It runs three rotating cohorts (base/head/reference,
-head/reference/base, reference/base/head). Each warm cohort has two warmups and three measured
-samples per case: nine measured samples per revision. Workload order reverses between samples.
+The PR workflow uses exact PR base/head commits, Node 24.20.0, and sequential production builds.
+It runs three sequential cohorts (base/head, head/base, base/head). Each warm cohort retains two
+warmups and three measured samples per case: nine measured samples per revision. Alternating
+the order gives each revision a turn first; with three cohorts, Base runs first twice. Keeping
+three cohorts preserves the existing sample count and correctness coverage. Workload order
+reverses between samples. Each cohort also runs one cold process per revision.
 All warmups, measured samples, slow values, and failures remain in JSON artifacts. The trusted
 comment workflow validates artifact data and current PR identity without executing candidate code.
 
@@ -71,14 +70,14 @@ SQLite uses the production Node assembly and its default scheduling, lease, and 
 configuration; checkpoint cases additionally install the documented host rollover preparation.
 Database teardown and evidence reads are outside the warm-operation interval.
 
-Fixture `runtime-v2` builds worker-local seed templates through those same public adapter
+Fixture `runtime-v3` builds worker-local seed templates through those same public adapter
 operations, once per history/ledger size and revision. It closes the full seed runtime and rejects
 any remaining WAL or SHM sidecar before copying the database to each sample's fresh directory.
 Copies share no mutable database state. Fresh submission and checkpoint recovery can reuse the
 same retained-history seed; every recovery sample still constructs and saves its own checkpoint,
 injects the fault, closes the runtime, and resumes its own Submission. Templates are discarded
 when the worker closes and never cross a cohort or revision. This removes repeated fixture setup;
-it does not measure or change the cost of production mutations. The reference SHA is unchanged.
+it does not measure or change the cost of production mutations.
 
 The worker composes the seed initializer, scoped template cache, sample runner, and progress
 writer as Effect services. Sample arguments contain only workload data and timeout settings;
@@ -115,20 +114,26 @@ shutdown. These are labeled subprocess totals, not isolated import latency or a 
 startup claim. Warm cohorts live in separate long-running child processes.
 
 The fixture is transpiled once without bundling, then identical JavaScript bytes are copied to
-all three stages. Framework stages contain only public `dist` artifacts and npm-ready manifests;
+both stages. Framework stages contain only public `dist` artifacts and npm-ready manifests;
 they cannot resolve framework TypeScript source. External dependencies come from each revision's
 own installation. Reports identify exact commits, dirty state, lockfile hashes, built artifact
 hashes, fixture hash/version, runtime, operating system, CPU, memory, sample counts, median,
 interquartile range, and process failures. The artifact includes the exact transpiled fixture.
 
-The retained reference is `audit-beta67-node24-v1`, commit
-`596cffba70716b1211ac02de949c4d0f31734b2f`. It is rebuilt and rerun on the same machine as each
-candidate to expose gradual drift. Historical stopwatch numbers are never used as the baseline.
-To reset it, change the version and immutable SHA in `src/contracts.ts`, both workflow validators,
-and this guide together; explain the release selection and fixture/runtime change in the PR.
-Keep the previous artifacts. Incompatible historical APIs must fail clearly rather than silently
+The `runtime-v3` artifact contract contains only Base and Head; the trusted publisher rejects
+older three-revision reports. Comparison tables show Base, Head, and Head/base. Workloads,
+operation clocks, warmups, and measured samples per revision are unchanged from `runtime-v2`.
+Keep historical artifacts. Incompatible historical APIs must fail clearly rather than silently
 substituting source code or skipping cases. A new fixture changes the measurement definition and
 requires a version bump; report environment changes before interpreting across-run trends.
+
+The PR profile runs 12 child processes and 576 attempts: 19 cases × five warm attempts ×
+three cohorts × two revisions, plus six cold attempts. Millisecond operation medians do not
+represent CI duration: all attempts, warmups, seed creation, checkpoint preparation, assertions,
+cleanup, imports, and report writes take wall time. The worker-time table retains attempt and
+setup totals; setup is part of attempt time, so do not add them. Checkout/install/build precedes
+measurement. Removing a revision removes its work, but an exact CI speedup requires matched
+runs on comparable runners; the retained setup and verification costs remain outside operation medians.
 
 Read the full spread and raw samples before drawing a conclusion. Re-run a suspected regression
 with another matched cohort. Small-sample p95, local source timings, or differing provider workloads
@@ -150,8 +155,8 @@ Run this command from the candidate checkout, with no concurrent builds, tests, 
 vp run perf:diagnose --base-dir /tmp/effect-agent-base --require-clean --out-dir /tmp/diagnostic-001
 ```
 
-The manual workflow's `diagnostic` choice runs the same command and skips the immutable-reference
-checkout. Ordinary PRs still run the unchanged `runtime-v2` matrix and trusted report validator.
+The manual workflow's `diagnostic` choice runs the same command. Ordinary PRs run the
+`runtime-v3` matrix and trusted report validator.
 Diagnostics run base/head followed by head/base, with two warmups and five measured samples per
 cohort: ten measured samples per case and revision. They use the same production-package staging,
 published manifests, own-lockfile dependencies, built-artifact identities, and identical unbundled
