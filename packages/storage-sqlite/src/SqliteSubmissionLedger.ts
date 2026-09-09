@@ -1816,6 +1816,76 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     return reserved;
   });
 
+  const validateFinalization = Effect.fn("SqliteSubmissionLedger.validateFinalization")(function* (
+    validated: SettlementFinalization,
+    reservation: Option.Option<ReservationRow>,
+  ) {
+    const operation = "ledger finalize settlement";
+
+    if (Option.isNone(reservation)) {
+      return yield* LedgerError.make({
+        operation,
+        message: `No settlement reservation exists for submission ${validated.submissionId}.`,
+      });
+    }
+    if (reservation.value.settlement_id !== validated.settlementId) {
+      return yield* SettlementConflict.make({
+        submissionId: validated.submissionId,
+        existingOutcome: reservation.value.outcome,
+      });
+    }
+
+    const reservationRecord = yield* decodeRecordEnvelopeText(reservation.value.record_json).pipe(
+      Effect.mapError((error) =>
+        corruptionFailure(
+          operation,
+          "effect_agent_settlement_reservations",
+          validated.submissionId,
+          error.message,
+        ),
+      ),
+    );
+
+    const settlementFailure = settlementFailureFromRecord(reservationRecord);
+
+    if ((reservation.value.outcome === "failed") !== (settlementFailure !== undefined)) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_settlement_reservations",
+        validated.submissionId,
+        "The reserved outcome and canonical failure diagnostic disagree.",
+      );
+    }
+
+    return { reservation: reservation.value, settlementFailure };
+  });
+
+  const replayFinalization = Effect.fn("SqliteSubmissionLedger.replayFinalization")(function* (
+    validated: SettlementFinalization,
+    submission: SubmissionRow,
+    { reservation, settlementFailure }: Effect.Success<ReturnType<typeof validateFinalization>>,
+  ) {
+    const operation = "ledger finalize settlement";
+
+    if (reservation.finalized_at === null) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_settlement_reservations",
+        validated.submissionId,
+        "A settled Submission's reservation carries no finalization timestamp.",
+      );
+    }
+
+    return yield* decodeSettlement({
+      submissionId: validated.submissionId,
+      settlementId: validated.settlementId,
+      receiptId: submission.receipt_id,
+      outcome: reservation.outcome,
+      ...(settlementFailure === undefined ? {} : { failure: settlementFailure }),
+      settledAt: reservation.finalized_at,
+    }).pipe(Effect.mapError(internalFailure(operation)));
+  });
+
   const finalizeSettlement: SubmissionLedger["Service"]["finalizeSettlement"] = Effect.fn(
     "SqliteSubmissionLedger.finalizeSettlement",
   )(function* (request: SettlementFinalization) {
@@ -1827,73 +1897,74 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
 
     yield* hitFailpoint("ledger:finalize-settlement:before", operation);
 
+    // A single statement captures the settled row and its immutable reservation together.
+    // A miss does not authorize finalization: the write path re-reads under its transaction.
+    const replayRows = yield* sql<Record<string, unknown>>`
+      SELECT submission.*, reservation.settlement_id, reservation.outcome,
+        reservation.record_id, reservation.record_json, reservation.record_digest,
+        reservation.reserved_at, reservation.finalized_at
+      FROM effect_agent_submissions AS submission
+      INNER JOIN effect_agent_settlement_reservations AS reservation
+        ON reservation.submission_id = submission.submission_id
+      WHERE submission.submission_id = ${validated.submissionId} AND submission.state = 'settled'
+    `.pipe(Effect.mapError(sqlFailure(operation)));
+
+    if (replayRows.length > 1) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_submissions",
+        validated.submissionId,
+        "A submission primary key returned more than one row.",
+      );
+    }
+    const replayRow = replayRows[0];
+
+    if (replayRow !== undefined) {
+      const reservations = yield* decodeRows(
+        Schema.Array(ReservationRow),
+        "effect_agent_settlement_reservations",
+        validated.submissionId,
+        replayRows,
+      ).pipe(Effect.mapError(internalFailure(operation)));
+
+      const state = yield* validateFinalization(validated, Option.fromUndefinedOr(reservations[0]));
+
+      const submission = yield* Schema.decodeUnknownEffect(SubmissionRow)(replayRow).pipe(
+        Effect.mapError((error) =>
+          corruptionFailure(
+            operation,
+            "effect_agent_submissions",
+            validated.submissionId,
+            error.message,
+          ),
+        ),
+      );
+
+      const settlement = yield* replayFinalization(validated, submission, state);
+
+      yield* hitFailpoint("ledger:finalize-settlement:after", operation);
+
+      return settlement;
+    }
+
     const settlement = yield* inWriteTransaction(
       operation,
       Effect.gen(function* () {
-        const reservation = yield* readReservation(operation, validated.submissionId);
-
-        if (Option.isNone(reservation)) {
-          return yield* LedgerError.make({
-            operation,
-            message: `No settlement reservation exists for submission ${validated.submissionId}.`,
-          });
-        }
-        if (reservation.value.settlement_id !== validated.settlementId) {
-          return yield* SettlementConflict.make({
-            submissionId: validated.submissionId,
-            existingOutcome: reservation.value.outcome,
-          });
-        }
-
-        const reservationRecord = yield* decodeRecordEnvelopeText(
-          reservation.value.record_json,
-        ).pipe(
-          Effect.mapError((error) =>
-            corruptionFailure(
-              operation,
-              "effect_agent_settlement_reservations",
-              validated.submissionId,
-              error.message,
-            ),
-          ),
+        const state = yield* validateFinalization(
+          validated,
+          yield* readReservation(operation, validated.submissionId),
         );
 
-        const settlementFailure = settlementFailureFromRecord(reservationRecord);
-
-        if ((reservation.value.outcome === "failed") !== (settlementFailure !== undefined)) {
-          return yield* corruptionFailure(
-            operation,
-            "effect_agent_settlement_reservations",
-            validated.submissionId,
-            "The reserved outcome and canonical failure diagnostic disagree.",
-          );
-        }
+        const { reservation, settlementFailure } = state;
         const submission = yield* requireSubmission(operation, validated.submissionId);
 
-        if (submission.state === "settled") {
-          if (reservation.value.finalized_at === null) {
-            return yield* corruptionFailure(
-              operation,
-              "effect_agent_settlement_reservations",
-              validated.submissionId,
-              "A settled Submission's reservation carries no finalization timestamp.",
-            );
-          }
-
-          return yield* decodeSettlement({
-            submissionId: validated.submissionId,
-            settlementId: validated.settlementId,
-            receiptId: submission.receipt_id,
-            outcome: reservation.value.outcome,
-            ...(settlementFailure === undefined ? {} : { failure: settlementFailure }),
-            settledAt: reservation.value.finalized_at,
-          }).pipe(Effect.mapError(internalFailure(operation)));
-        }
+        if (submission.state === "settled")
+          return yield* replayFinalization(validated, submission, state);
         const now = yield* currentInstant;
 
         yield* sql`
           UPDATE effect_agent_submissions
-          SET state = 'settled', settled_outcome = ${reservation.value.outcome}
+          SET state = 'settled', settled_outcome = ${reservation.outcome}
           WHERE submission_id = ${validated.submissionId}
         `.pipe(Effect.mapError(sqlFailure(operation)));
         yield* sql`
@@ -1910,7 +1981,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           submissionId: validated.submissionId,
           settlementId: validated.settlementId,
           receiptId: submission.receipt_id,
-          outcome: reservation.value.outcome,
+          outcome: reservation.outcome,
           ...(settlementFailure === undefined ? {} : { failure: settlementFailure }),
           settledAt: now.iso,
         }).pipe(Effect.mapError(internalFailure(operation)));
@@ -3051,13 +3122,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           SELECT ${sql.literal(SUBMISSION_COLUMNS)}
           FROM effect_agent_submissions
           WHERE state <> 'settled'
-            AND (
-              thread_id > ${cursor.threadId}
-              OR (
-                thread_id = ${cursor.threadId}
-                AND queue_sequence > ${cursor.queueSequence}
-              )
-            )
+            AND (thread_id, queue_sequence) > (${cursor.threadId}, ${cursor.queueSequence})
           ORDER BY thread_id ASC, queue_sequence ASC
           LIMIT ${SCAN_PAGE_SIZE}
         `

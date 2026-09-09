@@ -416,14 +416,22 @@ checkpoints continue to populate and compare these fields; absent metadata falls
 canonical replay.
 
 The persistent adapters automatically upgrade supported predecessor formats on acquisition:
-Cloudflare Thread stores move from version 2, 3, or 4 to 5; Schedule and Subscription stores move
-from version 2 to 3; the combined SQLite file moves from version 7, 8, or 9 to 10. Thread and SQLite
-stores add a separate slot for the latest recovery checkpoint and, where needed, independently discoverable
-message delivery storage. Each owning store upgrades in one native transaction and advances its
-version marker last. Reopening after interruption retries the entire uncommitted upgrade.
+Cloudflare Thread stores move from version 2, 3, 4, or 5 to 6; Schedule and Subscription stores move
+from version 2 to 3; the combined SQLite file moves from version 7, 8, 9, or 10 to 11. Thread and SQLite
+stores add an index containing only unfinished submissions, plus recovery checkpoint and message
+delivery storage where those are missing from a supported predecessor. Recovery scans use the
+index in Thread and queue order, seeking from the previous page's cursor without revisiting its
+prefix. Each owning store upgrades in one native transaction and advances its version marker
+last. Reopening after interruption retries the entire uncommitted upgrade.
 Namespaces, canonical history and digests, receipts, pending work, ownership, deadlines, alarm
 generations and scan cursors are preserved. Keep the existing namespace/file and the old source
 versions, input bindings and agent registrations needed to finish retained work.
+
+Repeated settlement finalization reads an already settled submission and its reservation together
+without acquiring a write transaction. A first finalization adds one read probe before the existing
+write transaction, which rechecks the current state. SQLite settlement observation can therefore
+read committed state while another connection holds the write lock. Runtime status still loads the
+recovery snapshot to materialize its response; this change does not remove that work.
 
 Recovery checkpoints are disposable: missing or incompatible cache state rebuilds from canonical
 history. Upgrades preserve existing generic projection checkpoints. The optional `verifyOnOpen`

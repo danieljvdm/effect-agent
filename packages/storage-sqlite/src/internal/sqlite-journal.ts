@@ -37,7 +37,11 @@ import {
 } from "../SqliteStorageError.ts";
 import { SqliteStorageFailpoint } from "../SqliteStorageFailpoint.ts";
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
-import { CurrentSqliteStorageVersion, sqliteMigrations } from "./migrations.ts";
+import {
+  CurrentSqliteStorageVersion,
+  createNonterminalIndex,
+  sqliteMigrations,
+} from "./migrations.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
@@ -381,11 +385,11 @@ const predecessorColumns = {
 } as const;
 
 const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")(function* (
-  version: 8 | 9,
+  version: 8 | 9 | 10,
 ) {
   const sql = yield* SqlClient.SqlClient;
 
-  const expectedColumns =
+  const messageColumns =
     version === 8
       ? predecessorColumns
       : {
@@ -404,6 +408,20 @@ const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")
             "record_json",
           ],
         };
+
+  const expectedColumns = {
+    ...messageColumns,
+    ...(version === 10
+      ? {
+          effect_agent_recovery_checkpoints: [
+            "thread_id",
+            "through_sequence",
+            "tail_digest",
+            "checkpoint_json",
+          ],
+        }
+      : {}),
+  };
 
   for (const [table, expected] of Object.entries(expectedColumns)) {
     const columns = yield* decodeRows(
@@ -472,6 +490,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     version.user_version !== 7 &&
     version.user_version !== 8 &&
     version.user_version !== 9 &&
+    version.user_version !== 10 &&
     version.user_version !== CurrentSqliteStorageVersion
   ) {
     return yield* SqliteStorageCompatibilityError.make({
@@ -480,11 +499,16 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       message:
         `The SQLite file uses unsupported storage version ${version.user_version}; ` +
         `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
-        "Only supported v7, v8 and v9 can be upgraded automatically. Keep the original file and use a compatible library version.",
+        "Only supported v7, v8, v9 and v10 can be upgraded automatically. Keep the original file and use a compatible library version.",
     });
   }
 
-  if (version.user_version === 7 || version.user_version === 8 || version.user_version === 9) {
+  if (
+    version.user_version === 7 ||
+    version.user_version === 8 ||
+    version.user_version === 9 ||
+    version.user_version === 10
+  ) {
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
@@ -496,7 +520,8 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             current.length !== 1 ||
             (current[0].user_version !== 7 &&
               current[0].user_version !== 8 &&
-              current[0].user_version !== 9)
+              current[0].user_version !== 9 &&
+              current[0].user_version !== 10)
           )
             return yield* SqliteStorageCompatibilityError.make({
               actualVersion: -1,
@@ -524,12 +549,23 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           const recoveryTables =
             yield* sql`SELECT name FROM sqlite_master WHERE type='table' AND name='effect_agent_recovery_checkpoints'`;
 
-          if (recoveryTables.length !== 0)
+          if (recoveryTables.length !== (current[0].user_version === 10 ? 1 : 0))
             return yield* SqliteStorageCompatibilityError.make({
               actualVersion: current[0].user_version,
               supportedVersion: CurrentSqliteStorageVersion,
               message:
-                "The predecessor already contains recovery checkpoint storage; refusing ambiguous data without mutation.",
+                "The predecessor recovery checkpoint storage does not match its version; refusing ambiguous data without mutation.",
+            });
+
+          const indexes =
+            yield* sql`SELECT name FROM sqlite_master WHERE name='effect_agent_submissions_nonterminal'`;
+
+          if (indexes.length !== 0)
+            return yield* SqliteStorageCompatibilityError.make({
+              actualVersion: current[0].user_version,
+              supportedVersion: CurrentSqliteStorageVersion,
+              message:
+                "The predecessor already contains the nonterminal index; refusing ambiguous storage without mutation.",
             });
           if (current[0].user_version === 7) {
             yield* checkV2ThreadLayout();
@@ -561,9 +597,13 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               }),
             );
           }
-          if (current[0].user_version === 8 || current[0].user_version === 9)
+          if (
+            current[0].user_version === 8 ||
+            current[0].user_version === 9 ||
+            current[0].user_version === 10
+          )
             yield* checkPredecessorLayout(current[0].user_version);
-          if (current[0].user_version !== 9) {
+          if (current[0].user_version === 7 || current[0].user_version === 8) {
             yield* failpoint("upgrade:before-mutation");
             yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
             yield* failpoint("upgrade:after-mutation");
@@ -574,11 +614,16 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             yield* createMessageDeliveryTables;
             yield* failpoint("upgrade:after-mutation");
           }
+          if (current[0].user_version !== 10) {
+            yield* failpoint("upgrade:before-mutation");
+            yield* createRecoveryCheckpointTable;
+            yield* failpoint("upgrade:after-mutation");
+          }
           yield* failpoint("upgrade:before-mutation");
-          yield* createRecoveryCheckpointTable;
+          yield* createNonterminalIndex;
           yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
-          yield* sql`PRAGMA user_version = 10`;
+          yield* sql`PRAGMA user_version = 11`;
           yield* failpoint("upgrade:after-version");
         }),
       )
@@ -655,7 +700,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
   const requiredRows = yield* sql<Record<string, unknown>>`
     SELECT name
     FROM sqlite_master
-    WHERE type = 'table'
+    WHERE (type = 'table'
       AND name IN (
         'effect_agent_threads',
         'effect_agent_canonical_batches',
@@ -671,7 +716,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         'effect_agent_schedules',
         'effect_agent_message_deliveries',
         'effect_agent_recovery_checkpoints'
-      )
+      )) OR (type = 'index' AND name = 'effect_agent_submissions_nonterminal')
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
 
@@ -682,12 +727,12 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     requiredRows,
   );
 
-  if (required.length !== 14) {
+  if (required.length !== 15) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,
       message:
-        "The SQLite file claims the current format but is missing required tables. Retain the original store for inspection.",
+        "The SQLite file claims the current format but is missing required tables or its nonterminal index. Retain the original store for inspection.",
     });
   }
 
