@@ -20,7 +20,7 @@ import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
 import { ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread/Schedule";
-import { Clock, Context, Crypto, Effect, Layer, Schema } from "effect";
+import { Clock, Config, Context, Crypto, Effect, Layer, Schema } from "effect";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 
@@ -186,6 +186,7 @@ interface BindingSourceProbe {
   readonly threadId: string;
   readonly producerId: string;
   readonly rawEnvHasNamespace: boolean;
+  readonly configuredLabel: string;
 }
 
 let nextBindingSourceIncarnation = 0;
@@ -204,6 +205,7 @@ const registrationResourceLayer = Layer.effect(
     const { raw: ctx } = yield* DurableObjectState.DurableObjectState;
     const env = yield* WorkerEnvironment;
     const { threadId, producerId } = yield* ThreadObjectIdentity;
+    const configuredLabel = yield* Config.string("REGISTRATION_LABEL");
 
     yield* Crypto.Crypto;
     const previous = bindingSourceProbes.get(ctx);
@@ -214,6 +216,7 @@ const registrationResourceLayer = Layer.effect(
       threadId,
       producerId,
       rawEnvHasNamespace: env.DYNAMIC_BINDINGS !== undefined,
+      configuredLabel,
     });
 
     const resource = yield* Effect.acquireRelease(

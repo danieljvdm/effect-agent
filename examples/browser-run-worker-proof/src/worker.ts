@@ -32,17 +32,7 @@ import {
   PageScreenshotRequest,
 } from "@effect-agent/sandbox/PageScreenshot";
 import { BrowserCrypto } from "@effect/platform-browser";
-import {
-  Config,
-  ConfigProvider,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Redacted,
-  Schema,
-  Stream,
-} from "effect";
+import { Config, Duration, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
 import { Worker, WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -113,7 +103,7 @@ const proofLayer = Layer.unwrap(
     const lifecycleConfig = yield* Config.all({
       accountId: Config.string("CLOUDFLARE_ACCOUNT_ID"),
       apiToken: Config.redacted("BROWSER_RENDERING_API_TOKEN"),
-    }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(env)));
+    });
 
     const quickActionLayer = browserQuickActionScreenshotLayer().pipe(
       Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser: env.BROWSER })),

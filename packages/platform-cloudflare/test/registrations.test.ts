@@ -100,6 +100,7 @@ describe("Cloudflare Agent registrations", () => {
       threadId: firstThread,
       producerId: `${PRODUCER_PREFIX}:${firstThread}`,
       rawEnvHasNamespace: true,
+      configuredLabel: "configured-by-worker",
       stateMatches: true,
     });
 
@@ -110,6 +111,7 @@ describe("Cloudflare Agent registrations", () => {
       threadId: secondThread,
       producerId: `${PRODUCER_PREFIX}:${secondThread}`,
       rawEnvHasNamespace: true,
+      configuredLabel: "configured-by-worker",
       stateMatches: true,
     });
     expect(secondProbe.incarnation).not.toBe(firstProbe.incarnation);
