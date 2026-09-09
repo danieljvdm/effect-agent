@@ -97,36 +97,32 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
         finished: Deferred.Deferred<void>,
       ) {
         // Always finish one wave; source completion prevents starting subsequent waves.
-        do {
-          yield* Effect.scoped(
-            Effect.gen(function* () {
-              // Subscribe before the durable read so an insertion during a wave is retained
-              // as a hint for the next one. The scan interval covers dropped notifications.
-              const notified = yield* wakes.subscribe(threadId);
+        yield* Effect.gen(function* () {
+          // Subscribe before the durable read so an insertion during a wave is retained
+          // as a hint for the next one. The scan interval covers dropped notifications.
+          const notified = yield* wakes.subscribe(threadId);
 
-              yield* drain;
+          yield* drain;
 
-              const deadline = yield* store
-                .nextDeadline(threadId)
-                .pipe(Effect.mapError(failure("read message deadline")));
+          const deadline = yield* store
+            .nextDeadline(threadId)
+            .pipe(Effect.mapError(failure("read message deadline")));
 
-              // The index includes unfinished waves, lease expiry, retry and settlement polls.
-              // Yield at least one millisecond for an already-due deadline instead of spinning.
-              const delay =
-                deadline === null
-                  ? config.wakeScanInterval
-                  : Math.min(
-                      config.wakeScanInterval,
-                      Math.max(1, deadline - (yield* Clock.currentTimeMillis)),
-                    );
+          // The index includes unfinished waves, lease expiry, retry and settlement polls.
+          // Yield at least one millisecond for an already-due deadline instead of spinning.
+          const delay =
+            deadline === null
+              ? config.wakeScanInterval
+              : Math.min(
+                  config.wakeScanInterval,
+                  Math.max(1, deadline - (yield* Clock.currentTimeMillis)),
+                );
 
-              yield* Effect.raceFirst(
-                Deferred.await(finished),
-                Effect.raceFirst(notified, Effect.sleep(delay)),
-              );
-            }),
+          yield* Effect.raceFirst(
+            Deferred.await(finished),
+            Effect.raceFirst(notified, Effect.sleep(delay)),
           );
-        } while (!(yield* Deferred.isDone(finished)));
+        }).pipe(Effect.scoped, Effect.repeat({ until: () => Deferred.isDone(finished) }));
       }),
       pendingDeadline: store
         .nextDeadline(threadId)
