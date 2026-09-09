@@ -36,6 +36,7 @@ import {
   IdempotencyKey,
   MarkReadyRequest,
   Principal,
+  type Settlement,
   SettlementFinalization,
   SettlementReservation,
   SubmissionLedger,
@@ -106,6 +107,47 @@ const ambientModel = Layer.effectContext(
 );
 
 const binding = { definition: agent, model: ambientModel };
+
+/** A completed worker Effect can return failed Settlements; retain those bounded diagnostics. */
+export const assertCheckpointFault = Effect.fn("benchmark.assertCheckpointFault")(function* <E>(
+  attempt: Exit.Exit<ReadonlyArray<Settlement>, E>,
+  phase: {
+    readonly compactionCommitted: boolean;
+    readonly checkpointCreationMs: number | null;
+  },
+) {
+  const fault = Exit.isFailure(attempt) ? Cause.findErrorOption(attempt.cause) : Option.none();
+
+  if (
+    Option.isSome(fault) &&
+    Schema.is(DurableRuntimeFailpointError)(fault.value) &&
+    fault.value.location === "checkpoint:after-save"
+  )
+    return;
+
+  const outcome = Exit.isFailure(attempt)
+    ? Cause.pretty(attempt.cause)
+    : JSON.stringify({
+        settlementCount: attempt.value.length,
+        // This fixture admits one Submission. Bound unexpected drain results and error text too.
+        settlements: attempt.value.slice(0, 8).map((settlement) => ({
+          submissionId: settlement.submissionId.slice(0, 256),
+          outcome: settlement.outcome,
+          ...(settlement.failure === undefined
+            ? {}
+            : {
+                failure: {
+                  errorTag: settlement.failure.errorTag.slice(0, 256),
+                  message: settlement.failure.message.slice(0, 1_024),
+                },
+              }),
+        })),
+      });
+
+  return yield* BenchmarkError.make({
+    message: `Expected checkpoint fault was not observed: ${outcome}; checkpoint phase: ${JSON.stringify(phase)}`,
+  });
+});
 
 const finalParts = (answer: string, chunks: number): ReadonlyArray<ScriptedStreamPart> => {
   const text = JSON.stringify({ answer });
@@ -677,16 +719,10 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
           yield* submit;
           const attempt = yield* runtime.processThread(binding, threadId).pipe(Effect.exit);
 
-          const fault = Exit.isFailure(attempt)
-            ? Cause.findErrorOption(attempt.cause)
-            : Option.none();
-
-          yield* check(
-            Option.isSome(fault) &&
-              fault.value._tag === "DurableRuntimeFailpointError" &&
-              fault.value.location === "checkpoint:after-save",
-            `Expected checkpoint fault was not observed: ${Exit.isFailure(attempt) ? Cause.pretty(attempt.cause) : "attempt succeeded"}`,
-          );
+          yield* assertCheckpointFault(attempt, {
+            compactionCommitted: checkpointStarted !== undefined,
+            checkpointCreationMs,
+          });
           const store = yield* ThreadStore;
 
           const checkpoint =

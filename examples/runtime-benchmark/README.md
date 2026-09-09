@@ -89,6 +89,9 @@ normalized provider callback. It does not use ModelStarted events. `totalMs` end
 completion or durable settlement; it includes the operation's correctness checks where those
 checks are inline. Every sample uses a new finite script, verifies exhaustion, and counts model
 stream finalizers. The first recovery attempt is verified before its counters are reset.
+If that attempt misses the expected checkpoint fault, its diagnostic includes bounded returned
+settlement outcomes/failures and the observed compaction/checkpoint phase. A successful worker
+Effect can return a failed settlement; it does not by itself prove a successful Attempt.
 `checkpointCreationMs` separately measures native checkpoint construction and persistence from
 `compaction:after-canonical-append` through `checkpoint:after-save`, before injecting the fault.
 It includes checkpoint scans/encoding/save but excludes the already committed compaction append
