@@ -284,6 +284,7 @@ import {
   RunResumeUsageSchema,
   RunContextPreparation,
   RunToolAuthorization,
+  type RunToolAuthorizationHook,
   RunToolScheduling,
   type PreparedRunContext,
   type RunContextPreparationError,
@@ -439,6 +440,7 @@ type InterpreterRequirements<
   | ThreadHistory
   | ContextCompactor
   | ModelUsageAccounting
+  | ProgrammaticToolAuthorization
   | HookRequirements
   | InstructionRequirements;
 
@@ -2184,7 +2186,10 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
   | AgentChildPending
   | AiError.AiError
   | Tool.HandlerError<ToolUnion<Tools>>,
-  HookRequirements | ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
+  | HookRequirements
+  | ToolSpanTelemetry
+  | ProgrammaticToolAuthorization
+  | Tool.HandlerServices<ToolUnion<Tools>>
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -2352,7 +2357,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         Stream.Stream<
           RunEvent,
           ModelProtocolError | AiError.AiError | Tool.HandlerError<ToolUnion<Tools>>,
-          ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
+          ToolSpanTelemetry | ProgrammaticToolAuthorization | Tool.HandlerServices<ToolUnion<Tools>>
         >
       >((stream, group) => {
         const channels = group.map(
@@ -2377,7 +2382,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                     turnId,
                     outerToolCallId: call.toolCallId,
                     turn,
-                    toolAuthorization: options.toolAuthorization,
                     maxToolCalls: brokerAccounting.maxToolCalls,
                     declaredToolCalls: brokerAccounting.declaredToolCalls,
                     budget: options.budget,
@@ -2457,7 +2461,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       const settling: Stream.Stream<
         RunEvent,
         never,
-        ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
+        ToolSpanTelemetry | ProgrammaticToolAuthorization | Tool.HandlerServices<ToolUnion<Tools>>
       > = handlers.pipe(
         Stream.provideService(RunEventSink, batchSink),
         Stream.provideService(SubagentDurability, batchSubagentDurability),
@@ -7277,6 +7281,27 @@ function streamWithCompletion<
           : { history: retained.prompt, onHistory: retained.stageHistory }),
       };
 
+      // Normalize the selected host policy at the Run boundary. Inner calls project typed
+      // override failures into broker outcomes; native calls retain their original E channel.
+      const programmaticAuthorization = Layer.effect(
+        ProgrammaticToolAuthorization,
+        Effect.gen(function* () {
+          const services = yield* Effect.context<HookRequirements>();
+          const selected = options.toolAuthorization;
+
+          return ProgrammaticToolAuthorization.of({
+            authorize: (request) =>
+              selected === undefined
+                ? Effect.succeed({ _tag: "allowed" })
+                : provideHookServices(selected.authorize(request), services).pipe(
+                    Effect.catchCauseFilter(Cause.findError, (error, cause) =>
+                      Effect.fail(new BrokerCallFailure(error, cause)),
+                    ),
+                  ),
+          });
+        }),
+      );
+
       const interpreted = Stream.unwrap(
         Effect.gen(function* () {
           const resumed =
@@ -7706,6 +7731,7 @@ function streamWithCompletion<
         AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
         | AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
         | ToolSpanTelemetry
+        | ProgrammaticToolAuthorization
         | ModelRequires
         | ModelUsageAccounting
       > = model === undefined ? finalized : finalized.pipe(Stream.provide(model, { local: true }));
@@ -7714,6 +7740,7 @@ function streamWithCompletion<
         // The engine composition boundary owns span-lifecycle isolation while preserving the host's
         // ambient Tracer/Logger configuration. Individual Tool executions consume this capability.
         Stream.provide(ToolSpanTelemetry.layer),
+        Stream.provide(programmaticAuthorization),
       );
 
       if (retained === undefined && onCompleted === undefined) return events;
@@ -8128,7 +8155,6 @@ interface ToolBrokerBinding<HookError, HookRequirements> {
   readonly turnId: TurnId;
   readonly outerToolCallId: ToolCallId;
   readonly turn: number;
-  readonly toolAuthorization: RunOptions<HookError, HookRequirements>["toolAuthorization"];
   readonly maxToolCalls: number;
   /** Model-declared Tool Calls committed through this batch (the outer call included). */
   readonly declaredToolCalls: number;
@@ -8148,13 +8174,19 @@ const programmaticOutcomeError = (
   message,
 });
 
-/** A handler's typed failure captured as a value so defects stay defects. */
-class BrokerHandlerFailure {
+/** A call's typed failure captured as a value so defects stay defects. */
+class BrokerCallFailure {
   constructor(
     readonly error: unknown,
     readonly cause: Cause.Cause<unknown>,
   ) {}
 }
+
+/** Run-owned authorization with typed override failures preserved for broker projection. */
+class ProgrammaticToolAuthorization extends Context.Service<
+  ProgrammaticToolAuthorization,
+  RunToolAuthorizationHook<BrokerCallFailure>
+>()("@effect-agent/engine/internal/ProgrammaticToolAuthorization") {}
 
 /**
  * Measure one started programmatic handler with the same canonical span semantics as a
@@ -8289,17 +8321,11 @@ interface LiveToolBroker {
  * handler is invoked. Inner calls produce no Run events and no Canonical
  * Records. Trusted applications may explicitly observe non-propagating failures (RUN-036).
  */
-const makeToolBrokerService = <HookError, HookRequirements>(
+const makeToolBrokerService = Effect.fnUntraced(function* <HookError, HookRequirements>(
   binding: ToolBrokerBinding<HookError, HookRequirements>,
-): Effect.Effect<LiveToolBroker, never, ToolSpanTelemetry> =>
-  Effect.map(ToolSpanTelemetry, (toolSpanTelemetry) =>
-    makeToolBrokerServiceWithTelemetry(binding, toolSpanTelemetry),
-  );
-
-const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
-  binding: ToolBrokerBinding<HookError, HookRequirements>,
-  toolSpanTelemetry: ToolSpanTelemetryService,
-): LiveToolBroker => {
+): Effect.fn.Return<LiveToolBroker, never, ToolSpanTelemetry | ProgrammaticToolAuthorization> {
+  const toolSpanTelemetry = yield* ToolSpanTelemetry;
+  const authorization = yield* ProgrammaticToolAuthorization;
   const lifecycle = { closed: false };
   const observer = binding.context.toolFailureObserver;
 
@@ -8469,27 +8495,24 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
             }
 
             const handleId = ToolCallId.make(`${binding.outerToolCallId}#${sequenceIndex}`);
-            const authorization = binding.toolAuthorization;
 
-            if (authorization !== undefined) {
-              const denied = yield* provideHookServices(
-                authorization.authorize({
-                  threadId: binding.context.threadId,
-                  runId: binding.context.runId,
-                  turnId: binding.turnId,
-                  turn: binding.turn,
-                  input: binding.context.input,
-                  programmatic: { parentToolCallId: binding.outerToolCallId, sequenceIndex },
-                  call: {
-                    toolCallId: handleId,
-                    toolName: input.toolName,
-                    parameters: input.encodedArguments,
-                    executionClass: getToolExecutionClass(tool),
-                    executionKind: getToolExecutionKind(tool.annotations),
-                  },
-                }),
-                binding.hookServices,
-              ).pipe(
+            const denied = yield* authorization
+              .authorize({
+                threadId: binding.context.threadId,
+                runId: binding.context.runId,
+                turnId: binding.turnId,
+                turn: binding.turn,
+                input: binding.context.input,
+                programmatic: { parentToolCallId: binding.outerToolCallId, sequenceIndex },
+                call: {
+                  toolCallId: handleId,
+                  toolName: input.toolName,
+                  parameters: input.encodedArguments,
+                  executionClass: getToolExecutionClass(tool),
+                  executionKind: getToolExecutionKind(tool.annotations),
+                },
+              })
+              .pipe(
                 Effect.flatMap((decision) =>
                   decision._tag === "allowed"
                     ? Effect.succeed(undefined)
@@ -8500,19 +8523,18 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                         decision.reason,
                       ),
                 ),
-                Effect.catchCauseFilter(Cause.findError, (error, cause) =>
+                Effect.catch((failure) =>
                   preflightFailure(
                     input,
                     "infrastructure",
-                    errorTag(error),
-                    errorMessage(error),
-                    cause,
+                    errorTag(failure.error),
+                    errorMessage(failure.error),
+                    failure.cause,
                   ),
                 ),
               );
 
-              if (denied !== undefined) return denied;
-            }
+            if (denied !== undefined) return denied;
 
             // Serialize admission and durable reservation across outer handlers.
             // Once reserved, a slot is never refunded: ownership may be lost
@@ -8700,11 +8722,11 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
                   ),
                   Effect.map(() => undefined),
                   Effect.catchCauseFilter(Cause.findError, (error, cause) =>
-                    Effect.succeed(new BrokerHandlerFailure(error, cause)),
+                    Effect.succeed(new BrokerCallFailure(error, cause)),
                   ),
                 );
 
-                if (handlerFailed instanceof BrokerHandlerFailure) {
+                if (handlerFailed instanceof BrokerCallFailure) {
                   const tag = errorTag(handlerFailed.error);
 
                   if (observer !== undefined) {
@@ -8903,7 +8925,7 @@ const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
       lifecycle.closed = true;
     },
   };
-};
+});
 
 /**
  * Ephemeral pass-through `DurableStep` provided when `RunOptions.durability`

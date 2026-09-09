@@ -9,7 +9,11 @@ import {
 } from "@effect-agent/core/SubagentContract";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { type RunOptions, type RunToolAuthorizationRequest } from "@effect-agent/engine/RunOptions";
+import {
+  RunToolAuthorization,
+  type RunOptions,
+  type RunToolAuthorizationRequest,
+} from "@effect-agent/engine/RunOptions";
 import {
   ToolBroker,
   ToolBrokerConfigurationError,
@@ -20,6 +24,7 @@ import {
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
+  Context,
   Deferred,
   Effect,
   Exit,
@@ -131,13 +136,17 @@ const orchestrateCall = (id: string): ReadonlyArray<Response.StreamPartEncoded> 
  * outcomes as its Tool success so the test observes exactly what generated
  * code would.
  */
-const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
+const runOrchestrated = <
+  InnerTools extends Record<string, Tool.Any>,
+  HookError = never,
+  HookRequirements = never,
+>(options: {
   readonly innerToolkit: Toolkit.Toolkit<InnerTools>;
   readonly innerHandlers: Layer.Layer<Tool.HandlersFor<InnerTools>, never, never>;
   readonly program: (pass: ToolBrokerPass) => Effect.Effect<unknown>;
   readonly passOptions?: ToolBrokerPassOptions;
   readonly agentPolicy?: AgentPolicy;
-  readonly runOptions?: RunOptions;
+  readonly runOptions?: RunOptions<HookError, HookRequirements>;
 }) =>
   Effect.gen(function* () {
     const Orchestrate = Tool.make("orchestrate", {
@@ -906,7 +915,11 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
 
             return null;
           }),
-      });
+      }).pipe(
+        Effect.provideService(RunToolAuthorization, {
+          authorize: () => Effect.die("The explicit override must replace the ambient policy"),
+        }),
+      );
       expect(started).toEqual(["allowed"]);
       expect(requests).toHaveLength(3);
       expect(requests[2]).toMatchObject({
@@ -921,6 +934,119 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       });
     }),
   );
+
+  it.effect("uses the Run's ambient authorization despite an inner policy substitution", () =>
+    Effect.gen(function* () {
+      const innerToolkit = Toolkit.make(Query);
+      const requests: Array<RunToolAuthorizationRequest> = [];
+
+      yield* runOrchestrated({
+        innerToolkit,
+        innerHandlers: innerToolkit.toLayer({ query: () => Effect.die("Denied handler started") }),
+        program: (pass) =>
+          pass.invoke({ toolName: "query", encodedArguments: { sql: "denied" } }).pipe(
+            Effect.tap((outcome) =>
+              Effect.sync(() => {
+                expect(outcome).toMatchObject({
+                  _tag: "ProgrammaticCallError",
+                  errorTag: "ProgrammaticToolAuthorizationDenied",
+                });
+              }),
+            ),
+            Effect.provideService(RunToolAuthorization, {
+              authorize: () => Effect.succeed({ _tag: "allowed" }),
+            }),
+          ),
+      }).pipe(
+        Effect.provideService(RunToolAuthorization, {
+          authorize: (request) =>
+            Effect.sync(() => {
+              requests.push(request);
+
+              return request.programmatic === undefined
+                ? { _tag: "allowed" as const }
+                : { _tag: "denied" as const, reason: "Inner call denied" };
+            }),
+        }),
+      );
+      expect(requests.map((request) => request.call.toolName)).toEqual(["orchestrate", "query"]);
+    }),
+  );
+
+  for (const failureKind of ["typed", "defect", "interruption"] as const) {
+    it.effect(`preserves ${failureKind} authorization failures and Run-captured services`, () =>
+      Effect.gen(function* () {
+        class AuthorizationPolicy extends Context.Service<
+          AuthorizationPolicy,
+          { readonly message: string }
+        >()("test/AuthorizationPolicy") {}
+
+        const innerToolkit = Toolkit.make(Query);
+        const observed: Array<ProgrammaticCallOutcome> = [];
+
+        const run = runOrchestrated({
+          innerToolkit,
+          innerHandlers: innerToolkit.toLayer({
+            query: () => Effect.die("Denied handler started"),
+          }),
+          runOptions: {
+            toolAuthorization: {
+              authorize: (request) =>
+                Effect.gen(function* () {
+                  if (request.programmatic === undefined) return { _tag: "allowed" as const };
+                  const policy = yield* AuthorizationPolicy;
+
+                  if (failureKind === "defect") return yield* Effect.die(policy.message);
+                  if (failureKind === "interruption") return yield* Effect.interrupt;
+
+                  return yield* new QueryFailure({ message: policy.message });
+                }),
+            },
+          },
+          program: (pass) =>
+            pass.invoke({ toolName: "query", encodedArguments: { sql: "denied" } }).pipe(
+              Effect.tap((outcome) => Effect.sync(() => observed.push(outcome))),
+              Effect.provideService(AuthorizationPolicy, { message: "inner substitution" }),
+            ),
+        });
+
+        const requirement: AuthorizationPolicy extends Effect.Services<typeof run> ? true : false =
+          true;
+
+        const error: QueryFailure extends Effect.Error<typeof run> ? true : false = true;
+
+        const exit = yield* run.pipe(
+          Effect.provideService(AuthorizationPolicy, { message: "Run policy failure" }),
+          Effect.exit,
+        );
+
+        expect(requirement && error).toBe(true);
+        if (failureKind === "typed") {
+          expect(Exit.isSuccess(exit)).toBe(true);
+          expect(observed).toMatchObject([
+            {
+              _tag: "ProgrammaticCallError",
+              index: undefined,
+              errorTag: "QueryFailure",
+              message: "Run policy failure",
+            },
+          ]);
+        } else {
+          expect(observed).toEqual([]);
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            if (failureKind === "defect") {
+              expect(
+                exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect),
+              ).toEqual(["Run policy failure"]);
+            } else {
+              expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+            }
+          }
+        }
+      }),
+    );
+  }
 
   it.effect("bounds concurrent calls and records outcomes without delaying dependencies", () =>
     Effect.gen(function* () {
