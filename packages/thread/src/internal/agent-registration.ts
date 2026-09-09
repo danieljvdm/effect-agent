@@ -404,7 +404,6 @@ const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInpu
         initialToolNames: exposure === undefined ? null : [...(exposure.initialToolNames ?? [])],
         maxTools: exposure?.maxTools ?? 64,
         maxSchemaBytes: exposure?.maxSchemaBytes ?? 262_144,
-        fromTools: (exposure?.fromTools ?? []).map((entry) => entry.tool),
         requiredCompletion:
           definition.completion?.required === true ? definition.completion.tool : null,
         tools: Object.values(definition.toolkit.tools).map((tool) => ({

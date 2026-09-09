@@ -17,6 +17,7 @@ import {
   type RunToolAuthorizationDecision,
   type RunToolAuthorizationRequest,
 } from "@effect-agent/engine/RunOptions";
+import { RunToolVisibility } from "@effect-agent/engine/ToolExposure";
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import { compileRegistrations } from "@effect-agent/thread/AgentRegistration";
@@ -1210,6 +1211,64 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(observations).toEqual([]);
     }),
   );
+
+  for (const configured of [false, true]) {
+    it.effect(`captures host visibility with configured=${configured} over a worker override`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const desk = yield* makeBookDesk(bookTools);
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(toolCall("book-1", "book", { ref: "r-visible" }))
+            : finalParts('{"answer":"booked"}'),
+        );
+
+        const agent = Agent.withModel(bookDefinition, scripted.model);
+        const thread = `visibility-captured-${configured}`;
+        let workerPolicyCalls = 0;
+
+        yield* runtime.submit(agent, { question: "book" }, submitOptions(thread, "visible"));
+
+        const settlements = yield* runtime.processThread(agent, decodeThreadId(thread)).pipe(
+          Effect.provide(desk.toolLayer),
+          Effect.provideService(RunToolVisibility, {
+            visible: () =>
+              Effect.sync(() => {
+                workerPolicyCalls++;
+
+                return [];
+              }),
+          }),
+        );
+
+        expect(settlements[0]?.outcome).toBe("completed");
+        expect(yield* desk.count("r-visible")).toBe(1);
+        expect(workerPolicyCalls).toBe(0);
+
+        const responses = (yield* readLog(thread)).flatMap((entry) =>
+          entry.record.payload._tag === "ModelResponseRecorded" ? [entry.record.payload] : [],
+        );
+
+        expect(responses).toHaveLength(2);
+        expect(
+          responses.every((response) => (response.toolExposure !== undefined) === configured),
+        ).toBe(true);
+      }).pipe(
+        Effect.provide(
+          testLayer.pipe(
+            Layer.provide(
+              Layer.succeed(
+                RunToolVisibility,
+                configured ? { visible: ({ toolNames }) => Effect.succeed(toolNames) } : undefined,
+              ),
+            ),
+          ),
+          { local: true },
+        ),
+      ),
+    );
+  }
 
   it.effect("splits a tool Turn into response, prepared, and results commits", () =>
     Effect.gen(function* () {

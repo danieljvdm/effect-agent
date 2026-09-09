@@ -128,37 +128,37 @@ Provide `SearchIndex` when building `discovery.handlers`. Its requirements remai
 `R`, and declared failures remain in the tool's `E` alongside `ToolDiscoveryError`. Search runs in
 a fresh Scope per invocation; failure, defect, timeout and interruption close acquired resources.
 
-An existing ordinary readonly search tool can select names without adopting `discover_tools`:
-set `toolExposure.fromTools` to `[{ tool: "your_search", project: ({ result }) => result.names }]`.
-The callback infers the native tool's decoded parameters and success type. It must be pure and
-return registered native names. Mark the source with `.annotate(ToolExecutionClass, "readonly")`
-using the annotation from `effect-agent/DurableStep`; uncertain
-and orchestration tools are rejected because their alternate durable settlement paths do not
-record these projections. A thrown projector fails the run with `ModelProtocolError`.
+An existing ordinary readonly search tool can use the same contract: annotate it with
+`ToolExposure.DiscoveryTool` and return a decoded `toolNames` array containing registered native
+names. The runtime validates that selection before recording it. Discovery tools must use the
+`ToolExecutionClass` annotation from `effect-agent/DurableStep` with value `"readonly"`;
+uncertain and orchestration tools have different durable settlement paths and are refused.
 
 ### Select without search {#tool-selection}
 
 Host context and workflow state can use the same mechanism directly:
 
 ```ts twoslash
-import { Selection } from "effect-agent/ToolExposure";
+import { RunToolVisibility, Selection } from "effect-agent/ToolExposure";
 import type { RunOptions } from "effect-agent/RunOptions";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 export const options: RunOptions = {
   toolSelection: Selection.make({ toolNames: ["search_records"] }),
-  toolVisibility: {
-    visible: ({ toolNames }) =>
-      Effect.succeed(toolNames.filter((name) => name !== "delete_record")),
-  },
 };
+
+export const VisibilityLive = Layer.succeed(RunToolVisibility, {
+  visible: ({ toolNames }) => Effect.succeed(toolNames.filter((name) => name !== "delete_record")),
+});
 ```
 
 Pass these options to `AgentRuntime.run`, `stream`, or `start`. A context preparation hook may
-return `toolSelection` beside its `prompt` to replace the set before a new model request. Durable
-hosts capture the optional `RunToolVisibility` service at runtime construction. That service
-provides the same `visible` callback; resolve its dependencies in the host Layer. Per-run hooks
-retain their own typed errors and requirements.
+return `toolSelection` beside its `prompt` to replace the set before a new model request. Provide
+`VisibilityLive` around an ephemeral run or when constructing a durable runtime. The optional
+`RunToolVisibility` service defaults to no filter; durable hosts capture that choice, including
+absence, so worker callers cannot replace it. Resolve policy dependencies and setup failures in
+the host Layer, where their types remain visible. The policy operation returns eligible names;
+an empty list denies all tools.
 
 Visibility controls eligibility. Exposure controls which eligible native schemas the model sees.
 Authorization, approval, budgets and resource checks still decide whether an action may execute.
@@ -174,7 +174,7 @@ successful selection clears it. If a batch contains several successful selection
 declaration order wins, regardless of completion order. No selection takes effect midway through
 a batch. Failed results retain the previous selection; ordinary tool error behavior still applies.
 
-During working turns, discovery/projector tools, explicit `PinnedTool` annotations, required completion and context
+During working turns, discovery tools, explicit `PinnedTool` annotations, required completion and context
 rollover tools stay exposed. Pins count toward the limits and never override eligibility: an
 excluded required pin causes a typed refusal. Optional completion is available when the runtime
 enters its final answer turn; that turn may expose only the completion tool. The default exposure limits are 64 tools and 256 KiB of aggregate
@@ -189,12 +189,12 @@ without searching again for a committed result. A crash before a result is commi
 ordinary readonly recovery contract. Resumed calls retain their original exposure and recheck
 current eligibility before unfinished handlers run; already settled siblings remain canonical.
 Custom durable hooks must stage request snapshots through `noteToolExposure`. Version custom
-search and projector semantics in your registration definitions as with other handler changes.
+search semantics in your registration definitions as with other handler changes.
 
 This provider-neutral API changes the native toolkit sent on subsequent calls. It does not use
 provider-specific deferred-tool references or promise a latency win: extra discovery rounds and
-provider prompt caching can outweigh smaller schemas. The [Code Mode example benchmark](https://github.com/danieljvdm/effect-agent/tree/main/examples/code-mode-cloudflare)
-compares common, uncommon and composed tasks with fixed success and latency gates.
+provider prompt caching can outweigh smaller schemas. Measure common, uncommon and composed
+tasks against eager exposure before claiming a performance improvement.
 
 ## Run batches deterministically {#batch-execution}
 

@@ -21,7 +21,7 @@ import { Tool, type LanguageModel } from "effect/unstable/ai";
 
 import { ContextRolloverTool } from "../ContextWindow.ts";
 import { getToolExecutionClass } from "../DurableStep.ts";
-import type { CatalogEntry, VisibilityHook, VisibilityRequest } from "../ToolExposure.ts";
+import { RunToolVisibility, type CatalogEntry, type VisibilityRequest } from "../ToolExposure.ts";
 import { utf8ByteLength } from "./bounded-value.ts";
 
 const invalid = (message: string) => ModelProtocolError.make({ message });
@@ -50,23 +50,22 @@ export const decodeSnapshot = (value: unknown) =>
     ),
   );
 
-export const eligibleCatalog = Effect.fn("ToolExposure.eligibleCatalog")(function* <E, R>(
+export const eligibleCatalog = Effect.fn("ToolExposure.eligibleCatalog")(function* (
   definition: AnyDefinition,
   request: Omit<VisibilityRequest, "toolNames">,
-  visibility: VisibilityHook<E, R> | undefined,
   grant: SubagentGrant | undefined,
   depth: number,
 ) {
+  const visibility = yield* RunToolVisibility;
   const entries: Array<CatalogEntry> = [];
 
   for (const tool of Object.values(definition.toolkit.tools)) {
     if (
-      (Context.get(tool.annotations, DiscoveryTool) ||
-        definition.toolExposure?.fromTools?.some((entry) => entry.tool === tool.name)) &&
+      Context.get(tool.annotations, DiscoveryTool) &&
       (getToolExecutionKind(tool.annotations) !== "ordinary" ||
         getToolExecutionClass(tool) !== "readonly")
     )
-      return yield* invalid("Tool exposure projections require ordinary readonly Tools");
+      return yield* invalid("Discovery requires ordinary readonly Tools");
     const namespace = Context.get(tool.annotations, ToolNamespace);
 
     entries.push({
@@ -157,7 +156,6 @@ export const exposureSnapshot = Effect.fn("ToolExposure.exposureSnapshot")(funct
 
   const pinned = Object.values(definition.toolkit.tools).filter(
     (tool) =>
-      definition.toolExposure?.fromTools?.some((entry) => entry.tool === tool.name) ||
       Context.get(tool.annotations, PinnedTool) ||
       Context.get(tool.annotations, DiscoveryTool) ||
       Context.get(tool.annotations, ContextRolloverTool) ||

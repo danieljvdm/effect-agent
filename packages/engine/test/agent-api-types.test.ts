@@ -15,6 +15,7 @@ import {
   type RunContextHook,
 } from "@effect-agent/engine/RunOptions";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { RunToolVisibility } from "@effect-agent/engine/ToolExposure";
 import { Context, Effect, Layer, Option, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { expectTypeOf, it } from "vite-plus/test";
@@ -570,7 +571,7 @@ it("resolved-call preparation preserves host and provider requirements and typed
   >().toEqualTypeOf<never>();
 });
 
-it("preserves full registered Tool E/R and typed exposure projectors", () => {
+it("preserves full registered Tool E/R under progressive exposure", () => {
   const progressive = Agent.make("typed-exposure", {
     input: Schema.String,
     output: Schema.String,
@@ -578,17 +579,6 @@ it("preserves full registered Tool E/R and typed exposure projectors", () => {
     toolkit,
     toolExposure: {
       initialToolNames: [],
-      fromTools: [
-        {
-          tool: "lookup",
-          project: ({ parameters, result }) => {
-            expectTypeOf(parameters).toEqualTypeOf<{ readonly city: string }>();
-            expectTypeOf(result).toEqualTypeOf<string>();
-
-            return ["lookup"];
-          },
-        },
-      ],
     },
   });
 
@@ -600,18 +590,24 @@ it("preserves full registered Tool E/R and typed exposure projectors", () => {
   >().toEqualTypeOf<ToolError>();
 });
 
-it("preserves host visibility requirements and failures", () => {
+it("preserves visibility Layer dependencies and construction failures", () => {
   const run = AgentRuntime.run(Agent.withModel(planner, model), { city: "Lisbon", days: "2" });
 
-  const visibleRun = AgentRuntime.run(
-    Agent.withModel(planner, model),
-    { city: "Lisbon", days: "2" },
-    {
-      toolVisibility: {
-        visible: () => TurnHost.pipe(Effect.andThen(Effect.fail(TurnHostError.make({})))),
-      },
-    },
+  const visibility = Layer.effect(
+    RunToolVisibility,
+    Effect.gen(function* () {
+      const allowedName = yield* TurnHost;
+
+      if (allowedName === "") return yield* TurnHostError.make({});
+
+      return {
+        visible: ({ toolNames }) =>
+          Effect.succeed(toolNames.filter((name) => name === allowedName)),
+      };
+    }),
   );
+
+  const visibleRun = run.pipe(Effect.provide(visibility));
 
   expectTypeOf<Effect.Services<typeof visibleRun>>().toEqualTypeOf<
     Effect.Services<typeof run> | TurnHost

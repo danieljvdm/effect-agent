@@ -29,21 +29,11 @@ export const Limits = Schema.Struct({
   maxSchemaBytes: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(4_194_304)),
 });
 
-/** Pure projection from a successful ordinary readonly Tool result; exceptions fail the Run. */
-export interface FromTool<Parameters = unknown, Result = unknown> {
-  readonly tool: string;
-  readonly project: (input: {
-    readonly parameters: Parameters;
-    readonly result: Result;
-  }) => ReadonlyArray<string>;
-}
-
 /** Omission preserves eager exposure. Selection changes take effect only after a complete batch. */
 export interface Configuration {
   readonly initialToolNames?: ReadonlyArray<string> | undefined;
   readonly maxTools?: number | undefined;
   readonly maxSchemaBytes?: number | undefined;
-  readonly fromTools?: ReadonlyArray<FromTool> | undefined;
 }
 
 /** Trusted grouping metadata; never inferred from a Tool's name. */

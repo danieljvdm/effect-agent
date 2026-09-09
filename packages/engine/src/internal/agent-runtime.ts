@@ -1969,29 +1969,9 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
         // through this seam.
         let toolSelection: Selection | undefined;
 
-        const projection = context.definition.toolExposure?.fromTools?.find(
-          (entry) => entry.tool === call.name,
-        );
-
-        if (
-          !result.isFailure &&
-          (projection !== undefined || Context.get(prepared.tool.annotations, DiscoveryTool))
-        ) {
-          const projected = yield* Effect.try({
-            try: () =>
-              projection === undefined
-                ? result.encodedResult
-                : {
-                    toolNames: projection.project({
-                      parameters: prepared.decodedParams,
-                      result: result.result,
-                    }),
-                  },
-            catch: () => ModelProtocolError.make({ message: "Tool exposure projection failed" }),
-          });
-
+        if (!result.isFailure && Context.get(prepared.tool.annotations, DiscoveryTool)) {
           toolSelection = yield* validateSelection(
-            projected,
+            result.result,
             context.definition,
             context.toolCatalog,
           );
@@ -2208,6 +2188,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
   Stream.unwrap(
     Effect.gen(function* () {
       const exposed = context.toolExposure?.exposedToolNames;
+      const visibility = yield* RunToolVisibility;
 
       const eligible = new Set(
         context.toolCatalog
@@ -2221,9 +2202,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
             (exposed !== undefined && !exposed.includes(call.name)) ||
             // Preserve the existing typed grant-denial preflight when no host visibility
             // hook is installed. Both checks still precede every unfinished handler.
-            (options.toolVisibility !== undefined &&
-              !settledCallIds?.has(call.id) &&
-              !eligible.has(call.name)),
+            (visibility !== undefined && !settledCallIds?.has(call.id) && !eligible.has(call.name)),
         )
       ) {
         return yield* ModelProtocolError.make({
@@ -4982,11 +4961,11 @@ const makeTurn = <
       context.windowContextTokenLimit = contextTokenLimit;
       const toolSchemaTransformer = modelContext.modelCall?.toolSchemaTransformer;
       const messageTokenEstimator = modelContext.modelCall?.estimateMessageTokens;
+      const visibility = yield* RunToolVisibility;
 
       const catalog = yield* eligibleCatalog(
         agent.definition,
         { threadId: context.threadId, runId: context.runId, turn, input: context.input },
-        options.toolVisibility,
         options.subagentGrant,
         options.delegationDepth ?? options.parentLink?.depth ?? 0,
       );
@@ -5001,7 +4980,7 @@ const makeTurn = <
       let snapshot =
         agent.definition.toolExposure === undefined &&
         context.toolSelection === undefined &&
-        options.toolVisibility === undefined
+        visibility === undefined
           ? undefined
           : yield* exposureSnapshot(
               agent.definition,
@@ -6712,12 +6691,13 @@ const makeResumeTurn = <
       const tools = agent.definition.toolkit.tools;
       const turn = resume.turn;
       const turnId = resume.turnId;
+      const visibility = yield* RunToolVisibility;
 
       if (
         resume.toolExposure === undefined &&
         (agent.definition.toolExposure !== undefined ||
           context.toolSelection !== undefined ||
-          options.toolVisibility !== undefined)
+          visibility !== undefined)
       )
         return yield* ModelProtocolError.make({
           message: "Resumed progressive Turn is missing its original Tool exposure",
@@ -6725,7 +6705,6 @@ const makeResumeTurn = <
       context.toolCatalog = yield* eligibleCatalog(
         agent.definition,
         { threadId: context.threadId, runId: context.runId, turn, input: context.input },
-        options.toolVisibility,
         options.subagentGrant,
         options.delegationDepth ?? options.parentLink?.depth ?? 0,
       );
@@ -7249,9 +7228,7 @@ function streamWithCompletion<
         Effect.map(Option.getOrUndefined),
       );
 
-      const visibility = yield* Effect.serviceOption(RunToolVisibility).pipe(
-        Effect.map(Option.getOrUndefined),
-      );
+      const visibility = yield* RunToolVisibility;
 
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
@@ -7284,7 +7261,6 @@ function streamWithCompletion<
         context: runOptions.context ?? preparation.hook,
         transientContext: runOptions.transientContext ?? preparation.transientContext,
         toolAuthorization: runOptions.toolAuthorization ?? authorization,
-        toolVisibility: runOptions.toolVisibility ?? visibility,
         threadId,
         runId,
         ...(retained === undefined
@@ -7659,6 +7635,7 @@ function streamWithCompletion<
               }),
             }),
             Context.add(CurrentToolCatalog, { entries: [] }),
+            Context.add(RunToolVisibility, visibility),
             Context.add(RunEventSink, closedRunEventSink),
             Context.add(DurableStep, closedDurableStep),
             Context.add(SubagentDurability, closedSubagentDurability),

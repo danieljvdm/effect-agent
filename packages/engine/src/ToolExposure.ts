@@ -35,11 +35,13 @@ export interface VisibilityRequest {
   readonly toolNames: ReadonlyArray<string>;
 }
 
-export interface VisibilityHook<E = never, R = never> {
-  readonly visible: (request: VisibilityRequest) => Effect.Effect<ReadonlyArray<string>, E, R>;
+/** Resolve host dependencies when constructing the policy Layer. */
+export interface VisibilityHook {
+  readonly visible: (request: VisibilityRequest) => Effect.Effect<ReadonlyArray<string>>;
 }
 
 /** Optional host policy captured by durable runtimes; action authorization remains independent. */
-export class RunToolVisibility extends Context.Service<RunToolVisibility, VisibilityHook>()(
+export const RunToolVisibility = Context.Reference<VisibilityHook | undefined>(
   "@effect-agent/engine/ToolExposure/RunToolVisibility",
-) {}
+  { defaultValue: () => undefined },
+);

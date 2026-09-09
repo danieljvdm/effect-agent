@@ -12,9 +12,9 @@ import {
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { CurrentToolCatalog } from "@effect-agent/engine/ToolExposure";
+import { CurrentToolCatalog, RunToolVisibility } from "@effect-agent/engine/ToolExposure";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Layer, Option, Schema, SchemaGetter, Stream } from "effect";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -68,7 +68,18 @@ const scripted = (
 
 const Search = Tool.make("discover", {
   parameters: Schema.Struct({ select: Schema.String }),
-  success: Schema.Struct({ toolNames: Schema.Array(Schema.String), padding: Schema.String }),
+  success: Schema.Struct({
+    // Selection uses decoded names even when the model-visible wire format differs.
+    toolNames: Schema.Array(
+      Schema.String.pipe(
+        Schema.decode({
+          decode: SchemaGetter.transform((name) => name.toLowerCase()),
+          encode: SchemaGetter.transform((name) => name.toUpperCase()),
+        }),
+      ),
+    ),
+    padding: Schema.String,
+  }),
 })
   .annotate(DiscoveryTool, true)
   .annotate(ToolExecutionClass, "readonly")
@@ -214,10 +225,6 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
         ),
         "go",
         {
-          toolVisibility: {
-            visible: ({ toolNames }) =>
-              Effect.succeed(toolNames.filter((name) => name !== "write")),
-          },
           context: {
             prepare: ({ source }) =>
               Effect.succeed({
@@ -227,6 +234,9 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
           },
         },
       ).pipe(
+        Effect.provideService(RunToolVisibility, {
+          visible: ({ toolNames }) => Effect.succeed(toolNames.filter((name) => name !== "write")),
+        }),
         Effect.provide(
           tools.toLayer({
             discover: () =>
@@ -319,8 +329,11 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
         const exit = yield* AgentRuntime.run(
           Agent.withModel(agent, scripted([done], requests)),
           "go",
-          { toolVisibility: { visible: () => Effect.succeed(["run_code"]) } },
-        ).pipe(Effect.provide(native.toLayer({ run_code: () => Effect.succeed("") })), Effect.exit);
+        ).pipe(
+          Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed(["run_code"]) }),
+          Effect.provide(native.toLayer({ run_code: () => Effect.succeed("") })),
+          Effect.exit,
+        );
 
         expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
         expect(requests).toEqual([]);
@@ -403,7 +416,6 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
         Agent.withModel(agent, scripted([done], requests)),
         "go",
         {
-          toolVisibility: { visible: () => Effect.succeed(["write"]) },
           resume: {
             turn: 1,
             turnId: TurnId.make("original"),
@@ -432,6 +444,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
           },
         },
       ).pipe(
+        Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed(["write"]) }),
         Effect.provide(
           native.toLayer({
             read: () =>
@@ -486,7 +499,6 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
           Agent.withModel(agent, scripted([done], requests)),
           "go",
           {
-            toolVisibility: { visible: () => Effect.succeed(["read"]) },
             resume: {
               turn: 1,
               turnId: TurnId.make("original"),
@@ -509,6 +521,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
             },
           },
         ).pipe(
+          Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed(["read"]) }),
           Effect.provide(
             native.toLayer({
               read: () =>
@@ -635,7 +648,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
     }),
   );
 
-  it.effect("refuses effectful discovery projectors before model or Handler execution", () =>
+  it.effect("refuses non-readonly discovery before model or Handler execution", () =>
     Effect.gen(function* () {
       const unsafe = Tool.make("unsafe", {
         parameters: Schema.Struct({}),
@@ -674,7 +687,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
 
       expect(failure(exit)).toMatchObject({
         _tag: "ModelProtocolError",
-        message: "Tool exposure projections require ordinary readonly Tools",
+        message: "Discovery requires ordinary readonly Tools",
       });
       expect(starts).toBe(0);
       expect(requests).toEqual([]);

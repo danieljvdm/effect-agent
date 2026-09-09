@@ -991,9 +991,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
   const runToolAuthorization = yield* RunToolAuthorization;
 
-  const runToolVisibility = yield* Effect.serviceOption(RunToolVisibility).pipe(
-    Effect.map(Option.getOrUndefined),
-  );
+  const runToolVisibility = yield* RunToolVisibility;
 
   const runToolScheduling = yield* RunToolScheduling;
 
@@ -6325,7 +6323,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         input,
         approval,
         toolAuthorization,
-        ...(runToolVisibility === undefined ? {} : { toolVisibility: runToolVisibility }),
         ...(journal.toolSelection === undefined ? {} : { toolSelection: journal.toolSelection }),
         durability,
         subagent,
@@ -6821,6 +6818,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               : messagingRuntime.forTool(source, submission.principal),
           ),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
+          Stream.provideService(RunToolVisibility, runToolVisibility),
           Stream.provideService(RunToolScheduling, runToolScheduling),
           Stream.provideService(ContextCompactor, compactor),
           Stream.provideService(RunContextPreparation, runContextPreparation),

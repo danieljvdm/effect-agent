@@ -5,7 +5,7 @@ import type { AiError, LanguageModel, Model, Prompt, Tool, Toolkit } from "effec
 import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./AgentError.ts";
 import { AgentPolicy, type AgentPolicyInput } from "./AgentPolicy.ts";
 import { AgentId } from "./Identifiers.ts";
-import type { Configuration, FromTool } from "./ToolExposure.ts";
+import type { Configuration } from "./ToolExposure.ts";
 
 /** Prompt input produced directly or by an Effect that preserves its failure and requirements. */
 export type InstructionResult<E = never, R = never> =
@@ -90,19 +90,6 @@ type CompletionFromToolFor<ToolkitValue extends Toolkit.Any, Output> = {
   > & { readonly tool: Name };
 }[keyof ToolkitValue["tools"] & string];
 
-type ToolExposureFor<T extends Toolkit.Any> = Omit<Configuration, "fromTools"> & {
-  readonly fromTools?:
-    | ReadonlyArray<
-        {
-          [N in keyof T["tools"] & string]: FromTool<
-            Tool.Parameters<T["tools"][N]>,
-            Tool.Success<T["tools"][N]>
-          > & { readonly tool: N };
-        }[keyof T["tools"] & string]
-      >
-    | undefined;
-};
-
 /** Immutable, model-agnostic schemas, behavior, tools, and bounds for an agent. */
 export interface Definition<
   InputSchema extends Schema.Top,
@@ -154,7 +141,7 @@ export interface DefinitionOptions<
   readonly instructions: Instructions;
   readonly inputPrompt?: InputPromptValue | undefined;
   readonly toolkit: ToolkitValue;
-  readonly toolExposure?: ToolExposureFor<ToolkitValue> | undefined;
+  readonly toolExposure?: Configuration | undefined;
   readonly policy?: Partial<AgentPolicyInput> | undefined;
   readonly completion?: CompletionToolFor<ToolkitValue, OutputSchema["Type"]> | undefined;
   readonly completionFromTools?:
@@ -424,15 +411,6 @@ export function make(
     readonly metadata?: Readonly<Record<string, string>> | undefined;
   },
 ): AnyDefinition {
-  const discoveryNames = new Set<string>();
-
-  for (const declaration of options.toolExposure?.fromTools ?? []) {
-    if (discoveryNames.has(declaration.tool))
-      throw new Error(`Tool ${declaration.tool} has more than one exposure projection`);
-    if (!Object.hasOwn(options.toolkit.tools, declaration.tool))
-      throw new Error(`Unknown exposure Tool ${declaration.tool}`);
-    discoveryNames.add(declaration.tool);
-  }
   const completionNames = new Set<string>();
 
   for (const declaration of options.completionFromTools ?? []) {
@@ -455,9 +433,6 @@ export function make(
         : Object.freeze({
             ...options.toolExposure,
             initialToolNames: Object.freeze([...(options.toolExposure.initialToolNames ?? [])]),
-            fromTools: Object.freeze(
-              (options.toolExposure.fromTools ?? []).map((entry) => Object.freeze({ ...entry })),
-            ),
           }),
     id: S.decodeSync(AgentId)(id),
     metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),

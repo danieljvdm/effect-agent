@@ -30,7 +30,6 @@ import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai"
 import type { CompactionError, ContextMessageTokenEstimator } from "./ContextCompactor.ts";
 import type { ContextRolloverSelection, ModelCallContext } from "./ContextWindow.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
-import type { VisibilityHook } from "./ToolExposure.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
 interface ToolFailureIdentity {
@@ -872,8 +871,6 @@ export interface RunBufferLimits {
 export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Initial or canonically restored run-scoped native selection. */
   readonly toolSelection?: Selection | undefined;
-  /** Visibility precedes discovery documentation; action authorization remains independent. */
-  readonly toolVisibility?: VisibilityHook<HookError, HookRequirements> | undefined;
   /**
    * Host preparation boundary before each new model Turn, including its context preparation
    * and compaction calls. The preceding Tool batch and history advance have finished. A resumed

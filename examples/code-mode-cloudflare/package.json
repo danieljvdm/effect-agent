@@ -14,9 +14,7 @@
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/sandbox": "workspace:*",
-    "@effect-agent/testing": "workspace:*",
     "@effect/ai-openai": "catalog:",
-    "@effect/platform-node": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

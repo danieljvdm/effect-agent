@@ -4,10 +4,6 @@ import { defineConfig, type UserConfig } from "vite-plus";
 // retaining dependency file hashes. The lockfile covers dependency additions.
 const run: NonNullable<UserConfig["run"]> = {
   tasks: {
-    benchmark: {
-      command: "node --experimental-transform-types src/discovery-benchmark-main.ts",
-      cache: false,
-    },
     test: {
       command: "vitest run",
       input: [
