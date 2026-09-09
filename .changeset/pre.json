@@ -114,6 +114,7 @@
     "lean-pr-review",
     "lean-startup-estimation",
     "literal-review-diffs",
+    "live-peer-message-delivery",
     "live-thread-projection",
     "mcp-client-transports",
     "mcp-ref-schema-normalization",

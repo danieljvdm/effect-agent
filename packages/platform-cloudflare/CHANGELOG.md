@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.71
+
+### Patch Changes
+
+- [#402](https://github.com/danieljvdm/effect-agent/pull/402) [`5ad2c51`](https://github.com/danieljvdm/effect-agent/commit/5ad2c513ec12be198f569c3fe82fdcb48a07c009) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Deliver messages created during an active Cloudflare source Run without waiting for that Run to finish.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.71
+  - @effect-agent/engine@0.1.0-beta.71
+  - @effect-agent/sandbox@0.1.0-beta.71
+  - @effect-agent/thread@0.1.0-beta.71
+  - @effect-agent/storage-cloudflare@0.1.0-beta.71
+
 ## 0.1.0-beta.70
 
 ### Patch Changes
