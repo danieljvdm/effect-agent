@@ -1,8 +1,8 @@
-import { makeOrchestrationThread, threadLayer } from "../../src/cloudflare-host.ts";
+import * as CloudflareHost from "../../src/CloudflareHost.ts";
 import { models } from "./models.ts";
 
-export { default } from "../../src/cloudflare-host.ts";
+export { default } from "../../src/CloudflareHost.ts";
 
-export class OrchestrationThread extends makeOrchestrationThread(
-  threadLayer(models, "scripted-v1"),
+export class OrchestrationThread extends CloudflareHost.make(
+  CloudflareHost.layer(models, "scripted-v1"),
 ) {}

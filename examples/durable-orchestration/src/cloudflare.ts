@@ -1,9 +1,9 @@
 import { Effect, Layer } from "effect";
 
-import { makeOrchestrationThread, threadLayer } from "./cloudflare-host.ts";
+import * as CloudflareHost from "./CloudflareHost.ts";
 import { openAiModels } from "./openai.ts";
 
-export { default } from "./cloudflare-host.ts";
+export { default } from "./CloudflareHost.ts";
 
 declare global {
   namespace Cloudflare {
@@ -16,8 +16,10 @@ declare global {
   }
 }
 
-export class OrchestrationThread extends makeOrchestrationThread(
+export class OrchestrationThread extends CloudflareHost.make(
   Layer.unwrap(
-    Effect.map(openAiModels, ({ models, modelVersion }) => threadLayer(models, modelVersion)),
+    Effect.map(openAiModels, ({ models, modelVersion }) =>
+      CloudflareHost.layer(models, modelVersion),
+    ),
   ),
 ) {}
