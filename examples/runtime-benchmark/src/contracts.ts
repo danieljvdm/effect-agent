@@ -1,11 +1,6 @@
 import { Effect, Schema } from "effect";
 
-export const FIXTURE_VERSION = "runtime-v2";
-
-export const REFERENCE = {
-  version: "audit-beta67-node24-v1",
-  revision: "596cffba70716b1211ac02de949c4d0f31734b2f",
-} as const;
+export const FIXTURE_VERSION = "runtime-v3";
 
 export class BenchmarkError extends Schema.TaggedError<BenchmarkError>()("BenchmarkError", {
   message: Schema.String,

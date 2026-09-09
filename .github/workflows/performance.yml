@@ -48,15 +48,6 @@ jobs:
           path: .performance-base
           persist-credentials: false
 
-      # Immutable audited beta67 release, rerun on this machine rather than
-      # comparing historical stopwatch values from another runner.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        if: github.event_name != 'workflow_dispatch' || inputs.profile != 'diagnostic'
-        with:
-          ref: 596cffba70716b1211ac02de949c4d0f31734b2f
-          path: .performance-reference
-          persist-credentials: false
-
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.20.0
@@ -74,11 +65,6 @@ jobs:
         working-directory: .performance-base
         run: ../node_modules/.bin/vp install --frozen-lockfile --ignore-scripts
 
-      - name: Install immutable reference dependencies
-        if: github.event_name != 'workflow_dispatch' || inputs.profile != 'diagnostic'
-        working-directory: .performance-reference
-        run: ../node_modules/.bin/vp install --frozen-lockfile --ignore-scripts
-
       - name: Build candidate public packages
         run: |
           ./node_modules/.bin/vp run patch:tsgo
@@ -86,13 +72,6 @@ jobs:
 
       - name: Build base public packages
         working-directory: .performance-base
-        run: |
-          ./node_modules/.bin/vp run patch:tsgo
-          ./node_modules/.bin/vp run --no-cache -F './packages/*' build
-
-      - name: Build reference public packages
-        if: github.event_name != 'workflow_dispatch' || inputs.profile != 'diagnostic'
-        working-directory: .performance-reference
         run: |
           ./node_modules/.bin/vp run patch:tsgo
           ./node_modules/.bin/vp run --no-cache -F './packages/*' build
@@ -108,13 +87,11 @@ jobs:
         env:
           PROFILE: ${{ github.event_name == 'pull_request' && 'pr' || inputs.profile }}
         run: |
-          for checkout in .performance-base .performance-reference; do
-            rm -f "$checkout/test/fixtures/checkpoints.d.ts" "$checkout/test/fixtures/storage-upgrade.d.ts" "$checkout/test/fixtures/storage-v2.d.ts"
-          done
+          rm -f .performance-base/test/fixtures/checkpoints.d.ts .performance-base/test/fixtures/storage-upgrade.d.ts .performance-base/test/fixtures/storage-v2.d.ts
           if [ "$PROFILE" = diagnostic ]; then
             ./node_modules/.bin/vp run --no-cache perf:diagnose --base-dir .performance-base --require-clean
           else
-            ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --reference-dir .performance-reference --profile "$PROFILE" --require-clean
+            ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --profile "$PROFILE" --require-clean
           fi
 
       - name: Preserve run identity and readable evidence

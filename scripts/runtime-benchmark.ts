@@ -14,7 +14,6 @@ import {
   completeBatch,
   FIXTURE_VERSION,
   Profile,
-  REFERENCE,
   summary,
   WorkerOptions,
   WorkerReport,
@@ -23,7 +22,7 @@ import { writeEvidence } from "../examples/runtime-benchmark/src/evidence.ts";
 import { PublishManifest, withPublishManifests } from "./release-publish.ts";
 
 const Revision = Schema.Struct({
-  role: Schema.Literals(["base", "head", "reference"]),
+  role: Schema.Literals(["base", "head"]),
   revision: Schema.String,
   dirty: Schema.Boolean,
   lockfileSha256: Schema.String,
@@ -51,7 +50,6 @@ export const PerformanceReport = Schema.Struct({
   fixtureSha256: Schema.String,
   transpiler: Schema.String,
   profile: Profile,
-  referenceVersion: Schema.Literal(REFERENCE.version),
   environment: Schema.Struct({
     platform: Schema.String,
     release: Schema.String,
@@ -228,10 +226,10 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
 
 export const renderPerformanceReport = (report: PerformanceReport): string => {
   const lines = [
-    "Timing is informational. Median [Q1–Q3] in milliseconds; every measured sample and outlier is retained.",
+    "Timing is informational. Operation median [Q1–Q3] in milliseconds; every measured sample and outlier is retained. Model-entry timings remain in raw samples.",
     "",
-    "| Workload | Base total | Head total | Reference total | Head/base | Head/reference | Head model entry |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Workload | Base | Head | Head/base |",
+    "| --- | ---: | ---: | ---: |",
   ];
 
   const format = (value: ReturnType<typeof summary>) =>
@@ -252,29 +250,20 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
 
     const base = summary(samples("base").map((sample) => sample.totalMs));
     const head = summary(samples("head").map((sample) => sample.totalMs));
-    const reference = summary(samples("reference").map((sample) => sample.totalMs));
-
-    const entry = summary(
-      samples("head").flatMap((sample) =>
-        sample.modelEntryMs === null ? [] : [sample.modelEntryMs],
-      ),
-    );
 
     const delta = (baseline: ReturnType<typeof summary>) =>
       baseline.count === 0 || head.count === 0 || baseline.median === 0
         ? "n/a"
         : `${((head.median / baseline.median - 1) * 100).toFixed(1)}%`;
 
-    lines.push(
-      `| ${workload.name} | ${format(base)} | ${format(head)} | ${format(reference)} | ${delta(base)} | ${delta(reference)} | ${format(entry)} |`,
-    );
+    lines.push(`| ${workload.name} | ${format(base)} | ${format(head)} | ${delta(base)} |`);
   }
   lines.push(
     "",
     "Inline checkpoint construction and save (outside recovery total):",
     "",
-    "| Workload | Base | Head | Reference |",
-    "| --- | ---: | ---: | ---: |",
+    "| Workload | Base | Head |",
+    "| --- | ---: | ---: |",
   );
   for (const workload of casesFor(report.profile).filter(
     (workload) => workload.kind === "recovery",
@@ -296,14 +285,14 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
       );
 
     lines.push(
-      `| ${workload.name} | ${format(checkpoints("base"))} | ${format(checkpoints("head"))} | ${format(checkpoints("reference"))} |`,
+      `| ${workload.name} | ${format(checkpoints("base"))} | ${format(checkpoints("head"))} |`,
     );
   }
   lines.push(
     "",
     "Cold subprocess totals include Node startup, imports, one small run, assertions, and process shutdown:",
   );
-  for (const role of ["base", "head", "reference"] as const)
+  for (const role of ["base", "head"] as const)
     lines.push(
       `${role}: ${format(summary(report.batches.filter((batch) => batch.role === role && batch.cold && batch.complete && batch.exitCode === 0).map((batch) => batch.subprocessMs)))}`,
     );
@@ -318,7 +307,7 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
   lines.push(
     "",
     `Correctness failures: ${failures.length}; failed subprocesses: ${failedProcesses}.`,
-    `Invalid/incomplete batches: ${incomplete.length}; processes recorded: ${report.batches.length}/${report.settings.batches * 6}. Incomplete batches are excluded from comparison summaries.`,
+    `Invalid/incomplete batches: ${incomplete.length}; processes recorded: ${report.batches.length}/${report.settings.batches * 4}. Incomplete batches are excluded from comparison summaries.`,
     ...(report.activeBatch === null
       ? []
       : [
@@ -329,7 +318,7 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
       (batch) =>
         `${batch.role}/${batch.cohort}/${batch.cold ? "cold" : "warm"}: ${(batch.failure ?? "Missing or invalid worker report").split("\n")[0]}`,
     ),
-    `Fixture ${report.fixture} (${report.fixtureSha256}); reference ${report.referenceVersion}.`,
+    `Fixture ${report.fixture} (${report.fixtureSha256}).`,
     `Node ${report.environment.node}; ${report.environment.platform}/${report.environment.architecture}; ${report.environment.cpu}.`,
     `Samples per workload/revision: ${report.settings.samplesPerBatch * report.settings.batches}; warmups: ${report.settings.warmupsPerBatch * report.settings.batches}.`,
   );
@@ -365,7 +354,6 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
 export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (options: {
   root: string;
   base: string;
-  reference: string;
   output: string;
   profile: Profile;
   requireClean: boolean;
@@ -411,13 +399,8 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
   // All compilation and staging finishes before any measurements start.
   const base = yield* stageCheckout(path.resolve(options.base), "base", fixtures);
   const head = yield* stageCheckout(root, "head", fixtures);
-  const reference = yield* stageCheckout(path.resolve(options.reference), "reference", fixtures);
-  const stages = [base, head, reference];
+  const stages = [base, head];
 
-  yield* check(
-    reference.revision.revision === REFERENCE.revision && !reference.revision.dirty,
-    `Reference must be clean immutable ${REFERENCE.revision} (${REFERENCE.version})`,
-  );
   if (options.requireClean)
     yield* check(
       stages.every((stage) => !stage.revision.dirty),
@@ -427,7 +410,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
 
   yield* check(
     node.exitCode === 0 && node.stdout.trim().startsWith("v24."),
-    `${FIXTURE_VERSION} requires Node 24; changing the runtime requires a versioned reference reset`,
+    `${FIXTURE_VERSION} requires Node 24; record runtime changes before comparing across runs`,
   );
 
   const sizes =
@@ -450,7 +433,6 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
     fixtureSha256: sha256(fixtureBytes.join("\n")),
     transpiler: `esbuild ${esbuildVersion} (fixture syntax only; no bundling)`,
     profile: options.profile,
-    referenceVersion: REFERENCE.version,
     environment: {
       platform: platform(),
       release: release(),
@@ -487,8 +469,9 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
   const measure = Effect.gen(function* () {
     yield* persist;
     for (let cohort = 0; cohort < sizes.batches; cohort++) {
-      // Rotate who goes first on the same runner; no concurrent builds, tests, or revisions.
-      const ordered = [...stages.slice(cohort % 3), ...stages.slice(0, cohort % 3)];
+      // Alternate base/head, head/base, base/head without reducing per-revision samples.
+      // Three cohorts necessarily give one revision the first slot twice. Keep measurements sequential.
+      const ordered = cohort % 2 === 0 ? stages : [...stages].reverse();
 
       for (const cold of [true, false])
         for (const stage of ordered) {
@@ -602,12 +585,10 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
     }),
   );
 
-  yield* withPublishManifests(base.stage, () =>
-    withPublishManifests(head.stage, () => withPublishManifests(reference.stage, () => measure)),
-  );
+  yield* withPublishManifests(base.stage, () => withPublishManifests(head.stage, () => measure));
   yield* Console.log(renderPerformanceReport(report));
   yield* check(
-    batches.length === sizes.batches * 6 &&
+    batches.length === sizes.batches * 4 &&
       batches.every((batch) => batch.exitCode === 0 && batch.complete),
     "Benchmark correctness failed; timings are informational but incomplete work is rejected",
   );
@@ -622,9 +603,6 @@ export const command = Command.make(
       Flag.withDescription(
         "Exact base checkout, installed with its lockfile and production packages built.",
       ),
-    ),
-    reference: Flag.string("reference-dir").pipe(
-      Flag.withDescription(`Clean built immutable reference ${REFERENCE.revision}.`),
     ),
     output: Flag.string("out-dir").pipe(
       Flag.withDefault(".performance-report"),
@@ -641,7 +619,7 @@ export const command = Command.make(
       Flag.withDescription("Reject modified or untracked files in any checkout (required by CI)."),
     ),
   },
-  Effect.fn(function* ({ base, reference, output, profile, requireClean }) {
+  Effect.fn(function* ({ base, output, profile, requireClean }) {
     const path = yield* Path.Path;
 
     const root = path.resolve(
@@ -649,11 +627,11 @@ export const command = Command.make(
       "..",
     );
 
-    yield* compareRuntime({ root, base, reference, output, profile, requireClean });
+    yield* compareRuntime({ root, base, output, profile, requireClean });
   }),
 ).pipe(
   Command.withDescription(
-    "Compare public built packages on one runner against PR base and a retained reference; no provider calls.",
+    "Compare public built packages on one runner for Base versus Head; no provider calls.",
   ),
 );
 
