@@ -1,5 +1,16 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.70
+
+### Patch Changes
+
+- [#397](https://github.com/danieljvdm/effect-agent/pull/397) [`3230353`](https://github.com/danieljvdm/effect-agent/commit/323035380f8296fc731a224f79f2717724b7f889) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Build EphemeralThreads history suffixes in one atomic update while preserving exact prefix validation, limits, and mutable prompt values.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.70
+  - @effect-agent/engine@0.1.0-beta.70
+  - @effect-agent/sandbox@0.1.0-beta.70
+
 ## 0.1.0-beta.69
 
 ### Patch Changes

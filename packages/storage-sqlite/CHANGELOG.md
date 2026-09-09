@@ -1,5 +1,15 @@
 # @effect-agent/storage-sqlite
 
+## 0.1.0-beta.70
+
+### Patch Changes
+
+- [#397](https://github.com/danieljvdm/effect-agent/pull/397) [`3230353`](https://github.com/danieljvdm/effect-agent/commit/323035380f8296fc731a224f79f2717724b7f889) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Index unfinished submissions and seek between recovery scan pages with an automatic data-preserving storage upgrade. Replay settled outcomes without acquiring a write transaction.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.70
+  - @effect-agent/thread@0.1.0-beta.70
+
 ## 0.1.0-beta.69
 
 ### Patch Changes
