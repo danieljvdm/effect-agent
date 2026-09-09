@@ -65,7 +65,11 @@ describe("Durable Object SubscriptionStore conformance", () => {
             ),
           ),
         ).resolves.toBeUndefined(),
-      30_000, // Real transactional conformance also runs beside other Workerd suites in ready.
+      // The 1,005-event case performs thousands of real SQLite transactions and can
+      // exceed 30 seconds on hosted runners while other Workerd suites are active.
+      testCase.name === "processes more than 1000 distinct events within fixed retained quotas"
+        ? 120_000
+        : 30_000,
     );
   }
 
