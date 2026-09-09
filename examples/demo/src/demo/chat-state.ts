@@ -9,6 +9,7 @@ import * as Atom from "effect/unstable/reactivity/Atom";
 import { capabilityFailureMessage, formatTravelPlanForChat } from "./chat-capabilities";
 import { DemoChatHistoryMessage, type DemoRunSelection } from "./contracts";
 import { decodeErrorDetails } from "./error-details";
+import { eventBatches } from "./event-batches";
 import { ChatOutput, type ChatOutput as ChatOutputValue } from "./general-chat";
 import {
   DemoModelSettings,
@@ -137,22 +138,15 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
   const projectEvent = Effect.fn("Demo.projectChatEvent")(function* (event: RunEvent) {
     const current = context(chatStateAtom);
 
-    const messages =
-      event._tag === "ReasoningDelta"
-        ? updateAssistant(current.messages, assistantId, (assistant) => ({
-            ...assistant,
-            reasoning: (assistant.reasoning ?? "") + event.text,
-            events: [...(assistant.events ?? []), event],
-          }))
-        : updateAssistant(current.messages, assistantId, (assistant) => ({
-            ...assistant,
-            events: [...(assistant.events ?? []), event],
-          }));
+    const nextEvents = [...current.events, event];
 
     context.set(chatStateAtom, {
       ...current,
-      messages,
-      events: [...current.events, event],
+      messages: updateAssistant(current.messages, assistantId, (assistant) => ({
+        ...assistant,
+        events: nextEvents,
+      })),
+      events: nextEvents,
     });
 
     if (event._tag === "RunCompleted") {
@@ -194,7 +188,35 @@ export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
       return client.StreamChatRun({ history, message, mode });
     }),
   ).pipe(
-    Stream.runForEach(projectEvent),
+    Stream.runForEachArray((events) =>
+      Effect.gen(function* () {
+        for (const batch of eventBatches(events)) {
+          if (batch._tag === "Event") {
+            yield* projectEvent(batch.event);
+          } else {
+            const current = context(chatStateAtom);
+            const nextEvents = [...current.events, ...batch.events];
+
+            const reasoning = batch.events
+              .filter((event) => event._tag === "ReasoningDelta")
+              .map((event) => event.text)
+              .join("");
+
+            context.set(chatStateAtom, {
+              ...current,
+              events: nextEvents,
+              messages: updateAssistant(current.messages, assistantId, (assistant) => ({
+                ...assistant,
+                ...(reasoning.length > 0
+                  ? { reasoning: (assistant.reasoning ?? "") + reasoning }
+                  : {}),
+                events: nextEvents,
+              })),
+            });
+          }
+        }
+      }),
+    ),
     Effect.scoped,
     Effect.tap(() =>
       Effect.sync(() => {
@@ -321,7 +343,7 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
       messages: updateAssistant(current.messages, assistantId, (assistant) => ({
         ...assistant,
         content: content ?? assistant.content,
-        events: [...(assistant.events ?? []), event],
+        events: nextEvents,
       })),
     });
   });
@@ -339,7 +361,27 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
         : client.StreamOperationalRun({ scenario });
     }),
   ).pipe(
-    Stream.runForEach(projectEvent),
+    Stream.runForEachArray((events) =>
+      Effect.gen(function* () {
+        for (const batch of eventBatches(events)) {
+          if (batch._tag === "Event") {
+            yield* projectEvent(batch.event);
+          } else {
+            const current = context(chatStateAtom);
+            const nextEvents = [...current.events, ...batch.events];
+
+            context.set(chatStateAtom, {
+              ...current,
+              events: nextEvents,
+              messages: updateAssistant(current.messages, assistantId, (assistant) => ({
+                ...assistant,
+                events: nextEvents,
+              })),
+            });
+          }
+        }
+      }),
+    ),
     Effect.scoped,
     Effect.tap(() =>
       Effect.sync(() => {

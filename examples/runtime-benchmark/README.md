@@ -203,8 +203,10 @@ worker defaults and make no strict round-robin, preemption, or starvation guaran
 Reports retain total elapsed wall time, named millisecond intervals, natural-number counters, and
 at most 512 phase marks per sample. Marks are in-memory and included in operation timing. Atomic
 phase-report writes occur before the operation clock or after its end. Authorization sums, handler
-phases, and model lifetimes can overlap and must not be added together. Post-authorization wait
-includes framework dispatch and bounded scheduling; public hooks cannot isolate semaphore wait.
+phases, and model lifetimes can overlap and must not be added together. `postAuthorizationWaitMax`
+starts at each handler's own authorization completion, so it includes later serial authorizations
+as well as framework dispatch and bounded scheduling. Use the final authorization mark in each
+batch to derive wait after the whole barrier; neither interval isolates semaphore wait.
 Native subagent span offsets flush at Run exit, including failure, so mark array order need not be
 chronological; use their operation-relative monotonic offsets.
 No diagnostic reports CPU time. Compare matched medians and interquartile ranges, including the
