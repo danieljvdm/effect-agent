@@ -26,9 +26,9 @@ import {
 } from "@effect-agent/capabilities/Commands";
 import {
   ThreadAppend,
+  ThreadEncodingError,
   ThreadExport,
   ThreadHistoryDiverged,
-  ThreadLimitExceeded,
   type ThreadNotFound,
   ThreadSnapshot,
   EphemeralThreads,
@@ -62,7 +62,18 @@ import { AgentId, ThreadId, RunId, ToolCallId, TurnId } from "@effect-agent/core
 import { RunStarted, TextDelta } from "@effect-agent/core/RunEvent";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Schema,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
@@ -84,6 +95,12 @@ const textMessage = (role: "system" | "user" | "assistant", content: string): Pr
 
   return message;
 };
+
+const encodedMessageBytes = Effect.fn(function* (message: Prompt.Message) {
+  return new TextEncoder().encode(
+    JSON.stringify(yield* Schema.encodeEffect(Prompt.Message)(message)),
+  ).byteLength;
+});
 
 const approvalDraft = (
   requestId: string,
@@ -275,13 +292,432 @@ describe("capability contracts", () => {
         ...threadPrompt(base).content,
         textMessage("assistant", "a".repeat(3 * 1024 * 1024)),
         textMessage("assistant", "b".repeat(3 * 1024 * 1024)),
+        textMessage("assistant", "not reached"),
       ]);
+
+      const firstOverflow =
+        base.contentBytes +
+        (yield* encodedMessageBytes(oversized.content[1]!)) +
+        (yield* encodedMessageBytes(oversized.content[2]!));
 
       const error = yield* threads.recordHistory(threadId, runId, oversized).pipe(Effect.flip);
 
-      expect(error).toBeInstanceOf(ThreadLimitExceeded);
+      expect(error).toMatchObject({
+        _tag: "ThreadLimitExceeded",
+        limit: "content-bytes",
+        limitValue: 4 * 1024 * 1024,
+        observedValue: firstOverflow,
+      });
       expect(yield* threads.snapshot(threadId)).toEqual(base);
     }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect(
+    "records equal-by-value native histories with one timestamp and contiguous sequences",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+
+        const rich = () => [
+          Prompt.userMessage({
+            options: { provider: { nested: ["é", { enabled: true }] } },
+            content: [
+              Prompt.filePart({
+                mediaType: "application/octet-stream",
+                data: new Uint8Array([1, 2, 3]),
+              }),
+              Prompt.filePart({
+                mediaType: "image/png",
+                data: new URL("https://example.test/image"),
+              }),
+            ],
+          }),
+          Prompt.assistantMessage({
+            content: [
+              Prompt.reasoningPart({ text: "Reasoning α" }),
+              Prompt.toolCallPart({
+                id: "native-call",
+                name: "search",
+                params: { query: "東京" },
+                providerExecuted: false,
+              }),
+              Prompt.toolResultPart({
+                id: "native-call",
+                name: "search",
+                isFailure: false,
+                result: { nested: ["found", 3] },
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+
+        yield* threads.create(threadId);
+        const base = yield* threads.recordHistory(threadId, runId, Prompt.fromMessages(rich()));
+        const suffix = [textMessage("user", "次"), textMessage("assistant", "réponse")];
+        const nextRunId = RunId.make("next-native-run");
+        const history = Prompt.fromMessages([...rich(), ...suffix]);
+        const clock = yield* Clock.Clock;
+
+        const snapshot = yield* threads.recordHistory(threadId, nextRunId, history).pipe(
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            currentTimeMillis: Effect.succeed(1234),
+          }),
+        );
+
+        expect(snapshot.messages.map((entry) => entry.sequence)).toEqual([0, 1, 2, 3]);
+        expect(snapshot.messages.map((entry) => entry.runId)).toEqual([
+          runId,
+          runId,
+          nextRunId,
+          nextRunId,
+        ]);
+        expect(snapshot.messages.slice(2).map((entry) => entry.timestamp)).toEqual([
+          at(1234),
+          at(1234),
+        ]);
+        expect(snapshot.nextSequence).toBe(4);
+        expect(snapshot.contentBytes).toBe(
+          base.contentBytes +
+            (yield* encodedMessageBytes(suffix[0]!)) +
+            (yield* encodedMessageBytes(suffix[1]!)),
+        );
+        expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
+          yield* Schema.encodeEffect(Prompt.Prompt)(history),
+        );
+        expect(yield* threads.recordHistory(threadId, nextRunId, history)).toEqual(snapshot);
+        expect(base.messages).toHaveLength(2);
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect(
+    "rechecks mutable native file data and nested options against current stored values",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+
+        const makeMessage = () => {
+          const bytes = new Uint8Array([1, 2, 3]);
+          const url = new URL("https://example.test/old");
+          const options = { provider: { value: "old" } };
+
+          const message = Prompt.userMessage({
+            options,
+            content: [
+              Prompt.filePart({ mediaType: "application/octet-stream", data: bytes }),
+              Prompt.filePart({ mediaType: "image/png", data: url }),
+            ],
+          });
+
+          return { bytes, url, options, message };
+        };
+
+        const original = makeMessage();
+        const stale = makeMessage();
+
+        yield* threads.create(threadId);
+
+        const base = yield* threads.append(
+          threadId,
+          ThreadAppend.make({ message: original.message }),
+        );
+
+        original.bytes[0] = 9;
+        original.url.pathname = "/new";
+        original.options.provider.value = "new";
+        expect(
+          yield* Schema.encodeEffect(Prompt.Prompt)(
+            threadPrompt(yield* threads.snapshot(threadId)),
+          ),
+        ).toEqual(
+          yield* Schema.encodeEffect(Prompt.Prompt)(Prompt.fromMessages([original.message])),
+        );
+
+        const rejected = yield* threads
+          .recordHistory(threadId, runId, Prompt.fromMessages([stale.message]))
+          .pipe(Effect.flip);
+
+        expect(rejected).toBeInstanceOf(ThreadHistoryDiverged);
+
+        const snapshot = yield* threads.recordHistory(
+          threadId,
+          runId,
+          Prompt.fromMessages([original.message, textMessage("assistant", "new suffix")]),
+        );
+
+        expect(snapshot.nextSequence).toBe(2);
+        expect(base.messages).toHaveLength(1);
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect(
+    "validates incoming messages before lookup or divergence and revalidates stored messages",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+        const options = { provider: { value: 0 } };
+        const message = Prompt.systemMessage({ content: "official", options });
+
+        const invalid = Prompt.systemMessage({
+          content: "invalid",
+          options: { provider: { value: Number.NaN } },
+        });
+
+        yield* threads.create(threadId);
+        const base = yield* threads.append(threadId, ThreadAppend.make({ message }));
+
+        const missing = yield* threads
+          .recordHistory(ThreadId.make("missing-history"), runId, Prompt.fromMessages([invalid]))
+          .pipe(Effect.flip);
+
+        const rewritten = yield* threads
+          .recordHistory(
+            threadId,
+            runId,
+            Prompt.fromMessages([textMessage("user", "rewritten"), invalid]),
+          )
+          .pipe(Effect.flip);
+
+        expect(missing).toBeInstanceOf(ThreadEncodingError);
+        expect(rewritten).toBeInstanceOf(ThreadEncodingError);
+        expect(yield* threads.snapshot(threadId)).toEqual(base);
+        options.provider.value = Number.NaN;
+
+        const stored = yield* threads
+          .recordHistory(
+            threadId,
+            runId,
+            Prompt.fromMessages([
+              Prompt.systemMessage({ content: "official", options: { provider: { value: 0 } } }),
+            ]),
+          )
+          .pipe(Effect.flip);
+
+        expect(stored).toBeInstanceOf(ThreadEncodingError);
+        options.provider.value = 0;
+        expect(yield* threads.snapshot(threadId)).toEqual(base);
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect(
+    "reports the first message-count overflow before byte limits and rolls back the suffix",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+        const small = textMessage("system", "x");
+
+        yield* threads.create(threadId);
+        const baseHistory = Prompt.fromMessages(Array.from({ length: 1_023 }, () => small));
+        const base = yield* threads.recordHistory(threadId, runId, baseHistory);
+
+        const error = yield* threads
+          .recordHistory(
+            threadId,
+            runId,
+            Prompt.fromMessages([
+              ...baseHistory.content,
+              small,
+              textMessage("system", "x".repeat(4 * 1024 * 1024)),
+              small,
+            ]),
+          )
+          .pipe(Effect.flip);
+
+        expect(error).toMatchObject({
+          _tag: "ThreadLimitExceeded",
+          limit: "messages",
+          limitValue: 1_024,
+          observedValue: 1_025,
+        });
+        expect(yield* threads.snapshot(threadId)).toEqual(base);
+
+        const full = yield* threads.recordHistory(
+          threadId,
+          runId,
+          Prompt.fromMessages([...baseHistory.content, small]),
+        );
+
+        expect(full.nextSequence).toBe(1_024);
+        expect(full.contentBytes).toBe(base.contentBytes + (yield* encodedMessageBytes(small)));
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect(
+    "rolls back store-byte overflow and admits only one concurrent suffix at shared capacity",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+        const mib = 1024 * 1024;
+        const overhead = yield* encodedMessageBytes(Prompt.systemMessage({ content: "" }));
+
+        const sized = (bytes: number) =>
+          Prompt.systemMessage({ content: "x".repeat(bytes - overhead) });
+
+        const fullMessage = sized(4 * mib);
+
+        for (let index = 0; index < 16; index++) {
+          const id = ThreadId.make(`full-history-${index}`);
+
+          yield* threads.create(id);
+          yield* threads.append(
+            id,
+            ThreadAppend.make({ message: index < 15 ? fullMessage : sized(3 * mib) }),
+          );
+        }
+        const otherId = ThreadId.make("other-history");
+        const base = yield* threads.create(threadId);
+        const otherBase = yield* threads.create(otherId);
+
+        const rejected = yield* threads
+          .recordHistory(
+            threadId,
+            runId,
+            Prompt.fromMessages([sized(mib / 2), sized(mib), sized(mib)]),
+          )
+          .pipe(Effect.flip);
+
+        expect(rejected).toMatchObject({
+          _tag: "ThreadLimitExceeded",
+          limit: "store-content-bytes",
+          limitValue: 64 * mib,
+          observedValue: 64 * mib + mib / 2,
+        });
+        expect(yield* threads.snapshot(threadId)).toEqual(base);
+        expect(yield* threads.snapshot(otherId)).toEqual(otherBase);
+        const history = Prompt.fromMessages([sized(mib)]);
+
+        const outcomes = yield* Effect.all(
+          [threadId, otherId].map((id) =>
+            threads.recordHistory(id, runId, history).pipe(Effect.exit),
+          ),
+          { concurrency: 2 },
+        );
+
+        expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1);
+        expect(outcomes.filter(Exit.isFailure)).toHaveLength(1);
+        for (const outcome of outcomes) {
+          if (Exit.isFailure(outcome))
+            expect(Cause.findErrorOption(outcome.cause)).toMatchObject({
+              _tag: "Some",
+              value: {
+                _tag: "ThreadLimitExceeded",
+                limit: "store-content-bytes",
+                observedValue: 65 * mib,
+              },
+            });
+        }
+
+        const snapshots = yield* Effect.all([
+          threads.snapshot(threadId),
+          threads.snapshot(otherId),
+        ]);
+
+        expect(snapshots.map((snapshot) => snapshot.contentBytes).sort((a, b) => a - b)).toEqual([
+          0,
+          mib,
+        ]);
+        expect(snapshots.map((snapshot) => snapshot.nextSequence).sort()).toEqual([0, 1]);
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect(
+    "releases a failed or interrupted history transaction without publishing its suffix",
+    () =>
+      Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+
+        yield* threads.create(threadId);
+
+        const base = yield* threads.append(
+          threadId,
+          ThreadAppend.make({ message: textMessage("user", "base") }),
+        );
+
+        const history = Prompt.fromMessages([
+          ...threadPrompt(base).content,
+          textMessage("assistant", "suffix"),
+        ]);
+
+        const clock = yield* Clock.Clock;
+
+        for (const failure of ["interruption", "timeout", "defect"] as const) {
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let finalized = false;
+
+          const timestamp = Effect.acquireUseRelease(
+            Effect.void,
+            () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(Effect.die("timestamp defect")),
+              ),
+            () =>
+              Effect.sync(() => {
+                finalized = true;
+              }),
+          );
+
+          const record = threads
+            .recordHistory(threadId, runId, history)
+            .pipe(Effect.provideService(Clock.Clock, { ...clock, currentTimeMillis: timestamp }));
+
+          const fiber = yield* (
+            failure === "timeout" ? record.pipe(Effect.timeout("1 second")) : record
+          ).pipe(Effect.forkChild);
+
+          yield* Deferred.await(entered);
+          if (failure === "interruption") yield* Fiber.interrupt(fiber);
+          else if (failure === "timeout") yield* TestClock.adjust("1 second");
+          else yield* Deferred.succeed(release, undefined);
+          const exit = yield* Fiber.await(fiber);
+
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            if (failure === "interruption") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+            else if (failure === "defect") expect(Cause.hasDies(exit.cause)).toBe(true);
+            else
+              expect(Cause.findErrorOption(exit.cause)).toMatchObject({
+                _tag: "Some",
+                value: { _tag: "TimeoutError" },
+              });
+          }
+          expect(finalized).toBe(true);
+          expect(yield* threads.snapshot(threadId)).toEqual(base);
+        }
+        const committed = yield* threads.recordHistory(threadId, runId, history);
+
+        expect(committed.nextSequence).toBe(2);
+        expect(committed.messages).toHaveLength(2);
+      }).pipe(Effect.provide(EphemeralThreadsLive)),
+  );
+
+  it.effect("starts each ephemeral store Scope with fresh thread and byte state", () =>
+    Effect.gen(function* () {
+      yield* Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+
+        yield* threads.create(threadId);
+        yield* threads.recordHistory(
+          threadId,
+          runId,
+          Prompt.fromMessages([textMessage("user", "old scope")]),
+        );
+      }).pipe(Effect.provide(EphemeralThreadsLive), Effect.scoped);
+
+      yield* Effect.gen(function* () {
+        const threads = yield* EphemeralThreads;
+        const missing = yield* threads.snapshot(threadId).pipe(Effect.flip);
+
+        expect(missing._tag).toBe("ThreadNotFound");
+        expect(yield* threads.create(threadId)).toMatchObject({
+          nextSequence: 0,
+          contentBytes: 0,
+          messages: [],
+        });
+      }).pipe(Effect.provide(EphemeralThreadsLive), Effect.scoped);
+    }),
   );
 
   it.effect(

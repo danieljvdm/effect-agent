@@ -288,20 +288,68 @@ export const EphemeralThreadsLive = Layer.effect(
               }
               const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
 
-              let snapshot = current;
-              let next = threads;
+              if (incoming.length === currentEncoded.length) return [current, threads] as const;
+
+              const messages = [...current.messages];
+              let contentBytes = current.contentBytes;
+              let storeBytes = totalStoreBytes(threads);
+              let nextSequence = current.nextSequence;
 
               for (const entry of incoming.slice(currentEncoded.length)) {
-                [snapshot, next] = yield* appendEncoded(
-                  next,
-                  snapshot,
-                  ThreadAppend.make({ runId: historyRunId, message: entry.message }),
-                  entry.encoded,
-                  timestamp,
+                const append = ThreadAppend.make({ runId: historyRunId, message: entry.message });
+
+                // Preserve append's first failing bound and observed value without publishing
+                // intermediate snapshots or rescanning the store for each suffix message.
+                if (messages.length >= MAX_THREAD_MESSAGES) {
+                  return yield* ThreadLimitExceeded.make({
+                    threadId,
+                    limit: "messages",
+                    limitValue: MAX_THREAD_MESSAGES,
+                    observedValue: messages.length + 1,
+                  });
+                }
+                const messageBytes = utf8ByteLength(entry.encoded);
+
+                contentBytes += messageBytes;
+                if (contentBytes > MAX_THREAD_CONTENT_BYTES) {
+                  return yield* ThreadLimitExceeded.make({
+                    threadId,
+                    limit: "content-bytes",
+                    limitValue: MAX_THREAD_CONTENT_BYTES,
+                    observedValue: contentBytes,
+                  });
+                }
+                storeBytes += messageBytes;
+                if (storeBytes > MAX_EPHEMERAL_CONTENT_BYTES) {
+                  return yield* ThreadLimitExceeded.make({
+                    threadId,
+                    limit: "store-content-bytes",
+                    limitValue: MAX_EPHEMERAL_CONTENT_BYTES,
+                    observedValue: storeBytes,
+                  });
+                }
+                messages.push(
+                  ThreadMessage.make({
+                    threadId,
+                    sequence: nextSequence,
+                    ...(append.runId === undefined ? {} : { runId: append.runId }),
+                    message: append.message,
+                    encodedBytes: messageBytes,
+                    timestamp,
+                  }),
                 );
+                nextSequence += 1;
               }
 
-              return [snapshot, next] as const;
+              const snapshot = ThreadSnapshot.make({
+                version: current.version,
+                threadId,
+                nextSequence,
+                contentBytes,
+                messages,
+              });
+
+              return [snapshot, new Map(threads).set(threadId, snapshot)] as const;
             }),
           );
         },

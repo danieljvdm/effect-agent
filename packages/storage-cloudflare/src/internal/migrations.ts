@@ -6,7 +6,15 @@ import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 /** The current storage version recorded in `effect_agent_meta`. */
-export const CurrentDoStorageVersion = 5;
+export const CurrentDoStorageVersion = 6;
+
+/** Index only outstanding obligations, ordered by the recovery scan's stable cursor. */
+export const createNonterminalIndex = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql`CREATE INDEX effect_agent_submissions_nonterminal ON effect_agent_submissions (thread_id, queue_sequence) WHERE state <> 'settled'`
+    .withoutTransform;
+});
 
 /**
  * The Thread Durable Object schema shares its thread and ledger tables with Node/SQLite.
@@ -257,6 +265,7 @@ export const doMigrations = SqliteMigrator.fromRecord({
       )
     `.withoutTransform;
 
+    yield* createNonterminalIndex;
     yield* createMessageDeliveryTables;
     yield* createRecoveryCheckpointTable;
     yield* sql`

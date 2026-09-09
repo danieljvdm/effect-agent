@@ -131,4 +131,87 @@ Read the full spread and raw samples before drawing a conclusion. Re-run a suspe
 with another matched cohort. Small-sample p95, local source timings, or differing provider workloads
 do not establish an SLO, Cloudflare CPU billing, or a competitive ranking. Deterministic engine
 and adapter work-budget tests remain the PR regression gates; timing evidence complements them.
-Fairness and lock contention need dedicated controlled load cases when those host changes land.
+The manual diagnostics below separate fairness and lock contention from isolated run latency.
+Keep timing informational until repeated matched cohorts establish a workload-specific relative
+and absolute regression threshold. Current hosted runs show substantial machine and storage
+variance; one small-sample tail estimate or percentage alone is not a release gate. Confirm a
+suspected regression in a fresh matched run and retain both results before changing a baseline.
+
+## Manual diagnostics
+
+`vp run perf:diagnose` runs the separate `runtime-diagnostic-v1` fixture against clean, built
+base/head checkouts. Install each checkout's own lockfile and build its public packages as above.
+Run this command from the candidate checkout, with no concurrent builds, tests, or measurements:
+
+```sh
+vp run perf:diagnose --base-dir /tmp/effect-agent-base --require-clean --out-dir /tmp/diagnostic-001
+```
+
+The manual workflow's `diagnostic` choice runs the same command and skips the immutable-reference
+checkout. Ordinary PRs still run the unchanged `runtime-v2` matrix and trusted report validator.
+Diagnostics run base/head followed by head/base, with two warmups and five measured samples per
+cohort: ten measured samples per case and revision. They use the same production-package staging,
+published manifests, own-lockfile dependencies, built-artifact identities, and identical unbundled
+fixture bytes. This task never uses a cached measurement.
+
+The policy matrix crosses one/four rounds, zero/two/twenty-millisecond authorization delays, and
+zero/twenty-millisecond per-Turn model-Layer acquisition delays. Each round declares eight tools
+with twenty-millisecond handlers and concurrency four; every cell uses the same immediate approval
+hook. The finite scripted provider must consume all successful results in declaration order. The
+probe verifies authorization ordering, complete-batch approval before handler entry, actual handler
+overlap, and every model/handler finalizer. The synthetic delays expose scheduling behavior; they do
+not estimate provider latency or prove an optimization.
+
+The capability cases use these bounded public operations:
+
+| Family      | Work and timing boundary                                                                                                                                                                                                                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| History     | Apply unchanged, one-message, or 64-message suffixes to a native 256-message prefix; include a 64-Thread store and the 768/256-message capacity boundary. A matched two-provider, one-tool Run compares history hooks on/off. Setup and verification are excluded.                                                                                            |
+| Memory      | Compare one-provider Runs with recall off, empty, or populated. Measure recall and actual fixture-file reader I/O separately; verify scoped reader release.                                                                                                                                                                                                   |
+| Remembering | Compare the same two-provider, one-tool foreground Run on/off while a previous extraction is held in another host Scope. Verify no foreground extraction/profile I/O; then release the worker and report admission, background completion, and profile readiness separately. The two-job public-port fixture excludes disk durability and host queue latency. |
+| MCP         | Compare the same two-provider Run and three echo results using local handlers or real MCP HTTP transport with an in-process responder. Report connection, reused calls, foreground work, and owned-Scope closure; a fresh connection verifies credentials and discovery. No network is used.                                                                  |
+| Subagents   | Compare the same two-provider parent and two projected results with local handlers or two actual child providers sharing one child slot. Report preparation, actual provider entry, slot wait, and completion separately. A named ten-millisecond first-provider hold creates controlled contention and remains included in elapsed times.                    |
+
+The ledger cases scan a closed seed with 8,192 settled and sixteen unfinished submissions, or a
+768-row unfinished ledger. Each sample receives a fresh copy; the seed is constructed once per
+worker through public admission/claim/settlement operations. Reports separate seed/setup cost
+from scan latency and retain the actual adapter SQL counts and query plans. Healthy finalization
+replay, runtime status observation, and active finalization are measured separately; status still
+includes its ordinary recovery-snapshot work. The statement counter excludes the driver's
+transaction BEGIN/COMMIT commands.
+
+Contention cases compare the same replay/status operation while another Node process holds a
+SQLite write transaction for zero, 25, or 100 milliseconds after a readiness handshake. That
+process releases its lock independently of the observer's event loop. Observer latency excludes
+process startup and handshake; the report retains both the requested-window duration and full
+lock occupancy through rollback. Writer and observer timestamps share Node's same-host `hrtime`
+domain; overlap uses the conservative interval after acquisition and before rollback begins.
+Samples that miss the writer window remain in the report with `noWriterOverlap=1`; consult the
+overlap counters before claiming contention. A healthy read may finish while the writer still
+holds its lock. These cases do not measure event-loop lag or change the adapter's busy timeout.
+A subsequent public write and scoped process finalization verify release.
+
+Fairness cases run four independent tool-heavy Threads and one short Thread with one, two, or
+four registered Node host workers. Each busy Run uses four 100-millisecond tools with concurrency
+two. Initial-backlog and warm-arrival cases retain every Thread's admission, Attempt/provider
+entry, observed settlement, active maxima, and finalizers. Request-to-Attempt time includes
+admission; observed settlement includes ordinary wake and polling cadence. Warm arrival records
+actual activity rather than assuming all workers are saturated. Host creation, canonical
+verification, and shutdown remain outside the operation clock. These probes preserve existing
+worker defaults and make no strict round-robin, preemption, or starvation guarantee.
+
+Reports retain total elapsed wall time, named millisecond intervals, natural-number counters, and
+at most 512 phase marks per sample. Marks are in-memory and included in operation timing. Atomic
+phase-report writes occur before the operation clock or after its end. Authorization sums, handler
+phases, and model lifetimes can overlap and must not be added together. Post-authorization wait
+includes framework dispatch and bounded scheduling; public hooks cannot isolate semaphore wait.
+Native subagent span offsets flush at Run exit, including failure, so mark array order need not be
+chronological; use their operation-relative monotonic offsets.
+No diagnostic reports CPU time. Compare matched medians and interquartile ranges, including the
+retained slow samples, and preserve the complete environment and exact revision identities.
+
+Each sample, including fixture setup, is bounded to two minutes, each child to five minutes, and the controller to nineteen
+minutes. The existing shared eight-MiB child-output cap and five-second force-kill grace apply.
+Worker reports are limited to sixteen MiB when read by the controller. Partial phase marks, completed
+samples, failures, and timeouts remain in atomic JSON reports. Missing, duplicated, failed, incomplete,
+or mismatched-runtime batches fail the command and never enter comparison summaries.

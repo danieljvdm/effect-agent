@@ -25,7 +25,7 @@ import {
   type DoStorageFailpointLocation,
 } from "../DoStorageError.ts";
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
-import { CurrentDoStorageVersion, doMigrations } from "./migrations.ts";
+import { CurrentDoStorageVersion, createNonterminalIndex, doMigrations } from "./migrations.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 /**
@@ -349,11 +349,11 @@ const predecessorColumns = {
 } as const;
 
 const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(function* (
-  version: 3 | 4,
+  version: 3 | 4 | 5,
 ) {
   const sql = yield* SqlClient.SqlClient;
 
-  const expectedColumns =
+  const messageColumns =
     version === 3
       ? predecessorColumns
       : {
@@ -372,6 +372,20 @@ const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(fun
             "record_json",
           ],
         };
+
+  const expectedColumns = {
+    ...messageColumns,
+    ...(version === 5
+      ? {
+          effect_agent_recovery_checkpoints: [
+            "thread_id",
+            "through_sequence",
+            "tail_digest",
+            "checkpoint_json",
+          ],
+        }
+      : {}),
+  };
 
   for (const [table, expected] of Object.entries(expectedColumns)) {
     const columns = yield* decodeRows(
@@ -486,7 +500,12 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       versionRows,
     );
 
-    if (version.value === "2" || version.value === "3" || version.value === "4") {
+    if (
+      version.value === "2" ||
+      version.value === "3" ||
+      version.value === "4" ||
+      version.value === "5"
+    ) {
       yield* sql
         .withTransaction(
           Effect.gen(function* () {
@@ -498,7 +517,10 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               return;
             if (
               current.length !== 1 ||
-              (current[0].value !== "2" && current[0].value !== "3" && current[0].value !== "4")
+              (current[0].value !== "2" &&
+                current[0].value !== "3" &&
+                current[0].value !== "4" &&
+                current[0].value !== "5")
             )
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: -1,
@@ -524,12 +546,23 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             const recoveryTables =
               yield* sql`SELECT name FROM sqlite_master WHERE type='table' AND name='effect_agent_recovery_checkpoints'`;
 
-            if (recoveryTables.length !== 0)
+            if (recoveryTables.length !== (current[0].value === "5" ? 1 : 0))
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: Number(current[0].value),
                 supportedVersion: CurrentDoStorageVersion,
                 message:
-                  "The predecessor already contains recovery checkpoint storage; refusing ambiguous data without mutation.",
+                  "The predecessor recovery checkpoint storage does not match its version; refusing ambiguous data without mutation.",
+              });
+
+            const indexes =
+              yield* sql`SELECT name FROM sqlite_master WHERE name='effect_agent_submissions_nonterminal'`;
+
+            if (indexes.length !== 0)
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: Number(current[0].value),
+                supportedVersion: CurrentDoStorageVersion,
+                message:
+                  "The predecessor already contains the nonterminal index; refusing ambiguous storage without mutation.",
               });
             if (current[0].value === "2") {
               yield* checkV2ThreadLayout();
@@ -545,7 +578,8 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             }
             if (current[0].value === "3") yield* checkPredecessorLayout(3);
             if (current[0].value === "4") yield* checkPredecessorLayout(4);
-            if (current[0].value !== "4") {
+            if (current[0].value === "5") yield* checkPredecessorLayout(5);
+            if (current[0].value === "2" || current[0].value === "3") {
               yield* failpoint("upgrade:before-mutation");
               yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
               yield* failpoint("upgrade:after-mutation");
@@ -556,11 +590,16 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               yield* createMessageDeliveryTables;
               yield* failpoint("upgrade:after-mutation");
             }
+            if (current[0].value !== "5") {
+              yield* failpoint("upgrade:before-mutation");
+              yield* createRecoveryCheckpointTable;
+              yield* failpoint("upgrade:after-mutation");
+            }
             yield* failpoint("upgrade:before-mutation");
-            yield* createRecoveryCheckpointTable;
+            yield* createNonterminalIndex;
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* sql`UPDATE effect_agent_meta SET value='5' WHERE key='storage_version'`;
+            yield* sql`UPDATE effect_agent_meta SET value='6' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -590,7 +629,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         message:
           `The Durable Object uses unsupported storage version ${version.value}; ` +
           `this build supports exactly version ${CurrentDoStorageVersion}. ` +
-          "Only supported v2, v3 and v4 can be upgraded automatically. Keep the original store and use a compatible library version.",
+          "Only supported v2, v3, v4 and v5 can be upgraded automatically. Keep the original store and use a compatible library version.",
       });
     }
   }
@@ -598,8 +637,9 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
   const requiredRows = yield* sql<Record<string, unknown>>`
     SELECT name
     FROM sqlite_master
-    WHERE type = 'table'
+    WHERE (type = 'table'
       AND name IN ${sql.in([...REQUIRED_TABLES, "effect_agent_message_deliveries", "effect_agent_recovery_checkpoints"])}
+    ) OR (type = 'index' AND name = 'effect_agent_submissions_nonterminal')
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
 
@@ -610,12 +650,12 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     requiredRows,
   );
 
-  if (required.length !== REQUIRED_TABLES.length + 2) {
+  if (required.length !== REQUIRED_TABLES.length + 3) {
     return yield* DoStorageCompatibilityError.make({
       actualVersion: CurrentDoStorageVersion,
       supportedVersion: CurrentDoStorageVersion,
       message:
-        "The Durable Object claims the current format but is missing required tables. Retain the original store for inspection.",
+        "The Durable Object claims the current format but is missing required tables or its nonterminal index. Retain the original store for inspection.",
     });
   }
 
