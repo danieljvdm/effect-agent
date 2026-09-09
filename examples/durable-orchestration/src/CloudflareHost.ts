@@ -6,14 +6,14 @@ import { DurableObject, type WorkerEnvironment } from "effect-cf";
 import { authority, handlers, registrations, rootThread, type Models } from "./agents.ts";
 import { Command, CommandResult, execute, Snapshot, snapshot } from "./application.ts";
 
-export const threadLayer = (models: Models, modelVersion: string) =>
+export const layer = (models: Models, modelVersion: string) =>
   ThreadObject.layer(registrations(models, modelVersion)).pipe(
     Layer.provide([authority, handlers(models)]),
   );
 
-type ApplicationLayer = ReturnType<typeof threadLayer>;
+type ApplicationLayer = ReturnType<typeof layer>;
 
-export const makeOrchestrationThread = <E>(
+export const make = <E>(
   application: Layer.Layer<
     Layer.Success<ApplicationLayer>,
     E,
