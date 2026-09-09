@@ -48,7 +48,9 @@ export const DiscoveryTool = Context.Reference<boolean>(
   { defaultValue: () => false },
 );
 
-/** Remains exposed under selection, subject to host visibility and inherited grants. */
+/** Remains selected while eligible. Host visibility and inherited grants may hide an explicit
+ * pin without failing the Run; discovery, context rollover and required completion stay mandatory.
+ */
 export const PinnedTool = Context.Reference<boolean>("@effect-agent/core/ToolExposure/PinnedTool", {
   defaultValue: () => false,
 });
