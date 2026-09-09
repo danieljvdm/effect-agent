@@ -19,6 +19,7 @@
     "./Approval": "./src/Approval.ts",
     "./Budget": "./src/Budget.ts",
     "./CodeMode": "./src/CodeMode.ts",
+    "./ToolDiscovery": "./src/ToolDiscovery.ts",
     "./Commands": "./src/Commands.ts",
     "./EphemeralThreads": "./src/EphemeralThreads.ts",
     "./Mcp": "./src/Mcp.ts",

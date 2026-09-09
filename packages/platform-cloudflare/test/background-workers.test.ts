@@ -70,6 +70,7 @@ const withOwner = <A, E>(
   );
 
 // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
+// Multiple native evictions and scout Runs need the same budget as the adjacent lifecycle tests.
 it("admits exact captured policies with one registered target and retains them through native eviction, joins and scouts", async () => {
   const source = `background-cf-independent-captured-${crypto.randomUUID()}`;
 
@@ -262,7 +263,7 @@ it("admits exact captured policies with one registered target and retains them t
     droppedMessageWakes.delete(source);
     backgroundWakeDropPrefixes.delete("worker:");
   }
-});
+}, 20_000);
 
 // Regression: https://github.com/danieljvdm/effect-agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
 it("drains private worker progress through rebuilt runtime maintenance into an idle parent", async () => {

@@ -16,7 +16,10 @@ export interface JournalMetadata {
   readonly terminalSequenceByRun: ReadonlyMap<string, number>;
   readonly settledSpans: ReadonlyArray<{ readonly from: number; readonly to: number }>;
   readonly settledToolCallRecordIds: ReadonlySet<string>;
-  readonly settledById: ReadonlyMap<string, Pick<ToolCallSettled, "isFailure" | "budgetRejected">>;
+  readonly settledById: ReadonlyMap<
+    string,
+    Pick<ToolCallSettled, "isFailure" | "budgetRejected" | "toolSelection">
+  >;
   readonly compactions: ReadonlyArray<{
     readonly payload: CompactionCreated;
     readonly sequence: number;
@@ -39,7 +42,12 @@ export const makeJournalMetadata = (
   const terminalSequenceByRun = new Map<string, number>();
   const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
   const settledToolCallRecordIds = new Set<string>();
-  const settledById = new Map<string, Pick<ToolCallSettled, "isFailure" | "budgetRejected">>();
+
+  const settledById = new Map<
+    string,
+    Pick<ToolCallSettled, "isFailure" | "budgetRejected" | "toolSelection">
+  >();
+
   const compactions: Array<{ readonly payload: CompactionCreated; readonly sequence: number }> = [];
 
   return {
@@ -72,6 +80,9 @@ export const makeJournalMetadata = (
         if (payload.runId === ownerRunId)
           settledById.set(envelope.record.recordId, {
             isFailure: payload.isFailure,
+            ...(payload.toolSelection === undefined
+              ? {}
+              : { toolSelection: payload.toolSelection }),
             ...(payload.budgetRejected === undefined
               ? {}
               : { budgetRejected: payload.budgetRejected }),

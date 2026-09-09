@@ -7,6 +7,7 @@ import {
 } from "@effect-agent/core/Identifiers";
 import { type ExhaustedLimit } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
+import { type Selection, type Snapshot } from "@effect-agent/core/ToolExposure";
 import {
   ModelCallUsage,
   summarizeModelUsage,
@@ -371,6 +372,7 @@ export interface RunJournalUsage {
 }
 
 export interface RunJournalProjection {
+  readonly toolSelection?: Selection | undefined;
   readonly policyUsage: RunPolicyUsage;
   /** Canonical projection for the requested Run; may end at its resumable Tool declaration. */
   readonly prompt: Prompt.Prompt;
@@ -793,6 +795,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     ...(seed === undefined ? {} : { summarizedModelUsage: seed.summarizedModelUsage }),
   };
 
+  let toolSelection = seed?.toolSelection;
   let usageTurn = seed?.committedTurns ?? 0;
 
   const incompleteToolTurns = new Set<string>();
@@ -898,6 +901,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         : undefined;
 
     policyUsage.toolCalls += calls.length;
+    if (payload.toolExposure !== undefined) toolSelection = payload.toolExposure.selection;
     if (incompleteToolTurns.has(record.recordId)) return;
     for (const call of calls) {
       const result = call.providerExecuted
@@ -911,6 +915,8 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       if (result === undefined || ("budgetRejected" in result && result.budgetRejected === true))
         continue;
       if (!("isFailure" in result)) continue;
+      if (!result.isFailure && "toolSelection" in result && result.toolSelection !== undefined)
+        toolSelection = result.toolSelection;
       policyUsage.consecutiveToolFailures = result.isFailure
         ? policyUsage.consecutiveToolFailures + 1
         : 0;
@@ -1103,6 +1109,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   );
 
   return {
+    ...(toolSelection === undefined ? {} : { toolSelection }),
     policyUsage: validatedPolicyUsage,
     prompt: Prompt.fromMessages(state.all),
     historyBefore: Prompt.fromMessages(state.before),
@@ -1153,6 +1160,8 @@ const validStagedUsage = (label: string, value: number): Effect.Effect<number, R
       );
 
 export interface TurnCommitInput {
+  readonly toolExposure?: Snapshot | undefined;
+  readonly toolSelections?: ReadonlyMap<string, Selection> | undefined;
   readonly budgetRejectedCalls?: ReadonlySet<string>;
   readonly runId: RunId;
   /** Canonical (Run-relative, Attempt-independent) Turn number; must be positive. */
@@ -1292,6 +1301,7 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
     createdAt: input.createdAt,
     deploymentId: input.deploymentId,
     payload: ModelResponseRecorded.make({
+      ...(input.toolExposure === undefined ? {} : { toolExposure: input.toolExposure }),
       runId: input.runId,
       turnId: input.turnId,
       turn: input.turn,
@@ -1350,6 +1360,9 @@ const toolSettledRecords = Effect.fn("RunJournal.toolSettledRecords")(function* 
         createdAt: input.createdAt,
         deploymentId: input.deploymentId,
         payload: ToolCallSettled.make({
+          ...(input.toolSelections?.get(part.id) === undefined
+            ? {}
+            : { toolSelection: input.toolSelections.get(part.id) }),
           runId: input.runId,
           toolCallId,
           toolName: part.name,

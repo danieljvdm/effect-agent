@@ -51,6 +51,8 @@ export default defineConfig({
       "src/SubagentReservations.ts",
       "src/ThreadHistory.ts",
       "src/ToolBroker.ts",
+      "src/ToolDiscovery.ts",
+      "src/ToolExposure.ts",
       "src/ToolResult.ts",
       "src/Usage.ts",
       "src/WebCapture.ts",

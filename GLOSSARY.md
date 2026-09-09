@@ -113,6 +113,24 @@ failure. A Tool definition is pure. Its Handler is provided through an Effect AI
 **Toolkit**  
 An Effect AI collection of Tools plus the handler requirements needed to execute them.
 
+**Tool visibility**
+
+Host eligibility, intersected with inherited Subagent grants, checked before Tool names or
+documentation reach discovery. It also restricts executable calls; resource authorization remains
+the Handler's responsibility.
+
+**Tool exposure**
+
+The eligible native Tools whose declarations accompany one model request. A run-scoped Selection
+replaces the non-pinned set at a complete Tool Batch boundary. It changes neither registered Tool
+identities nor their Handler requirements.
+
+**Tool discovery**
+
+A readonly Tool that searches the currently visible catalogue and returns bounded documentation.
+Successful native selections are recorded separately from result text and restored through
+durable recovery. Discovery does not grant new authority.
+
 **Tool Call**  
 A model-declared request to execute one Tool. Its stable Tool Call ID scopes results, progress,
 durable steps, approvals, and reconciliation.

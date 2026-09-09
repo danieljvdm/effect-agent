@@ -28,7 +28,8 @@
     "./ThreadHistory": "./src/ThreadHistory.ts",
     "./ToolBroker": "./src/ToolBroker.ts",
     "./ContextWindow": "./src/ContextWindow.ts",
-    "./ContextHistory": "./src/ContextHistory.ts"
+    "./ContextHistory": "./src/ContextHistory.ts",
+    "./ToolExposure": "./src/ToolExposure.ts"
   },
   "publishConfig": {
     "access": "public"

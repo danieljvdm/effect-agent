@@ -1,4 +1,6 @@
 import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { Selection, Snapshot } from "@effect-agent/core/ToolExposure";
+import { summarizeModelUsage } from "@effect-agent/core/Usage";
 import { contextWindowId, contextWindowMessage } from "@effect-agent/engine/Compaction";
 import {
   BatchId,
@@ -43,6 +45,7 @@ import { describe, expect, it, layer } from "@effect/vitest";
 import { DateTime, Effect, Schema, Stream } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
+import { JournalCheckpointSeed } from "../src/internal/journal-checkpoint.ts";
 import { makeJournalMetadata } from "../src/internal/journal-metadata.ts";
 
 const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
@@ -1758,4 +1761,103 @@ describe("engine compaction records and projection (RUN-026)", () => {
       }),
     );
   });
+});
+
+layer(NodeCrypto.layer)("Tool exposure journal", (it) => {
+  it.effect(
+    "retains last declared replacement across partial settles, compaction, and checkpoints",
+    () =>
+      Effect.gen(function* () {
+        const initial = Selection.make({ toolNames: ["initial"] });
+        const expected = Selection.make({ toolNames: ["last"] });
+
+        const response = yield* turnResponseBatch({
+          ...turnInput(toolTurnAppended),
+          toolExposure: Snapshot.make({
+            exposedToolNames: ["book_flight", "book_lodging"],
+            selection: initial,
+          }),
+        });
+
+        const results = yield* turnResultsBatch({
+          ...turnInput(toolTurnAppended),
+          toolSelections: new Map([
+            [CALL_ONE, Selection.make({ toolNames: ["first"] })],
+            [CALL_TWO, expected],
+          ]),
+        });
+
+        const first = results.records[0]!;
+        const second = results.records[1]!;
+        const declaration = envelopeAt(1, response.records[0]!);
+        const partial = [declaration, envelopeAt(2, second)];
+
+        expect((yield* projectRunJournal(partial, RUN_ID)).toolSelection).toEqual(initial);
+        const records = [...partial, envelopeAt(3, first)];
+        const projected = yield* projectRunJournal(records, RUN_ID);
+
+        expect(projected.toolSelection).toEqual(expected);
+        expect((yield* projectRunJournal(records, LATER_RUN_ID)).toolSelection).toBeUndefined();
+
+        const compacted = envelopeAt(
+          4,
+          auditRecord("exposure-rollover", {
+            _tag: "CompactionCreated",
+            runId: RUN_ID,
+            turn: 2,
+            kind: "rollover",
+            coversThrough: 3,
+            handoff: "Continue.",
+          }),
+        );
+
+        expect((yield* projectRunJournal([...records, compacted], RUN_ID)).toolSelection).toEqual(
+          expected,
+        );
+
+        const seed = JournalCheckpointSeed.make({
+          runId: RUN_ID,
+          throughSequence: CanonicalSequence.make(3),
+          firstSequence: CanonicalSequence.make(1),
+          committedTurns: projected.committedTurns,
+          policyUsage: projected.policyUsage,
+          modelCalls: projected.usage.modelCalls,
+          unobservedModelCalls: 0,
+          inputTokens: projected.usage.inputTokens,
+          outputTokens: projected.usage.outputTokens,
+          lastInputTokens: projected.usage.lastInputTokens,
+          lastOutputTokens: projected.usage.lastOutputTokens,
+          costMicrousd: projected.usage.costMicrousd,
+          summarizedModelUsage: yield* summarizeModelUsage(projected.usage.modelUsage),
+          compaction: compacted,
+          toolSelection: expected,
+        });
+
+        expect(
+          (yield* projectRunJournalStream(
+            Stream.fromIterable([compacted]),
+            RUN_ID,
+            undefined,
+            seed,
+          )).toolSelection,
+        ).toEqual(expected);
+
+        const hostReplacement = yield* turnCanonicalBatch({
+          ...turnInput(finalTurnAppended),
+          turn: 2,
+          turnId: turnIdForRun(RUN_ID, 2),
+          toolExposure: Snapshot.make({
+            exposedToolNames: [],
+            selection: Selection.make({ toolNames: [] }),
+          }),
+        });
+
+        expect(
+          (yield* projectRunJournal(
+            [...records, envelopeAt(4, hostReplacement.records[0]!)],
+            RUN_ID,
+          )).toolSelection?.toolNames,
+        ).toEqual([]);
+      }),
+  );
 });

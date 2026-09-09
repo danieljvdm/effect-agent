@@ -55,6 +55,9 @@ Applications installing constituent packages directly use the owning package ins
 | Semantic index contracts and errors              | `@effect-agent/core/SemanticMemoryIndex`    |
 | Delegation contracts and reservation amounts     | `@effect-agent/core/SubagentContract`       |
 | Runtime operations and inferred failures         | `@effect-agent/engine/AgentRuntime`         |
+| Native tool selection schemas and annotations    | `@effect-agent/core/ToolExposure`           |
+| Host tool visibility and eligible catalogue      | `@effect-agent/engine/ToolExposure`         |
+| Bounded native and Code Mode discovery           | `@effect-agent/capabilities/ToolDiscovery`  |
 | Compactor service                                | `@effect-agent/engine/ContextCompactor`     |
 | Command-drain, scheduling, and run options       | `@effect-agent/engine/RunOptions`           |
 | Subagent authoring and handlers                  | `@effect-agent/capabilities/Subagent`       |
@@ -81,25 +84,26 @@ implementations.
 
 ## Find a capability {#capability-inventory}
 
-| Need                                    | Guide                                                             | Your application supplies                                    |
-| --------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
-| Run or stream an agent                  | [Execution](../guide/run-agents)                                  | Model, tool handlers, history policy                         |
-| Retain completed threads                | [History](../guide/threads#retain-completed-runs)                 | Store and thread IDs                                         |
-| Recover work after a crash              | [Durability](../concepts/durability)                              | Registered agents, workers, storage, authorization           |
-| Drive durable work with Effect Workflow | [Effect Workflows](../guide/workflows)                            | Workflow engine, dispatch store, repair trigger              |
-| Prune, summarize, or roll over context  | [Context management](../guide/context-management)                 | Context limits and compaction policy                         |
-| Search prior context windows            | [Context windows](../guide/context-management#context-windows)    | Authorized ThreadStore or ContextHistory adapter             |
-| Keep working notes across windows       | [Context windows](../guide/context-management#context-windows)    | Memory document identity, reader, writer                     |
-| Recall application-owned sources        | [Context management](../guide/context-management#recall-memory)   | Readable passages, provenance, query policy                  |
-| Remember in the background              | [Remembering](../guide/context-management#background-remembering) | Durable jobs, source policy, extraction, merging and cleanup |
-| Require approval or limit spending      | [Run hooks](../guide/run-agents#operational-hooks)                | Approval policy, budget hooks, cost estimates                |
-| Delegate to another agent               | [Subagents](../guide/subagents)                                   | Targets, bindings, permissions, budgets                      |
-| Schedule new input                      | [Scheduling](../guide/operations#scheduled-input)                 | Owner policy, registered inputs, driver                      |
-| React to external events                | [Subscriptions](../guide/operations#event-subscriptions)          | Authenticated source, preparation, authorization             |
-| Run generated JavaScript                | [Code Mode](../guide/code-mode)                                   | Read-only tools and an isolated executor                     |
-| Run trusted local commands              | [Sandbox execution](../guide/sandbox)                             | Executable, environment, output and time limits              |
-| Capture, crawl, or interact with pages  | [Browser tools](../guide/browser)                                 | Browser binding or credentials, target policy                |
-| Call tools on an MCP server             | [MCP servers](../guide/tools#mcp)                                 | Transport, `HttpClient` or process spawner, bounds           |
+| Need                                       | Guide                                                             | Your application supplies                                                |
+| ------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Run or stream an agent                     | [Execution](../guide/run-agents)                                  | Model, tool handlers, history policy                                     |
+| Discover a large registered tool catalogue | [Progressive discovery](../guide/tools#progressive-discovery)     | Native toolkit, grouping metadata, optional search and visibility policy |
+| Retain completed threads                   | [History](../guide/threads#retain-completed-runs)                 | Store and thread IDs                                                     |
+| Recover work after a crash                 | [Durability](../concepts/durability)                              | Registered agents, workers, storage, authorization                       |
+| Drive durable work with Effect Workflow    | [Effect Workflows](../guide/workflows)                            | Workflow engine, dispatch store, repair trigger                          |
+| Prune, summarize, or roll over context     | [Context management](../guide/context-management)                 | Context limits and compaction policy                                     |
+| Search prior context windows               | [Context windows](../guide/context-management#context-windows)    | Authorized ThreadStore or ContextHistory adapter                         |
+| Keep working notes across windows          | [Context windows](../guide/context-management#context-windows)    | Memory document identity, reader, writer                                 |
+| Recall application-owned sources           | [Context management](../guide/context-management#recall-memory)   | Readable passages, provenance, query policy                              |
+| Remember in the background                 | [Remembering](../guide/context-management#background-remembering) | Durable jobs, source policy, extraction, merging and cleanup             |
+| Require approval or limit spending         | [Run hooks](../guide/run-agents#operational-hooks)                | Approval policy, budget hooks, cost estimates                            |
+| Delegate to another agent                  | [Subagents](../guide/subagents)                                   | Targets, bindings, permissions, budgets                                  |
+| Schedule new input                         | [Scheduling](../guide/operations#scheduled-input)                 | Owner policy, registered inputs, driver                                  |
+| React to external events                   | [Subscriptions](../guide/operations#event-subscriptions)          | Authenticated source, preparation, authorization                         |
+| Run generated JavaScript                   | [Code Mode](../guide/code-mode)                                   | Read-only tools and an isolated executor                                 |
+| Run trusted local commands                 | [Sandbox execution](../guide/sandbox)                             | Executable, environment, output and time limits                          |
+| Capture, crawl, or interact with pages     | [Browser tools](../guide/browser)                                 | Browser binding or credentials, target policy                            |
+| Call tools on an MCP server                | [MCP servers](../guide/tools#mcp)                                 | Transport, `HttpClient` or process spawner, bounds                       |
 
 ### Limits and unsupported features {#compaction-and-unsupported-capabilities}
 

@@ -30,6 +30,172 @@ The tool declaration owns parameter, success, and failure schemas, approval, dep
 failure mode, and preliminary results. The runtime decodes every model-generated tool call through
 that declaration.
 
+## Discover tools progressively {#progressive-discovery}
+
+A large registered catalogue can contain hundreds of tools even when a request needs only two.
+`ToolDiscovery.make` adds an ordinary `discover_tools` tool. Start with common tools pinned, then
+expose matching schemas after discovery. All tools retain their native Effect AI definitions and
+handlers; omitting selection configuration and discovery preserves eager exposure.
+
+```ts twoslash
+import { Agent, ToolDiscovery, ToolExposure } from "effect-agent";
+import { Effect, Layer, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
+
+const GetRecord = Tool.make("get_record", {
+  description: "Read one record by its ID.",
+  parameters: Schema.Struct({ id: Schema.String }),
+  success: Schema.String,
+})
+  .annotate(ToolExposure.ToolNamespace, "records")
+  .annotate(ToolExposure.PinnedTool, true);
+
+const SearchRecords = Tool.make("search_records", {
+  description: "Search records by title.",
+  parameters: Schema.Struct({ title: Schema.String }),
+  success: Schema.Array(Schema.String),
+}).annotate(ToolExposure.ToolNamespace, "records");
+
+const discovery = ToolDiscovery.make({
+  maxResults: 8,
+  maxResultBytes: 32_768,
+  namespaceDescriptions: { records: "Record lookup and title search" },
+});
+
+export const agent = Agent.make("record-assistant", {
+  input: Schema.String,
+  output: Schema.String,
+  instructions: "Use discover_tools to find missing tools. Return the answer as a JSON string.",
+  toolkit: Toolkit.make(GetRecord, SearchRecords, discovery.tool),
+  toolExposure: { initialToolNames: [], maxTools: 16, maxSchemaBytes: 65_536 },
+});
+
+export const Handlers = Layer.merge(
+  Toolkit.make(GetRecord, SearchRecords).toLayer({
+    get_record: ({ id }) => Effect.succeed(`Record ${id}`),
+    search_records: ({ title }) => Effect.succeed([`Matching record: ${title}`]),
+  }),
+  discovery.handlers,
+);
+```
+
+The first request exposes `get_record` and `discover_tools`. A call such as
+`discover_tools({ query: "search", namespace: "records" })` returns metadata and encoded parameter
+and success schemas; `search_records` becomes callable on the next turn. Provide handlers for the
+full registered toolkit as before: hidden schemas do not remove requirements from `R`.
+
+Default search matches every whitespace-separated query term, ignoring case, against names,
+descriptions, methods and namespace hints, with deterministic catalogue-ID ordering. Namespaces
+come from `ToolNamespace` annotations or Code Mode's allowlist, never from parsing a tool name.
+Namespace hints appear only on eligible matches. Queries are bounded to 512 characters and exact
+namespace filters to 128. The default returns at most eight matches and 32 KiB of complete encoded
+JSON; limits can rise to 64 matches and 256 KiB. Oversized documentation fails with
+`ToolDiscoveryError` rather than returning broken schemas. Provider-defined tools are not ordinary
+callable schemas and cannot be documented by this capability.
+
+### Supply application search
+
+The optional Effect callback receives only the eligible catalogue, already filtered by the exact
+namespace. Return ranked `Descriptor.id` values. Every ID is validated before limiting results;
+unknown or duplicate IDs fail closed. Native tools and each Code Mode alias have separate IDs.
+
+```ts twoslash
+import * as ToolDiscovery from "effect-agent/ToolDiscovery";
+import { Context, Effect, Schema } from "effect";
+
+class SearchUnavailable extends Schema.TaggedError<SearchUnavailable>()("SearchUnavailable", {
+  message: Schema.String,
+}) {}
+
+class SearchIndex extends Context.Service<
+  SearchIndex,
+  {
+    readonly rank: (
+      query: string,
+      catalogue: ReadonlyArray<ToolDiscovery.Descriptor>,
+    ) => Effect.Effect<ReadonlyArray<string>, SearchUnavailable>;
+  }
+>()("SearchIndex") {}
+
+export const discovery = ToolDiscovery.make({
+  failure: SearchUnavailable,
+  search: (request, catalogue) =>
+    Effect.flatMap(SearchIndex, (index) => index.rank(request.query, catalogue)),
+});
+```
+
+Provide `SearchIndex` when building `discovery.handlers`. Its requirements remain in the Layer's
+`R`, and declared failures remain in the tool's `E` alongside `ToolDiscoveryError`. Search runs in
+a fresh Scope per invocation; failure, defect, timeout and interruption close acquired resources.
+
+An existing ordinary readonly search tool can use the same contract: annotate it with
+`ToolExposure.DiscoveryTool` and return a decoded `toolNames` array containing registered native
+names. The runtime validates that selection before recording it. Discovery tools must use the
+`ToolExecutionClass` annotation from `effect-agent/DurableStep` with value `"readonly"`;
+uncertain and orchestration tools have different durable settlement paths and are refused.
+
+### Select without search {#tool-selection}
+
+Host context and workflow state can use the same mechanism directly:
+
+```ts twoslash
+import { RunToolVisibility, Selection } from "effect-agent/ToolExposure";
+import type { RunOptions } from "effect-agent/RunOptions";
+import { Effect, Layer } from "effect";
+
+export const options: RunOptions = {
+  toolSelection: Selection.make({ toolNames: ["search_records"] }),
+};
+
+export const VisibilityLive = Layer.succeed(RunToolVisibility, {
+  visible: ({ toolNames }) => Effect.succeed(toolNames.filter((name) => name !== "delete_record")),
+});
+```
+
+Pass these options to `AgentRuntime.run`, `stream`, or `start`. A context preparation hook may
+return `toolSelection` beside its `prompt` to replace the set before a new model request. Provide
+`VisibilityLive` around an ephemeral run or when constructing a durable runtime. The optional
+`RunToolVisibility` service defaults to no filter; durable hosts capture that choice, including
+absence, so worker callers cannot replace it. Resolve policy dependencies and setup failures in
+the host Layer, where their types remain visible. The policy operation returns eligible names;
+an empty list denies all tools.
+
+Visibility controls eligibility. Exposure controls which eligible native schemas the model sees.
+Authorization, approval, budgets and resource checks still decide whether an action may execute.
+Visibility and inherited grants are applied before custom search receives any names or docs.
+Guessed native calls outside the original request exposure fail before handlers start. Code Mode
+also filters its sandbox method surface and denies hidden inner calls; resource authorization
+still belongs inside those handlers.
+
+### Selection lifetime and recovery
+
+Selections last for one run and **replace** the non-pinned set; they do not accumulate. An empty
+successful selection clears it. If a batch contains several successful selections, the last in
+declaration order wins, regardless of completion order. No selection takes effect midway through
+a batch. Failed results retain the previous selection; ordinary tool error behavior still applies.
+
+During working turns, discovery tools, explicit `PinnedTool` annotations, required completion and context
+rollover tools stay exposed. Pins count toward the limits and never override eligibility: an
+excluded required pin causes a typed refusal. Optional completion is available when the runtime
+enters its final answer turn; that turn may expose only the completion tool. The default exposure limits are 64 tools and 256 KiB of aggregate
+UTF-8 JSON declarations (names, descriptions and parameter schemas, including the current model's
+schema transformation). Exceeding a limit fails with `ModelProtocolError`; there is no silent
+eviction beyond replacement.
+
+The runtime records the actual request exposure with each canonical model response and each
+successful selection with its tool settlement, before result truncation. `ToolCallSucceeded`
+also carries `toolSelection`. Durable recovery, compaction and checkpoints restore this metadata
+without searching again for a committed result. A crash before a result is committed follows the
+ordinary readonly recovery contract. Resumed calls retain their original exposure and recheck
+current eligibility before unfinished handlers run; already settled siblings remain canonical.
+Custom durable hooks must stage request snapshots through `noteToolExposure`. Version custom
+search semantics in your registration definitions as with other handler changes.
+
+This provider-neutral API changes the native toolkit sent on subsequent calls. It does not use
+provider-specific deferred-tool references or promise a latency win: extra discovery rounds and
+provider prompt caching can outweigh smaller schemas. Measure common, uncommon and composed
+tasks against eager exposure before claiming a performance improvement.
+
 ## Run batches deterministically {#batch-execution}
 
 The runtime validates the complete model response before starting any handler. It resolves tool

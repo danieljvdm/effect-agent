@@ -36,7 +36,8 @@
     "./RememberingStore": "./src/RememberingStore.ts",
     "./Receipt": "./src/Receipt.ts",
     "./Worker": "./src/Worker.ts",
-    "./Messaging": "./src/Messaging.ts"
+    "./Messaging": "./src/Messaging.ts",
+    "./ToolExposure": "./src/ToolExposure.ts"
   },
   "publishConfig": {
     "access": "public"
