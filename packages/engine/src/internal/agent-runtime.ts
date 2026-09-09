@@ -5113,7 +5113,13 @@ const makeTurn = <
             turn === bounds.maxTurns);
 
         return terminalToolChoiceOnly
-          ? agent.definition.completion === undefined
+          ? agent.definition.completion === undefined ||
+            (agent.definition.completion.required !== true &&
+              !catalog.some(
+                (entry) =>
+                  entry.kind === "native" &&
+                  entry.nativeToolName === agent.definition.completion?.tool,
+              ))
             ? "none"
             : agent.definition.completion.required === true
               ? { tool: agent.definition.completion.tool }

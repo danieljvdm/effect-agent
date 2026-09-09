@@ -38,24 +38,22 @@ jobs:
             const number = read('pr-number.txt', 20).trim();
             if (!/^[1-9][0-9]{0,9}$/.test(number)) throw new Error('Invalid PR number');
             const report = JSON.parse(read('report.json', 3000000));
-            if (report.fixture !== 'runtime-v2' || report.profile !== 'pr' ||
-                report.referenceVersion !== 'audit-beta67-node24-v1' ||
+            if (report.fixture !== 'runtime-v3' || report.profile !== 'pr' ||
                 report.activeBatch !== null || report.failure !== null ||
                 report.settings?.batches !== 3 || report.settings?.warmupsPerBatch !== 2 || report.settings?.samplesPerBatch !== 3 ||
                 report.settings?.production !== true || report.settings?.execution !== 'unbundled published ESM' ||
                 report.environment?.node !== 'v24.20.0' ||
                 !/^[a-f0-9]{64}$/.test(report.fixtureSha256) ||
-                !Array.isArray(report.revisions) || report.revisions.length !== 3 ||
-                !Array.isArray(report.batches) || report.batches.length !== 18) {
+                !Array.isArray(report.revisions) || report.revisions.length !== 2 ||
+                !Array.isArray(report.batches) || report.batches.length !== 12) {
               throw new Error('Invalid report contract');
             }
             const revision = role => report.revisions.find(value => value.role === role);
-            for (const role of ['base', 'head', 'reference']) {
+            for (const role of ['base', 'head']) {
               if (!/^[a-f0-9]{40}$/.test(revision(role)?.revision) || revision(role).dirty !== false ||
                   !/^[a-f0-9]{64}$/.test(revision(role).lockfileSha256) ||
                   !/^[a-f0-9]{64}$/.test(revision(role).builtArtifactsSha256)) throw new Error('Invalid revision');
             }
-            if (revision('reference').revision !== '596cffba70716b1211ac02de949c4d0f31734b2f') throw new Error('Unexpected reference');
             const run = context.payload.workflow_run;
             const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(number) });
             if (pr.state !== 'open' || pr.head.sha !== run.head_sha || pr.head.sha !== revision('head').revision ||
@@ -73,7 +71,7 @@ jobs:
             const identities = new Set();
             for (const batch of report.batches) {
               const key = `${batch.role}:${batch.cohort}:${batch.cold}`;
-              if (!['base','head','reference'].includes(batch.role) || ![0,1,2].includes(batch.cohort) ||
+              if (!['base','head'].includes(batch.role) || ![0,1,2].includes(batch.cohort) ||
                   typeof batch.cold !== 'boolean' || identities.has(key) || batch.exitCode !== 0 || batch.complete !== true ||
                   batch.failure !== null || !Number.isFinite(batch.subprocessMs) || batch.subprocessMs < 0 ||
                   batch.report?.fixture !== report.fixture || batch.report?.profile !== report.profile ||
@@ -101,15 +99,15 @@ jobs:
             }
             const rows = expected.map(name => {
               const values = role => samples.filter(s => s.name === name && s.role === role).map(s => s.ms);
-              const base = med(values('base')), head = med(values('head')), reference = med(values('reference'));
+              const base = med(values('base')), head = med(values('head'));
               const change = before => before === 0 ? 'n/a' : `${((head / before - 1) * 100).toFixed(1)}%`;
-              return `| ${name} | ${base.toFixed(2)} | ${head.toFixed(2)} | ${reference.toFixed(2)} | ${change(base)} | ${change(reference)} |`;
+              return `| ${name} | ${base.toFixed(2)} | ${head.toFixed(2)} | ${change(base)} |`;
             });
             const marker = '<!-- effect-agent:runtime-performance -->';
             const body = `${marker}\n### Runtime performance\n\n` +
               'Informational medians in milliseconds, nine samples per workload and revision. Same fixture bytes and Node runtime; separate lockfiles and public builds.\n\n' +
-              '| Workload | Base | Head | Reference | Head/base | Head/reference |\n| --- | ---: | ---: | ---: | ---: | ---: |\n' + rows.join('\n') +
-              `\n\n[Raw samples, spread, cold process totals, failures, environment, and immutable reference](${run.html_url}) for \`${run.head_sha.slice(0,12)}\`. Timing deltas are not a merge threshold.`;
+              '| Workload | Base | Head | Head/base |\n| --- | ---: | ---: | ---: |\n' + rows.join('\n') +
+              `\n\n[Raw samples, spread, cold process totals, failures, environment, and exact revisions](${run.html_url}) for \`${run.head_sha.slice(0,12)}\`. Timing deltas are not a merge threshold.`;
             const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: pr.number, per_page: 100 });
             const previous = comments.find(comment => comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
             if (previous) await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });

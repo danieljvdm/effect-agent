@@ -31,5 +31,4 @@ packages/*/src/**/*.d.ts
 scripts/*.d.ts
 test/fixtures/*.d.ts
 .performance-base/
-.performance-reference/
 .performance-report/

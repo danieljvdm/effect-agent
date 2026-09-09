@@ -361,8 +361,8 @@ The comment workflow becomes active after it is merged into the default branch.
 
 ## Runtime performance comparisons
 
-Pull requests run the **Runtime performance** workflow against the exact base, head, and retained
-release reference. The [scripted benchmark](../examples/runtime-benchmark/README.md) runs identical
+Pull requests run the **Runtime performance** workflow against the exact base and head commits.
+The [scripted benchmark](../examples/runtime-benchmark/README.md) runs identical
 fixture bytes against production builds and each revision's own lockfile on the same Node runtime.
 Run `vp run perf:compare --help` for local reproduction. Timing tasks bypass the task cache; keep
 other builds, tests, and benchmarks idle during measurement.

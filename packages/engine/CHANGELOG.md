@@ -1,5 +1,21 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.74
+
+### Patch Changes
+
+- [#407](https://github.com/danieljvdm/effect-agent/pull/407) [`cf10ec3`](https://github.com/danieljvdm/effect-agent/commit/cf10ec32e2d94402d417b05358bf96715e8c5401) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep explicit tool pins selected only while authorized, so disabling a common tool does not prevent other work. Omit unavailable optional completion tools from final-answer requests while preserving mandatory tool checks.
+
+- Updated dependencies [[`cf10ec3`](https://github.com/danieljvdm/effect-agent/commit/cf10ec32e2d94402d417b05358bf96715e8c5401)]:
+  - @effect-agent/core@0.1.0-beta.74
+
+## 0.1.0-beta.73
+
+### Patch Changes
+
+- Updated dependencies [[`da6971d`](https://github.com/danieljvdm/effect-agent/commit/da6971d450c7ed73b88c8ae74ac8376aee6c1254)]:
+  - @effect-agent/core@0.1.0-beta.73
+
 ## 0.1.0-beta.72
 
 ### Minor Changes
