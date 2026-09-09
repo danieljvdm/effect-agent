@@ -152,6 +152,12 @@ The single Definition-designated Tool whose successful singleton call projects t
 output Schema and completes the Run immediately. It remains an ordinary external side effect for
 authorization and durability; the designation adds terminal semantics, not exactly-once execution.
 
+**Action completion**
+
+An optional Definition-owned projection from an ordinary action Tool's successful canonical result
+to Agent output. The Tool runs alone and receives no completion-budget exemption. The pure
+projector may decline completion when the whole request remains unfinished.
+
 **Step**  
 A deterministically named sub-operation within one Durable Tool Call. Its result is
 exactly-once-recorded but its external side effect is at-least-once-executed.

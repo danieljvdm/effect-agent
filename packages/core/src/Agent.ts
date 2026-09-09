@@ -1,4 +1,4 @@
-import type { Effect, Layer, Schema } from "effect";
+import type { Effect, Layer, Option, Schema } from "effect";
 import * as S from "effect/Schema";
 import type { AiError, LanguageModel, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
@@ -66,6 +66,29 @@ type CompletionToolFor<ToolkitValue extends Toolkit.Any, Output> = {
   > & { readonly tool: Name };
 }[keyof ToolkitValue["tools"] & string];
 
+/**
+ * An ordinary action Tool whose canonical success may satisfy the whole request.
+ * Projectors must be pure and deterministic: recovery re-evaluates them. None preserves
+ * ordinary continuation; Some is validated as the Agent output. These Tools must run alone
+ * and never receive the required completion Tool's exhaustion allowance.
+ */
+export interface CompletionFromToolDeclaration<
+  Parameters = unknown,
+  Result = unknown,
+  Output = unknown,
+> {
+  readonly tool: string;
+  readonly project: (input: CompletionProjectionInput<Parameters, Result>) => Option.Option<Output>;
+}
+
+type CompletionFromToolFor<ToolkitValue extends Toolkit.Any, Output> = {
+  readonly [Name in keyof ToolkitValue["tools"] & string]: CompletionFromToolDeclaration<
+    Tool.Parameters<ToolkitValue["tools"][Name]>,
+    Tool.Success<ToolkitValue["tools"][Name]>,
+    Output
+  > & { readonly tool: Name };
+}[keyof ToolkitValue["tools"] & string];
+
 /** Immutable, model-agnostic schemas, behavior, tools, and bounds for an agent. */
 export interface Definition<
   InputSchema extends Schema.Top,
@@ -93,6 +116,7 @@ export interface Definition<
   readonly policyOverrides?: Partial<AgentPolicyInput> | undefined;
   /** Optional successful Tool result that projects directly to the Agent output and settles. */
   readonly completion?: CompletionToolDeclaration | undefined;
+  readonly completionFromTools?: ReadonlyArray<CompletionFromToolDeclaration> | undefined;
   readonly runDisposition?: RunDispositionValue | undefined;
   readonly description?: string | undefined;
   readonly metadata?: Readonly<Record<string, string>> | undefined;
@@ -117,6 +141,9 @@ export interface DefinitionOptions<
   readonly toolkit: ToolkitValue;
   readonly policy?: Partial<AgentPolicyInput> | undefined;
   readonly completion?: CompletionToolFor<ToolkitValue, OutputSchema["Type"]> | undefined;
+  readonly completionFromTools?:
+    | ReadonlyArray<CompletionFromToolFor<ToolkitValue, OutputSchema["Type"]>>
+    | undefined;
   readonly runDisposition?: RunDispositionValue | undefined;
   readonly description?: string | undefined;
   readonly metadata?: Readonly<Record<string, string>> | undefined;
@@ -374,11 +401,24 @@ export function make(
     readonly toolkit: Toolkit.Any;
     readonly policy?: Partial<AgentPolicyInput> | undefined;
     readonly completion?: CompletionToolDeclaration | undefined;
+    readonly completionFromTools?: ReadonlyArray<CompletionFromToolDeclaration> | undefined;
     readonly runDisposition?: RunDispositionDeclaration<never, Schema.Top> | undefined;
     readonly description?: string | undefined;
     readonly metadata?: Readonly<Record<string, string>> | undefined;
   },
 ): AnyDefinition {
+  const completionNames = new Set<string>();
+
+  for (const declaration of options.completionFromTools ?? []) {
+    if (declaration.tool === options.completion?.tool || completionNames.has(declaration.tool)) {
+      throw new Error(`Tool ${declaration.tool} has more than one completion declaration`);
+    }
+    if (options.toolkit.tools[declaration.tool] === undefined) {
+      throw new Error(`Unknown completion Tool ${declaration.tool}`);
+    }
+    completionNames.add(declaration.tool);
+  }
+
   return Object.freeze({
     ...options,
     policy: AgentPolicy.resolve(options.policy),
@@ -387,6 +427,12 @@ export function make(
     metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
     completion:
       options.completion === undefined ? undefined : Object.freeze({ ...options.completion }),
+    completionFromTools:
+      options.completionFromTools === undefined
+        ? undefined
+        : Object.freeze(
+            options.completionFromTools.map((declaration) => Object.freeze({ ...declaration })),
+          ),
     runDisposition:
       options.runDisposition === undefined
         ? undefined

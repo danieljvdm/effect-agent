@@ -63,6 +63,8 @@ import {
   Principal,
   QueueSequence,
   RecoverySnapshotRequest,
+  ResolutionCompletedWithResult,
+  UnknownResolutionCommand,
   Settlement,
   SubmissionLedger,
   SubmissionLookupById,
@@ -217,6 +219,65 @@ const dispositionDefinition = Agent.make("durable-run-disposition", {
     fromOutput: (output) => output.runDisposition,
   },
 });
+
+const makeReceiptCompletionFixture = (needsApproval = false) => {
+  const Create = Tool.make("create", {
+    parameters: Schema.Struct({ name: Schema.String }),
+    success: Schema.Struct({
+      name: Schema.String,
+      href: Schema.String,
+      complete: Schema.Boolean,
+    }),
+    needsApproval,
+  });
+
+  const Respond = Tool.make("respond", {
+    parameters: Schema.Struct({ answer: Schema.String }),
+    success: Schema.Struct({ answer: Schema.String }),
+  });
+
+  const tools = Toolkit.make(Create, Respond);
+
+  const definition = Agent.make("durable-receipt-completion", {
+    input: Schema.Struct({ question: Schema.String }),
+    output: Schema.Struct({ answer: Schema.String }),
+    instructions: "Use create only when creation satisfies the whole request; otherwise respond.",
+    toolkit: tools,
+    policy: AgentPolicy.make({
+      maxTurns: 3,
+      maxToolCalls: 2,
+      maxDuration: "30 seconds",
+      toolConcurrency: 1,
+    }),
+    completion: {
+      tool: "respond",
+      required: true,
+      project: ({ result }) => result,
+    },
+    completionFromTools: [
+      {
+        tool: "create",
+        project: ({ result }) =>
+          result.complete
+            ? Option.some({ answer: `Created ${result.name}: ${result.href}` })
+            : Option.none(),
+      },
+    ],
+  });
+
+  return { definition, tools };
+};
+
+const receiptCreateParts: ReadonlyArray<Response.StreamPartEncoded> = [
+  {
+    type: "tool-call",
+    id: "create-1",
+    name: "create",
+    params: { name: "requested name" },
+    providerExecuted: false,
+  },
+  { type: "finish", reason: "tool-calls", usage },
+];
 
 // `readonly` keeps the P4 canonical record shape byte-stable (plan §4.3): an unannotated tool
 // fails closed to `uncertain` and gains `ToolCallPrepared` records under the P5 split commits.
@@ -1481,6 +1542,364 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         });
       }),
   );
+
+  it.effect("recovers canonical receipt completion without repeating the action or model", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const { definition, tools } = makeReceiptCompletionFixture();
+      const scripted = yield* makeScriptedModel(() => receiptCreateParts);
+      const createCalls = yield* Ref.make(0);
+      const respondCalls = yield* Ref.make(0);
+
+      const toolLayer = tools.toLayer({
+        create: () =>
+          Ref.update(createCalls, (count) => count + 1).pipe(
+            Effect.as({ name: "Committed name", href: "/projects/created-1", complete: true }),
+          ),
+        respond: (parameters) =>
+          Ref.update(respondCalls, (count) => count + 1).pipe(Effect.as(parameters)),
+      });
+
+      const agent = Agent.withModel(definition, scripted.model);
+      const thread = "thread-receipt-completion-recovery";
+      const options = submitOptions(thread, "receipt-completion-recovery-1");
+      const input = { question: "Create requested name." };
+      const receipt = yield* runtime.submit(agent, input, options);
+
+      yield* armFailpoint("turn:after-results-append");
+
+      const crashed = yield* Effect.exit(
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
+      );
+
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      expect(yield* Ref.get(createCalls)).toBe(1);
+      expect(scripted.prompts).toHaveLength(1);
+      yield* clearFailpoint;
+
+      const settled = yield* runtime
+        .processThread(agent, decodeThreadId(thread))
+        .pipe(Effect.provide(toolLayer));
+
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.outcome).toBe("completed");
+      expect(yield* runtime.awaitSettlement(receipt)).toEqual(settled[0]);
+      const repeated = yield* runtime.submit(agent, input, options);
+
+      expect(repeated.submissionId).toBe(receipt.submissionId);
+      expect(
+        yield* runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
+      ).toHaveLength(0);
+      expect(yield* Ref.get(createCalls)).toBe(1);
+      expect(yield* Ref.get(respondCalls)).toBe(0);
+      expect(scripted.prompts).toHaveLength(1);
+      const payloads = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
+      expect(payloads.filter((payload) => payload._tag === "ModelResponseRecorded")).toHaveLength(
+        1,
+      );
+      expect(payloads.filter((payload) => payload._tag === "ToolCallSettled")).toHaveLength(1);
+      expect(payloads.filter((payload) => payload._tag === "RunCompleted")).toHaveLength(1);
+      expect(payloads.filter((payload) => payload._tag === "SubmissionSettled")).toHaveLength(1);
+      expect(payloads.at(-1)).toMatchObject({
+        _tag: "SubmissionSettled",
+        result: { answer: "Created Committed name: /projects/created-1" },
+      });
+    }),
+  );
+
+  it.effect(
+    "receipt completion projects a recovered external result without another model call",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const fixture = makeReceiptCompletionFixture();
+        const scripted = yield* makeScriptedModel(() => receiptCreateParts);
+        const agent = Agent.withModel(fixture.definition, scripted.model);
+        const thread = "thread-receipt-recovered-result";
+        const starts = yield* Ref.make(0);
+
+        const tools = fixture.tools.toLayer({
+          create: () =>
+            Ref.update(starts, (count) => count + 1).pipe(
+              Effect.as({ name: "Project", href: "/project/1", complete: true }),
+            ),
+          respond: ({ answer }) => Effect.succeed({ answer }),
+        });
+
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "create" },
+          submitOptions(thread, "recovered-result"),
+        );
+
+        yield* armFailpoint("tools:after-prepared-append");
+
+        const crashed = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.provide(tools), Effect.exit);
+
+        expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+        yield* runtime.runRecovery;
+        expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
+        yield* runtime.resolveUnknown(
+          UnknownResolutionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: Schema.decodeSync(ToolCallId)("create-1"),
+            author: "operator",
+            reason: "The authoritative product receipt confirms committed creation",
+            resolution: ResolutionCompletedWithResult.make({
+              result: { name: "Project", href: "/project/1", complete: true },
+              isFailure: false,
+            }),
+          }),
+        );
+        yield* armFailpoint("turn:after-results-append");
+
+        const afterProjection = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.provide(tools), Effect.exit);
+
+        expect(failureTag(afterProjection)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+
+        const settled = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.provide(tools));
+
+        expect(settled[0]?.outcome).toBe("completed");
+        expect(yield* Ref.get(starts)).toBe(0);
+        expect(scripted.prompts).toHaveLength(1);
+        const records = yield* readLog(thread);
+
+        expect(
+          records.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
+        ).toHaveLength(1);
+        expect(records.filter(({ record }) => record.payload._tag === "RunCompleted")).toHaveLength(
+          1,
+        );
+        expect(records.at(-1)?.record.payload).toMatchObject({
+          _tag: "SubmissionSettled",
+          result: { answer: "Created Project: /project/1" },
+        });
+      }),
+  );
+
+  it.effect("receipt completion preserves transformed output through canonical recovery", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const fixture = makeReceiptCompletionFixture();
+
+      const definition = Agent.make("transformed-receipt-completion", {
+        input: fixture.definition.input,
+        output: Schema.NumberFromString,
+        instructions: "Complete from the committed action.",
+        toolkit: fixture.tools,
+        completionFromTools: [{ tool: "create", project: () => Option.some(42) }],
+      });
+
+      const scripted = yield* makeScriptedModel(() => receiptCreateParts);
+      const agent = Agent.withModel(definition, scripted.model);
+      const thread = "thread-transformed-receipt-completion";
+      const starts = yield* Ref.make(0);
+
+      const tools = fixture.tools.toLayer({
+        create: () =>
+          Ref.update(starts, (count) => count + 1).pipe(
+            Effect.as({ name: "Project", href: "/project/1", complete: true }),
+          ),
+        respond: ({ answer }) => Effect.succeed({ answer }),
+      });
+
+      yield* runtime.submit(
+        agent,
+        { question: "create" },
+        submitOptions(thread, "transformed-receipt"),
+      );
+      yield* armFailpoint("turn:after-results-append");
+
+      const crashed = yield* runtime
+        .processThread(agent, decodeThreadId(thread))
+        .pipe(Effect.provide(tools), Effect.exit);
+
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      const settled = yield* runtime
+        .processThread(agent, decodeThreadId(thread))
+        .pipe(Effect.provide(tools));
+
+      expect(settled[0]?.outcome).toBe("completed");
+      expect(yield* Ref.get(starts)).toBe(1);
+      expect(scripted.prompts).toHaveLength(1);
+      const records = yield* readLog(thread);
+
+      expect(
+        records.find(({ record }) => record.payload._tag === "RunCompleted")?.record.payload,
+      ).toMatchObject({ output: "42" });
+      expect(records.at(-1)?.record.payload).toMatchObject({
+        _tag: "SubmissionSettled",
+        result: "42",
+      });
+    }),
+  );
+
+  it.effect("a declined receipt completion recovers and continues to required respond", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const { definition, tools } = makeReceiptCompletionFixture();
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? receiptCreateParts
+          : [
+              {
+                type: "tool-call",
+                id: "respond-1",
+                name: "respond",
+                params: { answer: "Creation is incomplete; additional input is required." },
+                providerExecuted: false,
+              },
+              { type: "finish", reason: "tool-calls", usage },
+            ],
+      );
+
+      const createCalls = yield* Ref.make(0);
+      const respondCalls = yield* Ref.make(0);
+
+      const toolLayer = tools.toLayer({
+        create: () =>
+          Ref.update(createCalls, (count) => count + 1).pipe(
+            Effect.as({ name: "Partial name", href: "/projects/partial-1", complete: false }),
+          ),
+        respond: (parameters) =>
+          Ref.update(respondCalls, (count) => count + 1).pipe(Effect.as(parameters)),
+      });
+
+      const agent = Agent.withModel(definition, scripted.model);
+      const thread = "thread-receipt-completion-declined";
+
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "Create and finish the project." },
+        submitOptions(thread, "receipt-completion-declined-1"),
+      );
+
+      yield* armFailpoint("turn:after-results-append");
+
+      const crashed = yield* Effect.exit(
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
+      );
+
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      const beforeRecovery = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
+      expect(beforeRecovery.filter((payload) => payload._tag === "RunCompleted")).toHaveLength(0);
+      expect(yield* Ref.get(createCalls)).toBe(1);
+      expect(yield* Ref.get(respondCalls)).toBe(0);
+      yield* clearFailpoint;
+      yield* runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer));
+
+      expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("completed");
+      expect(scripted.prompts).toHaveLength(2);
+      expect(yield* Ref.get(createCalls)).toBe(1);
+      expect(yield* Ref.get(respondCalls)).toBe(1);
+      const payloads = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
+      expect(payloads.filter((payload) => payload._tag === "ModelResponseRecorded")).toHaveLength(
+        2,
+      );
+      expect(payloads.filter((payload) => payload._tag === "ToolCallSettled")).toHaveLength(2);
+      expect(payloads.filter((payload) => payload._tag === "RunCompleted")).toHaveLength(1);
+      expect(payloads.at(-1)).toMatchObject({
+        _tag: "SubmissionSettled",
+        result: { answer: "Creation is incomplete; additional input is required." },
+      });
+    }),
+  );
+
+  for (const decision of ["approved", "aborted"] as const) {
+    it.effect(`receipt completion preserves ${decision} approval suspension`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const { definition, tools } = makeReceiptCompletionFixture(true);
+        const scripted = yield* makeScriptedModel(() => receiptCreateParts);
+        const createCalls = yield* Ref.make(0);
+        const respondCalls = yield* Ref.make(0);
+
+        const toolLayer = tools.toLayer({
+          create: () =>
+            Ref.update(createCalls, (count) => count + 1).pipe(
+              Effect.as({ name: "Approved name", href: "/projects/approved-1", complete: true }),
+            ),
+          respond: (parameters) =>
+            Ref.update(respondCalls, (count) => count + 1).pipe(Effect.as(parameters)),
+        });
+
+        const agent = Agent.withModel(definition, scripted.model);
+        const thread = `thread-receipt-completion-${decision}`;
+
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "Create a project after approval." },
+          submitOptions(thread, `receipt-completion-${decision}-1`),
+        );
+
+        yield* runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer));
+        expect(yield* Ref.get(createCalls)).toBe(0);
+        expect(yield* Ref.get(respondCalls)).toBe(0);
+        const suspended = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
+        expect(
+          suspended.filter((payload) => payload._tag === "ToolApprovalRequested"),
+        ).toHaveLength(1);
+        expect(suspended.filter((payload) => payload._tag === "RunCompleted")).toHaveLength(0);
+
+        if (decision === "approved") {
+          yield* runtime.resolveApproval(
+            ApprovalDecisionCommand.make({
+              submissionId: receipt.submissionId,
+              toolCallId: Schema.decodeSync(ToolCallId)("create-1"),
+              decision: "approved",
+              resolver: "operator",
+              reason: "approve the requested creation",
+            }),
+          );
+          yield* runtime
+            .processThread(agent, decodeThreadId(thread))
+            .pipe(Effect.provide(toolLayer));
+        } else {
+          yield* runtime.abort(
+            AbortCommand.make({
+              submissionId: receipt.submissionId,
+              author: "operator",
+              reason: "cancel before approval",
+            }),
+          );
+          yield* runtime.runRecovery;
+        }
+
+        const settlement = yield* runtime.awaitSettlement(receipt);
+
+        expect(settlement.outcome).toBe(decision === "approved" ? "completed" : "aborted");
+        expect(yield* Ref.get(createCalls)).toBe(decision === "approved" ? 1 : 0);
+        expect(yield* Ref.get(respondCalls)).toBe(0);
+        expect(scripted.prompts).toHaveLength(1);
+        const payloads = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
+        expect(payloads.filter((payload) => payload._tag === "SubmissionSettled")).toHaveLength(1);
+        expect(payloads.filter((payload) => payload._tag === "RunCompleted")).toHaveLength(
+          decision === "approved" ? 1 : 0,
+        );
+        expect(payloads.find((payload) => payload._tag === "SubmissionSettled")?.result).toEqual(
+          decision === "approved"
+            ? { answer: "Created Approved name: /projects/approved-1" }
+            : undefined,
+        );
+      }),
+    );
+  }
 
   it.effect(
     "RUN-032 resumes an over-token completion delivery under final-answer mode after the response commit",
@@ -2903,6 +3322,51 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 });
 
 layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (it) => {
+  it.effect("rejects a recovered receipt completion that disagrees with the canonical result", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const { definition, tools } = makeReceiptCompletionFixture();
+      const scripted = yield* makeScriptedModel(() => receiptCreateParts);
+      const createCalls = yield* Ref.make(0);
+      const respondCalls = yield* Ref.make(0);
+
+      const toolLayer = tools.toLayer({
+        create: () =>
+          Ref.update(createCalls, (count) => count + 1).pipe(
+            Effect.as({ name: "Canonical name", href: "/projects/canonical-1", complete: true }),
+          ),
+        respond: (parameters) =>
+          Ref.update(respondCalls, (count) => count + 1).pipe(Effect.as(parameters)),
+      });
+
+      const agent = Agent.withModel(definition, scripted.model);
+      const thread = "thread-hostile-receipt-completion";
+
+      yield* runtime.submit(
+        agent,
+        { question: "Create a project." },
+        submitOptions(thread, "hostile-receipt-completion-1"),
+      );
+      yield* armFailpoint("turn:after-results-append");
+
+      const crashed = yield* Effect.exit(
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
+      );
+
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      const recovered = yield* Effect.exit(
+        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(toolLayer)),
+      );
+
+      expect(failureTag(recovered)).toBe("RunJournalError");
+      expect(yield* Ref.get(createCalls)).toBe(1);
+      expect(yield* Ref.get(respondCalls)).toBe(0);
+      expect(scripted.prompts).toHaveLength(1);
+    }),
+  );
+
   it.effect("rejects a no-Tool marker whose output disagrees with its canonical response", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
@@ -4185,6 +4649,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
         expect(model.prompts).toHaveLength(0);
         yield* clearFailpoint;
+
         const settled = yield* runtime.processThread(agent, decodeThreadId(thread));
 
         expect(settled[0]?.outcome).toBe("completed");

@@ -1730,6 +1730,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const pendingToolBatchFor = Effect.fn("DurableAgentRuntime.pendingToolBatchFor")(function* (
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     runId: ReturnType<typeof runIdForSubmission>,
+    completionTools: ReadonlyArray<string> = [],
   ): Effect.fn.Return<PendingToolBatch | undefined, RunJournalError> {
     let lastResponse: { readonly turn: number; readonly messages: PersistedJson } | undefined;
 
@@ -1794,7 +1795,17 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         settled.push({ id: call.id, ...recorded });
       }
     }
-    if (settled.length >= calls.length) return undefined;
+
+    const projectSettledCompletion =
+      calls.length === 1 &&
+      calls[0] !== undefined &&
+      completionTools.includes(calls[0].name) &&
+      settled[0]?.isFailure === false &&
+      !records.some(
+        ({ record }) => record.payload._tag === "RunCompleted" && record.payload.runId === runId,
+      );
+
+    if (settled.length >= calls.length && !projectSettledCompletion) return undefined;
 
     return {
       turn: lastResponse.turn,
@@ -4156,7 +4167,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           message: "The child Run has no matching canonical lineage and execution bounds",
         });
       }
-      const pending = yield* pendingToolBatchFor(records, runId);
+
+      const pending = yield* pendingToolBatchFor(
+        records,
+        runId,
+        agent.definition.completionFromTools?.map((declaration) => declaration.tool),
+      );
 
       const resumeProjection =
         pending === undefined
@@ -4519,6 +4535,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           const completion = agent.definition.completion;
           const call = calls[0];
 
+          const actionCompletion = agent.definition.completionFromTools?.find(
+            (declaration) => declaration.tool === call?.name,
+          );
+
           const settled =
             call === undefined
               ? undefined
@@ -4530,23 +4550,38 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 )?.record.payload;
 
           if (
-            completion === undefined ||
             declared.total !== 1 ||
             calls.length !== 1 ||
-            call?.name !== completion.tool ||
+            call === undefined ||
+            (call.name !== completion?.tool && actionCompletion === undefined) ||
             settled?._tag !== "ToolCallSettled" ||
-            settled.toolName !== completion.tool ||
+            settled.toolName !== call.name ||
             settled.isFailure
           ) {
             return yield* RunJournalError.make({
               message: `Run ${runId} has a terminal completion marker without one successful declared completion Tool result`,
             });
           }
-          expectedOutput = yield* AgentRuntime.projectCompletionOutput(
-            agent,
-            completion,
-            call.params,
-            settled.result,
+
+          const projected = yield* (
+            actionCompletion !== undefined
+              ? AgentRuntime.projectCompletionFromToolOutput(
+                  agent,
+                  actionCompletion,
+                  call.params,
+                  settled.result,
+                )
+              : completion !== undefined
+                ? Effect.map(
+                    AgentRuntime.projectCompletionOutput(
+                      agent,
+                      completion,
+                      call.params,
+                      settled.result,
+                    ),
+                    Option.some,
+                  )
+                : Effect.succeed(Option.none())
           ).pipe(
             Effect.mapError((cause) =>
               RunJournalError.make({
@@ -4555,6 +4590,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               }),
             ),
           );
+
+          if (Option.isNone(projected)) {
+            return yield* RunJournalError.make({
+              message: `Run ${runId} completion Tool declined its recorded terminal output`,
+            });
+          }
+          expectedOutput = projected.value;
         } else {
           const responseText = yield* terminalAssistantText(response.messages);
 
@@ -6363,14 +6405,36 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             resultParts.push(...parts);
             remaining.push(Prompt.makeMessage("tool", { content: parts }));
           }
-          if (toolParts > 0) {
+
+          const settledCompletionPart =
+            completedRun === undefined || toolParts > 0
+              ? undefined
+              : appended
+                  .flatMap((message) => (message.role === "tool" ? message.content : []))
+                  .find(
+                    (part) =>
+                      part.type === "tool-result" &&
+                      !part.isFailure &&
+                      agent.definition.completionFromTools?.some(
+                        (declaration) => declaration.tool === part.name,
+                      ),
+                  );
+
+          if (settledCompletionPart?.type === "tool-result") {
+            resultParts.push(settledCompletionPart);
+            remaining.push(Prompt.makeMessage("tool", { content: [settledCompletionPart] }));
+          }
+
+          if (toolParts > 0 || settledCompletionPart !== undefined) {
             const completion = agent.definition.completion;
             const completionPart = resultParts[0];
 
             const runCompletion =
-              completion !== undefined &&
               resultParts.length === 1 &&
-              completionPart?.name === completion.tool &&
+              (completionPart?.name === completion?.tool ||
+                agent.definition.completionFromTools?.some(
+                  (declaration) => declaration.tool === completionPart?.name,
+                )) &&
               completionPart.isFailure !== true &&
               completedRun !== undefined
                 ? completedRun
@@ -6388,8 +6452,25 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               ...(runCompletion === undefined ? {} : { runCompletion }),
             });
 
-            yield* appendBatch(ctx, batch);
-            for (const record of batch.records) knownIds.add(record.recordId);
+            // A recovered external receipt is already canonical. Commit only the terminal
+            // marker at the same results boundary; never duplicate or rewrite its result.
+            let pendingBatch = batch;
+
+            if (settledCompletionPart !== undefined) {
+              const completionRecord = batch.records.find(
+                (record) => record.payload._tag === "RunCompleted",
+              );
+
+              if (completionRecord === undefined || knownIds.has(completionRecord.recordId)) {
+                return yield* RunJournalError.make({
+                  message: "Recovered action completion has no new terminal record",
+                });
+              }
+              pendingBatch = CanonicalBatch.make({ ...batch, records: [completionRecord] });
+            }
+
+            yield* appendBatch(ctx, pendingBatch);
+            for (const record of pendingBatch.records) knownIds.add(record.recordId);
             yield* hit("turn:after-results-append");
           }
         } else {

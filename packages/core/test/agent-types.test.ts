@@ -7,7 +7,7 @@ import {
   type ContextOverflowError,
 } from "@effect-agent/core/AgentError";
 import { AgentPolicy, type CompactionPolicy } from "@effect-agent/core/AgentPolicy";
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
 import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -174,6 +174,20 @@ const terminalDefinition = Agent.make("terminal-type-proof", {
   },
 });
 
+const actionCompletionDefinition = Agent.make("action-type-proof", {
+  input: Schema.String,
+  output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+  instructions: "Deliver one action.",
+  toolkit: DeliveryTools,
+  completionFromTools: [
+    {
+      tool: "post_message",
+      project: ({ parameters, result }) =>
+        Option.some({ message: parameters.message, messageId: result.messageId }),
+    },
+  ],
+});
+
 type ExpectedRequirements =
   | InstructionContext
   | ModelConfig
@@ -292,6 +306,8 @@ describe("Agent type inference", () => {
     expect(runDispositionFailureProof).toBe(true);
     expect(Object.isFrozen(dispositionDefinition.runDisposition)).toBe(true);
     expect(Object.isFrozen(terminalDefinition.completion)).toBe(true);
+    expect(Object.isFrozen(actionCompletionDefinition.completionFromTools)).toBe(true);
+    expect(Object.isFrozen(actionCompletionDefinition.completionFromTools?.[0])).toBe(true);
     expect(agent.definition).toBe(definition);
     expect(agent.model).toBe(model);
     expect(Object.isFrozen(definition)).toBe(true);
