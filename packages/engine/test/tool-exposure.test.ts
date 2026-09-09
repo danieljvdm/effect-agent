@@ -1,6 +1,7 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { RunId, ThreadId, TurnId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import {
   AdditionalToolCatalog,
   DiscoveryTool,
@@ -10,6 +11,7 @@ import {
   Snapshot,
 } from "@effect-agent/core/ToolExposure";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
+import { ContextRolloverTool } from "@effect-agent/engine/ContextWindow";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { CurrentToolCatalog, RunToolVisibility } from "@effect-agent/engine/ToolExposure";
@@ -46,6 +48,7 @@ const done: ReadonlyArray<Response.StreamPartEncoded> = [
 const scripted = (
   responses: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>,
   requests: Array<ReadonlyArray<string>>,
+  choices?: Array<LanguageModel.ToolChoice<string>>,
 ) => {
   let index = 0;
 
@@ -58,6 +61,7 @@ const scripted = (
         generateText: () => Effect.succeed([]),
         streamText: (options) => {
           requests.push(options.tools.map((tool) => tool.name));
+          choices?.push(options.toolChoice);
 
           return Stream.fromIterable(responses[index++] ?? done);
         },
@@ -113,6 +117,147 @@ const failure = <E>(exit: Exit.Exit<unknown, E>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined;
 
 layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool exposure", (it) => {
+  for (const authority of ["host", "grant"] as const) {
+    it.effect(`keeps eligible pins across replacements while ${authority} hides another pin`, () =>
+      Effect.gen(function* () {
+        const native = Toolkit.make(Search, Read.annotate(PinnedTool, true), Write, Status);
+
+        const agent = Agent.make("eligible-pins", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Use authorized Tools.",
+          toolkit: native,
+          toolExposure: { maxTools: 3 },
+        });
+
+        const requests: Array<ReadonlyArray<string>> = [];
+        let hiddenStarts = 0;
+
+        const handlers = native.toLayer({
+          discover: ({ select }) =>
+            Effect.gen(function* () {
+              expect((yield* CurrentToolCatalog).entries.map((entry) => entry.tool.name)).toEqual([
+                "discover",
+                "read",
+                "write",
+              ]);
+
+              return { toolNames: select === "" ? [] : [select], padding: "" };
+            }),
+          read: () => Effect.succeed("read"),
+          write: () => Effect.succeed("write"),
+          status: () =>
+            Effect.sync(() => {
+              hiddenStarts++;
+
+              return "status";
+            }),
+        });
+
+        const options =
+          authority === "grant"
+            ? {
+                subagentGrant: SubagentGrant.make({
+                  allowedToolNames: ["discover", "read", "write"],
+                  maxDepth: 1,
+                }),
+                delegationDepth: 1,
+              }
+            : {};
+
+        const visibility = Layer.succeed(
+          RunToolVisibility,
+          authority === "host"
+            ? {
+                visible: ({ toolNames }) =>
+                  Effect.succeed(toolNames.filter((name) => name !== "status")),
+              }
+            : undefined,
+        );
+
+        const result = yield* AgentRuntime.run(
+          Agent.withModel(
+            agent,
+            scripted(
+              [
+                [call("select", "discover", { select: "write" }), finish],
+                [call("clear", "discover", { select: "" }), finish],
+                done,
+              ],
+              requests,
+            ),
+          ),
+          "go",
+          options,
+        ).pipe(Effect.provide([handlers, visibility]));
+
+        expect(result.output).toBe("done");
+        expect(requests).toEqual([
+          ["discover", "read"],
+          ["discover", "read", "write"],
+          ["discover", "read"],
+        ]);
+
+        const rejected = yield* AgentRuntime.run(
+          Agent.withModel(agent, scripted([[call("hidden", "status"), finish]], [])),
+          "go",
+          options,
+        ).pipe(Effect.provide([handlers, visibility]), Effect.exit);
+
+        expect(Exit.isFailure(rejected)).toBe(true);
+        expect(hiddenStarts).toBe(0);
+      }),
+    );
+  }
+
+  for (const mandatory of ["discovery", "rollover", "completion"] as const) {
+    it.effect(`refuses an unavailable mandatory ${mandatory} Tool before model dispatch`, () =>
+      Effect.gen(function* () {
+        const required =
+          mandatory === "discovery"
+            ? Search
+            : mandatory === "rollover"
+              ? Read.annotate(ContextRolloverTool, true)
+              : Read;
+
+        const native = Toolkit.make(required);
+
+        const agent = Agent.make("mandatory-tool", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Go.",
+          toolkit: native,
+          toolExposure: {},
+          ...(mandatory === "completion"
+            ? { completion: { tool: "read", required: true, project: () => "done" } }
+            : {}),
+        });
+
+        const requests: Array<ReadonlyArray<string>> = [];
+
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(agent, scripted([done], requests)),
+          "go",
+        ).pipe(
+          Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed([]) }),
+          Effect.provide(
+            native.toLayer({
+              discover: () => Effect.die("Unavailable discovery must not execute"),
+              read: () => Effect.die("Unavailable mandatory Tool must not execute"),
+            }),
+          ),
+          Effect.exit,
+        );
+
+        expect(failure(exit)).toMatchObject({
+          _tag: "ModelProtocolError",
+          message: "A mandatory Tool is excluded by host visibility or the inherited grant",
+        });
+        expect(requests).toEqual([]);
+      }),
+    );
+  }
+
   it.effect(
     "replaces in declaration order, keeps pins, and projects before result truncation",
     () =>
@@ -600,6 +745,82 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool ex
       expect(staged[1]?.selection?.toolNames).toEqual(["read"]);
     }),
   );
+
+  for (const authority of ["host", "grant"] as const) {
+    it.effect(`finishes with text when ${authority} hides an optional completion Tool`, () =>
+      Effect.gen(function* () {
+        const Finish = Tool.make("finish", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }).annotate(PinnedTool, true);
+
+        const native = Toolkit.make(Read, Finish);
+
+        const agent = Agent.make("hidden-optional-completion", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Read then answer.",
+          toolkit: native,
+          toolExposure: { initialToolNames: ["read"] },
+          policy: { maxTurns: 1, maxToolCalls: 5, onExhaustion: "final-answer" },
+          completion: { tool: "finish", project: ({ result }) => result },
+        });
+
+        const requests: Array<ReadonlyArray<string>> = [];
+        const choices: Array<LanguageModel.ToolChoice<string>> = [];
+        const staged: Array<Snapshot> = [];
+
+        const result = yield* AgentRuntime.run(
+          Agent.withModel(
+            agent,
+            scripted([[call("read-1", "read"), finish], done], requests, choices),
+          ),
+          "go",
+          {
+            ...(authority === "grant"
+              ? {
+                  subagentGrant: SubagentGrant.make({ allowedToolNames: ["read"], maxDepth: 1 }),
+                  delegationDepth: 1,
+                }
+              : {}),
+            durability: {
+              noteToolExposure: (_, snapshot) =>
+                Effect.sync(() => {
+                  staged.push(snapshot);
+                }),
+              commitResponse: () => Effect.void,
+              prepareToolCalls: () => Effect.void,
+              commitCompaction: () => Effect.void,
+              noteTurnUsage: () => Effect.void,
+              step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
+            },
+          },
+        ).pipe(
+          Effect.provideService(
+            RunToolVisibility,
+            authority === "host"
+              ? {
+                  visible: ({ toolNames }) =>
+                    Effect.succeed(toolNames.filter((name) => name !== "finish")),
+                }
+              : undefined,
+          ),
+          Effect.provide(
+            native.toLayer({
+              read: () => Effect.succeed("read"),
+              finish: () => Effect.die("Hidden optional completion must not execute"),
+            }),
+          ),
+        );
+
+        expect(result.output).toBe("done");
+        expect(result.finishReason).toBe("budget-exhausted");
+        expect(requests).toEqual([["read"], ["read"]]);
+        expect(choices).toEqual(["auto", "none"]);
+        expect(staged.map((snapshot) => snapshot.exposedToolNames)).toEqual(requests);
+      }),
+    );
+  }
 
   it.effect("keeps legacy eager completion free of opt-in exposure bounds", () =>
     Effect.gen(function* () {

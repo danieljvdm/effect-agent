@@ -154,9 +154,8 @@ export const exposureSnapshot = Effect.fn("ToolExposure.exposureSnapshot")(funct
   const native = entries.filter((entry) => entry.kind === "native").map((entry) => entry.tool);
   const progressive = definition.toolExposure !== undefined || selection !== undefined;
 
-  const pinned = Object.values(definition.toolkit.tools).filter(
+  const mandatory = Object.values(definition.toolkit.tools).filter(
     (tool) =>
-      Context.get(tool.annotations, PinnedTool) ||
       Context.get(tool.annotations, DiscoveryTool) ||
       Context.get(tool.annotations, ContextRolloverTool) ||
       (definition.completion?.required === true && definition.completion.tool === tool.name),
@@ -164,10 +163,17 @@ export const exposureSnapshot = Effect.fn("ToolExposure.exposureSnapshot")(funct
 
   if (
     progressive &&
-    pinned.some((tool) => !native.some((candidate) => candidate.name === tool.name))
+    mandatory.some((tool) => !native.some((candidate) => candidate.name === tool.name))
   ) {
-    return yield* invalid("A pinned Tool is excluded by host visibility or the inherited grant");
+    return yield* invalid("A mandatory Tool is excluded by host visibility or the inherited grant");
   }
+
+  // Explicit pins affect selection, never eligibility. Hosts may disable a common action
+  // without disabling the Run; protocol-required Tools still fail closed above.
+  const pinned = native.filter(
+    (tool) => Context.get(tool.annotations, PinnedTool) || mandatory.includes(tool),
+  );
+
   if (selection !== undefined) yield* validateSelection(selection, definition, entries, false);
   const selected = selection === undefined ? undefined : new Set(selection.toolNames);
 

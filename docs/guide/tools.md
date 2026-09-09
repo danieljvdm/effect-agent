@@ -174,10 +174,12 @@ successful selection clears it. If a batch contains several successful selection
 declaration order wins, regardless of completion order. No selection takes effect midway through
 a batch. Failed results retain the previous selection; ordinary tool error behavior still applies.
 
-During working turns, discovery tools, explicit `PinnedTool` annotations, required completion and context
-rollover tools stay exposed. Pins count toward the limits and never override eligibility: an
-excluded required pin causes a typed refusal. Optional completion is available when the runtime
-enters its final answer turn; that turn may expose only the completion tool. The default exposure limits are 64 tools and 256 KiB of aggregate
+During working turns, eligible tools with explicit `PinnedTool` annotations stay exposed across
+selections. Host visibility and inherited grants may hide these common tools without failing the
+run. Discovery, required completion and context rollover tools are mandatory: excluding one causes
+a typed refusal. Exposed pins count toward the limits and never override eligibility. Optional
+completion is available in the final answer turn only when eligible; otherwise the model finishes
+with text. That turn may expose only the completion tool. The default exposure limits are 64 tools and 256 KiB of aggregate
 UTF-8 JSON declarations (names, descriptions and parameter schemas, including the current model's
 schema transformation). Exceeding a limit fails with `ModelProtocolError`; there is no silent
 eviction beyond replacement.
