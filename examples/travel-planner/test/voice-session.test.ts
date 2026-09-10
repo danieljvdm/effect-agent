@@ -8,6 +8,7 @@ import {
   PlannerError,
   type SendMessageRequest,
   type VoiceWork,
+  type ResearchScoutActivity,
 } from "../src/domain.ts";
 import type { planner, previousTextPlanner } from "../src/server/planner.ts";
 import { emptyProgress } from "../src/server/progress.ts";
@@ -16,6 +17,7 @@ import {
   captionRows,
   delegationMessage,
   voiceUpdate,
+  voiceActivity,
   type VoiceRequest,
 } from "../src/voice/delegation.ts";
 import { LiveEvent, VoiceError } from "../src/voice/protocol.ts";
@@ -77,6 +79,7 @@ const setup = Effect.fn("voiceTest.setup")(function* (retained: ReadonlyArray<Vo
       }),
     read: (input) => Effect.succeed(observation(input.requestId)),
     progress: () => null,
+    background: () => null,
     typedRevision: () => typed,
     typedContext: () => "Thursday instead of Friday",
     typedRequest: () =>
@@ -590,3 +593,147 @@ it.effect(
       yield* Fiber.interrupt(fiber);
     }),
 );
+
+it.effect(
+  "speaks paced research updates after the parent finishes, yielding to recent speech",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup([
+        {
+          request,
+          delegationId: "item",
+          sessionId: "live-new",
+          offset: 100,
+          status: "accepted",
+          receipt: observation(),
+        },
+      ]);
+
+      let scouts: ResearchScoutActivity[] = [
+        {
+          id: "scout-one",
+          title: "Private hot tub cottages",
+          task: "PRIVATE task body",
+          state: "active",
+          progress: { ...emptyProgress, text: "PRIVATE provisional findings" },
+          activity: [{ id: "error", kind: "failure", text: "PRIVATE diagnostic" }],
+        },
+      ];
+
+      test.backend.background = () => ({ scouts });
+      test.backend.read = () => Effect.succeed(observation(request.requestId, "completed"));
+
+      const acknowledge = () =>
+        test.offer(
+          Schema.decodeUnknownSync(LiveEvent)({
+            type: "session.commentary.appended",
+            client_event_id: test.sent.at(-1)?.event_id,
+          }),
+        );
+
+      const fiber = yield* test.run.pipe(Effect.forkChild);
+
+      yield* test.start;
+      yield* TestClock.adjust("1 second");
+      expect(test.sent[0]?.content).toBe("Saved your Lisbon trip.");
+      yield* acknowledge();
+      yield* TestClock.adjust("5 seconds");
+      yield* test.offer(
+        Schema.decodeUnknownSync(LiveEvent)({
+          ...caption("assistant-speaking", "I’m looking into that."),
+          type: "session.output_transcript.delta",
+        }),
+      );
+      yield* TestClock.adjust("9 seconds");
+      expect(test.sent).toHaveLength(1);
+      yield* TestClock.adjust("1 second");
+      expect(test.sent[1]).toMatchObject({
+        type: "session.commentary.append",
+        delegation_id: "item",
+      });
+      expect(test.sent[1]?.content).toContain("Private hot tub cottages");
+      expect(test.sent[1]?.content).not.toContain("PRIVATE");
+      yield* acknowledge();
+      yield* TestClock.adjust("29 seconds");
+      expect(test.sent).toHaveLength(2);
+      yield* TestClock.adjust("1 second");
+      expect(test.sent).toHaveLength(3);
+      yield* acknowledge();
+      scouts = scouts.map((scout) => ({ ...scout, state: "failed" }));
+      yield* TestClock.adjust("35 seconds");
+      expect(test.sent).toHaveLength(3);
+      expect(test.admitted).toEqual([]);
+      yield* Fiber.interrupt(fiber);
+      expect(test.finalized()).toBe(true);
+    }),
+);
+
+it.effect("spoken activity takes priority over frequently changing quiet previews", () =>
+  Effect.gen(function* () {
+    const test = yield* setup([
+      {
+        request,
+        delegationId: "item",
+        sessionId: "live-new",
+        offset: 100,
+        status: "accepted",
+        receipt: observation(),
+      },
+    ]);
+
+    let revision = 0;
+
+    test.backend.progress = () => ({
+      ...emptyProgress,
+      submissionId: observation().submissionId,
+      attemptId: "attempt",
+      revision: revision++,
+      text: "Provisional answer still streaming",
+      tools: [{ id: "read", label: "Reading an Airbnb listing", state: "running" }],
+    });
+    const fiber = yield* test.run.pipe(Effect.forkChild);
+
+    yield* test.start;
+    for (let second = 0; second < 13; second++) {
+      yield* TestClock.adjust("1 second");
+      const last = test.sent.at(-1);
+
+      if (last)
+        yield* test.offer(
+          Schema.decodeUnknownSync(LiveEvent)({
+            type:
+              last.type === "session.thinking.append"
+                ? "session.thinking.appended"
+                : "session.commentary.appended",
+            client_event_id: last.event_id,
+          }),
+        );
+    }
+    const spoken = test.sent.filter((event) => event.type === "session.commentary.append");
+
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0]?.content).toContain("Reading an Airbnb listing");
+    expect(spoken[0]?.content).not.toContain("Provisional");
+    yield* Fiber.interrupt(fiber);
+  }),
+);
+
+it("excludes superseded and stopped work from spoken activity", () => {
+  const background = {
+    editor: {
+      id: "editor",
+      state: "active" as const,
+      task: "PRIVATE",
+      progress: emptyProgress,
+      activity: [],
+    },
+  };
+
+  expect(voiceActivity({ ...observation(), superseded: true }, null, background)).toBeNull();
+  expect(voiceActivity(observation(request.requestId, "aborted"), null, background)).toBeNull();
+  expect(voiceActivity(observation(request.requestId, "failed"), null, background)).toBeNull();
+  expect(voiceActivity(observation(request.requestId, "missing"), null, background)).toBeNull();
+  expect(voiceActivity(observation(request.requestId, "completed"), null, background)).toContain(
+    "trip website",
+  );
+});

@@ -146,7 +146,12 @@ labels, and schema-decoded settled answers reach the voice model. Previews are e
 provisional and sent as context; final answers use canonical settlement. Reasoning, credentials,
 raw tool output and diagnostics are excluded. A short summary of the saved trip and visible
 option names keeps references such as “the second one” grounded in the screen. Later canonical
-research answers return to the same voice exchange. A brief utterance delays an outgoing result
+research answers return to the same voice exchange. Observed research and editor activity also
+produce brief spoken updates while background work continues, even after the initial reply.
+These updates contain public task labels and work state, never partial findings or diagnostics.
+They wait for ten seconds without transcript activity, are spaced at least twelve seconds apart,
+and repeat unchanged ongoing activity only after thirty seconds. New speech postpones them;
+completed answers take priority. These are delivery pacing rules, not proof of audible playback. A brief utterance delays an outgoing result
 without discarding it; actual delegated corrections and typed requests replace the tracked work.
 Typing redirects the current explanation without leaving audio muted. Provider acknowledgment,
 playback and durable settlement remain separate internal states; no event proves speech was heard.

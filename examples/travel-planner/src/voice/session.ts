@@ -7,6 +7,7 @@ import {
   type VoiceWork,
   type VoiceWorkRequest,
   type SpokenMessage,
+  type PlannerSnapshot,
 } from "../domain.ts";
 import type { VoiceConnection } from "./browser.ts";
 import {
@@ -14,6 +15,7 @@ import {
   delegationMessage,
   isCaption,
   voiceUpdate,
+  voiceActivity,
   type VoiceRequest,
 } from "./delegation.ts";
 import { shortContext, VoiceError, type Caption } from "./protocol.ts";
@@ -29,6 +31,7 @@ export interface VoiceBackend {
   readonly submit: (request: SendMessageRequest) => Effect.Effect<unknown, PlannerError>;
   readonly read: (request: typeof VoiceWorkRequest.Type) => Effect.Effect<VoiceWork, PlannerError>;
   readonly progress: () => PlannerProgress | null;
+  readonly background: () => Pick<PlannerSnapshot, "scouts" | "editor"> | null;
   readonly typedRevision: () => number;
   readonly typedContext: () => string;
   readonly typedRequest: () => SendMessageRequest | null;
@@ -60,6 +63,9 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
   let lastProgressAt = 0;
   let lastDelegatedOffset = -1;
   let lastUserAt = -Infinity;
+  let lastSpeechAt = yield* Clock.currentTimeMillis;
+  let lastCommentaryAt = lastSpeechAt;
+  let lastActivity = "";
   let typedRequestId = backend.typedRequest()?.requestId;
   let lastContext = "";
   let seenAnswers = new Set(backend.answers().map((answer) => answer.id));
@@ -110,8 +116,8 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         } else if (isCaption(event)) {
           captions = appendCaption(captions, event);
           backend.caption(event);
-          if (event.type === "session.input_transcript.delta")
-            lastUserAt = yield* Clock.currentTimeMillis;
+          lastSpeechAt = yield* Clock.currentTimeMillis;
+          if (event.type === "session.input_transcript.delta") lastUserAt = lastSpeechAt;
         } else if (event.type === "session.delegation.created") {
           if (event.offset_ms <= lastDelegatedOffset) return;
           if (!knownDelegations.has(event.delegation.id)) {
@@ -173,6 +179,8 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       };
       stale = false;
       lastUpdate = "";
+      lastActivity = "";
+      lastCommentaryAt = now;
       yield* replace(latest);
     }
     if (append && now - append.at > 15_000)
@@ -222,6 +230,8 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         stale = false;
         lastDelegatedOffset = delegation.offset;
         lastUpdate = "";
+        lastActivity = "";
+        lastCommentaryAt = now;
         seenAnswers = new Set(backend.answers().map((answer) => answer.id));
         // Freeze before the first network call. A lost acknowledgement retains identical input/settings.
         yield* replace(latest);
@@ -299,11 +309,19 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         ? { kind: "result" as const, key: `answer:${answer.id}`, text: shortContext(answer.text) }
         : voiceUpdate(work, backend.progress());
 
+    const activity = voiceActivity(work, backend.progress(), backend.background());
+
+    const activityDue =
+      activity !== null &&
+      now - lastSpeechAt >= 10_000 &&
+      now - lastCommentaryAt >= (activity === lastActivity ? 30_000 : 12_000);
+
     if (
       update &&
       now - lastUserAt >= 1500 &&
       !append &&
       update.key !== lastUpdate &&
+      (update.kind === "result" || !activityDue) &&
       (update.kind === "result" || now - lastProgressAt >= 3000)
     ) {
       const delegation =
@@ -316,12 +334,22 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       );
       lastUpdate = update.key;
       if (update.kind === "result") {
+        lastCommentaryAt = now;
         for (const answer of answers) seenAnswers.add(answer.id);
         // A later research answer continues the exchange; don't then repeat the earlier receipt answer.
         if (update.key.startsWith("answer:")) lastUpdate = `settled:${work.receiptId}`;
       }
       lastProgressAt = now;
       note = update.kind === "result" ? "Listening" : "Working on your trip…";
+    }
+    if (activity && activityDue && !append && !typedContext && !pauseForTyped) {
+      yield* sendContext(
+        "session.commentary.append",
+        activity,
+        current.sessionId === sessionId && current.delegationId ? current.delegationId : null,
+      );
+      lastActivity = activity;
+      lastCommentaryAt = now;
     }
     render();
   });

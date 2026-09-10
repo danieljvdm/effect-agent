@@ -174,6 +174,7 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
                 ),
               ),
             progress: () => Option.getOrNull(AsyncResult.value(get(progressAtom))),
+            background: () => Option.getOrNull(AsyncResult.value(get(plannerAtom))),
             typedRevision: () => get(latestTypedInputAtom).revision,
             typedContext: () => get(latestTypedInputAtom).text,
             typedRequest: () => get(conversationRequestAtom),
