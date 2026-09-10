@@ -220,6 +220,22 @@ describe("thread canonical contracts", () => {
       }),
     );
 
+    it.effect("persists frozen provider arrays without changing their canonical digest", () =>
+      Effect.gen(function* () {
+        const sources = [{ type: "url", url: "https://example.com" }];
+
+        Object.setPrototypeOf(sources, null);
+        Object.freeze(sources);
+        const decoded = Schema.decodeUnknownSync(PersistedJson)({ action: { sources } });
+
+        expect(yield* digestJson(decoded)).toBe(
+          yield* digestJson({
+            action: { sources: [{ type: "url", url: "https://example.com" }] },
+          }),
+        );
+      }),
+    );
+
     it.effect("digests object keys by UTF-16 code units, independent of insertion order", () =>
       Effect.gen(function* () {
         const ordered = yield* digestJson({

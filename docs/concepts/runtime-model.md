@@ -113,7 +113,7 @@ maximum charge before the request.
 | Stop condition                                 | Runtime behavior                                                                               |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | Valid final output                             | Decode through the output Schema and complete when no queued input continues the run           |
-| Successful designated completion tool          | Project its singleton result through the output Schema and complete immediately                |
+| Successful designated completion tool          | Project its sole application result through the output Schema and complete immediately         |
 | Turn, tool call, or token exhaustion           | Follow `onExhaustion`: fail, or produce a constrained final answer with at most one grace turn |
 | Duration, cost, or repeated tool failure limit | Fail with a typed policy error                                                                 |
 | Abort or interruption                          | End the current execution; durable ownership loss may leave work for a replacement attempt     |

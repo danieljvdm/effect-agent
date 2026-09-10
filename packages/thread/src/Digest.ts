@@ -21,7 +21,7 @@ const canonicalJson = (value: Schema.Json): string => {
     return JSON.stringify(value);
   }
   if (Array.isArray<Schema.Json>(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
+    return `[${globalThis.Array.from(value, canonicalJson).join(",")}]`;
   }
 
   const entries = Object.entries(value).sort(([left], [right]) =>

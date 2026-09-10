@@ -106,6 +106,18 @@ const mixed = [
 
 const complete = [call("final", "complete", { answer: "researched" }), finish];
 
+const hostedSearch = [
+  call("provider-search", "search", { query: "Tahoe" }, true),
+  {
+    type: "tool-result",
+    id: "provider-search",
+    name: "search",
+    result: "found",
+    isFailure: false,
+    providerExecuted: true,
+  },
+] satisfies ReadonlyArray<Response.StreamPartEncoded>;
+
 const scriptedModel = (responses: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) => {
   const prompts: Array<Prompt.Prompt> = [];
 
@@ -128,6 +140,20 @@ const scriptedModel = (responses: ReadonlyArray<ReadonlyArray<Response.StreamPar
   );
 
   return { model, prompts };
+};
+
+const resumeUsage = {
+  modelCalls: 1,
+  committedTurns: 1,
+  toolCalls: 2,
+  inputTokens: 10,
+  outputTokens: 5,
+  lastInputTokens: 10,
+  lastOutputTokens: 5,
+  costMicrousd: 0,
+  programmaticToolCalls: 0,
+  consecutiveToolFailures: 0,
+  finalizationUsed: false,
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
@@ -379,35 +405,201 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient, RunContextPrepar
       }),
     );
 
-    it.effect.each([false, true])(
-      "refuses mixed provider batches with terminal result=%s",
-      (settled) =>
-        Effect.gen(function* () {
-          const { model, prompts } = scriptedModel([
-            [
-              call("provider-search", "search", { query: "Tahoe" }, true),
-              ...(settled
-                ? [
-                    {
-                      type: "tool-result" as const,
-                      id: "provider-search",
-                      name: "search",
-                      result: "found",
-                      isFailure: false,
-                      providerExecuted: true,
-                    },
-                  ]
-                : []),
-              call("premature", "complete", { answer: "unresearched" }),
-              finish,
-            ],
-            complete,
-          ]);
+    for (const kind of ["required", "optional", "action"] as const) {
+      it.effect.each(["live", "pending", "settled"] as const)(
+        `${kind} completion accepts terminal provider work during %s execution`,
+        (mode) =>
+          Effect.gen(function* () {
+            const { model, prompts } = scriptedModel([[...hostedSearch, ...complete]]);
+            let starts = 0;
+            const usage: Array<RunUsageDelta> = [];
 
-          const exit = yield* AgentRuntime.run(Agent.withModel(definition(), model), "travel").pipe(
+            const result = yield* AgentRuntime.run(
+              Agent.withModel(definition(kind), model),
+              "travel",
+              {
+                ...(mode === "live"
+                  ? {}
+                  : {
+                      resumeUsage,
+                      resume: {
+                        turn: 1,
+                        turnId: TurnId.make("resumed-provider"),
+                        calls: [
+                          {
+                            id: "provider-search",
+                            name: "search",
+                            params: { query: "Tahoe" },
+                            providerExecuted: true,
+                          },
+                          { id: "final", name: "complete", params: { answer: "researched" } },
+                        ],
+                        settled: [
+                          { id: "provider-search", result: "found", isFailure: false },
+                          ...(mode === "settled"
+                            ? [{ id: "final", result: "researched", isFailure: false }]
+                            : []),
+                        ],
+                      },
+                    }),
+                budget: {
+                  guard: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
+                  consume: (delta: RunUsageDelta) =>
+                    Effect.sync(() => {
+                      usage.push(delta);
+                    }),
+                },
+              },
+            ).pipe(
+              Effect.provide(
+                tools.toLayer({
+                  search: () =>
+                    Effect.die("provider work must never invoke an application handler"),
+                  complete: ({ answer }) =>
+                    Effect.sync(() => {
+                      starts++;
+
+                      return answer;
+                    }),
+                }),
+              ),
+            );
+
+            expect(result.output).toBe("researched");
+            expect(starts).toBe(mode === "settled" ? 0 : 1);
+            expect(prompts).toHaveLength(mode === "live" ? 1 : 0);
+            expect(
+              usage.filter((delta) => delta.modelCalls > 0).map((delta) => delta.toolCalls),
+            ).toEqual(mode === "live" ? [2] : []);
+          }),
+      );
+
+      it.effect(
+        `${kind} completion corrects application calls while retaining hosted results`,
+        () =>
+          Effect.gen(function* () {
+            const { model, prompts } = scriptedModel([[...hostedSearch, ...mixed], complete]);
+            const starts: Array<string> = [];
+
+            const events = yield* AgentRuntime.stream(
+              Agent.withModel(definition(kind), model),
+              "travel",
+            ).pipe(
+              Stream.runCollect,
+              Effect.provide(
+                tools.toLayer({
+                  search: () => Effect.die("rejected and provider calls must not run"),
+                  complete: ({ answer }) =>
+                    Effect.sync(() => {
+                      starts.push(answer);
+
+                      return answer;
+                    }),
+                }),
+              ),
+            );
+
+            expect(starts).toEqual(["researched"]);
+            expect(events.at(-1)).toMatchObject({
+              _tag: "RunCompleted",
+              output: "researched",
+              turns: 2,
+            });
+            expect(
+              events
+                .filter((event) => event._tag === "ToolCallFailed")
+                .map((event) => event.toolCallId),
+            ).toEqual(["premature", "rejected-search"]);
+            expect(
+              prompts[1]?.content.flatMap((message) =>
+                message.role === "assistant" ? message.content : [],
+              ),
+            ).toContainEqual(
+              expect.objectContaining({
+                type: "tool-result",
+                id: "provider-search",
+                result: "found",
+                isFailure: false,
+                providerExecuted: true,
+              }),
+            );
+            expect(JSON.stringify(prompts[1])).toContain("none of its application tools ran");
+          }),
+      );
+    }
+
+    it.effect.each(["strict", "finalization"] as const)(
+      "counts provider calls and preserves the %s budget boundary",
+      (mode) =>
+        Effect.gen(function* () {
+          const { model } = scriptedModel([[...hostedSearch, ...complete]]);
+
+          const exit = yield* AgentRuntime.run(
+            Agent.withModel(
+              definition("required", {
+                maxToolCalls: 1,
+                onExhaustion: mode === "strict" ? "fail" : "final-answer",
+              }),
+              model,
+            ),
+            "travel",
+            mode === "finalization" ? { resumeUsage } : {},
+          ).pipe(
             Effect.provide(
               tools.toLayer({
-                search: () => Effect.die("provider calls never invoke handlers"),
+                search: () => Effect.die("must not replay"),
+                complete: () => Effect.die("must not execute beyond the allowed tool surface"),
+              }),
+            ),
+            Effect.exit,
+          );
+
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit))
+            expect(Cause.findErrorOption(exit.cause)).toMatchObject({
+              _tag: "Some",
+              value:
+                mode === "strict"
+                  ? { _tag: "AgentPolicyError", limit: "tool-calls" }
+                  : { _tag: "ModelProtocolError" },
+            });
+        }),
+    );
+
+    it.effect.each(["live", "resume"] as const)(
+      "refuses provider work without a terminal result during %s",
+      (mode) =>
+        Effect.gen(function* () {
+          const { model, prompts } = scriptedModel([
+            [call("provider-search", "search", { query: "Tahoe" }, true), ...complete],
+          ]);
+
+          const exit = yield* AgentRuntime.run(
+            Agent.withModel(definition(), model),
+            "travel",
+            mode === "live"
+              ? {}
+              : {
+                  resumeUsage,
+                  resume: {
+                    turn: 1,
+                    turnId: TurnId.make("missing-provider-result"),
+                    calls: [
+                      {
+                        id: "provider-search",
+                        name: "search",
+                        params: { query: "Tahoe" },
+                        providerExecuted: true,
+                      },
+                      { id: "final", name: "complete", params: { answer: "researched" } },
+                    ],
+                    settled: [],
+                  },
+                },
+          ).pipe(
+            Effect.provide(
+              tools.toLayer({
+                search: () => Effect.die("must not replay"),
                 complete: () => Effect.die("must not execute"),
               }),
             ),
@@ -420,7 +612,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient, RunContextPrepar
               _tag: "Some",
               value: { _tag: "ModelProtocolError" },
             });
-          expect(prompts).toHaveLength(1);
+          expect(prompts).toHaveLength(mode === "live" ? 1 : 0);
         }),
     );
 
@@ -431,6 +623,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient, RunContextPrepar
           const { model, prompts } = scriptedModel([complete]);
 
           const exit = yield* AgentRuntime.run(Agent.withModel(definition(), model), "travel", {
+            resumeUsage,
             resume: {
               turn: 1,
               turnId: TurnId.make("resumed"),

@@ -48,10 +48,12 @@ export interface CompletionProjectionInput<Parameters = unknown, Result = unknow
 }
 
 /**
- * One application Tool whose successful singleton result can complete its owning Agent.
+ * One application Tool whose successful result can complete its owning Agent when it is the
+ * only application call. Provider-executed calls may accompany it only with terminal results.
  * Mixed, wholly unexecuted application batches are rejected with failed Tool results so the
- * model can correct them within ordinary Run budgets. Provider-containing and invalid pending
- * resumed batches fail closed; the completion designation never permits side-effect replay.
+ * model can correct them within ordinary Run budgets; completed provider results are retained.
+ * Missing provider results and invalid pending resumed batches fail closed. The completion
+ * designation never permits side-effect replay.
  */
 export interface CompletionToolDeclaration<
   Parameters = unknown,
@@ -75,8 +77,9 @@ type CompletionToolFor<ToolkitValue extends Toolkit.Any, Output> = {
 /**
  * An ordinary action Tool whose canonical success may satisfy the whole request.
  * Projectors must be pure and deterministic: recovery re-evaluates them. None preserves
- * ordinary continuation; Some is validated as the Agent output. These Tools must run alone
- * and never receive the required completion Tool's exhaustion allowance.
+ * ordinary continuation; Some is validated as the Agent output. These Tools must be the sole
+ * application call; terminal provider results may accompany them. They never receive the
+ * required completion Tool's exhaustion allowance.
  */
 export interface CompletionFromToolDeclaration<
   Parameters = unknown,

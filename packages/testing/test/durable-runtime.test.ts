@@ -1614,7 +1614,26 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const fixture = makeReceiptCompletionFixture();
-        const scripted = yield* makeScriptedModel(() => receiptCreateParts);
+
+        const scripted = yield* makeScriptedModel(() => [
+          {
+            type: "tool-call",
+            id: "hosted-1",
+            name: "respond",
+            params: { answer: "found" },
+            providerExecuted: true,
+          },
+          {
+            type: "tool-result",
+            id: "hosted-1",
+            name: "respond",
+            result: { answer: "found" },
+            isFailure: false,
+            providerExecuted: true,
+          },
+          ...receiptCreateParts,
+        ]);
+
         const agent = Agent.withModel(fixture.definition, scripted.model);
         const thread = "thread-receipt-recovered-result";
         const starts = yield* Ref.make(0);
@@ -1624,7 +1643,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             Ref.update(starts, (count) => count + 1).pipe(
               Effect.as({ name: "Project", href: "/project/1", complete: true }),
             ),
-          respond: ({ answer }) => Effect.succeed({ answer }),
+          respond: () => Effect.die("Recorded provider work must not be replayed"),
         });
 
         const receipt = yield* runtime.submit(
@@ -2010,7 +2029,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     repeated: boolean;
   }>) {
     it.effect(
-      `mixed completion recovery preserves ${scenario.name} without duplicate effects`,
+      `mixed completion recovery retains hosted results and preserves ${scenario.name} without duplicate effects`,
       () =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
@@ -2044,6 +2063,25 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           const scripted = yield* makeScriptedModel((turn) =>
             turn === 0 || scenario.repeated
               ? [
+                  ...(turn === 0
+                    ? ([
+                        {
+                          type: "tool-call",
+                          id: `hosted-${turn}`,
+                          name: "search",
+                          params: {},
+                          providerExecuted: true,
+                        },
+                        {
+                          type: "tool-result",
+                          id: `hosted-${turn}`,
+                          name: "search",
+                          result: "provider evidence",
+                          isFailure: false,
+                          providerExecuted: true,
+                        },
+                      ] as const)
+                    : []),
                   {
                     type: "tool-call",
                     id: `premature-${turn}`,
@@ -2170,7 +2208,8 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(scripted.prompts).toHaveLength(scenario.repeated ? 2 : 3);
           const correctionPrompt = JSON.stringify(scripted.prompts[1]);
 
-          expect(correctionPrompt).toContain("none of its tools ran");
+          expect(correctionPrompt).toContain("none of its application tools ran");
+          expect(correctionPrompt).toContain("provider evidence");
           expect(correctionPrompt).toContain("premature-0");
           const after = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
 
@@ -3656,8 +3695,8 @@ layer(corruptedCompletionTestLayer)("RUN-032 recovered completion validation", (
   );
 });
 
-layer(injectedProviderCallTestLayer)("RUN-032 recovered completion singleton validation", (it) => {
-  it.effect("rejects a completion marker mixed with a provider-executed Tool Call", () =>
+layer(injectedProviderCallTestLayer)("RUN-032 recovered completion provider validation", (it) => {
+  it.effect("rejects a completion marker whose provider call has no terminal result", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
 
