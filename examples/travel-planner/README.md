@@ -287,8 +287,13 @@ against an expected SHA. Conflicting edits fail without force-pushing. Source is
 
 Each committed edit starts a deterministic Workflow. The host transfers source into a fresh
 scoped Sandbox, runs `vp install --ignore-scripts`, `vp check --no-fmt`, and `vp run build`,
-then destroys it. The container has no account, model, Access, or Git credentials. Build
-output must include `dist/web/index.html` and `dist/server/index.js`, with at most 200 files,
+then destroys it. The container has no account, model, Access, or Git credentials. Capacity
+is capped at four containers. If all are busy, startup waits with bounded backoff
+and records that it is waiting for a builder. Only the initial directory creation is retried;
+source writes and build commands are not replayed on ambiguous Sandbox errors. Cancellation
+still releases the container. Startup failures identify the operation or capacity limit
+without exposing the raw provider error or blaming the app's source.
+Build output must include `dist/web/index.html` and `dist/server/index.js`, with at most 200 files,
 4 MiB per file, and 24 MiB total. R2 stores immutable objects and commits the validated
 manifest last. Failed builds retain the last working version and show bounded diagnostics.
 Retry reuses a valid completed build; an obsolete Workflow cannot activate over newer edits.

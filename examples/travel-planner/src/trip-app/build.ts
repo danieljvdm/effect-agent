@@ -1,4 +1,4 @@
-import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { Context, DateTime, Duration, Effect, Layer, Option, Schedule, Schema } from "effect";
 import { R2, WorkerEnvironment, Workflow } from "effect-cf";
 import * as Sandbox from "effect-cf/sandbox";
 
@@ -23,6 +23,18 @@ const MAX_FILE = 4 * 1024 * 1024;
 const MAX_BUILD = 24 * 1024 * 1024;
 const failed = (message: string) => new PlannerError({ code: "unavailable", message });
 const badManifest = () => failed("Invalid app build manifest.");
+
+// The Sandbox SDK currently exposes container capacity through its wrapped cause,
+// rather than a typed retryable reason. Match the platform diagnostic narrowly.
+const builderAtCapacity = (error: Sandbox.SandboxOperationError) =>
+  error.message.includes("Maximum number of running container instances exceeded");
+
+const sandboxFailure = (error: Sandbox.SandboxOperationError) =>
+  failed(
+    builderAtCapacity(error)
+      ? "All app builders are busy. Retry the build in a moment."
+      : `The app builder's ${error.operation} operation failed. Retry the build.`,
+  );
 
 const outputPath = AppFilePath.check(
   Schema.makeFilter(
@@ -174,7 +186,25 @@ export const AppBuilderLive = Layer.effect(
                 }
               });
 
-              const directory = yield* box.mkdir(root, { recursive: true });
+              // Only the initial, idempotent directory creation can be retried here.
+              // Commands and source writes must never be replayed on ambiguous errors.
+              const directory = yield* box.mkdir(root, { recursive: true }).pipe(
+                Effect.tapError((error) =>
+                  builderAtCapacity(error)
+                    ? report({ phase: "queued", message: "Waiting for an available app builder" })
+                    : Effect.void,
+                ),
+                Effect.retry({
+                  while: (error) =>
+                    error._tag === "SandboxOperationError" && builderAtCapacity(error),
+                  times: 10,
+                  schedule: Schedule.exponential("1 second").pipe(
+                    Schedule.modifyDelay(({ duration }) =>
+                      Effect.succeed(Duration.min(duration, Duration.seconds(15))),
+                    ),
+                  ),
+                }),
+              );
 
               if (!directory.success) return yield* failed("Could not prepare the app builder.");
               for (const file of files) {
@@ -258,11 +288,7 @@ export const AppBuilderLive = Layer.effect(
                 orElse: () => Effect.fail(failed("App builder cleanup timed out.")),
               }),
             ),
-        ).pipe(
-          Effect.catchTag("SandboxOperationError", () =>
-            failed("The app sandbox operation failed. Check the source and retry."),
-          ),
-        );
+        ).pipe(Effect.catchTag("SandboxOperationError", sandboxFailure));
       },
       Effect.scoped,
       Effect.timeoutOrElse({

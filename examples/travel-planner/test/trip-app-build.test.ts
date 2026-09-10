@@ -62,7 +62,7 @@ beforeAll(async () => {
     import { AppRepository } from "../src/trip-app/repository.ts";
     import { TripFailpoint } from "../src/server/trips.ts";
     let app = ${JSON.stringify(initial)};
-    let compiles = 0, reads = 0, saves = 0, destroyed = 0, subscriptions = 0;
+    let compiles = 0, reads = 0, saves = 0, destroyed = 0, subscriptions = 0, mkdirCalls = 0;
     let point = "", mode = "", conflict = "", fault = "failure";
     const events = [];
     const commands = [];
@@ -119,7 +119,13 @@ beforeAll(async () => {
     export class FakeSandbox extends DurableObject {
       async configure() {}
       async exec(command, options) { commands.push({command,options,phase:app.buildProgress?.at(-1)?.phase??null}); return { id: "process", pid: 1, capability: new Process() }; }
-      async mkdir(path) { return { success: true, path, recursive: true, timestamp: "2026-09-09T00:00:00Z" }; }
+      async mkdir(path) {
+        mkdirCalls++;
+        if (mode === "capacity-wait" || (mode === "capacity-once" && mkdirCalls === 1))
+          throw new Error("Maximum number of running container instances exceeded. PRIVATE_SANDBOX_FAILURE");
+        if (mode === "startup-fail") throw new Error("PRIVATE_SANDBOX_FAILURE");
+        return { success: true, path, recursive: true, timestamp: "2026-09-09T00:00:00Z" };
+      }
       async writeFile(path) { return {success:true,path,timestamp:"2026-09-09T00:00:00Z"}; }
       async listFiles(path) { return { success: true, path, count: 2, timestamp:"2026-09-09T00:00:00Z", files: output.map((file) => ({name:file.path,absolutePath:path+"/"+file.path,relativePath:file.path,type:mode === "symlink" ? "symlink":"file",size:file.body.byteLength,modifiedAt:"2026-09-09T00:00:00Z",mode:"0644",permissions:{readable:true,writable:true,executable:false}})) }; }
       async readFile(path) { const file = output.find((file) => path.endsWith(file.path)); return {success:true,path,content:btoa(String.fromCharCode(...file.body)),encoding:"base64",timestamp:"2026-09-09T00:00:00Z"}; }
@@ -130,7 +136,7 @@ beforeAll(async () => {
       const request = Schema.decodeUnknownSync(AppBuildRequest)(input.request);
       if (input.kind === "reset") {
         app = Schema.decodeUnknownSync(TripApp)(input.app);
-        compiles=0;reads=0;saves=0;destroyed=0;subscriptions=0;events.length=0;commands.length=0;point="";mode="";conflict="";fault="failure";
+        compiles=0;reads=0;saves=0;destroyed=0;subscriptions=0;mkdirCalls=0;events.length=0;commands.length=0;point="";mode="";conflict="";fault="failure";
         const listed = await env.APP_BUILDS.list(); if (listed.objects.length) await env.APP_BUILDS.delete(listed.objects.map((object) => object.key));
       }
       if(input.point !== undefined) point=input.point;
@@ -145,13 +151,13 @@ beforeAll(async () => {
       if (input.kind === "corrupt") action = Effect.promise(() => env.APP_BUILDS.put(buildPrefix(request.appId, request.commitId)+"manifest.json", input.value));
       if (input.kind === "sdk") action = Effect.flatMap(AppBuilder, (builder) => builder.compile(request.appId+"-"+request.commitId, [{path:"index.ts",content:"export {}"}], (event) => recordBuildProgress(request,event).pipe(Effect.provide(apps)))).pipe(
         Effect.provide(AppBuilderLive.pipe(Layer.provide(AppBuildSandbox.layer({binding:"APP_SANDBOX"})))),
-        ...(mode === "hang" ? [Effect.timeoutOrElse({duration:"100 millis",orElse:()=>Effect.fail(new PlannerError({code:"unavailable",message:"Fixture deadline"}))})] : []),
+        ...(mode === "hang" || mode === "capacity-wait" ? [Effect.timeoutOrElse({duration:"100 millis",orElse:()=>Effect.fail(new PlannerError({code:"unavailable",message:"Fixture deadline"}))})] : []),
       );
       if (input.kind === "workflow") action = SiteBuildBinding.create(request, {id:input.id}).pipe(Effect.provide(SiteBuildBinding.layer({binding:"SITE_BUILD"})));
       if (input.kind === "status") action = Effect.flatMap(SiteBuildBinding.get(input.id), (instance) => instance.status).pipe(Effect.provide(SiteBuildBinding.layer({binding:"SITE_BUILD"})));
       const exit = await Effect.runPromise(action.pipe(Effect.provide(services),Effect.provideService(WorkerEnvironment,env),Effect.exit));
       const manifest = await Effect.runPromise(readBuild(env.APP_BUILDS,request.appId,request.commitId).pipe(Effect.result));
-      return Response.json({exit:exit._tag === "Success" ? {tag:"Success",...(input.kind==="status"?{value:exit.value}:{})}:{tag:"Failure",error:Cause.pretty(exit.cause)},app,compiles,reads,saves,destroyed,subscriptions,events,commands,manifest:manifest._tag === "Success" ? manifest.success : null});
+      return Response.json({exit:exit._tag === "Success" ? {tag:"Success",...(input.kind==="status"?{value:exit.value}:{})}:{tag:"Failure",error:Cause.pretty(exit.cause)},app,compiles,reads,saves,destroyed,subscriptions,mkdirCalls,events,commands,manifest:manifest._tag === "Success" ? manifest.success : null});
     }};
   `,
     },
@@ -200,6 +206,7 @@ const Result = Schema.Struct({
   saves: Schema.Number,
   destroyed: Schema.Number,
   subscriptions: Schema.Number,
+  mkdirCalls: Schema.Number,
   events: Schema.Array(Schema.String),
   commands: Schema.Array(
     Schema.Struct({
@@ -450,6 +457,44 @@ it("uses the actual Sandbox SDK through effect-cf and cleans up success, command
         : ["installing", "checking", "compiling"],
     );
   }
+}, 30_000);
+
+it("waits for temporary builder capacity without replaying build commands", async () => {
+  await reset();
+  const result = await call("sdk", { mode: "capacity-once" });
+
+  expect(result.exit.tag).toBe("Success");
+  expect(result.mkdirCalls).toBe(2);
+  expect(result.destroyed).toBe(1);
+  expect(result.commands).toHaveLength(3);
+  expect(result.app.buildProgress?.map(({ phase }) => phase)).toEqual([
+    "queued",
+    "installing",
+    "checking",
+    "compiling",
+  ]);
+  expect(result.app.buildProgress?.[0]?.message).toBe("Waiting for an available app builder");
+}, 30_000);
+
+it("does not retry unknown startup failures and releases capacity waiters on interruption", async () => {
+  await reset();
+  const failed = await call("sdk", { mode: "startup-fail" });
+
+  expect(failed.exit.tag).toBe("Failure");
+  expect(failed.exit.error).toContain("mkdir operation failed");
+  expect(failed.exit.error).not.toContain("PRIVATE_SANDBOX_FAILURE");
+  expect(failed.mkdirCalls).toBe(1);
+  expect(failed.commands).toEqual([]);
+  expect(failed.destroyed).toBe(1);
+  await reset();
+  const interrupted = await call("sdk", { mode: "capacity-wait" });
+
+  expect(interrupted.exit.tag).toBe("Failure");
+  expect(interrupted.exit.error).toContain("Fixture deadline");
+  expect(interrupted.mkdirCalls).toBe(1);
+  expect(interrupted.commands).toEqual([]);
+  expect(interrupted.destroyed).toBe(1);
+  expect(interrupted.app.buildProgress?.map(({ phase }) => phase)).toEqual(["queued"]);
 }, 30_000);
 
 it("runs the typed effect-cf Workflow against real R2 and validates its result", async () => {

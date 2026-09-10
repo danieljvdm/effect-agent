@@ -16,16 +16,21 @@ import { AppSourceStore, appSourceLayer } from "../src/trip-app/source.ts";
 // history use the real smart-HTTP backend and production isomorphic-git client.
 const command = (args: string[], input = new Uint8Array(), env = process.env) =>
   new Promise<Buffer>((resolve, reject) => {
-    const child = spawn("git", args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("git", args, {
+      env,
+      stdio: [input.byteLength === 0 ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+
     const chunks: Buffer[] = [];
 
-    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.stderr.resume();
+    child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.stderr?.resume();
     child.on("error", reject);
-    child.on("exit", (code) =>
+    child.on("close", (code) =>
       code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error("Fixture Git command failed")),
     );
-    child.stdin.end(input);
+    child.stdin?.on("error", reject);
+    child.stdin?.end(input);
   });
 
 const initial: AppFile[] = [
