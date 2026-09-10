@@ -22,7 +22,12 @@ import {
 } from "@effect-agent/core/SubagentContract";
 import type { Snapshot } from "@effect-agent/core/ToolExposure";
 import { Selection } from "@effect-agent/core/ToolExposure";
-import { type ModelCallUsage } from "@effect-agent/core/Usage";
+import {
+  ChildRunUsage,
+  UsageCompleteness,
+  type RunTotals,
+  type ModelCallUsage,
+} from "@effect-agent/core/Usage";
 import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
@@ -654,6 +659,9 @@ export interface ChildEstablishWaiting extends RunSubagentChildIdentity {
  */
 export interface ChildEstablishSettled extends RunSubagentChildIdentity {
   readonly _tag: "settled";
+  /** Verified canonical usage; absence denotes legacy or unavailable evidence. */
+  readonly usage?: RunTotals;
+  readonly delegatedUsage?: RunTotals;
   readonly outcome: "completed" | "failed" | "aborted";
   readonly encodedResult: unknown;
   /**
@@ -762,6 +770,11 @@ export const RunResumeUsageSchema = Schema.Struct({
   lastInputTokens: Schema.Natural,
   lastOutputTokens: Schema.Natural,
   costMicrousd: Schema.Natural,
+  usageStatus: Schema.optionalKey(UsageCompleteness),
+  pricingStatus: Schema.optionalKey(UsageCompleteness),
+  unobservedModelCalls: Schema.optionalKey(Schema.Natural),
+  /** Verified direct-child reports, deduplicated by Run ID across Attempts. */
+  children: Schema.optionalKey(Schema.Array(ChildRunUsage)),
 }).check(
   Schema.makeFilter(
     (usage) =>

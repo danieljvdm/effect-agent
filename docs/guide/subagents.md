@@ -51,6 +51,11 @@ Set `failure` and `mapChildFailure` for application-specific errors. These custo
 are independent. Missing mappings validate the default value against the selected Schema and
 fail with `SubagentProjectionFailure` if it does not fit.
 
+Child terminal events and the `projectResult` context expose `usage` and `delegatedUsage`.
+Durable joins preserve verified totals across recovery; see [usage accounting](run-agents.md#provider-usage-and-cost-evidence).
+For live child deltas or pricing, pass `child.budget` or `child.estimateCostMicrousd` to
+`SubagentRuntime.layer`.
+
 ## Define the child
 
 The child is an ordinary agent. Give it a narrow task and the tools that task needs.

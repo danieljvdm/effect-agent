@@ -244,13 +244,21 @@ durable Submission with an explicit persisted command. See
 
 ## Provider usage and cost evidence
 
+`AgentRuntime` results and `RunCompleted` expose optional `usage` (own calls, including compaction) and
+`delegatedUsage` (all attached descendants). Combine them once with `Usage.sumRunTotals`;
+background workers are excluded. Child events repeat cumulative totals, so deduplicate by Run ID.
+
+For failed or interrupted Runs, read `handle.usageReport` after `handle.await` settles or its
+owning Scope closes. Earlier reads are live snapshots and may omit in-flight usage. Durable
+settlements retain their richer per-model `usageSummary` for the Run's own calls.
+
 A cost estimator receives the configured binding name in `request.model` and the actual
 provider-reported identity in `request.response`. Use the latter for response-sensitive pricing.
 `request.finishMetadata` carries native Effect AI finish metadata only during estimation; the
 engine never persists provider HTTP details or raw metadata in accounting records. A summarizer
 uses the same estimator with `purpose: "summary"`.
 
-Calls retain `usageStatus` and `pricingStatus`. Missing legacy status is unknown, and a numeric
+Calls and Run totals retain `usageStatus` and `pricingStatus`. Missing legacy status is unknown, and a numeric
 zero without an estimate is not evidence of free execution. Run summaries distinguish complete,
 partial, and unknown coverage; `unobservedModelCalls` counts observed calls without retained accounting,
 which are excluded from numeric token and call totals. A canonical `ModelResponseInterrupted`

@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, TurnId } from "./Identifiers.ts";
 import { DelegationDepth } from "./SubagentContract.ts";
 import { Selection } from "./ToolExposure.ts";
+import { RunTotals } from "./Usage.ts";
 
 const RunEventBase = {
   eventVersion: Schema.Literal(1),
@@ -191,6 +192,9 @@ const RunCompletedFields = Schema.Struct({
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
   finishReason: CompletionFinishReason,
   exhausted: Schema.optionalKey(ExhaustedLimit),
+  /** Own Run usage, excluding attached descendants. Missing legacy reports are unknown. */
+  usage: Schema.optionalKey(RunTotals),
+  delegatedUsage: Schema.optionalKey(RunTotals),
 }).check(
   Schema.makeFilter((event) => validateCompletionMetadata(event)),
   Schema.makeFilter((event) =>
@@ -223,6 +227,8 @@ export class RunCompleted extends Schema.TaggedClass<RunCompleted>()(
 /** Terminal event for a run that failed with an expected error. */
 export class RunFailed extends Schema.TaggedClass<RunFailed>()("RunFailed", {
   ...RunEventBase,
+  usage: Schema.optionalKey(RunTotals),
+  delegatedUsage: Schema.optionalKey(RunTotals),
   errorTag: Schema.NonEmptyString,
   message: Schema.String,
 }) {}
@@ -236,6 +242,8 @@ export class RunInterrupted extends Schema.TaggedClass<RunInterrupted>()("RunInt
 /** Terminal event for a run awaiting resumable external input. */
 export class RunSuspended extends Schema.TaggedClass<RunSuspended>()("RunSuspended", {
   ...RunEventBase,
+  usage: Schema.optionalKey(RunTotals),
+  delegatedUsage: Schema.optionalKey(RunTotals),
   reason: Schema.String,
 }) {}
 
@@ -283,12 +291,19 @@ export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
     finishReason: CompletionFinishReason,
     exhausted: Schema.optionalKey(ExhaustedLimit),
+    /**
+     * The child's own observed usage. Delegated usage covers its attached descendants separately.
+     */
+    usage: Schema.optionalKey(RunTotals),
+    delegatedUsage: Schema.optionalKey(RunTotals),
   }).check(Schema.makeFilter((event) => validateCompletionMetadata(event))),
 ) {}
 
 /** Records the child run's expected terminal failure using safe, serializable diagnostics. */
 export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("SubagentFailed", {
   ...SubagentEventBase,
+  usage: Schema.optionalKey(RunTotals),
+  delegatedUsage: Schema.optionalKey(RunTotals),
   errorTag: Schema.NonEmptyString,
   message: SubagentText,
 }) {}
@@ -298,15 +313,18 @@ export class SubagentInterrupted extends Schema.TaggedClass<SubagentInterrupted>
   "SubagentInterrupted",
   {
     ...SubagentEventBase,
+    usage: Schema.optionalKey(RunTotals),
+    delegatedUsage: Schema.optionalKey(RunTotals),
     reason: SubagentText,
   },
 ) {}
 
 /** Records that the child's terminal outcome was joined into its parent delegation Tool Call. */
-export class SubagentJoined extends Schema.TaggedClass<SubagentJoined>()(
-  "SubagentJoined",
-  SubagentEventBase,
-) {}
+export class SubagentJoined extends Schema.TaggedClass<SubagentJoined>()("SubagentJoined", {
+  ...SubagentEventBase,
+  usage: Schema.optionalKey(RunTotals),
+  delegatedUsage: Schema.optionalKey(RunTotals),
+}) {}
 
 /** Versioned union of stable semantic run events, excluding raw provider chunks. */
 export const RunEvent = Schema.Union([

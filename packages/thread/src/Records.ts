@@ -24,7 +24,7 @@ import {
   ToolExecutionKind,
 } from "@effect-agent/core/SubagentContract";
 import { Selection, Snapshot } from "@effect-agent/core/ToolExposure";
-import { ModelCallUsage, RunUsageSummary } from "@effect-agent/core/Usage";
+import { ModelCallUsage, RunUsageSummary, RunTotals } from "@effect-agent/core/Usage";
 import { WorkerBudgetScope, WorkerRef, WorkerSource } from "@effect-agent/core/Worker";
 import { ContextHandoff } from "@effect-agent/engine/ContextWindow";
 import { Schema } from "effect";
@@ -737,6 +737,8 @@ export class SubagentJoined extends Schema.TaggedClass<SubagentJoined>(
   childResultDigest: Digest,
   projectedResultDigest: Digest,
   usageSummary: PersistedJson,
+  usage: Schema.optionalKey(RunTotals),
+  delegatedUsage: Schema.optionalKey(RunTotals),
   reservationId: BoundedName,
   finalAccounting: PersistedJson,
 }) {}
