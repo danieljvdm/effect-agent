@@ -52,11 +52,14 @@ export interface SubagentCompletedPayload extends SubagentEventBasePayload {
   readonly exhausted?: "tokens" | "tool-calls" | "turns" | undefined;
   /** What the child spent, so a parent can account for delegated work. */
   readonly usage?: RunTotals | undefined;
+  readonly delegatedUsage?: RunTotals | undefined;
 }
 
 /** Pre-base payload for the core `SubagentFailed` event; `message` is at most 4096 characters. */
 export interface SubagentFailedPayload extends SubagentEventBasePayload {
   readonly _tag: "SubagentFailed";
+  readonly usage?: RunTotals | undefined;
+  readonly delegatedUsage?: RunTotals | undefined;
   readonly errorTag: string;
   readonly message: string;
 }
@@ -64,12 +67,16 @@ export interface SubagentFailedPayload extends SubagentEventBasePayload {
 /** Pre-base payload for the core `SubagentInterrupted` event; `reason` is at most 4096 characters. */
 export interface SubagentInterruptedPayload extends SubagentEventBasePayload {
   readonly _tag: "SubagentInterrupted";
+  readonly usage?: RunTotals | undefined;
+  readonly delegatedUsage?: RunTotals | undefined;
   readonly reason: string;
 }
 
 /** Pre-base payload for the core `SubagentJoined` event. */
 export interface SubagentJoinedPayload extends SubagentEventBasePayload {
   readonly _tag: "SubagentJoined";
+  readonly usage?: RunTotals | undefined;
+  readonly delegatedUsage?: RunTotals | undefined;
 }
 
 /**

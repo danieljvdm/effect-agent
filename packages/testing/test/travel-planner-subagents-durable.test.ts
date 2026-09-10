@@ -1,6 +1,7 @@
 import { SubagentDurableAccounting } from "@effect-agent/capabilities/Subagent";
 import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import { SubagentReservationAmounts } from "@effect-agent/core/SubagentContract";
+import { runTotalsFromSummary, emptyRunTotals } from "@effect-agent/core/Usage";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
@@ -486,6 +487,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const locations = [
+            "subagent:before-join-append",
             "subagent:after-join-append",
             "subagent:after-release-pending",
             "subagent:after-release",
@@ -526,6 +528,15 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               const log = yield* readLog(receipt.threadId);
 
               expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
+              const joined = payloadsOf(log, "SubagentJoined")[0]?.record.payload;
+              const childUsage = childSettlements[0]?.usageSummary;
+
+              if (joined?._tag !== "SubagentJoined" || childUsage === undefined)
+                throw new Error("Expected canonical child usage");
+              expect(joined.usage).toEqual(runTotalsFromSummary(childUsage));
+              expect(joined.usage?.modelCalls).toBe(2);
+              expect(joined.delegatedUsage).toEqual(emptyRunTotals());
+
               const reservations = yield* childReservations(receipt.submissionId);
 
               expect(reservations.map((row) => row.status)).toEqual(["released"]);

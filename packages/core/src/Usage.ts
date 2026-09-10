@@ -1,5 +1,7 @@
 import { Effect, Schema } from "effect";
 
+import { RunId } from "./Identifiers.ts";
+
 const UsageIdentity = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 
 /** Bounded provider response identity. Request configuration is not response evidence. */
@@ -70,18 +72,53 @@ export class ModelCallUsage extends Schema.Class<ModelCallUsage>(
 }) {}
 
 /**
- * Cumulative spend for one Run, without per-model attribution.
- *
- * The ephemeral runtime tracks running totals to enforce `tokenBudget`, but it does not retain the
- * per-pricing-identity groups a `RunUsageSummary` carries, so this is what it can report honestly.
- * Durable settlements keep using `RunUsageSummary`.
+ * Observed model usage and estimated cost, without per-model attribution.
+ * Numeric zero with unknown coverage never establishes free execution. Missing legacy
+ * statuses mean unknown. Unobserved calls are excluded from the numeric call/token totals.
  */
 export class RunTotals extends Schema.Class<RunTotals>("@effect-agent/core/RunTotals")({
   modelCalls: Schema.Natural,
   inputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
   costMicrousd: Schema.Natural,
+  usageStatus: Schema.optionalKey(UsageCompleteness),
+  pricingStatus: Schema.optionalKey(UsageCompleteness),
+  unobservedModelCalls: Schema.optionalKey(Schema.Natural),
 }) {}
+
+/** Own Run usage and disjoint attached-descendant usage. Add each component once. */
+export class RunUsageReport extends Schema.Class<RunUsageReport>(
+  "@effect-agent/core/RunUsageReport",
+)({
+  usage: RunTotals,
+  delegatedUsage: RunTotals,
+}) {}
+
+/** A verified child report retained across durable parent Attempts. */
+export class ChildRunUsage extends Schema.Class<ChildRunUsage>("@effect-agent/core/ChildRunUsage")({
+  runId: RunId,
+  report: RunUsageReport,
+}) {}
+
+/** Known absence of observed work. */
+export const emptyRunTotals = (): RunTotals =>
+  RunTotals.make({
+    modelCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    costMicrousd: 0,
+    usageStatus: "complete",
+    pricingStatus: "complete",
+    unobservedModelCalls: 0,
+  });
+
+/** No accounting evidence, including legacy child reports. This is not known zero spend. */
+export const unknownRunTotals = (): RunTotals =>
+  RunTotals.make({
+    ...emptyRunTotals(),
+    usageStatus: "unknown",
+    pricingStatus: "unknown",
+  });
 
 /** Settlement-sized aggregate for calls sharing one pricing identity. */
 export class ModelUsageGroup extends Schema.Class<ModelUsageGroup>(
@@ -224,6 +261,81 @@ const checkedAdd = (
         }),
       );
 };
+
+/** Combine disjoint totals, retaining uncertainty and rejecting numeric overflow. */
+export const sumRunTotals = Effect.fn("sumRunTotals")(function* (
+  contributions: ReadonlyArray<RunTotals>,
+): Effect.fn.Return<RunTotals, UsageAggregationError> {
+  let modelCalls = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let costMicrousd = 0;
+  let unobservedModelCalls = 0;
+  const usageStatuses: Array<typeof UsageCompleteness.Type> = [];
+  const pricingStatuses: Array<typeof UsageCompleteness.Type> = [];
+
+  for (const contribution of contributions) {
+    const value = yield* Schema.decodeUnknownEffect(RunTotals)(contribution).pipe(
+      Effect.mapError(
+        () => new UsageAggregationError({ field: "totals", message: "Invalid Run totals" }),
+      ),
+    );
+
+    modelCalls = yield* checkedAdd("modelCalls", modelCalls, value.modelCalls);
+    inputTokens = yield* checkedAdd("inputTokens", inputTokens, value.inputTokens);
+    outputTokens = yield* checkedAdd("outputTokens", outputTokens, value.outputTokens);
+    costMicrousd = yield* checkedAdd("costMicrousd", costMicrousd, value.costMicrousd);
+    unobservedModelCalls = yield* checkedAdd(
+      "unobservedModelCalls",
+      unobservedModelCalls,
+      value.unobservedModelCalls ?? 0,
+    );
+    // Known empty contributions are identities; unknown empty contributions are evidence gaps.
+    if (
+      value.modelCalls > 0 ||
+      (value.unobservedModelCalls ?? 0) > 0 ||
+      value.usageStatus !== "complete"
+    ) {
+      usageStatuses.push(value.usageStatus ?? "unknown");
+    }
+    if (
+      value.modelCalls > 0 ||
+      (value.unobservedModelCalls ?? 0) > 0 ||
+      value.pricingStatus !== "complete"
+    ) {
+      pricingStatuses.push(value.pricingStatus ?? "unknown");
+    }
+  }
+
+  const coverage = (statuses: ReadonlyArray<typeof UsageCompleteness.Type>) =>
+    statuses.every((status) => status === "complete")
+      ? ("complete" as const)
+      : statuses.every((status) => status === "unknown")
+        ? ("unknown" as const)
+        : ("partial" as const);
+
+  return RunTotals.make({
+    modelCalls,
+    inputTokens,
+    outputTokens,
+    costMicrousd,
+    unobservedModelCalls,
+    usageStatus: coverage(usageStatuses),
+    pricingStatus: coverage(pricingStatuses),
+  });
+});
+
+/** Flatten a canonical settlement summary without discarding its coverage markers. */
+export const runTotalsFromSummary = (summary: RunUsageSummary): RunTotals =>
+  RunTotals.make({
+    modelCalls: summary.modelCalls,
+    inputTokens: summary.inputTokens.total,
+    outputTokens: summary.outputTokens.total,
+    costMicrousd: summary.costMicrousd,
+    usageStatus: summary.usageStatus ?? "unknown",
+    pricingStatus: summary.pricingStatus ?? "unknown",
+    unobservedModelCalls: summary.unobservedModelCalls ?? 0,
+  });
 
 /**
  * Deterministically aggregate canonical per-call usage without making cached tokens free.

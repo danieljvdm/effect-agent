@@ -51,6 +51,29 @@ Set `failure` and `mapChildFailure` for application-specific errors. These custo
 are independent. Missing mappings validate the default value against the selected Schema and
 fail with `SubagentProjectionFailure` if it does not fit.
 
+## Account for delegated work
+
+`SubagentCompleted` reports the child's own `usage` and its separate `delegatedUsage` for attached
+descendants. Failed and interrupted child observations retain the usage known at termination;
+a failed output validation does not erase the model call. The parent's result reports its own
+usage separately from the entire attached subtree. Observing both a completion and a join does
+not add another charge: reports are cumulative snapshots keyed by child Run ID.
+
+`projectResult` receives the same optional `usage` and `delegatedUsage` fields in its context,
+alongside `budgetExhausted`. A host can record accounting without including it in model-visible
+Tool output. `SubagentRuntime.layer` also accepts `child.budget` for live per-child deltas and
+`child.estimateCostMicrousd` for pricing; the reservation observer composes with that budget hook.
+
+Durable delegation carries verified settlement usage in `SubagentJoined` and into `projectResult`.
+The canonical join retains both totals atomically with the Tool result, and replacement Attempts
+restore child reports by Run ID. Earlier joins without accounting remain unknown; reservations
+are not substituted for measured spend. Durable Run settlements retain their existing own-Run
+`usageSummary`; child accounting is available from their canonical joins. Background worker
+accounting remains independent of the launching Run.
+
+Keep the completeness markers when exporting or combining totals. Unknown usage or pricing may
+contain numeric zeros; see [usage and cost evidence](run-agents.md#provider-usage-and-cost-evidence).
+
 ## Define the child
 
 The child is an ordinary agent. Give it a narrow task and the tools that task needs.

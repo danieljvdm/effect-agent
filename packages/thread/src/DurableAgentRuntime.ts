@@ -31,6 +31,12 @@ import {
   InputTokenUsage,
   ModelUsageGroup,
   RunUsageSummary,
+  ChildRunUsage,
+  RunUsageReport,
+  emptyRunTotals,
+  unknownRunTotals,
+  runTotalsFromSummary,
+  sumRunTotals,
   summarizeModelUsage,
   OutputTokenUsage,
 } from "@effect-agent/core/Usage";
@@ -486,6 +492,20 @@ const subagentRecordsOf = (
 
   return { requested, started, joined, preparedNames };
 };
+
+/** Joined reports are canonical snapshots, keyed by child Run so replay cannot double charge. */
+const childUsageReportsOf = (state: SubagentCallRecords): ReadonlyArray<ChildRunUsage> =>
+  [...state.started.entries()].map(([toolCallId, child]) => {
+    const joined = state.joined.get(toolCallId);
+
+    return ChildRunUsage.make({
+      runId: child.childRunId,
+      report: RunUsageReport.make({
+        usage: joined?.usage ?? unknownRunTotals(),
+        delegatedUsage: joined?.delegatedUsage ?? unknownRunTotals(),
+      }),
+    });
+  });
 
 /** Deterministic batch identity of one Thread's initial `ThreadCreated` append. */
 export const threadCreatedBatchId = (threadId: ThreadId): BatchId =>
@@ -3192,6 +3212,25 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     readonly childRecords: ReadonlyArray<CanonicalRecordEnvelope>;
   }
 
+  const verifiedChildUsage = Effect.fn("DurableAgentRuntime.verifiedChildUsage")(function* (
+    verified: VerifiedChildSettlement,
+    childRunId: RunId,
+  ) {
+    const reports = childUsageReportsOf(subagentRecordsOf(verified.childRecords, childRunId));
+
+    const delegatedUsage = yield* sumRunTotals(
+      reports.flatMap(({ report }) => [report.usage, report.delegatedUsage]),
+    ).pipe(Effect.catchTag("UsageAggregationError", () => Effect.succeed(unknownRunTotals())));
+
+    return RunUsageReport.make({
+      usage:
+        verified.settlement.usageSummary === undefined
+          ? unknownRunTotals()
+          : runTotalsFromSummary(verified.settlement.usageSummary),
+      delegatedUsage,
+    });
+  });
+
   type ChildVerification =
     | { readonly _tag: "verified"; readonly value: VerifiedChildSettlement }
     | { readonly _tag: "mismatch"; readonly message: string };
@@ -3433,6 +3472,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }).pipe(Effect.orDie);
       const childRunId = runIdForSubmission(childSubmissionId);
 
+      yield* hit("subagent:before-join-append");
+
       const joinedPayload = SubagentJoined.make({
         runId,
         toolCallId,
@@ -3442,6 +3483,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         childResultDigest: yield* withCrypto(digestJson(verified.settlement.result ?? null)),
         projectedResultDigest: yield* withCrypto(digestJson(boundedResult)),
         usageSummary: yield* childUsageSummaryOf(verified.childRecords, childRunId),
+        ...(yield* verifiedChildUsage(verified, childRunId)),
         reservationId: reservation.reservationId,
         finalAccounting,
       });
@@ -6177,6 +6219,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               ...identity,
               outcome: verification.value.outcome,
               encodedResult: verification.value.encodedResult,
+              ...(yield* verifiedChildUsage(verification.value, startedPayload.childRunId)),
               // The child Settlement's honest exhaustion marker (RUN-018)
               // rides to the parent handler so the delegation can surface a
               // budget-truncated partial to the orchestrator (SUB-034).
@@ -6257,6 +6300,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 });
               }
 
+              yield* hit("subagent:before-join-append");
+
               const joinedPayload = SubagentJoined.make({
                 runId,
                 toolCallId,
@@ -6271,6 +6316,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   verified.childRecords,
                   startedPayload.childRunId,
                 ),
+                ...(yield* verifiedChildUsage(verified, startedPayload.childRunId)),
                 reservationId: requestedPayload.reservationId,
                 finalAccounting: accounting,
               });
@@ -6410,7 +6456,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         ...(config.estimateCostMicrousd === undefined
           ? {}
           : { estimateCostMicrousd: config.estimateCostMicrousd }),
-        resumeUsage: { ...journal.usage, ...journal.policyUsage },
+        resumeUsage: {
+          ...journal.usage,
+          ...journal.policyUsage,
+          ...(journal.usage.modelCalls === 0 &&
+          (journal.usage.unobservedModelCalls ?? 0) === 0 &&
+          !records.some(
+            ({ record }) =>
+              record.payload._tag === "ModelResponseInterrupted" && record.payload.runId === runId,
+          )
+            ? emptyRunTotals()
+            : runTotalsFromSummary(yield* currentUsageSummary())),
+          children: childUsageReportsOf(subagentState),
+        },
         ...(journal.contextWindowId === undefined
           ? {}
           : { initialContextWindowId: journal.contextWindowId }),

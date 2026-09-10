@@ -30,6 +30,8 @@ import {
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type RunEvent } from "@effect-agent/core/RunEvent";
 import { DelegationTool, SubagentDelegationCaps } from "@effect-agent/core/SubagentContract";
+import type { RunUsageReport } from "@effect-agent/core/Usage";
+import { RunTotals, emptyRunTotals } from "@effect-agent/core/Usage";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
   type SubagentDurability,
@@ -62,6 +64,7 @@ import {
   Option,
   Ref,
   Schema,
+  Scope,
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -437,12 +440,19 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
       expect(requested?.childRunId).toBe(joined?.childRunId);
       expect(findEvent(events, "SubagentCompleted")).toMatchObject({ turns: 1 });
-      // The parent's own budget hook never sees the child's model calls, so this event is the
-      // only place a host can learn what a delegation cost.
+      // Completion reports preserve uncertainty when this fixture reports no token usage.
       const childUsage = findEvent(events, "SubagentCompleted")?.usage;
 
       expect(childUsage).toBeDefined();
-      expect(childUsage?.modelCalls).toBeGreaterThan(0);
+      expect(childUsage).toMatchObject({
+        modelCalls: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        costMicrousd: 0,
+        usageStatus: "unknown",
+        pricingStatus: "unknown",
+      });
+      expect(result.delegatedUsage).toEqual(childUsage);
 
       // The parent Tool result is the projected, Schema-encoded value.
       expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
@@ -1212,6 +1222,8 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         ).pipe(Effect.provide(middleLive));
 
         expect(result.output).toBe("root");
+        expect(result.usage?.modelCalls).toBe(2);
+        expect(result.delegatedUsage?.modelCalls).toBe(3);
         const reservations = yield* SubagentReservations;
         const snapshot = yield* reservations.parentSnapshot(runId);
 
@@ -3854,3 +3866,362 @@ const countingProbingChildBinding = (invocations: Ref.Ref<number>) =>
       ),
     ),
   );
+
+layer(TestServices)("Subagent usage accounting", (it) => {
+  const reviewModel = (answer: string) =>
+    Model.make(
+      "scripted",
+      "review-child",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: () =>
+            Stream.fromIterable<Response.StreamPartEncoded>([
+              { type: "text-start", id: "a" },
+              { type: "text-delta", id: "a", delta: answer },
+              { type: "text-end", id: "a" },
+              {
+                type: "finish",
+                reason: "stop",
+                usage: { inputTokens: { total: 12 }, outputTokens: { total: 3 } },
+              },
+            ]),
+        }),
+      ),
+    );
+
+  const parent = () =>
+    Agent.withModel(
+      coordinatorDefinition,
+      delegatingModel(
+        "review-parent",
+        "delegate_research",
+        [{ id: "review-call", params: { topic: "review" } }],
+        '{"report":"done"}',
+      ),
+    );
+
+  it.effect("reports exact known child totals and supports the existing child budget hook", () =>
+    Effect.gen(function* () {
+      const deltas: number[] = [];
+
+      const childLayer = SubagentRuntime.layer(
+        researchDelegation,
+        Agent.withModel(childDefinition, reviewModel('{"answer":"ok"}')),
+        {
+          mapChildFailure,
+          child: {
+            estimateCostMicrousd: () => Effect.succeed(17),
+            budget: {
+              guard: (effect) => effect,
+              consume: (delta) =>
+                Effect.sync(() => {
+                  deltas.push(delta.inputTokens);
+                }),
+            },
+          },
+        },
+      );
+
+      const handle = yield* AgentRuntime.start(parent(), { mission: "review" }).pipe(
+        Effect.provide(childLayer),
+      );
+
+      yield* handle.await;
+      const events = yield* handle.events;
+
+      expect(findEvent(events, "SubagentCompleted")?.usage).toMatchObject({
+        modelCalls: 1,
+        inputTokens: 12,
+        outputTokens: 3,
+        costMicrousd: 17,
+        usageStatus: "partial",
+        pricingStatus: "complete",
+      });
+      const result = yield* handle.await;
+
+      expect(result.usage?.modelCalls).toBe(2);
+      expect(result.delegatedUsage).toEqual(findEvent(events, "SubagentCompleted")?.usage);
+      expect(yield* handle.usageReport).toMatchObject({
+        usage: result.usage,
+        delegatedUsage: result.delegatedUsage,
+      });
+      expect(deltas).toEqual([12]);
+    }),
+  );
+
+  it.effect("preserves unknown usage and pricing instead of reporting unqualified zero", () =>
+    Effect.gen(function* () {
+      const childLayer = researchLayer(
+        Agent.withModel(childDefinition, answeringModel("review-unknown", '{"answer":"ok"}')),
+      );
+
+      const handle = yield* AgentRuntime.start(parent(), { mission: "review" }).pipe(
+        Effect.provide(childLayer),
+      );
+
+      yield* handle.await;
+      const events = yield* handle.events;
+      const usage = findEvent(events, "SubagentCompleted")?.usage;
+
+      expect(usage).toMatchObject({ usageStatus: "unknown", pricingStatus: "unknown" });
+    }),
+  );
+
+  it.effect("reports consumed child usage when output validation fails", () =>
+    Effect.gen(function* () {
+      const childLayer = SubagentRuntime.layer(
+        researchDelegation,
+        Agent.withModel(childDefinition, reviewModel("invalid json")),
+        {
+          mapChildFailure,
+          child: { estimateCostMicrousd: () => Effect.succeed(17) },
+        },
+      );
+
+      const events: RunEvent[] = [];
+
+      yield* AgentRuntime.stream(parent(), { mission: "review" }).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.provide(childLayer),
+        Effect.exit,
+      );
+      const failed = findEvent(events, "SubagentFailed");
+
+      expect(failed).toMatchObject({
+        usage: { modelCalls: 1, inputTokens: 12, outputTokens: 3, costMicrousd: 17 },
+      });
+    }),
+  );
+  for (const ending of ["defect", "timeout", "interrupt"] as const) {
+    it.effect(`retains child spend and closes resources after ${ending}`, () =>
+      Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>();
+        const finalized = yield* Ref.make(false);
+        const turn = yield* Ref.make(0);
+
+        const progressTools = Toolkit.make(
+          Tool.make("progress", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          }),
+        );
+
+        const target = Agent.make("accounting-child", {
+          input: ChildInput,
+          output: ChildOutput,
+          instructions: "Make progress, then answer.",
+          toolkit: progressTools,
+          policy: childPolicy,
+        });
+
+        const delegation = Subagent.define("delegate_research", {
+          description: "Research",
+          target,
+          parameters: ResearchParams,
+          success: ResearchFindings,
+          failure: ResearchDelegationFailed,
+          policy: researchPolicy,
+          prepareInput: ({ topic }) => Effect.succeed({ question: topic }),
+          projectResult: (output) => Effect.succeed({ summary: output.answer }),
+        });
+
+        const childModel = Model.make(
+          "scripted",
+          `accounting-${ending}`,
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    if ((yield* Ref.getAndUpdate(turn, (value) => value + 1)) === 0) {
+                      return Stream.fromIterable<Response.StreamPartEncoded>([
+                        {
+                          type: "tool-call",
+                          id: "progress-1",
+                          name: "progress",
+                          params: {},
+                          providerExecuted: false,
+                        },
+                        {
+                          type: "finish",
+                          reason: "tool-calls",
+                          usage: { inputTokens: { total: 12 }, outputTokens: { total: 3 } },
+                        },
+                      ]);
+                    }
+
+                    return Stream.unwrap(
+                      Deferred.succeed(ready, undefined).pipe(
+                        Effect.as(
+                          ending === "defect" ? Stream.die("child-defect-sentinel") : Stream.never,
+                        ),
+                      ),
+                    ).pipe(Stream.ensuring(Ref.set(finalized, true)));
+                  }),
+                ),
+            }),
+          ),
+        );
+
+        const scope = yield* Scope.make();
+
+        yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
+
+        const childLayer = SubagentRuntime.layer(delegation, Agent.withModel(target, childModel), {
+          mapChildFailure,
+          child: { estimateCostMicrousd: () => Effect.succeed(17) },
+        }).pipe(Layer.provide(progressTools.toLayer({ progress: () => Effect.succeed("done") })));
+
+        const handle = yield* AgentRuntime.start(parent(), { mission: "review" }).pipe(
+          Effect.provide(childLayer),
+          Scope.provide(scope),
+        );
+
+        const infallibleReport: Assert<
+          Equal<typeof handle.usageReport, Effect.Effect<RunUsageReport>>
+        > = true;
+
+        expect(infallibleReport).toBe(true);
+        yield* Deferred.await(ready);
+        if (ending === "interrupt") yield* Scope.close(scope, Exit.void);
+        if (ending === "timeout") yield* TestClock.adjust("10 seconds");
+        const exit = yield* Effect.exit(handle.await);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) return;
+        if (ending === "defect") expect(Cause.hasDies(exit.cause)).toBe(true);
+        if (ending === "interrupt") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+        if (ending === "timeout") expect(failureFrom(exit)).toBeInstanceOf(SubagentBudgetExhausted);
+        expect(yield* Ref.get(finalized)).toBe(true);
+        const report = yield* handle.usageReport;
+
+        expect(report.delegatedUsage).toMatchObject({
+          modelCalls: 1,
+          inputTokens: 12,
+          outputTokens: 3,
+          costMicrousd: 17,
+        });
+        if (ending !== "interrupt") {
+          const events = yield* handle.events;
+
+          expect(findEvent(events, "SubagentFailed")?.usage).toEqual(report.delegatedUsage);
+        }
+      }),
+    );
+  }
+
+  it.effect(
+    "passes a verified durable child's accounting into projection and counts a repeated report once",
+    () =>
+      Effect.gen(function* () {
+        const child = durableChildIdentity("accounting");
+
+        const usage = RunTotals.make({
+          ...emptyRunTotals(),
+          modelCalls: 2,
+          inputTokens: 100,
+          outputTokens: 25,
+          costMicrousd: 17,
+        });
+
+        const delegatedUsage = RunTotals.make({
+          ...emptyRunTotals(),
+          modelCalls: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          costMicrousd: 3,
+        });
+
+        let projected: RunTotals | undefined;
+
+        const delegation = Subagent.define("delegate_research", {
+          description: "Research",
+          target: childDefinition,
+          parameters: ResearchParams,
+          success: ResearchFindings,
+          failure: ResearchDelegationFailed,
+          policy: researchPolicy,
+          prepareInput: ({ topic }) => Effect.succeed({ question: topic }),
+          projectResult: (output, context) =>
+            Effect.sync(() => {
+              projected = context.usage;
+
+              return { summary: output.answer };
+            }),
+        });
+
+        const subagent = scriptedDurableHook({
+          establish: () => ({
+            _tag: "settled",
+            ...child,
+            outcome: "completed",
+            encodedResult: { answer: "done" },
+            usage,
+            delegatedUsage,
+          }),
+        });
+
+        const result = yield* AgentRuntime.run(
+          Agent.withModel(
+            Agent.make("accounting-parent", {
+              input: Schema.String,
+              output: Schema.String,
+              instructions: "Delegate",
+              toolkit: Toolkit.make(delegation.tool),
+              policy: parentPolicy,
+            }),
+            delegatingModel(
+              "accounting-parent",
+              "delegate_research",
+              [{ id: "call-1", params: { topic: "x" } }],
+              '"done"',
+            ),
+          ),
+          "input",
+          {
+            subagent,
+            resumeUsage: {
+              committedTurns: 0,
+              toolCalls: 0,
+              programmaticToolCalls: 0,
+              consecutiveToolFailures: 0,
+              finalizationUsed: false,
+              modelCalls: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              lastInputTokens: 0,
+              lastOutputTokens: 0,
+              costMicrousd: 0,
+              usageStatus: "complete",
+              pricingStatus: "complete",
+              children: [{ runId: child.childRunId, report: { usage, delegatedUsage } }],
+            },
+          },
+        ).pipe(
+          Effect.provide(
+            SubagentRuntime.layer(
+              delegation,
+              Agent.withModel(childDefinition, reviewModel('{"answer":"unused"}')),
+            ),
+          ),
+        );
+
+        expect(projected).toEqual(usage);
+        expect(result.delegatedUsage).toMatchObject({
+          modelCalls: 3,
+          inputTokens: 110,
+          outputTokens: 30,
+          costMicrousd: 20,
+        });
+      }),
+  );
+});

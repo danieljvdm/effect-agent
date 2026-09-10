@@ -14,6 +14,7 @@ import {
   SubagentGrant,
   SubagentReservationAmounts,
 } from "@effect-agent/core/SubagentContract";
+import { type RunTotals, RunUsageReport, unknownRunTotals } from "@effect-agent/core/Usage";
 import {
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
@@ -41,7 +42,7 @@ import {
 } from "@effect-agent/engine/RunOptions";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import type { Layer } from "effect";
-import { Clock, Duration, Effect, Option, Ref, Schema } from "effect";
+import { Cause, Clock, Duration, Effect, Exit, Option, Ref, Schema, Scope } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type {
@@ -112,6 +113,9 @@ export type SubagentPrepareContext = {
  */
 export interface SubagentResultContext {
   readonly budgetExhausted: boolean;
+  /** Own and disjoint attached-descendant usage; absent only for legacy/custom hosts. */
+  readonly usage?: RunTotals;
+  readonly delegatedUsage?: RunTotals;
 }
 
 /** Default delegation result, preserving partial-output information. */
@@ -1545,26 +1549,32 @@ const layer = <
 
       yield* Ref.set(startedAt, yield* Clock.currentTimeMillis);
 
-      const child = yield* spawner.spawn<
-        TargetInput,
-        TargetOutput,
-        TargetInstructions,
-        TargetTools,
-        Provider,
-        ModelProvides,
-        ModelRequires,
-        never,
-        HookRequirements,
-        InstructionError,
-        InstructionRequirements,
-        undefined,
-        InputPromptValue
-      >(
-        { ...childBinding, definition: { ...childBinding.definition, policy: childPolicy } },
-        encodedInput,
-        { delegationId: delegation.delegationId, parentToolCallId: toolCallId },
-        childOptions,
-      );
+      const childScope = yield* Scope.make();
+
+      yield* Effect.addFinalizer((exit) => Scope.close(childScope, exit));
+
+      const child = yield* spawner
+        .spawn<
+          TargetInput,
+          TargetOutput,
+          TargetInstructions,
+          TargetTools,
+          Provider,
+          ModelProvides,
+          ModelRequires,
+          never,
+          HookRequirements,
+          InstructionError,
+          InstructionRequirements,
+          undefined,
+          InputPromptValue
+        >(
+          { ...childBinding, definition: { ...childBinding.definition, policy: childPolicy } },
+          encodedInput,
+          { delegationId: delegation.delegationId, parentToolCallId: toolCallId },
+          childOptions,
+        )
+        .pipe(Scope.provide(childScope));
 
       const payload: SubagentEventBasePayload = {
         toolCallId,
@@ -1586,12 +1596,16 @@ const layer = <
       const joined = Effect.gen(function* () {
         const result = yield* child.await.pipe(
           Effect.catch((childFailure) =>
-            emit({
-              _tag: "SubagentFailed",
-              ...payload,
-              errorTag: errorTagOf(childFailure),
-              message: boundedEventText(errorMessageOf(childFailure)),
-            }).pipe(
+            child.usageReport.pipe(
+              Effect.flatMap((report) =>
+                emit({
+                  _tag: "SubagentFailed",
+                  ...payload,
+                  ...report,
+                  errorTag: errorTagOf(childFailure),
+                  message: boundedEventText(errorMessageOf(childFailure)),
+                }),
+              ),
               Effect.andThen(
                 Effect.fail(
                   options.mapChildFailure === undefined
@@ -1607,46 +1621,63 @@ const layer = <
           ),
           Effect.timeoutOrElse({
             duration: Duration.millis(allocation.durationMillis),
-            orElse: () =>
-              emit({
-                _tag: "SubagentFailed",
-                ...payload,
-                errorTag: "SubagentBudgetExhausted",
-                message: `Attached child exceeded its ${allocation.durationMillis}ms delegation duration budget`,
-              }).pipe(
-                Effect.andThen(
-                  Effect.fail(
-                    SubagentBudgetExhausted.make({
-                      parentRunId,
-                      dimension: "duration",
-                      limitValue: allocation.durationMillis,
-                      observedValue: allocation.durationMillis,
+            orElse: () => Effect.succeed(undefined),
+          }),
+          Effect.tapCause((cause) =>
+            Cause.hasDies(cause)
+              ? child.usageReport.pipe(
+                  Effect.flatMap((report) =>
+                    emit({
+                      _tag: "SubagentFailed",
+                      ...payload,
+                      ...report,
+                      errorTag: "Defect",
+                      message: "The child Run ended with a defect",
                     }),
                   ),
-                ),
-              ),
-          }),
+                  Effect.ignore,
+                )
+              : Effect.void,
+          ),
         );
+
+        if (result === undefined) {
+          // Choose the timeout before interrupting the child; otherwise its interrupted await
+          // can win the timeout race and replace the typed delegation failure.
+          yield* Scope.close(childScope, Exit.void);
+          const report = yield* child.usageReport;
+
+          yield* emit({
+            _tag: "SubagentFailed",
+            ...payload,
+            ...report,
+            errorTag: "SubagentBudgetExhausted",
+            message: `Attached child exceeded its ${allocation.durationMillis}ms delegation duration budget`,
+          });
+
+          return yield* SubagentBudgetExhausted.make({
+            parentRunId,
+            dimension: "duration",
+            limitValue: allocation.durationMillis,
+            observedValue: allocation.durationMillis,
+          });
+        }
+        const report = yield* child.usageReport;
 
         yield* emit({
           _tag: "SubagentCompleted",
           ...payload,
+          ...report,
           turns: result.turns,
           finishReason: result.finishReason,
-          // A child that settled through graceful budget exhaustion (RUN-025)
-          // stays a success; the marker keeps the degradation observable to
-          // the parent without leaking any child transcript.
           ...(result.exhausted !== undefined ? { exhausted: result.exhausted } : {}),
-          // Travels verbatim from the child's own terminal event: without it a parent cannot
-          // account for delegated work, because the child is a separate Run and the parent's
-          // budget hook never sees its model calls.
-          ...(result.usage !== undefined ? { usage: result.usage } : {}),
         });
 
         const projected = yield* delegation.projectResult(
           result.output,
           {
             budgetExhausted: result.finishReason === "budget-exhausted",
+            ...report,
           },
           parameters,
         );
@@ -1670,6 +1701,7 @@ const layer = <
           yield* emit({
             _tag: "SubagentFailed",
             ...payload,
+            ...report,
             errorTag: "SubagentBudgetExhausted",
             message: `Projected child result of ${resultBytes} bytes exceeds the ${policy.maxResultBytes}-byte delegation budget`,
           });
@@ -1681,23 +1713,27 @@ const layer = <
             observedValue: resultBytes,
           });
         }
-        yield* emit({ _tag: "SubagentJoined", ...payload });
+        yield* emit({ _tag: "SubagentJoined", ...payload, ...report });
 
         return projected;
       });
 
-      // Interruption stays interruption: record the
-      // bounded lifecycle event best-effort, then let the closing handler
-      // scope interrupt and join the child and settle the reservation.
+      // Join the interrupted child before observing its final usage. Keep the original
+      // interruption even when the closing parent can no longer accept lifecycle events.
       return yield* joined.pipe(
         Effect.onInterrupt(() =>
-          sink
-            .emit({
-              _tag: "SubagentInterrupted",
-              ...payload,
-              reason: "Parent Run interrupted the attached child before it settled",
-            })
-            .pipe(Effect.ignore),
+          Scope.close(childScope, Exit.void).pipe(
+            Effect.andThen(child.usageReport),
+            Effect.flatMap((report) =>
+              sink.emit({
+                _tag: "SubagentInterrupted",
+                ...payload,
+                ...report,
+                reason: "Parent Run interrupted the attached child before it settled",
+              }),
+            ),
+            Effect.ignore,
+          ),
         ),
       );
     });
@@ -1838,6 +1874,11 @@ const layer = <
             depth,
           };
 
+          const report = RunUsageReport.make({
+            usage: status.usage ?? unknownRunTotals(),
+            delegatedUsage: status.delegatedUsage ?? unknownRunTotals(),
+          });
+
           // Every terminal projection of a settled child — success or typed
           // failure — goes through ONE atomic join (SUB-019): the coordinator
           // appends `SubagentJoined` + the parent `ToolCallSettled` in one
@@ -1851,6 +1892,7 @@ const layer = <
             emit({
               _tag: "SubagentFailed",
               ...payload,
+              ...report,
               errorTag: errorTagOf(failure),
               message: boundedEventText(errorMessageOf(failure)),
             }).pipe(
@@ -1919,6 +1961,7 @@ const layer = <
               decoded,
               {
                 budgetExhausted: status.finishReason === "budget-exhausted",
+                ...report,
               },
               parameters,
             )
@@ -1968,7 +2011,7 @@ const layer = <
               encodedAccounting: conservativeAccounting,
             }),
           );
-          yield* emit({ _tag: "SubagentJoined", ...payload });
+          yield* emit({ _tag: "SubagentJoined", ...payload, ...report });
 
           return projected;
         }

@@ -244,6 +244,32 @@ durable Submission with an explicit persisted command. See
 
 ## Provider usage and cost evidence
 
+`AgentRuntime.run` results and `RunCompleted` carry optional `usage` and `delegatedUsage` totals.
+`usage` covers this Run's own model calls, including compaction; `delegatedUsage` covers its
+attached children and their attached descendants. These sets are disjoint. Add them once with
+`Usage.sumRunTotals` when a combined report is needed; do not also add child event totals.
+Background workers have independent lifetimes and are excluded.
+
+Each total retains `usageStatus`, `pricingStatus`, and `unobservedModelCalls`. Missing legacy
+fields mean unknown. A numeric zero is only meaningful alongside its coverage: absent provider
+usage or pricing is not a free call. Costs are host estimates. Flat totals do not retain the
+per-model, cache, or reasoning breakdown; durable `usageSummary` retains that richer evidence.
+
+Expected-failure and suspended Run events include the usage observed at that boundary. For a detached Run,
+`handle.usageReport` provides a snapshot even if `handle.await` fails or is interrupted. Read it
+after execution settles, or after closing its owning Scope, to include finalization accounting:
+
+```ts
+const outcome = yield * Effect.exit(handle.await);
+const report = yield * handle.usageReport;
+```
+
+Reading a live report does not wait for execution. It cannot quantify an in-flight request until
+usage arrives, and interruption without usage leaves an unobserved call. If aggregated descendant
+totals exceed safe-integer capacity, their coverage becomes unknown rather than changing the
+Run's outcome or reporting a rounded value. Reports are observations, not billing receipts:
+retry/recovery and event replay require consumers to deduplicate by logical Run/child identity.
+
 A cost estimator receives the configured binding name in `request.model` and the actual
 provider-reported identity in `request.response`. Use the latter for response-sensitive pricing.
 `request.finishMetadata` carries native Effect AI finish metadata only during estimation; the

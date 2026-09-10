@@ -80,6 +80,11 @@ import {
   ModelResponseIdentity,
   OutputTokenUsage,
   RunTotals,
+  RunUsageReport,
+  emptyRunTotals,
+  unknownRunTotals,
+  sumRunTotals,
+  type UsageCompleteness,
 } from "@effect-agent/core/Usage";
 import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
 import type { Take } from "effect";
@@ -339,6 +344,8 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     runDisposition: Schema.optionalKey(Schema.Json),
     /** Cumulative spend for the Run, as reported on its terminal event. */
     usage: Schema.optionalKey(RunTotals),
+    /** Disjoint usage of attached descendants, including nested and failed children. */
+    delegatedUsage: Schema.optionalKey(RunTotals),
   }).check(
     Schema.makeFilter(
       (result) =>
@@ -352,19 +359,48 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     ),
   );
 
-/** The Run's cumulative spend, as the terminal events report it. */
-const runTotalsOf = (context: {
-  readonly modelCalls: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly costMicrousd: number;
-}): RunTotals =>
+/** Direct usage only: budget counters never absorb descendant consumption. */
+const runTotalsOf = (context: RunContext): RunTotals =>
   RunTotals.make({
     modelCalls: context.modelCalls,
     inputTokens: context.inputTokens,
     outputTokens: context.outputTokens,
     costMicrousd: context.costMicrousd,
+    usageStatus: context.usageStatus,
+    pricingStatus: context.pricingStatus,
+    unobservedModelCalls: context.unobservedModelCalls,
   });
+
+const usageReportOf = Effect.fn("AgentRuntime.usageReport")(function* (context: RunContext) {
+  const contributions: RunTotals[] = [];
+
+  for (const read of context.childUsage.values()) {
+    const report = yield* read;
+
+    contributions.push(report.usage, report.delegatedUsage);
+  }
+
+  // Observation must not change execution when a subtree exceeds numeric accounting capacity.
+  const delegatedUsage = yield* sumRunTotals(contributions).pipe(
+    Effect.catchTag("UsageAggregationError", () => Effect.succeed(unknownRunTotals())),
+  );
+
+  return RunUsageReport.make({ usage: runTotalsOf(context), delegatedUsage });
+});
+
+const noteIncompleteUsage = Effect.fn("AgentRuntime.noteIncompleteUsage")(function* (
+  context: RunContext,
+  turn: number,
+) {
+  const accounting = yield* ModelUsageAccounting;
+
+  context.unobservedModelCalls += 1;
+  context.usageStatus =
+    context.usageStatus === "unknown" || context.modelCalls === 0 ? "unknown" : "partial";
+  context.pricingStatus =
+    context.pricingStatus === "unknown" || context.modelCalls === 0 ? "unknown" : "partial";
+  yield* accounting.noteIncompleteUsage(turn);
+});
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
 export type AgentResult<Output> = ReturnType<
@@ -482,6 +518,11 @@ interface RunContext {
   readonly durationDeadlineMillis: number;
   history: Prompt.Prompt;
   modelCalls: number;
+  usageStatus: typeof UsageCompleteness.Type;
+  pricingStatus: typeof UsageCompleteness.Type;
+  unobservedModelCalls: number;
+  readonly childUsage: Map<RunId, Effect.Effect<RunUsageReport>>;
+  readonly liveChildren: Set<RunId>;
   consecutiveToolFailures: number;
   inputTokens: number;
   outputTokens: number;
@@ -1298,9 +1339,10 @@ const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: un
           throw new TypeError("Run resume usage must be an object");
         }
 
-        const read = (key: keyof RunResumeUsage): unknown => {
+        const read = (key: keyof RunResumeUsage, optional = false): unknown => {
           const descriptor = Object.getOwnPropertyDescriptor(input, key);
 
+          if (descriptor === undefined && optional) return undefined;
           if (descriptor === undefined || !("value" in descriptor)) {
             throw new TypeError(`Run resume usage ${key} must be an own data property`);
           }
@@ -1308,7 +1350,14 @@ const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: un
           return descriptor.value;
         };
 
+        const optional = Object.fromEntries(
+          (["usageStatus", "pricingStatus", "unobservedModelCalls", "children"] as const)
+            .map((key) => [key, read(key, true)])
+            .filter(([, value]) => value !== undefined),
+        );
+
         return {
+          ...optional,
           modelCalls: read("modelCalls"),
           inputTokens: read("inputTokens"),
           outputTokens: read("outputTokens"),
@@ -1437,6 +1486,16 @@ const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function
     depth: payload.depth,
   };
 
+  const report =
+    "usage" in payload
+      ? {
+          ...(payload.usage === undefined ? {} : { usage: payload.usage }),
+          ...(payload.delegatedUsage === undefined
+            ? {}
+            : { delegatedUsage: payload.delegatedUsage }),
+        }
+      : {};
+
   switch (payload._tag) {
     case "SubagentRequested": {
       return SubagentRequested.make(shared);
@@ -1453,21 +1512,22 @@ const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function
         turns: payload.turns,
         finishReason: payload.finishReason,
         ...(payload.exhausted !== undefined ? { exhausted: payload.exhausted } : {}),
-        ...(payload.usage !== undefined ? { usage: payload.usage } : {}),
+        ...report,
       });
     }
     case "SubagentFailed": {
       return SubagentFailed.make({
         ...shared,
+        ...report,
         errorTag: payload.errorTag,
         message: payload.message,
       });
     }
     case "SubagentInterrupted": {
-      return SubagentInterrupted.make({ ...shared, reason: payload.reason });
+      return SubagentInterrupted.make({ ...shared, ...report, reason: payload.reason });
     }
     case "SubagentJoined": {
-      return SubagentJoined.make(shared);
+      return SubagentJoined.make({ ...shared, ...report });
     }
   }
 });
@@ -2492,7 +2552,33 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           Queue.offer(sinkQueue, payload).pipe(
             Effect.flatMap((accepted) =>
               accepted
-                ? Effect.void
+                ? Effect.sync(() => {
+                    if (context.liveChildren.has(payload.childRunId)) return;
+                    if ("usage" in payload && payload.usage !== undefined) {
+                      context.childUsage.set(
+                        payload.childRunId,
+                        Effect.succeed(
+                          RunUsageReport.make({
+                            usage: payload.usage,
+                            delegatedUsage: payload.delegatedUsage ?? unknownRunTotals(),
+                          }),
+                        ),
+                      );
+                    } else if (
+                      payload._tag === "SubagentStarted" &&
+                      !context.childUsage.has(payload.childRunId)
+                    ) {
+                      context.childUsage.set(
+                        payload.childRunId,
+                        Effect.succeed(
+                          RunUsageReport.make({
+                            usage: unknownRunTotals(),
+                            delegatedUsage: unknownRunTotals(),
+                          }),
+                        ),
+                      );
+                    }
+                  })
                 : Effect.fail(
                     RunEventSinkClosedError.make({
                       message: `Subagent event ${payload._tag} was emitted after its Tool batch settled`,
@@ -3138,6 +3224,18 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         message: "Cumulative model cost exceeds safe-integer accounting capacity",
       });
     }
+    const firstObserved = context.modelCalls === 0 && context.unobservedModelCalls === 0;
+
+    const combineStatus = (
+      prior: typeof UsageCompleteness.Type,
+      next: typeof UsageCompleteness.Type,
+    ) => (firstObserved && prior === "complete" ? next : prior === next ? prior : "partial");
+
+    context.usageStatus = combineStatus(context.usageStatus, modelUsage.usageStatus ?? "unknown");
+    context.pricingStatus = combineStatus(
+      context.pricingStatus,
+      pricingStatus === "estimated" ? "complete" : "unknown",
+    );
     context.modelCalls = modelCalls;
     context.inputTokens = cumulativeInputTokens;
     context.outputTokens = cumulativeOutputTokens;
@@ -3550,7 +3648,6 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
   | Model.ModelName
 > =>
   Effect.gen(function* () {
-    const usageAccounting = yield* ModelUsageAccounting;
     const state = context.compaction;
     const events: Array<RunEvent> = [];
     const messages = source.content;
@@ -3791,7 +3888,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         );
 
         if (summaryUsage === undefined) {
-          yield* usageAccounting.noteIncompleteUsage(turn);
+          yield* noteIncompleteUsage(context, turn);
           if (Exit.isFailure(summaryExit)) return yield* Effect.failCause(summaryExit.cause);
           if (!summaryFinished)
             return yield* ModelProtocolError.make({
@@ -3810,7 +3907,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         }).pipe(
           Effect.tapCause(() =>
             summaryUsage !== undefined && context.modelCalls === priorSummaryModelCalls
-              ? usageAccounting.noteIncompleteUsage(turn)
+              ? noteIncompleteUsage(context, turn)
               : Effect.void,
           ),
           Effect.ensuring(
@@ -4939,7 +5036,6 @@ const makeTurn = <
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const usageAccounting = yield* ModelUsageAccounting;
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
 
@@ -5694,7 +5790,7 @@ const makeTurn = <
             withCallModel,
             Effect.tapCause(() =>
               context.modelCalls === priorModelCalls
-                ? usageAccounting.noteIncompleteUsage(turn)
+                ? noteIncompleteUsage(context, turn)
                 : Effect.void,
             ),
           );
@@ -5706,7 +5802,7 @@ const makeTurn = <
         if (trace.usageConsumed) return;
         trace.usageConsumed = true;
         if (trace.usage === undefined) {
-          return yield* usageAccounting.noteIncompleteUsage(turn);
+          return yield* noteIncompleteUsage(context, turn);
         }
         yield* consumeTurnUsage(0).pipe(Effect.exit);
       });
@@ -6194,6 +6290,8 @@ const makeTurn = <
                         if (Option.isSome(output)) {
                           yield* advanceHistory(context, historyWithResponse(), options);
 
+                          const completionUsage = yield* usageReportOf(context);
+
                           return emitThen(
                             Stream.fromEffect(
                               Effect.map(eventBase(context), (base) =>
@@ -6203,7 +6301,7 @@ const makeTurn = <
                                   turns: turn,
                                   finishReason: "budget-exhausted",
                                   exhausted: "tokens",
-                                  usage: runTotalsOf(context),
+                                  ...completionUsage,
                                 }),
                               ),
                             ),
@@ -6315,6 +6413,8 @@ const makeTurn = <
                   ? undefined
                   : yield* encodeRunDisposition(agent, output.decoded);
 
+              const completionUsage = yield* usageReportOf(context);
+
               return Stream.fromEffect(
                 Effect.map(eventBase(context), (base) =>
                   RunCompleted.make({
@@ -6329,7 +6429,7 @@ const makeTurn = <
                     ...(finalAnswerOnly && context.exhaustedDimension !== undefined
                       ? { exhausted: context.exhaustedDimension }
                       : {}),
-                    usage: runTotalsOf(context),
+                    ...completionUsage,
                   }),
                 ),
               );
@@ -6714,6 +6814,8 @@ const toolBatchContinuation = <
             ? undefined
             : yield* encodeRunDisposition(agent, output.decoded);
 
+        const completionUsage = yield* usageReportOf(context);
+
         return Stream.fromEffect(
           Effect.map(eventBase(context), (base) =>
             RunCompleted.make({
@@ -6723,7 +6825,7 @@ const toolBatchContinuation = <
               turns: turn,
               finishReason: exhausted === undefined ? "completed" : "budget-exhausted",
               ...(exhausted === undefined ? {} : { exhausted }),
-              usage: runTotalsOf(context),
+              ...completionUsage,
             }),
           ),
         );
@@ -7231,6 +7333,7 @@ function streamWithCompletion<
   onCompleted?: (
     completed: RunCompleted,
   ) => Effect.Effect<void, CompletionError, CompletionRequirements>,
+  onUsage?: (read: Effect.Effect<RunUsageReport>) => void,
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<A, H> | CompletionError,
@@ -7288,6 +7391,7 @@ function streamWithCompletion<
   onCompleted?: (
     completed: RunCompleted,
   ) => Effect.Effect<void, CompletionError, CompletionRequirements>,
+  onUsage?: (read: Effect.Effect<RunUsageReport>) => void,
 ) {
   const agent: RuntimeProgram<
     InputSchema,
@@ -7470,6 +7574,18 @@ function streamWithCompletion<
             // canonical response records so token budgets and the compaction
             // trigger keep accounting across ownership changes.
             modelCalls: resumeUsage?.modelCalls ?? 0,
+            usageStatus:
+              resumeUsage?.usageStatus ?? (resumeUsage === undefined ? "complete" : "unknown"),
+            pricingStatus:
+              resumeUsage?.pricingStatus ?? (resumeUsage === undefined ? "complete" : "unknown"),
+            unobservedModelCalls: resumeUsage?.unobservedModelCalls ?? 0,
+            childUsage: new Map(
+              (resumeUsage?.children ?? []).map((child) => [
+                child.runId,
+                Effect.succeed(child.report),
+              ]),
+            ),
+            liveChildren: new Set(),
             consecutiveToolFailures: resumeUsage?.consecutiveToolFailures ?? 0,
             inputTokens: resumeUsage?.inputTokens ?? 0,
             outputTokens: resumeUsage?.outputTokens ?? 0,
@@ -7495,6 +7611,8 @@ function streamWithCompletion<
             finalizationUsed: resumeUsage?.finalizationUsed ?? false,
             policyReservations: yield* Semaphore.make(1),
           };
+
+          onUsage?.(usageReportOf(context));
 
           // Restored totals can already breach the token budget (runtime spec §9):
           // the resumed Attempt must never issue an unconstrained external call.
@@ -7728,6 +7846,10 @@ function streamWithCompletion<
               options.subagentGrant,
               options.subagentBudget,
               options.subagentBudgetScope,
+              (childRunId, read) => {
+                context.liveChildren.add(childRunId);
+                context.childUsage.set(childRunId, read);
+              },
             ),
           ).pipe(
             Context.add(ContextWindow, {
@@ -7780,11 +7902,13 @@ function streamWithCompletion<
                     return RunSuspended.make({
                       ...(yield* terminalEventBase(context)),
                       reason: error.message,
+                      ...(yield* usageReportOf(context)),
                     });
                   }
 
                   return RunFailed.make({
                     ...(yield* terminalEventBase(context)),
+                    ...(yield* usageReportOf(context)),
                     errorTag: errorTag(error),
                     message: errorMessage(error),
                   });
@@ -7867,6 +7991,8 @@ function streamWithCompletion<
                       threadId: terminal.threadId,
                       runId: terminal.runId,
                       agentId: terminal.agentId,
+                      usage: terminal.usage,
+                      delegatedUsage: terminal.delegatedUsage,
                       sequence: terminal.sequence,
                       timestamp: terminal.timestamp,
                       errorTag: errorTag(error),
@@ -7955,6 +8081,9 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
             ...(completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {}),
             ...(runDisposition === undefined ? {} : { runDisposition: completed.runDisposition }),
             ...(completed.usage === undefined ? {} : { usage: completed.usage }),
+            ...(completed.delegatedUsage === undefined
+              ? {}
+              : { delegatedUsage: completed.delegatedUsage }),
           };
         }),
       ),
@@ -7994,6 +8123,9 @@ export interface DetachedRun<Output, Error> {
   readonly await: Effect.Effect<AgentResult<Output>, Error>;
   readonly events: Effect.Effect<ReadonlyArray<RunEvent>>;
   readonly observe: Stream.Stream<RunEvent>;
+  /** Snapshot of observed usage, also available after failure, defect, or interruption. Read after
+   * await settles (or the owning Scope closes) for a final report. In-flight work may be unpriced. */
+  readonly usageReport: Effect.Effect<RunUsageReport>;
 }
 
 const startProgram = Effect.fn("AgentRuntime.start")(function* <A extends Agent.Any, E, R, H, HR>(
@@ -8001,6 +8133,7 @@ const startProgram = Effect.fn("AgentRuntime.start")(function* <A extends Agent.
   events: (
     options: RunOptions<H, HR>,
     onCompleted: CompletionValidator<A>,
+    onUsage: (read: Effect.Effect<RunUsageReport>) => void,
   ) => Stream.Stream<RunEvent, E, R>,
   options: RunOptions<H, HR>,
 ) {
@@ -8038,8 +8171,14 @@ const startProgram = Effect.fn("AgentRuntime.start")(function* <A extends Agent.
 
   yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
 
+  let readUsage = Effect.succeed(
+    RunUsageReport.make({ usage: emptyRunTotals(), delegatedUsage: emptyRunTotals() }),
+  );
+
   const execution = reduceRunEvents(agent, (onCompleted) =>
-    events(executionOptions, onCompleted).pipe(
+    events(executionOptions, onCompleted, (read) => {
+      readUsage = read;
+    }).pipe(
       Stream.tap((event) =>
         Effect.suspend(() => {
           captured.push(event);
@@ -8048,7 +8187,18 @@ const startProgram = Effect.fn("AgentRuntime.start")(function* <A extends Agent.
         }),
       ),
     ),
-  ).pipe(Effect.ensuring(PubSub.publish(pubsub, Exit.void)));
+  ).pipe(
+    Effect.onExit(() =>
+      Effect.suspend(() => readUsage).pipe(
+        Effect.flatMap((report) =>
+          Effect.sync(() => {
+            readUsage = Effect.succeed(report);
+          }),
+        ),
+      ),
+    ),
+    Effect.ensuring(PubSub.publish(pubsub, Exit.void)),
+  );
 
   const fiber = yield* execution.pipe(Effect.forkScoped);
 
@@ -8056,6 +8206,7 @@ const startProgram = Effect.fn("AgentRuntime.start")(function* <A extends Agent.
     await: Fiber.join(fiber),
     events: Fiber.await(fiber).pipe(Effect.andThen(Effect.sync(() => captured.slice()))),
     observe: Stream.fromPubSubTake(pubsub),
+    usageReport: Effect.suspend(() => readUsage),
   };
 });
 
@@ -8161,8 +8312,8 @@ function startUnknown<H = never, R = never>(
 
   return startProgram(
     program,
-    (executionOptions, onCompleted) =>
-      streamWithCompletion(agent, input, executionOptions, onCompleted).pipe(
+    (executionOptions, onCompleted, onUsage) =>
+      streamWithCompletion(agent, input, executionOptions, onCompleted, onUsage).pipe(
         Stream.provide(ModelUsageAccounting.layerEphemeral),
       ),
     options,
@@ -9417,6 +9568,7 @@ const spawnWithParent = (
   depth: number,
   history: ThreadHistory["Service"],
   preparation: RunContextPreparation["Service"],
+  onChild: (runId: RunId, read: Effect.Effect<RunUsageReport>) => void,
 ) =>
   Effect.fn("AgentSpawner.spawn")(function* <
     InputSchema extends Schema.Top,
@@ -9489,6 +9641,8 @@ const spawnWithParent = (
         Context.make(ThreadHistory, history).pipe(Context.add(RunContextPreparation, preparation)),
       ),
     );
+
+    onChild(runId, child.usageReport);
 
     return {
       ...child,
@@ -9614,6 +9768,7 @@ const makeAgentSpawner = (
   grant?: SubagentGrant,
   budget?: SubagentBudgetReservation,
   budgetScope?: WorkerBudgetScope,
+  onChild: (runId: RunId, read: Effect.Effect<RunUsageReport>) => void = () => {},
 ): AgentSpawnerService => ({
   ...(grant === undefined ? {} : { grant }),
   ...(budget === undefined ? {} : { budget }),
@@ -9621,7 +9776,7 @@ const makeAgentSpawner = (
   policy,
   depth,
   parent,
-  spawn: spawnWithParent(parent, depth, history, preparation),
+  spawn: spawnWithParent(parent, depth, history, preparation, onChild),
 });
 
 /** Bound applied to the rendered defect message of `withTerminalDefectEvent` (SEC-013). */
