@@ -103,6 +103,8 @@ implementations.
 | Run generated JavaScript                   | [Code Mode](../guide/code-mode)                                   | Authorized tools and an isolated executor                                |
 | Run trusted local commands                 | [Sandbox execution](../guide/sandbox)                             | Executable, environment, output and time limits                          |
 | Capture, crawl, or interact with pages     | [Browser tools](../guide/browser)                                 | Browser binding or credentials, target policy                            |
+| Search the web                             | [Web search](../guide/tools#web-search)                           | Native search tool and search-model Layer                                |
+| Use Cloudflare AI Gateway                  | [AI Gateway](../platforms/cloudflare#ai-gateway)                  | Account, gateway, credentials, upstream Effect client                    |
 | Call tools on an MCP server                | [MCP servers](../guide/tools#mcp)                                 | Transport, `HttpClient` or process spawner, bounds                       |
 
 ### Limits and unsupported features {#compaction-and-unsupported-capabilities}
@@ -165,6 +167,8 @@ JavaScript execution over an explicit authorized Tool allowlist with bounded par
 `WebCapture.makeScrape`, and `WebCapture.makeExtract` expose a supplied `PageCapture` service as tools.
 Capture calls have uncertain external outcomes;
 extraction retains its schema's service requirements.
+`WebSearch.tool` exposes a separately configured native hosted search model through
+`WebSearch.layer`, returning bounded text, citations, and search-model token usage.
 
 ### `@effect-agent/sandbox`
 

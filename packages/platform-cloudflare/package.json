@@ -30,7 +30,8 @@
     "./InteractiveBrowser": "./src/InteractiveBrowser.ts",
     "./ProtectedBrowser": "./src/ProtectedBrowser.ts",
     "./ThreadObject": "./src/ThreadObject.ts",
-    "./WakeScheduler": "./src/WakeScheduler.ts"
+    "./WakeScheduler": "./src/WakeScheduler.ts",
+    "./CloudflareAiGateway": "./src/CloudflareAiGateway.ts"
   },
   "publishConfig": {
     "access": "public"

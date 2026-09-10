@@ -16,6 +16,29 @@ remains class `E`: process loss has no recovery promise.
 
 No provider wrapper, registry, or ambient model selection is introduced here.
 
+## Cloudflare AI Gateway
+
+[`src/cloudflare-ai-gateway.ts`](src/cloudflare-ai-gateway.ts) supplies two interchangeable
+handler Layers for `WebSearch.tool`: `openAiGatewaySearch` uses Cloudflare's account REST API,
+and `anthropicGatewaySearch` uses the Anthropic provider-native gateway. Supply the account ID,
+gateway ID, redacted Cloudflare token, and an Effect `HttpClient`; no provider SDK wrapper or
+Worker-only import is needed. Include `WebSearch.tool` in any agent's toolkit, then provide
+one of these Layers independently of the agent's own model.
+
+Both examples use `CloudflareAiGateway.provide(Client.layer, route)` directly in the Layer
+pipeline. Choose `provider: "anthropic"` for the native proxy or `protocol: "responses"` for
+the account REST API; the helper preserves the client's typed errors and service requirements.
+
+The REST example needs a Workers AI Read token and uses `openai/gpt-4.1-mini`. The provider
+proxy example uses the native `claude-haiku-4-5` name and Gateway authentication with stored
+keys or Unified Billing. Search-model usage is returned with the tool result and is billed
+separately from the parent Run's model accounting. Both examples bound provider output tokens.
+
+The [Gateway guide](../../docs/platforms/cloudflare.md#ai-gateway) covers direct provider keys,
+other providers, embeddings, streaming, and native search in the primary model's toolkit.
+Deterministic tests exercise the real Effect client encoders/decoders with local HTTP fixtures;
+they do not call Cloudflare or incur inference charges.
+
 ## Persistent history
 
 The offline history example runs two inputs against one SQLite Thread, then reconstructs
