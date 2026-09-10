@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.76
+
+### Patch Changes
+
+- [#419](https://github.com/danieljvdm/effect-agent/pull/419) [`3eef297`](https://github.com/danieljvdm/effect-agent/commit/3eef297d2343989a830d5d2b88e0b863b54c91fd) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow completion alongside terminal provider tool results during execution and recovery. Preserve hosted results when correcting mixed application completion calls, and keep provider work charged to run budgets.
+
 ## 0.1.0-beta.75
 
 ### Patch Changes

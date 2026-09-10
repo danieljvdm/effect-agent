@@ -163,6 +163,7 @@
     "quick-primitive-responses",
     "quiescent-conversation-maintenance",
     "quiet-browsers-read",
+    "quiet-hosted-completion",
     "quiet-retained-prompts",
     "quiet-runs-own-scope",
     "quiet-stream-tool-bounds",
