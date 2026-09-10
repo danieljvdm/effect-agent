@@ -222,12 +222,8 @@ it("publishes release versus main even though the release PR head is a version-o
   );
   expect(comments[0]).toContain(baselineTag);
   expect(comments[0]).toContain(`/commit/${head}`);
-  expect(comments[0]).toContain(
-    "| Workload | Latest release | Main | Change |\n| --- | ---: | ---: | ---: |\n",
-  );
-  expect(comments[0]).toContain(
-    "| settled-ledger-2048 | 2.00 [2.00–2.00] | 2.00 [2.00–2.00] | 0.0% |",
-  );
+  expect(comments[0]).toContain("| Workload | Latest release | Main |\n| --- | ---: | ---: |\n");
+  expect(comments[0]).toContain("| settled-ledger-2048 | 2.00 [2.00–2.00] | 2.00 [2.00–2.00] |");
   expect(comments[0]).not.toMatch(/reference/i);
   expect(await publish(makeReport(), { annotatedTag: true })).toHaveLength(1);
 });
@@ -243,7 +239,7 @@ it.each([
   expect(await publish(makeReport(), options)).toEqual([]);
 });
 
-it("computes Head/base from measured warm samples only", async () => {
+it("shows measured warm samples without automatic percentage regression signals", async () => {
   const report = makeReport();
 
   for (const batch of report.batches) {
@@ -261,10 +257,13 @@ it("computes Head/base from measured warm samples only", async () => {
 
   const comments = await publish(report);
 
-  expect(comments[0]).toContain("| small-run | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] | -50.0% |");
-  expect(comments[0]).toContain(
-    "| settled-ledger-2048 | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] | -50.0% |",
-  );
+  expect(comments[0]).toContain("| small-run | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] |");
+  expect(comments[0]).toContain("| settled-ledger-2048 | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] |");
+  expect(comments[0]).toContain("**Informational timings.**");
+  expect(comments[0]).toContain("#deterministic-performance-checks");
+  expect(comments[0]).toContain("<summary>Observed operation timings</summary>");
+  expect(comments[0]).not.toMatch(/[+-]?\d+(?:\.\d+)?%/);
+  expect(renderPerformanceReport(report)).toContain("| -50.0% |");
 });
 
 it("preserves slow samples and spread without claiming identical builds regressed", async () => {
@@ -287,16 +286,21 @@ it("preserves slow samples and spread without claiming identical builds regresse
 
   for (const output of [comments[0]!, renderPerformanceReport(report)]) {
     expect(output).toContain("Identical built JavaScript and lockfiles");
-    expect(output).toContain("| small-run | 2.00 [2.00–2.00] | 4.00 [3.00–100.00] | n/a |");
+    expect(output).toContain("| small-run | 2.00 [2.00–2.00] | 4.00 [3.00–100.00] |");
     expect(output).not.toContain("100.0%");
   }
+  expect(renderPerformanceReport(report)).toContain("| n/a |");
   report.revisions[1]!.lockfileSha256 = "a".repeat(64);
-  expect((await publish(report))[0]).toContain("| 100.0% |");
+  expect((await publish(report))[0]).not.toContain("100.0%");
+  expect(renderPerformanceReport(report)).toContain("| 100.0% |");
 });
 
 it("rejects historical contracts and reference roles before commenting", async () => {
   const report = makeReport();
 
+  await expect(
+    publish({ ...report, settings: { ...report.settings, timingGate: "threshold" } }),
+  ).rejects.toThrow("Invalid report contract");
   await expect(publish({ ...report, fixture: "runtime-v2" })).rejects.toThrow(
     "Invalid report contract",
   );

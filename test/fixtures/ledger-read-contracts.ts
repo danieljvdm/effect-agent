@@ -195,18 +195,27 @@ const assertIndexedScan = Effect.fn("LedgerReadFixture.assertIndexedScan")(funct
 
   for (const [index, [query, parameters]] of queries.entries()) {
     const plan = yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`, parameters);
+    const accesses = plan.filter(({ detail }) => /\b(?:SCAN|SEARCH)\b/.test(detail));
 
-    expect(plan.some(({ detail }) => detail.includes("effect_agent_submissions_nonterminal"))).toBe(
-      true,
-    );
+    // A constant statement count can still hide a full-ledger scan or a correlated scan.
+    // Each page walks only the outstanding-obligation index, and later pages seek past
+    // the cursor rather than revisiting earlier rows through OFFSET pagination.
+    expect(accesses.length).toBeGreaterThan(0);
+    for (const { detail } of accesses) {
+      expect(detail, "Nonterminal scans must exclude settled rows at the index").toContain(
+        "effect_agent_submissions_nonterminal",
+      );
+      if (index > 0) {
+        expect(detail, "Later ledger pages must seek from their cursor").toContain("SEARCH");
+        expect(detail, "A Thread-only seek can rescan its earlier queue pages").toContain(
+          "queue_sequence",
+        );
+      }
+    }
     expect(plan.some(({ detail }) => detail.includes("TEMP B-TREE"))).toBe(false);
-    if (index > 0)
-      expect(
-        plan.some(
-          ({ detail }) =>
-            detail.includes("SEARCH") && detail.includes("effect_agent_submissions_nonterminal"),
-        ),
-      ).toBe(true);
+    expect(query).toMatch(/\bLIMIT \?\s*$/);
+    expect(parameters.at(-1)).toBeGreaterThan(0);
+    expect(parameters.at(-1)).toBeLessThanOrEqual(256);
   }
 });
 
@@ -228,21 +237,30 @@ export const ledgerReadCases = [
       yield* assertIndexedScan(queries);
     }),
   },
-  {
-    name: "skips a large settled prefix with one indexed page",
-    run: Effect.gen(function* () {
-      const ledger = yield* SubmissionLedger;
+  // Empty, short, and exact multiple-page scans distinguish fixed/indexed work from
+  // the allowed linear work in *unfinished* rows. Retained settlements add no pages.
+  ...[0, 2_048, 8_192].flatMap((settled) =>
+    [0, 16, 768].map((unfinished) => ({
+      name: `bounds the scan to ${unfinished} unfinished rows with ${settled} settled rows`,
+      run: Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
 
-      yield* seedScan(2064, 2048);
-      const { result, queries } = yield* observeQueries(Stream.runCollect(ledger.scanNonterminal));
+        if (settled + unfinished > 0) yield* seedScan(settled + unfinished, settled);
 
-      expect(result.map(({ submissionId }) => submissionId)).toEqual(
-        Array.from({ length: 16 }, (_, n) => `scan-${2048 + n}`),
-      );
-      expect(queries).toHaveLength(1);
-      yield* assertIndexedScan(queries);
-    }),
-  },
+        const { result, queries } = yield* observeQueries(
+          Stream.runCollect(ledger.scanNonterminal),
+        );
+
+        expect(result.map(({ submissionId }) => submissionId)).toEqual(
+          Array.from({ length: unfinished }, (_, n) => `scan-${settled + n}`),
+        );
+        // A full final page may need one empty read to discover the end of the stream.
+        expect(queries.length).toBeLessThanOrEqual(Math.floor(unfinished / 256) + 1);
+        expect(queries.length).toBeGreaterThan(0);
+        yield* assertIndexedScan(queries);
+      }),
+    })),
+  ),
   {
     name: "keeps cursor order during settlement and observes earlier admissions on the next scan",
     run: Effect.gen(function* () {

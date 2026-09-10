@@ -1,8 +1,10 @@
 # Scripted runtime benchmark
 
 This leaf consumer measures public production packages with deterministic Effect AI responses.
-It makes no provider requests. Correctness assertions fail the command; latency changes are
-informational until CI variance supports workload-specific relative and absolute thresholds.
+It makes no provider requests. Correctness assertions fail the command; latency changes remain
+informational. [Deterministic performance gates](../../docs/TOOLCHAIN.md#deterministic-performance-checks)
+run in ordinary CI and bound records, SQL statements and query plans, calls, concurrency, and
+resource ownership. Shared-runner timings do not provide deterministic regression signals.
 
 Run from the repository root with Node 24 and the repository's Bun/Vite+ toolchain. Prepare two
 checkouts, install each checkout's own lockfile, and build before measuring:
@@ -133,8 +135,10 @@ interquartile range, and process failures. The artifact includes the exact trans
 
 The `runtime-v3` artifact contract contains only Base and Head, with `baselineTag` naming
 the release (null for an unlabeled local comparison). The trusted publisher rejects
-older three-revision reports. Release PR tables name Latest release, Main, and Change and
-link the exact tag and commits. Both the comment and artifact show medians and Q1–Q3 spread.
+older three-revision reports. The automatic release PR comment links the ordinary CI work-budget
+gates and labels timing as informational. Its collapsed table names Latest release and Main,
+links the exact tag and commits, and omits percentage deltas. Both the comment and artifact show
+medians and Q1–Q3 spread; percentage comparisons remain available in the full diagnostic artifact.
 The nine samples share three worker processes per revision; that spread is not a confidence
 interval, and runner/process variability has not been calibrated. Timing differences alone
 do not establish a regression. When built JavaScript and lockfile hashes match, reports
@@ -158,9 +162,10 @@ with another matched cohort. Small-sample p95, local source timings, or differin
 do not establish an SLO, Cloudflare CPU billing, or a competitive ranking. Deterministic engine
 and adapter work-budget tests remain the PR regression gates; timing evidence complements them.
 The manual diagnostics below separate fairness and lock contention from isolated run latency.
-Keep timing informational until repeated matched cohorts establish a workload-specific relative
-and absolute regression threshold. Current hosted runs show substantial machine and storage
-variance; one small-sample tail estimate or percentage alone is not a release gate. Confirm a
+Keep timing informational. Making deltas less prominent in automatic comments trades quick
+percentage scanning for a clearer distinction between measured latency and enforced work budgets;
+all raw diagnostic evidence remains available. Current hosted runs show substantial variance;
+one small-sample tail estimate or percentage alone is not a release gate. Confirm a
 suspected regression in a fresh matched run and retain both results before changing a baseline.
 
 ## Manual diagnostics
@@ -173,8 +178,8 @@ Run this command from the candidate checkout, with no concurrent builds, tests, 
 vp run perf:diagnose --base-dir /tmp/effect-agent-base --require-clean --out-dir /tmp/diagnostic-001
 ```
 
-The manual workflow's `diagnostic` choice runs the same command. Ordinary PRs run the
-`runtime-v3` matrix and trusted report validator.
+The manual workflow's `diagnostic` choice runs the same command. Main pushes run the
+`runtime-v3` matrix; ordinary PR CI runs the work-budget gates and trusted report validator.
 Diagnostics run base/head followed by head/base, with two warmups and five measured samples per
 cohort: ten measured samples per case and revision. They use the same production-package staging,
 published manifests, own-lockfile dependencies, built-artifact identities, and identical unbundled

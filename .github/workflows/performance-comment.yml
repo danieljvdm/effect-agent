@@ -41,7 +41,7 @@ jobs:
                 !/^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(report.baselineTag) ||
                 report.activeBatch !== null || report.failure !== null ||
                 report.settings?.batches !== 3 || report.settings?.warmupsPerBatch !== 2 || report.settings?.samplesPerBatch !== 3 ||
-                report.settings?.production !== true || report.settings?.execution !== 'unbundled published ESM' ||
+                report.settings?.production !== true || report.settings?.execution !== 'unbundled published ESM' || report.settings?.timingGate !== 'informational' ||
                 report.environment?.node !== 'v24.20.0' ||
                 !/^[a-f0-9]{64}$/.test(report.fixtureSha256) ||
                 !Array.isArray(report.revisions) || report.revisions.length !== 2 ||
@@ -120,19 +120,21 @@ jobs:
               const values = role => samples.filter(s => s.name === name && s.role === role).map(s => s.ms);
               const base = summarize(values('base')), head = summarize(values('head'));
               const format = value => `${value.median.toFixed(2)} [${value.q1.toFixed(2)}–${value.q3.toFixed(2)}]`;
-              const change = identical || base.median === 0 ? 'n/a' : `${((head.median / base.median - 1) * 100).toFixed(1)}%`;
-              return `| ${name} | ${format(base)} | ${format(head)} | ${change} |`;
+              return `| ${name} | ${format(base)} | ${format(head)} |`;
             });
             const marker = '<!-- effect-agent:runtime-performance -->';
             const repoUrl = `https://github.com/${repository}`;
-            const body = `${marker}\n### Runtime performance: latest release → main\n\n` +
+            const body = `${marker}\n### Runtime timing diagnostics: latest release → main\n\n` +
+              `**Informational timings.** [Deterministic performance gates](${repoUrl}/blob/${revision('head').revision}/docs/TOOLCHAIN.md#deterministic-performance-checks) run in ordinary CI and bound algorithmic work. This timing run does not establish a latency regression or a merge threshold.\n\n` +
               `Release: [\`${report.baselineTag}\`](${repoUrl}/releases/tag/${encodeURIComponent(report.baselineTag)}) (\`${revision('base').revision.slice(0,12)}\`). ` +
               `Main: [\`${revision('head').revision.slice(0,12)}\`](${repoUrl}/commit/${revision('head').revision}).\n\n` +
+              '<details>\n<summary>Observed operation timings</summary>\n\n' +
               'Operation median [Q1–Q3] in milliseconds; nine samples per workload and revision across three worker processes. Same fixture bytes and Node runtime; separate lockfiles and public builds.\n\n' +
-              (identical ? '**Identical built JavaScript and lockfiles. Timing differences do not establish a code regression; percentage changes are suppressed.**\n\n' : '') +
-              '| Workload | Latest release | Main | Change |\n| --- | ---: | ---: | ---: |\n' + rows.join('\n') +
-              `\n\n[Raw samples, cold process totals, failures, environment, and exact revisions](${run.html_url}). ` +
-              'Sample spread is not a confidence interval. Timing deltas are observations, not established regressions or a merge threshold; runner and process variability have not been calibrated.';
+              (identical ? '**Identical built JavaScript and lockfiles. Timing differences do not establish a code regression.**\n\n' : '') +
+              '| Workload | Latest release | Main |\n| --- | ---: | ---: |\n' + rows.join('\n') +
+              '\n\n</details>\n\n' +
+              `[Full timing report, raw samples, cold process totals, failures, environment, and exact revisions](${run.html_url}). ` +
+              'Shared-runner wall-clock measurements vary. Sample spread is not a confidence interval; percentage deltas remain in the diagnostic artifact rather than this automatic comment.';
             const pulls = await github.paginate(github.rest.pulls.list, {
               ...context.repo, state: 'open', base: 'main', head: `${context.repo.owner}:changeset-release/main`, per_page: 100,
             });
