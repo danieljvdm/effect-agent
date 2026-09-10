@@ -5,7 +5,13 @@ import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
-import { LanguageModel, Model, type Prompt, type Response as AiResponse } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  Toolkit,
+  type Prompt,
+  type Response as AiResponse,
+} from "effect/unstable/ai";
 
 import {
   PlannerError,
@@ -15,12 +21,13 @@ import {
   Trip,
   TripSiteStore,
 } from "../../src/domain.ts";
+import { ReadTravelPage } from "../../src/research.ts";
 import { ScoutInput } from "../../src/research/contracts.ts";
 import { ResearchScoutBackground } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { previousEditorPlanner, previousResearchPlanner } from "../../src/server/planner.ts";
 import { ownerOfThread, storageOwner } from "../../src/server/tenancy.ts";
-import { FixtureBrowserLive } from "./browser.ts";
+import { EditorInput } from "../../src/trip-app/editor.ts";
 import fixtureWorker from "./worker.ts";
 
 const call = (
@@ -103,6 +110,25 @@ const model = Model.make(
             const bucket = environment.value.APP_BUILDS;
 
             if (!bucket) return yield* Effect.die("Missing fixture bucket");
+            const editor = inputs(prompt, EditorInput).at(-1);
+
+            if (editor) {
+              const key = "gate/Expanded editor";
+
+              yield* Effect.promise(() => bucket.put(`${key}/entered`, "yes"));
+              while ((yield* Effect.promise(() => bucket.head(`${key}/open`))) === null)
+                yield* Effect.sleep("25 millis");
+
+              const reads = results(prompt, editor.index).filter(
+                (result) => result.name === "get_trip",
+              ).length;
+
+              return Stream.fromIterable(
+                reads < 25
+                  ? call("get_trip", { tripId: editor.input.tripId }, `editor-read-${reads}`)
+                  : finish("Expanded editor completed."),
+              );
+            }
             const scout = inputs(prompt, ScoutInput).at(-1);
 
             if (scout) {
@@ -117,14 +143,17 @@ const model = Model.make(
               yield* Effect.promise(() => bucket.put(`${key}/entered`, "yes"));
               while ((yield* Effect.promise(() => bucket.head(`${key}/open`))) === null)
                 yield* Effect.sleep("25 millis");
-              if (
-                !results(prompt, scout.index).some((result) => result.name === "read_travel_page")
-              )
+
+              const reads = results(prompt, scout.index).filter(
+                (result) => result.name === "read_travel_page",
+              ).length;
+
+              if (reads < (scout.input.title.startsWith("Expanded") ? 13 : 1))
                 return Stream.fromIterable(
                   call(
                     "read_travel_page",
                     { url: "https://visitlisboa.com", focus: scout.input.message },
-                    `read-${scout.index}`,
+                    `read-${scout.index}-${reads}`,
                   ),
                 );
 
@@ -181,6 +210,43 @@ const model = Model.make(
             }
             if (!parent) return Stream.fromIterable(finish("Ready"));
             const current = results(prompt, parent.index);
+
+            if (parent.input.message === "start expanded research") {
+              const started = current.filter(
+                (result) => result.name === "research_scout_start" && !result.isFailure,
+              ).length;
+
+              if (started < 6)
+                return Stream.fromIterable(
+                  call(
+                    "research_scout_start",
+                    {
+                      title: `Expanded ${started + 1}`,
+                      message: "Research a distinct Lisbon topic with the expanded allowance",
+                    },
+                    `expanded-${started}`,
+                  ),
+                );
+              const listed = current.find((result) => result.name === "list_trips");
+
+              if (!listed) return Stream.fromIterable(call("list_trips", {}));
+              const trip = Schema.decodeUnknownSync(Schema.Array(Trip))(listed.result)[0];
+
+              if (!trip) return yield* Effect.die("Missing expanded fixture trip");
+              if (!current.some((result) => result.name === "app_editor_start"))
+                return Stream.fromIterable(
+                  call("app_editor_start", { tripId: trip.id, message: "Expanded editor" }),
+                );
+
+              return Stream.fromIterable(finish("Six scouts and the editor are working."));
+            }
+            if (parent.input.message === "overflow expanded research")
+              return Stream.fromIterable(
+                call("research_scout_start", {
+                  title: "Overflow",
+                  message: "Must exceed capacity",
+                }),
+              );
 
             if (parent.input.message === "start research") {
               const started = current.filter(
@@ -279,9 +345,20 @@ const sites = Layer.succeed(TripSiteStore, {
   load: () => Effect.succeed(null),
 });
 
+const researchBrowser = Toolkit.make(ReadTravelPage).toLayer({
+  read_travel_page: ({ url, focus }) =>
+    Effect.succeed({
+      url,
+      title: "Fixture travel source",
+      excerpts: [focus],
+      photos: [],
+      truncated: false,
+    }),
+});
+
 export class TravelPlannerThread extends makeTravelPlannerThread(
   sites,
-  plannerApplication(model, "research-v1", "Research fixture", FixtureBrowserLive),
+  plannerApplication(model, "research-v1", "Research fixture", researchBrowser),
 ) {
   fetch(request: Request): Promise<Response> {
     return this[DurableObject.RunSymbol](

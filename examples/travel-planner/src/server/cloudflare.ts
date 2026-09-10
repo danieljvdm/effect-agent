@@ -32,7 +32,11 @@ import {
   researchScoutReport,
   scoutAttemptLayer,
 } from "../research/runtime.ts";
-import { ResearchScoutBackground, researchScout } from "../research/scout.ts";
+import {
+  ExpandedResearchScoutBackground,
+  ResearchScoutBackground,
+  researchScout,
+} from "../research/scout.ts";
 import { EditorHostLive, editorAttemptLayer } from "../trip-app/editor-runtime.ts";
 import { AppEditorBackground, appEditor } from "../trip-app/editor.ts";
 import { OwnerAppRepositoryLive, serveAppRepository } from "../trip-app/remote.ts";
@@ -48,6 +52,7 @@ import { PlannerModel, plannerSnapshot, sendMessage } from "./application.ts";
 import { liveModel } from "./models.ts";
 import {
   planner,
+  previousBudgetPlanner,
   previousResearchPlanner,
   previousEditorPlanner,
   previousContinuingPlanner,
@@ -197,16 +202,19 @@ export const plannerApplication = <E, R>(
   selectedModel?: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>,
   sourceLayer = AppSourceLive,
 ) => {
-  const attemptLayer = (context: {
-    readonly threadId: string;
-    readonly submissionId: SubmissionLookupById["submissionId"];
-    readonly attemptId: string;
-  }) =>
+  const attemptLayer = (
+    context: {
+      readonly threadId: string;
+      readonly submissionId: SubmissionLookupById["submissionId"];
+      readonly attemptId: string;
+    },
+    expandedResearch = false,
+  ) =>
     Layer.mergeAll(
       TripToolsLive(context.threadId),
       AppToolsLive,
       AppEditorBackground.layer,
-      ResearchScoutBackground.layer,
+      expandedResearch ? ExpandedResearchScoutBackground.layer : ResearchScoutBackground.layer,
     ).pipe(
       Layer.provideMerge(
         Layer.effect(
@@ -251,9 +259,20 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v10" },
+        agent: { id: planner.id, version: "travel-planner-v11" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      reporting: [researchScoutReport],
+      attemptLayer: (context) => attemptLayer(context, true),
+    },
+    {
+      agent: previousBudgetPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousBudgetPlanner.id, version: "travel-planner-v10" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousBudgetPlanner.toolkit.tools),
       }),
       reporting: [researchScoutReport],
       attemptLayer,

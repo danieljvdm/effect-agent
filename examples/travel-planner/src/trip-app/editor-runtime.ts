@@ -5,15 +5,17 @@ import {
   WorkerBudgetAuthorizer,
   WorkerHostAuthorizer,
   WorkerHostConfig,
+  WorkerPolicyResolver,
 } from "@effect-agent/thread/WorkerHost";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Duration, Effect, Layer, Option, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
 
 import { DeliverResponse } from "../agent.ts";
 import { PlannerError } from "../domain.ts";
-import { previousResearchCoordinatorId, researchCoordinatorId } from "../research/contracts.ts";
+import { researchCoordinatorIds, researchCoordinatorId } from "../research/contracts.ts";
 import { ResearchScout, researchScout } from "../research/scout.ts";
+import { activeWorkerLimit, editorPolicy, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt, ProgressStore, withToolProgress } from "../server/progress.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
 import { tripRepositoryForOwner } from "../server/trip-rpc.ts";
@@ -69,9 +71,7 @@ export const editorAttemptLayer = (context: {
             origin.worker.threadId !== context.threadId ||
             origin.worker.targetAgentId !== appEditor.id ||
             origin.worker.delegationId !== AppEditor.delegationId ||
-            ![coordinatorId, previousResearchCoordinatorId, researchCoordinatorId].includes(
-              origin.source.agentId,
-            ) ||
+            ![coordinatorId, ...researchCoordinatorIds].includes(origin.source.agentId) ||
             captured.sourceThreadId !== origin.source.threadId ||
             origin.depth !== 1
           )
@@ -193,6 +193,27 @@ const sourceAllowed = (threadId: string, principal: string) => {
 
 /** Native caller identity and canonical lineage, never a model-supplied account, confer access. */
 export const EditorHostLive = Layer.mergeAll(
+  Layer.succeed(WorkerPolicyResolver, {
+    resolveSource: () => Effect.succeed(Option.none()),
+    resolveTarget: (request) => {
+      if (![appEditor.id, researchScout.id].includes(request.definition.id))
+        return Effect.succeed(Option.none());
+      // A worker's allowance is immutable. Follow-ups and recovery retain it, including
+      // workers started by earlier coordinators; only new v11 admissions opt in.
+      if (request._tag === "RetainedWorker")
+        return Effect.succeed(Option.some(request.origin.policy));
+      if (request.source.agentId !== researchCoordinatorId) return Effect.succeed(Option.none());
+      if (
+        request.sourceSubmission?.agentId !== researchCoordinatorId ||
+        request.sourceSubmission.threadId !== request.source.threadId
+      )
+        return Effect.fail(WorkerError.make({ operation: "start", reason: "unavailable" }));
+
+      return Effect.succeed(
+        Option.some(request.definition.id === researchScout.id ? scoutPolicy : editorPolicy),
+      );
+    },
+  }),
   Layer.succeed(WorkerHostAuthorizer, {
     authorize: (request) =>
       sourceAllowed(request.sourceThreadId, request.principal) &&
@@ -205,28 +226,42 @@ export const EditorHostLive = Layer.mergeAll(
         : Effect.fail(WorkerError.make({ operation: request.operation, reason: "denied" })),
   }),
   Layer.succeed(WorkerBudgetAuthorizer, {
-    authorize: (request) =>
-      sourceAllowed(request.source.threadId, request.principal) &&
-      (([coordinatorId, previousResearchCoordinatorId, researchCoordinatorId].includes(
-        request.source.agentId,
-      ) &&
+    authorize: (request) => {
+      const expanded = request.source.agentId === researchCoordinatorId;
+
+      const editor =
+        [coordinatorId, ...researchCoordinatorIds].includes(request.source.agentId) &&
         request.worker.delegationId === AppEditor.delegationId &&
-        request.worker.targetAgentId === appEditor.id &&
-        request.policy.maxTurns <= 16 &&
-        request.policy.maxToolCalls <= 24) ||
-        ([previousResearchCoordinatorId, researchCoordinatorId].includes(request.source.agentId) &&
-          request.worker.delegationId === ResearchScout.delegationId &&
-          request.worker.targetAgentId === researchScout.id &&
-          request.policy.maxTurns <= 8 &&
-          request.policy.maxToolCalls <= 12))
+        request.worker.targetAgentId === appEditor.id;
+
+      const scout =
+        researchCoordinatorIds.includes(request.source.agentId) &&
+        request.worker.delegationId === ResearchScout.delegationId &&
+        request.worker.targetAgentId === researchScout.id;
+
+      const ceiling = editor
+        ? expanded
+          ? editorPolicy
+          : appEditor.policy
+        : expanded
+          ? scoutPolicy
+          : researchScout.policy;
+
+      return sourceAllowed(request.source.threadId, request.principal) &&
+        (editor || scout) &&
+        request.policy.maxTurns <= ceiling.maxTurns &&
+        request.policy.maxToolCalls <= ceiling.maxToolCalls &&
+        request.policy.toolConcurrency <= ceiling.toolConcurrency &&
+        Duration.isLessThanOrEqualTo(request.policy.maxDuration, ceiling.maxDuration)
         ? Effect.void
-        : Effect.fail(WorkerError.make({ operation: "start", reason: "denied" })),
+        : Effect.fail(WorkerError.make({ operation: "start", reason: "denied" }));
+    },
   }),
   Layer.succeed(WorkerHostConfig, {
-    maxWorkersPerSource: 32,
-    maxActiveWorkersPerSource: 3,
-    maxInputsPerWorker: 64,
-    maxPendingInputsPerWorker: 8,
+    maxWorkersPerSource: 100,
+    maxActiveWorkersPerSource: activeWorkerLimit,
+    maxInputsPerWorker: 256,
+    maxPendingInputsPerWorker: 16,
     lifetimeMillis: 7 * 24 * 60 * 60 * 1000,
   }),
 );

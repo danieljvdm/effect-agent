@@ -7,7 +7,14 @@ import { PlannerInput, PlannerSettings, ShortText, Text } from "../domain.ts";
 import { TravelPhoto, TravelUrl } from "../travel-content.ts";
 
 export const previousResearchCoordinatorId = "travel-planner-v9";
-export const researchCoordinatorId = "travel-planner-v10";
+export const previousBudgetCoordinatorId = "travel-planner-v10";
+export const researchCoordinatorId = "travel-planner-v11";
+
+export const researchCoordinatorIds = [
+  previousResearchCoordinatorId,
+  previousBudgetCoordinatorId,
+  researchCoordinatorId,
+];
 
 export const ScoutRequest = Schema.Struct({ title: ShortText, message: Text });
 

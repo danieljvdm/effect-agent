@@ -8,13 +8,15 @@ import { currentPlannerInstructions, DeliverResponse, makePlanner } from "../age
 import { PlannerInput, Text } from "../domain.ts";
 import {
   CoordinatorInput,
+  previousBudgetCoordinatorId,
   previousResearchCoordinatorId,
   researchCoordinatorId,
   ScoutReportInput,
 } from "../research/contracts.ts";
-import { ResearchScoutBackground } from "../research/scout.ts";
+import { ExpandedResearchScoutBackground, ResearchScoutBackground } from "../research/scout.ts";
 import { AppEditorBackground, coordinatorId } from "../trip-app/editor.ts";
 import { AppTools } from "../trip-app/tools.ts";
+import { plannerLimits } from "./agent-limits.ts";
 
 // Provider-owned search is assembled at the host boundary; the planner accepts any research toolkit.
 export const previousCardPlanner = makePlanner(
@@ -122,7 +124,7 @@ Each actual scout run automatically reports its findings to you. For an internal
 });
 
 /** Give multi-part requests room to dispatch all work, including in established conversations. */
-export const planner = Agent.make(researchCoordinatorId, {
+export const previousBudgetPlanner = Agent.make(previousBudgetCoordinatorId, {
   input: CoordinatorInput,
   output: previousResearchPlanner.output,
   toolkit: previousResearchPlanner.toolkit,
@@ -151,6 +153,32 @@ After every requested part is done or accepted by a worker, finish promptly so t
 ${instructions}`,
       ),
     ),
+  completion: { tool: "deliver_response", required: true, project: ({ result }) => result.message },
+});
+
+/** New user submissions use expanded limits; retained submissions keep their original binding. */
+export const planner = Agent.make(researchCoordinatorId, {
+  input: CoordinatorInput,
+  output: previousBudgetPlanner.output,
+  toolkit: Toolkit.merge(previousEditorPlanner.toolkit, ExpandedResearchScoutBackground.toolkit),
+  inputPrompt: coordinatorInputPrompt,
+  policy: { ...previousBudgetPlanner.policy, ...plannerLimits },
+  instructions: () =>
+    previousBudgetPlanner
+      .instructions()
+      .pipe(
+        Effect.map((instructions) =>
+          instructions
+            .replace(
+              "up to two complementary research_scout workers",
+              "up to six complementary research_scout workers",
+            )
+            .replace(
+              "Keep at most two research scouts for this conversation.",
+              "Use up to six research scouts for independent questions in this conversation. Choose useful distinct tasks, such as flights, stays, golf, surf, local transport, and activities; do not duplicate research just to fill slots. Reuse relevant workers and leave room for the app editor.",
+            ),
+        ),
+      ),
   completion: { tool: "deliver_response", required: true, project: ({ result }) => result.message },
 });
 

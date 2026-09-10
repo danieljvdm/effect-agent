@@ -32,7 +32,7 @@ viewport while the conversation scrolls. Search results and saved source URLs ar
 Replies arrive as live text. The expandable activity chip keeps a stable step count;
 current work and public progress appear in its details and the response.
 
-The planner can send two focused research scouts into the background while asking about
+The planner can send up to six focused research scouts into the background while asking about
 your preferences. Later details steer those same durable workers. Completed findings return
 to the planner automatically; you do not need to ask it to check again. A compact research
 dock above the composer opens live progress and recorded activity in a dialog. Scouts can
@@ -43,16 +43,35 @@ when a scout report has no selected trip ID. A rejected trip lookup or save is r
 the model so it can refresh the ID/revision and correct the request without ending the turn.
 Cross-conversation writes remain forbidden. A storage failure may follow a committed write;
 the planner must read the saved state before retrying and stop saving if it cannot verify it.
-The host allows three active workers across research and app editing, and retains at most
-32 workers per conversation. Existing conversations and app editors continue to work.
+The host allows seven active workers across research and app editing, leaving room for six
+scouts and an editor, and retains at most 100 workers per conversation. Each worker accepts
+up to 256 total inputs and 16 pending inputs; its reference lasts seven days. Existing
+conversations and app editors continue to work.
 
 For a request with several parts, the coordinator must complete or dispatch every part
 before its final reply. A request to build a site and find golf courses and surf breaks
 starts the editor and both research tasks; saving a draft or starting only the editor
 does not fulfill it. Optional questions do not block independent work. The coordinator
-has a cumulative 256,000-token run allowance, a separate 64,000-token context target,
-and visible run limits so an established conversation can still make several tool calls.
-Previously accepted runs and their worker references retain their registered definitions.
+has a cumulative 8,000,000-token run allowance, separate from its 128,000-token context
+target. The context target triggers compaction of the model prompt, not deletion of saved
+conversation records, and is an application setting rather than a model context-window limit.
+Repeated input tokens count toward the cumulative allowance, which leaves room for the
+longer run even with a large conversation. These are ceilings, not work quotas: finish once
+the requested work is complete or accepted by the appropriate workers.
+
+| Agent          | Model steps | Tool calls | Duration   | Concurrent tools |
+| -------------- | ----------: | ---------: | ---------- | ---------------: |
+| Planner        |          48 |         96 | 15 minutes |                1 |
+| Research scout |          32 |         64 | 10 minutes |                4 |
+| App editor     |          48 |         96 | 15 minutes |                1 |
+
+All three receive visible remaining run limits and a 128,000-token context target. Scouts
+and editors have independently funded run budgets without a cumulative token cap. The host
+selects the expanded policy from the new worker's canonical v11 owner submission, then
+persists that policy in its immutable origin. Previously accepted runs and existing workers
+retain their original allowances and bindings, including after restart or follow-up. New
+messages on existing trips use v11; new workers receive the expanded allowance. No worker
+or conversation history is reset by the upgrade.
 
 Researched options appear as native stay, flight, restaurant/activity, and itinerary cards.
 Stay cards include source photos, a keyboard-accessible gallery, amenities, and listing links.
@@ -274,7 +293,7 @@ The Leaflet/OpenStreetMap view preserves attribution and shows an empty state wi
 The planner delegates app work through the native background-worker start/follow-up tools;
 source-editing tools are available only to the registered editor. Later changes reuse its worker
 when available. The editor captures the message's model settings and has a separate bounded
-run budget (16 turns, 24 tools, four minutes). Worker admission and canonical lineage establish
+run budget (48 turns, 96 tools, fifteen minutes for newly created workers). Worker admission and canonical lineage establish
 the source account; each tool is restricted to the admitted trip. Parent completion does not
 cancel the editor. The Cloudflare host resumes durable work after eviction, while unresolved
 ordinary tool outcomes retain the framework's protection against automatic replay. Existing

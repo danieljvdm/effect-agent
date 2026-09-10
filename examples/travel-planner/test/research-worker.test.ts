@@ -13,6 +13,7 @@ import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 import { PlannerSnapshot, Trip, type PlannerSettings } from "../src/domain.ts";
 import {
   previousResearchCoordinatorId,
+  researchCoordinatorId,
   ScoutInput,
   ScoutReportInput,
 } from "../src/research/contracts.ts";
@@ -110,14 +111,18 @@ const fixture = async (path: string, parameters: Record<string, string>, method 
     )
   ).json();
 
-const send = (message: string) =>
-  rpc("SendMessage", {
-    message,
-    settings,
-    requestId: crypto.randomUUID(),
-    selectedTripId: null,
-    conversationId: "research",
-  });
+const send = (message: string, email?: string) =>
+  rpc(
+    "SendMessage",
+    {
+      message,
+      settings,
+      requestId: crypto.randomUUID(),
+      selectedTripId: null,
+      conversationId: "research",
+    },
+    email,
+  );
 
 const until = async <A>(read: () => Promise<A>, matches: (value: A) => boolean) => {
   let value = await read();
@@ -282,6 +287,11 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
           record.payload.origin.source.agentId === previousResearchCoordinatorId,
       ),
     ).toBe(true);
+    expect(
+      journal.records.flatMap(({ record }) =>
+        record.payload._tag === "WorkerOriginRecorded" ? [record.payload.origin.policy] : [],
+      )[0],
+    ).toMatchObject({ maxTurns: 8, maxToolCalls: 12 });
   }
 
   const parent = Schema.decodeUnknownSync(ThreadExport)(
@@ -316,4 +326,122 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
         ),
     ),
   ).toBe(true);
+}, 90_000);
+
+it("runs six scouts and an editor beyond the old budgets, preserves them across restart, and bounds admission", async () => {
+  const email = "expanded@example.com";
+  const expandedThread = `member-${createHash("sha256").update(email).digest("hex")}--research`;
+
+  await rpc(
+    "SaveTrip",
+    {
+      conversationId: "research",
+      tripId: null,
+      expectedRevision: null,
+      title: "Lisbon",
+      destination: "Lisbon",
+      summary: "Independent expanded worker fixture",
+      startDate: null,
+      endDate: null,
+      travelers: 2,
+      days: [],
+      notes: [],
+    },
+    email,
+  );
+  await send("start expanded research", email);
+
+  const active = await until(
+    () => snapshot(email),
+    (state) =>
+      state.pending === 0 &&
+      state.scouts?.filter((scout) => scout.state === "active").length === 6 &&
+      state.editor?.state === "active",
+  );
+
+  expect(active.messages.at(-1)?.text).toBe("Six scouts and the editor are working.");
+  if (!active.editor) throw new Error("Expected an active editor");
+
+  const workers = [
+    ...(active.scouts?.filter((scout) => scout.state === "active").map((scout) => scout.id) ?? []),
+    active.editor.id,
+  ];
+
+  await send("overflow expanded research", email);
+  await until(
+    () => snapshot(email),
+    (state) => state.pending === 0,
+  );
+
+  const rejected = Schema.decodeUnknownSync(ThreadExport)(
+    await fixture("journal", { thread: expandedThread }),
+  );
+
+  const failure = rejected.records
+    .flatMap(({ record }) =>
+      record.payload._tag === "SubmissionSettled" && record.payload.outcome === "failed"
+        ? [record.payload.result]
+        : [],
+    )
+    .at(-1);
+
+  expect(failure).toMatchObject({ errorTag: "WorkerError" });
+  expect((await snapshot(email)).scouts?.filter((scout) => scout.state === "active")).toHaveLength(
+    6,
+  );
+
+  await runtime.dispose();
+  runtime = makeRuntime();
+  for (const name of [
+    "Expanded 1",
+    "Expanded 2",
+    "Expanded 3",
+    "Expanded 4",
+    "Expanded 5",
+    "Expanded 6",
+    "Expanded editor",
+  ])
+    await fixture("gate", { name }, "POST");
+
+  const completed = await until(
+    () => snapshot(email),
+    (state) =>
+      state.pending === 0 &&
+      state.editor?.state === "idle" &&
+      state.scouts
+        ?.filter((scout) => scout.task.includes("expanded allowance"))
+        .every((scout) => scout.state === "idle" || scout.state === "failed") === true,
+  );
+
+  expect(completed.editor?.id).toBe(active.editor?.id);
+  expect(
+    completed.scouts
+      ?.filter((scout) => scout.task.includes("expanded allowance"))
+      .map((scout) => scout.state),
+  ).toEqual(["idle", "idle", "idle", "idle", "idle", "idle"]);
+  for (const id of workers) {
+    const journal = Schema.decodeUnknownSync(ThreadExport)(
+      await fixture("journal", { thread: id }),
+    );
+
+    const origin = journal.records.flatMap(({ record }) =>
+      record.payload._tag === "WorkerOriginRecorded" ? [record.payload.origin] : [],
+    )[0];
+
+    expect(origin?.source.agentId).toBe(researchCoordinatorId);
+    expect(origin?.policy.contextTokenLimit).toBe(128_000);
+    expect(origin?.policy.runStatus).toBe("appended");
+
+    const toolResults = journal.records.filter(
+      ({ record }) => record.payload._tag === "ToolCallSettled" && !record.payload.isFailure,
+    );
+
+    expect(toolResults.length).toBeGreaterThan(id === active.editor?.id ? 24 : 12);
+    expect(
+      journal.records.some(
+        ({ record }) =>
+          record.payload._tag === "SubmissionSettled" && record.payload.outcome === "completed",
+      ),
+    ).toBe(true);
+  }
 }, 90_000);

@@ -8,6 +8,7 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { PlannerError } from "../domain.ts";
 import { ReadTravelPage } from "../research.ts";
+import { researchScoutLimit, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt } from "../server/progress.ts";
 import { ScoutFindings, ScoutInput, ScoutRequest } from "./contracts.ts";
 
@@ -74,6 +75,31 @@ export const ResearchScout = Subagent.make("research_scout", {
 });
 
 export const ResearchScoutBackground = Subagent.background(ResearchScout, {
+  start: true,
+  followUp: true,
+  summary: true,
+  inspect: true,
+  list: true,
+  cancel: true,
+  budgetScope: "worker-run",
+});
+
+/** Same worker identity/schema; the host captures the v11 allowance on initial admission. */
+export const ExpandedResearchScout = Subagent.make("research_scout", {
+  ...ResearchScout,
+  description:
+    "Research a focused part of the trip in the background. Use up to six complementary scouts for independent questions, and steer existing workers with updated preferences.",
+  policy: Subagent.SubagentPolicy.make({
+    maxChildren: researchScoutLimit,
+    maxConcurrency: researchScoutLimit,
+    maxTurns: scoutPolicy.maxTurns,
+    maxToolCalls: scoutPolicy.maxToolCalls,
+    maxDuration: scoutPolicy.maxDuration,
+    maxResultBytes: 12 * 1_024,
+  }),
+});
+
+export const ExpandedResearchScoutBackground = Subagent.background(ExpandedResearchScout, {
   start: true,
   followUp: true,
   summary: true,
