@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, TurnId } from "./Identifiers.ts";
 import { DelegationDepth } from "./SubagentContract.ts";
 import { Selection } from "./ToolExposure.ts";
+import { RunTotals } from "./Usage.ts";
 
 const RunEventBase = {
   eventVersion: Schema.Literal(1),
@@ -191,6 +192,8 @@ const RunCompletedFields = Schema.Struct({
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
   finishReason: CompletionFinishReason,
   exhausted: Schema.optionalKey(ExhaustedLimit),
+  /** Cumulative spend for the Run. Optional so records written before this field still decode. */
+  usage: Schema.optionalKey(RunTotals),
 }).check(
   Schema.makeFilter((event) => validateCompletionMetadata(event)),
   Schema.makeFilter((event) =>
@@ -283,6 +286,13 @@ export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
     finishReason: CompletionFinishReason,
     exhausted: Schema.optionalKey(ExhaustedLimit),
+    /**
+     * What the child spent, travelling verbatim from its own terminal event.
+     *
+     * Without it a parent cannot account for delegated work at all: the child is a separate Run, so
+     * a parent's `RunBudgetHook` never sees its calls.
+     */
+    usage: Schema.optionalKey(RunTotals),
   }).check(Schema.makeFilter((event) => validateCompletionMetadata(event))),
 ) {}
 

@@ -1637,6 +1637,10 @@ const layer = <
           // stays a success; the marker keeps the degradation observable to
           // the parent without leaking any child transcript.
           ...(result.exhausted !== undefined ? { exhausted: result.exhausted } : {}),
+          // Travels verbatim from the child's own terminal event: without it a parent cannot
+          // account for delegated work, because the child is a separate Run and the parent's
+          // budget hook never sees its model calls.
+          ...(result.usage !== undefined ? { usage: result.usage } : {}),
         });
 
         const projected = yield* delegation.projectResult(

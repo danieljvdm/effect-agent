@@ -437,6 +437,12 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
       expect(requested?.childRunId).toBe(joined?.childRunId);
       expect(findEvent(events, "SubagentCompleted")).toMatchObject({ turns: 1 });
+      // The parent's own budget hook never sees the child's model calls, so this event is the
+      // only place a host can learn what a delegation cost.
+      const childUsage = findEvent(events, "SubagentCompleted")?.usage;
+
+      expect(childUsage).toBeDefined();
+      expect(childUsage?.modelCalls).toBeGreaterThan(0);
 
       // The parent Tool result is the projected, Schema-encoded value.
       expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({

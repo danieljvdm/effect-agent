@@ -69,6 +69,20 @@ export class ModelCallUsage extends Schema.Class<ModelCallUsage>(
   costMicrousd: Schema.Natural,
 }) {}
 
+/**
+ * Cumulative spend for one Run, without per-model attribution.
+ *
+ * The ephemeral runtime tracks running totals to enforce `tokenBudget`, but it does not retain the
+ * per-pricing-identity groups a `RunUsageSummary` carries, so this is what it can report honestly.
+ * Durable settlements keep using `RunUsageSummary`.
+ */
+export class RunTotals extends Schema.Class<RunTotals>("@effect-agent/core/RunTotals")({
+  modelCalls: Schema.Natural,
+  inputTokens: Schema.Natural,
+  outputTokens: Schema.Natural,
+  costMicrousd: Schema.Natural,
+}) {}
+
 /** Settlement-sized aggregate for calls sharing one pricing identity. */
 export class ModelUsageGroup extends Schema.Class<ModelUsageGroup>(
   "@effect-agent/core/ModelUsageGroup",

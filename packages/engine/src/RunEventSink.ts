@@ -6,6 +6,7 @@ import {
   type ToolCallId,
 } from "@effect-agent/core/Identifiers";
 import { type DelegationDepth } from "@effect-agent/core/SubagentContract";
+import { type RunTotals } from "@effect-agent/core/Usage";
 import { Context, Schema } from "effect";
 import type { Effect } from "effect";
 
@@ -49,6 +50,8 @@ export interface SubagentCompletedPayload extends SubagentEventBasePayload {
   readonly finishReason: "completed" | "model-stop" | "budget-exhausted";
   /** Dimension that bound when the child settled budget-exhausted (the RUN-021 grant-flow marker). */
   readonly exhausted?: "tokens" | "tool-calls" | "turns" | undefined;
+  /** What the child spent, so a parent can account for delegated work. */
+  readonly usage?: RunTotals | undefined;
 }
 
 /** Pre-base payload for the core `SubagentFailed` event; `message` is at most 4096 characters. */

@@ -79,6 +79,7 @@ import {
   ModelCallUsage,
   ModelResponseIdentity,
   OutputTokenUsage,
+  RunTotals,
 } from "@effect-agent/core/Usage";
 import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
 import type { Take } from "effect";
@@ -336,6 +337,8 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     exhausted: Schema.optionalKey(Schema.Literals(["tokens", "tool-calls", "turns"])),
     /** Schema-encoded application disposition declared for an ordinary completed Run. */
     runDisposition: Schema.optionalKey(Schema.Json),
+    /** Cumulative spend for the Run, as reported on its terminal event. */
+    usage: Schema.optionalKey(RunTotals),
   }).check(
     Schema.makeFilter(
       (result) =>
@@ -348,6 +351,20 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
       },
     ),
   );
+
+/** The Run's cumulative spend, as the terminal events report it. */
+const runTotalsOf = (context: {
+  readonly modelCalls: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly costMicrousd: number;
+}): RunTotals =>
+  RunTotals.make({
+    modelCalls: context.modelCalls,
+    inputTokens: context.inputTokens,
+    outputTokens: context.outputTokens,
+    costMicrousd: context.costMicrousd,
+  });
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
 export type AgentResult<Output> = ReturnType<
@@ -1436,6 +1453,7 @@ const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function
         turns: payload.turns,
         finishReason: payload.finishReason,
         ...(payload.exhausted !== undefined ? { exhausted: payload.exhausted } : {}),
+        ...(payload.usage !== undefined ? { usage: payload.usage } : {}),
       });
     }
     case "SubagentFailed": {
@@ -6185,6 +6203,7 @@ const makeTurn = <
                                   turns: turn,
                                   finishReason: "budget-exhausted",
                                   exhausted: "tokens",
+                                  usage: runTotalsOf(context),
                                 }),
                               ),
                             ),
@@ -6310,6 +6329,7 @@ const makeTurn = <
                     ...(finalAnswerOnly && context.exhaustedDimension !== undefined
                       ? { exhausted: context.exhaustedDimension }
                       : {}),
+                    usage: runTotalsOf(context),
                   }),
                 ),
               );
@@ -6703,6 +6723,7 @@ const toolBatchContinuation = <
               turns: turn,
               finishReason: exhausted === undefined ? "completed" : "budget-exhausted",
               ...(exhausted === undefined ? {} : { exhausted }),
+              usage: runTotalsOf(context),
             }),
           ),
         );
@@ -7933,6 +7954,7 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
             finishReason: completed.finishReason,
             ...(completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {}),
             ...(runDisposition === undefined ? {} : { runDisposition: completed.runDisposition }),
+            ...(completed.usage === undefined ? {} : { usage: completed.usage }),
           };
         }),
       ),
