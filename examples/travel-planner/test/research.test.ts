@@ -1,5 +1,6 @@
 import { WebCaptureFailure } from "@effect-agent/capabilities/WebCapture";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { CloudflareBrowser } from "@effect-agent/platform-cloudflare/CloudflareBrowser";
 import {
   PageCapture,
   PageCaptureNavigationError,
@@ -107,6 +108,96 @@ it.effect("keeps deep amenity evidence from a large page within the encoded resu
     expect(second.result).toEqual(first.result);
     expect(yield* Ref.get(calls)).toBe(2);
   }),
+);
+
+it.effect("waits for Airbnb amenity content through the published Browser Run adapter", () =>
+  Effect.gen(function* () {
+    for (const [id, title] of [
+      ["11960125", "Coastal Cabin, with king bed, big deck, hot tub"],
+      ["12269624", "Romantic Retreat with hot tub near the beach!"],
+    ]) {
+      const url = `https://www.airbnb.com/rooms/${id}`;
+      const markdown = `# ${title}\n\n![](https://a0.muscache.com/pictures/cabin.jpg)\n\n## What this place offers\n\nKitchen\n\nPrivate hot tub\n\nWifi`;
+      let calls = 0;
+
+      const browser: BrowserRun = {
+        fetch: () => Promise.reject(new Error("Unexpected fetch")),
+        quickAction: (action, options) => {
+          calls += 1;
+          expect(action).toBe("markdown");
+          expect(options).toMatchObject({
+            url,
+            gotoOptions: { waitUntil: "domcontentloaded", timeout: 10_000 },
+            waitForSelector: {
+              selector: '[data-section-id="AMENITIES_DEFAULT"]',
+              timeout: 10_000,
+            },
+            rejectResourceTypes: ["image", "media", "font"],
+          });
+
+          return Promise.resolve(Response.json({ success: true, result: markdown }));
+        },
+      };
+
+      const result = yield* read({ ...parameters, url }).pipe(
+        Effect.provide(CloudflareBrowser.layer({ handlers: ReadTravelPageLive }, { browser })),
+      );
+
+      expect(result.isFailure).toBe(false);
+      const inspected = yield* Schema.decodeUnknownEffect(ReadTravelPageResult)(result.result);
+
+      expect(inspected.title).toBe(title);
+      expect(inspected.photos).toHaveLength(1);
+      expect(inspected.excerpts.join("\n")).toContain("Private hot tub");
+      expect(new TextEncoder().encode(JSON.stringify(inspected)).byteLength).toBeLessThanOrEqual(
+        12 * 1_024,
+      );
+      expect(calls).toBe(1);
+    }
+  }),
+);
+
+it.effect(
+  "rejects Airbnb navigation shells and title galleries without replaying the capture",
+  () =>
+    Effect.gen(function* () {
+      const captured = yield* Ref.make<FailureDiagnostic[]>([]);
+
+      const diagnostics = Layer.succeed(FailureDiagnostics, {
+        append: (value) => Ref.update(captured, (values) => [...values, value]),
+        list: Effect.succeed([]),
+      });
+
+      for (const markdown of [
+        "[Airbnb homepage](/)\n\nHomesHomesExperiencesExperiencesServicesServices\n\nStart your search\n\nAnywhere Anytime Add guests\n\n[Log in or sign up](https://www.airbnb.com/signup_login)",
+        "# Coastal Cabin, with king bed, big deck, hot tub\n\nShare\n\nSave\n\n![](https://a0.muscache.com/pictures/cabin.jpg)\n\nShow all photos\n\n# Help us improve your experience\n\nWe use cookies and other technologies.",
+        "# Cabin\n\n## What this place offers\n\n",
+      ]) {
+        const calls = yield* Ref.make(0);
+
+        const result = yield* read({
+          ...parameters,
+          url: "https://www.airbnb.com/rooms/11960125",
+        }).pipe(
+          provideCapture(() =>
+            Ref.update(calls, (count) => count + 1).pipe(Effect.as(page(markdown))),
+          ),
+          Effect.provide(diagnostics),
+        );
+
+        expect(result).toMatchObject({
+          isFailure: true,
+          result: { errorTag: "WebCapturePageUnready" },
+        });
+        expect(yield* Ref.get(calls)).toBe(1);
+        const diagnostic = (yield* Ref.get(captured)).at(-1);
+
+        expect(diagnostic?.operation).toBe("read_travel_page: unready-page");
+        expect(diagnostic?.text).toContain("domcontentloaded");
+        expect(diagnostic?.text).toContain("AMENITIES_DEFAULT");
+        expect(diagnostic?.text).toContain('"destinationHttpStatus": null');
+      }
+    }),
 );
 
 it.effect("inspects newly discovered sites and CDNs without a travel-site allowlist", () =>
@@ -292,7 +383,10 @@ it.effect("times out a stalled capture and completes its finalizer", () =>
     yield* TestClock.adjust("26 seconds");
     expect(yield* Fiber.join(fiber)).toMatchObject({
       isFailure: true,
-      result: { errorTag: "WebCaptureTimeout" },
+      result: {
+        errorTag: "WebCaptureTimeout",
+        message: expect.stringContaining("25-second overall limit"),
+      },
     });
     expect(yield* Ref.get(closed)).toBe(true);
   }),
