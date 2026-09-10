@@ -34,7 +34,8 @@
     "./WebCapture": "./src/WebCapture.ts",
     "./Remembering": "./src/Remembering.ts",
     "./ContextTools": "./src/ContextTools.ts",
-    "./MemoryNotes": "./src/MemoryNotes.ts"
+    "./MemoryNotes": "./src/MemoryNotes.ts",
+    "./WebSearch": "./src/WebSearch.ts"
   },
   "publishConfig": {
     "access": "public"

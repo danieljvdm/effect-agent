@@ -9,3 +9,4 @@ export * as CloudflareSubscriptions from "./CloudflareSubscriptions.ts";
 export * as CloudflareThreadClient from "./CloudflareThreadClient.ts";
 export * as ThreadObject from "./ThreadObject.ts";
 export * as WakeScheduler from "./WakeScheduler.ts";
+export * as CloudflareAiGateway from "./CloudflareAiGateway.ts";

@@ -67,7 +67,8 @@
     "./ContextWindow": "./src/ContextWindow.ts",
     "./ContextHistory": "./src/ContextHistory.ts",
     "./ContextTools": "./src/ContextTools.ts",
-    "./MemoryNotes": "./src/MemoryNotes.ts"
+    "./MemoryNotes": "./src/MemoryNotes.ts",
+    "./WebSearch": "./src/WebSearch.ts"
   },
   "publishConfig": {
     "access": "public"

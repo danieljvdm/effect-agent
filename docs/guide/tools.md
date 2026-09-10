@@ -359,6 +359,70 @@ and keep local server commands under application control.
 The [Subagents guide](./subagents) covers definition, model binding, budgets, authority, failure
 handling, and durable child recovery.
 
+## Search the web {#web-search}
+
+`WebSearch.tool` is an ordinary Effect AI tool with a stable `{ query }` input and a result
+containing `text`, `sources`, and search-model token `usage`. Its handler uses a separately
+supplied LanguageModel and a native hosted search tool. The calling agent can use a different
+model or provider. Include `WebSearch.tool` in its toolkit, then provide this handler Layer:
+
+```ts twoslash
+import * as WebSearch from "effect-agent/WebSearch";
+import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
+import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
+import { Config, Effect, Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const ClientLive = Layer.unwrap(
+  Effect.gen(function* () {
+    return OpenAiClient.layer(
+      Gateway.rest({
+        accountId: yield* Config.string("CLOUDFLARE_ACCOUNT_ID"),
+        gatewayId: yield* Config.string("CLOUDFLARE_AI_GATEWAY_ID"),
+        apiToken: yield* Config.redacted("CLOUDFLARE_API_TOKEN"),
+        protocol: "responses",
+      }),
+    );
+  }),
+);
+
+const SearchLive = WebSearch.layer({
+  tool: OpenAiTool.WebSearch({ search_context_size: "medium" }),
+  timeoutMillis: 30_000,
+  maxOutputBytes: 32 * 1024,
+}).pipe(
+  Layer.provide(
+    OpenAiLanguageModel.model("openai/gpt-4.1-mini", {
+      max_output_tokens: 2_048,
+      store: false,
+    }),
+  ),
+  Layer.provide(ClientLive),
+  Layer.provide(FetchHttpClient.layer),
+);
+```
+
+For Anthropic, select `AnthropicTool.WebSearch_20250305({ maxUses: 3 })` and supply an
+`AnthropicLanguageModel` Layer. Direct provider clients work too. The compiling
+[provider examples](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers#cloudflare-ai-gateway) show both backends.
+
+Each invocation makes one model request, without handler retries. The host fixes the backend,
+native search options, deadline (1–300,000 ms), and encoded result limit (1–1,048,576 bytes).
+Queries are bounded to 8,192 characters and results to 64 source citations. A missing completed
+search, provider error, invalid result, or exceeded limit returns `WebSearchFailure`. Defects
+and interruption propagate; timeout interrupts the in-flight request. Search results and source
+URLs remain untrusted, and a citation grants no permission to fetch it. No provider payload or
+credential is included in the tool result. Model-call telemetry remains upstream Effect AI's;
+the wrapper adds the `WebSearch.search` span without logging queries or responses itself.
+
+Search is separately billed. Returned token counts use `null` when unavailable and are **not**
+added to the parent Run's model usage or spending limit. Configure provider output limits and
+host billing controls. For search within the primary model call and its normal Run accounting,
+include the native `OpenAiTool.WebSearch` or `AnthropicTool.WebSearch_20250305` directly in the
+agent's toolkit instead. Both work with [Gateway client configuration](../platforms/cloudflare#ai-gateway).
+The ordinary WebSearch tool remains uncertain for recovery: an unresolved call is not replayed
+automatically after ownership loss.
+
 ## Browse web pages
 
 Use `WebCapture.make`, `WebCapture.makeScrape`, or `WebCapture.makeExtract` to expose authorized page

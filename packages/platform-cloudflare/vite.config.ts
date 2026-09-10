@@ -42,6 +42,7 @@ export default defineConfig({
       "src/BrowserRestCapture.ts",
       "src/BrowserRestCrawl.ts",
       "src/CloudflareBindings.ts",
+      "src/CloudflareAiGateway.ts",
       "src/CloudflareBrowser.ts",
       "src/CloudflareCodeMode.ts",
       "src/CloudflareConfig.ts",
