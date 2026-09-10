@@ -5,7 +5,7 @@ import { expect, it } from "vite-plus/test";
 
 import { SavedTrip, Trip } from "../src/domain.ts";
 import { legacyTripMessages } from "../src/server/conversation.ts";
-import { draftAtom, newTripAtom, selectionAtom, selectTripAtom } from "../src/state.ts";
+import { draftAtom, selectionAtom, selectTripAtom } from "../src/state.ts";
 
 const trip = Schema.decodeUnknownSync(Trip)({
   id: "tahoe-trip",
@@ -99,18 +99,17 @@ it("retains only the selected trip's historical conversation without changing it
   expect(JSON.stringify(source)).toBe(before);
 });
 
-it("starts distinct new conversations and returns to the saved trip's conversation", () => {
+it("clears the draft when switching conversations and preserves it when reselecting the same one", () => {
   const registry = AtomRegistry.make();
 
   try {
     registry.set(draftAtom, "Draft from another trip");
-    registry.set(newTripAtom, undefined);
-    const first = registry.get(selectionAtom);
-
-    expect(first.conversationId).toBeTruthy();
+    registry.set(selectTripAtom, { conversationId: "new-conversation", id: null });
+    expect(registry.get(selectionAtom).conversationId).toBe("new-conversation");
     expect(registry.get(draftAtom)).toBe("");
-    registry.set(newTripAtom, undefined);
-    expect(registry.get(selectionAtom).conversationId).not.toBe(first.conversationId);
+    registry.set(draftAtom, "Still writing");
+    registry.set(selectTripAtom, { conversationId: "new-conversation", id: null });
+    expect(registry.get(draftAtom)).toBe("Still writing");
 
     const saved = Schema.decodeUnknownSync(SavedTrip)({
       ...trip,
@@ -118,6 +117,7 @@ it("starts distinct new conversations and returns to the saved trip's conversati
     });
 
     registry.set(selectTripAtom, saved);
+    expect(registry.get(draftAtom)).toBe("");
     expect(registry.get(selectionAtom)).toEqual({
       conversationId: "saved-conversation",
       tripId: trip.id,

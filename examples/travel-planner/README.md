@@ -27,7 +27,14 @@ ID and model settings without clearing a new draft. Accepted queued messages sur
 messages that have not reached the server remain local to the current tab.
 
 **Plan a new trip** starts a separate conversation with fresh model history. Returning
-to a trip restores that conversation's messages. The first message reserves a private
+to a trip restores that conversation's messages. Each conversation has a private
+`/conversations/<conversationId>` URL, including conversations without a saved itinerary.
+Opening `/` or **Plan a new trip** redirects to a fresh conversation URL before the first
+message; it does not create a stored conversation until you send one. Refresh, bookmarks,
+and browser Back/Forward restore the conversation selected by that URL. Sidebar links can
+also open in another tab. Links still require sign-in to the owning account; they do not
+publish conversation history. Malformed conversation IDs show the not-found page.
+The first message reserves a private
 sidebar entry before agent admission, independently of whether the model saves trip details.
 Unfinished and failed conversations remain reachable after reload or restart. Entries initially
 use the first message as their title; saved trip details replace that label without a duplicate.
