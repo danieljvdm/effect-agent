@@ -16,7 +16,7 @@ export interface ProgressWriter {
   readonly tool: (
     id: string,
     label: string,
-    state: "running" | "complete" | "failed",
+    state: "running" | "complete" | "failed" | "incomplete",
   ) => Effect.Effect<void>;
   readonly finish: Effect.Effect<void>;
 }

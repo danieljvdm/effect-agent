@@ -2348,3 +2348,89 @@
     grid-column: 2;
   }
 }
+
+/* Pending messages remain in the composer dock until delivery is confirmed. */
+.pending-messages {
+  display: flex;
+  flex-direction: column-reverse;
+  max-height: min(240px, calc(var(--planner-viewport-height, 100dvh) * 0.25));
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  margin-bottom: 12px;
+  padding: 2px 4px;
+  border-radius: 12px;
+}
+.pending-messages > ol {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pending-message {
+  align-self: flex-end;
+  min-width: 0;
+  max-width: 86%;
+  padding: 12px 15px;
+  border: 1px dashed #a6b599;
+  border-radius: 12px;
+  background: #f0f3e9;
+  color: #344633;
+}
+.pending-message > p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pending-message-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 7px;
+}
+.pending-message-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #58724f;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.pending-message-status svg {
+  flex-shrink: 0;
+}
+.pending-message[data-status="failed"] {
+  border-color: #c3a68b;
+  background: #faf4ed;
+}
+.pending-message[data-status="failed"] .pending-message-status {
+  color: #874831;
+}
+.pending-message-retry {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #c3a68b;
+  border-radius: 8px;
+  background: #fff;
+  color: #874831;
+  font-size: 12px;
+  font-weight: 600;
+}
+.pending-message-retry:hover:not(:disabled) {
+  background: #f3e7dc;
+}
+@media (max-width: 700px) {
+  .pending-message {
+    max-width: 94%;
+    padding: 10px 12px;
+  }
+  .pending-message > p {
+    font-size: 14px;
+  }
+}

@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityPanel } from "./components/activity-panel";
 import { AgentProgress } from "./components/agent-progress.tsx";
 import { MessageText } from "./components/message-text";
+import { PendingMessages } from "./components/pending-messages";
 import { ResearchScoutCard } from "./components/research-scout-card.tsx";
 import { TravelCards } from "./components/travel/travel-cards";
 import { TripAppCard } from "./components/trip-app-card.tsx";
@@ -33,6 +34,7 @@ import {
   changeSettingsAtom,
   conversationStatusAtom,
   sidebarTripsAtom,
+  pendingMessagesAtom,
 } from "./state";
 
 function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | null {
@@ -61,6 +63,7 @@ export function Planner() {
   const snapshot = Option.getOrNull(AsyncResult.value(result));
   const conversationStatus = useAtomValue(conversationStatusAtom);
   const savedTrips = useAtomValue(sidebarTripsAtom);
+  const pendingMessages = useAtomValue(pendingMessagesAtom);
   const [sendResult, send] = useAtom(sendMessageAtom);
   const [publishResult, changeApp] = useAtom(changeTripAppAtom);
   const [inspect, setInspect] = useState(false);
@@ -80,7 +83,12 @@ export function Planner() {
       : null;
 
   const visibleProgress = live ?? (!busy ? progress : null);
-  const error = failure(result) ?? failure(sendResult) ?? failure(publishResult);
+
+  const sendError = pendingMessages.some((message) => message.status === "failed")
+    ? failure(sendResult)
+    : null;
+
+  const error = failure(result) ?? sendError ?? failure(publishResult);
   const transcript = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const lastMessageId = messages.at(-1)?.id;
@@ -283,7 +291,7 @@ export function Planner() {
                   <p>This conversation couldn't load. Retrying…</p>
                 )}
               </div>
-            ) : messages.length === 0 ? (
+            ) : messages.length === 0 && pendingMessages.length === 0 ? (
               <div className="welcome">
                 <div className="compass" aria-hidden="true">
                   <ArrowUpRight size={43} aria-hidden="true" />
@@ -351,7 +359,10 @@ export function Planner() {
               className="composer"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (canSend) send();
+                if (canSend) {
+                  followResponse.current = true;
+                  send();
+                }
               }}
             >
               {!!snapshot?.scouts?.length && (
@@ -369,6 +380,11 @@ export function Planner() {
                   {error}
                 </p>
               )}
+              <PendingMessages
+                messages={pendingMessages}
+                onRetry={(id) => send(id)}
+                retrying={sendResult.waiting}
+              />
               <div className="input-wrap">
                 <textarea
                   ref={composerInput}
@@ -387,7 +403,10 @@ export function Planner() {
                       event.keyCode !== 229
                     ) {
                       event.preventDefault();
-                      if (canSend) send();
+                      if (canSend) {
+                        followResponse.current = true;
+                        send();
+                      }
                     }
                   }}
                 />

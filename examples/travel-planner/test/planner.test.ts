@@ -285,6 +285,9 @@ it("isolates conversations while retaining owner trips, native mutations, public
     expect(saved.trips[0]?.destination).toBe("Lisbon");
     expect(saved.conversationId).toBe(firstConversation);
     expect(saved.trips[0]?.conversationId).toBe(firstConversation);
+    expect(saved.messages.find((message) => message.role === "user")?.requestId).toBe(
+      "create-lisbon",
+    );
     expect(saved.activity.some((item) => item.text === "save_trip: completed")).toBe(true);
     const trip = saved.trips[0]!;
 
@@ -373,6 +376,30 @@ it("isolates conversations while retaining owner trips, native mutations, public
     );
 
     expect(republished.revision).toBe(4);
+    // A lost acknowledgement retries the original admitted publication, even after later edits.
+    expect(
+      await rpc("SendMessage", {
+        conversationId: firstConversation,
+        message: "Publish this trip",
+        selectedTripId: trip.id,
+        requestId: "publish-lisbon",
+      }),
+    ).toEqual({ accepted: true });
+    expect(
+      (await snapshot()).messages.filter(
+        (message) => message.role === "user" && message.requestId === "publish-lisbon",
+      ),
+    ).toHaveLength(1);
+    expect(
+      (
+        await rpcExit("SendMessage", {
+          conversationId: firstConversation,
+          message: "Publish different details",
+          selectedTripId: trip.id,
+          requestId: "publish-lisbon",
+        })
+      )._tag,
+    ).toBe("Failure");
     const firstBeforeNew = await snapshot();
     const emptyConversation = await snapshot("/api/rpc", secondConversation);
 

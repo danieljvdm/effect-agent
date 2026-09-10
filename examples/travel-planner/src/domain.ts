@@ -255,7 +255,7 @@ export const PlannerProgress = Schema.Struct({
     Schema.Struct({
       id: Schema.String,
       label: ShortText,
-      state: Schema.Literals(["running", "complete", "failed"]),
+      state: Schema.Literals(["running", "complete", "failed", "incomplete"]),
       startedAt: Schema.optionalKey(Schema.Natural),
       completedAt: Schema.optionalKey(Schema.Natural),
     }),
@@ -315,6 +315,8 @@ export const PlannerSnapshot = Schema.Struct({
       role: Schema.Literals(["user", "assistant"]),
       text: Schema.String,
       tripId: Schema.NullOr(TripId),
+      requestId: Schema.optionalKey(Schema.String),
+      submissionId: Schema.optionalKey(Schema.String),
       content: Schema.optionalKey(TravelContent),
     }),
   ),
@@ -323,6 +325,14 @@ export const PlannerSnapshot = Schema.Struct({
   activity: Schema.Array(PlannerActivity),
   pending: Schema.Natural,
   pendingSubmissionIds: Schema.Array(Schema.String),
+  queuedMessages: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        requestId: Schema.String,
+        text: Text,
+      }),
+    ),
+  ),
   usage: Schema.Struct({
     model: Schema.String,
     inputTokens: Schema.NullOr(Schema.Natural),

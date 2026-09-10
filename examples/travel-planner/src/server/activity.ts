@@ -13,6 +13,7 @@ const redactText = (text: string) =>
 type PendingDetail = { readonly label: string; readonly value: unknown };
 type PendingActivity = Omit<PlannerActivity, "details"> & { readonly details: PendingDetail[] };
 const detail = (label: string, value: unknown): PendingDetail => ({ label, value });
+const SearchResultStatus = Schema.Struct({ status: Schema.String });
 
 /** Serialize only retained events. Credentials and opaque provider state are not diagnostics. */
 const renderDetail = ({ label, value }: PendingDetail) => {
@@ -180,14 +181,34 @@ export const plannerActivity = (
             recordDetails,
           ],
         });
-        for (const result of providerResults)
+        for (const result of providerResults) {
+          const search =
+            result.name === "OpenAiWebSearch" || result.name === "OpenAiWebSearchPreview";
+
+          const decoded = search
+            ? Schema.decodeUnknownOption(SearchResultStatus)(result.result)
+            : undefined;
+
+          const status = decoded?._tag === "Some" ? decoded.value.status : undefined;
+          // Effect AI currently marks every web-search result isFailure:false, even unfinished items.
+          const failed = result.isFailure || status === "failed";
+
+          const outcome = failed
+            ? "failed"
+            : status !== undefined && status !== "completed"
+              ? `not completed (provider status: ${redactText(status).slice(0, 80)})`
+              : search && status === undefined
+                ? "result recorded by provider"
+                : "completed by provider";
+
           activity.push({
             ...base,
             id: `${sequence}-${result.id}`,
-            kind: result.isFailure ? "failure" : "tool",
-            text: `${result.name}: ${result.isFailure ? "failed" : "completed by provider"}`,
+            kind: failed ? "failure" : "tool",
+            text: `${result.name}: ${outcome}`,
             details: [detail("Result", result), recordDetails],
           });
+        }
         boundaries.set(payload.runId, time);
         break;
       }

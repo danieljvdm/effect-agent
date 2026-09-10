@@ -59,3 +59,31 @@ it("reserves the thinking fallback for busy turns with no text or steps", () => 
   expect(settled).not.toContain("Saved response");
   expect(settled).not.toContain("Thinking through your trip");
 });
+
+it("shows unfinished searches neutrally while preserving success and explicit failure labels", () => {
+  const snapshot = progress();
+
+  for (const [state, label] of [
+    ["complete", "Done"],
+    ["incomplete", "Not completed"],
+    ["failed", "Couldn&#x27;t finish"],
+  ] as const) {
+    const html = renderToStaticMarkup(
+      <AgentProgress
+        progress={{
+          ...snapshot,
+          tools: [
+            { id: "search", label: "Searching the web", state, startedAt: 0, completedAt: 1000 },
+          ],
+        }}
+        active={false}
+        busy={false}
+      />,
+    );
+
+    expect(html).toContain(label);
+    expect(html.includes("Couldn")).toBe(state === "failed");
+    expect(html.includes("✓")).toBe(state === "complete");
+    expect(html).not.toContain("spinning");
+  }
+});

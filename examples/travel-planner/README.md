@@ -12,6 +12,11 @@ the card. Saved trip data stays current when code changes or is restored. App cr
 code changes run in a separate durable editor. You can keep chatting while it works, including
 sending a new message while the planner's previous turn is pending. Accepted messages join
 at a safe runtime boundary; accepting a message does not mean its work has finished.
+Messages appear immediately above the input with **Sending** or **Queued** status, then move
+into the conversation when recorded. The pending list scrolls independently so the input
+remains reachable. Failed acknowledgements offer **Retry**, preserving the original request
+ID and model settings without clearing a new draft. Accepted queued messages survive reload;
+messages that have not reached the server remain local to the current tab.
 
 **Plan a new trip** starts a separate conversation with fresh model history. Returning
 to a trip restores that conversation's messages. The first message reserves a private
@@ -190,7 +195,11 @@ non-success statuses; the token is never forwarded to a redirect destination.
   original settings, including when a save happens during a run.
 - `SendMessage` admits work to the framework's durable thread runtime and returns
   acceptance. Alarm execution survives a disconnected browser. A stable request ID
-  deduplicates retries with the original model settings; the UI reconciles saved snapshots
+  deduplicates retries with the original admitted input, including model settings and any
+  publication revision. Reusing the ID with changed input fails. Snapshot messages carry
+  their request IDs so optimistic entries reconcile without matching message text; queued
+  entries come from nonterminal submissions until their input enters the canonical log.
+  The UI reconciles saved snapshots
   every two seconds. The current attempt reads its settings from its admitted submission,
   never from model-generated text or a later message joining the run.
 - `/api/progress` streams schema-defined replacement frames for the selected conversation
@@ -228,10 +237,16 @@ non-success statuses; the token is never forwarded to a redirect destination.
   Blocked pages and access challenges produce typed
   failures; the agent can use another source and distinguishes source evidence from
   verified availability. There are no logins, bookings, or access-control bypasses.
-  Page content is untrusted. Each model response permits one native search call. Runs
+  Page content is untrusted. Each selectable-model response permits four native search calls;
+  the legacy model registration retains its original one-call limit for admitted work. Runs
   allow twelve turns, eighteen tool calls, 64,000 tokens, and two minutes, with one tool
   at a time. Each page inspection has a 25-second timeout. Ordinary tools with uncertain outcomes are
   not automatically replayed after ownership loss.
+- Native search status is retained in the trace. A provider search that ends without completing
+  is shown as **Not completed**, separately from an explicit failure. This can happen when
+  the provider reaches its per-response tool allowance; a tool-result event alone does not
+  establish that the search succeeded. Canonical activity already persists in Durable Object
+  storage, so debugging does not require a duplicate trace database.
 - Activity expands each canonical model turn, tool call, result, request settings, and failure diagnostic, with run/turn/call IDs and token usage. The latest 100 events are shown; individual detail sections are capped at 16,384 characters and marked when truncated. Credentials, raw provider errors, and private provider reasoning are excluded. UTC timestamps and T+ elapsed times come from the journal; recorded step intervals include orchestration and storage, rather than claiming model-only or handler-only latency. Live response and tool timers measure the current attempt and reset after restart. Estimated cost is shown
   as unavailable until a pricing policy is configured; it is never presented as travel
   spend. Failed or stopped requests also appear in the conversation so a timeout never

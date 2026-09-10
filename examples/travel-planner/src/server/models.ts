@@ -88,7 +88,9 @@ export const observeOpenAi = (
                         ? "running"
                         : visible.item.status === "completed"
                           ? "complete"
-                          : "failed",
+                          : visible.item.status === "failed"
+                            ? "failed"
+                            : "incomplete",
                     );
                   }
 
@@ -105,7 +107,8 @@ export const selectedModelConfig = (settings: PlannerSettings) =>
   ({
     store: false,
     max_output_tokens: 16_384,
-    max_tool_calls: 1,
+    // OpenAI ignores additional built-in attempts after this per-response allowance.
+    max_tool_calls: 4,
     // Built-in search limits do not constrain native function calls or completion batches.
     parallel_tool_calls: false,
     reasoning: { effort: settings.reasoningEffort },

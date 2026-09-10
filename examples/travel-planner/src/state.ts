@@ -98,13 +98,15 @@ export const selectionAtom = Atom.make<{
 
 export const draftAtom = Atom.make("");
 
-const pendingRequestAtom = Atom.make<{
+type PendingMessage = {
+  readonly email: string;
   readonly text: string;
   readonly tripId: string | null;
   readonly conversationId: string;
   readonly id: string;
-  readonly settings: PlannerSettings;
-} | null>(null);
+  readonly settings?: PlannerSettings;
+  readonly status: "sending" | "queued" | "failed";
+};
 
 export class PlannerClient extends AtomRpc.Service<PlannerClient>()("travel-planner/Client", {
   group: PlannerRpcs,
@@ -435,6 +437,69 @@ export const sidebarTripsAtom = Atom.map(tripListAtom, ({ trips, conversations }
   ...trips,
 ]);
 
+const outboxAtom = Atom.writable<ReadonlyArray<PendingMessage>, ReadonlyArray<PendingMessage>>(
+  (get) => {
+    get.subscribe(conversationViewAtom, (view) => {
+      const snapshot = Option.getOrNull(AsyncResult.value(view.result));
+
+      if (snapshot === null) return;
+
+      const recorded = new Set(
+        snapshot.messages.flatMap((message) =>
+          message.role === "user" && message.requestId !== undefined ? [message.requestId] : [],
+        ),
+      );
+
+      const entries = Option.getOrElse(get.self<ReadonlyArray<PendingMessage>>(), () => []);
+
+      const remaining = entries.filter(
+        (entry) =>
+          entry.email !== view.email ||
+          entry.conversationId !== view.conversationId ||
+          !recorded.has(entry.id),
+      );
+
+      if (remaining.length !== entries.length) get.setSelf(remaining);
+    });
+
+    return Option.getOrElse(get.self<ReadonlyArray<PendingMessage>>(), () => []);
+  },
+  (get, entries) => get.setSelf(entries),
+).pipe(Atom.keepAlive);
+
+/** The server queue survives reload; local entries cover the time before acknowledgement. */
+export const pendingMessagesAtom = Atom.make((get) => {
+  const session = get(visibleSessionAtom);
+
+  if (session === null) return [];
+  const { conversationId } = get(selectionAtom);
+  const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
+
+  const recorded = new Set(
+    snapshot?.messages.flatMap((message) =>
+      message.role === "user" && message.requestId !== undefined ? [message.requestId] : [],
+    ) ?? [],
+  );
+
+  const queued = snapshot?.queuedMessages ?? [];
+
+  const entries = get(outboxAtom).filter(
+    (entry) =>
+      entry.email === session.email &&
+      entry.conversationId === conversationId &&
+      !recorded.has(entry.id),
+  );
+
+  return [
+    ...queued.map((entry) => ({
+      id: entry.requestId,
+      text: entry.text,
+      status: "queued" as const,
+    })),
+    ...entries.filter((entry) => !queued.some((saved) => saved.requestId === entry.id)),
+  ];
+});
+
 export const activeTripAtom = Atom.make((get) => {
   const selection = get(selectionAtom);
 
@@ -448,7 +513,6 @@ export const activeTripAtom = Atom.make((get) => {
 export const newTripAtom = Atom.fnSync<void>()((_, get) => {
   get.set(selectionAtom, { conversationId: crypto.randomUUID(), tripId: null });
   get.set(draftAtom, "");
-  get.set(pendingRequestAtom, null);
 });
 
 export const selectTripAtom = Atom.fnSync<{
@@ -457,52 +521,90 @@ export const selectTripAtom = Atom.fnSync<{
 }>()((trip, get) => {
   get.set(selectionAtom, { conversationId: trip.conversationId, tripId: trip.id });
   get.set(draftAtom, "");
-  get.set(pendingRequestAtom, null);
 });
 
-export const sendMessageAtom = PlannerClient.runtime.fn<void>()(
-  Effect.fnUntraced(function* (_, get) {
-    const draft = get(draftAtom);
-    const message = draft.trim();
+export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
+  Effect.fnUntraced(function* (retryId, get) {
+    const session = get(visibleSessionAtom);
+
+    if (session === null) return;
     const selection = get(selectionAtom);
-    const conversationId = selection.conversationId ?? crypto.randomUUID();
-    const selectedTripId = get(activeTripAtom)?.id ?? null;
+
+    const retry =
+      retryId === undefined
+        ? undefined
+        : get(outboxAtom).find(
+            (entry) =>
+              entry.id === retryId &&
+              entry.email === session.email &&
+              entry.conversationId === selection.conversationId &&
+              entry.status === "failed",
+          );
+
+    if (retryId !== undefined && retry === undefined) return;
+    const message = retry?.text ?? get(draftAtom).trim();
 
     if (!message) return;
+    const conversationId = retry?.conversationId ?? selection.conversationId ?? crypto.randomUUID();
+    const selectedTripId = retry ? retry.tripId : (get(activeTripAtom)?.id ?? null);
+    const requestId = retry?.id ?? crypto.randomUUID();
+
     if (selection.conversationId === null)
       get.set(selectionAtom, { conversationId, tripId: selectedTripId });
-    const previous = get(pendingRequestAtom);
 
-    const retrying =
-      previous?.text === message &&
-      previous.tripId === selectedTripId &&
-      previous.conversationId === conversationId;
-
-    const requestId = retrying ? previous.id : crypto.randomUUID();
-    const settings = retrying ? previous.settings : yield* get.result(settingsResultAtom);
-
-    get.set(pendingRequestAtom, {
+    const entry: PendingMessage = {
+      ...retry,
+      email: session.email,
       text: message,
       tripId: selectedTripId,
       conversationId,
       id: requestId,
-      settings,
-    });
-    const client = yield* PlannerClient;
+      status: "sending",
+    };
 
-    yield* Reactivity.mutation(
-      client("SendMessage", {
-        message,
-        requestId,
-        selectedTripId,
-        conversationId,
-        settings,
-      }),
-      ["planner"],
+    get.set(
+      outboxAtom,
+      retry
+        ? get(outboxAtom).map((current) => (current.id === requestId ? entry : current))
+        : [...get(outboxAtom), entry],
     );
-    if (get(selectionAtom).conversationId === conversationId && get(draftAtom) === draft)
-      get.set(draftAtom, "");
-    if (get(pendingRequestAtom)?.id === requestId) get.set(pendingRequestAtom, null);
+    if (retry === undefined) get.set(draftAtom, "");
+
+    yield* Effect.gen(function* () {
+      const settings = retry?.settings ?? (yield* get.result(settingsResultAtom));
+      const liveSession = get(sessionAtom);
+
+      if (!AsyncResult.isSuccess(liveSession) || liveSession.value.email !== session.email)
+        return yield* new AccessError({
+          code: "unauthorized",
+          message: "Sign in to the same account before retrying this message.",
+        });
+      get.set(
+        outboxAtom,
+        get(outboxAtom).map((current) =>
+          current.id === requestId ? { ...current, settings } : current,
+        ),
+      );
+      const client = yield* PlannerClient;
+
+      yield* Reactivity.mutation(
+        client("SendMessage", { message, requestId, selectedTripId, conversationId, settings }),
+        ["planner"],
+      );
+    }).pipe(
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          get.set(
+            outboxAtom,
+            get(outboxAtom).map((current) =>
+              current.id === requestId
+                ? { ...current, status: Exit.isSuccess(exit) ? "queued" : "failed" }
+                : current,
+            ),
+          );
+        }),
+      ),
+    );
   }),
 );
 

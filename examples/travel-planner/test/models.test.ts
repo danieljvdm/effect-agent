@@ -28,6 +28,7 @@ const RequestBody = Schema.Struct({
   reasoning: Schema.Struct({ effort: Schema.String }),
   service_tier: Schema.String,
   max_output_tokens: Schema.Number,
+  max_tool_calls: Schema.Number,
   parallel_tool_calls: Schema.Boolean,
   store: Schema.Boolean,
   stream: Schema.Boolean,
@@ -319,6 +320,7 @@ it.effect(
           reasoning: { effort: settings.reasoningEffort },
           service_tier: settings.fast ? "fast" : "default",
           max_output_tokens: 16_384,
+          max_tool_calls: 4,
           parallel_tool_calls: false,
           store: false,
           stream: true,
@@ -408,6 +410,62 @@ it.effect("retains the exact legacy model identity and rejects unsupported UI se
       Schema.is(PlannerSettings)({ model: "arbitrary-model", reasoningEffort: "low", fast: false }),
     ).toBe(false);
   }),
+);
+
+it.effect("distinguishes completed, unfinished and failed searches in public SSE progress", () =>
+  Effect.gen(function* () {
+    const store = yield* ProgressStore;
+    const progress = yield* store.begin("search-submission", "search-attempt");
+
+    const items = ["completed", "searching", "failed"].map((status, index) => ({
+      type: "web_search_call",
+      id: `search-${index}`,
+      status,
+      action: { type: "search", query: "Boston Mexico nonstop" },
+    }));
+
+    const events = items.flatMap((item, output_index) => [
+      {
+        type: "response.output_item.added",
+        output_index,
+        item: { ...item, status: "in_progress" },
+      },
+      { type: "response.output_item.done", output_index, item },
+    ]);
+
+    const fetch: typeof globalThis.fetch = async () =>
+      new Response(
+        events
+          .map(
+            (event, sequence_number) =>
+              `data: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
+          )
+          .join(""),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+
+    const client = yield* OpenAiClient.make({ apiKey: Redacted.make("fake-api-key") }).pipe(
+      Effect.provide(FetchHttpClient.layer),
+      Effect.provideService(FetchHttpClient.Fetch, fetch),
+    );
+
+    const [, stream] = yield* observeOpenAi(client, progress).createResponseStream({
+      model: "gpt-5.6-luna",
+      input: [],
+    });
+
+    const received = yield* Stream.runCollect(stream);
+
+    yield* progress.finish;
+
+    expect(received.map((event) => event.type)).toEqual(events.map((event) => event.type));
+    expect((yield* store.read).tools.map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: "search-0", state: "complete" },
+      { id: "search-1", state: "incomplete" },
+      { id: "search-2", state: "failed" },
+    ]);
+    expect((yield* store.read).tools.every((tool) => tool.completedAt !== undefined)).toBe(true);
+  }).pipe(Effect.provide(ProgressStore.layer)),
 );
 
 it.effect("streams only deliver-response message arguments through the real SDK SSE decoder", () =>

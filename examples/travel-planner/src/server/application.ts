@@ -2,9 +2,13 @@ import { ThreadId } from "@effect-agent/core/Identifiers";
 import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import {
+  SubmissionLedger,
+  SubmissionLookupById,
+  SubmissionLookupByKey,
+} from "@effect-agent/thread/SubmissionLedger";
 import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { Context, Effect, Schema, Stream } from "effect";
+import { Context, Effect, Option, Schema, Stream } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
 import {
@@ -82,6 +86,49 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
     identity.threadId === ownerThread ? ownerPrincipal : identity.threadId,
   ).pipe(Effect.mapError(unavailable));
 
+  const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(request.conversationId).pipe(
+    Effect.mapError(unavailable),
+  );
+
+  const idempotencyKey = yield* Schema.decodeUnknownEffect(IdempotencyKey)(request.requestId).pipe(
+    Effect.mapError(
+      () => new PlannerError({ code: "invalid", message: "Invalid request identifier." }),
+    ),
+  );
+
+  const ledger = yield* SubmissionLedger;
+
+  const admitted = yield* ledger
+    .lookup(SubmissionLookupByKey.make({ threadId, principal, idempotencyKey }))
+    .pipe(Effect.mapError(unavailable));
+
+  if (Option.isSome(admitted)) {
+    const input = yield* Schema.decodeUnknownEffect(PlannerInput)(admitted.value.inputPayload).pipe(
+      Effect.mapError(unavailable),
+    );
+
+    const priorSettings = input.settings ?? defaultPlannerSettings;
+
+    if (
+      input.message !== request.message ||
+      input.selectedTripId !== request.selectedTripId ||
+      priorSettings.model !== settings.model ||
+      priorSettings.reasoningEffort !== settings.reasoningEffort ||
+      priorSettings.fast !== settings.fast
+    )
+      return yield* new PlannerError({
+        code: "conflict",
+        message: "This message was already submitted with different details.",
+      });
+    // Preserve the admitted publication revision and legacy seed when acknowledgement was lost.
+    // Resubmission completes readiness; finding an admitted ledger row alone is not acceptance.
+    yield* runtime
+      .submitRegistered({ definition: planner }, input, { threadId, principal, idempotencyKey })
+      .pipe(Effect.mapError(unavailable));
+
+    return { accepted: true as const };
+  }
+
   const selectedTrip =
     request.selectedTripId === null ? null : yield* repository.get(request.selectedTripId);
 
@@ -93,16 +140,6 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
       code: "invalid",
       message: "Open this trip's conversation before sending a message.",
     });
-
-  const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(request.conversationId).pipe(
-    Effect.mapError(unavailable),
-  );
-
-  const idempotencyKey = yield* Schema.decodeUnknownEffect(IdempotencyKey)(request.requestId).pipe(
-    Effect.mapError(
-      () => new PlannerError({ code: "invalid", message: "Invalid request identifier." }),
-    ),
-  );
 
   const existing = yield* readThread(threadId);
 
@@ -179,6 +216,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
   let usageComplete = true;
   let usedModel = model.model;
   const reportSubmissions = new Set<string>();
+  const recordedInputs = new Set<string>();
 
   for (const { record, sequence } of source?.records ?? []) {
     const id = String(sequence);
@@ -196,7 +234,14 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
 
         if (input._tag === "Some") {
           selected = input.value.selectedTripId;
-          messages.push({ id, role: "user", text: input.value.message, tripId: selected });
+          if (payload.submissionId !== undefined) recordedInputs.add(payload.submissionId);
+          messages.push({
+            id,
+            role: "user",
+            text: input.value.message,
+            tripId: selected,
+            ...(payload.submissionId === undefined ? {} : { submissionId: payload.submissionId }),
+          });
         }
         break;
       }
@@ -292,6 +337,34 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     }
   }
 
+  const visibleMessages = yield* Effect.forEach(
+    messages.slice(-100),
+    Effect.fn("plannerMessageIdentity")(function* (message) {
+      if (message.role !== "user" || message.submissionId === undefined) return message;
+
+      const submissionId = yield* Schema.decodeUnknownEffect(
+        SubmissionLookupById.fields.submissionId,
+      )(message.submissionId).pipe(Effect.mapError(unavailable));
+
+      const submission = yield* ledger
+        .lookup(SubmissionLookupById.make({ submissionId }))
+        .pipe(Effect.mapError(unavailable));
+
+      return Option.isSome(submission)
+        ? { ...message, requestId: submission.value.idempotencyKey }
+        : message;
+    }),
+  );
+
+  const queuedMessages = pending.flatMap((submission) => {
+    if (recordedInputs.has(submission.submissionId)) return [];
+    const input = Schema.decodeUnknownOption(PlannerInput)(submission.inputPayload);
+
+    return Option.isSome(input)
+      ? [{ requestId: submission.idempotencyKey, text: input.value.message }]
+      : [];
+  });
+
   return {
     conversationId,
     scouts:
@@ -301,12 +374,13 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
         ? null
         : yield* editorSnapshot(conversationId, currentTrip.id, source?.records ?? []),
     app,
-    messages: messages.slice(-100),
+    messages: visibleMessages,
     trips,
     conversations: yield* repository.listConversations,
     activity: plannerActivity(source?.records ?? []),
     pending: pending.length,
     pendingSubmissionIds: pending.map((submission) => submission.submissionId),
+    queuedMessages,
     usage: {
       model: usedModel,
       inputTokens: usageComplete ? inputTokens : null,

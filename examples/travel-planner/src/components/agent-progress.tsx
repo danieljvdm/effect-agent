@@ -50,12 +50,13 @@ function ToolActivity({
   readonly active: boolean;
 }) {
   const failed = progress.tools.some((tool) => tool.state === "failed");
+  const incomplete = progress.tools.some((tool) => tool.state === "incomplete");
 
   return (
     <details className={`tool-activity ${active ? "is-working" : ""}`}>
       <summary>
         <span className={`tool-indicator ${active ? "spinning" : ""}`} aria-hidden="true">
-          {active ? "" : failed ? "!" : "✓"}
+          {active ? "" : failed ? "!" : incomplete ? "–" : "✓"}
         </span>
         <span role="status">
           {progress.tools.length} {progress.tools.length === 1 ? "step" : "steps"}{" "}
@@ -72,7 +73,15 @@ function ToolActivity({
               className={`tool-indicator ${active && tool.state === "running" ? "spinning" : ""}`}
               aria-hidden="true"
             >
-              {tool.state === "failed" ? "!" : tool.state === "complete" ? "✓" : active ? "" : "–"}
+              {tool.state === "failed"
+                ? "!"
+                : tool.state === "complete"
+                  ? "✓"
+                  : tool.state === "incomplete"
+                    ? "–"
+                    : active
+                      ? ""
+                      : "–"}
             </span>
             <span>{tool.label}</span>
             {(tool.completedAt !== undefined || (active && tool.state === "running")) && (
@@ -83,9 +92,11 @@ function ToolActivity({
                 ? "Done"
                 : tool.state === "failed"
                   ? "Couldn't finish"
-                  : active
-                    ? "Working"
-                    : "Last seen running"}
+                  : tool.state === "incomplete"
+                    ? "Not completed"
+                    : active
+                      ? "Working"
+                      : "Last seen running"}
             </small>
           </li>
         ))}

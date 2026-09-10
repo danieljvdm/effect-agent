@@ -61,6 +61,39 @@ const settled = (outcome: string, extras = {}) => ({
   ...extras,
 });
 
+it("reports actual provider search statuses despite an upstream success flag", () => {
+  const source = records([
+    [0, runStart],
+    [
+      1000,
+      modelResponse(
+        ["completed", "searching", "failed"].map((status) =>
+          Prompt.makePart("tool-result", {
+            id: status,
+            name: "OpenAiWebSearch",
+            result: { status, action: { type: "search", query: "Boston Mexico nonstop" } },
+            isFailure: false,
+            providerExecuted: true,
+          }),
+        ),
+      ),
+    ],
+  ]);
+
+  const before = JSON.stringify(source);
+  const trace = plannerActivity(source);
+
+  expect(trace.filter((event) => event.text.startsWith("OpenAiWebSearch:"))).toMatchObject([
+    { kind: "tool", text: "OpenAiWebSearch: completed by provider" },
+    { kind: "tool", text: "OpenAiWebSearch: not completed (provider status: searching)" },
+    { kind: "failure", text: "OpenAiWebSearch: failed" },
+  ]);
+  expect(trace.find((event) => event.text.includes("not completed"))?.details?.[0]?.text).toContain(
+    '"status": "searching"',
+  );
+  expect(JSON.stringify(source)).toBe(before);
+});
+
 it("projects model calls, arguments, results, usage and journal timing without changing the log", () => {
   const source = records([
     [

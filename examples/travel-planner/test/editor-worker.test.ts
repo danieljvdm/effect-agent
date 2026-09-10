@@ -217,6 +217,13 @@ it("keeps planning available while a scoped durable editor edits source, accepts
   expect(await send(conversation, trip.id, "main input while parent pending")).toEqual({
     accepted: true,
   });
+  const queued = await snapshot(conversation);
+
+  expect(queued.queuedMessages).toHaveLength(1);
+  expect(queued.queuedMessages?.[0]?.text).toBe("main input while parent pending");
+  expect(
+    queued.messages.some((message) => message.text === "main input while parent pending"),
+  ).toBe(false);
   await gate("parent-initial", true);
 
   const available = await until(
@@ -230,6 +237,12 @@ it("keeps planning available while a scoped durable editor edits source, accepts
       (message) => message.role === "user" && message.text === "main input while parent pending",
     ),
   ).toBe(true);
+  expect(available.queuedMessages).toEqual([]);
+  expect(
+    available.messages.find(
+      (message) => message.role === "user" && message.text === "main input while parent pending",
+    )?.requestId,
+  ).toBe(queued.queuedMessages?.[0]?.requestId);
   expect(await send(conversation, trip.id, "main input while editor active")).toEqual({
     accepted: true,
   });
