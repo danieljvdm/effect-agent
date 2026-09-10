@@ -1,5 +1,16 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.76
+
+### Patch Changes
+
+- Updated dependencies [[`3eef297`](https://github.com/danieljvdm/effect-agent/commit/3eef297d2343989a830d5d2b88e0b863b54c91fd)]:
+  - @effect-agent/core@0.1.0-beta.76
+  - @effect-agent/engine@0.1.0-beta.76
+  - @effect-agent/thread@0.1.0-beta.76
+  - @effect-agent/storage-cloudflare@0.1.0-beta.76
+  - @effect-agent/sandbox@0.1.0-beta.76
+
 ## 0.1.0-beta.75
 
 ### Patch Changes
