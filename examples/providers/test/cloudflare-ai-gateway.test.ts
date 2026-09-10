@@ -2,9 +2,8 @@ import * as WebSearch from "@effect-agent/capabilities/WebSearch";
 import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
 import { AnthropicClient, AnthropicLanguageModel, AnthropicTool } from "@effect/ai-anthropic";
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
-import type { Layer } from "effect";
-import { Effect, Redacted, Schema, Stream } from "effect";
-import { LanguageModel, Toolkit, type Tool } from "effect/unstable/ai";
+import { Config, Effect, Layer, Redacted, Schema, Stream } from "effect";
+import { LanguageModel, Toolkit, type Model, type Tool } from "effect/unstable/ai";
 import type { HttpClientRequest } from "effect/unstable/http";
 import { FetchHttpClient, Headers, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
@@ -115,6 +114,29 @@ describe("Cloudflare AI Gateway with upstream Effect clients", () => {
   it("runs the same WebSearch tool against OpenAI REST and Anthropic provider-native search", async () => {
     expectTypeOf(openAiGatewaySearch(config)).toEqualTypeOf<
       Layer.Layer<Tool.Handler<"WebSearch">, never, HttpClient.HttpClient>
+    >();
+    expectTypeOf(anthropicGatewaySearch(config)).toEqualTypeOf<
+      Layer.Layer<Tool.Handler<"WebSearch">, never, HttpClient.HttpClient>
+    >();
+
+    const configuredModel = AnthropicLanguageModel.model("claude-haiku-4-5").pipe(
+      Gateway.provide(
+        (options) =>
+          Layer.unwrap(
+            Config.redacted("ANTHROPIC_API_KEY").pipe(
+              Effect.map((apiKey) => AnthropicClient.layer({ ...options, apiKey })),
+            ),
+          ),
+        { ...config, provider: "anthropic" },
+      ),
+    );
+
+    expectTypeOf(configuredModel).toEqualTypeOf<
+      Layer.Layer<
+        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
+        Config.ConfigError,
+        HttpClient.HttpClient
+      >
     >();
     for (const backend of ["openai", "anthropic"] as const) {
       const requests: Array<HttpClientRequest.HttpClientRequest> = [];

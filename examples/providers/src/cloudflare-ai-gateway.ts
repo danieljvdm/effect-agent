@@ -19,9 +19,7 @@ export const openAiGatewaySearch = (options: GatewayOptions) =>
     Layer.provide(
       OpenAiLanguageModel.model("openai/gpt-4.1-mini", { max_output_tokens: 2_048, store: false }),
     ),
-    Layer.provide(
-      OpenAiClient.layer(CloudflareAiGateway.rest({ ...options, protocol: "responses" })),
-    ),
+    CloudflareAiGateway.provide(OpenAiClient.layer, { ...options, protocol: "responses" }),
   );
 
 /** The same model-visible tool, backed by Anthropic through a provider-native Gateway route. */
@@ -30,7 +28,5 @@ export const anthropicGatewaySearch = (options: GatewayOptions) =>
     tool: AnthropicTool.WebSearch_20250305({ maxUses: 3 }),
   }).pipe(
     Layer.provide(AnthropicLanguageModel.model("claude-haiku-4-5", { max_tokens: 2_048 })),
-    Layer.provide(
-      AnthropicClient.layer(CloudflareAiGateway.provider({ ...options, provider: "anthropic" })),
-    ),
+    CloudflareAiGateway.provide(AnthropicClient.layer, { ...options, provider: "anthropic" }),
   );

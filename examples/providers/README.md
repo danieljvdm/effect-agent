@@ -25,6 +25,10 @@ gateway ID, redacted Cloudflare token, and an Effect `HttpClient`; no provider S
 Worker-only import is needed. Include `WebSearch.tool` in any agent's toolkit, then provide
 one of these Layers independently of the agent's own model.
 
+Both examples use `CloudflareAiGateway.provide(Client.layer, route)` directly in the Layer
+pipeline. Choose `provider: "anthropic"` for the native proxy or `protocol: "responses"` for
+the account REST API; the helper preserves the client's typed errors and service requirements.
+
 The REST example needs a Workers AI Read token and uses `openai/gpt-4.1-mini`. The provider
 proxy example uses the native `claude-haiku-4-5` name and Gateway authentication with stored
 keys or Unified Billing. Search-model usage is returned with the tool result and is billed

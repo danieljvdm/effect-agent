@@ -370,21 +370,14 @@ model or provider. Include `WebSearch.tool` in its toolkit, then provide this ha
 import * as WebSearch from "effect-agent/WebSearch";
 import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
-import { Config, Effect, Layer } from "effect";
+import { Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
-const ClientLive = Layer.unwrap(
-  Effect.gen(function* () {
-    return OpenAiClient.layer(
-      Gateway.rest({
-        accountId: yield* Config.string("CLOUDFLARE_ACCOUNT_ID"),
-        gatewayId: yield* Config.string("CLOUDFLARE_AI_GATEWAY_ID"),
-        apiToken: yield* Config.redacted("CLOUDFLARE_API_TOKEN"),
-        protocol: "responses",
-      }),
-    );
-  }),
-);
+const gateway = {
+  accountId: "your-account",
+  gatewayId: "your-gateway",
+  apiToken: Redacted.make("your-cloudflare-token"),
+};
 
 const SearchLive = WebSearch.layer({
   tool: OpenAiTool.WebSearch({ search_context_size: "medium" }),
@@ -397,13 +390,15 @@ const SearchLive = WebSearch.layer({
       store: false,
     }),
   ),
-  Layer.provide(ClientLive),
+  Gateway.provide(OpenAiClient.layer, { ...gateway, protocol: "responses" }),
   Layer.provide(FetchHttpClient.layer),
 );
 ```
 
-For Anthropic, select `AnthropicTool.WebSearch_20250305({ maxUses: 3 })` and supply an
-`AnthropicLanguageModel` Layer. Direct provider clients work too. The compiling
+Load real gateway credentials from your host configuration or secret store. For Anthropic,
+select `AnthropicTool.WebSearch_20250305({ maxUses: 3 })`, provide an `AnthropicLanguageModel`
+Layer, and use `Gateway.provide(AnthropicClient.layer, { ...gateway, provider: "anthropic" })`.
+Direct provider clients work too. The compiling
 [provider examples](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers#cloudflare-ai-gateway) show both backends.
 
 Each invocation makes one model request, without handler retries. The host fixes the backend,

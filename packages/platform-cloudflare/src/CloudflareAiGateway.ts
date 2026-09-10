@@ -1,4 +1,4 @@
-import { Context, Effect, Option, Redactable, Redacted, Schema } from "effect";
+import { Context, Effect, Layer, Option, Redactable, Redacted, Schema } from "effect";
 import {
   FetchHttpClient,
   Headers,
@@ -37,6 +37,11 @@ export interface RestOptions {
   /** Matches the paths appended by the upstream Effect client. */
   readonly protocol: "responses" | "chat-completions" | "messages";
 }
+
+/** Choose exactly one route: a native provider path or an account REST protocol. */
+export type RouteOptions =
+  | (ProviderOptions & { readonly protocol?: never })
+  | (RestOptions & { readonly provider?: never });
 
 const redactGatewayToken = (headers: Headers.Headers, tokenHeader: string): void => {
   // HTTP tracing can copy headers after preprocessing. Attach the public redaction
@@ -145,3 +150,21 @@ export const rest = (options: RestOptions): ClientOptions =>
     options.apiToken,
     decodeSegment(options.gatewayId),
   );
+
+/**
+ * Provide a Gateway-configured upstream client directly in a Layer pipeline.
+ * Pass the client's `layer` factory, or a callback adding client-specific options.
+ * The factory's errors and remaining services (such as HttpClient) stay visible.
+ * Model selection and resource ownership remain with the supplied upstream Layers.
+ *
+ * @example
+ * ```ts
+ * AnthropicLanguageModel.model("claude-haiku-4-5").pipe(
+ *   Gateway.provide(AnthropicClient.layer, { ...options, provider: "anthropic" }),
+ * )
+ * ```
+ */
+export const provide = <Client, E, R>(
+  clientLayer: (options: ClientOptions) => Layer.Layer<Client, E, R>,
+  options: RouteOptions,
+) => Layer.provide(clientLayer(options.provider !== undefined ? provider(options) : rest(options)));

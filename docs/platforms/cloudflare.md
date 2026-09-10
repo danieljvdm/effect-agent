@@ -21,9 +21,9 @@ Keep framework packages at one release and add your [model provider](../guide/ge
 ## AI Gateway {#ai-gateway}
 
 The Node-safe `@effect-agent/platform-cloudflare/CloudflareAiGateway` subpath configures
-upstream Effect clients in Workers, Durable Objects, Node, or Bun. It returns `apiUrl` and
-`transformClient`; model selection, tools, response decoding, streaming, and typed provider
-errors stay with upstream Effect AI. Use the configured client for primary agents, subagents,
+upstream Effect clients in Workers, Durable Objects, Node, or Bun. `Gateway.provide` supplies
+the client directly in a Layer pipeline; model selection, tools, response decoding, streaming,
+and typed provider errors stay with upstream Effect AI. Use the configured client for primary agents, subagents,
 compaction models, [WebSearch](../guide/tools#web-search), or embeddings supported by its provider.
 
 Two endpoint families have different credentials and model names:
@@ -33,30 +33,41 @@ Two endpoint families have different credentials and model names:
 | `Gateway.rest({ accountId, gatewayId, apiToken, protocol })`     | Cloudflare API token with Workers AI Read permission       | Provider-qualified, such as `openai/gpt-4.1-mini` |
 | `Gateway.provider({ accountId, gatewayId, provider, apiToken })` | `cf-aig-authorization`; optionally a separate provider key | Native provider name, such as `gpt-4.1-mini`      |
 
-For provider-native routing with stored keys or Unified Billing:
+For provider-native routing with stored keys or Unified Billing, pass the upstream client's
+`layer` factory and your resolved gateway configuration:
 
 ```ts twoslash
 import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
-import { OpenAiClient } from "@effect/ai-openai";
-import { Config, Effect, Layer } from "effect";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
-const GatewayClientLive = Layer.unwrap(
-  Effect.gen(function* () {
-    return OpenAiClient.layer(
-      Gateway.provider({
-        accountId: yield* Config.string("CLOUDFLARE_ACCOUNT_ID"),
-        gatewayId: yield* Config.string("CLOUDFLARE_AI_GATEWAY_ID"),
-        provider: "openai",
-        apiToken: yield* Config.redacted("CLOUDFLARE_AI_GATEWAY_TOKEN"),
-      }),
-    );
+const gateway = {
+  accountId: "your-account",
+  gatewayId: "your-gateway",
+  apiToken: Redacted.make("your-cloudflare-token"),
+};
+
+const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
+  Gateway.provide(OpenAiClient.layer, {
+    ...gateway,
+    provider: "openai",
   }),
-).pipe(Layer.provide(FetchHttpClient.layer));
+  Layer.provide(FetchHttpClient.layer),
+);
 ```
 
-To send your own provider key, add `apiKey` to `OpenAiClient.layer` or `AnthropicClient.layer`.
-Omit it when the gateway supplies a stored key. Use `layer` here: provider `layerConfig`
+Supply real credentials from your host configuration or secret store. For account REST routing,
+replace `provider` with `protocol: "responses"` and use a provider-qualified model name.
+`Gateway.provide` preserves client initialization errors and remaining dependencies, including
+`HttpClient`. The upstream Layers retain their normal resource lifetimes.
+
+For custom client options, pass a factory such as
+`Gateway.provide((options) => OpenAiClient.layer({ ...options, apiKey }), route)`.
+The lower-level `Gateway.provider` and `Gateway.rest` helpers return `apiUrl` and
+`transformClient` for direct client construction or raw HTTP requests.
+
+Omit the provider `apiKey` when the gateway supplies a stored key. Use `layer` here: provider `layerConfig`
 can load a provider API key from the environment when its `apiKey` option is omitted.
 An unauthenticated provider gateway can omit `apiToken` when sending its own provider key.
 
