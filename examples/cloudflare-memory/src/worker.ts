@@ -107,13 +107,28 @@ export class BenchmarkThread extends ThreadObject.make(ThreadObject.layer([]), {
       Effect.gen(function* () {
         name = yield* Schema.decodeUnknownEffect(BenchmarkCase)(name);
         const client = yield* memoryClient(name);
-        const lookup = candidates(name);
+        const lookup = name === "get" ? null : candidates(name);
+        const key = command(name, 0).key;
         let validatedBytes = 0;
         let renderedBytes = 0;
         let validationRpcMillis = 0;
         const start = yield* Clock.currentTimeMillis;
 
         const result = yield* Effect.gen(function* () {
+          if (lookup === null) {
+            const document = yield* client.get(key);
+
+            validationRpcMillis = (yield* Clock.currentTimeMillis) - start;
+            if (
+              document?._tag !== "ActiveMemoryDocument" ||
+              document.source.revision !== "1" ||
+              document.content.text !== "source-0: ".padEnd(1024, "x")
+            )
+              return yield* MemoryRpcError.make({ reason: "protocol" });
+            validatedBytes = memoryWireBytes(JSON.stringify(document));
+
+            return;
+          }
           const current = yield* client.revalidate(lookup, limits);
 
           validationRpcMillis = (yield* Clock.currentTimeMillis) - start;
@@ -132,9 +147,9 @@ export class BenchmarkThread extends ThreadObject.make(ThreadObject.layer([]), {
         return yield* Schema.encodeEffect(Sample)({
           case: name,
           sourceCount: sourceCount(name),
-          candidateCount: lookup._tag === "Found" ? lookup.passages.length : 0,
+          candidateCount: lookup?._tag === "Found" ? lookup.passages.length : 0,
           corpusTextBytes: sourceCount(name) * 1024,
-          candidateBytes: memoryWireBytes(JSON.stringify(lookup)),
+          candidateBytes: lookup === null ? 0 : memoryWireBytes(JSON.stringify(lookup)),
           validatedBytes,
           renderedBytes,
           validationRpcMillis,

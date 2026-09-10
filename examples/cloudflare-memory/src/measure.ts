@@ -159,7 +159,7 @@ export const command = Command.make(
       yield* request("sample", name, "b", Sample);
     }
     yield* Console.error(
-      `Seeded five isolated memory owners; waiting ${options.inactivity}s before first-after-inactivity samples.`,
+      `Seeded ${cases.length} isolated memory owners; waiting ${options.inactivity}s before first-after-inactivity samples.`,
     );
     yield* Effect.sleep(options.inactivity * 1000);
     for (const name of cases) {
@@ -212,6 +212,8 @@ export const command = Command.make(
       cohorts,
       placements,
       notes: [
+        "The get case reads one exact current 1024-byte document in one owner RPC, with zero candidates and no rendering. validationRpc measures the get round trip; fullRecall retains the existing field name and measures the complete read and result checks for this case.",
+        "Adapter timings include the synthetic owner's fixed authorization policy; production application authentication, source authority checks and rendering are not measured. This does not establish a 100–200 ms complete lookup target.",
         "Synthetic 1024-byte source texts; normal cases use 64-byte excerpts; duplicate-heavy uses 128 candidates over 16 sources.",
         "validationRpc measures Thread-to-Memory round trip plus validation, excluding candidate preparation and final rendering; fullRecall adds final rendering. HTTP includes caller activation and ingress.",
         "No embedding or search runs in this source-validation benchmark. Their latency is not measured or inferred.",

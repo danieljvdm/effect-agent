@@ -19,12 +19,18 @@ The measurement command does not deploy, delete, or change account configuration
 Worker and its DO namespaces afterward. Ordinary builds use only `wrangler deploy --dry-run`.
 
 The bounded workload covers 1, 4, 8, and 16 distinct 1024-byte sources, plus 128 candidates over
-16 sources. Two Thread callers alternate, at concurrency 1 and 4. Five independent memory owners
+16 sources. The `get` case reads one known 1024-byte current document directly through the public
+client, with no candidates, search, or rendering. Two Thread callers alternate, at concurrency 1 and 4. Six independent memory owners
 permit a first request after inactivity for each case. Every sample, payload size, error, and timeout
 is retained; warm p50/p95/p99 are reported in milliseconds. Egress-colo probes run after measurement.
 They describe observed routing, not guaranteed physical owner placement.
 
 Source-validation RPC time is separate from final recall rendering and full HTTP elapsed time.
+For `get`, `validationRpcMillis` measures the direct adapter round trip and
+`fullRecallMillis` retains the report's existing field name for the complete read and result checks.
+These timings include the synthetic owner's fixed authorization policy, but exclude production
+application authentication, source authority lookups, and rendering. They do not establish a
+100–200 ms complete application lookup target.
 Embedding/search are deliberately absent, so this benchmark makes no claim about their latency.
 Worker clocks advance on I/O; zero rendering intervals are not evidence of zero CPU cost.
 One first-after-inactivity sample per case cannot establish cold-start percentiles, and inactivity

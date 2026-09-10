@@ -16,6 +16,7 @@ import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
+  type MemoryOwnerRequest,
 } from "@effect-agent/storage-cloudflare/MemoryProtocol";
 import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Clock, Deferred, Effect, Layer, Schema } from "effect";
@@ -91,6 +92,9 @@ export const memoryCandidates = (ids: ReadonlyArray<string>): MemoryLookup => ({
 });
 
 export const memoryCalls = new Map<string, number>();
+export const memoryRequests = new Map<string, Array<MemoryOwnerRequest>>();
+export const memoryReplies = new Map<string, string>();
+export const memoryDeniedSources = new Map<string, ReadonlySet<string>>();
 
 export const memoryFaults = new Map<
   string,
@@ -110,6 +114,10 @@ export const memoryAuthorizer = Layer.effect(
 
     return {
       authorize: Effect.fn("test.memory.authorize")(function* (request) {
+        const requests = memoryRequests.get(namespace.address) ?? [];
+
+        requests.push(request);
+        memoryRequests.set(namespace.address, requests);
         if (request.principal === "defect") return yield* Effect.die("authorization defect");
         if (request.principal === "slow") {
           return yield* Effect.acquireUseRelease(
@@ -128,6 +136,11 @@ export const memoryAuthorizer = Layer.effect(
           );
         }
         if (request.principal !== memoryPrincipal || request.access.scope !== memoryScope)
+          return yield* MemoryRpcError.make({ reason: "denied" });
+        if (
+          request._tag === "Get" &&
+          memoryDeniedSources.get(namespace.address)?.has(request.key.id)
+        )
           return yield* MemoryRpcError.make({ reason: "denied" });
       }),
     };

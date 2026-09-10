@@ -13,11 +13,13 @@ export const Projects = MemoryNamespace.define({
   identity: Schema.String,
 });
 
-export const BenchmarkCase = Schema.Literals(["1", "4", "8", "16", "duplicates"]);
+export const BenchmarkCase = Schema.Literals(["get", "1", "4", "8", "16", "duplicates"]);
 export type BenchmarkCase = typeof BenchmarkCase.Type;
 export const cases = BenchmarkCase.literals;
 export const memoryScope = MemoryScope.make("benchmark");
-export const sourceCount = (name: BenchmarkCase) => (name === "duplicates" ? 16 : Number(name));
+
+export const sourceCount = (name: BenchmarkCase) =>
+  name === "get" ? 1 : name === "duplicates" ? 16 : Number(name);
 
 export const limits = MemoryRecallLimits.make({
   maxSources: 16,
