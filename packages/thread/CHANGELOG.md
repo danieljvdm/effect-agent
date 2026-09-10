@@ -1,5 +1,13 @@
 # @effect-agent/session
 
+## 0.1.0-beta.77
+
+### Patch Changes
+
+- Updated dependencies [[`84d6684`](https://github.com/danieljvdm/effect-agent/commit/84d66844e24e7fbdc5dc3f54a5d3a7a6127cdd99)]:
+  - @effect-agent/core@0.1.0-beta.77
+  - @effect-agent/engine@0.1.0-beta.77
+
 ## 0.1.0-beta.76
 
 ### Patch Changes
