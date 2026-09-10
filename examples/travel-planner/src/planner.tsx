@@ -1,9 +1,10 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomInitialValues, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { Link } from "@tanstack/react-router";
 import { Option } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { ArrowUp, ArrowUpRight, Clock3, Map, Menu, Plus, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ActivityPanel } from "./components/activity-panel";
 import { AgentProgress } from "./components/agent-progress.tsx";
@@ -25,7 +26,6 @@ import {
   draftAtom,
   plannerAtom,
   changeTripAppAtom,
-  newTripAtom,
   selectTripAtom,
   selectionAtom,
   sendMessageAtom,
@@ -53,7 +53,20 @@ function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | nu
     : "Couldn't connect. Reload the page to sign in again.";
 }
 
-export function Planner() {
+export function Planner({ conversationId }: { readonly conversationId: string }) {
+  // Seed before any authenticated query mounts on a direct link. Later route
+  // changes update the existing registry, retaining its account-scoped cache.
+  useAtomInitialValues([[selectionAtom, { conversationId, tripId: null }]]);
+  const selectTrip = useAtomSet(selectTripAtom);
+
+  useLayoutEffect(() => {
+    selectTrip({ conversationId, id: null });
+  }, [conversationId, selectTrip]);
+
+  return <PlannerContent />;
+}
+
+function PlannerContent() {
   const connectionResult = useAtomValue(openAiConnectionAtom);
   const connected = AsyncResult.isSuccess(connectionResult) && connectionResult.value.connected;
   const openSettings = useAtomSet(modelSettingsOpenAtom);
@@ -62,8 +75,6 @@ export function Planner() {
   const [manageAccess, setManageAccess] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const selectTrip = useAtomSet(selectTripAtom);
-  const newTrip = useAtomSet(newTripAtom);
   const selection = useAtomValue(selectionAtom);
   const [draft, setDraft] = useAtom(draftAtom);
   const result = useAtomValue(plannerAtom);
@@ -136,29 +147,31 @@ export function Planner() {
 
   const navigation = (
     <>
-      <a className="wordmark" href="/">
+      <Link className="wordmark" to="/" preload={false}>
         elsewhere
         <ArrowUpRight size={34} aria-hidden="true" />
-      </a>
-      <button
+      </Link>
+      <Link
         className="new-trip"
+        to="/"
+        preload={false}
         onClick={() => {
-          newTrip();
           setMenuOpen(false);
         }}
       >
         <Plus size={21} aria-hidden="true" /> Plan a new trip
-      </button>
+      </Link>
       <div className="sidebar-heading">
         YOUR TRIPS <span>{savedTrips.length}</span>
       </div>
       <nav aria-label="Saved trips" className="trip-list">
         {savedTrips.map((saved) => (
-          <button
+          <Link
             className={`trip-link ${selection.conversationId === saved.conversationId ? "selected" : ""}`}
             key={saved.conversationId}
+            to="/conversations/$conversationId"
+            params={{ conversationId: saved.conversationId }}
             onClick={() => {
-              selectTrip(saved);
               setMenuOpen(false);
             }}
           >
@@ -169,7 +182,7 @@ export function Planner() {
               <strong>{saved.title}</strong>
               <small>{saved.destination}</small>
             </span>
-          </button>
+          </Link>
         ))}
         {!savedTrips.length && conversationStatus === "ready" && (
           <p className="sidebar-empty">
@@ -226,7 +239,9 @@ export function Planner() {
         ) : (
           <p className="session-status" role="status">
             {failure(sessionResult) ?? "Checking your session…"}
-            {AsyncResult.isFailure(sessionResult) && <a href="/">Reload / sign in</a>}
+            {AsyncResult.isFailure(sessionResult) && (
+              <a href={window.location.href}>Reload / sign in</a>
+            )}
           </p>
         )}
         <p className="powered">A travel companion built with Effect Agent</p>

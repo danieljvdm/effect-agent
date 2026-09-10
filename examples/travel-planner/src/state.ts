@@ -630,15 +630,11 @@ export const activeTripAtom = Atom.make((get) => {
   );
 });
 
-export const newTripAtom = Atom.fnSync<void>()((_, get) => {
-  get.set(selectionAtom, { conversationId: crypto.randomUUID(), tripId: null });
-  get.set(draftAtom, "");
-});
-
 export const selectTripAtom = Atom.fnSync<{
   readonly conversationId: string;
   readonly id: string | null;
 }>()((trip, get) => {
+  if (get(selectionAtom).conversationId === trip.conversationId) return;
   get.set(selectionAtom, { conversationId: trip.conversationId, tripId: trip.id });
   get.set(draftAtom, "");
 });
