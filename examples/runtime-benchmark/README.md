@@ -28,14 +28,25 @@ measurement. `perf:compare` always bypasses task caching. `--help` describes the
 The cleanup lines remove only declaration artifacts emitted by older package builds in those
 disposable checkouts. Every other modified or untracked file fails clean-checkout validation.
 
-The PR workflow uses exact PR base/head commits, Node 24.20.0, and sequential production builds.
+The workflow runs on pushes to `main`, comparing the most recently published
+`effect-agent@…` release tag against the triggering `main` commit. It includes beta
+prereleases, excludes drafts and sibling-package/Action releases, and resolves the tag to
+an exact commit before checkout. It does not compare the Changesets version bump against
+its own parent. Manual dispatch must select `main` and uses the same release baseline;
+local `--base-dir` comparisons remain available for exact-revision investigations.
+Use `--base-tag effect-agent@<version>` to name the release in a local report.
+
+The workflow uses Node 24.20.0 and sequential production builds.
 It runs three sequential cohorts (base/head, head/base, base/head). Each warm cohort retains two
 warmups and three measured samples per case: nine measured samples per revision. Alternating
 the order gives each revision a turn first; with three cohorts, Base runs first twice. Keeping
 three cohorts preserves the existing sample count and correctness coverage. Workload order
 reverses between samples. Each cohort also runs one cold process per revision.
 All warmups, measured samples, slow values, and failures remain in JSON artifacts. The trusted
-comment workflow validates artifact data and current PR identity without executing candidate code.
+comment workflow validates artifact data, the current `main` commit, and the latest release
+tag's commit without executing candidate code. Successful push runs update the open Changesets
+release PR when one exists; every run retains its Actions summary and artifact. Superseded
+`main` commits, newer releases, and moved release tags cannot publish stale comments.
 
 `--profile smoke` exercises every workload family with one sample and 16 retained records;
 it checks the command, not statistical confidence. `extended` takes 30 samples per revision and
@@ -120,8 +131,15 @@ own installation. Reports identify exact commits, dirty state, lockfile hashes, 
 hashes, fixture hash/version, runtime, operating system, CPU, memory, sample counts, median,
 interquartile range, and process failures. The artifact includes the exact transpiled fixture.
 
-The `runtime-v3` artifact contract contains only Base and Head; the trusted publisher rejects
-older three-revision reports. Comparison tables show Base, Head, and Head/base. Workloads,
+The `runtime-v3` artifact contract contains only Base and Head, with `baselineTag` naming
+the release (null for an unlabeled local comparison). The trusted publisher rejects
+older three-revision reports. Release PR tables name Latest release, Main, and Change and
+link the exact tag and commits. Both the comment and artifact show medians and Q1–Q3 spread.
+The nine samples share three worker processes per revision; that spread is not a confidence
+interval, and runner/process variability has not been calibrated. Timing differences alone
+do not establish a regression. When built JavaScript and lockfile hashes match, reports
+explicitly identify identical builds and suppress percentage changes while preserving all
+timings and samples. Workloads,
 operation clocks, warmups, and measured samples per revision are unchanged from `runtime-v2`.
 Keep historical artifacts. Incompatible historical APIs must fail clearly rather than silently
 substituting source code or skipping cases. A new fixture changes the measurement definition and
