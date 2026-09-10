@@ -1,5 +1,19 @@
 # @effect-agent/session
 
+## 0.1.0-beta.78
+
+### Patch Changes
+
+- [#429](https://github.com/danieljvdm/effect-agent/pull/429) [`301ead3`](https://github.com/danieljvdm/effect-agent/commit/301ead3c88dbd5b6fc40e31e53f11745235d3977) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Persist native provider web-search responses without rejecting valid JSON, while retaining cycle rejection and existing persistence limits.
+
+- [#425](https://github.com/danieljvdm/effect-agent/pull/425) [`84fe655`](https://github.com/danieljvdm/effect-agent/commit/84fe65580c35a91707eda809b7e47d90402179a9) Thanks [@Makisuo](https://github.com/Makisuo)! - Expose observed model usage and estimated cost on Run results, child projections, and terminal reports while preserving unknown coverage. Report nested attached-child usage separately and retain verified child totals across durable joins and recovery.
+
+- [#430](https://github.com/danieljvdm/effect-agent/pull/430) [`c8163c1`](https://github.com/danieljvdm/effect-agent/commit/c8163c14194b256653db98821c58c493bdebe21a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow an explicitly admitted root Agent upgrade to start background workers and receive their reports in an existing conversation. Preserve existing worker lineage and reject unregistered upgrade bindings.
+
+- Updated dependencies [[`84fe655`](https://github.com/danieljvdm/effect-agent/commit/84fe65580c35a91707eda809b7e47d90402179a9)]:
+  - @effect-agent/engine@0.1.0-beta.78
+  - @effect-agent/core@0.1.0-beta.78
+
 ## 0.1.0-beta.77
 
 ### Patch Changes

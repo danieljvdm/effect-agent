@@ -1,5 +1,20 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.78
+
+### Patch Changes
+
+- [#426](https://github.com/danieljvdm/effect-agent/pull/426) [`b8bae94`](https://github.com/danieljvdm/effect-agent/commit/b8bae94a03ffa5bec9e01a4ea779993512ca19ac) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add authorized, bounded exact-key current document reads through `CloudflareMemoryClient.get`, returning explicit absence or withdrawal tombstones while preserving typed access, storage, and transport failures.
+
+- [#431](https://github.com/danieljvdm/effect-agent/pull/431) [`16ec320`](https://github.com/danieljvdm/effect-agent/commit/16ec320ab3565c9429d62b60b19e024218283bb0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Retain Browser Run response status, request identifiers, and body truncation metadata in host-only failure causes.
+
+- Updated dependencies [[`b8bae94`](https://github.com/danieljvdm/effect-agent/commit/b8bae94a03ffa5bec9e01a4ea779993512ca19ac), [`301ead3`](https://github.com/danieljvdm/effect-agent/commit/301ead3c88dbd5b6fc40e31e53f11745235d3977), [`84fe655`](https://github.com/danieljvdm/effect-agent/commit/84fe65580c35a91707eda809b7e47d90402179a9), [`c8163c1`](https://github.com/danieljvdm/effect-agent/commit/c8163c14194b256653db98821c58c493bdebe21a)]:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.78
+  - @effect-agent/thread@0.1.0-beta.78
+  - @effect-agent/engine@0.1.0-beta.78
+  - @effect-agent/core@0.1.0-beta.78
+  - @effect-agent/sandbox@0.1.0-beta.78
+
 ## 0.1.0-beta.77
 
 ### Minor Changes
