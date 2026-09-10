@@ -89,6 +89,39 @@ const model = Model.make(
   ),
 );
 
+it("preserves completion correction failures and services in run and stream composition", () => {
+  const completing = Agent.make("typed-completion", {
+    input: Schema.String,
+    output: Schema.String,
+    instructions: "Look up the answer and complete alone.",
+    toolkit,
+    completion: { tool: "lookup", required: true, project: ({ result }) => result },
+  });
+
+  const binding = Agent.withModel(completing, model);
+
+  const options = {
+    beforeTurn: () => TurnHost.pipe(Effect.andThen(Effect.fail(new TurnHostError()))),
+  };
+
+  const run = AgentRuntime.run(binding, "question", options);
+  const stream = AgentRuntime.stream(binding, "question", options);
+
+  expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
+    AgentRuntimeFailure<typeof completing, TurnHostError>
+  >();
+  expectTypeOf<Stream.Error<typeof stream>>().toEqualTypeOf<Effect.Error<typeof run>>();
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
+    | ThreadHistory
+    | IdGenerator
+    | ProviderClient
+    | Catalog
+    | Tool.HandlersFor<typeof toolkit.tools>
+    | TurnHost
+  >();
+  expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<Effect.Services<typeof run>>();
+});
+
 it("preserves encoded input, output, failures and every unsatisfied service", () => {
   const input = { city: "Lisbon", days: "2" };
   const bufferLimits: RunBufferLimits = { maxToolProgressBytes: 1_024 };

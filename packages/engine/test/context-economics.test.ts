@@ -1232,8 +1232,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         );
 
         expect(yield* Ref.get(starts)).toBe(0);
-        if (boundary === "mixed" || boundary === "turns")
-          expect(failureFrom(result)).toBeInstanceOf(ModelProtocolError);
+        if (boundary === "turns") expect(failureFrom(result)).toBeInstanceOf(ModelProtocolError);
         else {
           expect(Exit.isSuccess(result)).toBe(true);
           if (Exit.isSuccess(result)) expect(result.value.output).toBe("No action performed.");
@@ -2030,7 +2029,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       }),
   );
 
-  it.effect("RUN-032: a completion Tool must be the singleton declared batch", () =>
+  it.effect("RUN-032: repeated mixed completion batches fail without executing tools", () =>
     Effect.gen(function* () {
       const mixedToolkit = Toolkit.make(PostMessageTool, SearchTool);
       const handlerStarts = yield* Ref.make(0);
@@ -2088,8 +2087,11 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         question: "deliver",
       }).pipe(Effect.provide(toolLayer), Effect.exit);
 
-      expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
-      expect(requests).toHaveLength(1);
+      expect(failureFrom(exit)).toMatchObject({
+        _tag: "AgentPolicyError",
+        limit: "repeated-failures",
+      });
+      expect(requests).toHaveLength(2);
       expect(yield* Ref.get(handlerStarts)).toBe(0);
     }),
   );
