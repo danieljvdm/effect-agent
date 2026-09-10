@@ -9,6 +9,7 @@ import { Toolkit } from "effect/unstable/ai";
 import { PlannerError, PlannerInput } from "../domain.ts";
 import { PlannerAttempt, ProgressStore } from "../server/progress.ts";
 import { publicationAuthorization } from "../server/security.ts";
+import { ownerOfThread } from "../server/tenancy.ts";
 import {
   CoordinatorInput,
   researchCoordinatorIds,
@@ -112,6 +113,7 @@ export const scoutAttemptLayer = (context: {
           finish_research: (findings) => Effect.succeed(findings),
         }),
         Layer.succeed(PlannerAttempt, {
+          billingOwner: Effect.map(input, (input) => ownerOfThread(input.sourceThreadId)),
           settings: Effect.map(input, (input) => input.settings),
           progress: writer,
         }),

@@ -1,9 +1,16 @@
+import type * as Agent from "@effect-agent/core/Agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Config, Effect, Layer, Result, Schema, Stream, type Redacted } from "effect";
+import { Config, Effect, Layer, Result, Schema, Stream, Redacted } from "effect";
 import { AiError, LanguageModel, Model } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+} from "effect/unstable/http";
 
-import { PlannerError, type PlannerSettings } from "../domain.ts";
+import { type PlannerError, type PlannerSettings } from "../domain.ts";
+import { credentialForOwner, type CredentialHost } from "./credentials.ts";
 import { recordDiagnostic } from "./diagnostics.ts";
 import { PlannerAttempt, type ProgressWriter } from "./progress.ts";
 import { responseTextPreview } from "./response-stream.ts";
@@ -168,8 +175,33 @@ const unavailableModel = (error: PlannerError) => {
   );
 };
 
+/** Resolve on each HTTP request so removal/rotation also affects running durable workers.
+ * An already dispatched provider request may finish; there is no host-key fallback.
+ */
+export const credentialClient = (key: Effect.Effect<Redacted.Redacted<string>, PlannerError>) =>
+  OpenAiClient.make({
+    transformClient: (client) =>
+      HttpClient.mapRequestEffect(client, (request) =>
+        key.pipe(
+          Effect.map((apiKey) => HttpClientRequest.bearerToken(request, Redacted.value(apiKey))),
+          Effect.mapError(
+            (error) =>
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({ request, description: error.message }),
+              }),
+          ),
+        ),
+      ),
+  });
+
 /** Settings are read once from the trusted claimed Submission, not from model prompts. */
-export const selectableModel = (apiKey: Redacted.Redacted<string>) =>
+export const selectableModel = (
+  resolve:
+    | Redacted.Redacted<string>
+    | ((
+        attempt: PlannerAttempt["Service"],
+      ) => Effect.Effect<Redacted.Redacted<string>, PlannerError>),
+) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const attempt = yield* PlannerAttempt;
@@ -180,7 +212,12 @@ export const selectableModel = (apiKey: Redacted.Redacted<string>) =>
 
       const client = Layer.effect(
         OpenAiClient.OpenAiClient,
-        Effect.map(OpenAiClient.make({ apiKey }), (base) => observeOpenAi(base, attempt.progress)),
+        Effect.map(
+          credentialClient(
+            Redacted.isRedacted(resolve) ? Effect.succeed(resolve) : resolve(attempt),
+          ),
+          (base) => observeOpenAi(base, attempt.progress),
+        ),
       ).pipe(Layer.provide(FetchHttpClient.layer));
 
       return OpenAiLanguageModel.model(settings.model, selectedModelConfig(settings)).pipe(
@@ -189,38 +226,48 @@ export const selectableModel = (apiKey: Redacted.Redacted<string>) =>
     }),
   );
 
-/** Secrets are read only at host assembly; credentials never enter model identity or records. */
-export const liveModel = Effect.gen(function* () {
-  const apiKey = yield* Config.schema(
-    Schema.Redacted(Schema.NonEmptyString),
-    "OPENAI_API_KEY",
-  ).pipe(
-    Effect.mapError(
-      () =>
-        new PlannerError({
-          code: "unavailable",
-          message: "Configure OPENAI_API_KEY to use the planner.",
-        }),
-    ),
-  );
+/** Production uses only the key belonging to the verified account. No deployment API key. */
+export const liveModel = (
+  env: CredentialHost,
+): Effect.Effect<
+  {
+    readonly model: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>;
+    readonly selectable: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>;
+    readonly identity: string;
+    readonly label: string;
+  },
+  Config.ConfigError
+> =>
+  Effect.gen(function* () {
+    const resolve = (attempt: PlannerAttempt["Service"]) =>
+      attempt.billingOwner.pipe(Effect.flatMap((owner) => credentialForOwner(env, owner)));
 
-  const name = yield* Config.nonEmptyString("OPENAI_MODEL").pipe(
-    Config.withDefault("gpt-5.6-luna"),
-  );
+    const name = yield* Config.nonEmptyString("OPENAI_MODEL").pipe(
+      Config.withDefault("gpt-5.6-luna"),
+    );
 
-  const config = {
-    store: false,
-    max_output_tokens: 4096,
-    max_tool_calls: 1,
-    reasoning: { effort: "low" },
-  } as const;
+    const config = {
+      store: false,
+      max_output_tokens: 4096,
+      max_tool_calls: 1,
+      reasoning: { effort: "low" },
+    } as const;
 
-  return {
-    model: OpenAiLanguageModel.model(name, config).pipe(
-      Layer.provide(OpenAiClient.layer({ apiKey }).pipe(Layer.provide(FetchHttpClient.layer))),
-    ),
-    identity: JSON.stringify({ provider: "openai", name, ...config }),
-    label: name,
-    selectable: selectableModel(apiKey),
-  };
-});
+    return {
+      // Preserve the legacy definition identity while changing only secret resolution.
+      model: Layer.unwrap(
+        Effect.map(PlannerAttempt, (attempt) =>
+          OpenAiLanguageModel.model(name, config).pipe(
+            Layer.provide(
+              Layer.effect(OpenAiClient.OpenAiClient, credentialClient(resolve(attempt))).pipe(
+                Layer.provide(FetchHttpClient.layer),
+              ),
+            ),
+          ),
+        ),
+      ),
+      identity: JSON.stringify({ provider: "openai", name, ...config }),
+      label: name,
+      selectable: selectableModel(resolve),
+    };
+  });

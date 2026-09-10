@@ -213,6 +213,7 @@ it.effect(
         const model = selectableModel(Redacted.make("fake-api-key")).pipe(
           Layer.provide(
             Layer.succeed(PlannerAttempt, {
+              billingOwner: Effect.succeed("travel-planner-owner-v1"),
               progress,
               settings: Effect.succeed(defaultPlannerSettings),
             }),
@@ -303,7 +304,11 @@ it.effect(
 
         const model = selectableModel(Redacted.make("fake-api-key")).pipe(
           Layer.provide(
-            Layer.succeed(PlannerAttempt, { settings: Effect.succeed(settings), progress }),
+            Layer.succeed(PlannerAttempt, {
+              billingOwner: Effect.succeed("travel-planner-owner-v1"),
+              settings: Effect.succeed(settings),
+              progress,
+            }),
           ),
         );
 
@@ -344,7 +349,13 @@ it.effect(
       const settings = yield* Effect.cached(Ref.get(selection));
 
       const model = selectableModel(Redacted.make("fake-api-key")).pipe(
-        Layer.provide(Layer.succeed(PlannerAttempt, { settings, progress })),
+        Layer.provide(
+          Layer.succeed(PlannerAttempt, {
+            billingOwner: Effect.succeed("travel-planner-owner-v1"),
+            settings,
+            progress,
+          }),
+        ),
       );
 
       const models: string[] = [];
@@ -372,6 +383,7 @@ it.effect(
       const unavailable = selectableModel(Redacted.make("fake-api-key")).pipe(
         Layer.provide(
           Layer.succeed(PlannerAttempt, {
+            billingOwner: Effect.succeed("travel-planner-owner-v1"),
             progress,
             settings: Effect.fail(
               new PlannerError({ code: "unavailable", message: "Settings unavailable" }),
@@ -395,7 +407,9 @@ it.effect(
 
 it.effect("retains the exact legacy model identity and rejects unsupported UI settings", () =>
   Effect.gen(function* () {
-    const legacy = yield* liveModel.pipe(
+    const legacy = yield* liveModel({
+      THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
+    }).pipe(
       Effect.provide(
         ConfigProvider.layer(ConfigProvider.fromEnvRecord({ OPENAI_API_KEY: "fake-api-key" })),
       ),
@@ -684,4 +698,126 @@ it.effect("records provider request failures with causes without changing the re
     expect(saved[0]?.text).toContain("req-provider-test");
     expect(saved[0]?.text).not.toContain("PRIVATE123456789");
   }).pipe(Effect.provide(ProgressStore.layer)),
+);
+
+it.effect(
+  "bills the verified account, observes key rotation/removal between calls, and never falls back to a host key",
+  () =>
+    Effect.gen(function* () {
+      const encryption = new Uint8Array(32);
+
+      const key = yield* Effect.promise(() =>
+        crypto.subtle.importKey("raw", encryption, "AES-GCM", false, ["encrypt"]),
+      );
+
+      const seal = (owner: string, secret: string) =>
+        Effect.gen(function* () {
+          const iv = crypto.getRandomValues(new Uint8Array(12));
+
+          const encrypted = yield* Effect.promise(() =>
+            crypto.subtle.encrypt(
+              {
+                name: "AES-GCM",
+                iv,
+                additionalData: new TextEncoder().encode(`travel-planner:openai:v1:${owner}`),
+              },
+              key,
+              new TextEncoder().encode(secret),
+            ),
+          );
+
+          return JSON.stringify({
+            version: 1,
+            iv: btoa(String.fromCharCode(...iv)),
+            ciphertext: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+            lastFour: secret.slice(-4),
+            updatedAt: "2026-09-10T00:00:00Z",
+          });
+        });
+
+      const alice = "alice-account";
+      const bob = "bob-account";
+
+      const records = new Map([
+        [alice, yield* seal(alice, "sk-private-alice-1111")],
+        [bob, yield* seal(bob, "sk-private-bob-2222")],
+      ]);
+
+      const lookedUp: string[] = [];
+
+      const live = yield* liveModel({
+        BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...encryption)),
+        THREADS: {
+          getByName: (owner) => ({
+            modelCredential: async () => {
+              lookedUp.push(owner);
+
+              return records.get(owner) ?? "null";
+            },
+          }),
+        },
+      });
+
+      const requests: string[] = [];
+
+      const fetch: typeof globalThis.fetch = async (_url, init) => {
+        requests.push(new Headers(init?.headers).get("authorization") ?? "");
+
+        return answer("gpt-5.6-luna");
+      };
+
+      const store = yield* ProgressStore;
+      const progress = yield* store.begin("byok-submission", "byok-attempt");
+      const ask = Stream.runDrain(LanguageModel.streamText({ prompt: "A fixture request" }));
+
+      yield* Effect.gen(function* () {
+        yield* ask;
+        records.set(alice, yield* seal(alice, "sk-private-rotated-3333"));
+        yield* ask;
+        records.delete(alice);
+        const failure = yield* Effect.flip(ask);
+
+        expect(failure.message).toContain("Connect your OpenAI API key");
+      }).pipe(
+        Effect.provide(
+          live.selectable.pipe(
+            Layer.provide(
+              Layer.succeed(PlannerAttempt, {
+                billingOwner: Effect.succeed(alice),
+                settings: Effect.succeed(defaultPlannerSettings),
+                progress,
+              }),
+            ),
+          ),
+        ),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+      );
+      yield* ask.pipe(
+        Effect.provide(
+          live.selectable.pipe(
+            Layer.provide(
+              Layer.succeed(PlannerAttempt, {
+                billingOwner: Effect.succeed(bob),
+                settings: Effect.succeed(defaultPlannerSettings),
+                progress,
+              }),
+            ),
+          ),
+        ),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+      );
+      expect(requests).toEqual([
+        "Bearer sk-private-alice-1111",
+        "Bearer sk-private-rotated-3333",
+        "Bearer sk-private-bob-2222",
+      ]);
+      expect(lookedUp).toEqual([alice, alice, alice, bob]);
+    }).pipe(
+      Effect.provide(ProgressStore.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnvRecord({ OPENAI_API_KEY: "sk-must-never-use-host-key" }),
+        ),
+      ),
+    ),
 );

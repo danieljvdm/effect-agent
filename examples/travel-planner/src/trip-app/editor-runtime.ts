@@ -177,6 +177,7 @@ export const editorAttemptLayer = (context: {
       return Layer.mergeAll(
         native,
         Layer.succeed(PlannerAttempt, {
+          billingOwner: Effect.map(input, (input) => ownerOfThread(input.sourceThreadId)),
           settings: Effect.map(input, (input) => input.settings),
           progress: writer,
         }),

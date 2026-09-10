@@ -26,6 +26,7 @@ import { ScoutInput } from "../../src/research/contracts.ts";
 import { ResearchScoutBackground } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { previousEditorPlanner, previousResearchPlanner } from "../../src/server/planner.ts";
+import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread, storageOwner } from "../../src/server/tenancy.ts";
 import { EditorInput } from "../../src/trip-app/editor.ts";
 import fixtureWorker from "./worker.ts";
@@ -111,6 +112,19 @@ const model = Model.make(
 
             if (!bucket) return yield* Effect.die("Missing fixture bucket");
             const editor = inputs(prompt, EditorInput).at(-1);
+            const scoutForBilling = inputs(prompt, ScoutInput).at(-1);
+            const attempt = yield* Effect.serviceOption(PlannerAttempt);
+
+            if (Option.isNone(attempt)) return yield* Effect.die("Missing billing attempt");
+            const billed = yield* attempt.value.billingOwner.pipe(Effect.orDie);
+
+            const expected = ownerOfThread(
+              editor?.input.sourceThreadId ??
+                scoutForBilling?.input.sourceThreadId ??
+                identity.threadId,
+            );
+
+            if (billed !== expected) return yield* Effect.die("Worker billed the wrong account");
 
             if (editor) {
               const key = "gate/Expanded editor";

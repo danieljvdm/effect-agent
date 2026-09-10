@@ -21,6 +21,8 @@ import {
   TripSiteStore,
 } from "../../src/domain.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
+import { PlannerAttempt } from "../../src/server/progress.ts";
+import { ownerOfThread } from "../../src/server/tenancy.ts";
 import { AppEditorBackground, EditorInput } from "../../src/trip-app/editor.ts";
 import { AppSourceStore } from "../../src/trip-app/source.ts";
 import { AppTools } from "../../src/trip-app/tools.ts";
@@ -194,6 +196,14 @@ const FixtureEditorModel = Model.make(
 
             if (Option.isNone(identity))
               return yield* Effect.die("Fixture model needs its actual thread");
+            const attempt = yield* Effect.serviceOption(PlannerAttempt);
+
+            if (Option.isNone(attempt)) return yield* Effect.die("Missing billing attempt");
+            if (
+              (yield* attempt.value.billingOwner.pipe(Effect.orDie)) !==
+              ownerOfThread(editor?.input.sourceThreadId ?? identity.value.threadId)
+            )
+              return yield* Effect.die("Editor billed the wrong account");
             yield* Effect.promise(() =>
               bucket.put(
                 `fixture-tools/${identity.value.threadId}/${role}.json`,

@@ -2,6 +2,7 @@ import type { Effect } from "effect";
 import { Context, Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
+import { ConnectOpenAi, OpenAiConnection } from "./credential-domain.ts";
 import { TravelContent, TravelUrl } from "./travel-content.ts";
 
 export const ShortText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240));
@@ -357,6 +358,13 @@ export class PlannerError extends Schema.TaggedError<PlannerError>()("PlannerErr
 }) {}
 
 export const PlannerRpcs = RpcGroup.make(
+  Rpc.make("GetOpenAiConnection", { success: OpenAiConnection, error: PlannerError }),
+  Rpc.make("ConnectOpenAi", {
+    payload: ConnectOpenAi,
+    success: OpenAiConnection,
+    error: PlannerError,
+  }),
+  Rpc.make("DisconnectOpenAi", { success: OpenAiConnection, error: PlannerError }),
   Rpc.make("CreateTripApp", {
     payload: Schema.Struct({ tripId: TripId }),
     success: TripApp,

@@ -13,6 +13,12 @@ export const accessResponse = Effect.fn("accessResponse")(function* (
 ) {
   const manage = Effect.fn("accessManage")(
     function* (command: typeof AccessCommand.Type) {
+      if (session.registration === "open")
+        return yield* new AccessError({
+          code: "invalid",
+          message:
+            "Registration is open. Anyone can sign in with their email and connect their own OpenAI key.",
+        });
       if (session.email !== adminEmail || !session.isAdmin)
         return yield* new AccessError({
           code: "forbidden",

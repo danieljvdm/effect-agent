@@ -111,8 +111,10 @@ vp install
 cp examples/travel-planner/.env.example examples/travel-planner/.env
 ```
 
-Set `OPENAI_API_KEY` in that ignored file and configure the Cloudflare Access values
-shown in `.env.example`. The deployed app is at <https://travel.effect-agent.com>.
+Set `BYOK_ENCRYPTION_KEY` to a securely generated base64-encoded 32-byte value in that
+ignored file and configure the Cloudflare Access values shown in `.env.example`.
+Keep this encryption key stable and backed up; replacing it makes existing saved API keys
+unreadable. Users connect their own OpenAI key in **Settings → Your OpenAI key**. The deployed app is at <https://travel.effect-agent.com>.
 Cloudflare handles email-code sign-in; there is no application access key. Each email
 has private trips and conversations. Daniel's existing catalogue and history keep
 their original storage addresses.
@@ -125,7 +127,7 @@ The Alchemy CLI prints the local URL. Local requests also require a valid Access
 deterministic tests substitute authentication only in their test Worker. There is no
 production development bypass. Cloudflare credentials must target the account
 that will host the application. Artifacts and Browser Run require account access to
-those products. The planner uses your OpenAI API key for every conversation.
+those products. The deployment has no OpenAI API key; each account supplies its own.
 
 Model selection and the provider's native web-search tool stay at the host boundary.
 The agent accepts a research toolkit and a provider-independent model Layer.
@@ -154,42 +156,42 @@ It uses Cloudflare's remote Alchemy state store. `ALCHEMY_LOCAL_STATE=true` sele
 state for isolated experiments; do not switch state stores for an existing deployment.
 The root docs stack is independent. Deployment credentials are never bound into the Worker.
 Alchemy owns the custom domain and Access application/policy covering both the custom
-domain and original `workers.dev` hostname. Trip apps have separate origins at
-`{trip-title}-{stable-suffix}-trip.effect-agent.com`. Generated sites are public and do not
-use Cloudflare Access; the planner retains its invited-user, 30-day Access policy. Existing
-`{appId}-trip.effect-agent.com` links remain valid.
-A proxied wildcard DNS record supplies otherwise unmatched names; only the narrow
-`*-trip.effect-agent.com/*` Worker route handles apps. Existing exact DNS records take
-precedence. Version preview URLs are disabled.
+hostname and workers.dev hostname. Public registration uses an **Allow / Everyone** policy,
+with email-code authentication still required and a 30-day session. Anyone within the account's
+Cloudflare Access seat allowance can sign in; the invitation list no longer gates membership.
+Access seat limits still apply. Existing verified emails resolve to the same private storage.
 
-Secrets are bound through Alchemy's redacted configuration. Deployment requires nonempty
-`OPENAI_API_KEY` and `ACCESS_API_TOKEN`; missing or invalid Access configuration fails closed. The application
-compatibility date matches the runtime shipped by the pinned Alchemy version.
+When upgrading a deployment that still has a shared model key, first deploy with
+`PUBLIC_SIGN_UP=false` (and the existing `ACCESS_GROUP_ID`) to keep the invitation gate while
+installing BYOK. Verify that the Worker no longer has `OPENAI_API_KEY`, then deploy with
+`PUBLIC_SIGN_UP=true`. This avoids opening access while the old, host-funded Worker is active.
+New deployments default to public registration. Generated trip app hosts remain public.
 
-## Invitations
+## Bring your own OpenAI key
 
-`danieljmerwe@gmail.com` is the sole administrator and is always allowed by the Access
-policy. **Manage access** adds and removes verified email addresses in the dedicated
-`effect-agent-travel-planner-invited` Access group. Share the displayed sign-in link with
-invitees; adding an address does not send an invitation email. Each invitee starts with
-an empty private planner. Removing an address prevents its next sign-in; existing Access
-sessions may remain valid for the configured 30 days. The administrator cannot be removed.
+Settings lets each account connect, replace, or remove its key. Connection checks use OpenAI's
+model-list endpoint, with a 15-second timeout and redirects disabled; they do not run inference.
+The check verifies authentication, not credit balance or permission to use every selectable model.
+The selected model and processing tier must be supported by the supplied OpenAI account.
+Cloudflare hosting, browsing, storage, and build containers remain billed to the platform owner.
 
-The group is bootstrapped once and its ID retained in `ACCESS_GROUP_ID`: the pinned
-Alchemy Group resource replaces membership during reconciliation, so the app owns this
-mutable list instead. Deployments reference it without resetting invitations. Runtime
-management requires `ACCESS_API_TOKEN`, restricted to **Access: Groups Write** in this
-Cloudflare account. Cloudflare cannot restrict that token to one group; the application
-uses only the configured group ID and refuses unexpected group names or rule shapes.
-Deployments require this credential so the admin panel cannot silently ship without working
-invitations. An older deployment with missing configuration reports that no access was changed.
+Keys are AES-256-GCM encrypted with a fresh nonce and account-bound associated data, in a
+separate versioned SQLite row in the account's owner Object. HTTP returns only connection status,
+last four characters, and update time. Keys never enter trip data, canonical submissions, prompts,
+traces, generated apps, or browser persistence. The password draft is cleared when submitted and
+when its form closes. Validation and storage failures return bounded messages without provider
+bodies or credential values. Before/after-write failpoints cover save and removal; after a lost
+reply, refresh the connection status before retrying. Unsupported rows fail without replacement.
 
-Group updates are serialized in the original owner Object. Cloudflare remains the source
-of truth, and failed updates are not automatically retried: refresh before retrying because
-a lost response may follow a committed update. **Refresh members** reloads the authoritative
-list without repeating the invitation. Tests exercise both sides of this mutation and the
-RPC-to-Object-to-HTTP path in workerd. Credentialed requests use manual redirects and reject
-non-success statuses; the token is never forwarded to a redirect destination.
+Every model HTTP request resolves the current key from the verified account. Planner attempts use
+the host-owned conversation namespace; scouts and editors use their validated canonical source
+lineage, never a model-supplied billing account or the child thread's name. Legacy registrations
+also require the owner's key. There is no deployment-key fallback. Rotation affects the next
+model request; removal prevents new requests, including background work. An already dispatched
+provider request may finish. Failed work is not automatically replayed when a key is reconnected.
+Saved trips, messages, and published apps remain readable without a key, and existing accounts
+must connect a key after this upgrade. Removing a key deletes the current credential row;
+provider-side revocation is needed to invalidate copies in historical database backups.
 
 ## Boundaries and behavior
 
@@ -214,7 +216,8 @@ non-success statuses; the token is never forwarded to a redirect destination.
   requests, method, and a 32 KiB body limit. Effect HTTP serves
   schema-defined RPCs: `GetPlanner`, `SendMessage`, `SaveTrip`, `PublishTrip`,
   `GetPlannerSettings`, `SavePlannerSettings`, `CreateTripApp`, `RetryTripAppBuild`, and `RestoreTripApp`.
-- `/api/access` also serves the signed-in session and administrator-only membership RPCs.
+- `/api/access` serves the signed-in session. Legacy administrator membership RPCs are disabled
+  while registration is open.
   Identity is request-scoped. Member storage addresses derive from the verified email,
   never a client-supplied owner ID; a member cannot address another member's private trips.
 - Each account stores one versioned model-preference row. Only explicit changes save it;
@@ -375,8 +378,8 @@ Existing app IDs, repository names, build objects, and saved URLs are preserved.
 administrator hash links can repair their directory entry from the fixed original owner on the
 first public request. Other members' existing entries are repaired when their planner loads or
 a build starts; load those planners before sharing their existing links after the first rollout.
-Missing or malformed entries never trigger an owner search. The deployment removes only the
-`TripAppsAccess` application; `TravelAccess`, invitations, and session duration remain unchanged.
+Missing or malformed entries never trigger an owner search. Generated app hosts have no
+Access wall; planner routes retain authenticated account access and the 30-day session.
 
 App state is schema-versioned append-only owner SQL with revision checks. Source SHA,
 active build SHA, and trip-data revision are separate. Restore commits the selected version's

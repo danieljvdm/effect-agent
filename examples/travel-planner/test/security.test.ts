@@ -89,24 +89,17 @@ it("allows only the admitted selected trip and revision, ignoring model claims o
     expect((await authorize(input, parameters))._tag).toBe("denied");
 });
 
-it("requires a nonempty OpenAI API key", async () => {
+it("assembles read-only planner access without a deployment OpenAI key", async () => {
   const configured = (values: Record<string, string>) =>
-    liveModel.pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(values))));
+    liveModel({
+      THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(values))));
 
-  expect((await Effect.runPromise(configured({}).pipe(Effect.flip)))._tag).toBe("PlannerError");
-  expect((await Effect.runPromise(configured({ OPENAI_API_KEY: "" }).pipe(Effect.flip)))._tag).toBe(
-    "PlannerError",
-  );
-  expect((await Effect.runPromise(configured({ OPENAI_API_KEY: "test-key" }))).label).toBe(
-    "gpt-5.6-luna",
-  );
+  expect((await Effect.runPromise(configured({}))).label).toBe("gpt-5.6-luna");
   expect(
     (
       await Effect.runPromise(
-        configured({
-          OPENAI_API_KEY: "test-key",
-          OPENAI_MODEL: "configured-model",
-        }),
+        configured({ OPENAI_API_KEY: "must-not-be-used", OPENAI_MODEL: "configured-model" }),
       )
     ).label,
   ).toBe("configured-model");

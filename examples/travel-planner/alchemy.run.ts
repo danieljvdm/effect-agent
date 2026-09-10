@@ -24,14 +24,25 @@ export default Alchemy.Stack(
   },
   Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
-    // Membership belongs to the app. Alchemy's Group reconciler replaces its
-    // include rules, so reference the bootstrapped group instead of resetting it.
-    const groupId = yield* Config.nonEmptyString("ACCESS_GROUP_ID");
+
+    const publicRegistration = yield* Config.boolean("PUBLIC_SIGN_UP").pipe(
+      Config.withDefault(true),
+    );
+
+    const include = publicRegistration
+      ? [{ everyone: {} }]
+      : [
+          { email: { email: adminEmail } },
+          { group: { id: yield* Config.nonEmptyString("ACCESS_GROUP_ID") } },
+        ];
 
     const allowInvited = yield* Cloudflare.Access.Policy("TravelInvitedUsers", {
-      name: "effect-agent-travel-planner-invited",
+      name: publicRegistration
+        ? "effect-agent-travel-planner-public-sign-in"
+        : "effect-agent-travel-planner-invited",
       decision: "allow",
-      include: [{ email: { email: adminEmail } }, { group: { id: groupId } }],
+      // Authenticate every user; do not use bypass, which would omit a verified identity.
+      include,
     });
 
     const access = yield* Cloudflare.Access.Application("TravelAccess", {
@@ -92,15 +103,16 @@ export default Alchemy.Stack(
         }),
         ARTIFACTS_GIT_BASE: `https://${accountId}.artifacts.cloudflare.net/git/${artifacts.namespace}`,
         BROWSER: Cloudflare.Browser(),
-        ACCESS_ACCOUNT_ID: accountId,
-        ACCESS_GROUP_ID: groupId,
-        ACCESS_API_TOKEN: Config.schema(Schema.Redacted(Schema.NonEmptyString), "ACCESS_API_TOKEN"),
+        ACCESS_OPEN_REGISTRATION: String(publicRegistration),
         ACCESS_TEAM_DOMAIN: Config.nonEmptyString("ACCESS_TEAM_DOMAIN").pipe(
           Config.withDefault("https://orange-cake-d758.cloudflareaccess.com"),
         ),
         ACCESS_AUD: access.aud,
         OPENAI_MODEL: Config.string("OPENAI_MODEL").pipe(Config.withDefault("gpt-5.6-luna")),
-        OPENAI_API_KEY: Config.schema(Schema.Redacted(Schema.NonEmptyString), "OPENAI_API_KEY"),
+        BYOK_ENCRYPTION_KEY: Config.schema(
+          Schema.Redacted(Schema.NonEmptyString),
+          "BYOK_ENCRYPTION_KEY",
+        ),
       },
       observability: { enabled: true },
       memo: {

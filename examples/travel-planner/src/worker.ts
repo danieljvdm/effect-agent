@@ -9,6 +9,7 @@ import { type AccessAdminEnvironment } from "./server/access-admin";
 import { authenticate, type AccessEnvironment } from "./server/access-auth";
 import { accessResponse } from "./server/access-http";
 import { makeTravelPlannerThread } from "./server/cloudflare";
+import type { CredentialEnvironment } from "./server/credentials";
 import { serveProgress } from "./server/progress-http";
 import { plannerOwner } from "./server/tenancy";
 import { appNameFromHost } from "./trip-app/addresses.ts";
@@ -26,7 +27,7 @@ export class PlannerThread extends makeTravelPlannerThread(
 
 declare global {
   namespace Cloudflare {
-    interface Env extends AccessEnvironment, AccessAdminEnvironment {
+    interface Env extends AccessEnvironment, AccessAdminEnvironment, CredentialEnvironment {
       THREADS: DurableObjectNamespace<PlannerThread>;
       ARTIFACTS: Artifacts;
       ARTIFACTS_GIT_BASE: string;

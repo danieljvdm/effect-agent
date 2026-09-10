@@ -2434,3 +2434,71 @@
     font-size: 14px;
   }
 }
+
+/* Account credentials are a separate form; never part of the chat composer. */
+.model-settings {
+  width: 350px;
+  max-height: calc(var(--planner-viewport-height, 100dvh) - 100px);
+  overflow-y: auto;
+}
+.openai-connection {
+  border-bottom: 1px solid #e5e9dd;
+  padding-bottom: 18px;
+  margin-bottom: 16px;
+}
+.openai-connection h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.openai-connection input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dce1d3;
+  border-radius: 7px;
+  padding: 10px;
+  background: white;
+  font-size: 16px;
+}
+.connection-status {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #476c51;
+}
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.connection-actions button {
+  border-radius: 7px;
+  padding: 9px 12px;
+  background: #476c51;
+  color: white;
+  font-size: 12px;
+}
+.connection-actions .connection-remove {
+  background: transparent;
+  color: #6b4b3d;
+}
+.connection-actions button:disabled {
+  opacity: 0.5;
+}
+.connection-error {
+  font-size: 12px;
+  color: #8d422b;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+}
+.connection-error button {
+  text-decoration: underline;
+}
+.connect-key-prompt {
+  width: 100%;
+  padding: 10px;
+  margin-top: 8px;
+  border-radius: 8px;
+  background: #eef1e7;
+  color: #476c51;
+  font-size: 13px;
+}

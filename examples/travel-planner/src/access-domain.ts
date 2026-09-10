@@ -8,7 +8,12 @@ export const Email = Schema.String.check(
   Schema.isPattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/),
 );
 
-export const AccessSession = Schema.Struct({ email: Email, isAdmin: Schema.Boolean });
+export const AccessSession = Schema.Struct({
+  email: Email,
+  isAdmin: Schema.Boolean,
+  registration: Schema.optionalKey(Schema.Literal("open")),
+});
+
 export type AccessSession = typeof AccessSession.Type;
 export const AccessMembers = Schema.Struct({ emails: Schema.Array(Email), adminEmail: Email });
 export type AccessMembers = typeof AccessMembers.Type;

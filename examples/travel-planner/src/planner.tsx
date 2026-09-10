@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityPanel } from "./components/activity-panel";
 import { AgentProgress } from "./components/agent-progress.tsx";
 import { MessageText } from "./components/message-text";
+import { OpenAiConnectionForm } from "./components/openai-connection";
 import { PendingMessages } from "./components/pending-messages";
 import { ResearchScoutCard } from "./components/research-scout-card.tsx";
 import { TravelCards } from "./components/travel/travel-cards";
@@ -36,6 +37,8 @@ import {
   sidebarTripsAtom,
   pendingMessagesAtom,
   messagesAtom,
+  openAiConnectionAtom,
+  modelSettingsOpenAtom,
 } from "./state";
 
 function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | null {
@@ -51,6 +54,9 @@ function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | nu
 }
 
 export function Planner() {
+  const connectionResult = useAtomValue(openAiConnectionAtom);
+  const connected = AsyncResult.isSuccess(connectionResult) && connectionResult.value.connected;
+  const openSettings = useAtomSet(modelSettingsOpenAtom);
   const sessionResult = useAtomValue(sessionAtom);
   const session = AsyncResult.isSuccess(sessionResult) ? sessionResult.value : null;
   const [manageAccess, setManageAccess] = useState(false);
@@ -76,7 +82,7 @@ export function Planner() {
   const messages = useAtomValue(messagesAtom);
 
   const busy = sendResult.waiting || (snapshot?.pending ?? 0) > 0;
-  const canSend = session !== null && !sendResult.waiting && draft.trim().length > 0;
+  const canSend = session !== null && connected && !sendResult.waiting && draft.trim().length > 0;
 
   const live =
     progress?.submissionId && snapshot?.pendingSubmissionIds.includes(progress.submissionId)
@@ -203,7 +209,7 @@ export function Planner() {
           <div className="account">
             <span className="account-email">{session.email}</span>
             <div className="account-actions">
-              {session.isAdmin && (
+              {session.isAdmin && session.registration !== "open" && (
                 <button
                   className="quiet"
                   onClick={() => {
@@ -434,6 +440,15 @@ export function Planner() {
                   <ArrowUp size={23} aria-hidden="true" />
                 </button>
               </div>
+              {session && !connected && (
+                <button
+                  type="button"
+                  className="connect-key-prompt"
+                  onClick={() => openSettings(true)}
+                >
+                  Connect your OpenAI key to start planning →
+                </button>
+              )}
               <p className="composer-note">
                 <span className="composer-tagline">Dream it. Plan it. Make it yours.</span>
                 <span>Check current prices and availability before booking.</span>
@@ -463,10 +478,11 @@ export function Planner() {
 }
 
 function ModelControls() {
+  const session = useAtomValue(sessionAtom);
   const settings = useAtomValue(settingsAtom);
   const status = useAtomValue(settingsStatusAtom);
   const change = useAtomSet(changeSettingsAtom);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useAtom(modelSettingsOpenAtom);
   const controls = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
@@ -480,7 +496,7 @@ function ModelControls() {
     document.addEventListener("pointerdown", dismiss);
 
     return () => document.removeEventListener("pointerdown", dismiss);
-  }, [open]);
+  }, [open, setOpen]);
 
   return (
     <div
@@ -550,6 +566,9 @@ function ModelControls() {
         >
           <p className="eyebrow">MAKE IT YOURS</p>
           <h2>Planner settings</h2>
+          <OpenAiConnectionForm
+            key={AsyncResult.isSuccess(session) ? session.value.email : "signed-out"}
+          />
           <label htmlFor="planner-model">Model</label>
           <select
             id="planner-model"

@@ -1,3 +1,4 @@
+import type { Redacted } from "effect";
 import { Data, Effect, Exit, Layer, Option, Schedule, Schema, Semaphore, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { AsyncResult, Atom, AtomRpc, Reactivity } from "effect/unstable/reactivity";
@@ -10,7 +11,9 @@ import {
   type AccessMembers,
   type AccessSession,
 } from "./access-domain";
+import type { OpenAiConnection } from "./credential-domain";
 import {
+  PlannerError,
   PlannerRpcs,
   ProgressRpcs,
   PlannerSettings,
@@ -116,6 +119,76 @@ export class PlannerClient extends AtomRpc.Service<PlannerClient>()("travel-plan
     Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer]),
   ),
 }) {}
+
+const connectionQuery = Atom.family((email: string) =>
+  PlannerClient.runtime
+    .atom((get) =>
+      Effect.gen(function* () {
+        const session = get(sessionAtom);
+
+        if (!AsyncResult.isSuccess(session) || session.waiting || session.value.email !== email)
+          return yield* Effect.interrupt;
+        const client = yield* PlannerClient;
+        const connection = yield* client("GetOpenAiConnection", undefined);
+        const current = get.once(sessionAtom);
+
+        if (!AsyncResult.isSuccess(current) || current.value.email !== email)
+          return yield* Effect.interrupt;
+
+        return connection;
+      }),
+    )
+    .pipe(PlannerClient.runtime.factory.withReactivity([`openai-connection:${email}`])),
+);
+
+export const openAiConnectionAtom = Atom.make((get) => {
+  const session = get(sessionAtom);
+
+  return AsyncResult.isSuccess(session)
+    ? get(connectionQuery(session.value.email))
+    : AsyncResult.initial<OpenAiConnection>();
+});
+
+/** UI-only presentation flag; the password draft stays in its mounted form. */
+export const modelSettingsOpenAtom = Atom.make(false);
+
+export const changeOpenAiConnectionAtom = PlannerClient.runtime.fn<
+  | { readonly action: "connect"; readonly apiKey: Redacted.Redacted<string> }
+  | { readonly action: "disconnect" }
+>()(
+  Effect.fnUntraced(function* (request, get) {
+    const session = get(sessionAtom);
+
+    if (!AsyncResult.isSuccess(session) || session.waiting)
+      return yield* new PlannerError({
+        code: "unavailable",
+        message: "Wait for sign-in to finish before changing your OpenAI key.",
+      });
+    const client = yield* PlannerClient;
+    const current = get(sessionAtom);
+
+    if (
+      !AsyncResult.isSuccess(current) ||
+      current.waiting ||
+      current.value.email !== session.value.email
+    )
+      return yield* Effect.interrupt;
+
+    return yield* Reactivity.mutation(
+      request.action === "connect"
+        ? client("ConnectOpenAi", { apiKey: request.apiKey })
+        : client("DisconnectOpenAi", undefined),
+      [`openai-connection:${session.value.email}`],
+    );
+  }),
+);
+
+export const refreshOpenAiConnectionAtom = Atom.fnSync<void>()((_, get) => {
+  get.set(changeOpenAiConnectionAtom, Atom.Reset);
+  const session = get(sessionAtom);
+
+  if (AsyncResult.isSuccess(session)) get.refresh(connectionQuery(session.value.email));
+});
 
 type AccountPreferences = {
   readonly settings: PlannerSettings | null;

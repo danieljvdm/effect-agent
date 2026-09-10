@@ -50,6 +50,12 @@ import { AppToolsLive } from "../trip-app/tools-live.ts";
 import { AccessCommand, AccessReply, manageAccess } from "./access-admin.ts";
 import { PlannerModel, plannerSnapshot, sendMessage } from "./application.ts";
 import {
+  CredentialStore,
+  credentialStoreLayer,
+  encodeStoredCredential,
+  validateOpenAiKey,
+} from "./credentials.ts";
+import {
   DiagnosticContext,
   DiagnosticObserverLive,
   FailureDiagnosticsLive,
@@ -96,6 +102,20 @@ const safeRpc = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   );
 
 export const plannerHandlers = PlannerRpcs.toLayer({
+  GetOpenAiConnection: () => safeRpc(Effect.flatMap(CredentialStore, (store) => store.status)),
+  ConnectOpenAi: ({ apiKey }) =>
+    safeRpc(
+      Effect.gen(function* () {
+        const store = yield* CredentialStore;
+
+        const verified = yield* validateOpenAiKey(apiKey).pipe(
+          Effect.provide(FetchHttpClient.layer),
+        );
+
+        return yield* store.save(verified);
+      }),
+    ),
+  DisconnectOpenAi: () => safeRpc(Effect.flatMap(CredentialStore, (store) => store.remove)),
   CreateTripApp: ({ tripId }) => safeRpc(createTripApp(tripId)),
   RetryTripAppBuild: ({ tripId }) => safeRpc(retryTripAppBuild(tripId)),
   RestoreTripApp: ({ tripId, commitId }) => safeRpc(restoreTripApp(tripId, commitId)),
@@ -202,7 +222,7 @@ const RpcHttp = RpcServer.layerHttp({
 }).pipe(Layer.provide(plannerHandlers), Layer.provide(RpcSerialization.layerNdjson));
 
 export const plannerApplication = <E, R>(
-  model: Layer.Layer<Agent.ModelServices>,
+  model: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>,
   modelVersion: string,
   modelLabel: string,
   browser: Layer.Layer<Tool.Handler<"read_travel_page">, E, R>,
@@ -255,7 +275,11 @@ export const plannerApplication = <E, R>(
               (writer) => writer.finish,
             );
 
-            return { settings, progress: writer };
+            return {
+              settings,
+              progress: writer,
+              billingOwner: Effect.succeed(ownerOfThread(context.threadId)),
+            };
           }),
         ),
       ),
@@ -420,6 +444,14 @@ export const plannerApplication = <E, R>(
     OwnerTripRepositoryLive,
     OwnerAppRepositoryLive,
     PlannerSettingsStoreLive,
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const env = yield* WorkerEnvironment;
+        const identity = yield* ThreadObjectIdentity;
+
+        return credentialStoreLayer(env, identity.threadId);
+      }),
+    ),
     FailureDiagnosticsLive,
     sourceLayer,
   ).pipe(Layer.provideMerge(ThreadObject.layer([])));
@@ -441,7 +473,15 @@ const PlannerLive = Layer.unwrap(
         code: "unavailable",
         message: "The planner requires a Browser Run binding.",
       });
-    const model = yield* liveModel;
+
+    const model: Effect.Success<ReturnType<typeof liveModel>> = yield* liveModel({
+      BYOK_ENCRYPTION_KEY: env.BYOK_ENCRYPTION_KEY,
+      THREADS: {
+        getByName: (owner) => ({
+          modelCredential: (): Promise<string> => env.THREADS.getByName(owner).modelCredential(),
+        }),
+      },
+    });
 
     return plannerApplication(
       model.model,
@@ -468,6 +508,15 @@ export const makeTravelPlannerThread = <E>(
     maxInputBytes: 16 * 1024,
   }) {
     private readonly accessChanges = Semaphore.makeUnsafe(1);
+
+    /** Host-only lookup; no HTTP route exposes ciphertext or decrypted model credentials. */
+    modelCredential(): Promise<string> {
+      return this[DurableObject.RunSymbol](
+        Effect.flatMap(CredentialStore, (store) => store.sealed).pipe(
+          Effect.flatMap(encodeStoredCredential),
+        ),
+      );
+    }
 
     /** Finite native RPC; UI observation never owns or interrupts durable execution. */
     plannerProgress(): Promise<string> {

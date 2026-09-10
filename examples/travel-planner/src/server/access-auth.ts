@@ -13,6 +13,7 @@ import { AccessError, AccessSession, adminEmail, Email } from "../access-domain.
 export interface AccessEnvironment {
   readonly ACCESS_TEAM_DOMAIN?: string;
   readonly ACCESS_AUD?: string;
+  readonly ACCESS_OPEN_REGISTRATION?: string;
 }
 
 const configuration = Schema.Struct({
@@ -92,6 +93,7 @@ export const makeAuthenticate = (
     return yield* Schema.decodeUnknownEffect(AccessSession)({
       email,
       isAdmin: email === adminEmail,
+      ...(env.ACCESS_OPEN_REGISTRATION === "true" ? { registration: "open" as const } : {}),
     }).pipe(Effect.mapError(unauthorized));
   });
 

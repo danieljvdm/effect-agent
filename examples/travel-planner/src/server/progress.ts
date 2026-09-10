@@ -26,6 +26,8 @@ export interface ProgressWriter {
 export class PlannerAttempt extends Context.Service<
   PlannerAttempt,
   {
+    /** Derived from the host's canonical admission/lineage, never a tool argument. */
+    readonly billingOwner: Effect.Effect<string, PlannerError>;
     readonly settings: Effect.Effect<PlannerSettings, PlannerError>;
     readonly progress: ProgressWriter;
   }

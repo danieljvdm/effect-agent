@@ -175,6 +175,7 @@ it.effect(
 
         const fiber = yield* trackTool(mode, "Reading an Airbnb listing", operation).pipe(
           Effect.provideService(PlannerAttempt, {
+            billingOwner: Effect.succeed("travel-planner-owner-v1"),
             progress,
             settings: Effect.succeed(defaultPlannerSettings),
           }),
