@@ -183,18 +183,23 @@ tool and completion must use the named tool. Without it, valid final assistant J
 complete the run. [Exhaustion policy](../concepts/budgets#exhaustion-final-answer-or-failure)
 controls the last available turn.
 
-Completion tools must run alone, after any other needed tool results arrive. When a model mixes
-a completion tool with other application calls, the engine rejects the entire batch before any
-handler starts and returns one `ModelProtocolError` result per call. The next ordinary turn can
-correct the declaration. Each rejected call counts toward `maxToolCalls` and
+A completion tool must be the only application call, after any other needed application tool
+results arrive. Completed provider work, such as hosted web search with a terminal result, may
+appear in the same response and still counts toward run budgets. When a model mixes a completion
+tool with other application calls, the engine rejects those application calls before any handler
+starts and returns one `ModelProtocolError` result per rejected call. Provider results are retained.
+The next ordinary turn can correct the declaration. Each rejected call counts toward `maxToolCalls` and
 `repeatedFailureLimit`; model usage, turns, cost, and duration remain charged to the same run.
 There is no separate retry allowance. A batch of three rejected calls can therefore exhaust the
 default repeated-failure limit immediately. Budget exhaustion still controls finalization, and an
 invalid finalization batch fails without another correction.
 
-This correction also applies to `completionFromTools`. Batches containing provider-executed tools,
-context rollover, or invalid declarations recovered as pending work still fail: provider tools
-may already have run, and pending durable calls cannot safely be treated as unexecuted. Completed
+This correction also applies to `completionFromTools`. Provider calls without terminal results,
+context rollover mixed with other calls, and invalid application batches recovered as pending work
+still fail: pending durable calls cannot safely be treated as unexecuted. Recovery permits one
+completion call alongside recorded terminal provider results, using recorded application results
+when available and never replaying an uncertain ordinary side effect. Finalization after budget
+exhaustion still permits only the advertised completion tool, with no provider calls. Completed
 rejections are retained atomically with their failed results and survive recovery without replay.
 Ordinary valid tool batches keep their configured concurrency. `ToolCallFailed` events identify
 each rejected call by name and ID; turn events show correction attempts and the terminal run event

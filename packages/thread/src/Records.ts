@@ -152,7 +152,7 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
       visited.add(value);
 
       const entries = Array.isArray(value)
-        ? value.map((entry, index) => [index, entry] as const)
+        ? Array.from(value, (entry, index) => [index, entry] as const)
         : Object.entries(value);
 
       if (entries.length > MAX_PERSISTED_JSON_COLLECTION_LENGTH) return false;

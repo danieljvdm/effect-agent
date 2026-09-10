@@ -5957,30 +5957,32 @@ const makeTurn = <
           }
 
           const completionBatchError =
-            (declaresCompletion || declaresActionCompletion) && trace.toolCalls.size !== 1
+            (declaresCompletion || declaresActionCompletion) &&
+            trace.applicationToolCalls.length !== 1
               ? ModelProtocolError.make({
                   message: declaresCompletion
-                    ? `Completion Tool ${completionTool} must be the only Tool Call in its batch`
-                    : "An action completion Tool must be the only Tool Call in its batch",
+                    ? `Completion Tool ${completionTool} must be the only application Tool Call in its batch`
+                    : "An action completion Tool must be the only application Tool Call in its batch",
                 })
               : undefined;
 
-          // Provider calls may already have executed. Finalization cannot grant
-          // another correction turn. Neither case is a safe batch rejection.
-          if (completionBatchError !== undefined && (hasProviderCalls || finalAnswerOnly)) {
+          // Finalization cannot grant another correction turn. Completed provider work
+          // is retained separately; only unexecuted application calls can be rejected.
+          if (completionBatchError !== undefined && finalAnswerOnly) {
             return failRunEventStream(completionBatchError);
           }
 
-          const completionBatch =
-            declaresCompletion &&
-            trace.toolCalls.size === 1 &&
-            trace.applicationToolCalls.length === 1;
+          const completionBatch = declaresCompletion && trace.applicationToolCalls.length === 1;
 
           // Fail-closed (RUN-020): final-answer mode advertises either no
           // Tool or exactly the Definition-owned completion Tool. Any other
           // declaration is a protocol violation, never another rejection
           // round.
-          if (finalAnswerOnly && trace.toolCalls.size > 0 && !completionBatch) {
+          if (
+            finalAnswerOnly &&
+            trace.toolCalls.size > 0 &&
+            (hasProviderCalls || !completionBatch)
+          ) {
             return failRunEventStream(
               ModelProtocolError.make({
                 message:
@@ -6340,7 +6342,10 @@ const makeTurn = <
                   ? undefined
                   : ModelProtocolError.make({
                       message:
-                        `${completionBatchError.message}. The entire batch was rejected before execution; none of its tools ran. ` +
+                        `${completionBatchError.message}. ` +
+                        (hasProviderCalls
+                          ? "The application batch was rejected before execution; none of its application tools ran. Completed provider results are retained. "
+                          : "The entire batch was rejected before execution; none of its tools ran. ") +
                         "Request any needed ordinary tools first, wait for their results, then call a completion tool alone.",
                     });
 
@@ -6865,18 +6870,18 @@ const makeResumeTurn = <
         (actionCompletionCall !== undefined ||
           (completionTool !== undefined &&
             trace.applicationToolCalls.some((call) => call.name === completionTool))) &&
-        trace.toolCalls.size !== 1
+        trace.applicationToolCalls.length !== 1
       ) {
         return failRunEventStream(
           ModelProtocolError.make({
-            message: `Completion Tool ${completionTool} must be the only Tool Call in its batch`,
+            message: "A completion Tool must be the only application Tool Call in its batch",
           }),
         );
       }
 
       const completionBatch =
         completionTool !== undefined &&
-        trace.toolCalls.size === 1 &&
+        trace.applicationToolCalls.length === 1 &&
         trace.applicationToolCalls[0]?.name === completionTool;
 
       if (
@@ -6891,7 +6896,7 @@ const makeResumeTurn = <
         );
       }
 
-      if (context.finalizationUsed && !completionBatch) {
+      if (context.finalizationUsed && (!completionBatch || trace.toolCalls.size !== 1)) {
         return failRunEventStream(
           ModelProtocolError.make({
             message: "A resumed grace finalization may only execute the completion Tool",

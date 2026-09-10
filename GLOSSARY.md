@@ -166,15 +166,19 @@ effects into named Steps. The handler may be re-entered after interruption.
 
 **Completion Tool**
 
-The single Definition-designated Tool whose successful singleton call projects through the Agent
-output Schema and completes the Run immediately. It remains an ordinary external side effect for
-authorization and durability; the designation adds terminal semantics, not exactly-once execution.
+The single Definition-designated Tool whose successful call, as the sole application Tool Call,
+projects through the Agent output Schema and completes the Run immediately. It remains an ordinary
+external side effect for authorization and durability; the designation adds terminal semantics,
+not exactly-once execution.
+Provider-executed calls may accompany it only with recorded terminal results and still count toward
+Run budgets.
 
 **Action completion**
 
 An optional Definition-owned projection from an ordinary action Tool's successful canonical result
-to Agent output. The Tool runs alone and receives no completion-budget exemption. The pure
-projector may decline completion when the whole request remains unfinished.
+to Agent output. The Tool is the sole application call, may accompany terminal provider results,
+and receives no completion-budget exemption. The pure projector may decline completion when the
+whole request remains unfinished.
 
 **Step**  
 A deterministically named sub-operation within one Durable Tool Call. Its result is
