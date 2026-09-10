@@ -1,5 +1,5 @@
 import { Context, DateTime, Duration, Effect, Layer, Option, Schedule, Schema } from "effect";
-import { R2, WorkerEnvironment, Workflow } from "effect-cf";
+import { WorkerEnvironment, Workflow } from "effect-cf";
 import * as Sandbox from "effect-cf/sandbox";
 
 import {
@@ -14,8 +14,9 @@ import {
 } from "../domain.ts";
 import { TripFailpoint } from "../server/trips.ts";
 import { publishTripAppAddress } from "./addresses.ts";
-import { AppBuildBucket, AppBuildSandbox, SiteBuildBinding } from "./bindings.ts";
-import { callAppRepository } from "./remote.ts";
+import { AppBuildBucketLive, AppBuildSandbox, SiteBuildBinding } from "./bindings.ts";
+import { AppBuildBucket } from "./bucket.ts";
+import { appRepositoryForOwner, callAppRepository } from "./remote.ts";
 import { AppRepository } from "./repository.ts";
 import { AppSourceStore, appSourceLayer } from "./source.ts";
 
@@ -110,13 +111,11 @@ const SourceFiles = Schema.Array(AppFile).check(
 export class AppBuilder extends Context.Service<
   AppBuilder,
   {
+    /** Persist each phase in the active repository before executing its build command. */
     readonly compile: (
-      id: string,
+      request: AppBuildRequest,
       files: ReadonlyArray<AppFile>,
-      report?: (
-        event: Pick<TripAppBuildEvent, "phase" | "message">,
-      ) => Effect.Effect<void, PlannerError>,
-    ) => Effect.Effect<ReadonlyArray<typeof OutputFile.Type>, PlannerError>;
+    ) => Effect.Effect<ReadonlyArray<typeof OutputFile.Type>, PlannerError, AppRepository>;
   }
 >()("trip-app/AppBuilder") {}
 
@@ -141,20 +140,20 @@ export const AppBuilderLive = Layer.effect(
     const namespace = yield* AppBuildSandbox;
 
     const compile = Effect.fn("AppBuilder.compile")(
-      function* (
-        id: string,
-        input: ReadonlyArray<AppFile>,
-        report: (
-          event: Pick<TripAppBuildEvent, "phase" | "message">,
-        ) => Effect.Effect<void, PlannerError> = () => Effect.void,
-      ) {
-        const files = yield* Schema.decodeUnknownEffect(SourceFiles)(input).pipe(
+      function* (input: AppBuildRequest, source: ReadonlyArray<AppFile>) {
+        const request = yield* Schema.decodeUnknownEffect(AppBuildRequest)(input).pipe(
+          Effect.mapError(() => failed("Invalid app build request.")),
+        );
+
+        const files = yield* Schema.decodeUnknownEffect(SourceFiles)(source).pipe(
           Effect.mapError(() => failed("Invalid app source.")),
         );
 
         const prefix = yield* Schema.decodeUnknownEffect(
           Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9-]{1,100}$/)),
-        )(id).pipe(Effect.mapError(() => failed("Invalid build identity.")));
+        )(`${request.appId}-${request.commitId}`).pipe(
+          Effect.mapError(() => failed("Invalid build identity.")),
+        );
 
         const name = `${prefix.slice(0, 24)}-${crypto.randomUUID().replaceAll("-", "")}`;
 
@@ -191,7 +190,10 @@ export const AppBuilderLive = Layer.effect(
               const directory = yield* box.mkdir(root, { recursive: true }).pipe(
                 Effect.tapError((error) =>
                   builderAtCapacity(error)
-                    ? report({ phase: "queued", message: "Waiting for an available app builder" })
+                    ? recordBuildProgress(request, {
+                        phase: "queued",
+                        message: "Waiting for an available app builder",
+                      })
                     : Effect.void,
                 ),
                 Effect.retry({
@@ -221,11 +223,20 @@ export const AppBuilderLive = Layer.effect(
 
                 if (!written.success) return yield* failed("Could not write app source.");
               }
-              yield* report({ phase: "installing", message: "Installing app dependencies" });
+              yield* recordBuildProgress(request, {
+                phase: "installing",
+                message: "Installing app dependencies",
+              });
               yield* execute(["vp", "install", "--ignore-scripts"], "Dependency install");
-              yield* report({ phase: "checking", message: "Checking app code" });
+              yield* recordBuildProgress(request, {
+                phase: "checking",
+                message: "Checking app code",
+              });
               yield* execute(["vp", "check", "--no-fmt"], "App checks");
-              yield* report({ phase: "compiling", message: "Building the website and API" });
+              yield* recordBuildProgress(request, {
+                phase: "compiling",
+                message: "Building the website and API",
+              });
               yield* execute(["vp", "run", "build"], "App compilation");
 
               const listed = yield* box.listFiles(`${root}/dist`, {
@@ -309,8 +320,11 @@ export const sandboxBuilder = (namespace: Sandbox.SandboxNamespaceResource) =>
     ),
   );
 
-const readManifest = Effect.fn("readAppBuildManifest")(
-  function* (bucket: R2.R2Client, appId: string, commitId: string) {
+/** Manifest bodies are consumed or cancelled in Scope. */
+export const readBuild = Effect.fn("readAppBuildManifest")(
+  function* (appId: string, commitId: string) {
+    const bucket = yield* AppBuildBucket;
+
     yield* Schema.decodeUnknownEffect(buildIdentity)({ appId, commitId }).pipe(
       Effect.mapError(badManifest),
     );
@@ -341,10 +355,6 @@ const readManifest = Effect.fn("readAppBuildManifest")(
   Effect.catchTag("R2OperationError", () => failed("App build storage is unavailable.")),
 );
 
-/** Native bindings are adapted once; manifest bodies are consumed or cancelled in Scope. */
-export const readBuild = (bucket: R2Bucket, appId: string, commitId: string) =>
-  readManifest(R2.makeClient({ binding: "APP_BUILDS" })(bucket), appId, commitId);
-
 const sha256 = (body: Uint8Array) =>
   Effect.tryPromise({
     try: () => crypto.subtle.digest("SHA-256", Uint8Array.from(body)),
@@ -355,10 +365,9 @@ const sha256 = (body: Uint8Array) =>
     ),
   );
 
-const verifyAssets = Effect.fn("verifyAppBuildAssets")(function* (
-  bucket: R2.R2Client,
-  manifest: BuildManifest,
-) {
+const verifyAssets = Effect.fn("verifyAppBuildAssets")(function* (manifest: BuildManifest) {
+  const bucket = yield* AppBuildBucket;
+
   yield* Effect.forEach(
     manifest.files,
     (file) =>
@@ -435,25 +444,19 @@ export const buildTripApp = Effect.fn("buildTripApp")(
 
     const bucket = yield* AppBuildBucket;
     const failpoint = yield* TripFailpoint;
-    const apps = yield* AppRepository;
 
-    const report = (event: Pick<TripAppBuildEvent, "phase" | "message">) =>
-      recordBuildProgress(request, event).pipe(Effect.provideService(AppRepository, apps));
-
-    yield* report({ phase: "starting", message: "Starting the app builder" });
-    const cached = yield* readManifest(bucket, request.appId, request.commitId);
+    yield* recordBuildProgress(request, { phase: "starting", message: "Starting the app builder" });
+    const cached = yield* readBuild(request.appId, request.commitId);
 
     if (cached === null) {
       const source = yield* AppSourceStore;
       const builder = yield* AppBuilder;
       const files = yield* source.read({ repoName: request.repoName, commitId: request.commitId });
 
-      const output = yield* builder
-        .compile(`${request.appId}-${request.commitId}`, files, report)
-        .pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(OutputFiles)),
-          Effect.catchTag("SchemaError", () => failed("Invalid app build output.")),
-        );
+      const output = yield* builder.compile(request, files).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(OutputFiles)),
+        Effect.catchTag("SchemaError", () => failed("Invalid app build output.")),
+      );
 
       const entries = yield* Effect.forEach(output, (file) =>
         sha256(file.body).pipe(
@@ -474,7 +477,10 @@ export const buildTripApp = Effect.fn("buildTripApp")(
         files: entries,
       }).pipe(Effect.mapError(badManifest));
 
-      yield* report({ phase: "uploading", message: "Saving the built app to Cloudflare" });
+      yield* recordBuildProgress(request, {
+        phase: "uploading",
+        message: "Saving the built app to Cloudflare",
+      });
       yield* failpoint.hit("app-build:before-assets");
       yield* Effect.forEach(
         entries,
@@ -487,7 +493,7 @@ export const buildTripApp = Effect.fn("buildTripApp")(
         { concurrency: 4, discard: true },
       );
       yield* failpoint.hit("app-build:after-assets");
-      yield* verifyAssets(bucket, manifest);
+      yield* verifyAssets(manifest);
 
       const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(BuildManifest))(
         manifest,
@@ -499,11 +505,11 @@ export const buildTripApp = Effect.fn("buildTripApp")(
         httpMetadata: { contentType: "application/json" },
       });
       yield* failpoint.hit("app-build:after-manifest");
-      const committed = yield* readManifest(bucket, request.appId, request.commitId);
+      const committed = yield* readBuild(request.appId, request.commitId);
 
       if (committed === null || JSON.stringify(committed) !== JSON.stringify(manifest))
         return yield* failed("A different build already exists for this source revision.");
-    } else yield* verifyAssets(bucket, cached);
+    } else yield* verifyAssets(cached);
     yield* settleBuild(request, null);
   },
   Effect.catchTag("R2OperationError", () => failed("Could not save the app build.")),
@@ -579,7 +585,7 @@ export const settleBuild = Effect.fn("settleTripAppBuild")(function* (
 });
 
 const BuildHostLive = Layer.mergeAll(
-  AppBuildBucket.layer({ binding: "APP_BUILDS" }),
+  AppBuildBucketLive,
   AppBuilderLive.pipe(Layer.provide(AppBuildSandbox.layer({ binding: "APP_SANDBOX" }))),
 );
 
@@ -615,23 +621,16 @@ export class SiteBuild extends SiteBuildBinding.make(BuildHostLive, {
       if (!env.APP_BUILDS || !env.APP_DOMAIN)
         return yield* failed("The app address storage isn't configured.");
 
-      const app = yield* callAppRepository(env, request.owner, Schema.NullOr(TripApp), {
+      const app = yield* callAppRepository(request.owner, Schema.NullOr(TripApp), {
         _tag: "GetById",
         appId: request.appId,
       });
 
       if (app === null || app.tripId !== request.tripId || app.repoName !== request.repoName)
         return yield* failed("The app build scope is unavailable.");
-      yield* publishTripAppAddress(env.APP_BUILDS, request.owner, app, env.APP_DOMAIN);
+      yield* publishTripAppAddress(request.owner, app, env.APP_DOMAIN);
 
-      const apps = Layer.succeed(AppRepository, {
-        get: (tripId) =>
-          callAppRepository(env, request.owner, Schema.NullOr(TripApp), { _tag: "Get", tripId }),
-        getById: (appId) =>
-          callAppRepository(env, request.owner, Schema.NullOr(TripApp), { _tag: "GetById", appId }),
-        save: (app, expectedRevision) =>
-          callAppRepository(env, request.owner, TripApp, { _tag: "Save", app, expectedRevision }),
-      });
+      const apps = Layer.succeed(AppRepository, appRepositoryForOwner(env, request.owner));
 
       return yield* runSiteBuild(request).pipe(
         Effect.provide(Layer.merge(apps, appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE))),

@@ -17,7 +17,6 @@ export class TripData extends Worker.make(Layer.empty, {
   fetch: Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
     const context = yield* Worker.ExecutionContext;
-    const env = yield* WorkerEnvironment;
 
     if (
       request.method !== "GET" ||
@@ -27,7 +26,7 @@ export class TripData extends Worker.make(Layer.empty, {
       return new Response("Not found", { status: 404 });
     const scope = yield* Schema.decodeUnknownEffect(TripScope)(context.props);
 
-    const data = yield* callAppRepository(env, scope.owner, TripAppData, {
+    const data = yield* callAppRepository(scope.owner, TripAppData, {
       _tag: "Data",
       tripId: scope.tripId,
     });
@@ -57,9 +56,10 @@ const secureHeaders = (headers: Headers) => {
 /** Public ingress resolves only trusted host metadata before reading code or trip data. */
 export const serveTripApp = Effect.fn("serveTripApp")(function* (
   request: Request,
-  env: Cloudflare.Env,
   ctx: ExecutionContext,
 ) {
+  const env = yield* WorkerEnvironment;
+
   if (!env.APP_BUILDS || !env.APP_LOADER) return yield* unavailable();
   if (request.method !== "GET" && request.method !== "HEAD")
     return new Response("Method not allowed", { status: 405 });
@@ -69,25 +69,25 @@ export const serveTripApp = Effect.fn("serveTripApp")(function* (
   const name = appNameFromHost(hostname, domain);
 
   if (name === null) return new Response("Not found", { status: 404 });
-  let address = yield* readTripAppAddress(env.APP_BUILDS, hostname);
+  let address = yield* readTripAppAddress(hostname);
 
   // Original administrator apps predate the directory. Only this fixed storage
   // owner can be recovered from a legacy ID; caller identity is never consulted.
   if (address === null && Schema.is(AppId)(name)) {
-    const legacy = yield* callAppRepository(env, storageOwner, Schema.NullOr(TripApp), {
+    const legacy = yield* callAppRepository(storageOwner, Schema.NullOr(TripApp), {
       _tag: "GetById",
       appId: name,
     });
 
     if (legacy !== null && legacy.id === name && legacy.url === `https://${hostname}`) {
-      yield* publishTripAppAddress(env.APP_BUILDS, storageOwner, legacy, domain);
-      address = yield* readTripAppAddress(env.APP_BUILDS, hostname);
+      yield* publishTripAppAddress(storageOwner, legacy, domain);
+      address = yield* readTripAppAddress(hostname);
     }
   }
   if (address === null) return new Response("Not found", { status: 404 });
   const { owner, appId } = address;
 
-  const app = yield* callAppRepository(env, owner, Schema.NullOr(TripApp), {
+  const app = yield* callAppRepository(owner, Schema.NullOr(TripApp), {
     _tag: "GetById",
     appId,
   });
@@ -113,7 +113,7 @@ export const serveTripApp = Effect.fn("serveTripApp")(function* (
   const commit = app.activeCommit;
   const bucket = env.APP_BUILDS;
   const prefix = buildPrefix(app.id, commit);
-  const manifest = yield* readBuild(bucket, app.id, commit);
+  const manifest = yield* readBuild(app.id, commit);
 
   if (manifest === null) return yield* unavailable();
   const url = new URL(request.url);

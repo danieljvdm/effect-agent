@@ -14,10 +14,17 @@ import {
   TripPlace,
 } from "../domain.ts";
 import { TripRepository } from "../server/trips.ts";
+import { AppBuildBucket } from "./bucket.ts";
 import { AppRepository } from "./repository.ts";
 import { AppSourceStore } from "./source.ts";
 
-const dependencies = [TripRepository, AppRepository, AppSourceStore, ThreadObjectIdentity];
+const dependencies = [
+  TripRepository,
+  AppRepository,
+  AppSourceStore,
+  AppBuildBucket,
+  ThreadObjectIdentity,
+];
 
 export const AppTools = Toolkit.make(
   Tool.make("create_trip_app", {

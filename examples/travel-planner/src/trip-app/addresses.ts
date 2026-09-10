@@ -1,8 +1,8 @@
 import { Effect, Option, Schema } from "effect";
-import { R2 } from "effect-cf";
 
 import { AppSiteName, AppSiteRegistration, PlannerError, type TripApp } from "../domain.ts";
 import { TripFailpoint } from "../server/trips.ts";
+import { AppBuildBucket } from "./bucket.ts";
 
 const unavailable = () =>
   new PlannerError({ code: "unavailable", message: "The trip app address is unavailable." });
@@ -32,8 +32,9 @@ export const tripAppHostname = (title: string, appId: string, domain: string) =>
   return `${slug}-${appId.slice(0, 12)}-trip.${domain}`;
 };
 
-const readAddress = Effect.fn("readTripAppAddress")(
-  function* (bucket: R2.R2Client, hostname: string) {
+export const readTripAppAddress = Effect.fn("readTripAppAddress")(
+  function* (hostname: string) {
+    const bucket = yield* AppBuildBucket;
     const found = yield* bucket.get(appAddressKey(hostname));
 
     if (Option.isNone(found)) return null;
@@ -60,16 +61,13 @@ const readAddress = Effect.fn("readTripAppAddress")(
   Effect.catchTag("R2OperationError", unavailable),
 );
 
-export const readTripAppAddress = (bucket: R2Bucket, hostname: string) =>
-  readAddress(R2.makeClient({ binding: "APP_BUILDS" })(bucket), hostname);
-
 /**
  * Register both names before returning or starting a build. Conditional immutable writes
  * and readback make a lost acknowledgement retryable; collisions never change ownership.
  * The gateway checks the owner repository again, so an interrupted creation grants no data.
  */
 export const publishTripAppAddress = Effect.fn("publishTripAppAddress")(
-  function* (bucket: R2Bucket, owner: string, app: TripApp, domain: string) {
+  function* (owner: string, app: TripApp, domain: string) {
     const canonical = yield* Effect.try({
       try: () => new URL(app.url),
       catch: unavailable,
@@ -86,7 +84,7 @@ export const publishTripAppAddress = Effect.fn("publishTripAppAddress")(
       appNameFromHost(canonical.hostname, domain) === null
     )
       return yield* unavailable();
-    const storage = R2.makeClient({ binding: "APP_BUILDS" })(bucket);
+    const storage = yield* AppBuildBucket;
     const failpoint = yield* TripFailpoint;
 
     for (const hostname of new Set([canonical.hostname, `${app.id}-trip.${domain}`])) {
@@ -102,7 +100,7 @@ export const publishTripAppAddress = Effect.fn("publishTripAppAddress")(
         entry,
       ).pipe(Effect.mapError(unavailable));
 
-      const existing = yield* readAddress(storage, hostname);
+      const existing = yield* readTripAppAddress(hostname);
 
       if (existing === null) {
         yield* failpoint.hit("app-address:before-put");
@@ -112,7 +110,7 @@ export const publishTripAppAddress = Effect.fn("publishTripAppAddress")(
         });
         yield* failpoint.hit("app-address:after-put");
       }
-      const registered = existing ?? (yield* readAddress(storage, hostname));
+      const registered = existing ?? (yield* readTripAppAddress(hostname));
 
       if (
         registered === null ||

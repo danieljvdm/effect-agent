@@ -37,6 +37,7 @@ import {
   ResearchScoutBackground,
   researchScout,
 } from "../research/scout.ts";
+import { AppBuildBucketLive } from "../trip-app/bindings.ts";
 import { EditorHostLive, editorAttemptLayer } from "../trip-app/editor-runtime.ts";
 import { AppEditorBackground, appEditor } from "../trip-app/editor.ts";
 import { OwnerAppRepositoryLive, serveAppRepository } from "../trip-app/remote.ts";
@@ -443,6 +444,7 @@ export const plannerApplication = <E, R>(
   const local = Layer.mergeAll(
     OwnerTripRepositoryLive,
     OwnerAppRepositoryLive,
+    AppBuildBucketLive,
     PlannerSettingsStoreLive,
     Layer.unwrap(
       Effect.gen(function* () {

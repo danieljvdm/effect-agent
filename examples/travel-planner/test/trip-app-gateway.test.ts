@@ -1,11 +1,15 @@
 import { join } from "node:path";
 
-import { Schema } from "effect";
+import { type Effect, Schema } from "effect";
+import type { WorkerEnvironment } from "effect-cf";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
-import { afterAll, beforeAll, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { type TripApp, TripAppData } from "../src/domain.ts";
+import { type PlannerError, type TripApp, TripAppData } from "../src/domain.ts";
+import type { publishTripAppAddress, readTripAppAddress } from "../src/trip-app/addresses.ts";
+import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
+import type { callAppRepository } from "../src/trip-app/remote.ts";
 
 const app: TripApp = {
   id: "a".repeat(32),
@@ -55,6 +59,8 @@ beforeAll(async () => {
       contents: `
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Schema } from "effect";
+import { WorkerEnvironment } from "effect-cf";
+import { AppBuildBucketLive } from "../src/trip-app/bindings.ts";
 import { handleRequest } from "../src/worker.ts";
 import { publishTripAppAddress, appAddressKey, tripAppHostname, appNameFromHost } from "../src/trip-app/addresses.ts";
 import { TripFailpoint } from "../src/server/trips.ts";
@@ -76,7 +82,7 @@ export default {async fetch(request,env,ctx){
  const url=new URL(request.url);
  if(url.pathname==="/__seed"){
    const input=await request.json();await env.THREADS.getByName(input.owner).seed(input.app,input.data);
-   if(input.register!==false)await Effect.runPromise(publishTripAppAddress(env.APP_BUILDS,input.owner,input.app,"effect-agent.com"));
+   if(input.register!==false)await Effect.runPromise(publishTripAppAddress(input.owner,input.app,"effect-agent.com").pipe(Effect.provide(AppBuildBucketLive),Effect.provideService(WorkerEnvironment,env)));
    if(input.app.activeCommit!==null){
      const prefix=buildPrefix(input.app.id,input.app.activeCommit);
      const files=[{path:"web/index.html",body:"<main>Built trip</main>",contentType:"text/html; charset=utf-8"},{path:"web/assets/style.css",body:"body{color:green}",contentType:"text/css; charset=utf-8"},{path:"server/index.js",body:${JSON.stringify(generated)},contentType:"application/javascript"}];
@@ -92,7 +98,8 @@ export default {async fetch(request,env,ctx){
  }
  if(url.pathname==="/__register") {
    const input=await request.json();
-   const result=await Effect.runPromise(publishTripAppAddress(env.APP_BUILDS,input.owner,input.app,"effect-agent.com").pipe(
+   const result=await Effect.runPromise(publishTripAppAddress(input.owner,input.app,"effect-agent.com").pipe(
+     Effect.provide(AppBuildBucketLive),Effect.provideService(WorkerEnvironment,env),
      Effect.provideService(TripFailpoint,{hit:(point)=>point!==input.point?Effect.void:input.fault==="defect"?Effect.die("Injected defect"):input.fault==="interrupt"?Effect.interrupt:Effect.fail(new PlannerError({code:"storage",message:"Injected failure"}))}),Effect.exit));
    return Response.json({tag:result._tag});
  }
@@ -167,6 +174,20 @@ const fetchApp = (
 ) => runtime.dispatchFetch(`${value.url}${path}`, { method, headers });
 
 it("serves public assets without authentication and keeps planner routes protected", async () => {
+  expectTypeOf<
+    Effect.Services<ReturnType<typeof publishTripAppAddress>>
+  >().toEqualTypeOf<AppBuildBucket>();
+  expectTypeOf<
+    Effect.Error<ReturnType<typeof publishTripAppAddress>>
+  >().toEqualTypeOf<PlannerError>();
+  expectTypeOf<
+    Effect.Services<ReturnType<typeof readTripAppAddress>>
+  >().toEqualTypeOf<AppBuildBucket>();
+  expectTypeOf<Effect.Error<ReturnType<typeof readTripAppAddress>>>().toEqualTypeOf<PlannerError>();
+  expectTypeOf<
+    Effect.Services<ReturnType<typeof callAppRepository>>
+  >().toEqualTypeOf<WorkerEnvironment>();
+  expectTypeOf<Effect.Error<ReturnType<typeof callAppRepository>>>().toEqualTypeOf<PlannerError>();
   await seed(storageOwner);
   const home = await fetchApp("/");
 

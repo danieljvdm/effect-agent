@@ -13,6 +13,7 @@ import type { CredentialEnvironment } from "./server/credentials";
 import { serveProgress } from "./server/progress-http";
 import { plannerOwner } from "./server/tenancy";
 import { appNameFromHost } from "./trip-app/addresses.ts";
+import { AppBuildBucketLive } from "./trip-app/bindings.ts";
 import { serveTripApp } from "./trip-app/gateway.ts";
 
 export { Sandbox } from "@cloudflare/sandbox";
@@ -119,7 +120,9 @@ export const handleRequest = (verify = authenticate) =>
     if (appName !== null) {
       if (!ctx) return new Response("App runtime is unavailable.", { status: 503 });
 
-      return yield* serveTripApp(request, env, ctx).pipe(
+      return yield* serveTripApp(request, ctx).pipe(
+        Effect.provide(AppBuildBucketLive),
+        Effect.provideService(WorkerEnvironment, env),
         Effect.catch(() =>
           Effect.succeed(new Response("The trip app is temporarily unavailable.", { status: 503 })),
         ),

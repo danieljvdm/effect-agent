@@ -112,6 +112,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
             messages: [],
           });
         },
+        r2Buckets: ["APP_BUILDS"],
         durableObjects: { THREADS: { className: "TravelPlannerThread", useSQLite: true } },
         resourcePersistencePath: directory,
       }),

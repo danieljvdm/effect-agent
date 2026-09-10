@@ -329,12 +329,9 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
 
     if (env.APP_BUILDS && env.APP_DOMAIN) {
       // Repair the derived address index for pre-publication member apps on their next view.
-      yield* publishTripAppAddress(
-        env.APP_BUILDS,
-        ownerOfThread(conversationId),
-        app,
-        env.APP_DOMAIN,
-      ).pipe(Effect.ignore);
+      yield* publishTripAppAddress(ownerOfThread(conversationId), app, env.APP_DOMAIN).pipe(
+        Effect.ignore,
+      );
     }
   }
 

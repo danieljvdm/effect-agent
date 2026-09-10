@@ -12,6 +12,7 @@ import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 import type { PlannerError } from "../src/domain.ts";
 import { AppFile, Trip, TripApp } from "../src/domain.ts";
 import type { TripRepository } from "../src/server/trips.ts";
+import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import type { AppRepository } from "../src/trip-app/repository.ts";
 import type { createTripApp } from "../src/trip-app/service.ts";
 import type { AppSourceStore } from "../src/trip-app/source.ts";
@@ -51,6 +52,7 @@ import { PlannerError } from "../src/domain.ts";
 import { TripRepository, TripRepositoryLive, TripFailpoint } from "../src/server/trips.ts";
 import { AppRepository, AppRepositoryLive } from "../src/trip-app/repository.ts";
 import { AppSourceStore } from "../src/trip-app/source.ts";
+import { AppBuildBucketLive } from "../src/trip-app/bindings.ts";
 import { createTripApp, addTripAppMap, editTripApp, readTripAppFiles, restoreTripApp, retryTripAppBuild } from "../src/trip-app/service.ts";
 import { recordBuildProgress, settleBuild } from "../src/trip-app/build.ts";
 const conversation = "lisbon-conversation";
@@ -115,7 +117,7 @@ export class ServiceFixture extends DurableObject {
       const app=yield* apps.get(trip.id);
       return {exit:exit._tag==="Success"?{tag:"Success",value:exit.value??null}:{tag:"Failure",error:Cause.pretty(exit.cause)},app,trip:yield* trips.get(trip.id),files:app?(fixture.trees.get(app.sourceCommit)??[]):[],forks:fixture.forks,commits:fixture.commits,creates:fixture.creates,restarts:fixture.restarts,workflows:Array.from(fixture.workflows.values())};
     }).pipe(
-      Effect.provide(layers), Effect.provide(source),
+      Effect.provide(Layer.mergeAll(layers,source,AppBuildBucketLive)),
       Effect.provideService(ThreadObjectIdentity,{threadId:input.conversation??conversation}),
       Effect.provideService(WorkerEnvironment,{APP_DOMAIN:"apps.example",APP_BUILDS:this.env.APP_BUILDS,SITE_BUILD:workflow}),
       Effect.provideService(TripFailpoint,{hit:(point)=>point!==input.point?Effect.void:input.fault==="defect"?Effect.die("Injected boundary defect"):input.fault==="interrupt"?Effect.interrupt:Effect.fail(new PlannerError({code:"storage",message:"Injected boundary failure"}))}),
@@ -381,7 +383,12 @@ it("rejects another conversation and stale edits before changing source or sched
   });
   expectTypeOf<Effect.Error<ReturnType<typeof createTripApp>>>().toEqualTypeOf<PlannerError>();
   expectTypeOf<Effect.Services<ReturnType<typeof createTripApp>>>().toEqualTypeOf<
-    AppRepository | AppSourceStore | TripRepository | ThreadObjectIdentity | WorkerEnvironment
+    | AppRepository
+    | AppSourceStore
+    | TripRepository
+    | ThreadObjectIdentity
+    | WorkerEnvironment
+    | AppBuildBucket
   >();
 });
 

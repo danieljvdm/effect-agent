@@ -82,12 +82,12 @@ export const serveAppRepository = Effect.fn("serveAppRepository")(function* (enc
 });
 
 export const callAppRepository = <A, I>(
-  env: Cloudflare.Env,
   owner: string,
   schema: Schema.Codec<A, I>,
   request: typeof AppCommand.Type,
-): Effect.Effect<A, PlannerError> =>
+): Effect.Effect<A, PlannerError, WorkerEnvironment> =>
   Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
     const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(AppCommand))(request);
 
     const response = yield* Effect.tryPromise({
@@ -121,9 +121,16 @@ export const appRepositoryForOwner = (
   env: Cloudflare.Env,
   owner: string,
 ): AppRepository["Service"] => ({
-  get: (tripId) => callAppRepository(env, owner, Schema.NullOr(TripApp), { _tag: "Get", tripId }),
+  get: (tripId) =>
+    callAppRepository(owner, Schema.NullOr(TripApp), { _tag: "Get", tripId }).pipe(
+      Effect.provideService(WorkerEnvironment, env),
+    ),
   getById: (appId) =>
-    callAppRepository(env, owner, Schema.NullOr(TripApp), { _tag: "GetById", appId }),
+    callAppRepository(owner, Schema.NullOr(TripApp), { _tag: "GetById", appId }).pipe(
+      Effect.provideService(WorkerEnvironment, env),
+    ),
   save: (app, expectedRevision) =>
-    callAppRepository(env, owner, TripApp, { _tag: "Save", app, expectedRevision }),
+    callAppRepository(owner, TripApp, { _tag: "Save", app, expectedRevision }).pipe(
+      Effect.provideService(WorkerEnvironment, env),
+    ),
 });

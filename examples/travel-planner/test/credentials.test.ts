@@ -42,6 +42,7 @@ const makeRuntime = () =>
         PLANNER_TOKEN: token,
         BYOK_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       },
+      r2Buckets: ["APP_BUILDS"],
       durableObjects: { THREADS: { className: "TravelPlannerThread", useSQLite: true } },
       resourcePersistencePath: directory,
       outboundService: async (request) => {

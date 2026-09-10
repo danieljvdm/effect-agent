@@ -19,6 +19,7 @@ import {
   planner as currentPlanner,
 } from "../src/server/planner.ts";
 import type { TripRepository } from "../src/server/trips.ts";
+import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import { appEditor } from "../src/trip-app/editor.ts";
 import type { AppRepository } from "../src/trip-app/repository.ts";
 import type { AppSourceStore } from "../src/trip-app/source.ts";
@@ -46,6 +47,7 @@ it("keeps app tools, dependencies, and typed failures in the v7 composition", ()
     | TripSiteStore
     | AppRepository
     | AppSourceStore
+    | AppBuildBucket
     | ThreadObjectIdentity
     | Tool.HandlersFor<Toolkit.Tools<typeof AppTools>>
   >();
@@ -127,6 +129,7 @@ it("preserves the v9 coordinator's native worker requirements and typed failures
     | TripSiteStore
     | AppRepository
     | AppSourceStore
+    | AppBuildBucket
     | ThreadObjectIdentity
     | Crypto.Crypto
     | Tool.HandlersFor<typeof currentPlanner.toolkit.tools>
@@ -168,6 +171,7 @@ it("preserves the editor's scoped app services without requiring a child host", 
     | TripRepository
     | AppRepository
     | AppSourceStore
+    | AppBuildBucket
     | ThreadObjectIdentity
     | Tool.HandlersFor<typeof appEditor.toolkit.tools>
   >();

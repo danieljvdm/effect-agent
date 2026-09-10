@@ -16,7 +16,7 @@ import { PlannerError } from "../domain.ts";
 import { researchCoordinatorIds, researchCoordinatorId } from "../research/contracts.ts";
 import { ResearchScout, researchScout } from "../research/scout.ts";
 import { activeWorkerLimit, editorPolicy, scoutPolicy } from "../server/agent-limits.ts";
-import { PlannerAttempt, ProgressStore, withToolProgress } from "../server/progress.ts";
+import { PlannerAttempt, ProgressStore, trackTool } from "../server/progress.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
 import { tripRepositoryForOwner } from "../server/trip-rpc.ts";
 import { TripRepository } from "../server/trips.ts";
@@ -115,8 +115,7 @@ export const editorAttemptLayer = (context: {
           get_trip: ({ tripId }) => scoped(tripId, requireAppTrip(tripId)),
           deliver_response: (response) => Effect.succeed(response),
           create_trip_app: ({ tripId }, context) =>
-            withToolProgress(
-              writer,
+            trackTool(
               context.toolCallId ?? "create",
               "Creating your trip app",
               scoped(tripId, createTripApp(tripId)),
@@ -131,29 +130,25 @@ export const editorAttemptLayer = (context: {
               }),
             ),
           read_trip_app_files: ({ tripId, paths }, context) =>
-            withToolProgress(
-              writer,
+            trackTool(
               context.toolCallId ?? "read",
               "Reading your app source",
               scoped(tripId, readTripAppFiles(tripId, paths)),
             ),
           edit_trip_app: (request, context) =>
-            withToolProgress(
-              writer,
+            trackTool(
               context.toolCallId ?? "edit",
               "Saving app changes",
               scoped(request.tripId, editTripApp(request)),
             ),
           add_trip_app_map: ({ tripId }, context) =>
-            withToolProgress(
-              writer,
+            trackTool(
               context.toolCallId ?? "map",
               "Adding your journey map",
               scoped(tripId, addTripAppMap(tripId)),
             ),
           restore_trip_app: ({ tripId, commitId }, context) =>
-            withToolProgress(
-              writer,
+            trackTool(
               context.toolCallId ?? "restore",
               "Restoring your app",
               scoped(tripId, restoreTripApp(tripId, commitId)),
@@ -174,13 +169,14 @@ export const editorAttemptLayer = (context: {
         },
       );
 
-      return Layer.mergeAll(
-        native,
-        Layer.succeed(PlannerAttempt, {
-          billingOwner: Effect.map(input, (input) => ownerOfThread(input.sourceThreadId)),
-          settings: Effect.map(input, (input) => input.settings),
-          progress: writer,
-        }),
+      return native.pipe(
+        Layer.provideMerge(
+          Layer.succeed(PlannerAttempt, {
+            billingOwner: Effect.map(input, (input) => ownerOfThread(input.sourceThreadId)),
+            settings: Effect.map(input, (input) => input.settings),
+            progress: writer,
+          }),
+        ),
       );
     }),
   );

@@ -113,19 +113,6 @@ export class ProgressStore extends Context.Service<
   );
 }
 
-export const withToolProgress = <A, E, R>(
-  writer: ProgressWriter,
-  id: string,
-  label: string,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  writer.tool(id, label, "running").pipe(
-    Effect.andThen(
-      effect.pipe(Effect.tapCause((cause) => recordDiagnostic(label, cause, { toolCallId: id }))),
-    ),
-    Effect.onExit((exit) => writer.tool(id, label, Exit.isSuccess(exit) ? "complete" : "failed")),
-  );
-
 export const pageProgressLabel = (url: string): string => {
   if (!URL.canParse(url)) return "Reading travel details";
   const host = new URL(url).hostname;
@@ -145,7 +132,19 @@ export const trackTool = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   Effect.serviceOption(PlannerAttempt).pipe(
-    Effect.flatMap((attempt) =>
-      Option.isSome(attempt) ? withToolProgress(attempt.value.progress, id, label, effect) : effect,
-    ),
+    Effect.flatMap((attempt) => {
+      if (Option.isNone(attempt)) return effect;
+      const writer = attempt.value.progress;
+
+      return writer.tool(id, label, "running").pipe(
+        Effect.andThen(
+          effect.pipe(
+            Effect.tapCause((cause) => recordDiagnostic(label, cause, { toolCallId: id })),
+          ),
+        ),
+        Effect.onExit((exit) =>
+          writer.tool(id, label, Exit.isSuccess(exit) ? "complete" : "failed"),
+        ),
+      );
+    }),
   );

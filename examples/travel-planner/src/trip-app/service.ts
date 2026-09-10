@@ -38,12 +38,7 @@ const startBuild = Effect.fn("startTripAppBuild")(function* (app: TripApp, label
 
   if (!env.SITE_BUILD || !env.APP_BUILDS || !env.APP_DOMAIN)
     return yield* failed("The app builder isn't configured.");
-  yield* publishTripAppAddress(
-    env.APP_BUILDS,
-    ownerOfThread(identity.threadId),
-    app,
-    env.APP_DOMAIN,
-  );
+  yield* publishTripAppAddress(ownerOfThread(identity.threadId), app, env.APP_DOMAIN);
   const id = `${app.id}-${app.sourceCommit}`;
 
   yield* failpoint.hit("app-build:before-start");

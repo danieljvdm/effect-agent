@@ -10,10 +10,11 @@ import {
   TripApp,
   TripAppBuildEvent,
 } from "../src/domain.ts";
-import type { AppBuildBucket } from "../src/trip-app/bindings.ts";
+import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import type {
   AppBuilder,
   buildTripApp,
+  readBuild,
   recordBuildProgress,
   settleBuild,
 } from "../src/trip-app/build.ts";
@@ -57,7 +58,7 @@ beforeAll(async () => {
     import { R2, WorkerEnvironment } from "effect-cf";
     import { AppBuildRequest, PlannerError, TripApp, TripAppBuildEvent } from "../src/domain.ts";
     import { AppBuilder, AppBuilderLive, buildTripApp, readBuild, recordBuildProgress, runSiteBuild, settleBuild, buildPrefix } from "../src/trip-app/build.ts";
-    import { AppBuildBucket, AppBuildSandbox, SiteBuildBinding } from "../src/trip-app/bindings.ts";
+    import { AppBuildBucketLive, AppBuildSandbox, SiteBuildBinding } from "../src/trip-app/bindings.ts";
     import { AppSourceStore } from "../src/trip-app/source.ts";
     import { AppRepository } from "../src/trip-app/repository.ts";
     import { TripFailpoint } from "../src/server/trips.ts";
@@ -97,7 +98,7 @@ beforeAll(async () => {
       point = "";
       return fault === "defect" ? Effect.die("Fixture mutation defect") : fault === "interrupt" ? Effect.interrupt : Effect.fail(new PlannerError({code:"storage", message:"Injected acknowledgement loss"}));
     }) });
-    const storage = AppBuildBucket.layer({ binding: "APP_BUILDS" });
+    const storage = AppBuildBucketLive;
     const services = Layer.mergeAll(apps, source, builder, failures, storage);
     export class TestBuild extends SiteBuildBinding.make(services, { run: runSiteBuild }) {}
     class Subscription extends RpcTarget {
@@ -149,14 +150,14 @@ beforeAll(async () => {
       if (input.kind === "settle") action = settleBuild(request, input.error ?? null);
       if (input.kind === "progress") action = Effect.forEach(Schema.decodeUnknownSync(Schema.Array(TripAppBuildEvent))(input.updates), (event) => recordBuildProgress(request, event), {discard:true});
       if (input.kind === "corrupt") action = Effect.promise(() => env.APP_BUILDS.put(buildPrefix(request.appId, request.commitId)+"manifest.json", input.value));
-      if (input.kind === "sdk") action = Effect.flatMap(AppBuilder, (builder) => builder.compile(request.appId+"-"+request.commitId, [{path:"index.ts",content:"export {}"}], (event) => recordBuildProgress(request,event).pipe(Effect.provide(apps)))).pipe(
+      if (input.kind === "sdk") action = Effect.flatMap(AppBuilder, (builder) => builder.compile(request, [{path:"index.ts",content:"export {}"}])).pipe(
         Effect.provide(AppBuilderLive.pipe(Layer.provide(AppBuildSandbox.layer({binding:"APP_SANDBOX"})))),
         ...(mode === "hang" || mode === "capacity-wait" ? [Effect.timeoutOrElse({duration:"100 millis",orElse:()=>Effect.fail(new PlannerError({code:"unavailable",message:"Fixture deadline"}))})] : []),
       );
       if (input.kind === "workflow") action = SiteBuildBinding.create(request, {id:input.id}).pipe(Effect.provide(SiteBuildBinding.layer({binding:"SITE_BUILD"})));
       if (input.kind === "status") action = Effect.flatMap(SiteBuildBinding.get(input.id), (instance) => instance.status).pipe(Effect.provide(SiteBuildBinding.layer({binding:"SITE_BUILD"})));
       const exit = await Effect.runPromise(action.pipe(Effect.provide(services),Effect.provideService(WorkerEnvironment,env),Effect.exit));
-      const manifest = await Effect.runPromise(readBuild(env.APP_BUILDS,request.appId,request.commitId).pipe(Effect.result));
+      const manifest = await Effect.runPromise(readBuild(request.appId,request.commitId).pipe(Effect.provide(storage),Effect.provideService(WorkerEnvironment,env),Effect.result));
       return Response.json({exit:exit._tag === "Success" ? {tag:"Success",...(input.kind==="status"?{value:exit.value}:{})}:{tag:"Failure",error:Cause.pretty(exit.cause)},app,compiles,reads,saves,destroyed,subscriptions,mkdirCalls,events,commands,manifest:manifest._tag === "Success" ? manifest.success : null});
     }};
   `,
@@ -520,6 +521,14 @@ it("runs the typed effect-cf Workflow against real R2 and validates its result",
   expect(last.app.activeCommit).toBe(request.commitId);
   expect(last.manifest?.files).toHaveLength(2);
   expectTypeOf<Effect.Error<ReturnType<typeof buildTripApp>>>().toEqualTypeOf<PlannerError>();
+  expectTypeOf<
+    Effect.Error<ReturnType<AppBuilder["Service"]["compile"]>>
+  >().toEqualTypeOf<PlannerError>();
+  expectTypeOf<
+    Effect.Services<ReturnType<AppBuilder["Service"]["compile"]>>
+  >().toEqualTypeOf<AppRepository>();
+  expectTypeOf<Effect.Services<ReturnType<typeof readBuild>>>().toEqualTypeOf<AppBuildBucket>();
+  expectTypeOf<Effect.Error<ReturnType<typeof readBuild>>>().toEqualTypeOf<PlannerError>();
   expectTypeOf<Effect.Services<ReturnType<typeof buildTripApp>>>().toEqualTypeOf<
     AppBuildBucket | AppBuilder | AppSourceStore | AppRepository
   >();

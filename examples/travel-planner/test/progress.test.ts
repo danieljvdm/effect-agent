@@ -4,7 +4,7 @@ import { it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
-import { expect } from "vite-plus/test";
+import { expect, expectTypeOf } from "vite-plus/test";
 
 import { adminEmail } from "../src/access-domain.ts";
 import { defaultPlannerSettings, PlannerError, PlannerProgress } from "../src/domain.ts";
@@ -154,13 +154,13 @@ it.effect(
 );
 
 it.effect(
-  "reports native tool start before completion and preserves interruption and failures",
+  "reports native tool start before completion and preserves interruption, failures, and defects",
   () =>
     Effect.gen(function* () {
       const store = yield* ProgressStore;
       const progress = yield* store.begin("submission", "attempt");
 
-      for (const mode of ["success", "failure", "interrupt"] as const) {
+      for (const mode of ["success", "failure", "defect", "interrupt"] as const) {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
 
@@ -169,7 +169,9 @@ it.effect(
           Effect.andThen(
             mode === "failure"
               ? Effect.fail(new PlannerError({ code: "storage", message: "Failed" }))
-              : Effect.succeed("done"),
+              : mode === "defect"
+                ? Effect.die("Tool defect")
+                : Effect.succeed("done"),
           ),
         );
 
@@ -210,6 +212,20 @@ it.effect(
         expect((yield* store.read).tools.find(({ id }) => id === mode)).toEqual(done);
       }
     }).pipe(Effect.provide(ProgressStore.layer)),
+);
+
+it.effect("runs direct tools without an attempt observer and preserves their dependencies", () =>
+  Effect.gen(function* () {
+    const store = yield* ProgressStore;
+    const before = yield* store.read;
+    const operation = Effect.flatMap(ProgressStore, () => Effect.fail("expected" as const));
+    const tracked = trackTool("direct", "Reading travel details", operation);
+
+    expectTypeOf<Effect.Error<typeof tracked>>().toEqualTypeOf<"expected">();
+    expectTypeOf<Effect.Services<typeof tracked>>().toEqualTypeOf<ProgressStore>();
+    expect(yield* tracked.pipe(Effect.exit)).toEqual(Exit.fail("expected"));
+    expect(yield* store.read).toEqual(before);
+  }).pipe(Effect.provide(ProgressStore.layer)),
 );
 
 it.effect(

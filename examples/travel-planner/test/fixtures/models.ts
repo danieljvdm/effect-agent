@@ -2,7 +2,7 @@ import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 import { PlannerInput, Trip, SaveTripRequest, PlannerSettings } from "../../src/domain.ts";
-import { PlannerAttempt, withToolProgress } from "../../src/server/progress.ts";
+import { PlannerAttempt, trackTool } from "../../src/server/progress.ts";
 import { requestsPublication } from "../../src/server/security.ts";
 import { TravelContent } from "../../src/travel-content.ts";
 
@@ -199,12 +199,7 @@ const streamingFixture = Stream.fromEffect(
 
     yield* writer.newResponse;
     yield* writer.text("A quiet ");
-    yield* withToolProgress(
-      writer,
-      "fixture-research",
-      "Reading travel details",
-      awaitProgressStage(1),
-    );
+    yield* trackTool("fixture-research", "Reading travel details", awaitProgressStage(1));
     yield* writer.text("escape.");
     yield* awaitProgressStage(2);
     completedProgressModels++;
