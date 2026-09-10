@@ -23,6 +23,7 @@ export default defineConfig({
       "src/Messaging.ts",
       "src/SubagentReservations.ts",
       "src/WebCapture.ts",
+      "src/WebSearch.ts",
     ],
     dts: true,
     sourcemap: true,
