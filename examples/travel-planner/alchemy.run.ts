@@ -83,6 +83,7 @@ export default Alchemy.Stack(
         APP_SANDBOX: Cloudflare.Container<Sandbox>("AppSandbox", {
           className: "Sandbox",
           context: "./site-builder",
+          instanceType: "standard-3",
           maxInstances: 4,
         }),
         ARTIFACTS_GIT_BASE: `https://${accountId}.artifacts.cloudflare.net/git/${artifacts.namespace}`,
