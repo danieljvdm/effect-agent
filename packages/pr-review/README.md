@@ -169,7 +169,7 @@ or network access. `ReviewSource.fromText` applies the shared source-range bound
 
 The navigable diff approach is informed by [Pullfrog's review workflow](https://github.com/pullfrog/pullfrog/blob/0212dedb0f92b8ba4020c17dc30d3eced32415d7/modes.ts)
 and [Codex's review task](https://github.com/openai/codex/blob/588b781ab4924ce7352488394028e63d74cf807f/codex-rs/core/src/tasks/review.rs).
-These designs do not establish accuracy. The [eval bench](../../examples/pr-review-eval/README.md)
+These designs do not establish accuracy. The [eval bench](../../tooling/pr-review-eval/README.md)
 measures first-trial detection, false positives, and incomplete runs against adjudicated cases.
 Portions of the original review instructions were adapted from
 [PR-Agent](https://github.com/The-PR-Agent/pr-agent); see `NOTICE` for its MIT attribution.

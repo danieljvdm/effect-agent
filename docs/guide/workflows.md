@@ -225,8 +225,6 @@ starts repair. Do not also start the ordinary `NodeDurableHost` worker loop for 
 `NodeWorkflowRepairTrigger` runs repair at startup and at the configured interval within the
 host Scope.
 
-The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/workflow.ts)
-accepts the engine as a Layer parameter and retains that engine's errors and requirements.
 See the [Node.js guide](../platforms/node#start-the-host) for registration and storage
 configuration, and [runtime services](../platforms/node#configure-runtime-services) for context
 preparation and tool authorization.

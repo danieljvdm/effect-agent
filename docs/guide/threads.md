@@ -42,14 +42,6 @@ const program = Effect.gen(function* () {
 Provide the history layer around the complete program, including any `start` handle. Also provide
 `IdGenerator` and the agent's other services at the application boundary.
 
-The [runnable SQLite example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/history.ts)
-stores history across two processes:
-
-```sh
-vp run -F @effect-agent/example-providers history --database /tmp/effect-agent-history.sqlite seed
-vp run -F @effect-agent/example-providers history --database /tmp/effect-agent-history.sqlite show
-```
-
 Each successful execution appends its input and native messages as one atomic batch. The runtime
 first closes run-owned resources, validates the result, and commits history. Only then does it
 publish `RunCompleted`. Services from an enclosing application layer stay open for that layer's

@@ -410,7 +410,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (
         Option.isNone(submission) ||
         submission.value.threadId !== threadId ||
-        submission.value.agentId !== created.agentId
+        (nested && submission.value.agentId !== created.agentId)
       )
         return yield* failure("start", "denied");
       ownerSubmission = submission.value;
@@ -472,7 +472,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
     const selectedBinding = ownerBinding ?? binding;
 
-    if (selectedBinding === undefined) return yield* failure("start", "declaration-unavailable");
+    const changedRootAgent =
+      ownerSubmission !== undefined && ownerSubmission.agentId !== created.agentId;
+
+    // A root conversation may admit a new registered Agent after deployment.
+    // Its immutable owner input selects authority; child lineage never changes.
+    if (selectedBinding === undefined || (changedRootAgent && ownerBinding === undefined))
+      return yield* failure("start", "declaration-unavailable");
 
     const selected = yield* deps.policyResolver.resolveSource({
       threadId,
@@ -483,7 +489,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
     if (Option.isSome(selected) && ownerSubmission !== undefined && ownerBinding === undefined)
       return yield* failure("start", "declaration-unavailable");
-    const effectiveBinding = Option.isSome(selected) ? selectedBinding : binding;
+
+    const effectiveBinding =
+      Option.isSome(selected) || changedRootAgent ? selectedBinding : binding;
 
     if (effectiveBinding === undefined) return yield* failure("start", "declaration-unavailable");
 
@@ -724,8 +732,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       }
       const first = current.records[0]?.record.payload;
 
-      if (first?._tag !== "ThreadCreated" || first.agentId !== origin.source.agentId)
-        return yield* failure("start", "denied");
+      if (first?._tag !== "ThreadCreated") return yield* failure("start", "denied");
 
       const own = rows.filter(
         (row) => row.admission.origin.worker.threadId === origin.worker.threadId,
@@ -737,6 +744,11 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       const prior = origins.get(origin.worker.threadId);
 
+      if (
+        prior === undefined &&
+        (source.submission?.agentId ?? first.agentId) !== origin.source.agentId
+      )
+        return yield* failure("start", "denied");
       if (prior !== undefined && !sameOrigin(prior, origin))
         return yield* failure("start", "worker-mismatch");
       if (prior === undefined && admission.messageId !== origin.firstMessageId)
@@ -2099,10 +2111,20 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           ? attached
           : undefined;
 
+    const selected =
+      request.sourceSubmissionId === undefined
+        ? undefined
+        : yield* sourceAuthority(sourceThreadId, request.sourceSubmissionId);
+
     return facet(
       {
-        source: { _tag: "programmatic", threadId: sourceThreadId, agentId: created.agentId },
-        policy: retained?.policy ?? resolved.definition.policy,
+        source: {
+          _tag: "programmatic",
+          threadId: sourceThreadId,
+          agentId: selected?.submission?.agentId ?? created.agentId,
+        },
+        policy:
+          retained?.policy ?? selected?.binding?.definition.policy ?? resolved.definition.policy,
         depth:
           origin?._tag === "WorkerOriginRecorded"
             ? origin.origin.depth

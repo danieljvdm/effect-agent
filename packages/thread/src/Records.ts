@@ -119,11 +119,14 @@ export const MAX_PERSISTED_JSON_BYTES = 1024 * 1024;
 const isJson = Schema.is(Schema.Json);
 
 const isPersistedJson = (input: unknown): input is Schema.Json => {
-  const pending: Array<{ readonly value: unknown; readonly depth: number }> = [
-    { value: input, depth: 0 },
-  ];
+  const pending: Array<
+    | { readonly _tag: "visit"; readonly value: unknown; readonly depth: number }
+    | { readonly _tag: "leave"; readonly value: object }
+  > = [{ _tag: "visit", value: input, depth: 0 }];
 
-  const visited = new WeakSet<object>();
+  // Only ancestors indicate a cycle. Shared acyclic values serialize once per occurrence,
+  // so revisit them and charge every occurrence against the same resource limits.
+  const ancestors = new WeakSet<object>();
   let nodes = 0;
   let textUnits = 0;
 
@@ -132,6 +135,10 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
       const current = pending.pop();
 
       if (current === undefined) return false;
+      if (current._tag === "leave") {
+        ancestors.delete(current.value);
+        continue;
+      }
       if (current.depth > MAX_PERSISTED_JSON_DEPTH || ++nodes > MAX_PERSISTED_JSON_NODES) {
         return false;
       }
@@ -148,18 +155,19 @@ const isPersistedJson = (input: unknown): input is Schema.Json => {
         if (textUnits > MAX_PERSISTED_JSON_BYTES) return false;
         continue;
       }
-      if (typeof value !== "object" || visited.has(value)) return false;
-      visited.add(value);
+      if (typeof value !== "object" || ancestors.has(value)) return false;
+      ancestors.add(value);
+      pending.push({ _tag: "leave", value });
 
       const entries = Array.isArray(value)
-        ? value.map((entry, index) => [index, entry] as const)
+        ? Array.from(value, (entry, index) => [index, entry] as const)
         : Object.entries(value);
 
       if (entries.length > MAX_PERSISTED_JSON_COLLECTION_LENGTH) return false;
       for (const [key, entry] of entries) {
         textUnits += typeof key === "string" ? key.length : 0;
         if (textUnits > MAX_PERSISTED_JSON_BYTES) return false;
-        pending.push({ value: entry, depth: current.depth + 1 });
+        pending.push({ _tag: "visit", value: entry, depth: current.depth + 1 });
       }
     }
 

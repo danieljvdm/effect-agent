@@ -610,6 +610,125 @@ const harness = Effect.fn("workerHostHarness")(function* (
 });
 
 layer(NodeCrypto.layer)((it) => {
+  it.effect("uses an admitted root Agent upgrade for workers without changing child lineage", () =>
+    Effect.gen(function* () {
+      const upgraded = Agent.make("upgraded-source-agent", {
+        input: sourceAgent.input,
+        output: sourceAgent.output,
+        instructions: "Delegate and receive research reports",
+        toolkit: Toolkit.empty,
+        policy: sourceAgent.policy,
+      });
+
+      const upgradedDigests = DefinitionDigests.make({
+        ...definitions,
+        agent: Schema.decodeSync(Digest)("d".repeat(64)),
+      });
+
+      const ownerId = Schema.decodeSync(SubmissionId)("upgraded-owner");
+
+      const owner = SubmissionSnapshot.make({
+        submissionId: ownerId,
+        threadId: sourceId,
+        queueSequence: Schema.decodeSync(QueueSequence)(1),
+        principal,
+        idempotencyKey: Schema.decodeSync(IdempotencyKey)("upgraded-owner"),
+        agentId: upgraded.id,
+        agentDigests: upgradedDigests,
+        deploymentId: Schema.decodeSync(DeploymentId)("test"),
+        inputPayload: "research this existing conversation",
+        inputDigest: digest,
+        receiptId: Schema.decodeSync(ReceiptId)("upgraded-owner"),
+        state: "ready",
+        createdAt: DateTime.makeUnsafe(0),
+      });
+
+      const h = yield* harness({
+        sourceRevisions: [
+          {
+            definition: upgraded,
+            digests: upgradedDigests,
+            reporting: [reportWith(() => Effect.succeed({ encodedInput: "upgraded findings" }))],
+          },
+        ],
+      });
+
+      const legacy = yield* h.host.start(request("legacy-worker"));
+
+      yield* h.settle(legacy.receipt);
+      h.submissions.set(ownerId, owner);
+
+      const host = yield* h.runtime.acquire({
+        sourceThreadId: sourceId,
+        principal,
+        sourceSubmissionId: ownerId,
+      });
+
+      const followUp = yield* host.followUp({
+        worker: legacy.worker,
+        target,
+        idempotencyKey: Schema.decodeSync(IdempotencyKey)("upgraded-follow-up"),
+        encodedInput: { text: "continue existing work" },
+        encodedParameters: { note: "continue existing work" },
+      });
+
+      expect(h.submissions.get(followUp.submissionId)?.workerAdmission?.origin).toEqual(
+        h.submissions.get(legacy.receipt.submissionId)?.workerAdmission?.origin,
+      );
+      yield* h.settle(followUp);
+      const started = yield* host.start(request("upgraded-scout"));
+      const child = h.submissions.get(started.receipt.submissionId)!;
+
+      expect(child.workerAdmission?.origin.source.agentId).toBe(upgraded.id);
+      expect(child.workerAdmission?.origin.reporting?.sourceDigests).toEqual(upgradedDigests);
+      yield* h.settle(started.receipt);
+      expect(
+        [...h.deliveries.values()]
+          .filter((row) => row.envelope.threadId === sourceId)
+          .map((row) => row.envelope),
+      ).toEqual([
+        expect.objectContaining({
+          agentId: upgraded.id,
+          definitions: upgradedDigests,
+          input: "upgraded findings",
+        }),
+      ]);
+      expect(h.logs.get(sourceId)?.[0]?.record.payload).toEqual(
+        ThreadCreated.make({ agentId: sourceAgent.id, definitions }),
+      );
+
+      // An exact registered owner is required; a different digest cannot fall back
+      // to the ThreadCreated agent or create a new canonical worker reservation.
+      const count = h.logs.get(sourceId)?.length;
+
+      h.submissions.set(ownerId, SubmissionSnapshot.make({ ...owner, agentDigests: definitions }));
+      expect((yield* host.start(request("unregistered-upgrade")).pipe(Effect.flip)).reason).toBe(
+        "declaration-unavailable",
+      );
+      expect(h.logs.get(sourceId)?.length).toBe(count);
+      h.submissions.set(
+        ownerId,
+        SubmissionSnapshot.make({ ...owner, threadId: started.worker.threadId }),
+      );
+      expect((yield* host.start(request("wrong-source")).pipe(Effect.flip)).reason).toBe("denied");
+
+      // Root upgrades cannot be used to replace a worker's admitted target Agent.
+      h.submissions.set(
+        child.submissionId,
+        SubmissionSnapshot.make({ ...child, agentId: upgraded.id, agentDigests: upgradedDigests }),
+      );
+      expect(
+        (yield* h.runtime
+          .acquire({
+            sourceThreadId: started.worker.threadId,
+            principal,
+            sourceSubmissionId: child.submissionId,
+          })
+          .pipe(Effect.flip)).reason,
+      ).toBe("denied");
+    }),
+  );
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
     "serializes source-aware active slots across raced starts, steering and idle reactivation",

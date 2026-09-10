@@ -264,6 +264,14 @@ Inspection, listing, observation, and cancellation do not require resolving a so
 Keep retained binding versions available; a policy resolver cannot repair ambiguous historical
 definition identities or reconstruct a missing capture.
 
+A root conversation can admit a new registered Agent ID after an application upgrade. When
+an explicit owner Submission selects that Agent, worker creation and reporting use its exact
+retained binding, while the original `ThreadCreated` record stays unchanged. An unregistered
+Agent/digest pair is rejected. Existing workers retain their original lineage and reporting
+binding when the upgraded root sends follow-ups; worker and attached child Agent IDs cannot
+be replaced this way. Without an explicit owner Submission, programmatic hosts continue to
+use the thread's original Agent.
+
 Captured source reporting uses the initial owner binding and stores its existing reporting intent
 in the worker origin. A later input from another source revision does not replace that projection;
 terminal preparation validates the original owner retained by the first worker input reservation.
@@ -568,6 +576,5 @@ Node's scoped delivery pump and Cloudflare's persisted alarms rediscover stored 
 after both Runs settle and wake hints are lost. During an active Cloudflare maintenance pass,
 message delivery continues alongside source execution, so a message can reach its destination
 before the source Run finishes. Progress still needs a functioning host and
-available capacity. The complete [Node and Cloudflare orchestration example](https://github.com/danieljvdm/effect-agent/tree/main/examples/durable-orchestration)
-shows builders, attached scouts, later input, automatic reports, and peer request/reply using
-the same platform-independent declarations.
+available capacity. The [canonical Cloudflare application](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner)
+provides the runnable application entrypoint.

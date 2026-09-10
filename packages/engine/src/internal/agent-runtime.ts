@@ -1341,11 +1341,11 @@ const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(functi
 });
 
 /**
- * Settle an over-budget declared Tool batch without starting any handler
- * (RUN-018): every open application call is marked settled in the trace with
- * the encoded policy failure as its model-visible result, flagged
- * `budgetRejected` so it is exempt from repeated-failure folding, and one
- * `ToolCallFailed` is emitted per call with no `ToolCallStarted` (the
+ * Settle a rejected Tool batch without starting any handler: every open
+ * application call receives the encoded failure as its model-visible result.
+ * Only budget rejections (RUN-018) are exempt from repeated-failure folding;
+ * correctable model declarations count as ordinary failed calls. Emit one
+ * `ToolCallFailed` per call with no `ToolCallStarted` (the
  * approval-denied precedent). The caller hands the trace to
  * `toolBatchContinuation`, so the synthetic results advance history through
  * the ordinary tool message and — under a durable coordinator that never saw
@@ -1356,13 +1356,15 @@ const settleRejectedBatch = Effect.fn("AgentRuntime.settleRejectedBatch")(functi
   context: RunContext,
   turnId: TurnId,
   trace: TurnTrace,
-  policyError: AgentPolicyError,
+  error: AgentPolicyError | ModelProtocolError,
   alreadySettled?: ReadonlySet<string>,
 ): Effect.fn.Return<ReadonlyArray<RunEvent>, ModelProtocolError> {
+  const budgetRejected = error._tag === "AgentPolicyError" ? true : undefined;
+
   const encodedResult = {
-    _tag: policyError._tag,
-    limit: policyError.limit,
-    message: policyError.message,
+    _tag: error._tag,
+    ...(error._tag === "AgentPolicyError" ? { limit: error.limit } : {}),
+    message: error.message,
   };
 
   const events: Array<RunEvent> = [];
@@ -1377,9 +1379,9 @@ const settleRejectedBatch = Effect.fn("AgentRuntime.settleRejectedBatch")(functi
       name: call.name,
       encodedResult,
       isFailure: true,
-      budgetRejected: true,
+      ...(budgetRejected === undefined ? {} : { budgetRejected }),
     };
-    events.push(yield* makeToolFailedEvent(context, turnId, call, policyError, true));
+    events.push(yield* makeToolFailedEvent(context, turnId, call, error, budgetRejected));
   }
 
   return events;
@@ -5947,26 +5949,33 @@ const makeTurn = <
             );
           }
 
-          if ((declaresCompletion || declaresActionCompletion) && trace.toolCalls.size !== 1) {
-            return failRunEventStream(
-              ModelProtocolError.make({
-                message: declaresCompletion
-                  ? `Completion Tool ${completionTool} must be the only Tool Call in its batch`
-                  : "An action completion Tool must be the only Tool Call in its batch",
-              }),
-            );
+          const completionBatchError =
+            (declaresCompletion || declaresActionCompletion) &&
+            trace.applicationToolCalls.length !== 1
+              ? ModelProtocolError.make({
+                  message: declaresCompletion
+                    ? `Completion Tool ${completionTool} must be the only application Tool Call in its batch`
+                    : "An action completion Tool must be the only application Tool Call in its batch",
+                })
+              : undefined;
+
+          // Finalization cannot grant another correction turn. Completed provider work
+          // is retained separately; only unexecuted application calls can be rejected.
+          if (completionBatchError !== undefined && finalAnswerOnly) {
+            return failRunEventStream(completionBatchError);
           }
 
-          const completionBatch =
-            declaresCompletion &&
-            trace.toolCalls.size === 1 &&
-            trace.applicationToolCalls.length === 1;
+          const completionBatch = declaresCompletion && trace.applicationToolCalls.length === 1;
 
           // Fail-closed (RUN-020): final-answer mode advertises either no
           // Tool or exactly the Definition-owned completion Tool. Any other
           // declaration is a protocol violation, never another rejection
           // round.
-          if (finalAnswerOnly && trace.toolCalls.size > 0 && !completionBatch) {
+          if (
+            finalAnswerOnly &&
+            trace.toolCalls.size > 0 &&
+            (hasProviderCalls || !completionBatch)
+          ) {
             return failRunEventStream(
               ModelProtocolError.make({
                 message:
@@ -6303,30 +6312,44 @@ const makeTurn = <
                 }),
               );
             }
-            // RUN-018: the over-budget batch never executes a handler and is
+
+            // RUN-018: a rejected batch never executes a handler and is
             // never durably declared — it settles synthetically through the
             // ordinary batch continuation, so the model sees one failed
-            // result per rejected call and the next Turn is final-answer
-            // constrained. `commitResponse` is deliberately skipped: with no
-            // response commit the Turn stays on the single-batch canonical
+            // result per rejected call. Budget exhaustion constrains the next
+            // Turn; a mixed completion declaration can be corrected within
+            // the remaining budgets. `commitResponse` is deliberately skipped:
+            // without it the Turn stays on the single-batch canonical
             // commit shape and recovery replays it like any no-tool Turn. The
             // rejected Turn's usage is still charged via
             // `afterValidatedResponse` because the Run continues.
-            if (
+            const batchRejection =
               overToolBudget &&
               trace.applicationToolCalls.length > 0 &&
               !(completionBatch && policy.onExhaustion === "final-answer")
-            ) {
+                ? AgentPolicyError.make({
+                    limit: "tool-calls",
+                    message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
+                  })
+                : completionBatchError === undefined
+                  ? undefined
+                  : ModelProtocolError.make({
+                      message:
+                        `${completionBatchError.message}. ` +
+                        (hasProviderCalls
+                          ? "The application batch was rejected before execution; none of its application tools ran. Completed provider results are retained. "
+                          : "The entire batch was rejected before execution; none of its tools ran. ") +
+                        "Request any needed ordinary tools first, wait for their results, then call a completion tool alone.",
+                    });
+
+            if (batchRejection !== undefined) {
               return afterValidatedResponse(
                 Effect.gen(function* () {
                   const rejection = yield* settleRejectedBatch(
                     context,
                     turnId,
                     trace,
-                    AgentPolicyError.make({
-                      limit: "tool-calls",
-                      message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
-                    }),
+                    batchRejection,
                   );
 
                   return Stream.fromIterable(rejection).pipe(
@@ -6840,18 +6863,18 @@ const makeResumeTurn = <
         (actionCompletionCall !== undefined ||
           (completionTool !== undefined &&
             trace.applicationToolCalls.some((call) => call.name === completionTool))) &&
-        trace.toolCalls.size !== 1
+        trace.applicationToolCalls.length !== 1
       ) {
         return failRunEventStream(
           ModelProtocolError.make({
-            message: `Completion Tool ${completionTool} must be the only Tool Call in its batch`,
+            message: "A completion Tool must be the only application Tool Call in its batch",
           }),
         );
       }
 
       const completionBatch =
         completionTool !== undefined &&
-        trace.toolCalls.size === 1 &&
+        trace.applicationToolCalls.length === 1 &&
         trace.applicationToolCalls[0]?.name === completionTool;
 
       if (
@@ -6866,7 +6889,7 @@ const makeResumeTurn = <
         );
       }
 
-      if (context.finalizationUsed && !completionBatch) {
+      if (context.finalizationUsed && (!completionBatch || trace.toolCalls.size !== 1)) {
         return failRunEventStream(
           ModelProtocolError.make({
             message: "A resumed grace finalization may only execute the completion Tool",

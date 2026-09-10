@@ -10,7 +10,7 @@ and validates the result — with typed errors, streaming, and bounded execution
 bun add effect-agent@beta
 ```
 
-Use an [Effect AI provider](examples/providers/README.md) for model access.
+Use an [Effect AI provider](docs/guide/getting-started.md) for model access.
 Public beta: APIs and stored data may change before 1.0. Persistent adapters support a
 [data-preserving beta49/beta50 storage upgrade](docs/guide/operations.md#adopting-these-contracts).
 
@@ -119,7 +119,7 @@ Use this in place of the earlier `BunRuntime.runMain` call.
   [Code Mode](docs/guide/code-mode.md) — delegate research, browse pages, and execute code.
 - [Persistent threads](docs/guide/threads.md), [durable execution](docs/concepts/durability.md), and
   [Effect Workflows](docs/guide/workflows.md) — keep history and resume work.
-- [Runnable examples](examples/) and the [PR reviewer](packages/pr-review/README.md).
+- [Cloudflare travel planner](examples/travel-planner/) and the [PR reviewer](packages/pr-review/README.md).
 
 Start with the [getting-started guide](docs/guide/getting-started.md), or explore the
 [package map](docs/reference/packages.md#capability-inventory) and

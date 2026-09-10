@@ -96,7 +96,7 @@ const generatedPaths = [
   ".claude/**",
   // Local and CI output from scripts/build-action.ts.
   "action/dist/**",
-  "examples/demo/src/routeTree.gen.ts",
+  "examples/travel-planner/src/routeTree.gen.ts",
 ];
 
 export default defineConfig({
@@ -176,11 +176,11 @@ export default defineConfig({
       },
       "perf:cloudflare": {
         cache: false,
-        command: "bun examples/context-continuity-eval/src/performance-main.ts",
+        command: "bun tooling/context-continuity-eval/src/performance-main.ts",
       },
       "perf:cloudflare:build": {
         cache: false,
-        command: "bun examples/context-continuity-eval/src/build-performance-cloudflare.ts",
+        command: "bun tooling/context-continuity-eval/src/build-performance-cloudflare.ts",
       },
       "bundle:compare": {
         cache: false,
@@ -192,15 +192,15 @@ export default defineConfig({
       },
       "pr-review-eval": {
         cache: false,
-        command: "bun --cwd examples/pr-review-eval src/main.ts",
+        command: "bun --cwd tooling/pr-review-eval src/main.ts",
       },
       "semantic-memory-eval": {
         cache: false,
-        command: "node --experimental-transform-types examples/semantic-memory-eval/src/main.ts",
+        command: "node --experimental-transform-types tooling/semantic-memory-eval/src/main.ts",
       },
       "context-continuity-eval": {
         cache: false,
-        command: "node --experimental-transform-types examples/context-continuity-eval/src/main.ts",
+        command: "node --experimental-transform-types tooling/context-continuity-eval/src/main.ts",
       },
       "release:checked-publish": {
         cache: false,

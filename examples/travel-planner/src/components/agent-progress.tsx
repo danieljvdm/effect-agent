@@ -1,0 +1,95 @@
+import { ArrowUpRight } from "lucide-react";
+
+import type { PlannerProgress } from "../domain.ts";
+import { ElapsedTime } from "./activity-panel.tsx";
+import { MessageText } from "./message-text.tsx";
+
+export function AgentProgress({
+  progress,
+  active,
+  busy,
+  persistText = false,
+}: {
+  readonly progress: PlannerProgress | null;
+  readonly active: boolean;
+  readonly busy: boolean;
+  readonly persistText?: boolean;
+}) {
+  const hasText = (active || persistText) && !!progress?.text.trim();
+  const hasSteps = !!progress?.tools.length;
+
+  return (
+    <>
+      {progress && hasSteps && <ToolActivity progress={progress} active={active} />}
+      {progress && hasText && (
+        <article
+          className={`message assistant${active ? " streaming-answer" : ""}`}
+          aria-label={active ? "Response in progress" : "Latest update"}
+          aria-live="off"
+        >
+          <span className="message-label">
+            ELSEWHERE <ArrowUpRight size={13} aria-hidden="true" />
+          </span>
+          <MessageText text={progress.text} streaming={active} />
+        </article>
+      )}
+      {busy && !hasText && !hasSteps && (
+        <p className="working" role="status">
+          <span /> Thinking through your trip…
+        </p>
+      )}
+    </>
+  );
+}
+
+function ToolActivity({
+  progress,
+  active,
+}: {
+  readonly progress: PlannerProgress;
+  readonly active: boolean;
+}) {
+  const failed = progress.tools.some((tool) => tool.state === "failed");
+
+  return (
+    <details className={`tool-activity ${active ? "is-working" : ""}`}>
+      <summary>
+        <span className={`tool-indicator ${active ? "spinning" : ""}`} aria-hidden="true">
+          {active ? "" : failed ? "!" : "✓"}
+        </span>
+        <span role="status">
+          {progress.tools.length} {progress.tools.length === 1 ? "step" : "steps"}{" "}
+          {active ? "so far" : "in this response"}
+        </span>
+        <span className="tool-chevron" aria-hidden="true">
+          ⌄
+        </span>
+      </summary>
+      <ol>
+        {progress.tools.map((tool) => (
+          <li key={tool.id}>
+            <span
+              className={`tool-indicator ${active && tool.state === "running" ? "spinning" : ""}`}
+              aria-hidden="true"
+            >
+              {tool.state === "failed" ? "!" : tool.state === "complete" ? "✓" : active ? "" : "–"}
+            </span>
+            <span>{tool.label}</span>
+            {(tool.completedAt !== undefined || (active && tool.state === "running")) && (
+              <ElapsedTime startedAt={tool.startedAt} completedAt={tool.completedAt} />
+            )}
+            <small>
+              {tool.state === "complete"
+                ? "Done"
+                : tool.state === "failed"
+                  ? "Couldn't finish"
+                  : active
+                    ? "Working"
+                    : "Last seen running"}
+            </small>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}

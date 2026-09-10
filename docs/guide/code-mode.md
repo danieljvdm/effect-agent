@@ -9,8 +9,7 @@ Code Mode gives an agent one Effect AI Tool for a small JavaScript program. The 
 fixed set of application Tools through named globals, then return one JSON value. It fits questions
 that need a bounded query followed by filtering, aggregation, or calculation.
 
-The [Cloudflare warehouse example](https://github.com/danieljvdm/effect-agent/tree/main/examples/code-mode-cloudflare)
-answers invoice questions this way:
+For example, an invoice analyst can answer a question this way:
 
 ```ts
 const code = `async () => {
@@ -137,9 +136,7 @@ export const program = AgentRuntime.run(analyst, "What is the total invoice reve
 
 Only the question is input to the agent. `AnalystLive` yields `WorkerEnvironment` to obtain the
 loader and provider key, leaving that service visible in the composed `program`'s requirements.
-An `effect-cf` Worker supplies it. The application owns the HTTP response and authentication;
-the [warehouse Worker](https://github.com/danieljvdm/effect-agent/blob/main/examples/code-mode-cloudflare/src/worker.ts)
-shows the example's HTTP behavior.
+An `effect-cf` Worker supplies it. The application owns the HTTP response and authentication.
 
 `CodeMode.make` fixes the namespaces and methods visible to generated code. Include `codeMode.tool`
 in the agent's Toolkit. `CloudflareCodeMode.layer` supplies the selected Tool handlers and executor
@@ -265,32 +262,14 @@ for Worker Loader setup and loading modes. This adapter uses `load()` for a fres
 Code Mode is ephemeral. The executor retains no pass state, and a later pass can run in another
 isolate. It does not make an Agent durable, persist generated programs, reconnect a lost pass, or
 replay an unresolved call. Use a Durable Object or another application store for data that must
-outlive a request. The warehouse example uses a Durable Object only for its invoice data.
+outlive a request. A warehouse application can use a Durable Object for its invoice data.
 
-## Run the warehouse example
+## Application integration
 
-The example has an offline scripted profile, so its test needs no model credential. From the
-repository root:
-
-```sh
-vp run -F @effect-agent/example-code-mode-cloudflare test
-vp run -F @effect-agent/example-code-mode-cloudflare dev
-```
-
-The test bundles the Worker, starts workerd through Miniflare, loads a program through a real Worker
-Loader binding, and queries the SQLite Durable Object. For a deployed Worker, optionally set
-`OPENAI_API_KEY` and always set `DEMO_AUTH_TOKEN` with it, then deploy:
-
-```sh
-vp dlx wrangler secret put OPENAI_API_KEY --config examples/code-mode-cloudflare/wrangler.jsonc
-vp dlx wrangler secret put DEMO_AUTH_TOKEN --config examples/code-mode-cloudflare/wrangler.jsonc
-vp run -F @effect-agent/example-code-mode-cloudflare deploy
-```
-
-The example [README](https://github.com/danieljvdm/effect-agent/tree/main/examples/code-mode-cloudflare)
-has the request format and full authorization behavior. It exposes one bounded, read-only warehouse
-query. The broker allowlist prevents calls to unlisted Tools, but it cannot decide whether an
-allowed handler should access a particular tenant, table, account, or secret.
+Use the [canonical Cloudflare application](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner)
+for the repository's deployment setup. A Code Mode integration additionally needs a Worker Loader
+binding and a bounded Tool allowlist. The broker prevents calls to unlisted Tools, but the
+application's handlers still decide which tenant, table, account, or secret may be accessed.
 
 ## Related capabilities
 

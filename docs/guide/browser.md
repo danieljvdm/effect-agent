@@ -497,7 +497,7 @@ the policy, and each credential write requires the policy's `ProtectedBrowserDis
 Build `ProtectedBrowserSession.layer(policy)` once around an execution and provide it to native
 Effect AI Toolkit handlers. Its lazy `get` shares one handle across successive Tool calls. Do not
 scope each Tool separately or put caller/vault/session state in a process or Durable Object singleton.
-The [compiled consumer example](https://github.com/danieljvdm/effect-agent/blob/main/examples/browser-run-worker-proof/src/protected-browser.ts)
+The [compiled consumer example](https://github.com/danieljvdm/effect-agent/blob/main/tooling/browser-run-worker-proof/src/protected-browser.ts)
 shows handlers and dummy grants.
 
 For durable execution, put the handlers and session Layer in `AgentRegistration.attemptLayer`.
@@ -563,7 +563,7 @@ describe action timing and lifecycle details.
 
 ## Hosted binding proof
 
-The repository includes an [opt-in temporary deployment proof](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-run-worker-proof).
+The repository includes an [opt-in temporary deployment proof](https://github.com/danieljvdm/effect-agent/tree/main/tooling/browser-run-worker-proof).
 It exercises the hosted Browser Run binding with Markdown capture, selector scrape, PNG screenshot,
 an interactive pass, a short Live View, and a short handoff. After closing that session it opens a
 fresh protected pass, exercises two dummy login layouts and a card frame, checks revocation and

@@ -12,6 +12,7 @@ import {
   DefinitionDigests,
   Digest,
   MAX_PERSISTED_JSON_BYTES,
+  MAX_PERSISTED_JSON_COLLECTION_LENGTH,
   MAX_PERSISTED_JSON_DEPTH,
   PersistedJson,
   ProducerEpoch,
@@ -92,6 +93,7 @@ import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Duration, Effect, Schema } from "effect";
+import { Prompt } from "effect/unstable/ai";
 
 import { historicalCheckpointJson } from "../../../test/fixtures/checkpoints.ts";
 
@@ -220,6 +222,22 @@ describe("thread canonical contracts", () => {
       }),
     );
 
+    it.effect("persists frozen provider arrays without changing their canonical digest", () =>
+      Effect.gen(function* () {
+        const sources = [{ type: "url", url: "https://example.com" }];
+
+        Object.setPrototypeOf(sources, null);
+        Object.freeze(sources);
+        const decoded = Schema.decodeUnknownSync(PersistedJson)({ action: { sources } });
+
+        expect(yield* digestJson(decoded)).toBe(
+          yield* digestJson({
+            action: { sources: [{ type: "url", url: "https://example.com" }] },
+          }),
+        );
+      }),
+    );
+
     it.effect("digests object keys by UTF-16 code units, independent of insertion order", () =>
       Effect.gen(function* () {
         const ordered = yield* digestJson({
@@ -304,6 +322,103 @@ describe("thread canonical contracts", () => {
 
     cyclic.self = cyclic;
     expect(Schema.decodeUnknownExit(PersistedJson)(cyclic)._tag).toBe("Failure");
+  });
+
+  it.each([false, true])(
+    "persists native provider search Prompts with shared actions (frozen arrays: %s)",
+    (frozen) => {
+      // OpenAI emits the same action object in both provider-executed parts.
+      const action = {
+        type: "search",
+        queries: ["Tahoe private hot tub October"],
+        sources: [{ type: "url", url: "https://www.tahoegetaways.com/" }],
+      };
+
+      if (frozen) {
+        // Engine provider-result staging deliberately removes prototypes before freezing.
+        Object.setPrototypeOf(action.queries, null);
+        Object.setPrototypeOf(action.sources, null);
+        Object.freeze(action.queries);
+        Object.freeze(action.sources);
+      }
+
+      const prompt = Prompt.fromMessages([
+        Prompt.makeMessage("assistant", {
+          content: [
+            Prompt.makePart("tool-call", {
+              id: "ws_1",
+              name: "OpenAiWebSearch",
+              params: { action },
+              providerExecuted: true,
+            }),
+            Prompt.makePart("tool-result", {
+              id: "ws_1",
+              name: "OpenAiWebSearch",
+              result: { action, status: "completed" },
+              providerExecuted: true,
+              isFailure: false,
+            }),
+          ],
+        }),
+      ]);
+
+      const encoded = Schema.encodeSync(Prompt.Prompt)(prompt);
+      const actionPayload = Schema.Struct({ action: Schema.Unknown });
+
+      const call = Schema.decodeUnknownSync(Schema.Struct({ params: actionPayload }))(
+        encoded.content[0]?.content[0],
+      );
+
+      const result = Schema.decodeUnknownSync(Schema.Struct({ result: actionPayload }))(
+        encoded.content[0]?.content[1],
+      );
+
+      expect(call.params.action).toBe(action);
+      expect(result.result.action).toBe(action);
+      expect(Schema.is(Schema.toEncoded(Prompt.Prompt))(encoded)).toBe(true);
+      const persisted = Schema.decodeUnknownSync(PersistedJson)(encoded);
+
+      expect(Schema.decodeUnknownSync(Prompt.Prompt)(persisted)).toEqual(prompt);
+    },
+  );
+
+  it("accepts shared acyclic JSON while rejecting object and array ancestor cycles", () => {
+    const shared = { amenities: ["hot tub", "kitchen"] };
+    const dag = { first: shared, nested: { second: shared }, list: [shared, shared.amenities] };
+
+    expect(Schema.decodeUnknownSync(PersistedJson)(dag)).toEqual(dag);
+    const cycle: unknown[] = [];
+    const parent = { shared, cycle };
+
+    cycle.push(parent);
+    expect(Schema.decodeUnknownExit(PersistedJson)(parent)._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(PersistedJson)(cycle)._tag).toBe("Failure");
+  });
+
+  it("charges every shared occurrence to traversal and byte limits", () => {
+    // Fifteen binary levels expand to 65,535 nodes despite containing only fifteen arrays.
+    let sharedTree: Schema.Json = null;
+
+    for (let level = 0; level < 15; level++) sharedTree = [sharedTree, sharedTree];
+    expect(Schema.decodeUnknownExit(PersistedJson)([sharedTree])._tag).toBe("Success");
+    expect(Schema.decodeUnknownExit(PersistedJson)([sharedTree, null])._tag).toBe("Failure");
+
+    const largeShared = { text: "x".repeat(MAX_PERSISTED_JSON_BYTES / 2) };
+
+    expect(Schema.decodeUnknownExit(PersistedJson)(largeShared)._tag).toBe("Success");
+    expect(Schema.decodeUnknownExit(PersistedJson)([largeShared, largeShared])._tag).toBe(
+      "Failure",
+    );
+    expect(
+      Schema.decodeUnknownExit(PersistedJson)(
+        Array(MAX_PERSISTED_JSON_COLLECTION_LENGTH).fill(null),
+      )._tag,
+    ).toBe("Success");
+    expect(
+      Schema.decodeUnknownExit(PersistedJson)(
+        Array(MAX_PERSISTED_JSON_COLLECTION_LENGTH + 1).fill(null),
+      )._tag,
+    ).toBe("Failure");
   });
 
   it("replays a checkpoint suffix equivalently to full replay", () => {

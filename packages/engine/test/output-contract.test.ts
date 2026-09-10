@@ -472,7 +472,7 @@ layer(testLayer)("RUN-028 model-visible output contract", (it) => {
         expect(contracts[0]?.split("\n\n")[0]).toBe(
           'Final output contract: when the task is complete without calling the "deliver_reply" completion Tool, the final assistant message must be only ' +
             "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
-            'before or after the JSON. When calling the "deliver_reply" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool\'s parameter schema instead. The engine projects the successful completion Tool result into the Agent output.',
+            'before or after the JSON. When calling the "deliver_reply" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool\'s parameter schema instead. Call it as the sole application Tool Call, after receiving any other needed application Tool results. Completed provider Tool results may accompany it. The engine projects the successful completion Tool result into the Agent output.',
         );
         expect(contracts[0]).toContain('"itemCount"');
         expect(histories.length).toBeGreaterThan(0);

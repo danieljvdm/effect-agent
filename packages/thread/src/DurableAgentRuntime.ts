@@ -838,7 +838,6 @@ interface DeclaredApplicationCall {
 }
 
 interface DeclaredToolCalls {
-  readonly total: number;
   readonly application: Array<DeclaredApplicationCall>;
   readonly all: Array<DeclaredApplicationCall>;
   readonly providerResults: Array<Prompt.ToolResultPart>;
@@ -846,8 +845,8 @@ interface DeclaredToolCalls {
 
 /**
  * Pure inspection of every Tool Call declared in one canonical response. Provider-executed calls
- * count toward the batch singleton invariant even though only application calls enter the durable
- * prepared/settled protocol.
+ * retain their terminal results, while only application calls enter the durable prepared/settled
+ * protocol and completion singleton invariant.
  */
 const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
   (messages: PersistedJson): Effect.Effect<DeclaredToolCalls, RunJournalError> =>
@@ -858,8 +857,7 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
           cause,
         }),
       ),
-      Effect.map((prompt) => {
-        let total = 0;
+      Effect.flatMap((prompt) => {
         const application: Array<DeclaredApplicationCall> = [];
         const all: Array<DeclaredApplicationCall> = [];
         const providerResults: Array<Prompt.ToolResultPart> = [];
@@ -869,7 +867,6 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
           for (const part of message.content) {
             if (part.type === "tool-result" && part.providerExecuted) providerResults.push(part);
             if (part.type !== "tool-call") continue;
-            total += 1;
             all.push({
               id: part.id,
               name: part.name,
@@ -882,7 +879,33 @@ const declaredToolCalls = Effect.fn("DurableAgentRuntime.declaredToolCalls")(
           }
         }
 
-        return { total, application, all, providerResults };
+        const providerCalls = new Map(
+          all.filter((call) => call.providerExecuted).map((call) => [call.id, call]),
+        );
+
+        const resultIds = new Set<string>();
+
+        for (const result of providerResults) {
+          if (providerCalls.get(result.id)?.name !== result.name || resultIds.has(result.id)) {
+            return Effect.fail(
+              RunJournalError.make({
+                message: `Invalid canonical provider result ${result.id}`,
+              }),
+            );
+          }
+          resultIds.add(result.id);
+        }
+        for (const id of providerCalls.keys()) {
+          if (!resultIds.has(id)) {
+            return Effect.fail(
+              RunJournalError.make({
+                message: `Turn lacks canonical provider result for ${id}`,
+              }),
+            );
+          }
+        }
+
+        return Effect.succeed({ application, all, providerResults });
       }),
     ),
 );
@@ -1829,11 +1852,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }
     }
 
+    const completionCall = declared.application[0];
+
     const projectSettledCompletion =
-      calls.length === 1 &&
-      calls[0] !== undefined &&
-      completionTools.includes(calls[0].name) &&
-      settled[0]?.isFailure === false &&
+      declared.application.length === 1 &&
+      completionCall !== undefined &&
+      completionTools.includes(completionCall.name) &&
+      settledByCallId.get(completionCall.id)?.isFailure === false &&
       !records.some(
         ({ record }) => record.payload._tag === "RunCompleted" && record.payload.runId === runId,
       );
@@ -4598,7 +4623,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 )?.record.payload;
 
           if (
-            declared.total !== 1 ||
             calls.length !== 1 ||
             call === undefined ||
             (call.name !== completion?.tool && actionCompletion === undefined) ||
