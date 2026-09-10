@@ -175,6 +175,28 @@ const QuickActionErrorEnvelope = Schema.Struct({
 const QuickActionEnvelope = Schema.Union([QuickActionSuccessEnvelope, QuickActionErrorEnvelope]);
 const decodeEnvelope = Schema.decodeUnknownOption(Schema.fromJsonString(QuickActionEnvelope));
 
+/** Recognize only the provider's exact timeout grammar; never forward arbitrary error text. */
+const navigationFailureMessage = (bodyText: string, response: Response): string => {
+  const fallback = `The Browser Run Quick Action API answered HTTP ${response.status}; the destination status is unknown`;
+
+  if (!isJsonResponse(response)) return fallback;
+  const envelope = decodeEnvelope(bodyText);
+
+  if (Option.isNone(envelope) || envelope.value.success) return fallback;
+  for (const error of envelope.value.errors) {
+    if (error.code !== 6002) continue;
+
+    const timeout = /^Navigation timeout of ([1-9][0-9]{0,5}) ms exceeded$/.exec(
+      error.detail ?? "",
+    );
+
+    if (timeout !== null)
+      return `Browser Run navigation timed out after ${timeout[1]} ms (Quick Action API HTTP ${response.status}); the destination status is unknown`;
+  }
+
+  return fallback;
+};
+
 /** Project the schema-validated request onto Cloudflare's native common options. */
 const quickActionCommonOptions = (request: PageCaptureRequest): BrowserRunCommonOptions => {
   const options: BrowserRunBaseOptions = {};
@@ -419,7 +441,7 @@ const parseOutput = (
   }
   if (!envelope.value.success) {
     return navigationError(
-      "The Quick Action reported a navigation failure",
+      navigationFailureMessage(bodyText, response),
       privateResponseCause(bodyText, response),
     );
   }
@@ -536,7 +558,7 @@ const makeCapture = (
       });
     }
     if (!response.ok) {
-      const message = `The Quick Action answered HTTP ${response.status}`;
+      const message = navigationFailureMessage(bodyText, response);
       const cause = privateResponseCause(bodyText, response);
 
       if (response.status >= 500) {

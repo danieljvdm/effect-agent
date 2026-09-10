@@ -541,6 +541,24 @@ Browser Run API response, not necessarily the destination page. Applications can
 redact and retain these causes for operator diagnostics; they are not automatically exposed to
 models or logged.
 
+Recognized Browser Run navigation timeouts report the provider's elapsed limit in the public
+`PageCaptureNavigationError` message. An API HTTP 422 is not the destination's status and does
+not establish that the destination blocked the request. Unknown provider text stays private.
+
+For JavaScript-rendered pages, choose a content-specific `waitForSelector` with a finite timeout
+alongside the navigation timeout. `domcontentloaded` alone can capture a navigation shell, and
+a heading alone may precede the content being researched. Inspect the returned evidence before
+treating the pass as useful; missing amenities are not evidence of their absence. See Cloudflare's
+[Markdown endpoint](https://developers.cloudflare.com/browser-run/quick-actions/markdown-endpoint/)
+and [independent timeout controls](https://developers.cloudflare.com/browser-run/reference/timeouts/).
+
+Quick Action response readers are canceled and unlocked on local interruption, including an
+outer Effect timeout. The native `quickAction()` binding exposes neither an abort signal nor a
+session handle: interrupting an unresolved RPC stops local waiting but does not confirm remote
+browser termination. Provider navigation/readiness limits remain important. The adapter does not
+retry that RPC. Tests with a scripted binding establish local waiting and reader cleanup only;
+hosted provider lifecycle behavior requires separate live evidence.
+
 The protected Cloudflare binding requests at most ten minutes of provider idle keep-alive,
 independently of the total pass deadline. A longer policy permits active work; it does not promise
 that an idle browser will remain available for the whole hour or reconnect an expired session.
