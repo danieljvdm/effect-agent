@@ -108,8 +108,12 @@ not an instruction to admit another Run. Corrections use ordinary queued input a
 The [travel planner](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner) demonstrates GPT-Live client
 delegation. Its adapter constructs schema-validated planner requests from attributed transcripts,
 uses the existing planner admission path, and reconciles receipts against canonical settlement.
-It suppresses older output after newer spoken or typed input. Reconnect creates a replacement
-voice session with relevant conversation history; it does not restart accepted planner work.
+It tracks corrections by work identity rather than treating every caption as a new task. Spoken
+and typed input share the demo conversation; attributed speech context is separate from the
+user's work request and visible message. Typed results and later research answers return to the
+active voice exchange. Reconnect restores relevant conversation history without restarting
+accepted work. The demo retains undelegated speech in the current tab; it does not add a durable
+partial-transcript journal.
 
 For application-selected previews, decorate the native Effect AI `LanguageModel` service in the
 model Layer. Its `streamText` exposes ordered `text-delta`, `tool-params-start`, and

@@ -3,7 +3,6 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { Mic, PhoneOff, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { captionRows } from "../voice/delegation.ts";
 import {
   muteVoiceAtom,
   startVoiceAtom,
@@ -50,26 +49,13 @@ export function VoiceControls({ enabled }: { readonly enabled: boolean }) {
           </button>
         )}
       </div>
-      <audio ref={audio} autoPlay controls hidden={!active} aria-label="AI voice playback" />
+      <audio ref={audio} autoPlay hidden aria-label="AI voice playback" />
       {view.note && <p role="status">{view.note}</p>}
       {!active && AsyncResult.isFailure(result) && (
         <p role="alert">
           Voice could not stay connected. Check microphone permission and GPT-Live access, then
           reconnect.
         </p>
-      )}
-      {view.captions.length > 0 && (
-        <details>
-          <summary>Voice transcript</summary>
-          <div className="voice-captions">
-            {captionRows(view.captions).map((row) => (
-              <p key={row.id}>
-                <strong>{row.speaker}: </strong>
-                {row.text}
-              </p>
-            ))}
-          </div>
-        </details>
       )}
     </div>
   );

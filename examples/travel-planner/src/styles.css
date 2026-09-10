@@ -2540,3 +2540,15 @@
   overflow-y: auto;
   padding: 0.4rem;
 }
+
+.conversation-details {
+  color: var(--muted, #737d70);
+  font-size: 0.9rem;
+  margin: 0 0 1.5rem;
+}
+.conversation-details summary {
+  cursor: pointer;
+}
+.conversation-details[open] {
+  color: inherit;
+}

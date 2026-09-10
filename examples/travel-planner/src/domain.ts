@@ -222,12 +222,28 @@ export const defaultPlannerSettings: PlannerSettings = {
   fast: false,
 };
 
+/** App-owned speech history, separate from requests to execute work. */
+export const SpokenMessage = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(/^speech-[a-zA-Z0-9-]+$/), Schema.isMaxLength(100)),
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String.check(Schema.isMaxLength(8000)),
+  after: Schema.NullOr(Schema.String),
+});
+
+export type SpokenMessage = typeof SpokenMessage.Type;
+
+export const VoiceContext = Schema.Struct({
+  input: Schema.Boolean,
+  messages: Schema.Array(SpokenMessage).check(Schema.isMaxLength(48)),
+}).check(Schema.makeFilter((value) => JSON.stringify(value).length <= 24000));
+
 export const SendMessageRequest = Schema.Struct({
   message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4000)),
   requestId: TripId,
   selectedTripId: Schema.NullOr(TripId),
   conversationId: ConversationId,
   settings: Schema.optionalKey(PlannerSettings),
+  voice: Schema.optionalKey(VoiceContext),
 });
 
 export type SendMessageRequest = typeof SendMessageRequest.Type;
@@ -250,7 +266,7 @@ export const VoiceWork = Schema.Struct({
 
 export type VoiceWork = typeof VoiceWork.Type;
 
-export const PlannerInput = Schema.Struct({
+export const TextPlannerInput = Schema.Struct({
   message: SendMessageRequest.fields.message,
   selectedTripId: Schema.NullOr(TripId),
   publication: Schema.NullOr(PublishTripRequest),
@@ -258,6 +274,11 @@ export const PlannerInput = Schema.Struct({
   previousMessages: Schema.optionalKey(
     Schema.Array(Schema.Struct({ role: Schema.Literals(["user", "assistant"]), text: Text })),
   ),
+});
+
+export const PlannerInput = Schema.Struct({
+  ...TextPlannerInput.fields,
+  voice: SendMessageRequest.fields.voice,
 });
 
 export const PlannerAnswer = Schema.Struct({ message: Text });
@@ -337,6 +358,8 @@ export const PlannerSnapshot = Schema.Struct({
       requestId: Schema.optionalKey(Schema.String),
       submissionId: Schema.optionalKey(Schema.String),
       content: Schema.optionalKey(TravelContent),
+      supporting: Schema.optionalKey(Schema.Boolean),
+      response: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   trips: Schema.Array(SavedTrip),

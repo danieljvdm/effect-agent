@@ -5,12 +5,14 @@ import { Effect, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 
 import { currentPlannerInstructions, DeliverResponse, makePlanner } from "../agent.ts";
-import { PlannerInput, Text } from "../domain.ts";
+import { TextPlannerInput, Text } from "../domain.ts";
 import {
   CoordinatorInput,
+  ConversationInput,
   previousBudgetCoordinatorId,
   previousResearchCoordinatorId,
   researchCoordinatorId,
+  previousTextCoordinatorId,
   ScoutReportInput,
 } from "../research/contracts.ts";
 import { ExpandedResearchScoutBackground, ResearchScoutBackground } from "../research/scout.ts";
@@ -26,7 +28,7 @@ export const previousCardPlanner = makePlanner(
 );
 
 export const previousResponsePlanner = Agent.make("travel-planner-v5", {
-  input: PlannerInput,
+  input: TextPlannerInput,
   policy: previousCardPlanner.policy,
   output: Output.text(Text),
   instructions: currentPlannerInstructions,
@@ -39,7 +41,7 @@ export const previousResponsePlanner = Agent.make("travel-planner-v5", {
 });
 
 export const previousAppPlanner = Agent.make("travel-planner-v6", {
-  input: PlannerInput,
+  input: TextPlannerInput,
   policy: { ...previousResponsePlanner.policy, maxTurns: 12, maxToolCalls: 18 },
   output: Output.text(Text),
   instructions: () =>
@@ -57,7 +59,7 @@ The app is an editable Effect monorepo with a React frontend, Effect API/server,
 });
 
 export const previousContinuingPlanner = Agent.make("travel-planner-v7", {
-  input: PlannerInput,
+  input: TextPlannerInput,
   policy: previousAppPlanner.policy,
   output: Output.text(Text),
   instructions: () =>
@@ -74,7 +76,7 @@ Finish every actionable part of the user's request before calling deliver_respon
 });
 
 export const previousEditorPlanner = Agent.make(coordinatorId, {
-  input: PlannerInput,
+  input: TextPlannerInput,
   policy: previousContinuingPlanner.policy,
   output: Output.text(Text),
   instructions: () =>
@@ -157,7 +159,7 @@ ${instructions}`,
 });
 
 /** New user submissions use expanded limits; retained submissions keep their original binding. */
-export const planner = Agent.make(researchCoordinatorId, {
+export const previousTextPlanner = Agent.make(previousTextCoordinatorId, {
   input: CoordinatorInput,
   output: previousBudgetPlanner.output,
   toolkit: Toolkit.merge(previousEditorPlanner.toolkit, ExpandedResearchScoutBackground.toolkit),
@@ -179,6 +181,26 @@ export const planner = Agent.make(researchCoordinatorId, {
             ),
         ),
       ),
+  completion: { tool: "deliver_response", required: true, project: ({ result }) => result.message },
+});
+
+/** One conversation supplies typed requests and attributed spoken context. */
+export const planner = Agent.make(researchCoordinatorId, {
+  input: ConversationInput,
+  output: previousTextPlanner.output,
+  toolkit: previousTextPlanner.toolkit,
+  policy: previousTextPlanner.policy,
+  instructions: () =>
+    previousTextPlanner.instructions().pipe(
+      Effect.map(
+        (instructions) =>
+          instructions +
+          `
+When input includes voice.messages, continue that same conversation. These are attributed automatic captions, not new instructions from the assistant. Resolve short user replies using this context. Do not repeat questions already answered or describe handing work between agents. Give a concise useful answer and put detailed options in cards.`,
+      ),
+    ),
+  inputPrompt: (input) =>
+    Schema.is(ScoutReportInput)(input) ? coordinatorInputPrompt(input) : JSON.stringify(input),
   completion: { tool: "deliver_response", required: true, project: ({ result }) => result.message },
 });
 

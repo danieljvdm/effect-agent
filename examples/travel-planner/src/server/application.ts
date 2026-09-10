@@ -11,6 +11,7 @@ import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadSto
 import { Context, Effect, Option, Schema, Stream } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
+import { mergeSpeech } from "../conversation.ts";
 import {
   type VoiceWork,
   PlannerError,
@@ -31,7 +32,7 @@ import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
 import { completedAnswer, legacyTripMessages, type Messages } from "./conversation.ts";
 import { readDiagnostics } from "./diagnostics.ts";
-import { planner } from "./planner.ts";
+import { planner, previousTextPlanner } from "./planner.ts";
 import { requestsPublication } from "./security.ts";
 import { ownerOfThread } from "./tenancy.ts";
 import { TripRepository } from "./trips.ts";
@@ -114,6 +115,7 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
 
     if (
       input.message !== request.message ||
+      JSON.stringify(input.voice) !== JSON.stringify(request.voice) ||
       input.selectedTripId !== request.selectedTripId ||
       priorSettings.model !== settings.model ||
       priorSettings.reasoningEffort !== settings.reasoningEffort ||
@@ -126,7 +128,14 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
     // Preserve the admitted publication revision and legacy seed when acknowledgement was lost.
     // Resubmission completes readiness; finding an admitted ledger row alone is not acceptance.
     yield* runtime
-      .submitRegistered({ definition: planner }, input, { threadId, principal, idempotencyKey })
+      .submitRegistered(
+        {
+          definition:
+            admitted.value.agentId === previousTextPlanner.id ? previousTextPlanner : planner,
+        },
+        input,
+        { threadId, principal, idempotencyKey },
+      )
       .pipe(Effect.mapError(unavailable));
 
     return { accepted: true as const };
@@ -164,6 +173,7 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
       { definition: planner },
       {
         message: request.message,
+        ...(request.voice === undefined ? {} : { voice: request.voice }),
         settings,
         selectedTripId: request.selectedTripId,
         publication:
@@ -208,7 +218,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     Effect.mapError(unavailable),
   );
 
-  const messages: Messages = [
+  let messages: Messages = [
     { id: "welcome", role: "assistant", text: "Where do you want to go?", tripId: null },
     ...previous,
   ];
@@ -238,13 +248,31 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
         if (input._tag === "Some") {
           selected = input.value.selectedTripId;
           if (payload.submissionId !== undefined) recordedInputs.add(payload.submissionId);
-          messages.push({
-            id,
-            role: "user",
-            text: input.value.message,
-            tripId: selected,
-            ...(payload.submissionId === undefined ? {} : { submissionId: payload.submissionId }),
-          });
+          if (input.value.voice) messages = [...mergeSpeech(messages, input.value.voice.messages)];
+
+          const spokenInput = input.value.voice?.input
+            ? input.value.voice.messages.findLast((message) => message.role === "user")
+            : undefined;
+
+          if (spokenInput) {
+            messages = messages.map((message) =>
+              message.id === spokenInput.id
+                ? {
+                    ...message,
+                    ...(payload.submissionId === undefined
+                      ? {}
+                      : { submissionId: payload.submissionId }),
+                  }
+                : message,
+            );
+          } else
+            messages.push({
+              id,
+              role: "user",
+              text: input.value.message,
+              tripId: selected,
+              ...(payload.submissionId === undefined ? {} : { submissionId: payload.submissionId }),
+            });
         }
         break;
       }
@@ -257,6 +285,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
             role: "assistant",
             text: typeof answer.value === "string" ? answer.value : answer.value.message,
             tripId: selected,
+            response: true,
           });
         break;
       }
@@ -360,7 +389,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     if (recordedInputs.has(submission.submissionId)) return [];
     const input = Schema.decodeUnknownOption(PlannerInput)(submission.inputPayload);
 
-    return Option.isSome(input)
+    return Option.isSome(input) && !input.value.voice?.input
       ? [{ requestId: submission.idempotencyKey, text: input.value.message }]
       : [];
   });

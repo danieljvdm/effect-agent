@@ -10,8 +10,10 @@ import { PlannerError, PlannerInput } from "../domain.ts";
 import { PlannerAttempt, ProgressStore } from "../server/progress.ts";
 import { publicationAuthorization } from "../server/security.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
+import type { ScoutFindings } from "./contracts.ts";
 import {
   CoordinatorInput,
+  ConversationInput,
   researchCoordinatorIds,
   ScoutInput,
   ScoutReportInput,
@@ -56,30 +58,40 @@ export const readScoutInput = Effect.fn("readScoutInput")(function* (
   return { input, submission, origin };
 });
 
+const prepareResearchScoutReport = Effect.fn("prepareResearchScoutReport")(function* (
+  report: Subagent.WorkerReport<typeof ScoutFindings>,
+) {
+  const captured = yield* readScoutInput(report.receipt.submissionId);
+
+  if (
+    captured.submission.threadId !== report.worker.threadId ||
+    captured.submission.receiptId !== report.receipt.receiptId
+  )
+    return yield* unavailable();
+
+  return {
+    _tag: "ResearchScoutReport" as const,
+    worker: report.worker,
+    receipt: Receipt.make(report.receipt),
+    runId: report.runId,
+    settlementId: report.settlementId,
+    title: captured.input.title,
+    settings: captured.input.settings,
+    outcome: report.outcome,
+    findings: report.outcome === "completed" ? report.result : null,
+  };
+});
+
 export const researchScoutReport = Subagent.reporting(ResearchScout, {
   input: CoordinatorInput,
   failure: PlannerError,
-  prepare: Effect.fn("prepareResearchScoutReport")(function* (report) {
-    const captured = yield* readScoutInput(report.receipt.submissionId);
+  prepare: prepareResearchScoutReport,
+});
 
-    if (
-      captured.submission.threadId !== report.worker.threadId ||
-      captured.submission.receiptId !== report.receipt.receiptId
-    )
-      return yield* unavailable();
-
-    return {
-      _tag: "ResearchScoutReport" as const,
-      worker: report.worker,
-      receipt: Receipt.make(report.receipt),
-      runId: report.runId,
-      settlementId: report.settlementId,
-      title: captured.input.title,
-      settings: captured.input.settings,
-      outcome: report.outcome,
-      findings: report.outcome === "completed" ? report.result : null,
-    };
-  }),
+export const conversationScoutReport = Subagent.reporting(ResearchScout, {
+  input: ConversationInput,
+  failure: PlannerError,
+  prepare: prepareResearchScoutReport,
 });
 
 export const scoutAttemptLayer = (context: {

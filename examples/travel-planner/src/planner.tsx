@@ -40,6 +40,7 @@ import {
   messagesAtom,
   openAiConnectionAtom,
   modelSettingsOpenAtom,
+  spokenConversationAtom,
 } from "./state";
 
 function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | null {
@@ -92,6 +93,12 @@ function PlannerContent() {
   const progress = Option.getOrNull(AsyncResult.value(progressResult));
 
   const messages = useAtomValue(messagesAtom);
+  const spoken = useAtomValue(spokenConversationAtom);
+
+  const voiceActive =
+    spoken?.active &&
+    spoken.conversationId === selection.conversationId &&
+    spoken.email === session?.email;
 
   const busy = sendResult.waiting || (snapshot?.pending ?? 0) > 0;
   const canSend = session !== null && connected && !sendResult.waiting && draft.trim().length > 0;
@@ -113,6 +120,7 @@ function PlannerContent() {
   const transcript = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const lastMessageId = messages.at(-1)?.id;
+  const lastMessageText = messages.at(-1)?.text;
   const followResponse = useRef(true);
 
   useMobileViewport(transcript);
@@ -132,7 +140,13 @@ function PlannerContent() {
   useEffect(() => {
     if (followResponse.current)
       transcript.current?.scrollTo({ top: transcript.current.scrollHeight });
-  }, [selection.conversationId, lastMessageId, live?.revision, snapshot?.app?.revision]);
+  }, [
+    selection.conversationId,
+    lastMessageId,
+    lastMessageText,
+    live?.revision,
+    snapshot?.app?.revision,
+  ]);
 
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 701px)");
@@ -356,45 +370,57 @@ function PlannerContent() {
                     area.scrollHeight - area.scrollTop - area.clientHeight < 80;
                 }}
               >
-                {messages.map((message) => (
-                  <article
-                    key={message.requestId ?? message.id}
-                    className={`message ${message.role}${message.content ? " has-cards" : ""}`}
-                  >
-                    <span className="message-label">
-                      {message.role === "user" ? (
-                        "YOU"
-                      ) : (
-                        <>
-                          ELSEWHERE <ArrowUpRight size={13} aria-hidden="true" />
-                        </>
-                      )}
-                    </span>
-                    {message.content ? (
-                      <TravelCards content={message.content} />
-                    ) : message.role === "user" ? (
-                      <p>{message.text}</p>
-                    ) : (
+                {messages.map((message) =>
+                  message.supporting && !message.content ? (
+                    <details key={message.id} className="conversation-details">
+                      <summary>Trip details</summary>
                       <MessageText text={message.text} />
-                    )}
-                    {message.delivery === "failed" && (
-                      <div className="pending-message-footer">
-                        <span className="pending-message-status" role="status">
-                          Couldn't confirm delivery
-                        </span>
-                        <button
-                          className="pending-message-retry"
-                          type="button"
-                          disabled={sendResult.waiting}
-                          onClick={() => send(message.id)}
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                  </article>
-                ))}
-                <AgentProgress progress={visibleProgress} active={live !== null} busy={busy} />
+                    </details>
+                  ) : (
+                    <article
+                      key={message.requestId ?? message.id}
+                      className={`message ${message.role}${message.content ? " has-cards" : ""}`}
+                    >
+                      <span className="message-label">
+                        {message.role === "user" ? (
+                          "YOU"
+                        ) : (
+                          <>
+                            ELSEWHERE <ArrowUpRight size={13} aria-hidden="true" />
+                          </>
+                        )}
+                      </span>
+                      {message.content ? (
+                        <TravelCards content={message.content} />
+                      ) : message.role === "user" ? (
+                        <p>{message.text}</p>
+                      ) : (
+                        <MessageText text={message.text} />
+                      )}
+                      {message.delivery === "failed" && (
+                        <div className="pending-message-footer">
+                          <span className="pending-message-status" role="status">
+                            Couldn't confirm delivery
+                          </span>
+                          <button
+                            className="pending-message-retry"
+                            type="button"
+                            disabled={sendResult.waiting}
+                            onClick={() => send(message.id)}
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  ),
+                )}
+                <AgentProgress
+                  progress={visibleProgress}
+                  active={live !== null}
+                  busy={busy}
+                  showText={!voiceActive}
+                />
               </div>
             )}
             <form

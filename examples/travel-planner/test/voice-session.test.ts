@@ -9,6 +9,7 @@ import {
   type SendMessageRequest,
   type VoiceWork,
 } from "../src/domain.ts";
+import type { planner, previousTextPlanner } from "../src/server/planner.ts";
 import { emptyProgress } from "../src/server/progress.ts";
 import {
   appendCaption,
@@ -78,6 +79,14 @@ const setup = Effect.fn("voiceTest.setup")(function* (retained: ReadonlyArray<Vo
     progress: () => null,
     typedRevision: () => typed,
     typedContext: () => "Thursday instead of Friday",
+    typedRequest: () =>
+      typed
+        ? { ...request, requestId: "typed-request", message: "Thursday instead of Friday" }
+        : null,
+    speech: () => [],
+    caption: () => {},
+    context: () => "",
+    answers: () => [],
     persist: (value) =>
       Effect.sync(() => {
         stored = value;
@@ -253,11 +262,12 @@ it.effect("a spoken correction fences an in-flight result without cancelling acc
     yield* test.start;
     yield* Deferred.await(entered);
     yield* test.offer(caption("correction", "Actually Thursday", 500));
+    yield* test.offer(delegation("new-correction", 900));
     yield* Effect.yieldNow;
     yield* Deferred.succeed(result, observation(request.requestId, "completed"));
     yield* TestClock.adjust("1 second");
     expect(test.sent.filter((event) => event.type === "session.commentary.append")).toEqual([]);
-    expect(test.admitted).toEqual([]);
+    expect(test.admitted).toHaveLength(1);
     yield* Fiber.interrupt(fiber);
   }),
 );
@@ -326,8 +336,32 @@ it.effect(
       );
       yield* TestClock.adjust("1 second");
       expect(test.sent).toHaveLength(2);
-      expect(test.sent[1]).toMatchObject({ type: "session.thinking.append", delegation_id: null });
-      expect(test.sent[1]?.content).toContain("Thursday instead of Friday");
+      expect(test.sent[1]).toMatchObject({
+        type: "session.instructions.append",
+        delegation_id: null,
+      });
+      yield* test.offer(
+        Schema.decodeUnknownSync(LiveEvent)({
+          type: "session.instructions.appended",
+          client_event_id: test.sent[1]?.event_id,
+        }),
+      );
+      yield* TestClock.adjust("1 second");
+      expect(test.sent[2]).toMatchObject({ type: "session.thinking.append", delegation_id: null });
+      expect(test.sent[2]?.content).toContain("Thursday instead of Friday");
+      yield* test.offer(
+        Schema.decodeUnknownSync(LiveEvent)({
+          type: "session.thinking.appended",
+          client_event_id: test.sent[2]?.event_id,
+        }),
+      );
+      yield* TestClock.adjust("1 second");
+      expect(test.stored().at(-1)?.request.requestId).toBe("typed-request");
+      expect(test.sent[3]).toMatchObject({
+        type: "session.commentary.append",
+        delegation_id: null,
+        content: "Saved your Lisbon trip.",
+      });
       expect(test.admitted).toEqual([]);
       yield* Fiber.interrupt(fiber);
     }),
@@ -441,6 +475,12 @@ it("selects public output by receipt and attempt and leaves structured previews 
   if (event.type === "session.input_transcript.delta")
     expect(appendCaption([event], event)).toEqual([event]);
   expectTypeOf<Effect.Error<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<VoiceError>();
+  expectTypeOf<Effect.Error<ReturnType<typeof planner.instructions>>>().toEqualTypeOf<
+    Effect.Error<ReturnType<typeof previousTextPlanner.instructions>>
+  >();
+  expectTypeOf<Effect.Services<ReturnType<typeof planner.instructions>>>().toEqualTypeOf<
+    Effect.Services<ReturnType<typeof previousTextPlanner.instructions>>
+  >();
   expectTypeOf<Effect.Services<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<never>();
 });
 
@@ -488,9 +528,65 @@ it("joins transcript fragments into readable speaker rows without merging overla
     { id: "three", speaker: "AI voice", text: "Three days?" },
     { id: "four", speaker: "You", text: "Yes. Actually four." },
   ]);
-  expect(delegationMessage(fragments, 650)).toBe(
-    "Voice conversation (automatic transcript):\n\nYou: Please save Lisbon.\n\nAI voice: Three days?\n\nYou: Yes.",
-  );
+  expect(delegationMessage(fragments, 650)).toBe("Please save Lisbon.\nYes.");
   expect(delegationMessage([fragments[2]!], 650)).toBeNull();
   expect(delegationMessage([{ ...fragments[0]!, delta: "x".repeat(4000) }], 650)).toBeNull();
 });
+
+it.effect(
+  "brief speech delays a result without abandoning it, and later research continues the same answer",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup([
+        {
+          request,
+          delegationId: "item",
+          sessionId: "live-new",
+          offset: 100,
+          status: "accepted",
+          receipt: observation(),
+        },
+      ]);
+
+      let answers: ReadonlyArray<{ id: string; text: string }> = [];
+
+      test.backend.answers = () => answers;
+      test.backend.read = () => Effect.succeed(observation(request.requestId, "completed"));
+      const fiber = yield* test.run.pipe(Effect.forkChild);
+
+      yield* test.offer(caption("acknowledgment", "Mm", 500));
+      yield* test.start;
+      yield* TestClock.adjust("1 second");
+      expect(test.sent).toHaveLength(0);
+      yield* TestClock.adjust("1 second");
+      expect(test.sent[0]).toMatchObject({
+        type: "session.commentary.append",
+        content: "Saved your Lisbon trip.",
+      });
+      yield* test.offer(
+        Schema.decodeUnknownSync(LiveEvent)({
+          type: "session.commentary.appended",
+          client_event_id: test.sent[0]?.event_id,
+        }),
+      );
+      answers = [
+        { id: "finished", text: "Saved your Lisbon trip." },
+        { id: "research", text: "The two quieter options are now on screen." },
+      ];
+      yield* TestClock.adjust("1 second");
+      expect(test.sent[1]).toMatchObject({
+        type: "session.commentary.append",
+        content: "The two quieter options are now on screen.",
+      });
+      yield* test.offer(
+        Schema.decodeUnknownSync(LiveEvent)({
+          type: "session.commentary.appended",
+          client_event_id: test.sent[1]?.event_id,
+        }),
+      );
+      yield* TestClock.adjust("2 seconds");
+      expect(test.sent).toHaveLength(2);
+      expect(test.admitted).toEqual([]);
+      yield* Fiber.interrupt(fiber);
+    }),
+);

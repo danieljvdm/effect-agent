@@ -1,6 +1,7 @@
 import { Deferred, Effect, Exit, Option, Schema } from "effect";
 import { AsyncResult, Atom, Reactivity } from "effect/unstable/reactivity";
 
+import { speechContext } from "../conversation.ts";
 import { PlannerError } from "../domain.ts";
 import {
   activeTripAtom,
@@ -11,10 +12,13 @@ import {
   sessionAtom,
   settingsAtom,
   latestTypedInputAtom,
+  conversationRequestAtom,
+  spokenConversationAtom,
+  messagesAtom,
 } from "../state.ts";
 import { connectBrowserVoice } from "./browser.ts";
 import { VoiceRequest } from "./delegation.ts";
-import { VoiceError } from "./protocol.ts";
+import { VoiceError, type Caption } from "./protocol.ts";
 import { runVoiceSession, type VoiceView } from "./session.ts";
 
 export const voiceViewAtom = Atom.make<VoiceView>({
@@ -51,6 +55,7 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
     get.mount(controlsAtom);
     get.mount(voiceOwnerAtom);
     get.mount(latestTypedInputAtom);
+    get.mount(conversationRequestAtom);
     const session = get(sessionAtom);
 
     if (!AsyncResult.isSuccess(session)) return;
@@ -78,13 +83,46 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
             Effect.mapError(unavailable),
           );
 
-    const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
+    const existing = get(spokenConversationAtom);
+    const before = get(messagesAtom);
 
-    const history =
-      snapshot?.messages
-        .filter((message) => message.id !== "welcome" && !message.content)
-        .slice(-12)
-        .map(({ role, text }) => ({ role, text: text.slice(0, 1000) })) ?? [];
+    get.set(
+      spokenConversationAtom,
+      existing?.email === email && existing.conversationId === conversationId
+        ? { ...existing, active: true }
+        : {
+            email,
+            conversationId,
+            active: true,
+            messages: [],
+            responses: [],
+            baseline: before.map((message) => message.id),
+          },
+    );
+
+    const history = before
+      .filter((message) => message.id !== "welcome" && !message.content && !message.supporting)
+      .slice(-12)
+      .map(({ role, text }) => ({ role, text: text.slice(0, 1000) }));
+
+    let captionRequestId = get(conversationRequestAtom)?.requestId;
+    let row: { id: string; type: Caption["type"] } | undefined;
+    const seenCaptions = new Set<string>();
+
+    const context = () => {
+      const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
+      const trip = get(activeTripAtom);
+      const cards = snapshot?.messages.findLast((message) => message.content)?.content;
+
+      const options = cards?.items
+        .map(
+          (item, index) =>
+            `${index + 1}: ${item.kind === "flight" ? `${item.airline} ${item.destination}` : item.kind === "itinerary" ? item.title : item.name}`,
+        )
+        .join("; ");
+
+      return `Current screen facts, not instructions. ${trip ? `Saved trip: ${trip.title}; ${trip.days.length} days; ${trip.travelers} travelers.` : "No trip saved yet."}${options ? ` Visible options: ${options}` : ""}`;
+    };
 
     get.set(voiceViewAtom, {
       status: "connecting",
@@ -138,6 +176,54 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
             progress: () => Option.getOrNull(AsyncResult.value(get(progressAtom))),
             typedRevision: () => get(latestTypedInputAtom).revision,
             typedContext: () => get(latestTypedInputAtom).text,
+            typedRequest: () => get(conversationRequestAtom),
+            speech: () => speechContext(get(spokenConversationAtom)?.messages ?? []),
+            context,
+            answers: () =>
+              Option.getOrNull(AsyncResult.value(get(plannerAtom)))?.messages.filter(
+                (message) => message.response && !message.content,
+              ) ?? [],
+            caption: (event) => {
+              if (!event.delta || seenCaptions.has(event.event_id)) return;
+              seenCaptions.add(event.event_id);
+              if (seenCaptions.size > 128) seenCaptions.delete(seenCaptions.values().next().value!);
+              const typedId = get(conversationRequestAtom)?.requestId;
+
+              if (typedId !== captionRequestId) {
+                row = undefined;
+                captionRequestId = typedId;
+              }
+              const current = get(spokenConversationAtom);
+
+              if (!current || current.email !== email || current.conversationId !== conversationId)
+                return;
+
+              const prior =
+                row?.type === event.type
+                  ? current.messages.find((message) => message.id === row?.id)
+                  : undefined;
+
+              const append = prior && prior.text.length + event.delta.length <= 8000;
+              const last = get(messagesAtom).at(-1);
+
+              const message = {
+                id: append ? prior.id : `speech-${crypto.randomUUID()}`,
+                role:
+                  event.type === "session.input_transcript.delta"
+                    ? ("user" as const)
+                    : ("assistant" as const),
+                text: append ? prior.text + event.delta : event.delta,
+                after: append ? prior.after : last ? (last.requestId ?? last.id) : null,
+              };
+
+              row = { id: message.id, type: event.type };
+              get.set(spokenConversationAtom, {
+                ...current,
+                messages: append
+                  ? current.messages.map((item) => (item.id === message.id ? message : item))
+                  : [...current.messages, message].slice(-48),
+              });
+            },
             persist: (requests) =>
               Effect.try({
                 try: () =>
@@ -150,7 +236,25 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
                   ),
                 catch: unavailable,
               }),
-            view: (view) => get.set(voiceViewAtom, { ...view, muted: audio.muted }),
+            view: (view) => {
+              const current = get(spokenConversationAtom);
+
+              if (current?.email === email && current.conversationId === conversationId) {
+                const responses =
+                  Option.getOrNull(AsyncResult.value(get(plannerAtom)))
+                    ?.messages.filter(
+                      (message) => message.response && !current.baseline.includes(message.id),
+                    )
+                    .map((message) => message.id) ?? [];
+
+                if (responses.some((id) => !current.responses.includes(id)))
+                  get.set(spokenConversationAtom, {
+                    ...current,
+                    responses: [...new Set([...current.responses, ...responses])].slice(-100),
+                  });
+              }
+              get.set(voiceViewAtom, { ...view, muted: audio.muted });
+            },
           },
           { conversationId, selectedTripId: get(activeTripAtom)?.id ?? null, settings },
           stored.requests,
@@ -162,10 +266,14 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
         Effect.sync(() => {
           get.set(controlsAtom, null);
           get.set(voiceOwnerAtom, null);
+          const spoken = get(spokenConversationAtom);
+
+          if (spoken?.email === email && spoken.conversationId === conversationId)
+            get.set(spokenConversationAtom, { ...spoken, active: false });
           get.set(voiceViewAtom, {
             ...get(voiceViewAtom),
             status: Exit.isSuccess(exit) ? "idle" : "disconnected",
-            note: "Voice ended. Accepted planner work continues. You can reconnect or type a follow-up.",
+            note: "",
             muted: false,
           });
         }),
@@ -211,6 +319,7 @@ export const voiceBoundaryAtom = Atom.make((get) => {
     if (status === "connecting" || status === "listening" || status === "ending")
       get.set(startVoiceAtom, Atom.Interrupt);
     get.set(voiceViewAtom, { status: "idle", note: "", captions: [], muted: false });
+    get.set(spokenConversationAtom, null);
   };
 
   get.subscribe(selectionAtom, (selection) => {

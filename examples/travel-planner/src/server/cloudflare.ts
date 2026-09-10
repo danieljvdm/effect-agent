@@ -30,6 +30,7 @@ import { CoordinatorInput } from "../research/contracts.ts";
 import {
   ResearchAuthorizationLive,
   researchScoutReport,
+  conversationScoutReport,
   scoutAttemptLayer,
 } from "../research/runtime.ts";
 import {
@@ -66,6 +67,7 @@ import {
 import { liveModel } from "./models.ts";
 import {
   planner,
+  previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
   previousEditorPlanner,
@@ -310,9 +312,20 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v11" },
+        agent: { id: planner.id, version: "travel-planner-v12" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      reporting: [conversationScoutReport],
+      attemptLayer: (context) => attemptLayer(context, true),
+    },
+    {
+      agent: previousTextPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousTextPlanner.id, version: "travel-planner-v11" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousTextPlanner.toolkit.tools),
       }),
       reporting: [researchScoutReport],
       attemptLayer: (context) => attemptLayer(context, true),

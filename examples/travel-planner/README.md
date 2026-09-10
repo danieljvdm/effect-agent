@@ -124,27 +124,32 @@ and durable admission. The voice model is fixed; the planner uses the model sett
 when the call starts. This uses [GPT-Live client delegation](https://developers.openai.com/api/docs/guides/live-delegation).
 
 **Stop playback** mutes audio locally. **End voice** closes the call; accepted planning and app
-work continues. You can type during a call or return to text afterward. The expandable transcript
-attributes user and AI voice fragments; its timestamps do not establish complete turns or what
-was heard. Only a delegation event submits work. Recent attributed fragments accompany that
-request, and ordinary queued inputs carry corrections at the planner's safe boundaries.
+work continues. Spoken lines appear under the same You and Elsewhere speakers in the main
+conversation. Full planner answers remain available under **Trip details** while voice carries
+the exchange; cards stay visible. You can type during a call or return to text afterward. Typed
+follow-ups include recent spoken context, and voice follows their results without resubmitting
+them. Only a delegation event admits spoken work. Its user request and attributed conversation
+context are separate fields; a transcript never becomes a synthetic user message or title.
 
 Reconnect creates a replacement voice session with recent saved conversation history. This tab
 retains up to sixteen frozen request envelopes in session storage, partitioned by verified email
 and conversation. An uncertain admission is looked up by its original request ID before retrying
 the exact envelope; accepted work is only observed. Closing the tab loses this local retry cache,
 while already accepted work and its canonical conversation remain saved. Recent undelegated
-speech is local to the call and is not promised to survive reload. Changing conversations or
+speech stays in this tab after ending a call, and accompanies the next typed or spoken request.
+It is not promised to survive reload before that submission. Changing conversations or
 accounts closes the media session. A full page reload can require reopening the original trip
 before reconnecting.
 
 Only native response text, designated `deliver_response.message` previews, selected progress
 labels, and schema-decoded settled answers reach the voice model. Previews are explicitly
 provisional and sent as context; final answers use canonical settlement. Reasoning, credentials,
-raw tool output, card payloads, and diagnostics are excluded. New speech suppresses older task
-updates until a new delegation; newer typed input mutes earlier speech and suppresses stale
-results. You can resume audio with the playback control. Provider acceptance and playback are
-shown separately from planner acceptance and settlement; no event proves that speech was heard.
+raw tool output and diagnostics are excluded. A short summary of the saved trip and visible
+option names keeps references such as “the second one” grounded in the screen. Later canonical
+research answers return to the same voice exchange. A brief utterance delays an outgoing result
+without discarding it; actual delegated corrections and typed requests replace the tracked work.
+Typing redirects the current explanation without leaving audio muted. Provider acknowledgment,
+playback and durable settlement remain separate internal states; no event proves speech was heard.
 
 The browser uses WebRTC media and a bounded event queue (128 events, 32 KiB per event). It waits
 for `session.started`, keeps at most 128 caption fragments, coalesces pending delegation metadata,

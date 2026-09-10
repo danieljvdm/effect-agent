@@ -19,6 +19,7 @@ import {
   sessionAtom,
   settingsAtom,
   latestTypedInputAtom,
+  spokenConversationAtom,
 } from "../src/state.ts";
 
 const Packet = Schema.Struct({
@@ -366,6 +367,53 @@ it("restores queued messages into a fresh registry without a local outbox", asyn
     expect(device.registry.get(pendingMessagesAtom)).toEqual([
       { id: "persisted-request", text: "Add a beach day", status: "queued" },
     ]);
+  } finally {
+    device.close();
+  }
+});
+
+it("carries the spoken exchange into a typed follow-up without displaying a transcript submission", async () => {
+  const fixture = setup();
+  const device = fixture.createDevice();
+  const { registry } = device;
+
+  try {
+    await flush();
+    fixture.reads[0]!.succeed(snapshot());
+    await flush();
+    registry.set(spokenConversationAtom, {
+      email: "danieljmerwe@gmail.com",
+      conversationId: "lisbon",
+      active: true,
+      baseline: [],
+      responses: [],
+      messages: [
+        { id: "speech-question", role: "assistant", text: "Starting from where?", after: null },
+        { id: "speech-reply", role: "user", text: "The Bay Area", after: "speech-question" },
+      ],
+    });
+    registry.set(draftAtom, "Three nights, please");
+    registry.set(sendMessageAtom, undefined);
+    await flush();
+    fixture.preferences[0]!.succeed();
+    await flush();
+    expect(fixture.sends[0]?.payload).toMatchObject({
+      message: "Three nights, please",
+      voice: {
+        input: false,
+        messages: [
+          { role: "assistant", text: "Starting from where?" },
+          { role: "user", text: "The Bay Area" },
+        ],
+      },
+    });
+    expect(registry.get(messagesAtom).map(({ text }) => text)).toEqual([
+      "Starting from where?",
+      "The Bay Area",
+      "Three nights, please",
+    ]);
+    fixture.sends[0]!.succeed();
+    await flush();
   } finally {
     device.close();
   }

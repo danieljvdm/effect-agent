@@ -2,7 +2,7 @@ import { Effect, Schema, Stream } from "effect";
 import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
-import { selectionAtom, sessionAtom } from "../src/state.ts";
+import { selectionAtom, sessionAtom, messagesAtom } from "../src/state.ts";
 import * as browser from "../src/voice/browser.ts";
 import {
   startVoiceAtom,
@@ -89,6 +89,7 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
   const unmounts = [
     registry.mount(voiceBoundaryAtom),
     registry.mount(voiceViewAtom),
+    registry.mount(messagesAtom),
     registry.mount(startVoiceAtom),
   ];
 
@@ -100,15 +101,18 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
     expect(registry.get(selectionAtom).conversationId).toBeTruthy();
     expect(registry.get(voiceViewAtom).status).toBe("listening");
     expect(registry.get(voiceViewAtom).captions).toHaveLength(1);
+    expect(registry.get(messagesAtom)).toMatchObject([{ role: "user", text: "Private trip" }]);
     registry.set(stopVoiceAtom, undefined);
     await vi.advanceTimersByTimeAsync(6000);
-    expect(sends).toEqual(["session.close"]);
+    expect(sends).toEqual(["session.thinking.append", "session.close"]);
     expect(finalized).toBe(1);
     expect(registry.get(voiceViewAtom).captions).toHaveLength(1);
+    expect(registry.get(messagesAtom)).toMatchObject([{ role: "user", text: "Private trip" }]);
     email = "second@example.com";
     registry.refresh(sessionAtom);
     await vi.advanceTimersByTimeAsync(1);
     expect(registry.get(voiceViewAtom).captions).toEqual([]);
+    expect(registry.get(messagesAtom)).toEqual([]);
   } finally {
     for (const unmount of unmounts) unmount();
     registry.dispose();

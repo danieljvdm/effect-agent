@@ -3,16 +3,18 @@ import { Receipt } from "@effect-agent/core/Receipt";
 import { WorkerRef } from "@effect-agent/core/Worker";
 import { Schema } from "effect";
 
-import { PlannerInput, PlannerSettings, ShortText, Text } from "../domain.ts";
+import { PlannerInput, TextPlannerInput, PlannerSettings, ShortText, Text } from "../domain.ts";
 import { TravelPhoto, TravelUrl } from "../travel-content.ts";
 
 export const previousResearchCoordinatorId = "travel-planner-v9";
 export const previousBudgetCoordinatorId = "travel-planner-v10";
-export const researchCoordinatorId = "travel-planner-v11";
+export const previousTextCoordinatorId = "travel-planner-v11";
+export const researchCoordinatorId = "travel-planner-v12";
 
 export const researchCoordinatorIds = [
   previousResearchCoordinatorId,
   previousBudgetCoordinatorId,
+  previousTextCoordinatorId,
   researchCoordinatorId,
 ];
 
@@ -55,4 +57,9 @@ export const ScoutReportInput = Schema.Struct({
 });
 
 // Keep PlannerInput user-only so existing transcript projections exclude internal reports.
-export const CoordinatorInput = Schema.Union([PlannerInput, ScoutReportInput]);
+export const CoordinatorInput = Schema.Union([TextPlannerInput, ScoutReportInput]);
+
+/** New admissions share this exact schema with the research reporting registration. */
+export const ConversationInput = Schema.Union([PlannerInput, ScoutReportInput]);
+
+export const expandedCoordinatorIds = [previousTextCoordinatorId, researchCoordinatorId];

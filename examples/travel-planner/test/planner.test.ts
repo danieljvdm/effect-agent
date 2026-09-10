@@ -277,11 +277,26 @@ it("isolates conversations while retaining owner trips, native mutations, public
     expect(accessRequests.every(({ url }) => url === accessGroupUrl)).toBe(true);
     redirectAccess = false;
     expect((await snapshot()).messages[0]?.text).toBe("Where do you want to go?");
+
+    const voice = {
+      input: true,
+      messages: [
+        {
+          id: "speech-question",
+          role: "assistant",
+          text: "Where would you like to go?",
+          after: null,
+        },
+        { id: "speech-reply", role: "user", text: "Let's go to Lisbon", after: "speech-question" },
+      ],
+    };
+
     await rpc("SendMessage", {
       conversationId: firstConversation,
       message: "Let's go to Lisbon",
       selectedTripId: null,
       requestId: "create-lisbon",
+      voice,
     });
     const saved = await until((state) => state.pending === 0 && state.trips.length === 1);
 
@@ -292,6 +307,28 @@ it("isolates conversations while retaining owner trips, native mutations, public
       "create-lisbon",
     );
     expect(saved.activity.some((item) => item.text === "save_trip: completed")).toBe(true);
+    expect(saved.messages.find((message) => message.id === "speech-question")).toMatchObject({
+      role: "assistant",
+      text: "Where would you like to go?",
+    });
+    expect(
+      saved.messages.filter((message) => message.role === "user").map((message) => message.text),
+    ).toEqual(["Let's go to Lisbon"]);
+    expect(
+      saved.conversations?.find((conversation) => conversation.conversationId === firstConversation)
+        ?.title,
+    ).toBe("Let's go to Lisbon");
+    expect(
+      (
+        await rpcExit("SendMessage", {
+          conversationId: firstConversation,
+          message: "Let's go to Lisbon",
+          selectedTripId: null,
+          requestId: "create-lisbon",
+          voice: { ...voice, messages: [] },
+        })
+      )._tag,
+    ).toBe("Failure");
     const trip = saved.trips[0]!;
 
     const voiceReceipt = Schema.decodeUnknownSync(VoiceWork)(
@@ -326,6 +363,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
       message: "Let's go to Lisbon",
       selectedTripId: null,
       requestId: "create-lisbon",
+      voice,
     });
     expect((await snapshot()).trips).toHaveLength(1);
     await rpc("SendMessage", {

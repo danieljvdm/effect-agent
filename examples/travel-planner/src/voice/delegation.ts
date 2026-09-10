@@ -40,11 +40,14 @@ export const captionRows = (captions: ReadonlyArray<Caption>) => {
 export const delegationMessage = (
   captions: ReadonlyArray<Caption>,
   offset: number,
+  after = -1,
 ): string | null => {
-  const selected = captions.filter((caption) => caption.start_ms <= offset).slice(-48);
+  const selected = captions
+    .filter((caption) => caption.start_ms <= offset && caption.end_ms > after)
+    .slice(-48);
 
   if (!selected.some((caption) => caption.type === "session.input_transcript.delta")) return null;
-  // Select whole attributed fragments. Assistant speech is evidence, never a user command.
+  // The work request contains user words; the attributed dialogue travels separately in voice.messages.
   const fragments: Caption[] = [];
   let size = 0;
   let hasUser = false;
@@ -60,12 +63,10 @@ export const delegationMessage = (
   }
   if (!hasUser) return null;
 
-  return (
-    "Voice conversation (automatic transcript):\n\n" +
-    captionRows(fragments)
-      .map((row) => `${row.speaker}: ${row.text}`)
-      .join("\n\n")
-  );
+  return captionRows(fragments)
+    .filter((row) => row.speaker === "You")
+    .map((row) => row.text)
+    .join("\n");
 };
 
 /** Output selection is allowlisted; diagnostics, reasoning, cards and tool data never pass. */

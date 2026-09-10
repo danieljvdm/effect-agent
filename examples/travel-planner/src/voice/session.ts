@@ -6,6 +6,7 @@ import {
   type PlannerProgress,
   type VoiceWork,
   type VoiceWorkRequest,
+  type SpokenMessage,
 } from "../domain.ts";
 import type { VoiceConnection } from "./browser.ts";
 import {
@@ -30,6 +31,11 @@ export interface VoiceBackend {
   readonly progress: () => PlannerProgress | null;
   readonly typedRevision: () => number;
   readonly typedContext: () => string;
+  readonly typedRequest: () => SendMessageRequest | null;
+  readonly speech: () => ReadonlyArray<SpokenMessage>;
+  readonly caption: (caption: Caption) => void;
+  readonly context: () => string;
+  readonly answers: () => ReadonlyArray<{ readonly id: string; readonly text: string }>;
   readonly persist: (requests: ReadonlyArray<VoiceRequest>) => Effect.Effect<void, VoiceError>;
   readonly view: (view: VoiceView) => void;
 }
@@ -52,11 +58,17 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
   let typedRevision = backend.typedRevision();
   let lastUpdate = "";
   let lastProgressAt = 0;
+  let lastDelegatedOffset = -1;
+  let lastUserAt = -Infinity;
+  let typedRequestId = backend.typedRequest()?.requestId;
+  let lastContext = "";
+  let seenAnswers = new Set(backend.answers().map((answer) => answer.id));
   let status: VoiceView["status"] = "connecting";
   let note = "Connecting…";
   let pending: { id: string; offset: number; at: number } | undefined;
   let append: { id: string; at: number } | undefined;
   let typedContext: string | undefined;
+  let pauseForTyped = false;
   const knownDelegations = new Set<string>();
   const render = () => backend.view({ status, note, captions, muted: false });
 
@@ -70,7 +82,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
   });
 
   const sendContext = Effect.fn("voice.context")(function* (
-    type: "session.thinking.append" | "session.commentary.append",
+    type: "session.thinking.append" | "session.commentary.append" | "session.instructions.append",
     text: string,
     delegation: string | null,
   ) {
@@ -91,19 +103,17 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         if (event.type === "session.started") {
           sessionId = event.session.id;
           status = "listening";
-          note = "Listening · AI voice";
+          note = "Listening";
           yield* Deferred.succeed(ready, undefined);
         } else if (event.type === "session.closed") {
           yield* Deferred.succeed(closed, undefined);
         } else if (isCaption(event)) {
           captions = appendCaption(captions, event);
-          if (
-            event.type === "session.input_transcript.delta" &&
-            latest &&
-            (latest.sessionId !== sessionId || event.start_ms > latest.offset)
-          )
-            stale = true;
+          backend.caption(event);
+          if (event.type === "session.input_transcript.delta")
+            lastUserAt = yield* Clock.currentTimeMillis;
         } else if (event.type === "session.delegation.created") {
+          if (event.offset_ms <= lastDelegatedOffset) return;
           if (!knownDelegations.has(event.delegation.id)) {
             if (knownDelegations.size >= 64)
               return yield* new VoiceError({
@@ -125,7 +135,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
           });
         } else if (event.client_event_id === append?.id) {
           append = undefined;
-          note = "Update accepted by voice · playback unconfirmed";
+          note = "Listening";
         }
         render();
       }),
@@ -138,21 +148,51 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
     if (typedRevision !== backend.typedRevision()) {
       typedRevision = backend.typedRevision();
       stale = true;
-      yield* connection.silence;
-      typedContext = `New typed input supersedes earlier results. Already sent to the planner; do not delegate it again. ${backend.typedContext()}`;
-      note = "Typed update sent · earlier speech muted";
+      pending = undefined;
+      lastDelegatedOffset = captions.at(-1)?.end_ms ?? lastDelegatedOffset;
+      typedContext = `New typed user input (reference data): ${JSON.stringify(backend.typedContext())}. This request is already being handled. Continue from its updated result.`;
+      pauseForTyped = true;
+      note = "Updating your trip…";
+      seenAnswers = new Set(backend.answers().map((answer) => answer.id));
+    }
+    const typedRequest = backend.typedRequest();
+
+    if (
+      typedRequest &&
+      typedRequest.conversationId === envelope.conversationId &&
+      typedRequest.requestId !== typedRequestId
+    ) {
+      typedRequestId = typedRequest.requestId;
+      latest = {
+        request: typedRequest,
+        sessionId,
+        delegationId: "",
+        offset: lastDelegatedOffset,
+        status: "accepted",
+        receipt: null,
+      };
+      stale = false;
+      lastUpdate = "";
+      yield* replace(latest);
     }
     if (append && now - append.at > 15_000)
       return yield* new VoiceError({
         message: "Voice did not acknowledge an update. Reconnect to check existing work.",
       });
-    if (typedContext && !append) {
+    if (pauseForTyped && !append) {
+      yield* sendContext(
+        "session.instructions.append",
+        "Pause the current explanation. The user has typed an update in this same conversation. Read the next context update and continue naturally; its work is already being handled, so do not delegate it again.",
+        null,
+      );
+      pauseForTyped = false;
+    } else if (typedContext && !append) {
       yield* sendContext("session.thinking.append", typedContext, null);
       typedContext = undefined;
     }
     if (pending && now - pending.at >= 400) {
       const delegation = pending;
-      const message = delegationMessage(captions, delegation.offset);
+      const message = delegationMessage(captions, delegation.offset, lastDelegatedOffset);
 
       if (message !== null) {
         pending = undefined;
@@ -160,6 +200,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         const request = yield* Schema.decodeUnknownEffect(SendMessageRequest)({
           ...envelope,
           message,
+          voice: { input: true, messages: backend.speech() },
           requestId: crypto.randomUUID(),
         }).pipe(
           Effect.mapError(
@@ -179,7 +220,9 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
           receipt: null,
         };
         stale = false;
+        lastDelegatedOffset = delegation.offset;
         lastUpdate = "";
+        seenAnswers = new Set(backend.answers().map((answer) => answer.id));
         // Freeze before the first network call. A lost acknowledgement retains identical input/settings.
         yield* replace(latest);
       } else if (now - delegation.at > 3_000 && !append) {
@@ -190,6 +233,12 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
           delegation.id,
         );
       }
+    }
+    const context = backend.context();
+
+    if (context && context !== lastContext && !append && !typedContext && !pending) {
+      yield* sendContext("session.thinking.append", context, null);
+      lastContext = context;
     }
     const current = latest;
 
@@ -210,10 +259,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       };
 
       yield* replace(accepted);
-      note =
-        accepted.status === "accepted"
-          ? "Planner accepted the request"
-          : "Admission uncertain · reconnect to reconcile";
+      note = accepted.status === "accepted" ? "Working on your trip…" : "Checking your request…";
     }
 
     const observed = yield* Effect.result(
@@ -221,7 +267,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
     );
 
     if (observed._tag === "Failure") {
-      note = "Planner status temporarily unavailable";
+      note = "Reconnecting to your trip…";
       render();
 
       return;
@@ -245,15 +291,23 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       receipt: work,
       status: work.state === "pending" ? "accepted" : "settled",
     });
-    const update = voiceUpdate(work, backend.progress());
+    const answers = backend.answers();
+    const answer = answers.findLast((item) => !seenAnswers.has(item.id));
+
+    const update =
+      !work.superseded && work.state === "completed" && answer && answer.text !== work.text
+        ? { kind: "result" as const, key: `answer:${answer.id}`, text: shortContext(answer.text) }
+        : voiceUpdate(work, backend.progress());
 
     if (
       update &&
+      now - lastUserAt >= 1500 &&
       !append &&
       update.key !== lastUpdate &&
       (update.kind === "result" || now - lastProgressAt >= 3000)
     ) {
-      const delegation = current.sessionId === sessionId ? current.delegationId : null;
+      const delegation =
+        current.sessionId === sessionId && current.delegationId ? current.delegationId : null;
 
       yield* sendContext(
         update.kind === "result" ? "session.commentary.append" : "session.thinking.append",
@@ -261,11 +315,13 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         delegation,
       );
       lastUpdate = update.key;
+      if (update.kind === "result") {
+        for (const answer of answers) seenAnswers.add(answer.id);
+        // A later research answer continues the exchange; don't then repeat the earlier receipt answer.
+        if (update.key.startsWith("answer:")) lastUpdate = `settled:${work.receiptId}`;
+      }
       lastProgressAt = now;
-      note =
-        update.kind === "result"
-          ? "Planner settled · sent to voice"
-          : "Planner working · preview sent";
+      note = update.kind === "result" ? "Listening" : "Working on your trip…";
     }
     render();
   });
@@ -295,7 +351,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
   const ending = Effect.gen(function* () {
     yield* Deferred.await(stop);
     status = "ending";
-    note = "Ending voice · planner work continues";
+    note = "Ending voice…";
     render();
     yield* connection.silence;
     yield* connection.send({ type: "session.close" });
@@ -310,7 +366,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       () =>
         new VoiceError({
           message:
-            "Voice ended or disconnected. Accepted planner work continues; reconnect to check it.",
+            "Voice disconnected. Your trip is still being worked on. You can reconnect or keep typing.",
         }),
     ),
   );

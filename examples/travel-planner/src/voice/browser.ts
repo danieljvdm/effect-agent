@@ -77,8 +77,10 @@ export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
 
   const onTrack = (event: RTCTrackEvent) => {
     audio.srcObject = new MediaStream([event.track]);
-    // Autoplay failure is visible through native audio controls.
-    void audio.play().catch(() => {});
+    // The existing resume action can retry playback after the browser blocks autoplay.
+    void audio.play().catch(() => {
+      audio.muted = true;
+    });
   };
 
   yield* Effect.acquireRelease(

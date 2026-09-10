@@ -13,7 +13,7 @@ import { Toolkit } from "effect/unstable/ai";
 
 import { DeliverResponse } from "../agent.ts";
 import { PlannerError } from "../domain.ts";
-import { researchCoordinatorIds, researchCoordinatorId } from "../research/contracts.ts";
+import { researchCoordinatorIds, expandedCoordinatorIds } from "../research/contracts.ts";
 import { ResearchScout, researchScout } from "../research/scout.ts";
 import { activeWorkerLimit, editorPolicy, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt, ProgressStore, trackTool } from "../server/progress.ts";
@@ -196,12 +196,13 @@ export const EditorHostLive = Layer.mergeAll(
       if (![appEditor.id, researchScout.id].includes(request.definition.id))
         return Effect.succeed(Option.none());
       // A worker's allowance is immutable. Follow-ups and recovery retain it, including
-      // workers started by earlier coordinators; only new v11 admissions opt in.
+      // workers started by earlier coordinators; v11 and later admissions opt in.
       if (request._tag === "RetainedWorker")
         return Effect.succeed(Option.some(request.origin.policy));
-      if (request.source.agentId !== researchCoordinatorId) return Effect.succeed(Option.none());
+      if (!expandedCoordinatorIds.includes(request.source.agentId))
+        return Effect.succeed(Option.none());
       if (
-        request.sourceSubmission?.agentId !== researchCoordinatorId ||
+        request.sourceSubmission?.agentId !== request.source.agentId ||
         request.sourceSubmission.threadId !== request.source.threadId
       )
         return Effect.fail(WorkerError.make({ operation: "start", reason: "unavailable" }));
@@ -224,7 +225,7 @@ export const EditorHostLive = Layer.mergeAll(
   }),
   Layer.succeed(WorkerBudgetAuthorizer, {
     authorize: (request) => {
-      const expanded = request.source.agentId === researchCoordinatorId;
+      const expanded = expandedCoordinatorIds.includes(request.source.agentId);
 
       const editor =
         [coordinatorId, ...researchCoordinatorIds].includes(request.source.agentId) &&
