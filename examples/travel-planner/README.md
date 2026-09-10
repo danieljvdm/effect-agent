@@ -167,6 +167,12 @@ installing BYOK. Verify that the Worker no longer has `OPENAI_API_KEY`, then dep
 `PUBLIC_SIGN_UP=true`. This avoids opening access while the old, host-funded Worker is active.
 New deployments default to public registration. Generated trip app hosts remain public.
 
+Deployment caveat: Alchemy can report a secret binding as deleted while the uploaded Worker
+still retains it. During the BYOK rollout, this happened to `OPENAI_API_KEY`. Inspect the
+deployed bindings and explicitly remove that obsolete Worker secret before opening signup;
+removing its entry from `env` alone is insufficient. Preserve `BYOK_ENCRYPTION_KEY`. Removing
+a Worker binding does not revoke the provider key or change secrets in other Workers.
+
 ## Bring your own OpenAI key
 
 Settings lets each account connect, replace, or remove its key. Connection checks use OpenAI's
