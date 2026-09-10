@@ -1,8 +1,12 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/workflow" },
-    { "path": "./examples/cloudflare-memory" },
+    {
+      "path": "./packages/workflow"
+    },
+    {
+      "path": "./tooling/cloudflare-memory"
+    },
     {
       "path": "./packages/effect-agent"
     },
@@ -43,22 +47,16 @@
       "path": "./packages/testing"
     },
     {
-      "path": "./examples/demo"
-    },
-    {
       "path": "./packages/pr-review-action"
     },
     {
-      "path": "./examples/providers"
+      "path": "./tooling/browser-run-worker-proof"
     },
     {
-      "path": "./examples/repo-ops"
+      "path": "./tooling/pr-review-eval"
     },
     {
-      "path": "./examples/browser-run-worker-proof"
-    },
-    {
-      "path": "./examples/pr-review-eval"
+      "path": "./examples/travel-planner"
     }
   ]
 }

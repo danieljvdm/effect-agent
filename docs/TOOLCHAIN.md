@@ -7,6 +7,9 @@ Framework packages live in `packages/*`; runnable examples live in `examples/*`.
 
 The root [package.json](../package.json) owns shared dependency versions.
 Workspace manifests use `catalog:` for those dependencies and `workspace:*` for internal packages.
+The travel planner is a release consumer: its Effect Agent dependencies pin exact npm versions.
+`bunfig.toml` disables implicit workspace linking, so only explicit `workspace:` dependencies
+use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 
 | Tool                                                    | Repository version   |
@@ -33,7 +36,7 @@ The docs deployment runs Alchemy under Bun, so the root also installs Alchemy's
 optional `@effect/platform-bun` peer at the shared Effect version.
 Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
-The Code Mode example also uses a Vite task for its Miniflare tests.
+Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 
 VitePress uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
@@ -42,21 +45,19 @@ do not add a global Vite override.
 
 See the [package map](reference/packages.md) for public packages and capabilities.
 
-| Directory                           | Purpose                                               |
-| ----------------------------------- | ----------------------------------------------------- |
-| `packages/*`                        | Framework and private PR-review integration packages  |
-| `examples/demo`                     | Local browser app                                     |
-| `examples/runtime-benchmark`        | Deterministic public-package runtime comparisons      |
-| `examples/context-continuity-eval`  | Continuity gates and opt-in deployed performance      |
-| `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
-| `examples/providers`                | Provider bindings, persistent history, Workflow host  |
-| `examples/repo-ops`                 | Repository evidence auditor                           |
-| `examples/browser-run-worker-proof` | Opt-in hosted Browser Run verification; owns Wrangler |
-| `examples/pr-review-eval`           | Opt-in live review evaluation                         |
-| `examples/code-mode-cloudflare`     | Generated JavaScript over a SQLite DO warehouse       |
-| `action/`                           | PR-review Action contract and ignored build output    |
+| Directory                          | Purpose                                                 |
+| ---------------------------------- | ------------------------------------------------------- |
+| `packages/*`                       | Framework and private PR-review integration packages    |
+| `examples/travel-planner`          | Canonical Cloudflare application, deployed with Alchemy |
+| `tooling/runtime-benchmark`        | Deterministic runtime comparisons                       |
+| `tooling/context-continuity-eval`  | Release continuity gates and deployed performance       |
+| `tooling/cloudflare-memory`        | Thread-to-Memory latency and heap measurements          |
+| `tooling/browser-run-worker-proof` | Opt-in hosted Browser Run verification                  |
+| `tooling/pr-review-eval`           | Opt-in live review evaluation                           |
+| `tooling/semantic-memory-eval`     | Semantic-memory quality evaluation                      |
+| `action/`                          | PR-review Action contract and ignored build output      |
 
-Framework code stays in `packages/*`. Examples are leaf workspaces.
+Framework code stays in `packages/*`. The canonical app and operational harnesses are leaf workspaces.
 Provider integrations come from upstream Effect AI Layers.
 
 ```text
@@ -77,22 +78,22 @@ Shared compiler settings live in `tsconfig.base.json`.
 
 Run `vp help` or `vp <command> --help` for options.
 
-| Command                                    | Use                                                   |
-| ------------------------------------------ | ----------------------------------------------------- |
-| `vp install`                               | Install dependencies and hooks                        |
-| `vp check`                                 | Format, lint, and type checks                         |
-| `vp fmt` / `vp fmt --check`                | Format files / check formatting                       |
-| `vp lint` / `vp lint --fix`                | Lint / apply fixes                                    |
-| `vp test`                                  | Root test runner                                      |
-| `vp run check`                             | All static checks, package types, scripts, and purity |
-| `vp run test`                              | All workspace suites, including Cloudflare            |
-| `vp run build`                             | Package, docs, and Action builds                      |
-| `vp run ready`                             | Full handoff gate: check, test, build                 |
-| `vp run docs:dev`                          | Docs development server                               |
-| `vp run docs:build`                        | Build docs and check links                            |
-| `vp run docs:preview`                      | Preview built docs                                    |
-| `vp run -F @effect-agent/example-demo dev` | Browser demo on port 4173                             |
-| `vp env doctor`                            | Diagnose toolchain setup                              |
+| Command                                              | Use                                                   |
+| ---------------------------------------------------- | ----------------------------------------------------- |
+| `vp install`                                         | Install dependencies and hooks                        |
+| `vp check`                                           | Format, lint, and type checks                         |
+| `vp fmt` / `vp fmt --check`                          | Format files / check formatting                       |
+| `vp lint` / `vp lint --fix`                          | Lint / apply fixes                                    |
+| `vp test`                                            | Root test runner                                      |
+| `vp run check`                                       | All static checks, package types, scripts, and purity |
+| `vp run test`                                        | All workspace suites, including Cloudflare            |
+| `vp run build`                                       | Package, docs, and Action builds                      |
+| `vp run ready`                                       | Full handoff gate: check, test, build                 |
+| `vp run docs:dev`                                    | Docs development server                               |
+| `vp run docs:build`                                  | Build docs and check links                            |
+| `vp run docs:preview`                                | Preview built docs                                    |
+| `vp run -F @effect-agent/example-travel-planner dev` | Cloudflare travel planner                             |
+| `vp env doctor`                                      | Diagnose toolchain setup                              |
 
 Use `vp run <task>` for other scripts. Do not use `bun run`, `npm run`, `pnpm run`,
 `yarn run`, or invoke the wrapped compiler, formatter, linter, or test runner directly.
@@ -169,7 +170,7 @@ After that PR merges, the workflow publishes through npm trusted publishing with
 Publication first runs `release:checked-publish`, which checks npm for unpublished public versions.
 If all versions already exist, it skips publication and the paid evaluation. Registry failures
 stop the attempt before inference. A pending release requires a fresh, uncached
-[context continuity evaluation](../examples/context-continuity-eval/README.md) on the exact clean
+[context continuity evaluation](../tooling/context-continuity-eval/README.md) on the exact clean
 candidate checkout. Missing credentials, incomplete runs, model failures, or failed assertions stop
 publication. Configure `OPENAI_API_KEY` as a repository secret and optionally `CONTEXT_EVAL_MODEL`
 as a repository variable; the workflow explicitly selects `gpt-6-astra` by default. Each suite has a
@@ -241,7 +242,7 @@ To upgrade Effect:
 
 1. Update all Effect-family catalog entries together.
 2. Run `vp install`.
-3. Run `vp run ready`, including provider example compilation.
+3. Run `vp run ready`, including canonical application compilation.
 4. Run applicable opt-in provider checks with host credentials.
 5. Commit the catalog and lockfile together.
 
@@ -362,7 +363,7 @@ The comment workflow becomes active after it is merged into the default branch.
 ## Runtime performance comparisons
 
 Pull requests run the **Runtime performance** workflow against the exact base and head commits.
-The [scripted benchmark](../examples/runtime-benchmark/README.md) runs identical
+The [scripted benchmark](../tooling/runtime-benchmark/README.md) runs identical
 fixture bytes against production builds and each revision's own lockfile on the same Node runtime.
 Run `vp run perf:compare --help` for local reproduction. Timing tasks bypass the task cache; keep
 other builds, tests, and benchmarks idle during measurement.
@@ -384,7 +385,7 @@ Fairness, lock contention, optional
 memory/MCP publication, and large settled-ledger indexing require their own controlled evidence
 before changing those paths.
 
-The separate [manual Cloudflare evaluation](../examples/context-continuity-eval/README.md#manual-deployed-performance-evaluation)
+The separate [manual Cloudflare evaluation](../tooling/context-continuity-eval/README.md#manual-deployed-performance-evaluation)
 deploys real model-and-tool workloads through the public HTTP/DO host. Use `vp run perf:cloudflare
 --dry-run` to inspect the deployment plan without credentials. The workflow accepts exact commits
 and runs only on explicit dispatch with its dedicated environment credentials. Its bounded fresh,

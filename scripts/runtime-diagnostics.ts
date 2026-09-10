@@ -6,8 +6,8 @@ import { Cause, Clock, Console, Effect, Exit, FileSystem, Path, Schema } from "e
 import { Command, Flag } from "effect/unstable/cli";
 import { build, version as esbuildVersion } from "esbuild";
 
-import { BenchmarkError, check, summary } from "../examples/runtime-benchmark/src/contracts.ts";
-import { diagnosticCases } from "../examples/runtime-benchmark/src/diagnostic-cases.ts";
+import { BenchmarkError, check, summary } from "../tooling/runtime-benchmark/src/contracts.ts";
+import { diagnosticCases } from "../tooling/runtime-benchmark/src/diagnostic-cases.ts";
 import {
   completeDiagnosticBatch,
   DIAGNOSTIC_SIZES,
@@ -15,8 +15,8 @@ import {
   DiagnosticCase,
   DiagnosticWorkerOptions,
   DiagnosticWorkerReport,
-} from "../examples/runtime-benchmark/src/diagnostic-contracts.ts";
-import { writeEvidence } from "../examples/runtime-benchmark/src/evidence.ts";
+} from "../tooling/runtime-benchmark/src/diagnostic-contracts.ts";
+import { writeEvidence } from "../tooling/runtime-benchmark/src/evidence.ts";
 import { withPublishManifests } from "./release-publish.ts";
 import { stageCheckout, subprocess } from "./runtime-benchmark.ts";
 
@@ -191,7 +191,7 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
       "Diagnostics require Node 24",
     );
     const fixtures = yield* fs.makeTempDirectoryScoped({ prefix: "runtime-diagnostic-fixture-" });
-    const source = path.join(root, "examples/runtime-benchmark/src");
+    const source = path.join(root, "tooling/runtime-benchmark/src");
 
     yield* Effect.tryPromise({
       try: () =>

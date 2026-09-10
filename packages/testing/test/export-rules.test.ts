@@ -107,7 +107,7 @@ tester.run("no-self-barrel-import", plugin.rules["no-self-barrel-import"], {
       "const load = (source: string) => import(source);",
     ].map((code) => ({ filename, code })),
     {
-      filename: "/repo/examples/demo/src/Consumer.ts",
+      filename: "/repo/examples/travel-planner/src/Consumer.ts",
       code: 'import { Agent } from "@effect-agent/core";',
     },
     {

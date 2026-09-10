@@ -81,6 +81,7 @@ jobs:
             filters: >-
               -F './packages/*'
               -F './examples/*'
+              -F './tooling/*'
               -F '!@effect-agent/platform-node'
               -F '!@effect-agent/testing'
               -F '!@effect-agent/platform-cloudflare'

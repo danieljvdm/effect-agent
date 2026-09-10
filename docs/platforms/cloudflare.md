@@ -489,7 +489,7 @@ with the same ID fail; withdrawal is terminal. Owner eviction preserves SQLite r
 Named Effect spans cover calls and local validation without adding source text, private namespace
 values, or metadata to span attributes. Keep RPC bindings private and audit host authorization.
 
-The [opt-in deployed benchmark](https://github.com/danieljvdm/effect-agent/tree/main/examples/cloudflare-memory) measures 1, 4, 8, and
+The [opt-in deployed benchmark](https://github.com/danieljvdm/effect-agent/tree/main/tooling/cloudflare-memory) measures 1, 4, 8, and
 16 sources plus duplicate-heavy candidates, with separate validation-RPC and full-recall durations.
 Local SQLite and workerd runs do not establish deployed latency.
 
@@ -558,7 +558,7 @@ with history, and an uncompacted prompt still grows with the conversation. Confi
 for the workload from the start. Admission and record-size limits do not reserve isolate memory.
 Whole-thread export still returns a complete collection; use paged reads for large histories.
 
-The [local heap benchmark](https://github.com/danieljvdm/effect-agent/tree/main/examples/cloudflare-memory#local-heap-measurements)
+The [local heap benchmark](https://github.com/danieljvdm/effect-agent/tree/main/tooling/cloudflare-memory#local-heap-measurements)
 measures exact Worker bundles and several concurrent Thread Objects using a synthetic model and
 tools. It requires no model key or deployment. Its local JavaScript heap snapshots help compare
 changes; profile production-like histories and tool payloads before choosing deployment capacity.

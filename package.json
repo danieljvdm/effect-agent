@@ -4,7 +4,8 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "examples/*"
+    "examples/*",
+    "tooling/*"
   ],
   "type": "module",
   "scripts": {
@@ -80,6 +81,7 @@
   "catalog": {
     "@base-ui/react": "1.6.0",
     "@cloudflare/puppeteer": "1.1.0",
+    "@cloudflare/sandbox": "0.13.0-next.738.2",
     "@cloudflare/vitest-pool-workers": "0.21.3",
     "@cloudflare/workers-types": "5.20260825.1",
     "@effect/ai-anthropic": "4.0.0-rc.112",
@@ -97,6 +99,7 @@
     "@fontsource/ibm-plex-mono": "5.3.0",
     "@napi-rs/canvas": "1.0.8",
     "@shikijs/vitepress-twoslash": "4.4.2",
+    "@streamparser/json": "0.0.26",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-router": "1.170.18",
     "@tanstack/react-start": "1.168.33",
@@ -130,6 +133,10 @@
     "vitepress": "2.0.0-alpha.18",
     "vitest": "4.1.11",
     "vue": "3.5.40",
-    "wrangler": "4.123.0"
+    "wrangler": "4.123.0",
+    "isomorphic-git": "1.41.9",
+    "memfs": "4.71.0",
+    "@alchemy.run/cloudflare-runtime": "2.0.0-beta.72",
+    "jose": "6.2.12"
   }
 }

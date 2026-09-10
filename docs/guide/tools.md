@@ -458,8 +458,8 @@ const SearchLive = WebSearch.layer({
 Load real gateway credentials from your host configuration or secret store. For Anthropic,
 select `AnthropicTool.WebSearch_20250305({ maxUses: 3 })`, provide an `AnthropicLanguageModel`
 Layer, and use `Gateway.provide(AnthropicClient.layer, { ...gateway, provider: "anthropic" })`.
-Direct provider clients work too. The compiling
-[provider examples](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers#cloudflare-ai-gateway) show both backends.
+Direct provider clients work too. See the [Cloudflare guide](../platforms/cloudflare#ai-gateway)
+for gateway configuration.
 
 Each invocation makes one model request, without handler retries. The host fixes the backend,
 native search options, deadline (1–300,000 ms), and encoded result limit (1–1,048,576 bytes).

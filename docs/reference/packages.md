@@ -333,9 +333,7 @@ adds GitHub admission, source retrieval, provider setup, and report publication 
 
 ## Examples {#leaf-examples}
 
-- [Provider examples](https://github.com/danieljvdm/effect-agent/tree/main/examples/providers): OpenAI, Anthropic, retained history, and an injected SQL-backed Workflow engine.
-- [Chat demo](https://github.com/danieljvdm/effect-agent/tree/main/examples/demo): steering, follow-ups, approval cards, and budget limits, with a credential-free scripted profile.
-- [Code Mode warehouse](https://github.com/danieljvdm/effect-agent/tree/main/examples/code-mode-cloudflare): generated JavaScript querying a SQLite Durable Object through brokered read-only tools. Start with the [Code Mode guide](../guide/code-mode).
-- [Hosted browser proof](https://github.com/danieljvdm/effect-agent/tree/main/examples/browser-run-worker-proof): an opt-in temporary Worker deployment exercising capture, screenshots, interactive actions, Live View, and handoff. See [browser setup](../guide/browser).
+- [Cloudflare travel planner](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner): the canonical application, deployed with Alchemy.
+- [Operational harnesses](https://github.com/danieljvdm/effect-agent/tree/main/tooling): release gates, performance measurements, and opt-in provider verification.
 
 For repository layout and contribution rules, see the [toolchain guide](https://github.com/danieljvdm/effect-agent/blob/main/docs/TOOLCHAIN.md).

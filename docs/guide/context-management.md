@@ -577,8 +577,7 @@ available to another Thread. Admission adds bounded persistence work and can fai
 Use `Remembering.admit(store, intent)` from `effect-agent/Remembering` for admission and
 `Remembering.make({ proposal, loadSource, extract, merge, cleanup }).advance(...)` for a finite
 worker pass. The `RememberingStore` module defines the portable Schemas and injectable port.
-The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/examples/providers/src/remembering.ts)
-shows native Effect AI extraction and source-aware profile callbacks. Provide
+Use native Effect AI extraction and source-aware profile callbacks. Provide
 `RememberingStore.MutationFailpoint.layer` in production and replace it for fault tests.
 
 Automatic remembering follows the host's committed source activity and outbox. It needs no memory
@@ -958,7 +957,7 @@ query text, attribution, or vectors are attached to the helpers' Effect spans.
 
 Deadlines interrupt cooperative work and run finalizers. A provider that cannot cancel native I/O
 may need to drain its active call before finalizing; account for that in the host's latency policy.
-The reproducible `examples/semantic-memory-eval` consumer compares direct, lexical, and real local
+The reproducible `tooling/semantic-memory-eval` consumer compares direct, lexical, and real local
 embedding recall on a frozen synthetic corpus. It separates warm query latency, cached-file cold
 model startup, source-commit-to-recallable lag, background extraction/indexing, and injected slow or
 failed requests. Its declared targets are 250 ms warm added recall, 3 seconds with a cold model

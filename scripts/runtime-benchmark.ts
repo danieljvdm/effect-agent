@@ -28,8 +28,8 @@ import {
   summary,
   WorkerOptions,
   WorkerReport,
-} from "../examples/runtime-benchmark/src/contracts.ts";
-import { writeEvidence } from "../examples/runtime-benchmark/src/evidence.ts";
+} from "../tooling/runtime-benchmark/src/contracts.ts";
+import { writeEvidence } from "../tooling/runtime-benchmark/src/evidence.ts";
 import { PublishManifest, withPublishManifests } from "./release-publish.ts";
 
 const Revision = Schema.Struct({
@@ -403,7 +403,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
     "Output already contains a report; choose a new --out-dir to preserve evidence",
   );
   const fixtures = yield* fs.makeTempDirectoryScoped({ prefix: "runtime-benchmark-fixture-" });
-  const source = path.join(root, "examples/runtime-benchmark/src");
+  const source = path.join(root, "tooling/runtime-benchmark/src");
 
   yield* Effect.tryPromise({
     try: () =>
