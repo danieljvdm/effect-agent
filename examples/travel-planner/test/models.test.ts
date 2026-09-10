@@ -1,10 +1,10 @@
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { OpenAiClient } from "@effect/ai-openai";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { it } from "@effect/vitest";
 import { ConfigProvider, Effect, Layer, Redacted, Ref, Result, Schema, Stream } from "effect";
-import { LanguageModel, Model } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 import { expect, expectTypeOf } from "vite-plus/test";
 
@@ -21,6 +21,7 @@ import { liveModel, observeOpenAi, selectableModel } from "../src/server/models.
 // Retain these protocol/legacy-publication regressions against the admitted v5 definition.
 import { previousResponsePlanner as planner } from "../src/server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../src/server/progress.ts";
+import { observePublicOutput } from "../src/server/public-output.ts";
 import { TripRepository } from "../src/server/trips.ts";
 import { FixtureBrowserLive } from "./fixtures/browser.ts";
 
@@ -614,7 +615,15 @@ it.effect("streams only deliver-response message arguments through the real SDK 
       Effect.provideService(FetchHttpClient.Fetch, fetch),
     );
 
-    const observed = observeOpenAi(client, {
+    const native = yield* LanguageModel.LanguageModel.pipe(
+      Effect.provide(
+        OpenAiLanguageModel.model("gpt-5.6-luna").pipe(
+          Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, client)),
+        ),
+      ),
+    );
+
+    const observed = observePublicOutput(native, {
       ...progress,
       text: (delta) =>
         progress.text(delta).pipe(
@@ -626,7 +635,18 @@ it.effect("streams only deliver-response message arguments through the real SDK 
         ),
     });
 
-    const [, stream] = yield* observed.createResponseStream({ model: "gpt-5.6-luna", input: [] });
+    const responseTools = Toolkit.make(
+      Tool.make("deliver_response", {
+        parameters: Schema.Struct({ message: Schema.String, content: Schema.Unknown }),
+        success: Schema.Void,
+      }),
+    );
+
+    const stream = observed.streamText({
+      prompt: "Research a stay",
+      disableToolCallResolution: true,
+      toolkit: responseTools,
+    });
 
     const received = yield* Stream.runCollect(
       stream.pipe(
@@ -638,14 +658,13 @@ it.effect("streams only deliver-response message arguments through the real SDK 
           ),
         ),
       ),
-    );
+    ).pipe(Effect.provide(responseTools.toLayer({ deliver_response: () => Effect.void })));
 
-    expect(received.map((event) => event.type)).toEqual(events.map((event) => event.type));
+    expect(received.some((part) => part.type === "tool-params-start")).toBe(true);
     expect(writes.length).toBeGreaterThan(2);
     expect(writes[0]).toBe("A ");
     expect(writes.join("")).toBe('A "quiet" stay\nTahoe 🚀.');
-    expect(frames.slice(0, 4)).toEqual(["", "", "", ""]);
-    expect(frames[4]).toBe("A ");
+    expect(frames).toContain("A ");
     expect(frames.at(-1)).toBe('A "quiet" stay\nTahoe 🚀.');
     expect(JSON.stringify(frames)).not.toContain("SECRET");
     expect((yield* store.read).tools).toEqual([]);

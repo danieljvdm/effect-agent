@@ -49,7 +49,7 @@ import {
 } from "../trip-app/service.ts";
 import { AppToolsLive } from "../trip-app/tools-live.ts";
 import { AccessCommand, AccessReply, manageAccess } from "./access-admin.ts";
-import { PlannerModel, plannerSnapshot, sendMessage } from "./application.ts";
+import { PlannerModel, plannerSnapshot, sendMessage, voiceWork } from "./application.ts";
 import {
   CredentialStore,
   credentialStoreLayer,
@@ -180,6 +180,19 @@ export const plannerHandlers = PlannerRpcs.toLayer({
         );
 
         return publicSnapshot(identity.threadId, snapshot);
+      }),
+    ),
+  GetVoiceWork: (request) =>
+    safeRpc(
+      Effect.gen(function* () {
+        const identity = yield* ThreadObjectIdentity;
+
+        const conversationId = yield* privateConversation(
+          identity.threadId,
+          request.conversationId,
+        );
+
+        return yield* voiceWork({ ...request, conversationId });
       }),
     ),
   SendMessage: (request) =>

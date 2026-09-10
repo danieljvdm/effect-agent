@@ -15,6 +15,7 @@ import { ResearchScoutCard } from "./components/research-scout-card.tsx";
 import { TravelCards } from "./components/travel/travel-cards";
 import { TripAppCard } from "./components/trip-app-card.tsx";
 import { useMobileViewport } from "./components/use-mobile-viewport";
+import { VoiceControls } from "./components/voice-controls";
 import type { Trip } from "./domain";
 import {
   sessionAtom,
@@ -426,6 +427,7 @@ function PlannerContent() {
                 onRetry={(id) => send(id)}
                 retrying={sendResult.waiting}
               />
+              <VoiceControls enabled={session !== null && connected} />
               <div className="input-wrap">
                 <textarea
                   ref={composerInput}

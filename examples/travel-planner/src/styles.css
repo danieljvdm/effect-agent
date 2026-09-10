@@ -2502,3 +2502,41 @@
   color: #476c51;
   font-size: 13px;
 }
+
+.voice-controls {
+  font-size: 0.8rem;
+  margin-bottom: 0.65rem;
+}
+.voice-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.voice-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.voice-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.voice-controls audio {
+  height: 30px;
+  max-width: 100%;
+  margin-top: 0.5rem;
+}
+.voice-controls p {
+  margin: 0.35rem 0;
+}
+.voice-captions {
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 0.4rem;
+}

@@ -102,6 +102,9 @@ export const selectionAtom = Atom.make<{
 
 export const draftAtom = Atom.make("");
 
+/** New typed input fences earlier spoken results without cancelling accepted work. */
+export const typedInputRevisionAtom = Atom.make(0);
+
 type PendingMessage = {
   readonly email: string;
   readonly text: string;
@@ -664,6 +667,8 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
     const conversationId = retry?.conversationId ?? selection.conversationId ?? crypto.randomUUID();
     const selectedTripId = retry ? retry.tripId : (get(activeTripAtom)?.id ?? null);
     const requestId = retry?.id ?? crypto.randomUUID();
+
+    if (retry === undefined) get.set(typedInputRevisionAtom, get(typedInputRevisionAtom) + 1);
     const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
 
     const waiting =

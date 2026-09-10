@@ -97,6 +97,35 @@ export const progressBufferLimits: RunBufferLimits = {
 };
 ```
 
+### Connect a voice conversation
+
+A voice adapter can delegate to the same agent and Thread as a text interface. Keep its media
+Scope separate from accepted durable work: closing a call or stopping playback closes media and
+observation, while the durable runtime retains its accepted-work obligation. Use the original
+idempotency key and frozen input to reconcile uncertain admission. A transcript delta is context,
+not an instruction to admit another Run. Corrections use ordinary queued input and steering.
+
+The [travel planner](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner) demonstrates GPT-Live client
+delegation. Its adapter constructs schema-validated planner requests from attributed transcripts,
+uses the existing planner admission path, and reconciles receipts against canonical settlement.
+It suppresses older output after newer spoken or typed input. Reconnect creates a replacement
+voice session with relevant conversation history; it does not restart accepted planner work.
+
+For application-selected previews, decorate the native Effect AI `LanguageModel` service in the
+model Layer. Its `streamText` exposes ordered `text-delta`, `tool-params-start`, and
+`tool-params-delta` parts. The demo selects native text and only the designated
+`deliver_response.message` field; it retains a bounded provisional preview and fences writes by
+Submission and Attempt. Parsing and presentation belong to the adapter. Never forward reasoning,
+arbitrary tool arguments, or diagnostics to a voice provider. Provider protocol interception is
+unnecessary for this public-output path, and no additional SDK output hook is required.
+
+Keep generation, schema validation, durable settlement, provider acknowledgment, and actual audio
+playback distinct. A partial completion-tool argument is provisional even when it resembles a
+complete sentence. A provider acknowledgment does not prove that the user heard the result.
+Use canonical, schema-decoded output for final answers, including after reconnect. The
+[official Live delegation guide](https://developers.openai.com/api/docs/guides/live-delegation)
+describes the provider-specific half of this integration.
+
 ## Start and re-observe locally
 
 ```ts

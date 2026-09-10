@@ -12,9 +12,11 @@ import { Context, Effect, Option, Schema, Stream } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
 import {
+  type VoiceWork,
   PlannerError,
   PlannerInput,
   PlannerSettings,
+  type VoiceWorkRequest,
   defaultPlannerSettings,
   type PlannerSnapshot,
   type SendMessageRequest,
@@ -386,4 +388,107 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
       estimatedCostMicrousd: null,
     },
   } satisfies PlannerSnapshot;
+});
+
+/** Reconcile by the original admitted key. Never admit or replay from a read. */
+export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof VoiceWorkRequest.Type) {
+  const identity = yield* ThreadObjectIdentity;
+
+  const lookup = yield* Schema.decodeUnknownEffect(SubmissionLookupByKey)({
+    _tag: "SubmissionLookupByKey",
+    threadId: request.conversationId,
+    principal: identity.threadId === ownerThread ? ownerPrincipal : identity.threadId,
+    idempotencyKey: request.requestId,
+  }).pipe(Effect.mapError(unavailable));
+
+  const ledger = yield* SubmissionLedger;
+  const found = yield* ledger.lookup(lookup).pipe(Effect.mapError(unavailable));
+
+  if (Option.isNone(found))
+    return {
+      requestId: request.requestId,
+      receiptId: null,
+      superseded: false,
+      submissionId: null,
+      runId: null,
+      state: "missing",
+      text: null,
+    } satisfies VoiceWork;
+  const submission = found.value;
+  const history = yield* readThread(request.conversationId);
+  const records = history?.records ?? [];
+
+  const pending = yield* ledger.scanNonterminal.pipe(
+    Stream.runCollect,
+    Effect.mapError(unavailable),
+  );
+
+  const inputIndex = records.findIndex(
+    ({ record }) =>
+      record.payload._tag === "UserInputRecorded" &&
+      record.payload.submissionId === submission.submissionId,
+  );
+
+  const superseded =
+    pending.some(
+      (next) =>
+        next.threadId === submission.threadId &&
+        next.queueSequence > submission.queueSequence &&
+        Schema.is(PlannerInput)(next.inputPayload),
+    ) ||
+    (inputIndex >= 0 &&
+      records
+        .slice(inputIndex + 1)
+        .some(
+          ({ record }) =>
+            record.payload._tag === "UserInputRecorded" &&
+            Schema.is(PlannerInput)(record.payload.input),
+        ));
+
+  const settled = records.find(
+    ({ record }) =>
+      record.payload._tag === "SubmissionSettled" &&
+      record.payload.submissionId === submission.submissionId,
+  )?.record.payload;
+
+  const input = records.find(
+    ({ record }) =>
+      record.payload._tag === "UserInputRecorded" &&
+      record.payload.submissionId === submission.submissionId,
+  )?.record.payload;
+
+  const runId =
+    (settled?._tag === "SubmissionSettled" ? settled.runId : undefined) ??
+    (input?._tag === "UserInputRecorded" ? input.runId : undefined);
+
+  // Joined inputs settle with the host; only the host stores the validated result.
+  const host =
+    runId === undefined
+      ? undefined
+      : records.find(
+          ({ record }) =>
+            record.payload._tag === "SubmissionSettled" && record.payload.runId === runId,
+        )?.record.payload;
+
+  const result = host?._tag === "SubmissionSettled" ? host : settled;
+  const state = settled?._tag === "SubmissionSettled" ? settled.outcome : "pending";
+
+  const answer =
+    state === "completed" && result?._tag === "SubmissionSettled"
+      ? Schema.decodeUnknownOption(completedAnswer)(result.result)
+      : Option.none();
+
+  return {
+    requestId: request.requestId,
+    receiptId: submission.receiptId,
+    superseded,
+    submissionId: submission.submissionId,
+    runId: runId ?? null,
+    state,
+    text: Option.isSome(answer)
+      ? typeof answer.value === "string"
+        ? answer.value
+        : answer.value.message
+      : null,
+  } satisfies VoiceWork;
 });

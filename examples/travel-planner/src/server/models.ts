@@ -13,10 +13,9 @@ import { type PlannerError, type PlannerSettings } from "../domain.ts";
 import { credentialForOwner, type CredentialHost } from "./credentials.ts";
 import { recordDiagnostic } from "./diagnostics.ts";
 import { PlannerAttempt, type ProgressWriter } from "./progress.ts";
-import { responseTextPreview } from "./response-stream.ts";
+import { observePublicOutput } from "./public-output.ts";
 
 const PublicProviderEvent = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("response.output_text.delta"), delta: Schema.String }),
   Schema.Struct({
     type: Schema.Literals(["response.output_item.added", "response.output_item.done"]),
     item: Schema.Union([
@@ -32,11 +31,6 @@ const PublicProviderEvent = Schema.Union([
       }),
     ]),
   }),
-  Schema.Struct({
-    type: Schema.Literal("response.function_call_arguments.delta"),
-    item_id: Schema.String,
-    delta: Schema.String,
-  }),
 ]);
 
 /** Observe typed public SSE events without altering the stream consumed by Effect AI. */
@@ -47,11 +41,7 @@ export const observeOpenAi = (
   ...client,
   createResponseStream: (request) =>
     Effect.suspend(() => {
-      let responseCall: string | undefined;
-      const preview = responseTextPreview();
-
-      return writer.newResponse.pipe(
-        Effect.andThen(client.createResponseStream(request)),
+      return client.createResponseStream(request).pipe(
         Effect.tapCause((cause) =>
           recordDiagnostic("OpenAI: response request failed", {
             request: {
@@ -88,29 +78,11 @@ export const observeOpenAi = (
                   if (decoded._tag === "None") return Effect.void;
                   const visible = decoded.value;
 
-                  if (visible.type === "response.output_text.delta")
-                    return writer.text(visible.delta);
-                  if (visible.type === "response.function_call_arguments.delta") {
-                    if (visible.item_id !== responseCall) return Effect.void;
-                    const delta = preview(visible.delta);
-
-                    return delta.length > 0 ? writer.text(delta) : Effect.void;
-                  }
                   if (
                     visible.type === "response.output_item.added" ||
                     visible.type === "response.output_item.done"
                   ) {
                     if (visible.item.type === "function_call") {
-                      if (
-                        visible.type === "response.output_item.added" &&
-                        visible.item.name === "deliver_response" &&
-                        responseCall === undefined
-                      ) {
-                        responseCall = visible.item.id;
-
-                        return writer.newResponse;
-                      }
-
                       return Effect.void;
                     }
 
@@ -220,9 +192,16 @@ export const selectableModel = (
         ),
       ).pipe(Layer.provide(FetchHttpClient.layer));
 
-      return OpenAiLanguageModel.model(settings.model, selectedModelConfig(settings)).pipe(
+      const model = OpenAiLanguageModel.model(settings.model, selectedModelConfig(settings)).pipe(
         Layer.provide(client),
       );
+
+      return Layer.effect(
+        LanguageModel.LanguageModel,
+        Effect.map(LanguageModel.LanguageModel, (base) =>
+          observePublicOutput(base, attempt.progress),
+        ),
+      ).pipe(Layer.provideMerge(model));
     }),
   );
 

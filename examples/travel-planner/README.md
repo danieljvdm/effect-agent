@@ -115,6 +115,58 @@ the signed-in account and restored on other browsers and devices. Settings are c
 a message is admitted. Changing a setting cannot alter
 work already running. The default remains Luna, Low reasoning, Standard speed.
 
+## Voice conversation
+
+Connect an OpenAI key with access to `gpt-live-1`, then select **Start voice** and allow the
+microphone. GPT-Live handles the spoken conversation and delegates travel work to the existing
+planner. Voice and typed messages use the selected trip conversation, tools, account credentials,
+and durable admission. The voice model is fixed; the planner uses the model settings captured
+when the call starts. This uses [GPT-Live client delegation](https://developers.openai.com/api/docs/guides/live-delegation).
+
+**Stop playback** mutes audio locally. **End voice** closes the call; accepted planning and app
+work continues. You can type during a call or return to text afterward. The expandable transcript
+attributes user and AI voice fragments; its timestamps do not establish complete turns or what
+was heard. Only a delegation event submits work. Recent attributed fragments accompany that
+request, and ordinary queued inputs carry corrections at the planner's safe boundaries.
+
+Reconnect creates a replacement voice session with recent saved conversation history. This tab
+retains up to sixteen frozen request envelopes in session storage, partitioned by verified email
+and conversation. An uncertain admission is looked up by its original request ID before retrying
+the exact envelope; accepted work is only observed. Closing the tab loses this local retry cache,
+while already accepted work and its canonical conversation remain saved. Recent undelegated
+speech is local to the call and is not promised to survive reload. Changing conversations or
+accounts closes the media session. A full page reload can require reopening the original trip
+before reconnecting.
+
+Only native response text, designated `deliver_response.message` previews, selected progress
+labels, and schema-decoded settled answers reach the voice model. Previews are explicitly
+provisional and sent as context; final answers use canonical settlement. Reasoning, credentials,
+raw tool output, card payloads, and diagnostics are excluded. New speech suppresses older task
+updates until a new delegation; newer typed input mutes earlier speech and suppresses stale
+results. You can resume audio with the playback control. Provider acceptance and playback are
+shown separately from planner acceptance and settlement; no event proves that speech was heard.
+
+The browser uses WebRTC media and a bounded event queue (128 events, 32 KiB per event). It waits
+for `session.started`, keeps at most 128 caption fragments, coalesces pending delegation metadata,
+and limits each call to fifteen minutes and 64 delegation IDs. Public context appends are capped
+at 420 UTF-8 bytes, with at most one outstanding acknowledgment and progress updates no more
+often than every three seconds. Startup, acknowledgment, admission, and close waits are bounded.
+Failed connections require explicit reconnect. Closing audio never calls planner cancellation.
+
+Session creation runs behind the existing Access authentication, origin checks, and request-size
+limit, using only the verified account's encrypted key. It requests `gpt-live-1` with client
+delegation and returns only the session ID and SDP answer. No shared key or credential reaches
+the browser. Voice sessions incur provider duration charges separately from planner inference.
+Removing a saved key prevents new sessions and new planner model requests; an already established
+voice session must be ended separately.
+
+For the live acceptance check, start a new conversation and speak a request that requires saving
+or researching a trip. Confirm tool activity, a saved planner answer, and an audible answer.
+Interrupt playback while work is pending, end and reconnect the call, and verify that the same
+request/receipt finishes without repeating the accepted work. Then type a correction and confirm
+it updates the same conversation. Deterministic transport tests cover these boundaries but do
+not substitute for checking real microphone input, provider delegation, and audible playback.
+
 ## Run
 
 From the repository root:

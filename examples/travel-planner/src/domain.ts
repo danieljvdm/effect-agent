@@ -232,6 +232,24 @@ export const SendMessageRequest = Schema.Struct({
 
 export type SendMessageRequest = typeof SendMessageRequest.Type;
 
+export const VoiceWorkRequest = Schema.Struct({
+  requestId: TripId,
+  conversationId: ConversationId,
+});
+
+/** Read-only receipt/result projection; never implies that speech was heard. */
+export const VoiceWork = Schema.Struct({
+  requestId: TripId,
+  receiptId: Schema.NullOr(Schema.String),
+  superseded: Schema.Boolean,
+  submissionId: Schema.NullOr(Schema.String),
+  runId: Schema.NullOr(Schema.String),
+  state: Schema.Literals(["missing", "pending", "completed", "failed", "aborted"]),
+  text: Schema.NullOr(Text),
+});
+
+export type VoiceWork = typeof VoiceWork.Type;
+
 export const PlannerInput = Schema.Struct({
   message: SendMessageRequest.fields.message,
   selectedTripId: Schema.NullOr(TripId),
@@ -394,6 +412,11 @@ export const PlannerRpcs = RpcGroup.make(
   Rpc.make("SendMessage", {
     payload: SendMessageRequest,
     success: Schema.Struct({ accepted: Schema.Literal(true) }),
+    error: PlannerError,
+  }),
+  Rpc.make("GetVoiceWork", {
+    payload: VoiceWorkRequest,
+    success: VoiceWork,
     error: PlannerError,
   }),
   Rpc.make("SaveTrip", { payload: SaveTripRpcRequest, success: Trip, error: PlannerError }),

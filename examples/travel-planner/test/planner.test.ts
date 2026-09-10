@@ -9,6 +9,7 @@ import { expect, it } from "vite-plus/test";
 
 import { AccessSession, adminEmail } from "../src/access-domain.ts";
 import {
+  VoiceWork,
   PlannerProgress,
   PlannerSettings,
   PlannerSnapshot,
@@ -183,6 +184,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
 
   try {
     for (const path of [
+      "/api/voice",
       "/api/rpc",
       "/api/rpc/",
       "/api/access",
@@ -292,6 +294,33 @@ it("isolates conversations while retaining owner trips, native mutations, public
     expect(saved.activity.some((item) => item.text === "save_trip: completed")).toBe(true);
     const trip = saved.trips[0]!;
 
+    const voiceReceipt = Schema.decodeUnknownSync(VoiceWork)(
+      await rpc("GetVoiceWork", {
+        conversationId: firstConversation,
+        requestId: "create-lisbon",
+      }),
+    );
+
+    expect(voiceReceipt).toMatchObject({ state: "completed", superseded: false });
+    expect(voiceReceipt.receiptId).toBeTruthy();
+    expect(voiceReceipt.text).toBe(
+      saved.messages.filter((message) => message.role === "assistant" && !message.content).at(-1)
+        ?.text,
+    );
+    expect(
+      Schema.decodeUnknownSync(VoiceWork)(
+        await rpc(
+          "GetVoiceWork",
+          {
+            conversationId: firstConversation,
+            requestId: "create-lisbon",
+          },
+          "/api/rpc",
+          guestEmail,
+        ),
+      ).state,
+    ).toBe("missing");
+
     await rpc("SendMessage", {
       conversationId: firstConversation,
       message: "Let's go to Lisbon",
@@ -308,6 +337,14 @@ it("isolates conversations while retaining owner trips, native mutations, public
     const revised = await until((state) => state.pending === 0 && state.trips[0]?.revision === 2);
 
     expect(revised.trips[0]?.notes).toContain("Include a relaxed afternoon");
+    expect(
+      Schema.decodeUnknownSync(VoiceWork)(
+        await rpc("GetVoiceWork", {
+          conversationId: firstConversation,
+          requestId: "create-lisbon",
+        }),
+      ),
+    ).toMatchObject({ receiptId: voiceReceipt.receiptId, state: "completed", superseded: true });
     expect((await rpcExit("PublishTrip", { tripId: trip.id, expectedRevision: 1 }))._tag).toBe(
       "Failure",
     );
