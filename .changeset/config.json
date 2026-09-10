@@ -34,5 +34,6 @@
     "tag": false
   },
   "updateInternalDependencies": "patch",
+  "bumpVersionsWithWorkspaceProtocolOnly": true,
   "ignore": []
 }
