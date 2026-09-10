@@ -262,6 +262,39 @@ type ContextOverflowInAgentErrorProof = Assert<
 >;
 
 describe("Agent type inference", () => {
+  it("inspects native failure modes without resolving handlers or the model", () => {
+    const toolkit = Toolkit.make(
+      SearchAvailability,
+      Tool.make("recoverable", { failure: AvailabilityFailure, failureMode: "return" }),
+      Tool.dynamic("dynamic", { failureMode: "return" }),
+      Tool.providerDefined({ id: "test.search", customName: "hosted", providerName: "search" })(
+        undefined,
+      ),
+    );
+
+    const inspected = Agent.make("inspect-tools", {
+      input: Schema.String,
+      output: Schema.String,
+      instructions: "Inspect only.",
+      toolkit,
+      toolExposure: { initialToolNames: ["recoverable"] },
+    });
+
+    const expected = [
+      { name: "search_availability", failureMode: "error", requiresHandler: true },
+      { name: "recoverable", failureMode: "return", requiresHandler: true },
+      { name: "dynamic", failureMode: "return", requiresHandler: true },
+      { name: "hosted", failureMode: "error", requiresHandler: false },
+    ];
+
+    expect(Agent.inspectTools(inspected)).toEqual(expected);
+    expect(Agent.inspectTools(Agent.withModel(inspected, model))).toEqual(expected);
+    expect(
+      Schema.encodeSync(Schema.Array(Agent.ToolInspection))(Agent.inspectTools(inspected)),
+    ).toEqual(expected);
+    expect(inspected.toolkit).toBe(toolkit);
+  });
+
   it("separates immutable definition from model binding", () => {
     const requirementsProof: RequirementsProof = true;
     const definitionRequirementsProof: DefinitionRequirementsProof = true;

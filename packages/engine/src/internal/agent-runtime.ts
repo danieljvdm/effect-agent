@@ -51,6 +51,7 @@ import {
   TextDelta,
   ToolCallDeclared,
   ToolCallFailed,
+  type ToolFailureHandling,
   type RunEvent,
   ToolCallStarted,
   ToolCallSucceeded,
@@ -1327,9 +1328,11 @@ const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(functi
   turnId: TurnId,
   call: Response.ToolCallPart<string, unknown>,
   error: unknown,
+  failureHandling: "propagated" | "returned-to-model",
   budgetRejected?: true,
 ): Effect.fn.Return<RunEvent, ModelProtocolError> {
   const toolCallId = yield* decodeToolCallId(call.id);
+  const tools = context.definition.toolkit.tools;
 
   return ToolCallFailed.make({
     ...(yield* eventBase(context)),
@@ -1339,6 +1342,8 @@ const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(functi
     errorTag: errorTag(error),
     message: errorMessage(error),
     providerExecuted: false,
+    failureHandling,
+    ...(Object.hasOwn(tools, call.name) ? { failureMode: tools[call.name].failureMode } : {}),
     ...(budgetRejected === undefined ? {} : { budgetRejected }),
   });
 });
@@ -1384,7 +1389,9 @@ const settleRejectedBatch = Effect.fn("AgentRuntime.settleRejectedBatch")(functi
       isFailure: true,
       ...(budgetRejected === undefined ? {} : { budgetRejected }),
     };
-    events.push(yield* makeToolFailedEvent(context, turnId, call, error, budgetRejected));
+    events.push(
+      yield* makeToolFailedEvent(context, turnId, call, error, "returned-to-model", budgetRejected),
+    );
   }
 
   return events;
@@ -1578,6 +1585,8 @@ const preflightApproval = <Tools extends Record<string, Tool.Any>, HookError, Ho
                   errorTag: denied._tag,
                   message: denied.message,
                   providerExecuted: false,
+                  failureMode: prepared.tool.failureMode,
+                  failureHandling: "propagated",
                 });
 
                 return Stream.fromIterable<RunEvent>([requested, failed]).pipe(
@@ -1667,6 +1676,8 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
                 errorTag: denied._tag,
                 message: denied.message,
                 providerExecuted: false,
+                failureMode: context.definition.toolkit.tools[call.toolName].failureMode,
+                failureHandling: "propagated",
               }),
             ),
           ).pipe(Stream.concat(Stream.fail(denied)));
@@ -1696,6 +1707,7 @@ interface ToolTelemetryDescriptor {
   readonly toolName: string;
   readonly executionClass: ReturnType<typeof getToolExecutionClass>;
   readonly invocationKind: "model" | "programmatic";
+  readonly failureMode: Tool.FailureMode;
   readonly parentToolCallId?: ToolCallId | undefined;
   readonly sequenceIndex?: number | undefined;
 }
@@ -1716,6 +1728,7 @@ const toolTelemetryAttributes = (descriptor: ToolTelemetryDescriptor) => ({
   "gen_ai.conversation.id": descriptor.context.threadId,
   "effect_agent.tool.execution_class": descriptor.executionClass,
   "effect_agent.tool.invocation_kind": descriptor.invocationKind,
+  "effect_agent.tool.failure_mode": descriptor.failureMode,
   ...(descriptor.parentToolCallId === undefined
     ? {}
     : {
@@ -1740,8 +1753,14 @@ const terminalToolTelemetry = (
   descriptor: ToolTelemetryDescriptor,
   outcome: ToolTelemetryOutcome,
   failureMarker?: ToolSpanFailure,
+  failureHandling?: ToolFailureHandling,
 ): Effect.Effect<void> =>
-  annotateToolSpanTerminalOutcome(outcome, failureMarker).pipe(
+  annotateToolSpanTerminalOutcome(
+    outcome,
+    failureMarker,
+    failureHandling,
+    descriptor.failureMode,
+  ).pipe(
     Effect.andThen(
       (outcome === "success"
         ? Effect.logInfo("agent tool execution completed")
@@ -1750,6 +1769,9 @@ const terminalToolTelemetry = (
         Effect.annotateLogs({
           ...toolTelemetryAttributes(descriptor),
           "effect_agent.tool.outcome": outcome,
+          ...(failureHandling === undefined
+            ? {}
+            : { "effect_agent.tool.failure_handling": failureHandling }),
           toolExecutionClass: descriptor.executionClass,
           toolOutcome: outcome,
         }),
@@ -1810,6 +1832,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     toolName: call.name,
     executionClass,
     invocationKind: "model",
+    failureMode: prepared.tool.failureMode,
   };
 
   const toolSpanFailure = ToolSpanFailure.marker();
@@ -1828,18 +1851,25 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   let propagatedFailure: Cause.Cause<ToolExecutionError> | undefined;
   let failureObservation: ModelToolFailure | undefined;
 
-  const terminalTelemetry = (outcome: ToolTelemetryOutcome) =>
+  const terminalTelemetry = (
+    outcome: ToolTelemetryOutcome,
+    failureHandling?: ToolFailureHandling,
+  ) =>
     terminalToolTelemetry(
       telemetryDescriptor,
       outcome,
       outcome === "failure" ? toolSpanFailure : undefined,
+      failureHandling,
     );
 
-  const isolatedTerminalTelemetry = (outcome: "success" | "failure") =>
+  const isolatedTerminalTelemetry = (
+    outcome: "success" | "failure",
+    failureHandling?: ToolFailureHandling,
+  ) =>
     // Measurement is derivative: a broken Logger/Tracer must never change the Tool event or make
     // an already-completed external side effect eligible for recovery. Non-interrupt Causes reach
     // Effect's owned reporter boundary; external interruption remains interruption.
-    isolateToolDerivative(terminalTelemetry(outcome));
+    isolateToolDerivative(terminalTelemetry(outcome, failureHandling));
 
   /**
    * The authoritative event reaches the downstream Run stream before derivative work starts.
@@ -1850,8 +1880,9 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     event: Effect.Effect<RunEvent, EventError>,
     outcome: "success" | "failure",
     failSpan: boolean,
+    failureHandling?: ToolFailureHandling,
   ): Stream.Stream<RunEvent, EventError | ToolSpanFailure> => {
-    const telemetry = isolatedTerminalTelemetry(outcome);
+    const telemetry = isolatedTerminalTelemetry(outcome, failureHandling);
 
     const after =
       observer === undefined
@@ -1999,6 +2030,8 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
               errorTag: errorTag(result.result),
               message: errorMessage(result.result),
               providerExecuted: false,
+              failureMode: prepared.tool.failureMode,
+              failureHandling: "returned-to-model",
             })
           : ToolCallSucceeded.make({
               ...(yield* eventBase(context)),
@@ -2046,6 +2079,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
           commitTerminalResult,
           terminalOutcome ?? "failure",
           terminalOutcome === "failure",
+          terminalOutcome === "failure" ? "returned-to-model" : undefined,
         ),
       ),
     );
@@ -2059,7 +2093,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     propagatedFailure = cause;
 
     return terminalEventThenAfter(
-      makeToolFailedEvent(context, turnId, call, Cause.squash(cause)).pipe(
+      makeToolFailedEvent(context, turnId, call, Cause.squash(cause), "propagated").pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             trace.finalToolResultIds.add(call.id);
@@ -2069,6 +2103,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
       ),
       "failure",
       true,
+      "propagated",
     );
   };
 
@@ -3383,7 +3418,12 @@ const stampProviderResultEvent = (
       case "ToolCallSucceeded":
         return ToolCallSucceeded.make({ ...base, turnId, ...payload });
       case "ToolCallFailed":
-        return ToolCallFailed.make({ ...base, turnId, ...payload });
+        return ToolCallFailed.make({
+          ...base,
+          turnId,
+          ...payload,
+          failureHandling: "returned-to-model",
+        });
     }
   });
 
@@ -8261,9 +8301,9 @@ const measureProgrammaticToolCall = <R>(
           }
           propagatedFailure = exit.cause;
 
-          return isolateToolDerivative(terminalToolTelemetry(descriptor, "failure", marker)).pipe(
-            Effect.andThen(Effect.fail(marker)),
-          );
+          return isolateToolDerivative(
+            terminalToolTelemetry(descriptor, "failure", marker, "propagated"),
+          ).pipe(Effect.andThen(Effect.fail(marker)));
         }
 
         terminalResult = exit.value;
@@ -8272,7 +8312,12 @@ const measureProgrammaticToolCall = <R>(
           exit.value._tag === "ProgrammaticCallSuccess" ? "success" : "failure";
 
         return isolateToolDerivative(
-          terminalToolTelemetry(descriptor, outcome, outcome === "failure" ? marker : undefined),
+          terminalToolTelemetry(
+            descriptor,
+            outcome,
+            outcome === "failure" ? marker : undefined,
+            outcome === "failure" ? "returned-to-caller" : undefined,
+          ),
         ).pipe(
           Effect.andThen(outcome === "failure" ? Effect.fail(marker) : Effect.succeed(exit.value)),
         );
@@ -8675,6 +8720,7 @@ const makeToolBrokerService = Effect.fnUntraced(function* <HookError, HookRequir
               toolName: input.toolName,
               executionClass,
               invocationKind: "programmatic",
+              failureMode: tool.failureMode,
               parentToolCallId: binding.outerToolCallId,
               sequenceIndex: index,
             };
