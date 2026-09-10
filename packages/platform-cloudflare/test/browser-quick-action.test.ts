@@ -25,7 +25,19 @@ import {
   type PageCaptureError,
   type PageCaptureResult,
 } from "@effect-agent/sandbox/PageCapture";
-import { Context, Deferred, Effect, Fiber, Layer, Schema, SchemaGetter, Stream } from "effect";
+import { it as effectIt } from "@effect/vitest";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+  SchemaGetter,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 import type { Tool } from "effect/unstable/ai";
 import { Toolkit } from "effect/unstable/ai";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
@@ -586,7 +598,8 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
     expect(navigation).toMatchObject({
       _tag: "PageCaptureNavigationError",
-      message: "The Quick Action answered HTTP 400",
+      message:
+        "The Browser Run Quick Action API answered HTTP 400; the destination status is unknown",
     });
     expect(navigation.message).not.toContain(privateDiagnostic);
     expect(navigation._tag === "PageCaptureNavigationError" && navigation.cause).toMatchObject({
@@ -597,7 +610,8 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
     expect(protocol).toMatchObject({
       _tag: "PageCaptureProtocolError",
-      message: "The Quick Action answered HTTP 500",
+      message:
+        "The Browser Run Quick Action API answered HTTP 500; the destination status is unknown",
     });
     expect(protocol.message).not.toContain(privateDiagnostic);
     expect(protocol._tag === "PageCaptureProtocolError" && protocol.cause).toMatchObject({
@@ -608,7 +622,8 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
 
     expect(envelope).toMatchObject({
       _tag: "PageCaptureNavigationError",
-      message: "The Quick Action reported a navigation failure",
+      message:
+        "The Browser Run Quick Action API answered HTTP 200; the destination status is unknown",
     });
     expect(envelope.message).not.toContain(privateDiagnostic);
     expect(envelope._tag === "PageCaptureNavigationError" && envelope.cause).toMatchObject({
@@ -619,6 +634,115 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       message: expect.stringContaining("valid response envelope"),
     });
   });
+
+  it("reports recognized provider navigation timeouts without exposing arbitrary diagnostics", async () => {
+    for (const status of [200, 422]) {
+      const { binding, calls } = makeBinding([
+        jsonResponse(
+          {
+            success: false,
+            errors: [
+              {
+                code: 6002,
+                message: "private provider detail",
+                detail: "Navigation timeout of 20000 ms exceeded",
+              },
+            ],
+          },
+          { status },
+        ),
+      ]);
+
+      const error = await captureError(binding, request(CapturePageMarkdown.make({})));
+
+      expect(error).toMatchObject({
+        _tag: "PageCaptureNavigationError",
+        message: `Browser Run navigation timed out after 20000 ms (Quick Action API HTTP ${status}); the destination status is unknown`,
+      });
+      expect(error.message).not.toContain("private provider detail");
+      expect(calls).toHaveLength(1);
+    }
+    for (const [code, detail] of [
+      [6002, "Navigation timeout of 20000 ms exceeded; token=private"],
+      [6002, "Navigation timeout of secret ms exceeded"],
+      [1, "Navigation timeout of 20000 ms exceeded"],
+    ] as const) {
+      const { binding } = makeBinding([
+        jsonResponse(
+          { success: false, errors: [{ code, message: "private", detail }] },
+          { status: 422 },
+        ),
+      ]);
+
+      const error = await captureError(binding, request(CapturePageMarkdown.make({})));
+
+      expect(error).toMatchObject({
+        _tag: "PageCaptureNavigationError",
+        message:
+          "The Browser Run Quick Action API answered HTTP 422; the destination status is unknown",
+      });
+    }
+  });
+
+  effectIt.effect(
+    "bounds waiting at the native RPC boundary and releases an acquired response on timeout",
+    () =>
+      Effect.gen(function* () {
+        for (const mode of ["rpc", "response"] as const) {
+          const entered = yield* Deferred.make<void>();
+          let calls = 0;
+          let canceled = false;
+
+          const stream = new ReadableStream<Uint8Array>(
+            {
+              pull() {
+                Effect.runSync(Deferred.succeed(entered, undefined));
+
+                return new Promise<void>(() => {});
+              },
+              cancel() {
+                canceled = true;
+              },
+            },
+            { highWaterMark: 0 },
+          );
+
+          const browser: BrowserRun = {
+            fetch: () => Promise.reject(new Error("Unexpected fetch")),
+            quickAction: () => {
+              calls += 1;
+              if (mode === "response") return Promise.resolve(new Response(stream));
+              Effect.runSync(Deferred.succeed(entered, undefined));
+
+              return new Promise<Response>(() => {});
+            },
+          };
+
+          const fiber = yield* Effect.gen(function* () {
+            const port = yield* PageCapture;
+
+            return yield* port.capture(request(CapturePageMarkdown.make({})));
+          }).pipe(
+            Effect.provide(
+              browserQuickActionCaptureLayer().pipe(
+                Layer.provide(BrowserQuickActionBrowserBinding.layer({ browser })),
+              ),
+            ),
+            Effect.timeoutOption("25 seconds"),
+            Effect.forkChild,
+          );
+
+          yield* Deferred.await(entered);
+          yield* TestClock.adjust("25 seconds");
+          expect(Option.isNone(yield* Fiber.join(fiber))).toBe(true);
+          expect(calls).toBe(1);
+          expect(canceled).toBe(mode === "response");
+          expect(stream.locked).toBe(false);
+          // The pending RPC has no cancellation handle. This establishes local
+          // waiting/reader behavior, not provider browser-session termination.
+        }
+      }),
+  );
 
   it("enforces the output byte budget on the encoded response", async () => {
     const { binding } = makeBinding([jsonResponse({ success: true, result: "x".repeat(4_096) })]);
