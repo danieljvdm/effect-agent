@@ -64,7 +64,7 @@ const contractDirective = (definition: Agent.AnyDefinition): string =>
       "before or after the JSON."
     : `Final output contract: when the task is complete without calling the "${definition.completion.tool}" completion Tool, the final assistant message must be only ` +
       "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
-      `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. The engine projects the successful completion Tool result into the Agent output.`;
+      `before or after the JSON. When calling the "${definition.completion.tool}" completion Tool, never place this private Agent output JSON in any Tool argument; follow the Tool's parameter schema instead. Call it alone, after receiving any other Tool results. The engine projects the successful completion Tool result into the Agent output.`;
 
 const requiredCompletionDirective = (tool: string, hasAlternatives: boolean): string =>
   `Final output contract: ${hasAlternatives ? "otherwise complete" : "complete only"} by calling the required completion Tool ${JSON.stringify(tool)} ` +
@@ -100,7 +100,7 @@ const renderOutputSchemaContract = (definition: Agent.AnyDefinition): OutputCont
         "An empty reply is valid only when allowed by the output Schema and the task instructions." +
         (definition.completion === undefined
           ? ""
-          : ` When calling the "${definition.completion.tool}" completion Tool, follow its parameter schema instead; the engine projects its successful result into the Agent output.`),
+          : ` When calling the "${definition.completion.tool}" completion Tool, follow its parameter schema instead and call it alone, after receiving any other Tool results; the engine projects its successful result into the Agent output.`),
     );
   }
   try {

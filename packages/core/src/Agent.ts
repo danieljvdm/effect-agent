@@ -47,7 +47,12 @@ export interface CompletionProjectionInput<Parameters = unknown, Result = unknow
   readonly result: Result;
 }
 
-/** One application Tool whose successful canonical result can complete its owning Agent. */
+/**
+ * One application Tool whose successful singleton result can complete its owning Agent.
+ * Mixed, wholly unexecuted application batches are rejected with failed Tool results so the
+ * model can correct them within ordinary Run budgets. Provider-containing and invalid pending
+ * resumed batches fail closed; the completion designation never permits side-effect replay.
+ */
 export interface CompletionToolDeclaration<
   Parameters = unknown,
   Result = unknown,

@@ -1999,6 +1999,195 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       }),
   );
 
+  for (const scenario of [
+    { name: "rejected batch", location: "turn:after-canonical-append", repeated: false },
+    { name: "corrected declaration", location: "turn:after-response-append", repeated: false },
+    { name: "corrected result", location: "turn:after-results-append", repeated: false },
+    { name: "repeated rejection", location: "turn:after-canonical-append", repeated: true },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    location: DurableRuntimeFailpointLocation;
+    repeated: boolean;
+  }>) {
+    it.effect(
+      `mixed completion recovery preserves ${scenario.name} without duplicate effects`,
+      () =>
+        Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+
+          const Search = Tool.make("search", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          });
+
+          const Deliver = Tool.make("deliver", {
+            parameters: Schema.Struct({ message: Schema.String }),
+            success: Schema.String,
+          });
+
+          const tools = Toolkit.make(Search, Deliver);
+
+          const definition = Agent.make("durable-completion-correction", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Research, then deliver alone.",
+            toolkit: tools,
+            completion: { tool: "deliver", required: true, project: ({ result }) => result },
+            policy: {
+              maxTurns: 5,
+              maxToolCalls: 8,
+              maxDuration: "30 seconds",
+              repeatedFailureLimit: 3,
+            },
+          });
+
+          const scripted = yield* makeScriptedModel((turn) =>
+            turn === 0 || scenario.repeated
+              ? [
+                  {
+                    type: "tool-call",
+                    id: `premature-${turn}`,
+                    name: "deliver",
+                    params: { message: "premature" },
+                    providerExecuted: false,
+                  },
+                  {
+                    type: "tool-call",
+                    id: `rejected-${turn}`,
+                    name: "search",
+                    params: {},
+                    providerExecuted: false,
+                  },
+                  {
+                    type: "finish",
+                    reason: "tool-calls",
+                    usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } },
+                  },
+                ]
+              : turn === 1
+                ? [
+                    {
+                      type: "tool-call",
+                      id: "research",
+                      name: "search",
+                      params: {},
+                      providerExecuted: false,
+                    },
+                    {
+                      type: "finish",
+                      reason: "tool-calls",
+                      usage: { inputTokens: { total: 20 }, outputTokens: { total: 10 } },
+                    },
+                  ]
+                : [
+                    {
+                      type: "tool-call",
+                      id: "final",
+                      name: "deliver",
+                      params: { message: "researched" },
+                      providerExecuted: false,
+                    },
+                    {
+                      type: "finish",
+                      reason: "tool-calls",
+                      usage: { inputTokens: { total: 30 }, outputTokens: { total: 15 } },
+                    },
+                  ],
+          );
+
+          const starts: Array<string> = [];
+
+          const toolLayer = tools.toLayer({
+            search: () =>
+              Effect.sync(() => {
+                starts.push("search");
+
+                return "found";
+              }),
+            deliver: ({ message }) =>
+              Effect.sync(() => {
+                starts.push(message);
+
+                return message;
+              }),
+          });
+
+          const agent = Agent.withModel(definition, scripted.model);
+          const thread = `correction-${scenario.name}`;
+
+          const receipt = yield* runtime.submit(
+            agent,
+            "travel",
+            submitOptions(thread, "correction"),
+          );
+
+          yield* armFailpoint(scenario.location);
+
+          const crashed = yield* runtime
+            .processThread(agent, decodeThreadId(thread))
+            .pipe(Effect.provide(toolLayer), Effect.exit);
+
+          expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+          yield* clearFailpoint;
+
+          const before = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
+          expect(
+            before.filter((payload) => payload._tag === "ToolCallSettled").slice(0, 2),
+          ).toMatchObject([
+            {
+              toolCallId: "premature-0",
+              toolName: "deliver",
+              isFailure: true,
+              result: { _tag: "ModelProtocolError" },
+            },
+            {
+              toolCallId: "rejected-0",
+              toolName: "search",
+              isFailure: true,
+              result: { _tag: "ModelProtocolError" },
+            },
+          ]);
+          expect(
+            before.some(
+              (payload) =>
+                payload._tag === "ToolCallPrepared" &&
+                (payload.toolCallId === "premature-0" || payload.toolCallId === "rejected-0"),
+            ),
+          ).toBe(false);
+          expect(before.some((payload) => payload._tag === "RunCompleted")).toBe(false);
+          expect(starts).toEqual(
+            scenario.location === "turn:after-results-append" ? ["search"] : [],
+          );
+
+          yield* runtime
+            .processThread(agent, decodeThreadId(thread))
+            .pipe(Effect.provide(toolLayer));
+          const settlement = yield* runtime.awaitSettlement(receipt);
+
+          expect(settlement.outcome).toBe(scenario.repeated ? "failed" : "completed");
+          expect(starts).toEqual(scenario.repeated ? [] : ["search", "researched"]);
+          expect(scripted.prompts).toHaveLength(scenario.repeated ? 2 : 3);
+          const correctionPrompt = JSON.stringify(scripted.prompts[1]);
+
+          expect(correctionPrompt).toContain("none of its tools ran");
+          expect(correctionPrompt).toContain("premature-0");
+          const after = (yield* readLog(thread)).map((envelope) => envelope.record.payload);
+
+          expect(after.filter((payload) => payload._tag === "RunCompleted")).toHaveLength(
+            scenario.repeated ? 0 : 1,
+          );
+          expect(after.filter((payload) => payload._tag === "SubmissionSettled")).toHaveLength(1);
+          expect(after.filter((payload) => payload._tag === "ModelResponseRecorded")).toHaveLength(
+            scenario.repeated ? 2 : 3,
+          );
+          expect(after.find((payload) => payload._tag === "SubmissionSettled")).toMatchObject({
+            result: scenario.repeated ? { errorTag: "AgentPolicyError" } : "researched",
+          });
+        }),
+    );
+  }
+
   it.effect("RUN-029 invalid disposition selection settles failed without disposition", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
