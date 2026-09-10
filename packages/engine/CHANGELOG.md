@@ -1,5 +1,18 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.75
+
+### Patch Changes
+
+- [#417](https://github.com/danieljvdm/effect-agent/pull/417) [`230c18a`](https://github.com/danieljvdm/effect-agent/commit/230c18a79fa3941615a6116f5678a1a3bd4b169c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow authorized writes and bounded concurrent tool calls in Code Mode, with individual outcome reports after partial failure or interruption. Classify generated programs as uncertain to prevent automatic replay after ownership loss.
+
+  BEHAVIOR CHANGE: Host Tool authorization now checks inner calls; policies must allow the selected Tools explicitly.
+
+- [#418](https://github.com/danieljvdm/effect-agent/pull/418) [`1208f7e`](https://github.com/danieljvdm/effect-agent/commit/1208f7e77a348ffd4a9dc0bcb90954b1095e1d4b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Let agents correct mixed completion-tool batches before application tools execute, within existing run budgets. Preserve failed call diagnostics and durable recovery without replaying rejected tools.
+
+- Updated dependencies [[`71afa3d`](https://github.com/danieljvdm/effect-agent/commit/71afa3d64f1cef889b46bea6a352d4e6f8446e32)]:
+  - @effect-agent/core@0.1.0-beta.75
+
 ## 0.1.0-beta.74
 
 ### Patch Changes

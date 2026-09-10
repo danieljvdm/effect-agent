@@ -1,5 +1,11 @@
 # @effect-agent/core
 
+## 0.1.0-beta.75
+
+### Patch Changes
+
+- [#413](https://github.com/danieljvdm/effect-agent/pull/413) [`71afa3d`](https://github.com/danieljvdm/effect-agent/commit/71afa3d64f1cef889b46bea6a352d4e6f8446e32) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Distinguish durably retained worker input from storage failures with `WorkerError` reason `delivery-pending`. Treat this outcome as pending delivery, preserve the original idempotency key, and wait for a Receipt before reporting destination acceptance.
+
 ## 0.1.0-beta.74
 
 ### Patch Changes
