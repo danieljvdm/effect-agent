@@ -90,79 +90,77 @@ const certified = Effect.gen(function* () {
 });
 
 describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () => {
-  it.effect(
-    "distinguishes executed-check success from complete real-loss certification",
-    () =>
+  // Each verdict exercises the full SQLite certification independently. Keep its timeout
+  // per case so disk latency across four sweeps cannot consume one shared test budget.
+  it.effect.each([
+    {
+      name: "missing",
+      crashLever: undefined,
+      ok: true,
+      full: false,
+      status: "not-exercised",
+    },
+    {
+      name: "empty",
+      crashLever: Effect.succeed([]),
+      ok: true,
+      full: false,
+      status: "not-exercised",
+    },
+    {
+      name: "passed",
+      crashLever: Effect.succeed([
+        CertificationCaseResult.make({
+          suite: "real-loss",
+          name: "supplied lever result",
+          status: "passed",
+        }),
+      ]),
+      ok: true,
+      full: true,
+      status: "exercised",
+    },
+    {
+      name: "failed",
+      crashLever: Effect.succeed([
+        CertificationCaseResult.make({
+          suite: "real-loss",
+          name: "supplied lever result",
+          status: "failed",
+        }),
+      ]),
+      ok: false,
+      full: false,
+      status: "exercised",
+    },
+  ])(
+    "distinguishes executed-check success from complete real-loss certification: $name lever",
+    (row) =>
       Effect.gen(function* () {
-        const rows = [
-          {
-            name: "missing",
-            crashLever: undefined,
-            ok: true,
-            full: false,
-            status: "not-exercised",
-          },
-          {
-            name: "empty",
-            crashLever: Effect.succeed([]),
-            ok: true,
-            full: false,
-            status: "not-exercised",
-          },
-          {
-            name: "passed",
-            crashLever: Effect.succeed([
-              CertificationCaseResult.make({
-                suite: "real-loss",
-                name: "supplied lever result",
-                status: "passed",
-              }),
-            ]),
-            ok: true,
-            full: true,
-            status: "exercised",
-          },
-          {
-            name: "failed",
-            crashLever: Effect.succeed([
-              CertificationCaseResult.make({
-                suite: "real-loss",
-                name: "supplied lever result",
-                status: "failed",
-              }),
-            ]),
-            ok: false,
-            full: false,
-            status: "exercised",
-          },
-        ];
+        const report = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
 
-        for (const row of rows) {
-          const report = yield* Effect.scoped(
-            Effect.gen(function* () {
-              const fs = yield* FileSystem.FileSystem;
+            const directory = yield* fs.makeTempDirectoryScoped({
+              prefix: "certification-verdict-",
+            });
 
-              const directory = yield* fs.makeTempDirectoryScoped({
-                prefix: "certification-verdict-",
-              });
+            const adapters = combinedAdapters(`${directory}/test.sqlite`);
 
-              const adapters = combinedAdapters(`${directory}/test.sqlite`);
+            return yield* certifyDurableAdapters({
+              adapter: { name: row.name },
+              submissionLedger: adapters,
+              threadStore: adapters,
+              crashLever: row.crashLever,
+            });
+          }),
+        );
 
-              return yield* certifyDurableAdapters({
-                adapter: { name: row.name },
-                submissionLedger: adapters,
-                threadStore: adapters,
-                crashLever: row.crashLever,
-              });
-            }),
-          );
-
-          expect({
-            ok: report.ok,
-            full: report.fullyCertified,
-            status: report.tier3.status,
-          }).toEqual({ ok: row.ok, full: row.full, status: row.status });
-        }
+        expect({
+          ok: report.ok,
+          full: report.fullyCertified,
+          status: report.tier3.status,
+        }).toEqual({ ok: row.ok, full: row.full, status: row.status });
       }).pipe(Effect.provide([NodeFileSystem.layer, NodeCrypto.layer])),
     300_000,
   );
