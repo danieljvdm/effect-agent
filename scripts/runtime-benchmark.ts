@@ -2,7 +2,18 @@ import { createHash } from "node:crypto";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Cause, Clock, Console, Effect, Exit, FileSystem, Path, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Console,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Path,
+  Schema,
+  Stream,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 import { build, version as esbuildVersion } from "esbuild";
@@ -47,6 +58,7 @@ type Batch = typeof Batch.Type;
 
 export const PerformanceReport = Schema.Struct({
   fixture: Schema.Literal(FIXTURE_VERSION),
+  baselineTag: Schema.NullOr(Schema.String),
   fixtureSha256: Schema.String,
   transpiler: Schema.String,
   profile: Profile,
@@ -225,8 +237,29 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
 });
 
 export const renderPerformanceReport = (report: PerformanceReport): string => {
+  const baseline = report.revisions.find((revision) => revision.role === "base");
+  const candidate = report.revisions.find((revision) => revision.role === "head");
+
+  const identical =
+    baseline !== undefined &&
+    candidate !== undefined &&
+    baseline.builtArtifactsSha256 === candidate.builtArtifactsSha256 &&
+    baseline.lockfileSha256 === candidate.lockfileSha256;
+
   const lines = [
+    ...(report.baselineTag === null
+      ? []
+      : [
+          `Base release: \`${report.baselineTag}\` (\`${baseline?.revision}\`). Head checkout: \`${candidate?.revision}\`.`,
+          "",
+        ]),
     "Timing is informational. Operation median [Q1–Q3] in milliseconds; every measured sample and outlier is retained. Model-entry timings remain in raw samples.",
+    "Samples share three worker processes per revision in the pr profile; their spread is not a confidence interval or a calibrated regression threshold.",
+    ...(identical
+      ? [
+          "Identical built JavaScript and lockfiles. Timing differences do not establish a code regression; percentage changes are suppressed.",
+        ]
+      : []),
     "",
     "| Workload | Base | Head | Head/base |",
     "| --- | ---: | ---: | ---: |",
@@ -252,7 +285,7 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
     const head = summary(samples("head").map((sample) => sample.totalMs));
 
     const delta = (baseline: ReturnType<typeof summary>) =>
-      baseline.count === 0 || head.count === 0 || baseline.median === 0
+      identical || baseline.count === 0 || head.count === 0 || baseline.median === 0
         ? "n/a"
         : `${((head.median / baseline.median - 1) * 100).toFixed(1)}%`;
 
@@ -357,6 +390,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
   output: string;
   profile: Profile;
   requireClean: boolean;
+  baselineTag: string | null;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -430,6 +464,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
 
   const report: PerformanceReport = {
     fixture: FIXTURE_VERSION,
+    baselineTag: options.baselineTag,
     fixtureSha256: sha256(fixtureBytes.join("\n")),
     transpiler: `esbuild ${esbuildVersion} (fixture syntax only; no bundling)`,
     profile: options.profile,
@@ -604,6 +639,15 @@ export const command = Command.make(
         "Exact base checkout, installed with its lockfile and production packages built.",
       ),
     ),
+    baselineTag: Flag.string("base-tag").pipe(
+      Flag.withSchema(
+        Schema.String.check(Schema.isPattern(/^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)),
+      ),
+      Flag.withDescription(
+        "Published effect-agent release tag naming the base checkout in CI reports.",
+      ),
+      Flag.optional,
+    ),
     output: Flag.string("out-dir").pipe(
       Flag.withDefault(".performance-report"),
       Flag.withDescription("New artifact directory; existing reports are never overwritten."),
@@ -619,7 +663,7 @@ export const command = Command.make(
       Flag.withDescription("Reject modified or untracked files in any checkout (required by CI)."),
     ),
   },
-  Effect.fn(function* ({ base, output, profile, requireClean }) {
+  Effect.fn(function* ({ base, baselineTag, output, profile, requireClean }) {
     const path = yield* Path.Path;
 
     const root = path.resolve(
@@ -627,7 +671,14 @@ export const command = Command.make(
       "..",
     );
 
-    yield* compareRuntime({ root, base, output, profile, requireClean });
+    yield* compareRuntime({
+      root,
+      base,
+      baselineTag: Option.getOrNull(baselineTag),
+      output,
+      profile,
+      requireClean,
+    });
   }),
 ).pipe(
   Command.withDescription(
