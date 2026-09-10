@@ -35,6 +35,7 @@ import {
   conversationStatusAtom,
   sidebarTripsAtom,
   pendingMessagesAtom,
+  messagesAtom,
 } from "./state";
 
 function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | null {
@@ -72,7 +73,7 @@ export function Planner() {
   const progressResult = useAtomValue(progressAtom);
   const progress = Option.getOrNull(AsyncResult.value(progressResult));
 
-  const messages = snapshot?.messages.filter((message) => message.id !== "welcome") ?? [];
+  const messages = useAtomValue(messagesAtom);
 
   const busy = sendResult.waiting || (snapshot?.pending ?? 0) > 0;
   const canSend = session !== null && !sendResult.waiting && draft.trim().length > 0;
@@ -84,9 +85,11 @@ export function Planner() {
 
   const visibleProgress = live ?? (!busy ? progress : null);
 
-  const sendError = pendingMessages.some((message) => message.status === "failed")
-    ? failure(sendResult)
-    : null;
+  const sendError =
+    pendingMessages.some((message) => message.status === "failed") ||
+    messages.some((message) => message.delivery === "failed")
+      ? failure(sendResult)
+      : null;
 
   const error = failure(result) ?? sendError ?? failure(publishResult);
   const transcript = useRef<HTMLDivElement>(null);
@@ -278,7 +281,9 @@ export function Planner() {
         </header>
         <div className={`content ${trip && showTrip ? "with-trip" : ""}`}>
           <section className="conversation" aria-label="Travel conversation">
-            {conversationStatus !== "ready" ? (
+            {conversationStatus !== "ready" &&
+            messages.length === 0 &&
+            pendingMessages.length === 0 ? (
               <div className="conversation-loading" role="status" aria-live="polite">
                 {conversationStatus === "loading" ? (
                   <>
@@ -331,7 +336,7 @@ export function Planner() {
               >
                 {messages.map((message) => (
                   <article
-                    key={message.id}
+                    key={message.requestId ?? message.id}
                     className={`message ${message.role}${message.content ? " has-cards" : ""}`}
                   >
                     <span className="message-label">
@@ -349,6 +354,21 @@ export function Planner() {
                       <p>{message.text}</p>
                     ) : (
                       <MessageText text={message.text} />
+                    )}
+                    {message.delivery === "failed" && (
+                      <div className="pending-message-footer">
+                        <span className="pending-message-status" role="status">
+                          Couldn't confirm delivery
+                        </span>
+                        <button
+                          className="pending-message-retry"
+                          type="button"
+                          disabled={sendResult.waiting}
+                          onClick={() => send(message.id)}
+                        >
+                          Retry
+                        </button>
+                      </div>
                     )}
                   </article>
                 ))}

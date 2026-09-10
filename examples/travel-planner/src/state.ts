@@ -19,6 +19,7 @@ import {
   type PublishTripRequest,
   type SavedTrip,
   type ConversationSummary,
+  type PlannerSnapshot,
 } from "./domain";
 
 export class AccessClient extends AtomRpc.Service<AccessClient>()("travel-planner/AccessClient", {
@@ -105,7 +106,8 @@ type PendingMessage = {
   readonly conversationId: string;
   readonly id: string;
   readonly settings?: PlannerSettings;
-  readonly status: "sending" | "queued" | "failed";
+  readonly placement: "conversation" | "queue";
+  readonly status: "sending" | "accepted" | "failed";
 };
 
 export class PlannerClient extends AtomRpc.Service<PlannerClient>()("travel-planner/Client", {
@@ -467,8 +469,7 @@ const outboxAtom = Atom.writable<ReadonlyArray<PendingMessage>, ReadonlyArray<Pe
   (get, entries) => get.setSelf(entries),
 ).pipe(Atom.keepAlive);
 
-/** The server queue survives reload; local entries cover the time before acknowledgement. */
-export const pendingMessagesAtom = Atom.make((get) => {
+const unrecordedMessagesAtom = Atom.make((get) => {
   const session = get(visibleSessionAtom);
 
   if (session === null) return [];
@@ -481,22 +482,68 @@ export const pendingMessagesAtom = Atom.make((get) => {
     ) ?? [],
   );
 
-  const queued = snapshot?.queuedMessages ?? [];
-
-  const entries = get(outboxAtom).filter(
+  return get(outboxAtom).filter(
     (entry) =>
       entry.email === session.email &&
       entry.conversationId === conversationId &&
       !recorded.has(entry.id),
   );
+});
+
+type ConversationMessage = PlannerSnapshot["messages"][number] & {
+  readonly delivery?: PendingMessage["status"];
+};
+
+/** Idle sends stay in the transcript until their request IDs appear in the saved history. */
+export const messagesAtom = Atom.make((get): ReadonlyArray<ConversationMessage> => {
+  if (get(visibleSessionAtom) === null) return [];
+  const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
 
   return [
-    ...queued.map((entry) => ({
-      id: entry.requestId,
-      text: entry.text,
-      status: "queued" as const,
-    })),
-    ...entries.filter((entry) => !queued.some((saved) => saved.requestId === entry.id)),
+    ...(snapshot?.messages.filter((message) => message.id !== "welcome") ?? []),
+    ...get(unrecordedMessagesAtom)
+      .filter((entry) => entry.placement === "conversation")
+      .map((entry): ConversationMessage => ({
+        id: entry.id,
+        requestId: entry.id,
+        role: "user",
+        text: entry.text,
+        tripId: entry.tripId,
+        delivery: entry.status,
+      })),
+  ];
+});
+
+/** The server queue survives reload; local entries preserve where each send first appeared. */
+export const pendingMessagesAtom = Atom.make((get) => {
+  if (get(visibleSessionAtom) === null) return [];
+  const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
+  const entries = get(unrecordedMessagesAtom);
+  const queued = snapshot?.queuedMessages ?? [];
+
+  return [
+    ...queued
+      .filter(
+        (entry) =>
+          !entries.some(
+            (local) => local.id === entry.requestId && local.placement === "conversation",
+          ),
+      )
+      .map((entry) => ({
+        id: entry.requestId,
+        text: entry.text,
+        status: "queued" as const,
+      })),
+    ...entries
+      .filter(
+        (entry) =>
+          entry.placement === "queue" && !queued.some((saved) => saved.requestId === entry.id),
+      )
+      .map((entry) => ({
+        id: entry.id,
+        text: entry.text,
+        status: entry.status === "accepted" ? ("queued" as const) : entry.status,
+      })),
   ];
 });
 
@@ -548,6 +595,11 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
     const conversationId = retry?.conversationId ?? selection.conversationId ?? crypto.randomUUID();
     const selectedTripId = retry ? retry.tripId : (get(activeTripAtom)?.id ?? null);
     const requestId = retry?.id ?? crypto.randomUUID();
+    const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
+
+    const waiting =
+      (snapshot?.pending ?? 0) > 0 ||
+      get(unrecordedMessagesAtom).some((entry) => entry.status !== "failed");
 
     if (selection.conversationId === null)
       get.set(selectionAtom, { conversationId, tripId: selectedTripId });
@@ -559,6 +611,7 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
       tripId: selectedTripId,
       conversationId,
       id: requestId,
+      placement: retry?.placement ?? (waiting ? "queue" : "conversation"),
       status: "sending",
     };
 
@@ -598,7 +651,7 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
             outboxAtom,
             get(outboxAtom).map((current) =>
               current.id === requestId
-                ? { ...current, status: Exit.isSuccess(exit) ? "queued" : "failed" }
+                ? { ...current, status: Exit.isSuccess(exit) ? "accepted" : "failed" }
                 : current,
             ),
           );

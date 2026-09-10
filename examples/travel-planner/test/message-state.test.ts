@@ -12,6 +12,7 @@ import {
   changeSettingsAtom,
   draftAtom,
   pendingMessagesAtom,
+  messagesAtom,
   plannerAtom,
   selectionAtom,
   sendMessageAtom,
@@ -42,7 +43,7 @@ const snapshot = (
   });
 
 const canonical = (request: SendMessageRequest): PlannerSnapshot["messages"][number] => ({
-  id: request.requestId,
+  id: `recorded:${request.requestId}`,
   requestId: request.requestId,
   role: "user",
   text: request.message,
@@ -136,6 +137,7 @@ const setup = () => {
       registry.mount(draftAtom),
       registry.mount(plannerAtom),
       registry.mount(pendingMessagesAtom),
+      registry.mount(messagesAtom),
       registry.mount(sendMessageAtom),
       registry.mount(settingsAtom),
     ];
@@ -163,7 +165,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("shows the message and clears the draft while settings and admission are held, then waits for canonical input", async () => {
+it("renders idle sends in the transcript immediately and keeps them there through admission", async () => {
   const fixture = setup();
   const device = fixture.createDevice();
   const { registry } = device;
@@ -175,20 +177,39 @@ it("shows the message and clears the draft while settings and admission are held
     registry.set(draftAtom, "Plan Lisbon");
     registry.set(sendMessageAtom, undefined);
     expect(registry.get(draftAtom)).toBe("");
-    expect(registry.get(pendingMessagesAtom)).toMatchObject([
-      { text: "Plan Lisbon", status: "sending" },
+    expect(registry.get(messagesAtom)).toMatchObject([
+      { role: "user", text: "Plan Lisbon", delivery: "sending" },
     ]);
+    expect(registry.get(pendingMessagesAtom)).toEqual([]);
     await flush();
     expect(fixture.sends).toHaveLength(0);
     fixture.preferences[0]!.succeed();
     await flush();
     expect(fixture.sends).toHaveLength(1);
-    expect(registry.get(pendingMessagesAtom)).toMatchObject([{ status: "sending" }]);
+    expect(registry.get(messagesAtom)).toMatchObject([{ delivery: "sending" }]);
     fixture.sends[0]!.succeed();
     await flush();
-    expect(registry.get(pendingMessagesAtom)).toMatchObject([{ status: "queued" }]);
+    expect(registry.get(messagesAtom)).toMatchObject([{ delivery: "accepted" }]);
+    expect(registry.get(pendingMessagesAtom)).toEqual([]);
+    const request = fixture.sends[0]!.payload;
+
+    fixture.reads
+      .at(-1)!
+      .succeed(snapshot("lisbon", [], [{ requestId: request.requestId, text: request.message }]));
+    await flush();
+    expect(registry.get(messagesAtom)).toMatchObject([{ text: "Plan Lisbon" }]);
+    expect(registry.get(pendingMessagesAtom)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2_010);
     fixture.reads.at(-1)!.succeed(snapshot("lisbon", [canonical(fixture.sends[0]!.payload)]));
     await flush();
+    expect(registry.get(messagesAtom)).toEqual([canonical(request)]);
+    expect(registry.get(pendingMessagesAtom)).toEqual([]);
+    registry.set(draftAtom, "Find a hotel");
+    registry.set(sendMessageAtom, undefined);
+    expect(registry.get(messagesAtom)).toMatchObject([
+      { text: "Plan Lisbon" },
+      { text: "Find a hotel", delivery: "sending" },
+    ]);
     expect(registry.get(pendingMessagesAtom)).toEqual([]);
   } finally {
     device.close();
@@ -207,6 +228,10 @@ it("distinguishes identical messages and never restores a canonical message afte
     await flush();
     registry.set(draftAtom, "More beaches");
     registry.set(sendMessageAtom, undefined);
+    expect(registry.get(messagesAtom)).toEqual([]);
+    expect(registry.get(pendingMessagesAtom)).toMatchObject([
+      { text: "More beaches", status: "sending" },
+    ]);
     await flush();
     const first = fixture.sends[0]!;
 
@@ -243,7 +268,7 @@ it("distinguishes identical messages and never restores a canonical message afte
   }
 });
 
-it("retries the captured request and settings while preserving the next draft", async () => {
+it("retries an idle message in place with its captured request and settings, preserving the next draft", async () => {
   const fixture = setup();
   const device = fixture.createDevice();
   const { registry } = device;
@@ -260,7 +285,10 @@ it("retries the captured request and settings while preserving the next draft", 
 
     first.fail();
     await flush();
-    expect(registry.get(pendingMessagesAtom)).toMatchObject([{ status: "failed" }]);
+    expect(registry.get(messagesAtom)).toMatchObject([
+      { text: "Find a hotel", delivery: "failed" },
+    ]);
+    expect(registry.get(pendingMessagesAtom)).toEqual([]);
     registry.set(changeSettingsAtom, { kind: "model", value: "gpt-6-astra" });
     await flush();
     expect(registry.get(settingsAtom).model).toBe("gpt-6-astra");
@@ -269,16 +297,17 @@ it("retries the captured request and settings while preserving the next draft", 
     await flush();
     expect(fixture.sends[1]!.payload).toEqual(first.payload);
     expect(registry.get(draftAtom)).toBe("A separate next message");
-    expect(registry.get(pendingMessagesAtom)).toMatchObject([{ status: "sending" }]);
+    expect(registry.get(messagesAtom)).toMatchObject([{ delivery: "sending" }]);
     fixture.sends[1]!.succeed();
     await flush();
-    expect(registry.get(pendingMessagesAtom)).toMatchObject([{ status: "queued" }]);
+    expect(registry.get(messagesAtom)).toMatchObject([{ delivery: "accepted" }]);
+    expect(registry.get(pendingMessagesAtom)).toEqual([]);
   } finally {
     device.close();
   }
 });
 
-it("isolates pending messages by conversation and verified account", async () => {
+it("isolates optimistic messages by conversation and verified account", async () => {
   const fixture = setup();
   const device = fixture.createDevice();
   const { registry } = device;
@@ -293,17 +322,20 @@ it("isolates pending messages by conversation and verified account", async () =>
     await flush();
     registry.set(selectionAtom, { conversationId: "kyoto", tripId: null });
     expect(registry.get(pendingMessagesAtom)).toEqual([]);
+    expect(registry.get(messagesAtom)).toEqual([]);
     await flush();
     fixture.reads.at(-1)!.succeed(snapshot("kyoto"));
     await flush();
     registry.set(selectionAtom, { conversationId: "lisbon", tripId: null });
-    expect(registry.get(pendingMessagesAtom)).toMatchObject([{ text: "Owner's Lisbon request" }]);
+    expect(registry.get(messagesAtom)).toMatchObject([{ text: "Owner's Lisbon request" }]);
     device.setEmail("guest@example.com");
     await flush();
     expect(registry.get(pendingMessagesAtom)).toEqual([]);
+    expect(registry.get(messagesAtom)).toEqual([]);
     fixture.sends[0]!.fail();
     await flush();
     expect(registry.get(pendingMessagesAtom)).toEqual([]);
+    expect(registry.get(messagesAtom)).toEqual([]);
   } finally {
     device.close();
   }

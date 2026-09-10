@@ -12,9 +12,11 @@ the card. Saved trip data stays current when code changes or is restored. App cr
 code changes run in a separate durable editor. You can keep chatting while it works, including
 sending a new message while the planner's previous turn is pending. Accepted messages join
 at a safe runtime boundary; accepting a message does not mean its work has finished.
-Messages appear immediately above the input with **Sending** or **Queued** status, then move
-into the conversation when recorded. The pending list scrolls independently so the input
-remains reachable. Failed acknowledgements offer **Retry**, preserving the original request
+When the planner is idle, messages appear immediately in the conversation and stay there
+as delivery is confirmed. Messages sent during an active turn appear above the input with
+**Sending** or **Queued** status, then move into the conversation when recorded. The pending
+list scrolls independently so the input remains reachable. Failed acknowledgements offer
+**Retry** where the message appeared, preserving the original request
 ID and model settings without clearing a new draft. Accepted queued messages survive reload;
 messages that have not reached the server remain local to the current tab.
 
