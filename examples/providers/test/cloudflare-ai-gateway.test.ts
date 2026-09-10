@@ -251,8 +251,11 @@ describe("Cloudflare AI Gateway with upstream Effect clients", () => {
         toolkit: Toolkit.make(AnthropicTool.WebSearch_20250305({})),
         toolChoice: "required",
       }).pipe(
-        Effect.provide(AnthropicLanguageModel.model("anthropic/claude-haiku-4.5")),
-        Effect.provide(AnthropicClient.layer(options)),
+        Effect.provide(
+          AnthropicLanguageModel.model("anthropic/claude-haiku-4.5").pipe(
+            Layer.provide(AnthropicClient.layer(options)),
+          ),
+        ),
         Effect.provideService(HttpClient.HttpClient, http),
       ),
     );
@@ -285,8 +288,11 @@ describe("Cloudflare AI Gateway with upstream Effect clients", () => {
     ]) {
       const error = await Effect.runPromise(
         LanguageModel.generateText({ prompt: "news" }).pipe(
-          Effect.provide(OpenAiLanguageModel.model("gpt-4.1-mini")),
-          Effect.provide(OpenAiClient.layer(options)),
+          Effect.provide(
+            OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
+              Layer.provide(OpenAiClient.layer(options)),
+            ),
+          ),
           Effect.provideService(HttpClient.HttpClient, http),
           Effect.provideService(Headers.CurrentRedactedNames, []),
           Effect.flip,
@@ -340,8 +346,11 @@ describe("Cloudflare AI Gateway with upstream Effect clients", () => {
         toolkit: Toolkit.make(OpenAiTool.WebSearch({})),
       }).pipe(
         Stream.runCollect,
-        Effect.provide(OpenAiLanguageModel.model("gpt-4.1-mini")),
-        Effect.provide(OpenAiClient.layer(Gateway.provider({ ...config, provider: "openai" }))),
+        Effect.provide(
+          OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
+            Gateway.provide(OpenAiClient.layer, { ...config, provider: "openai" }),
+          ),
+        ),
         Effect.provideService(HttpClient.HttpClient, http),
       ),
     );
