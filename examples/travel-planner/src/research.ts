@@ -7,6 +7,7 @@ import {
   PageCaptureRequest,
   PageNavigationOptions,
   PageResourcePolicy,
+  PageSelectorWait,
   PageUrlTarget,
   type PageCaptureError,
 } from "@effect-agent/sandbox/PageCapture";
@@ -74,7 +75,7 @@ export const ReadTravelPageResult = Schema.Struct({
 );
 
 export const ReadTravelPage = Tool.make("read_travel_page", {
-  description: `${PreviousReadTravelPage.description} Includes up to four image references from the inspected page when available. These are untrusted source photo candidates, not proof of amenities; use only images relevant to this listing.`,
+  description: `${PreviousReadTravelPage.description} Includes up to four image references from the inspected page when available. These are untrusted source photo candidates, not proof of amenities; use only images relevant to this listing. A successful read contains excerpts, not a complete amenity inventory. Missing amenities remain unverified, and titles or photos alone do not establish them.`,
   parameters: ReadTravelPageParameters,
   success: ReadTravelPageResult,
   failure: WebCaptureFailure,
@@ -215,11 +216,38 @@ const excerptsFor = (markdown: string, focus: string) => {
   return selected;
 };
 
+// A selector wait can still return incomplete content. Require a listing heading
+// and a text section beyond the gallery; this does not certify every amenity.
+const AirbnbListingContent = Schema.String.check(
+  Schema.isPattern(/^#[ \t]+\S[^\n]*\n[\s\S]*^##[ \t]+\S[^\n]*\n+(?![#\s!]|\[)\S/m),
+);
+
 const inspect = Effect.fn("TravelResearch.inspect")(function* (
   parameters: typeof ReadTravelPageParameters.Type,
   toolCallId?: string,
 ) {
   const started = yield* Clock.currentTimeMillis;
+  const decoded = decodeUrl(parameters.url);
+
+  const airbnbListing =
+    Option.isSome(decoded) &&
+    ["airbnb.com", "www.airbnb.com"].includes(decoded.value.hostname) &&
+    /^\/rooms\/[0-9]+\/?$/.test(decoded.value.pathname);
+
+  // Network quiet and the listing title can precede useful amenity content.
+  // Keep this site-specific readiness policy out of the general capture adapter.
+  const navigation = PageNavigationOptions.make(
+    airbnbListing
+      ? {
+          waitUntil: "domcontentloaded",
+          timeoutMillis: 10_000,
+          waitForSelector: PageSelectorWait.make({
+            selector: '[data-section-id="AMENITIES_DEFAULT"]',
+            timeoutMillis: 10_000,
+          }),
+        }
+      : { waitUntil: "networkidle2", timeoutMillis: 20_000 },
+  );
 
   const report = (category: string, data: unknown) =>
     Effect.flatMap(Clock.currentTimeMillis, (now) =>
@@ -232,8 +260,9 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
             provider: "cloudflare-browser-run",
             action: "markdown",
             engine: "chromium",
-            waitUntil: "networkidle2",
-            navigationTimeoutMs: 20_000,
+            waitUntil: navigation.waitUntil,
+            navigationTimeoutMs: navigation.timeoutMillis,
+            waitForSelector: navigation.waitForSelector,
             overallTimeoutMs: 25_000,
             maxOutputBytes: 512 * 1_024,
           },
@@ -245,8 +274,6 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
         },
       ),
     );
-
-  const decoded = decodeUrl(parameters.url);
 
   if (Option.isNone(decoded)) {
     yield* report("url-policy", {
@@ -271,10 +298,7 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
         action: CapturePageMarkdown.make({}),
         engine: "chromium",
         limits: PageCaptureLimits.make({ maxOutputBytes: 512 * 1_024 }),
-        navigation: PageNavigationOptions.make({
-          waitUntil: "networkidle2",
-          timeoutMillis: 20_000,
-        }),
+        navigation,
         resourcePolicy,
       }),
     )
@@ -287,7 +311,10 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
           report("timeout", { timeoutMs: 25_000 }).pipe(
             Effect.andThen(
               Effect.fail(
-                failure("WebCaptureTimeout", "Page inspection timed out. Try another source."),
+                failure(
+                  "WebCaptureTimeout",
+                  "Page inspection exceeded its 25-second overall limit. The destination status is unknown; use another source.",
+                ),
               ),
             ),
           ),
@@ -318,6 +345,21 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
     return yield* failure(
       "WebCapturePageUnavailable",
       `The page ${category === "empty-page" ? "returned no text" : category === "page-not-found" ? "shows a not-found message" : "shows an access challenge"}. It was not inspected; use another source.`,
+    );
+  }
+
+  if (airbnbListing && !Schema.is(AirbnbListingContent)(markdown)) {
+    yield* report("unready-page", {
+      evidence: "rendered-page-text",
+      destinationHttpStatus: null,
+      pageText: markdown,
+      resourceUse: result.resourceUse,
+      implementation: result.implementation,
+    });
+
+    return yield* failure(
+      "WebCapturePageUnready",
+      "The listing content did not finish loading. Its title or photos alone do not verify amenities; use another source.",
     );
   }
 

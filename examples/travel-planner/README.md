@@ -145,6 +145,27 @@ local hostnames, embedded credentials, and custom ports, and also apply to brows
 and subresources. These are URL checks, not a DNS-resolution firewall. Page-size limits,
 timeouts, and access-challenge handling still apply.
 
+Airbnb listing URLs on `airbnb.com` and `www.airbnb.com` use a 10-second
+`domcontentloaded` navigation limit followed by a 10-second wait for
+`[data-section-id="AMENITIES_DEFAULT"]`. This waits for listing details without depending
+on network quiet. Other sites retain their existing navigation policy. A navigation shell,
+a title/gallery alone, or a heading without a text section is a typed `WebCapturePageUnready`
+failure. A successful result still contains selected source excerpts, not a complete amenity
+inventory: missing amenities remain unverified, and titles or photos alone do not prove them.
+
+Each inspection makes one capture request with a 25-second outer timeout, a 512 KiB capture
+limit, and a 12 KiB result limit. There is no automatic retry or fallback capture. Selector
+changes, incomplete content, access challenges, and provider timeouts can still fail. Browser
+Run API HTTP 422 is not a destination status or proof that Airbnb blocked the request.
+The provider's detailed cause stays in private diagnostics; the published beta.78 adapter
+reports only the generic API status for these navigation timeouts to the model.
+
+Local interruption stops waiting and finalizes an acquired response reader; it does not
+confirm remote browser termination because the native Quick Action binding provides no
+abort signal or session handle. REST captures informed the readiness policy. Local tests
+exercise the published adapter with scripted binding responses, not the hosted provider's
+lifecycle.
+
 ## Deploy with Alchemy
 
 The app pins published `0.1.0-beta.78` packages, including JSON persistence,
