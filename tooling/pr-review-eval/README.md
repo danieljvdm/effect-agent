@@ -62,8 +62,9 @@ search failure. Search covers only the files included in the snapshot.
 
 ## Corpus scope
 
-`public-effect-agent-v2.json` contains six historical cases: five known-defect cases with fourteen
-adjudicated defects (four blocking and ten important), and one clean control. Frozen files come
+`public-effect-agent-v2.json` contains seven historical cases: six known-defect cases with sixteen
+adjudicated defects (four blocking and twelve important), and one clean control. The original
+PR #425 case checks usage completeness and durable delegation, without requiring later API extensions. Frozen files come
 from each case's exact local Git revisions, including present changed files, tracked relative
 TypeScript dependencies, `AGENTS.md`, root toolchain manifests, and relevant package manifests.
 Files added or deleted by the change are absent at the corresponding revision. Snapshot digests

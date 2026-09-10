@@ -1,5 +1,16 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.78
+
+### Patch Changes
+
+- [#425](https://github.com/danieljvdm/effect-agent/pull/425) [`84fe655`](https://github.com/danieljvdm/effect-agent/commit/84fe65580c35a91707eda809b7e47d90402179a9) Thanks [@Makisuo](https://github.com/Makisuo)! - Expose observed model usage and estimated cost on Run results, child projections, and terminal reports while preserving unknown coverage. Report nested attached-child usage separately and retain verified child totals across durable joins and recovery.
+
+- Updated dependencies [[`84fe655`](https://github.com/danieljvdm/effect-agent/commit/84fe65580c35a91707eda809b7e47d90402179a9)]:
+  - @effect-agent/engine@0.1.0-beta.78
+  - @effect-agent/core@0.1.0-beta.78
+  - @effect-agent/sandbox@0.1.0-beta.78
+
 ## 0.1.0-beta.77
 
 ### Minor Changes

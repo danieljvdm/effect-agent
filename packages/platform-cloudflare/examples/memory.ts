@@ -2,7 +2,11 @@ import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import { type MemoryLookup, type MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
 import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
 import { type MemoryWrite } from "@effect-agent/core/MemoryStore";
-import { MemoryScope } from "@effect-agent/core/MemoryStore";
+import { MemoryKey, MemoryScope } from "@effect-agent/core/MemoryStore";
+import {
+  MemoryObject,
+  CloudflareMemoryClient,
+} from "@effect-agent/platform-cloudflare/CloudflareMemory";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
@@ -10,8 +14,6 @@ import {
 } from "@effect-agent/storage-cloudflare/MemoryProtocol";
 import { Principal } from "@effect-agent/thread/SubmissionLedger";
 import { Effect, Layer, Schema } from "effect";
-
-import { MemoryObject, CloudflareMemoryClient } from "../src/CloudflareMemory.ts";
 
 export const Projects = MemoryNamespace.define({
   name: "application/projects",
@@ -37,6 +39,17 @@ const authorizer = Layer.effect(
 );
 
 export class ProjectMemory extends MemoryObject.make(authorizer) {}
+
+/** Host-authenticated access; add source authority checks to the owner policy when required. */
+export const readProjectMemory = Effect.fn("example.readProjectMemory")(function* (
+  access: MemoryAccess<ReturnType<typeof Projects.make>>,
+  principal: Principal,
+) {
+  const memory = yield* CloudflareMemoryClient.make(access, principal);
+
+  // One owner request. Null is absent; a withdrawn document is an explicit tombstone.
+  return yield* memory.get(MemoryKey.make({ namespace: access.namespace, id: "project-profile" }));
+});
 
 /** Called by any authorized Thread or ingestion job, not by the framework automatically. */
 export const correctProjectMemory = Effect.fn("example.correctProjectMemory")(function* (

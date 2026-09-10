@@ -20,8 +20,9 @@ returns up to five matching lines per file, and provides `nextCursor` for more f
 `truncated` identifies omitted matching lines and `unreadablePaths` identifies failed reads.
 A partial or failed search cannot establish that a caller is absent.
 
-The reviewer turns changed contracts into material, falsifiable questions and traces evidence
-for and against them across callers and consumers. Before recording a defect, it checks the
+The reviewer starts with the promised consumer outcome and traces supported execution paths,
+including unchanged callers and consumers. It distinguishes missing promised behavior from
+optional feature expansion. Before recording a defect, it checks the
 strongest relevant guard, documented exception, or alternative interpretation and establishes
 why the supported trigger still causes concrete impact. It checks base/head causation, boundary
 values, cleanup, concurrency, and whether changed tests would detect the claimed failure.

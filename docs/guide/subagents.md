@@ -51,6 +51,11 @@ Set `failure` and `mapChildFailure` for application-specific errors. These custo
 are independent. Missing mappings validate the default value against the selected Schema and
 fail with `SubagentProjectionFailure` if it does not fit.
 
+Child terminal events and the `projectResult` context expose `usage` and `delegatedUsage`.
+Durable joins preserve verified totals across recovery; see [usage accounting](run-agents.md#provider-usage-and-cost-evidence).
+For live child deltas or pricing, pass `child.budget` or `child.estimateCostMicrousd` to
+`SubagentRuntime.layer`.
+
 ## Define the child
 
 The child is an ordinary agent. Give it a narrow task and the tools that task needs.
@@ -263,6 +268,14 @@ for authorization. Worker and attached source policies continue to come from sto
 Inspection, listing, observation, and cancellation do not require resolving a source policy.
 Keep retained binding versions available; a policy resolver cannot repair ambiguous historical
 definition identities or reconstruct a missing capture.
+
+A root conversation can admit a new registered Agent ID after an application upgrade. When
+an explicit owner Submission selects that Agent, worker creation and reporting use its exact
+retained binding, while the original `ThreadCreated` record stays unchanged. An unregistered
+Agent/digest pair is rejected. Existing workers retain their original lineage and reporting
+binding when the upgraded root sends follow-ups; worker and attached child Agent IDs cannot
+be replaced this way. Without an explicit owner Submission, programmatic hosts continue to
+use the thread's original Agent.
 
 Captured source reporting uses the initial owner binding and stores its existing reporting intent
 in the worker origin. A later input from another source revision does not replace that projection;

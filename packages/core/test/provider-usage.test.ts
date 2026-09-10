@@ -1,5 +1,9 @@
 import {
   ModelCallUsage,
+  RunTotals,
+  emptyRunTotals,
+  unknownRunTotals,
+  sumRunTotals,
   RunUsageSummary,
   summarizeModelUsage,
   UsageAggregationError,
@@ -184,5 +188,53 @@ it("rejects invalid seeds and seeded usage overflow through the typed error chan
       expect((yield* summarizeModelUsage([zero], callLimit).pipe(Effect.flip)).field).toBe(
         "modelCalls",
       );
+    }),
+  ));
+
+it("combines disjoint Run totals without converting unknown or legacy evidence into free work", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const known = RunTotals.make({
+        ...emptyRunTotals(),
+        modelCalls: 2,
+        inputTokens: 12,
+        outputTokens: 3,
+        costMicrousd: 17,
+      });
+
+      const legacy = Schema.decodeUnknownSync(RunTotals)({
+        modelCalls: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        costMicrousd: 0,
+      });
+
+      expect(yield* sumRunTotals([emptyRunTotals(), known])).toEqual(known);
+      expect(yield* sumRunTotals([legacy])).toMatchObject({
+        usageStatus: "unknown",
+        pricingStatus: "unknown",
+      });
+      expect((yield* sumRunTotals([known, unknownRunTotals()])).pricingStatus).toBe("partial");
+      const combined = yield* sumRunTotals([known, legacy]);
+
+      expect(combined).toMatchObject({
+        modelCalls: 3,
+        inputTokens: 12,
+        outputTokens: 3,
+        costMicrousd: 17,
+        usageStatus: "partial",
+        pricingStatus: "partial",
+      });
+      expect(yield* sumRunTotals([legacy, known])).toEqual(combined);
+      expectTypeOf(sumRunTotals([known])).toEqualTypeOf<
+        Effect.Effect<RunTotals, UsageAggregationError>
+      >();
+
+      const overflow = yield* sumRunTotals([
+        RunTotals.make({ ...known, inputTokens: Number.MAX_SAFE_INTEGER }),
+        known,
+      ]).pipe(Effect.flip);
+
+      expect(overflow).toMatchObject({ _tag: "UsageAggregationError", field: "inputTokens" });
     }),
   ));

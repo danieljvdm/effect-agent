@@ -377,6 +377,32 @@ make an RPC. Applications that provide that service once through their Effect La
 `CloudflareMemoryClient.make(access, principal)` instead. Both return the same Effect-native client
 with the same validation and budgets.
 
+When the host already knows the document key, use `client.get(key)` with a `MemoryKey` in the
+bound namespace. The [compiling example](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/memory.ts)
+reads `project-profile` directly. It sends one `Get` owner request and returns a schema-validated
+`MemoryDocument` with its current `source.revision`, or `null` only when the key is absent.
+A withdrawn key returns `WithdrawnMemoryDocument`, containing its terminal revision and no content.
+There is no extraction, job draining, embedding, candidate search, index refresh, rendering, or
+background readiness wait on this path.
+
+The owner invokes `MemoryOwnerAuthorizer` for the exact key, namespace, authenticated principal,
+and scope before reading, including for absent and withdrawn documents. It also denies active
+documents whose `scopes` omit the bound scope. Key or scope possession never grants access.
+For source-dependent memories, the application's owner authorizer must preserve its source authority
+and provenance checks; a current document revision does not prove that its original evidence remains
+authorized or current. These checks remain application-owned and are not replaced by `get`.
+
+Reads begun after an acknowledged write see that revision or a later one through the same SQLite
+owner. Reads after withdrawal return the tombstone; an already captured read may finish. The adapter
+must fail with `MemoryStorageError` if it cannot provide a current view. Denied access, expired
+deadlines, unavailable owners, invalid wire data, and exceeded budgets remain typed failures,
+never `null`. Both client and owner enforce `MemoryRpcLimits`: encoded request and response bytes,
+encoded document `maxSourceBytes`, and `timeoutMillis`. Storage row limits bound local reads before
+wire encoding. An interrupted caller stops waiting; the owner's own deadline finalizes its work.
+The `CloudflareMemoryClient.get` span measures the client operation without adding document text,
+keys, principals, or scopes as span attributes. Measure application authentication and rendering
+separately; this adapter operation alone does not establish a 100–200 ms complete lookup target.
+
 Access and document scopes share the `MemoryScope` brand from core. Clients and owner authorizers
 use the existing `Principal` brand from thread. Decode external values with their Effect Schemas
 after authentication; `.make` is suitable for trusted constants. Scopes are nonempty strings of at

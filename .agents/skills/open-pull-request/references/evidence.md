@@ -5,7 +5,12 @@ verification and reuse it for the PR. A screenshot is the default; use a short
 video when the sequence matters, such as an agent exchange or animation. Both
 are rarely needed. Nonvisual changes need no screenshots or recordings.
 
-Use existing capture tools; load `playwright-cli` when available for browser capture. Keep
+For changes to existing visible behavior, prefer a before/after table with
+published captures when the comparison helps reviewers see the change. Use the
+same viewport, fixture data, and interaction state for both captures. A new
+feature can use a final-state capture without a contrived before image.
+
+Use existing capture tools; load `playwright-cli` for browser capture. Keep
 recordings focused, usually under 30 seconds, without changing product timing.
 Use safe fixture data and review the image or whole clip once for correctness
 and private content. Treat published assets as public; unreviewed media stays
@@ -17,13 +22,6 @@ Use the repository's existing media publisher when available. Otherwise inspect
 that capability when authenticated access allows it. Do not assume a particular
 publisher script exists in every consumer repository.
 
-If no approved publisher or supported attachment tool is available, report the
-exact local path. Do not add a publisher as part of opening a PR.
-
 Use the returned link or Markdown in the PR. Keep originals until publication succeeds;
 if it fails, report the exact local path. Never extract browser cookies, expose
 credentials in arguments, create asset branches, or invent an upload service.
-
-Include nonvisual evidence only when it adds to the diff and CI. Mention
-validation commands for unusual checks, checks CI cannot run, or results that
-explain the behavior.

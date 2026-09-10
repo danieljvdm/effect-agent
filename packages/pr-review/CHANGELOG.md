@@ -1,5 +1,16 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.78
+
+### Patch Changes
+
+- [#432](https://github.com/danieljvdm/effect-agent/pull/432) [`d5ca92d`](https://github.com/danieljvdm/effect-agent/commit/d5ca92df2a5634368de0ba789dd5584626d639b7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Trace promised consumer outcomes across supported execution paths during review, distinguishing missing behavior from optional feature expansion.
+
+- Updated dependencies [[`84fe655`](https://github.com/danieljvdm/effect-agent/commit/84fe65580c35a91707eda809b7e47d90402179a9)]:
+  - @effect-agent/engine@0.1.0-beta.78
+  - @effect-agent/core@0.1.0-beta.78
+  - effect-agent@0.1.0-beta.78
+
 ## 0.1.0-beta.77
 
 ### Patch Changes

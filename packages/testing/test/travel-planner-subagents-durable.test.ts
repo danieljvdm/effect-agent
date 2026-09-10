@@ -486,6 +486,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
           const locations = [
+            "subagent:before-join-append",
             "subagent:after-join-append",
             "subagent:after-release-pending",
             "subagent:after-release",
@@ -526,6 +527,24 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               const log = yield* readLog(receipt.threadId);
 
               expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
+              const joined = payloadsOf(log, "SubagentJoined")[0]?.record.payload;
+
+              expect(joined).toMatchObject({
+                usage: {
+                  modelCalls: 2,
+                  inputTokens: 192,
+                  outputTokens: 128,
+                  costMicrousd: 0,
+                  usageStatus: "partial",
+                  pricingStatus: "unknown",
+                },
+                delegatedUsage: {
+                  modelCalls: 0,
+                  usageStatus: "complete",
+                  pricingStatus: "complete",
+                },
+              });
+
               const reservations = yield* childReservations(receipt.submissionId);
 
               expect(reservations.map((row) => row.status)).toEqual(["released"]);

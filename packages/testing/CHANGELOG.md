@@ -1,5 +1,16 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.78
+
+### Patch Changes
+
+- Updated dependencies [[`301ead3`](https://github.com/danieljvdm/effect-agent/commit/301ead3c88dbd5b6fc40e31e53f11745235d3977), [`84fe655`](https://github.com/danieljvdm/effect-agent/commit/84fe65580c35a91707eda809b7e47d90402179a9), [`c8163c1`](https://github.com/danieljvdm/effect-agent/commit/c8163c14194b256653db98821c58c493bdebe21a)]:
+  - @effect-agent/thread@0.1.0-beta.78
+  - @effect-agent/capabilities@0.1.0-beta.78
+  - @effect-agent/engine@0.1.0-beta.78
+  - @effect-agent/core@0.1.0-beta.78
+  - @effect-agent/sandbox@0.1.0-beta.78
+
 ## 0.1.0-beta.77
 
 ### Patch Changes
