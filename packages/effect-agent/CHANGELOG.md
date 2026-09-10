@@ -1,5 +1,18 @@
 # effect-agent
 
+## 0.1.0-beta.77
+
+### Minor Changes
+
+- [#421](https://github.com/danieljvdm/effect-agent/pull/421) [`38bc092`](https://github.com/danieljvdm/effect-agent/commit/38bc092ba87e631416b75d0ed4871330c2c40489) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add a WebSearch tool with interchangeable native search backends and bounded, cited results. Route upstream Effect clients through Cloudflare AI Gateway with a pipeable Layer helper for search, model calls, streaming, and supported provider APIs.
+
+### Patch Changes
+
+- Updated dependencies [[`84d6684`](https://github.com/danieljvdm/effect-agent/commit/84d66844e24e7fbdc5dc3f54a5d3a7a6127cdd99), [`38bc092`](https://github.com/danieljvdm/effect-agent/commit/38bc092ba87e631416b75d0ed4871330c2c40489)]:
+  - @effect-agent/core@0.1.0-beta.77
+  - @effect-agent/engine@0.1.0-beta.77
+  - @effect-agent/capabilities@0.1.0-beta.77
+
 ## 0.1.0-beta.76
 
 ### Patch Changes

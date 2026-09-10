@@ -1,5 +1,14 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.77
+
+### Patch Changes
+
+- [#423](https://github.com/danieljvdm/effect-agent/pull/423) [`84d6684`](https://github.com/danieljvdm/effect-agent/commit/84d66844e24e7fbdc5dc3f54a5d3a7a6127cdd99) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose native tool failure modes through `Agent.inspectTools` and distinguish propagated failures from returned results in tool events, spans, and logs. Clarify when declared tool failures end a run and when the model or programmatic caller receives them.
+
+- Updated dependencies [[`84d6684`](https://github.com/danieljvdm/effect-agent/commit/84d66844e24e7fbdc5dc3f54a5d3a7a6127cdd99)]:
+  - @effect-agent/core@0.1.0-beta.77
+
 ## 0.1.0-beta.76
 
 ### Patch Changes
