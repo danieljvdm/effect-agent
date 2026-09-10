@@ -687,7 +687,13 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         failureMode: "return",
       }).annotate(ToolExecutionClass, "readonly");
 
-      const innerToolkit = Toolkit.make(ObservedQuery, ObservedFailure);
+      const ObservedError = Tool.make("observed_error", {
+        parameters: ObservedFailure.parametersSchema,
+        success: ObservedFailure.successSchema,
+        failure: QueryFailure,
+      });
+
+      const innerToolkit = Toolkit.make(ObservedQuery, ObservedFailure, ObservedError);
 
       return Effect.gen(function* () {
         const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
@@ -698,6 +704,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
             observed_query: () =>
               Effect.succeed({ rows: [1] }).pipe(Effect.withSpan("host.programmatic.query")),
             observed_failure: () => Effect.fail(QueryFailure.make({ message: failureSecret })),
+            observed_error: () => Effect.fail(QueryFailure.make({ message: failureSecret })),
           }),
           program: (pass) =>
             Effect.gen(function* () {
@@ -711,7 +718,12 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
                 encodedArguments: { sql: argumentSecret },
               });
 
-              yield* Ref.set(outcomes, [success, failure]);
+              const error = yield* pass.invoke({
+                toolName: "observed_error",
+                encodedArguments: { sql: argumentSecret },
+              });
+
+              yield* Ref.set(outcomes, [success, failure, error]);
 
               return null;
             }),
@@ -723,6 +735,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         expect(yield* Ref.get(outcomes)).toMatchObject([
           { _tag: "ProgrammaticCallSuccess", index: 0 },
           { _tag: "ProgrammaticCallFailure", index: 1 },
+          { _tag: "ProgrammaticCallError", index: 2 },
         ]);
 
         const programmaticSpans = spans.filter(
@@ -732,11 +745,12 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
         expect(programmaticSpans.map((span) => span.name)).toEqual([
           "execute_tool observed_query",
           "execute_tool observed_failure",
+          "execute_tool observed_error",
         ]);
         expect(spans.some((span) => span.name === "AgentRuntime.programmaticTool")).toBe(false);
         expect(spans.some((span) => span.name === "AgentRuntime.toolkit.handle")).toBe(false);
 
-        const [successSpan, failureSpan] = programmaticSpans;
+        const [successSpan, failureSpan, errorSpan] = programmaticSpans;
 
         expect(Object.fromEntries(successSpan?.attributes ?? [])).toMatchObject({
           "gen_ai.operation.name": "execute_tool",
@@ -747,6 +761,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           "effect_agent.tool.execution_class": "readonly",
           "effect_agent.tool.invocation_kind": "programmatic",
           "effect_agent.tool.outcome": "success",
+          "effect_agent.tool.failure_mode": "error",
           "effect_agent.tool.parent_call.id": "orchestrate-1",
           "effect_agent.tool.sequence_index": 0,
           toolCallId: "orchestrate-1#0",
@@ -758,8 +773,16 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           "gen_ai.tool.name": "observed_failure",
           "gen_ai.tool.call.id": "orchestrate-1#1",
           "effect_agent.tool.outcome": "failure",
+          "effect_agent.tool.failure_mode": "return",
+          "effect_agent.tool.failure_handling": "returned-to-caller",
           "effect_agent.tool.sequence_index": 1,
           toolCallId: "orchestrate-1#1",
+        });
+        expect(successSpan?.attributes.has("effect_agent.tool.failure_handling")).toBe(false);
+        expect(Object.fromEntries(errorSpan?.attributes ?? [])).toMatchObject({
+          "gen_ai.tool.name": "observed_error",
+          "effect_agent.tool.failure_mode": "error",
+          "effect_agent.tool.failure_handling": "returned-to-caller",
         });
         if (successSpan?.status._tag !== "Ended" || failureSpan?.status._tag !== "Ended") {
           throw new Error("Expected both programmatic Tool spans to end");
@@ -792,6 +815,8 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
             outcome: annotations.toolOutcome,
             toolCallId: annotations.toolCallId,
             toolName: annotations.toolName,
+            failureMode: annotations["effect_agent.tool.failure_mode"],
+            failureHandling: annotations["effect_agent.tool.failure_handling"],
           })),
         ).toEqual([
           {
@@ -799,12 +824,24 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
             outcome: "success",
             toolCallId: "orchestrate-1#0",
             toolName: "observed_query",
+            failureMode: "error",
+            failureHandling: undefined,
           },
           {
             message: "agent tool execution failed",
             outcome: "failure",
             toolCallId: "orchestrate-1#1",
             toolName: "observed_failure",
+            failureMode: "return",
+            failureHandling: "returned-to-caller",
+          },
+          {
+            message: "agent tool execution failed",
+            outcome: "failure",
+            toolCallId: "orchestrate-1#2",
+            toolName: "observed_error",
+            failureMode: "error",
+            failureHandling: "returned-to-caller",
           },
         ]);
 
@@ -1243,6 +1280,62 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       expect(yield* Ref.get(invocations)).toBe(0);
     }),
   );
+
+  for (const failureKind of ["defect", "interruption"] as const) {
+    it.effect(`keeps a programmatic ${failureKind} distinct from a returned failure`, () =>
+      Effect.gen(function* () {
+        const spans: Array<Tracer.NativeSpan> = [];
+        let finalized = 0;
+        const defect = new Error("programmatic handler defect");
+
+        const innerToolkit = Toolkit.make(
+          Tool.make("inner", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+            failureMode: "return",
+          }),
+        );
+
+        const tracer = Tracer.make({
+          span(options) {
+            const span = new Tracer.NativeSpan(options);
+
+            spans.push(span);
+
+            return span;
+          },
+        });
+
+        const exit = yield* runOrchestrated({
+          innerToolkit,
+          innerHandlers: innerToolkit.toLayer({
+            inner: () =>
+              (failureKind === "defect" ? Effect.die(defect) : Effect.interrupt).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    finalized += 1;
+                  }),
+                ),
+              ),
+          }),
+          program: (pass) =>
+            pass.invoke({ toolName: "inner", encodedArguments: {} }).pipe(Effect.as(null)),
+        }).pipe(Effect.provideService(Tracer.Tracer, tracer), Effect.exit);
+
+        if (Exit.isSuccess(exit)) throw new Error("Expected a propagated handler Cause");
+        if (failureKind === "defect") expect(Cause.squash(exit.cause)).toBe(defect);
+        else expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+        expect(finalized).toBe(1);
+        const span = spans.find((candidate) => candidate.name === "execute_tool inner");
+
+        expect(span?.status._tag).toBe("Ended");
+        expect(span?.attributes.get("effect_agent.tool.failure_mode")).toBe("return");
+        expect(span?.attributes.get("effect_agent.tool.failure_handling")).toBe(
+          failureKind === "defect" ? "propagated" : undefined,
+        );
+      }),
+    );
+  }
 
   it.effect("RUN-016 a typed handler failure stays typed in the outcome", () =>
     Effect.gen(function* () {

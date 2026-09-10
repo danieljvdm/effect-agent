@@ -42,6 +42,33 @@ const Lookup = Tool.make("lookup", {
 
 const toolkit = Toolkit.make(Lookup);
 
+it("keeps native failure-mode error and service inference unchanged by inspection", () => {
+  const returned = Tool.make("lookup", {
+    parameters: Lookup.parametersSchema,
+    success: Lookup.successSchema,
+    failure: ToolError,
+    failureMode: "return",
+    dependencies: [Catalog],
+  });
+
+  const base = { input: Schema.String, output: Schema.String, instructions: "Look up." };
+  const fatal = Agent.make("fatal", { ...base, toolkit });
+  const recoverable = Agent.make("recoverable", { ...base, toolkit: Toolkit.make(returned) });
+
+  expectTypeOf(Agent.inspectTools(fatal)).toEqualTypeOf<ReadonlyArray<Agent.ToolInspection>>();
+  expectTypeOf(Agent.inspectTools(recoverable)).toEqualTypeOf<
+    ReadonlyArray<Agent.ToolInspection>
+  >();
+  const fatalRun = AgentRuntime.run(fatal, "go");
+  const returnedRun = AgentRuntime.run(recoverable, "go");
+
+  expectTypeOf<Extract<Effect.Error<typeof fatalRun>, ToolError>>().toEqualTypeOf<ToolError>();
+  expectTypeOf<Extract<Effect.Error<typeof returnedRun>, ToolError>>().toEqualTypeOf<never>();
+  expectTypeOf<Effect.Services<typeof returnedRun>>().toEqualTypeOf<
+    Effect.Services<typeof fatalRun>
+  >();
+});
+
 const Input = Schema.Struct({
   city: Schema.String,
   days: Schema.NumberFromString.pipe(

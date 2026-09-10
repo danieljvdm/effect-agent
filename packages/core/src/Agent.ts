@@ -1,6 +1,13 @@
 import type { Effect, Layer, Option, Schema } from "effect";
 import * as S from "effect/Schema";
-import type { AiError, LanguageModel, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  type AiError,
+  type LanguageModel,
+  type Model,
+  type Prompt,
+  Tool,
+  type Toolkit,
+} from "effect/unstable/ai";
 
 import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./AgentError.ts";
 import { AgentPolicy, type AgentPolicyInput } from "./AgentPolicy.ts";
@@ -202,6 +209,35 @@ export interface Any {
   readonly definition: AnyDefinition;
   readonly model?: unknown;
 }
+
+/** Native Tool configuration for inspection; it does not predict an invocation's outcome. */
+export const ToolInspection = S.Struct({
+  name: S.String,
+  failureMode: S.Literals(["error", "return"]),
+  /** False for provider-executed Tools, whose results do not pass through local handlers. */
+  requiresHandler: S.Boolean,
+});
+
+export type ToolInspection = typeof ToolInspection.Type;
+
+/**
+ * Inspect registered native Tools in declaration order without acquiring handlers or a Model.
+ * This is the full Definition toolkit, before run-specific visibility or exposure filtering.
+ * `failureMode` is Effect AI's configured mode, including its `"error"` default. Handler-level
+ * recovery, programmatic invocation and Subagent containment can change where failures go;
+ * consult execution diagnostics for the actual route. No arguments, results or services are read.
+ */
+export const inspectTools = (agent: AnyDefinition | Any): ReadonlyArray<ToolInspection> => {
+  const definition = "definition" in agent ? agent.definition : agent;
+
+  return Object.values(definition.toolkit.tools).map((tool) =>
+    ToolInspection.make({
+      name: tool.name,
+      failureMode: tool.failureMode,
+      requiresHandler: !Tool.isProviderDefined(tool) || tool.requiresHandler,
+    }),
+  );
+};
 
 type DefinitionOf<AgentValue extends AnyDefinition | Any> = AgentValue extends {
   readonly definition: infer DefinitionValue extends AnyDefinition;

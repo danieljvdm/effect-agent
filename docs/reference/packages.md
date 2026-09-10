@@ -138,6 +138,8 @@ Provider clients, storage, hosts, sandbox adapters, and testing remain separate 
 Agent definitions and bindings, schemas, identifiers, errors, and run events. Shared memory
 contracts and `Memory.recall` compose host-selected readers without a storage or platform dependency.
 Start with `Agent`, `AgentPolicy`, and `IdGenerator`.
+Use [`Agent.inspectTools`](../guide/tools#failure-remains-failure) to inspect registered native tool
+failure modes without acquiring handlers or model services.
 
 ### `@effect-agent/engine`
 

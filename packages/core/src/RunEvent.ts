@@ -80,6 +80,20 @@ export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
   },
 ) {}
 
+/**
+ * How this boundary handled a failed invocation, independently of its native failure mode.
+ * `returned-to-model` records the result path; delivery still requires the complete batch to
+ * commit and a later model call. A sibling, policy or later operation can still fail the Run.
+ * This classification never implies that side effects were rolled back.
+ */
+export const ToolFailureHandling = Schema.Literals([
+  "propagated",
+  "returned-to-model",
+  "returned-to-caller",
+]);
+
+export type ToolFailureHandling = typeof ToolFailureHandling.Type;
+
 /** Records a terminal Tool Call failure using safe, serializable diagnostics. */
 export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCallFailed", {
   ...RunEventBase,
@@ -88,6 +102,10 @@ export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCa
   errorTag: Schema.NonEmptyString,
   message: Schema.String,
   providerExecuted: Schema.Boolean,
+  /** Native configuration when a local Tool is known; absent on provider results and old events. */
+  failureMode: Schema.optionalKey(Schema.Literals(["error", "return"])),
+  /** Actual route at this boundary. Absence on older events means unknown, never recoverable. */
+  failureHandling: Schema.optionalKey(ToolFailureHandling),
   /** Synthetic policy rejection; no handler ran and the failure streak is unchanged. */
   budgetRejected: Schema.optionalKey(Schema.Literal(true)),
 }) {}

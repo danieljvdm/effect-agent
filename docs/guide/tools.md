@@ -210,8 +210,68 @@ declaration order. The model never sees a partial batch.
 
 ## Keep tool failures typed {#failure-remains-failure}
 
-The default `failureMode: "error"` keeps a declared tool failure in the Effect error channel. Use
-`failureMode: "return"` when the model should receive that declared failure as a tool result.
+The default `failureMode: "error"` keeps a declared tool failure in the Effect error channel and
+fails the run. Declaring a `failure` Schema does not opt into recovery. Choose `failureMode: "return"`
+when the model should receive the failure as a tool result and decide what to do next:
+
+```ts twoslash
+import { Agent } from "effect-agent";
+import { Effect, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
+
+class SearchUnavailable extends Schema.TaggedError<SearchUnavailable>()("SearchUnavailable", {
+  message: Schema.String,
+}) {}
+
+const Search = Tool.make("search", {
+  parameters: Schema.Struct({ query: Schema.String }),
+  success: Schema.Array(Schema.String),
+  failure: SearchUnavailable,
+  failureMode: "return",
+});
+const tools = Toolkit.make(Search);
+const ToolsLive = tools.toLayer({
+  search: () => Effect.fail(SearchUnavailable.make({ message: "Try another source." })),
+});
+const researcher = Agent.make("researcher", {
+  input: Schema.String,
+  output: Schema.String,
+  instructions: "Search, then answer. Try another source if search is unavailable.",
+  toolkit: tools,
+});
+
+Agent.inspectTools(researcher);
+// [{ name: "search", failureMode: "return", requiresHandler: true }]
+```
+
+`Agent.inspectTools` accepts a Definition or Binding and reads its registered native toolkit without
+starting a run or acquiring services. It includes tools outside the current exposure. Provider-executed
+tools have `requiresHandler: false`; their results do not pass through a local handler's failure mode.
+
+Inspect configuration and execution separately. A handler can catch its own errors, the programmatic
+broker can contain an error-channel failure, and Subagent containment has its own policy. A returned
+failure may still be followed by a run failure from a sibling, a repeated-failure limit, or another budget.
+
+| Failure boundary                              | Behavior                                                                                                       |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Declared handler error, `"error"`             | Propagates the original typed error and fails the model-declared call's run.                                   |
+| Declared handler error, `"return"`            | Encodes a failed tool result for the model; the loop may continue.                                             |
+| Handler defect or interruption                | Stays a defect or interruption under either mode.                                                              |
+| Invalid result encoding                       | Still fails even with `"return"`.                                                                              |
+| Invalid parameters, unknown or unexposed tool | Rejected before handler execution. Effect Agent's model/preflight validation remains strict under either mode. |
+
+`ToolCallFailed.failureMode` reports the native configuration when known. Its `failureHandling` reports
+the actual route: `propagated` or `returned-to-model`. Older events may omit these fields; absence means
+unknown. `returned-to-model` records the result path; delivery still requires the complete batch to
+commit and another model call. A failure event terminates that call, not necessarily the run. Use the
+run's terminal event and Effect exit to determine the overall outcome.
+
+Application tool spans and terminal logs carry `effect_agent.tool.failure_mode` and, on failure,
+`effect_agent.tool.failure_handling`. Programmatic calls use `returned-to-caller` when the broker
+returns a failure outcome, including a captured error-channel failure. A propagated defect is still
+`propagated`. These attributes contain no error payloads. Interruption alone emits no terminal tool
+failure log or failure-handling classification. Returned failures can also be reported through the
+[recovered tool failure observer](./run-agents#observe-recovered-tool-failures).
 
 Represent an expected empty result as success with `Option.none` or an empty collection.
 

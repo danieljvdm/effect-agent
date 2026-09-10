@@ -203,6 +203,11 @@ per-run hooks.
 A tool may fail and the model may still complete the run. Install `toolFailureObserverLayer` from
 `@effect-agent/engine` to report such failures.
 
+This observer covers failures contained as results, including programmatic broker outcomes. It does
+not duplicate model-declared failures that propagate through the run's Effect error channel, or
+defects and interruptions. Use [`ToolCallFailed.failureHandling` and tool telemetry](./tools#failure-remains-failure)
+to distinguish returned failures from propagated ones, and handle the run's Effect exit separately.
+
 ```ts
 import { toolFailureObserverLayer } from "@effect-agent/engine/RunOptions";
 import { Effect, ErrorReporter } from "effect";

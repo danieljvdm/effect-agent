@@ -1,3 +1,4 @@
+import type { ToolFailureHandling } from "@effect-agent/core/RunEvent";
 import {
   Cause,
   Context,
@@ -10,7 +11,7 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import { AiError } from "effect/unstable/ai";
+import { AiError, type Tool } from "effect/unstable/ai";
 
 import { isolateToolDerivative } from "./tool-derivative.ts";
 
@@ -42,6 +43,8 @@ const terminalOutcomeTokens = new WeakMap<
   {
     readonly outcome: "success" | "failure";
     readonly failureMarker: ToolSpanFailure | undefined;
+    readonly failureHandling: ToolFailureHandling | undefined;
+    readonly failureMode: Tool.FailureMode | undefined;
   }
 >();
 
@@ -49,10 +52,12 @@ const terminalOutcomeTokens = new WeakMap<
 export const annotateToolSpanTerminalOutcome = (
   outcome: "success" | "failure",
   failureMarker?: ToolSpanFailure,
+  failureHandling?: ToolFailureHandling,
+  failureMode?: Tool.FailureMode,
 ): Effect.Effect<void> => {
   const token = {};
 
-  terminalOutcomeTokens.set(token, { outcome, failureMarker });
+  terminalOutcomeTokens.set(token, { outcome, failureMarker, failureHandling, failureMode });
 
   return Effect.annotateCurrentSpan({
     "effect_agent.tool.outcome": outcome,
@@ -135,6 +140,8 @@ class IsolatedToolSpan implements Tracer.Span {
   readonly #recordDefect: (defect: unknown) => void;
   #terminalOutcome: "success" | "failure" | undefined;
   #terminalFailure: ToolSpanFailure | undefined;
+  #terminalFailureHandling: ToolFailureHandling | undefined;
+  #terminalFailureMode: Tool.FailureMode | undefined;
 
   constructor(
     delegate: Tracer.Span,
@@ -187,6 +194,21 @@ class IsolatedToolSpan implements Tracer.Span {
         this.#recordDefect(defect);
       }
     }
+    for (const [key, value] of [
+      ["effect_agent.tool.failure_mode", this.#terminalFailureMode],
+      ["effect_agent.tool.failure_handling", this.#terminalFailureHandling],
+    ] as const) {
+      if (value !== undefined) {
+        this.attributes.set(key, value);
+        try {
+          this.#delegate.attribute(key, value);
+        } catch (defect) {
+          this.#recordDefect(defect);
+        }
+      } else if (key === "effect_agent.tool.failure_handling") {
+        this.attributes.delete(key);
+      }
+    }
     try {
       this.#delegate.end(endTime, exportedExit);
     } catch (defect) {
@@ -202,11 +224,15 @@ class IsolatedToolSpan implements Tracer.Span {
         if (terminal !== undefined) {
           this.#terminalOutcome = terminal.outcome;
           this.#terminalFailure = terminal.failureMarker;
+          this.#terminalFailureHandling = terminal.failureHandling;
+          this.#terminalFailureMode = terminal.failureMode;
         }
       }
 
       return;
     }
+    // Only the authenticated terminal token may classify a failure's route.
+    if (key === "effect_agent.tool.failure_handling") return;
     this.attributes.set(key, value);
     try {
       this.#delegate.attribute(key, value);
