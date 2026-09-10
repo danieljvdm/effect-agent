@@ -268,25 +268,8 @@ const navigationError = (message: string, cause?: unknown): PageCaptureNavigatio
   });
 
 /** Preserve bounded remote diagnostics for the host without exposing their text to a model. */
-const privateResponseCause = (bodyText: string, response: Response): Error =>
-  new Error(boundedDiagnostic(bodyText), {
-    cause: {
-      provider: "cloudflare-browser-run",
-      httpStatus: response.status,
-      httpStatusSource: "browser-api",
-      headers: Object.fromEntries(
-        ["content-type", "cf-ray", "x-request-id", "retry-after", "x-browser-ms-used"].flatMap(
-          (name) => {
-            const value = response.headers.get(name);
-
-            return value === null ? [] : [[name, boundedDiagnostic(value)]];
-          },
-        ),
-      ),
-      bodyCharacters: bodyText.length,
-      bodyTruncated: bodyText.length > MAX_DIAGNOSTIC_LENGTH,
-    },
-  });
+const privateResponseCause = (bodyText: string): Error | undefined =>
+  bodyText.length === 0 ? undefined : new Error(boundedDiagnostic(bodyText));
 
 /** Foreign cancellation must not keep a response Scope open indefinitely. */
 const cancelResponse = (cancel: () => Promise<void>, warning: string): Effect.Effect<void> =>
@@ -406,7 +389,7 @@ const parseOutput = (
   if (!isJsonResponse(response)) {
     return protocolError(
       "The Quick Action success response was not a JSON response envelope",
-      privateResponseCause(bodyText, response),
+      privateResponseCause(bodyText),
     );
   }
   const envelope = decodeEnvelope(bodyText);
@@ -414,13 +397,13 @@ const parseOutput = (
   if (Option.isNone(envelope)) {
     return protocolError(
       "The JSON Quick Action response did not carry a valid response envelope",
-      privateResponseCause(bodyText, response),
+      privateResponseCause(bodyText),
     );
   }
   if (!envelope.value.success) {
     return navigationError(
       "The Quick Action reported a navigation failure",
-      privateResponseCause(bodyText, response),
+      privateResponseCause(bodyText),
     );
   }
   switch (action._tag) {
@@ -522,7 +505,7 @@ const makeCapture = (
     if (response.status === 429) {
       const retryAfter = retryAfterMillis(response);
       const reason = isQuotaMessage(bodyText) ? "quota" : "rate";
-      const cause = privateResponseCause(bodyText, response);
+      const cause = privateResponseCause(bodyText);
 
       return yield* PageCaptureRateLimitedError.make({
         implementation: browserQuickActionImplementation,
@@ -537,7 +520,7 @@ const makeCapture = (
     }
     if (!response.ok) {
       const message = `The Quick Action answered HTTP ${response.status}`;
-      const cause = privateResponseCause(bodyText, response);
+      const cause = privateResponseCause(bodyText);
 
       if (response.status >= 500) {
         return yield* protocolError(message, cause);

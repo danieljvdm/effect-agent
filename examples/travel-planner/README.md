@@ -3,6 +3,12 @@
 The canonical runnable Effect Agent example: a small travel chat, saved trips, and
 standalone trip websites on Cloudflare. This is KOM-173's first vertical slice.
 
+The app consumes published Effect Agent packages, pinned to exact npm versions in
+`package.json`. `vp install` uses the repository's `bunfig.toml` to keep those dependencies
+and their transitive imports on registry packages. Framework workspaces use explicit
+`workspace:` dependencies for local development. Library fixes belong in separate PRs
+with regression tests and changesets; upgrade this app after those fixes are released.
+
 Start a conversation, describe a destination, and the agent saves a draft through
 `save_trip`. Select a trip in the sidebar to revise it. Ask for a website or use **Create trip
 website** to fork a public full-stack app. The request itself authorizes creation; there is
@@ -140,6 +146,14 @@ and subresources. These are URL checks, not a DNS-resolution firewall. Page-size
 timeouts, and access-challenge handling still apply.
 
 ## Deploy with Alchemy
+
+The current npm pin, `0.1.0-beta.77`, predates the fixes in
+[JSON persistence #429](https://github.com/danieljvdm/effect-agent/pull/429),
+[worker upgrades #430](https://github.com/danieljvdm/effect-agent/pull/430), and
+[browser diagnostics #431](https://github.com/danieljvdm/effect-agent/pull/431).
+The existing-conversation scout regression fails on that release. Do not deploy this
+revision over the running app until these fixes are published, the pins are updated,
+and the unchanged regression suite passes. Library patches are not bundled locally.
 
 ```sh
 vp run ready

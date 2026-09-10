@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 import { NodeServices } from "@effect/platform-node";
@@ -1286,7 +1287,9 @@ esac
       const prReviewDependencies = manifestDependencies(prReviewAction);
 
       expect(demo.name).toBe("@effect-agent/example-travel-planner");
-      expect(demo.dependencies?.["@effect-agent/platform-cloudflare"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect-agent/platform-cloudflare"]).toMatch(
+        /^\d+\.\d+\.\d+-beta\.\d+$/,
+      );
       expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
       expect(demo.dependencies?.effect).toBe("catalog:");
@@ -1333,6 +1336,43 @@ esac
           expect(manifestDependencies(manifest)).not.toContain(adapter);
         }
       }
+    }),
+  );
+
+  it.effect("resolves the demo and its transitive framework dependencies from npm", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const pending = [`${repositoryRoot}/examples/travel-planner/package.json`];
+      const visited = new Set<string>();
+
+      while (pending.length > 0) {
+        const manifestPath = pending.pop()!;
+
+        if (visited.has(manifestPath)) continue;
+        visited.add(manifestPath);
+        const manifest = yield* readManifest(manifestPath);
+        const resolve = createRequire(manifestPath).resolve;
+
+        for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
+          if (!name.startsWith("@effect-agent/")) continue;
+          expect(version).toMatch(/^\d+\.\d+\.\d+-beta\.\d+$/);
+          const entry = resolve(name);
+
+          expect(entry).toContain("/node_modules/");
+          expect(entry).toMatch(/\/dist\/index\.mjs$/);
+          const dependencyPath = path.resolve(path.dirname(entry), "../package.json");
+          const dependency = yield* readManifest(dependencyPath);
+
+          expect(dependency.name).toBe(name);
+          expect(dependency.version).toBe(version);
+          pending.push(dependencyPath);
+        }
+      }
+      expect(visited.size).toBeGreaterThan(1);
+      // Library development still exercises source through explicit workspace: dependencies.
+      expect(createRequire(import.meta.url).resolve("@effect-agent/thread")).toBe(
+        `${repositoryRoot}/packages/thread/src/index.ts`,
+      );
     }),
   );
 

@@ -7,6 +7,9 @@ Framework packages live in `packages/*`; runnable examples live in `examples/*`.
 
 The root [package.json](../package.json) owns shared dependency versions.
 Workspace manifests use `catalog:` for those dependencies and `workspace:*` for internal packages.
+The travel planner is a release consumer: its Effect Agent dependencies pin exact npm versions.
+`bunfig.toml` disables implicit workspace linking, so only explicit `workspace:` dependencies
+use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 
 | Tool                                                    | Repository version   |

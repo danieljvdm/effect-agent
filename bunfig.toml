@@ -1,0 +1,3 @@
+[install]
+# Only explicit workspace: dependencies use local framework source.
+linkWorkspacePackages = false

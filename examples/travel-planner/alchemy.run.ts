@@ -116,13 +116,7 @@ export default Alchemy.Stack(
       },
       observability: { enabled: true },
       memo: {
-        include: [
-          "src/**",
-          "site-builder/**",
-          "vite.config.ts",
-          "package.json",
-          "../../packages/*/src/**",
-        ],
+        include: ["src/**", "site-builder/**", "vite.config.ts", "package.json"],
         lockfile: true,
       },
     });

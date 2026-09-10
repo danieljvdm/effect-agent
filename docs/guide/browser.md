@@ -535,12 +535,6 @@ Browser APIs use finite requests and typed expected failures:
 - An interactive policy fixes network mode, at most 1,000 actions, at most 60 minutes, and at most
   8 MiB from one result. Handles expire at policy limits or explicit close.
 
-Quick Action failures retain bounded response text and Browser Run API status, selected request
-identifiers, and body truncation metadata in their host-only `cause`. That status describes the
-Browser Run API response, not necessarily the destination page. Applications can explicitly
-redact and retain these causes for operator diagnostics; they are not automatically exposed to
-models or logged.
-
 The protected Cloudflare binding requests at most ten minutes of provider idle keep-alive,
 independently of the total pass deadline. A longer policy permits active work; it does not promise
 that an idle browser will remain available for the whole hour or reconnect an expired session.

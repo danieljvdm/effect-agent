@@ -516,7 +516,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     const { binding } = makeBinding([
       new Response(`Too many requests; ${privateDiagnostic}`, {
         status: 429,
-        headers: { "Retry-After": "12", "CF-Ray": "ray-test", "Set-Cookie": "private-cookie" },
+        headers: { "Retry-After": "12" },
       }),
       new Response(`Browser time limit exceeded for today; ${privateDiagnostic}`, { status: 429 }),
     ]);
@@ -532,16 +532,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
     expect(rate.message).not.toContain(privateDiagnostic);
     expect(rate._tag === "PageCaptureRateLimitedError" && rate.cause).toMatchObject({
       message: expect.stringContaining(privateDiagnostic),
-      cause: {
-        httpStatus: 429,
-        httpStatusSource: "browser-api",
-        headers: { "cf-ray": "ray-test", "retry-after": "12" },
-        bodyTruncated: false,
-      },
     });
-    expect(JSON.stringify(rate._tag === "PageCaptureRateLimitedError" && rate.cause)).not.toContain(
-      "private-cookie",
-    );
     const quota = await captureError(binding, request(CapturePageMarkdown.make({})));
 
     expect(quota).toMatchObject({
