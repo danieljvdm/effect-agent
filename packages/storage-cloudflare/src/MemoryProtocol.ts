@@ -5,8 +5,9 @@ import {
   MemoryRecallLimits,
 } from "@effect-agent/core/MemoryReference";
 import { MemoryAccess, revalidateMemoryLookup } from "@effect-agent/core/MemoryRevalidation";
-import { type MemoryReader } from "@effect-agent/core/MemoryStore";
 import {
+  MemoryKey,
+  MemoryReader,
   MemoryConflict,
   MemoryDocument,
   MemoryMutationFailure,
@@ -68,6 +69,8 @@ const RevalidateRequest = Schema.TaggedStruct("Revalidate", {
 
 const ChangeRequest = Schema.TaggedStruct("Change", { ...RequestFields, write: MemoryWrite.Wire });
 
+const GetRequest = Schema.TaggedStruct("Get", { ...RequestFields, key: MemoryKey.Wire });
+
 const SemanticRequest: Schema.TaggedStruct<
   "RevalidateSemantic",
   typeof RequestFields & {
@@ -83,8 +86,8 @@ const SemanticRequest: Schema.TaggedStruct<
 });
 
 export const MemoryOwnerRequest: Schema.Union<
-  [typeof RevalidateRequest, typeof ChangeRequest, typeof SemanticRequest]
-> = Schema.Union([RevalidateRequest, ChangeRequest, SemanticRequest]);
+  [typeof RevalidateRequest, typeof ChangeRequest, typeof SemanticRequest, typeof GetRequest]
+> = Schema.Union([RevalidateRequest, ChangeRequest, SemanticRequest, GetRequest]);
 
 export type MemoryOwnerRequest = typeof MemoryOwnerRequest.Type;
 
@@ -102,16 +105,52 @@ export const MemoryOwnerFailure = Schema.Union([
 
 export type MemoryOwnerFailure = typeof MemoryOwnerFailure.Type;
 
-export const MemoryOwnerResponse = Schema.Union([
-  Schema.TaggedStruct("Lookup", { access: MemoryAccess.Wire, lookup: MemoryLookup }),
-  Schema.TaggedStruct("Changed", { access: MemoryAccess.Wire, document: MemoryDocument.Wire }),
-  Schema.TaggedStruct("Semantic", { access: MemoryAccess.Wire, result: SemanticCandidateResult }),
-  Schema.TaggedStruct("Failed", { failure: MemoryOwnerFailure }),
+const LookupResponse = Schema.TaggedStruct("Lookup", {
+  access: MemoryAccess.Wire,
+  lookup: MemoryLookup,
+});
+
+const ChangedResponse = Schema.TaggedStruct("Changed", {
+  access: MemoryAccess.Wire,
+  document: MemoryDocument.Wire,
+});
+
+const SemanticResponse = Schema.TaggedStruct("Semantic", {
+  access: MemoryAccess.Wire,
+  result: SemanticCandidateResult,
+});
+
+const DocumentResponse = Schema.TaggedStruct("Document", {
+  access: MemoryAccess.Wire,
+  key: MemoryKey.Wire,
+  document: Schema.NullOr(MemoryDocument.Wire),
+});
+
+const FailedResponse = Schema.TaggedStruct("Failed", { failure: MemoryOwnerFailure });
+
+export const MemoryOwnerResponse: Schema.Union<
+  [
+    typeof LookupResponse,
+    typeof ChangedResponse,
+    typeof SemanticResponse,
+    typeof DocumentResponse,
+    typeof FailedResponse,
+  ]
+> = Schema.Union([
+  LookupResponse,
+  ChangedResponse,
+  SemanticResponse,
+  DocumentResponse,
+  FailedResponse,
 ]);
 
 export type MemoryOwnerResponse = typeof MemoryOwnerResponse.Type;
 
-/** Fail-closed application policy. Authorize the namespace, principal, scope, and full command. */
+/**
+ * Fail-closed application policy. Authorize the namespace, principal, scope, and full command.
+ * Get requires exact-key authority, including application source/provenance checks where needed.
+ * Possession of a key or scope is not authorization, including for absent or withdrawn documents.
+ */
 export class MemoryOwnerAuthorizer extends Context.Service<
   MemoryOwnerAuthorizer,
   {
@@ -161,7 +200,7 @@ export const encodeMemoryWire = Effect.fn("encodeMemoryWire")(function* <A, I>(
   return encoded;
 });
 
-/** One local read per distinct candidate source, with no per-document network calls. */
+/** One local read for Get, or per distinct candidate source. No discovery or background work. */
 export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(function* (
   raw: unknown,
   limits: MemoryRpcLimits = defaultMemoryRpcLimits,
@@ -183,6 +222,7 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
 
     if (
       !MemoryNamespace.equals(namespace, request.access.namespace) ||
+      (request._tag === "Get" && !MemoryNamespace.equals(namespace, request.key.namespace)) ||
       (request._tag === "Change" &&
         !MemoryNamespace.equals(namespace, request.write.key.namespace)) ||
       (request._tag === "RevalidateSemantic" &&
@@ -207,6 +247,30 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
       const authorizer = yield* MemoryOwnerAuthorizer;
 
       yield* authorizer.authorize(request);
+      if (request._tag === "Get") {
+        const reader = yield* MemoryReader;
+        const current = yield* reader.get(request.key);
+
+        const document =
+          current === null ? null : yield* MemoryDocument.restore(namespace, current);
+
+        if (document !== null) {
+          if (document.key.id !== request.key.id || document.source.id !== request.key.id)
+            return yield* MemoryStorageError.make({
+              operation: "validate memory read identity",
+              reason: "corrupt",
+            });
+          if (
+            document._tag === "ActiveMemoryDocument" &&
+            !document.scopes.includes(request.access.scope)
+          )
+            return yield* MemoryRpcError.make({ reason: "denied" });
+
+          yield* encodeMemoryWire(MemoryDocument.Wire, document, limits.maxSourceBytes);
+        }
+
+        return { _tag: "Document", access: request.access, key: request.key, document };
+      }
       if (request._tag === "Change") {
         const writer = yield* MemoryWriter;
 

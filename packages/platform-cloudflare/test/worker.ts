@@ -56,6 +56,7 @@ import {
   memoryAuthorizer,
   memoryFailpoints,
   memoryCalls,
+  memoryReplies,
   memoryAccess,
   memoryPrincipal,
   memoryRecallLimits,
@@ -85,6 +86,10 @@ export class TestMemoryObject extends MemoryObject.make(memoryAuthorizer, {
     const name = this.ctx.id.name ?? "";
 
     memoryCalls.set(name, (memoryCalls.get(name) ?? 0) + 1);
+
+    const reply = memoryReplies.get(name);
+
+    if (reply !== undefined) return Promise.resolve(reply);
 
     return super.memory(encoded);
   }

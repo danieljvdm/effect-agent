@@ -76,6 +76,7 @@ it(
 
           expect(denied.status).toBe(401);
           expect((yield* request(runtime, "seed?case=4&caller=a")).status).toBe(200);
+          expect((yield* request(runtime, "seed?case=get&caller=a")).status).toBe(200);
         }).pipe(Effect.scoped);
         yield* Effect.gen(function* () {
           const runtime = yield* open(script, directory);
@@ -90,6 +91,22 @@ it(
             corpusTextBytes: 4096,
           });
           expect(sample.renderedBytes).toBeGreaterThan(0);
+          const direct = yield* request(runtime, "sample?case=get&caller=b");
+
+          const directSample = yield* Schema.decodeUnknownEffect(Sample)(
+            yield* Effect.promise(() => direct.json()),
+          );
+
+          expect(directSample).toMatchObject({
+            case: "get",
+            status: "ok",
+            sourceCount: 1,
+            candidateCount: 0,
+            candidateBytes: 0,
+            corpusTextBytes: 1024,
+            renderedBytes: 0,
+          });
+          expect(directSample.validatedBytes).toBeGreaterThan(1024);
           // Re-ingestion uses the original null expected revision and must resolve receipts.
           expect((yield* request(runtime, "seed?case=4&caller=a")).status).toBe(200);
         }).pipe(Effect.scoped);

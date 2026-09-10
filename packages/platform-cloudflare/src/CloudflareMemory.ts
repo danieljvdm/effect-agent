@@ -6,6 +6,7 @@ import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
 import {
   type MemoryReader,
   type MemoryWrite,
+  MemoryKey,
   MemoryDocument,
   MemoryMutationFailpoint,
   MemoryStorageError,
@@ -164,6 +165,52 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
     }).pipe((effect) => withinDeadline(effect, validated.timeoutMillis));
   });
 
+  /**
+   * Read one exact current document in one owner RPC. Null means absent; withdrawals return
+   * tombstones. Denial, unavailable storage and deadlines fail typed, never become absence.
+   * Reads begun after an acknowledged write observe it or a later revision. The owner checks
+   * exact-key authority and active document scopes; source-dependent provenance policy remains
+   * application-owned. No extraction, job draining, embedding, discovery or rendering occurs.
+   */
+  const get = Effect.fn("CloudflareMemoryClient.get")(function* (key: MemoryKey<Namespace>) {
+    const decodedKey = yield* Schema.decodeUnknownEffect(MemoryKey.Wire)(key).pipe(
+      Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
+    );
+
+    if (!MemoryNamespace.equals(decodedKey.namespace, bound.namespace))
+      return yield* MemoryRpcError.make({ reason: "denied" });
+
+    return yield* Effect.gen(function* () {
+      const response = yield* call({
+        _tag: "Get",
+        version: 1,
+        access: bound,
+        principal,
+        key: decodedKey,
+        deadlineMillis: (yield* Clock.currentTimeMillis) + validated.timeoutMillis,
+      });
+
+      if (
+        response._tag !== "Document" ||
+        !MemoryNamespace.equals(response.key.namespace, bound.namespace) ||
+        response.key.id !== decodedKey.id
+      )
+        return yield* MemoryRpcError.make({ reason: "protocol" });
+      if (response.document === null) return null;
+      if (
+        response.document.key.id !== decodedKey.id ||
+        response.document.source.id !== decodedKey.id ||
+        (response.document._tag === "ActiveMemoryDocument" &&
+          !response.document.scopes.includes(bound.scope))
+      )
+        return yield* MemoryRpcError.make({ reason: "protocol" });
+
+      yield* encodeMemoryWire(MemoryDocument.Wire, response.document, validated.maxSourceBytes);
+
+      return yield* MemoryDocument.restore(access.namespace, response.document);
+    }).pipe((effect) => withinDeadline(effect, validated.timeoutMillis));
+  });
+
   const revalidateSemantic = Effect.fn("CloudflareMemoryClient.revalidateSemantic")(function* (
     found: MemoryIndexSearch<Namespace>,
     profile: SemanticMemoryProfile,
@@ -206,7 +253,7 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
     );
   });
 
-  return { recall, revalidate, revalidateSemantic, change };
+  return { get, recall, revalidate, revalidateSemantic, change };
 });
 
 export const CloudflareMemoryClient = {
