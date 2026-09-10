@@ -147,13 +147,9 @@ timeouts, and access-challenge handling still apply.
 
 ## Deploy with Alchemy
 
-The current npm pin, `0.1.0-beta.77`, predates the fixes in
-[JSON persistence #429](https://github.com/danieljvdm/effect-agent/pull/429),
-[worker upgrades #430](https://github.com/danieljvdm/effect-agent/pull/430), and
-[browser diagnostics #431](https://github.com/danieljvdm/effect-agent/pull/431).
-The existing-conversation scout regression fails on that release. Do not deploy this
-revision over the running app until these fixes are published, the pins are updated,
-and the unchanged regression suite passes. Library patches are not bundled locally.
+The app pins published `0.1.0-beta.78` packages, including JSON persistence,
+existing-conversation worker upgrades, and browser failure diagnostics. Library fixes
+are released separately before the demo adopts them; local library patches are not bundled.
 
 ```sh
 vp run ready
