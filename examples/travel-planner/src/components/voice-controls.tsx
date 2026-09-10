@@ -3,6 +3,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { Mic, PhoneOff, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import { captionRows } from "../voice/delegation.ts";
 import {
   muteVoiceAtom,
   startVoiceAtom,
@@ -61,12 +62,10 @@ export function VoiceControls({ enabled }: { readonly enabled: boolean }) {
         <details>
           <summary>Voice transcript</summary>
           <div className="voice-captions">
-            {view.captions.map((caption) => (
-              <p key={caption.event_id}>
-                <strong>
-                  {caption.type === "session.input_transcript.delta" ? "You" : "AI voice"}:{" "}
-                </strong>
-                {caption.delta}
+            {captionRows(view.captions).map((row) => (
+              <p key={row.id}>
+                <strong>{row.speaker}: </strong>
+                {row.text}
               </p>
             ))}
           </div>

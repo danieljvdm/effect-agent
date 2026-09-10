@@ -22,6 +22,21 @@ export const appendCaption = (captions: ReadonlyArray<Caption>, event: Caption) 
   return [...captions, event].slice(-128);
 };
 
+/** Presentation groups grow by speaker; they never establish completed turns. */
+export const captionRows = (captions: ReadonlyArray<Caption>) => {
+  const rows: Array<{ id: string; speaker: "You" | "AI voice"; text: string }> = [];
+
+  for (const caption of captions) {
+    const speaker = caption.type === "session.input_transcript.delta" ? "You" : "AI voice";
+    const previous = rows.at(-1);
+
+    if (previous?.speaker === speaker) previous.text += caption.delta;
+    else rows.push({ id: caption.event_id, speaker, text: caption.delta });
+  }
+
+  return rows;
+};
+
 export const delegationMessage = (
   captions: ReadonlyArray<Caption>,
   offset: number,
@@ -30,26 +45,26 @@ export const delegationMessage = (
 
   if (!selected.some((caption) => caption.type === "session.input_transcript.delta")) return null;
   // Select whole attributed fragments. Assistant speech is evidence, never a user command.
-  const rows: string[] = [];
+  const fragments: Caption[] = [];
   let size = 0;
   let hasUser = false;
 
   for (const caption of [...selected].reverse()) {
-    const row = JSON.stringify({
-      speaker: caption.type === "session.input_transcript.delta" ? "user" : "voice assistant",
-      text: caption.delta,
-    });
+    // Reserve enough label/separator space even if every fragment changes speaker.
+    const length = caption.delta.length + 16;
 
-    if (size + row.length > 3400) break;
-    rows.unshift(row);
-    size += row.length;
+    if (size + length > 3400) break;
+    fragments.unshift(caption);
+    size += length;
     hasUser ||= caption.type === "session.input_transcript.delta";
   }
   if (!hasUser) return null;
 
   return (
-    "Please handle my latest request or correction using the saved trip and existing work. Voice conversation (automatic transcript):\n" +
-    rows.join("\n")
+    "Voice conversation (automatic transcript):\n\n" +
+    captionRows(fragments)
+      .map((row) => `${row.speaker}: ${row.text}`)
+      .join("\n\n")
   );
 };
 

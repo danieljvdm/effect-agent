@@ -10,8 +10,15 @@ import {
   type VoiceWork,
 } from "../src/domain.ts";
 import { emptyProgress } from "../src/server/progress.ts";
-import { appendCaption, voiceUpdate, type VoiceRequest } from "../src/voice/delegation.ts";
+import {
+  appendCaption,
+  captionRows,
+  delegationMessage,
+  voiceUpdate,
+  type VoiceRequest,
+} from "../src/voice/delegation.ts";
 import { LiveEvent, VoiceError } from "../src/voice/protocol.ts";
+import type { Caption } from "../src/voice/protocol.ts";
 import { runVoiceSession, type VoiceBackend } from "../src/voice/session.ts";
 
 const envelope = {
@@ -435,4 +442,55 @@ it("selects public output by receipt and attempt and leaves structured previews 
     expect(appendCaption([event], event)).toEqual([event]);
   expectTypeOf<Effect.Error<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<VoiceError>();
   expectTypeOf<Effect.Services<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<never>();
+});
+
+it("joins transcript fragments into readable speaker rows without merging overlapping speakers or later input", () => {
+  const fragments: Caption[] = [
+    {
+      type: "session.input_transcript.delta",
+      event_id: "one",
+      start_ms: 0,
+      end_ms: 200,
+      delta: "Please save",
+    },
+    {
+      type: "session.input_transcript.delta",
+      event_id: "two",
+      start_ms: 200,
+      end_ms: 400,
+      delta: " Lisbon.",
+    },
+    {
+      type: "session.output_transcript.delta",
+      event_id: "three",
+      start_ms: 300,
+      end_ms: 500,
+      delta: "Three days?",
+    },
+    {
+      type: "session.input_transcript.delta",
+      event_id: "four",
+      start_ms: 450,
+      end_ms: 650,
+      delta: "Yes.",
+    },
+    {
+      type: "session.input_transcript.delta",
+      event_id: "five",
+      start_ms: 800,
+      end_ms: 1000,
+      delta: " Actually four.",
+    },
+  ];
+
+  expect(captionRows(fragments)).toEqual([
+    { id: "one", speaker: "You", text: "Please save Lisbon." },
+    { id: "three", speaker: "AI voice", text: "Three days?" },
+    { id: "four", speaker: "You", text: "Yes. Actually four." },
+  ]);
+  expect(delegationMessage(fragments, 650)).toBe(
+    "Voice conversation (automatic transcript):\n\nYou: Please save Lisbon.\n\nAI voice: Three days?\n\nYou: Yes.",
+  );
+  expect(delegationMessage([fragments[2]!], 650)).toBeNull();
+  expect(delegationMessage([{ ...fragments[0]!, delta: "x".repeat(4000) }], 650)).toBeNull();
 });

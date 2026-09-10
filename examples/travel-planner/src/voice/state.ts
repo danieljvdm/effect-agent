@@ -10,7 +10,7 @@ import {
   selectionAtom,
   sessionAtom,
   settingsAtom,
-  typedInputRevisionAtom,
+  latestTypedInputAtom,
 } from "../state.ts";
 import { connectBrowserVoice } from "./browser.ts";
 import { VoiceRequest } from "./delegation.ts";
@@ -50,7 +50,7 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
   Effect.fnUntraced(function* (audio, get) {
     get.mount(controlsAtom);
     get.mount(voiceOwnerAtom);
-    get.mount(typedInputRevisionAtom);
+    get.mount(latestTypedInputAtom);
     const session = get(sessionAtom);
 
     if (!AsyncResult.isSuccess(session)) return;
@@ -136,11 +136,8 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
                 ),
               ),
             progress: () => Option.getOrNull(AsyncResult.value(get(progressAtom))),
-            typedRevision: () => get(typedInputRevisionAtom),
-            typedContext: () =>
-              Option.getOrNull(AsyncResult.value(get(plannerAtom)))
-                ?.messages.filter((message) => message.role === "user")
-                .at(-1)?.text ?? "A new typed message was submitted.",
+            typedRevision: () => get(latestTypedInputAtom).revision,
+            typedContext: () => get(latestTypedInputAtom).text,
             persist: (requests) =>
               Effect.try({
                 try: () =>

@@ -18,6 +18,7 @@ import {
   sendMessageAtom,
   sessionAtom,
   settingsAtom,
+  latestTypedInputAtom,
 } from "../src/state.ts";
 
 const Packet = Schema.Struct({
@@ -140,6 +141,7 @@ const setup = () => {
       registry.mount(messagesAtom),
       registry.mount(sendMessageAtom),
       registry.mount(settingsAtom),
+      registry.mount(latestTypedInputAtom),
     ];
 
     return {
@@ -176,6 +178,8 @@ it("renders idle sends in the transcript immediately and keeps them there throug
     await flush();
     registry.set(draftAtom, "Plan Lisbon");
     registry.set(sendMessageAtom, undefined);
+    // Voice steering uses the submitted draft even before admission or a snapshot refresh.
+    expect(registry.get(latestTypedInputAtom)).toEqual({ revision: 1, text: "Plan Lisbon" });
     expect(registry.get(draftAtom)).toBe("");
     expect(registry.get(messagesAtom)).toMatchObject([
       { role: "user", text: "Plan Lisbon", delivery: "sending" },
@@ -206,6 +210,7 @@ it("renders idle sends in the transcript immediately and keeps them there throug
     expect(registry.get(pendingMessagesAtom)).toEqual([]);
     registry.set(draftAtom, "Find a hotel");
     registry.set(sendMessageAtom, undefined);
+    expect(registry.get(latestTypedInputAtom)).toEqual({ revision: 2, text: "Find a hotel" });
     expect(registry.get(messagesAtom)).toMatchObject([
       { text: "Plan Lisbon" },
       { text: "Find a hotel", delivery: "sending" },
