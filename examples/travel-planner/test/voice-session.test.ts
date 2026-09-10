@@ -17,10 +17,9 @@ import {
   captionRows,
   delegationMessage,
   voiceUpdate,
-  voiceActivity,
   type VoiceRequest,
 } from "../src/voice/delegation.ts";
-import { LiveEvent, VoiceError } from "../src/voice/protocol.ts";
+import { contextParts, LiveEvent, VoiceError } from "../src/voice/protocol.ts";
 import type { Caption } from "../src/voice/protocol.ts";
 import { runVoiceSession, type VoiceBackend } from "../src/voice/session.ts";
 
@@ -594,93 +593,72 @@ it.effect(
     }),
 );
 
-it.effect(
-  "speaks paced research updates after the parent finishes, yielding to recent speech",
-  () =>
-    Effect.gen(function* () {
-      const test = yield* setup([
-        {
-          request,
-          delegationId: "item",
-          sessionId: "live-new",
-          offset: 100,
-          status: "accepted",
-          receipt: observation(),
-        },
-      ]);
+const researchRequest: VoiceRequest = {
+  request,
+  delegationId: "item",
+  sessionId: "live-new",
+  offset: 100,
+  status: "accepted",
+  receipt: observation(),
+};
 
-      let scouts: ResearchScoutActivity[] = [
-        {
-          id: "scout-one",
-          title: "Private hot tub cottages",
-          task: "PRIVATE task body",
-          state: "active",
-          progress: { ...emptyProgress, text: "PRIVATE provisional findings" },
-          activity: [{ id: "error", kind: "failure", text: "PRIVATE diagnostic" }],
-        },
-      ];
+const activeScout: ResearchScoutActivity = {
+  id: "scout-one",
+  title: "Private hot tub cottages",
+  task: "PRIVATE task body",
+  state: "active",
+  progress: { ...emptyProgress, text: "PRIVATE provisional findings" },
+  activity: [{ id: "error", kind: "failure", text: "PRIVATE diagnostic" }],
+};
 
-      test.backend.background = () => ({ scouts });
-      test.backend.read = () => Effect.succeed(observation(request.requestId, "completed"));
-
-      const acknowledge = () =>
-        test.offer(
-          Schema.decodeUnknownSync(LiveEvent)({
-            type: "session.commentary.appended",
-            client_event_id: test.sent.at(-1)?.event_id,
-          }),
-        );
-
-      const fiber = yield* test.run.pipe(Effect.forkChild);
-
-      yield* test.start;
-      yield* TestClock.adjust("1 second");
-      expect(test.sent[0]?.content).toBe("Saved your Lisbon trip.");
-      yield* acknowledge();
-      yield* TestClock.adjust("5 seconds");
-      yield* test.offer(
-        Schema.decodeUnknownSync(LiveEvent)({
-          ...caption("assistant-speaking", "I’m looking into that."),
-          type: "session.output_transcript.delta",
-        }),
-      );
-      yield* TestClock.adjust("9 seconds");
-      expect(test.sent).toHaveLength(1);
-      yield* TestClock.adjust("1 second");
-      expect(test.sent[1]).toMatchObject({
-        type: "session.commentary.append",
-        delegation_id: "item",
-      });
-      expect(test.sent[1]?.content).toContain("Private hot tub cottages");
-      expect(test.sent[1]?.content).not.toContain("PRIVATE");
-      yield* acknowledge();
-      yield* TestClock.adjust("29 seconds");
-      expect(test.sent).toHaveLength(2);
-      yield* TestClock.adjust("1 second");
-      expect(test.sent).toHaveLength(3);
-      yield* acknowledge();
-      scouts = scouts.map((scout) => ({ ...scout, state: "failed" }));
-      yield* TestClock.adjust("35 seconds");
-      expect(test.sent).toHaveLength(3);
-      expect(test.admitted).toEqual([]);
-      yield* Fiber.interrupt(fiber);
-      expect(test.finalized()).toBe(true);
+const acknowledge = (test: Effect.Success<ReturnType<typeof setup>>) =>
+  test.offer(
+    Schema.decodeUnknownSync(LiveEvent)({
+      type: "session.thinking.appended",
+      client_event_id: test.sent.at(-1)?.event_id,
     }),
+  );
+
+it.effect("activity and elapsed time do not produce waiting announcements", () =>
+  Effect.gen(function* () {
+    const test = yield* setup([researchRequest]);
+
+    test.backend.background = () => ({ scouts: [activeScout] });
+    test.backend.progress = () => ({
+      ...emptyProgress,
+      submissionId: observation().submissionId,
+      attemptId: "attempt",
+      tools: [{ id: "read", label: "Reading a rental listing", state: "running" }],
+    });
+    const fiber = yield* test.run.pipe(Effect.forkChild);
+
+    yield* test.start;
+    yield* TestClock.adjust("60 seconds");
+    expect(test.sent).toEqual([]);
+    expect(test.admitted).toEqual([]);
+    yield* Fiber.interrupt(fiber);
+    expect(test.finalized()).toBe(true);
+  }),
 );
 
-it.effect("spoken activity takes priority over frequently changing quiet previews", () =>
+it.effect("speaks each settled finding once after receiving its complete summary and caveats", () =>
   Effect.gen(function* () {
-    const test = yield* setup([
-      {
-        request,
-        delegationId: "item",
-        sessionId: "live-new",
-        offset: 100,
-        status: "accepted",
-        receipt: observation(),
-      },
-    ]);
+    const test = yield* setup([researchRequest]);
+    let scouts = [activeScout];
 
+    test.backend.background = () => ({ scouts });
+    const fiber = yield* test.run.pipe(Effect.forkChild);
+
+    yield* test.start;
+    yield* TestClock.adjust("1 second");
+
+    const summary =
+      "Harbor Cottage has a private hot tub and a separate writing room. " +
+      "The beach is a short walk away. ".repeat(20) +
+      "Caveat: holiday availability and the total price are unverified.";
+
+    scouts = [{ ...activeScout, state: "idle", finding: { id: "settled-one", text: summary } }];
+    // A changing parent preview must not starve a complete research note.
     let revision = 0;
 
     test.backend.progress = () => ({
@@ -688,52 +666,152 @@ it.effect("spoken activity takes priority over frequently changing quiet preview
       submissionId: observation().submissionId,
       attemptId: "attempt",
       revision: revision++,
-      text: "Provisional answer still streaming",
-      tools: [{ id: "read", label: "Reading an Airbnb listing", state: "running" }],
+      text: "Public parent preview",
     });
-    const fiber = yield* test.run.pipe(Effect.forkChild);
-
-    yield* test.start;
-    for (let second = 0; second < 13; second++) {
-      yield* TestClock.adjust("1 second");
-      const last = test.sent.at(-1);
-
-      if (last)
-        yield* test.offer(
-          Schema.decodeUnknownSync(LiveEvent)({
-            type:
-              last.type === "session.thinking.append"
-                ? "session.thinking.appended"
-                : "session.commentary.appended",
-            client_event_id: last.event_id,
-          }),
-        );
+    for (let step = 0; step < 12; step++) {
+      yield* TestClock.adjust("500 millis");
+      if (test.sent.length) yield* acknowledge(test);
     }
+
+    const quiet = test.sent.filter(
+      (event) =>
+        event.type === "session.thinking.append" &&
+        String(event.content).startsWith("Research note"),
+    );
+
     const spoken = test.sent.filter((event) => event.type === "session.commentary.append");
 
+    expect(
+      quiet
+        .map((event) => String(event.content).replace(/^Research note \d+, part \d+\/\d+: /, ""))
+        .join(""),
+    ).toBe(summary);
     expect(spoken).toHaveLength(1);
-    expect(spoken[0]?.content).toContain("Reading an Airbnb listing");
-    expect(spoken[0]?.content).not.toContain("Provisional");
+    expect(spoken[0]?.content).toContain("Harbor Cottage");
+    expect(spoken[0]?.content).toContain("preserve all caveats");
+    expect(test.sent.indexOf(spoken[0]!)).toBeGreaterThan(test.sent.indexOf(quiet.at(-1)!));
+    expect(JSON.stringify(test.sent)).not.toContain("PRIVATE");
+    expect(
+      test.sent.every((event) => new TextEncoder().encode(String(event.content)).length <= 420),
+    ).toBe(true);
+    test.backend.progress = () => null;
+    yield* TestClock.adjust("60 seconds");
+    expect(test.sent.filter((event) => event.type === "session.commentary.append")).toHaveLength(1);
+    expect(test.admitted).toEqual([]);
     yield* Fiber.interrupt(fiber);
   }),
 );
 
-it("excludes superseded and stopped work from spoken activity", () => {
-  const background = {
-    editor: {
-      id: "editor",
-      state: "active" as const,
-      task: "PRIVATE",
-      progress: emptyProgress,
-      activity: [],
-    },
-  };
+it.effect("later research continues after the initial reply and yields to ongoing speech", () =>
+  Effect.gen(function* () {
+    const test = yield* setup([researchRequest]);
+    let scouts = [activeScout];
 
-  expect(voiceActivity({ ...observation(), superseded: true }, null, background)).toBeNull();
-  expect(voiceActivity(observation(request.requestId, "aborted"), null, background)).toBeNull();
-  expect(voiceActivity(observation(request.requestId, "failed"), null, background)).toBeNull();
-  expect(voiceActivity(observation(request.requestId, "missing"), null, background)).toBeNull();
-  expect(voiceActivity(observation(request.requestId, "completed"), null, background)).toContain(
-    "trip website",
-  );
+    test.backend.background = () => ({ scouts });
+    test.backend.read = () => Effect.succeed(observation(request.requestId, "completed"));
+    const fiber = yield* test.run.pipe(Effect.forkChild);
+
+    yield* test.start;
+    yield* TestClock.adjust("1 second");
+    expect(test.sent[0]?.content).toBe("Saved your Lisbon trip.");
+    yield* acknowledge(test);
+    scouts = [
+      {
+        ...activeScout,
+        state: "idle",
+        finding: { id: "later", text: "Harbor Cottage has a private hot tub." },
+      },
+    ];
+    yield* TestClock.adjust("500 millis");
+    expect(test.sent.at(-1)?.type).toBe("session.thinking.append");
+    yield* acknowledge(test);
+    yield* test.offer(
+      Schema.decodeUnknownSync(LiveEvent)({
+        ...caption("speaking", "And good food"),
+        type: "session.output_transcript.delta",
+      }),
+    );
+    yield* TestClock.adjust("1 second");
+    expect(test.sent).toHaveLength(2);
+    yield* TestClock.adjust("500 millis");
+    expect(test.sent.at(-1)).toMatchObject({
+      type: "session.commentary.append",
+      delegation_id: "item",
+    });
+    expect(test.sent.at(-1)?.content).toContain("private hot tub");
+    yield* Fiber.interrupt(fiber);
+  }),
+);
+
+it.effect("a typed correction discards a partially delivered research note", () =>
+  Effect.gen(function* () {
+    const test = yield* setup([researchRequest]);
+    let scouts = [activeScout];
+
+    test.backend.background = () => ({ scouts });
+    const fiber = yield* test.run.pipe(Effect.forkChild);
+
+    yield* test.start;
+    yield* TestClock.adjust("1 second");
+    scouts = [
+      {
+        ...activeScout,
+        state: "idle",
+        finding: { id: "old", text: "Old Friday options. ".repeat(50) },
+      },
+    ];
+    yield* TestClock.adjust("500 millis");
+    expect(test.sent[0]?.type).toBe("session.thinking.append");
+    test.type();
+    yield* acknowledge(test);
+    for (let step = 0; step < 5; step++) {
+      yield* TestClock.adjust("500 millis");
+      yield* acknowledge(test);
+    }
+    expect(test.sent.some((event) => event.type === "session.instructions.append")).toBe(true);
+    expect(test.sent.filter((event) => event.type === "session.commentary.append")).toEqual([]);
+    scouts = [
+      {
+        ...activeScout,
+        state: "idle",
+        finding: { id: "new", text: "Harbor Cottage is available Thursday." },
+      },
+    ];
+    yield* TestClock.adjust("500 millis");
+    yield* acknowledge(test);
+    yield* TestClock.adjust("500 millis");
+    expect(test.sent.at(-1)?.content).toContain("available Thursday");
+    expect(test.sent.at(-1)?.type).toBe("session.commentary.append");
+    yield* Fiber.interrupt(fiber);
+  }),
+);
+
+it.effect("superseded work and failed scouts cannot supply spoken findings", () =>
+  Effect.gen(function* () {
+    const test = yield* setup([researchRequest]);
+    let scouts = [activeScout];
+
+    test.backend.background = () => ({ scouts });
+    const fiber = yield* test.run.pipe(Effect.forkChild);
+
+    yield* test.start;
+    yield* TestClock.adjust("1 second");
+    scouts = [{ ...activeScout, state: "failed", finding: { id: "old", text: "Stale option" } }];
+    yield* TestClock.adjust("5 seconds");
+    expect(test.sent).toEqual([]);
+    scouts = scouts.map((scout) => ({ ...scout, state: "idle" }));
+    test.backend.read = () => Effect.succeed({ ...observation(), superseded: true });
+    yield* TestClock.adjust("5 seconds");
+    expect(test.sent).toEqual([]);
+    yield* Fiber.interrupt(fiber);
+  }),
+);
+
+it("splits complete Unicode research summaries without losing caveats or exceeding append limits", () => {
+  const summary = "海辺の宿 🏖️ ".repeat(100) + "Price unconfirmed.";
+  const parts = contextParts(summary);
+
+  expect(parts.join("")).toBe(summary);
+  expect(parts.every((part) => new TextEncoder().encode(part).length <= 330)).toBe(true);
+  expect(contextParts("")).toEqual([]);
 });

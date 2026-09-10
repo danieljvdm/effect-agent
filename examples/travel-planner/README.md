@@ -125,7 +125,13 @@ when the call starts. This uses [GPT-Live client delegation](https://developers.
 
 **Stop playback** mutes audio locally. **End voice** closes the call; accepted planning and app
 work continues. Spoken lines appear under the same You and Elsewhere speakers in the main
-conversation. Full planner answers remain available under **Trip details** while voice carries
+conversation. Display grouping follows each speaker’s transcript timestamps independently:
+brief overlapping acknowledgments do not split a continuing user sentence, while distinct
+assistant updates get separate messages. Questions and substantive replies separate quick
+user answers. Grouping uses revisable timing heuristics, retains original caption fragments,
+and never submits or cancels work. A typed-input boundary or replacement call starts fresh
+groups; already saved transcripts are not retrospectively rewritten. Full planner answers
+remain available under **Trip details** while voice carries
 the exchange; cards stay visible. You can type during a call or return to text afterward. Typed
 follow-ups include recent spoken context, and voice follows their results without resubmitting
 them. Only a delegation event admits spoken work. Its user request and attributed conversation
@@ -141,18 +147,19 @@ It is not promised to survive reload before that submission. Changing conversati
 accounts closes the media session. A full page reload can require reopening the original trip
 before reconnecting.
 
-Only native response text, designated `deliver_response.message` previews, selected progress
-labels, and schema-decoded settled answers reach the voice model. Previews are explicitly
+Only native response text, designated `deliver_response.message` previews,
+and schema-decoded settled answers reach the voice model. Previews are explicitly
 provisional and sent as context; final answers use canonical settlement. Reasoning, credentials,
 raw tool output and diagnostics are excluded. A short summary of the saved trip and visible
 option names keeps references such as “the second one” grounded in the screen. Later canonical
-research answers return to the same voice exchange. Observed research and editor activity also
-produce brief spoken updates while background work continues, even after the initial reply.
-These updates contain public task labels and work state, never partial findings or diagnostics.
-They wait for ten seconds without transcript activity, are spaced at least twelve seconds apart,
-and repeat unchanged ongoing activity only after thirty seconds. New speech postpones them;
-completed answers take priority. These are delivery pacing rules, not proof of audible playback. A brief utterance delays an outgoing result
-without discarding it; actual delegated corrections and typed requests replace the tracked work.
+research answers return to the same voice exchange. Successfully settled research summaries
+can reach voice before the planner finishes synthesizing the full answer. The complete public
+summary arrives as bounded quiet context chunks, including its caveats, before one spoken
+finding update. Each result is sent
+once; corrections discard pending notes. Activity labels and timers do not trigger waiting
+announcements. Provisional scout findings, raw tool data, and diagnostics are excluded. A brief utterance
+delays an outgoing result without discarding it; actual delegated corrections and typed requests
+replace the tracked work.
 Typing redirects the current explanation without leaving audio muted. Provider acknowledgment,
 playback and durable settlement remain separate internal states; no event proves speech was heard.
 

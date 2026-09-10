@@ -15,10 +15,9 @@ import {
   delegationMessage,
   isCaption,
   voiceUpdate,
-  voiceActivity,
   type VoiceRequest,
 } from "./delegation.ts";
-import { shortContext, VoiceError, type Caption } from "./protocol.ts";
+import { contextParts, shortContext, VoiceError, type Caption } from "./protocol.ts";
 
 export interface VoiceView {
   readonly status: "idle" | "connecting" | "listening" | "ending" | "disconnected";
@@ -64,8 +63,29 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
   let lastDelegatedOffset = -1;
   let lastUserAt = -Infinity;
   let lastSpeechAt = yield* Clock.currentTimeMillis;
-  let lastCommentaryAt = lastSpeechAt;
-  let lastActivity = "";
+
+  const findings = () =>
+    backend
+      .background()
+      ?.scouts?.flatMap((scout) =>
+        scout.state === "idle" && scout.finding?.text.trim() ? [scout.finding] : [],
+      ) ?? [];
+
+  let seenFindings = new Set(findings().map((finding) => finding.id));
+
+  const rememberFinding = (id: string) => {
+    seenFindings.add(id);
+    const oldest = seenFindings.values().next();
+
+    if (seenFindings.size > 128 && !oldest.done) seenFindings.delete(oldest.value);
+  };
+
+  let researchNoteSerial = 0;
+
+  let researchNote:
+    | { id: string; serial: number; parts: ReadonlyArray<string>; next: number }
+    | undefined;
+
   let typedRequestId = backend.typedRequest()?.requestId;
   let lastContext = "";
   let seenAnswers = new Set(backend.answers().map((answer) => answer.id));
@@ -158,6 +178,8 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       lastDelegatedOffset = captions.at(-1)?.end_ms ?? lastDelegatedOffset;
       typedContext = `New typed user input (reference data): ${JSON.stringify(backend.typedContext())}. This request is already being handled. Continue from its updated result.`;
       pauseForTyped = true;
+      researchNote = undefined;
+      seenFindings = new Set(findings().map((finding) => finding.id));
       note = "Updating your trip…";
       seenAnswers = new Set(backend.answers().map((answer) => answer.id));
     }
@@ -179,8 +201,6 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       };
       stale = false;
       lastUpdate = "";
-      lastActivity = "";
-      lastCommentaryAt = now;
       yield* replace(latest);
     }
     if (append && now - append.at > 15_000)
@@ -230,8 +250,8 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         stale = false;
         lastDelegatedOffset = delegation.offset;
         lastUpdate = "";
-        lastActivity = "";
-        lastCommentaryAt = now;
+        researchNote = undefined;
+        seenFindings = new Set(findings().map((finding) => finding.id));
         seenAnswers = new Set(backend.answers().map((answer) => answer.id));
         // Freeze before the first network call. A lost acknowledgement retains identical input/settings.
         yield* replace(latest);
@@ -309,19 +329,12 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         ? { kind: "result" as const, key: `answer:${answer.id}`, text: shortContext(answer.text) }
         : voiceUpdate(work, backend.progress());
 
-    const activity = voiceActivity(work, backend.progress(), backend.background());
-
-    const activityDue =
-      activity !== null &&
-      now - lastSpeechAt >= 10_000 &&
-      now - lastCommentaryAt >= (activity === lastActivity ? 30_000 : 12_000);
-
     if (
       update &&
       now - lastUserAt >= 1500 &&
       !append &&
       update.key !== lastUpdate &&
-      (update.kind === "result" || !activityDue) &&
+      (update.kind === "result" || !researchNote) &&
       (update.kind === "result" || now - lastProgressAt >= 3000)
     ) {
       const delegation =
@@ -334,7 +347,8 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       );
       lastUpdate = update.key;
       if (update.kind === "result") {
-        lastCommentaryAt = now;
+        researchNote = undefined;
+        for (const finding of findings()) rememberFinding(finding.id);
         for (const answer of answers) seenAnswers.add(answer.id);
         // A later research answer continues the exchange; don't then repeat the earlier receipt answer.
         if (update.key.startsWith("answer:")) lastUpdate = `settled:${work.receiptId}`;
@@ -342,14 +356,43 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       lastProgressAt = now;
       note = update.kind === "result" ? "Listening" : "Working on your trip…";
     }
-    if (activity && activityDue && !append && !typedContext && !pauseForTyped) {
-      yield* sendContext(
-        "session.commentary.append",
-        activity,
-        current.sessionId === sessionId && current.delegationId ? current.delegationId : null,
-      );
-      lastActivity = activity;
-      lastCommentaryAt = now;
+    if (!work.superseded && (work.state === "pending" || work.state === "completed")) {
+      const available = findings();
+
+      if (researchNote && !available.some((finding) => finding.id === researchNote?.id))
+        researchNote = undefined;
+      const finding = available.find((item) => !seenFindings.has(item.id));
+
+      if (!researchNote && finding)
+        researchNote = {
+          id: finding.id,
+          serial: ++researchNoteSerial,
+          parts: contextParts(finding.text),
+          next: 0,
+        };
+      if (researchNote && !append && !typedContext && !pauseForTyped) {
+        const note = researchNote;
+
+        const delegation =
+          current.sessionId === sessionId && current.delegationId ? current.delegationId : null;
+
+        if (note.next < note.parts.length) {
+          yield* sendContext(
+            "session.thinking.append",
+            `Research note ${note.serial}, part ${note.next + 1}/${note.parts.length}: ${note.parts[note.next]}`,
+            delegation,
+          );
+          note.next++;
+        } else if (now - lastSpeechAt >= 1500) {
+          yield* sendContext(
+            "session.commentary.append",
+            `New finding from complete research note ${note.serial}; preserve all caveats: ${note.parts[0]}`,
+            delegation,
+          );
+          rememberFinding(note.id);
+          researchNote = undefined;
+        }
+      }
     }
     render();
   });

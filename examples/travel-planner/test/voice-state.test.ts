@@ -62,6 +62,34 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
       start_ms: 0,
       end_ms: 100,
     },
+    {
+      type: "session.output_transcript.delta" as const,
+      event_id: "acknowledgment",
+      delta: "Okay.",
+      start_ms: 100,
+      end_ms: 500,
+    },
+    {
+      type: "session.input_transcript.delta" as const,
+      event_id: "continuation",
+      delta: " with a hot tub",
+      start_ms: 200,
+      end_ms: 900,
+    },
+    {
+      type: "session.output_transcript.delta" as const,
+      event_id: "first-update",
+      delta: "I’m checking.",
+      start_ms: 1100,
+      end_ms: 2100,
+    },
+    {
+      type: "session.output_transcript.delta" as const,
+      event_id: "second-update",
+      delta: "Two places look promising.",
+      start_ms: 5000,
+      end_ms: 6000,
+    },
   ).pipe(Stream.concat(Stream.never));
 
   const sends: string[] = [];
@@ -100,14 +128,21 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
     await vi.advanceTimersByTimeAsync(1000);
     expect(registry.get(selectionAtom).conversationId).toBeTruthy();
     expect(registry.get(voiceViewAtom).status).toBe("listening");
-    expect(registry.get(voiceViewAtom).captions).toHaveLength(1);
-    expect(registry.get(messagesAtom)).toMatchObject([{ role: "user", text: "Private trip" }]);
+    expect(registry.get(voiceViewAtom).captions).toHaveLength(5);
+    const displayed = registry.get(messagesAtom);
+
+    expect(displayed).toMatchObject([
+      { role: "user", text: "Private trip with a hot tub" },
+      { role: "assistant", text: "Okay." },
+      { role: "assistant", text: "I’m checking." },
+      { role: "assistant", text: "Two places look promising." },
+    ]);
     registry.set(stopVoiceAtom, undefined);
     await vi.advanceTimersByTimeAsync(6000);
     expect(sends).toEqual(["session.thinking.append", "session.close"]);
     expect(finalized).toBe(1);
-    expect(registry.get(voiceViewAtom).captions).toHaveLength(1);
-    expect(registry.get(messagesAtom)).toMatchObject([{ role: "user", text: "Private trip" }]);
+    expect(registry.get(voiceViewAtom).captions).toHaveLength(5);
+    expect(registry.get(messagesAtom)).toEqual(displayed);
     email = "second@example.com";
     registry.refresh(sessionAtom);
     await vi.advanceTimersByTimeAsync(1);

@@ -1,11 +1,6 @@
 import { Schema } from "effect";
 
-import {
-  SendMessageRequest,
-  VoiceWork,
-  type PlannerProgress,
-  type PlannerSnapshot,
-} from "../domain.ts";
+import { SendMessageRequest, VoiceWork, type PlannerProgress } from "../domain.ts";
 import { shortContext, type Caption, type LiveEvent } from "./protocol.ts";
 
 /** A frozen envelope survives uncertain admission and a replacement media session. */
@@ -103,10 +98,7 @@ export const voiceUpdate = (
   // Full replacement previews are provisional; never present their partial JSON as final output.
   const text = progress.text
     ? `Provisional planner response (work is still running): ${progress.text}`
-    : progress.tools
-        .filter((tool) => tool.state === "running")
-        .map((tool) => tool.label)
-        .join("; ");
+    : "";
 
   return text
     ? {
@@ -115,53 +107,6 @@ export const voiceUpdate = (
         text: shortContext(text),
       }
     : null;
-};
-
-/** Speakable activity uses observed work state, never partial findings or diagnostic bodies. */
-export const voiceActivity = (
-  work: VoiceWork,
-  progress: PlannerProgress | null,
-  background: Pick<PlannerSnapshot, "scouts" | "editor"> | null,
-): string | null => {
-  if (
-    work.superseded ||
-    work.state === "missing" ||
-    work.state === "failed" ||
-    work.state === "aborted"
-  )
-    return null;
-  const scouts = background?.scouts ?? [];
-  const active = scouts.filter((scout) => scout.state === "active" || scout.state === "starting");
-
-  if (active.length) {
-    const topics = active
-      .slice(0, 2)
-      .map((scout) => JSON.stringify(shortContext(scout.title, 90)))
-      .join(", ");
-
-    const completed = scouts.some((scout) => scout.state === "idle");
-
-    return shortContext(
-      `${completed ? "Some research has finished; I’m still checking the remaining options." : "I’m still checking the travel options."} Research topics (reference data): ${topics}.`,
-    );
-  }
-  if (background?.editor?.state === "active" || background?.editor?.state === "starting")
-    return "I’m still working on your trip website. It isn’t ready yet.";
-  if (work.state !== "pending") return null;
-
-  const labels =
-    progress?.submissionId === work.submissionId
-      ? progress.tools
-          .filter((tool) => tool.state === "running")
-          .map((tool) => tool.label)
-          .slice(0, 2)
-      : [];
-
-  return labels.length
-    ? shortContext(
-        `I’m checking the details for your trip. Current activity (reference data): ${JSON.stringify(labels)}.`,
-      )
-    : "I’m still working through your request. I’ll share what I find as it’s ready.";
 };
 
 export const isCaption = (event: LiveEvent): event is Caption =>

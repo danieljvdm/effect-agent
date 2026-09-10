@@ -119,6 +119,12 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
 
         return {
           ...base,
+          ...(summary.state === "idle" &&
+          settled?._tag === "SubmissionSettled" &&
+          settled.outcome === "completed" &&
+          findings?._tag === "Some"
+            ? { finding: { id: settled.settlementId, text: findings.value.summary } }
+            : {}),
           state:
             summary.state === "idle" &&
             settled?._tag === "SubmissionSettled" &&

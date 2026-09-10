@@ -340,6 +340,8 @@ export type EditorActivity = typeof EditorActivity.Type;
 export const ResearchScoutActivity = Schema.Struct({
   ...EditorActivity.fields,
   title: ShortText,
+  /** Latest successfully settled public summary; never a partial model preview. */
+  finding: Schema.optionalKey(Schema.Struct({ id: Schema.String, text: Text })),
 });
 
 export type ResearchScoutActivity = typeof ResearchScoutActivity.Type;

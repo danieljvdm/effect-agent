@@ -18,8 +18,9 @@ import {
 } from "../state.ts";
 import { connectBrowserVoice } from "./browser.ts";
 import { VoiceRequest } from "./delegation.ts";
-import { VoiceError, type Caption } from "./protocol.ts";
+import { VoiceError } from "./protocol.ts";
 import { runVoiceSession, type VoiceView } from "./session.ts";
+import { groupCaption, type CaptionGroups } from "./transcript.ts";
 
 export const voiceViewAtom = Atom.make<VoiceView>({
   status: "idle",
@@ -106,7 +107,7 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
       .map(({ role, text }) => ({ role, text: text.slice(0, 1000) }));
 
     let captionRequestId = get(conversationRequestAtom)?.requestId;
-    let row: { id: string; type: Caption["type"] } | undefined;
+    let groups: CaptionGroups = {};
     const seenCaptions = new Set<string>();
 
     const context = () => {
@@ -191,7 +192,7 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
               const typedId = get(conversationRequestAtom)?.requestId;
 
               if (typedId !== captionRequestId) {
-                row = undefined;
+                groups = {};
                 captionRequestId = typedId;
               }
               const current = get(spokenConversationAtom);
@@ -199,28 +200,22 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
               if (!current || current.email !== email || current.conversationId !== conversationId)
                 return;
 
-              const prior =
-                row?.type === event.type
-                  ? current.messages.find((message) => message.id === row?.id)
-                  : undefined;
-
-              const append = prior && prior.text.length + event.delta.length <= 8000;
               const last = get(messagesAtom).at(-1);
 
-              const message = {
-                id: append ? prior.id : `speech-${crypto.randomUUID()}`,
-                role:
-                  event.type === "session.input_transcript.delta"
-                    ? ("user" as const)
-                    : ("assistant" as const),
-                text: append ? prior.text + event.delta : event.delta,
-                after: append ? prior.after : last ? (last.requestId ?? last.id) : null,
-              };
+              const grouped = groupCaption(
+                event,
+                current.messages,
+                groups,
+                last ? (last.requestId ?? last.id) : null,
+                () => `speech-${crypto.randomUUID()}`,
+              );
 
-              row = { id: message.id, type: event.type };
+              const message = grouped.message;
+
+              groups = grouped.groups;
               get.set(spokenConversationAtom, {
                 ...current,
-                messages: append
+                messages: current.messages.some((item) => item.id === message.id)
                   ? current.messages.map((item) => (item.id === message.id ? message : item))
                   : [...current.messages, message].slice(-48),
               });

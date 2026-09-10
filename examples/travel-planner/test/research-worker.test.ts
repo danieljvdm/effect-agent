@@ -192,6 +192,7 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
   expect(active.messages.some((message) => message.text.includes("What is your budget?"))).toBe(
     true,
   );
+  expect(active.scouts?.every((scout) => scout.finding === undefined)).toBe(true);
   const ids = active.scouts?.map((scout) => scout.id).sort();
 
   expect((await snapshot("other@example.com")).scouts).toEqual([]);
@@ -261,6 +262,14 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
     const journal = Schema.decodeUnknownSync(ThreadExport)(
       await fixture("journal", { thread: scout.id }),
     );
+
+    const settled = journal.records.findLast(
+      ({ record }) => record.payload._tag === "SubmissionSettled",
+    )?.record.payload;
+
+    if (settled?._tag !== "SubmissionSettled") throw new Error("Expected settled scout");
+    expect(scout.finding).toEqual({ id: settled.settlementId, text: scout.progress.text });
+    expect(settled.outcome).toBe("completed");
 
     const admitted = journal.records.flatMap(({ record }) =>
       record.payload._tag === "UserInputRecorded"

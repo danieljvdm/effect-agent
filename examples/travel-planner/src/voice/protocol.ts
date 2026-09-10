@@ -77,3 +77,18 @@ export const shortContext = (text: string, limit = 420): string => {
 
   return result;
 };
+
+/** Quiet chunks preserve the complete public summary, including caveats near its end. */
+export const contextParts = (text: string): ReadonlyArray<string> => {
+  const parts: string[] = [];
+  let remaining = text;
+
+  while (remaining.length) {
+    const part = shortContext(remaining, 330);
+
+    parts.push(part);
+    remaining = remaining.slice(part.length);
+  }
+
+  return parts;
+};
