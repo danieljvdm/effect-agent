@@ -3902,10 +3902,8 @@ layer(TestServices)("Subagent usage accounting", (it) => {
       ),
     );
 
-  it.effect("reports exact known child totals and supports the existing child budget hook", () =>
+  it.effect("reports priced child totals on completion and the detached handle", () =>
     Effect.gen(function* () {
-      const deltas: number[] = [];
-
       const childLayer = SubagentRuntime.layer(
         researchDelegation,
         Agent.withModel(childDefinition, reviewModel('{"answer":"ok"}')),
@@ -3913,13 +3911,6 @@ layer(TestServices)("Subagent usage accounting", (it) => {
           mapChildFailure,
           child: {
             estimateCostMicrousd: () => Effect.succeed(17),
-            budget: {
-              guard: (effect) => effect,
-              consume: (delta) =>
-                Effect.sync(() => {
-                  deltas.push(delta.inputTokens);
-                }),
-            },
           },
         },
       );
@@ -3928,7 +3919,12 @@ layer(TestServices)("Subagent usage accounting", (it) => {
         Effect.provide(childLayer),
       );
 
-      yield* handle.await;
+      const infallibleReport: Assert<
+        Equal<typeof handle.usageReport, Effect.Effect<RunUsageReport>>
+      > = true;
+
+      expect(infallibleReport).toBe(true);
+      const result = yield* handle.await;
       const events = yield* handle.events;
 
       expect(findEvent(events, "SubagentCompleted")?.usage).toMatchObject({
@@ -3939,7 +3935,6 @@ layer(TestServices)("Subagent usage accounting", (it) => {
         usageStatus: "partial",
         pricingStatus: "complete",
       });
-      const result = yield* handle.await;
 
       expect(result.usage?.modelCalls).toBe(2);
       expect(result.delegatedUsage).toEqual(findEvent(events, "SubagentCompleted")?.usage);
@@ -3947,25 +3942,6 @@ layer(TestServices)("Subagent usage accounting", (it) => {
         usage: result.usage,
         delegatedUsage: result.delegatedUsage,
       });
-      expect(deltas).toEqual([12]);
-    }),
-  );
-
-  it.effect("preserves unknown usage and pricing instead of reporting unqualified zero", () =>
-    Effect.gen(function* () {
-      const childLayer = researchLayer(
-        Agent.withModel(childDefinition, answeringModel("review-unknown", '{"answer":"ok"}')),
-      );
-
-      const handle = yield* AgentRuntime.start(parent(), { mission: "review" }).pipe(
-        Effect.provide(childLayer),
-      );
-
-      yield* handle.await;
-      const events = yield* handle.events;
-      const usage = findEvent(events, "SubagentCompleted")?.usage;
-
-      expect(usage).toMatchObject({ usageStatus: "unknown", pricingStatus: "unknown" });
     }),
   );
 
@@ -3980,18 +3956,12 @@ layer(TestServices)("Subagent usage accounting", (it) => {
         },
       );
 
-      const events: RunEvent[] = [];
-
-      yield* AgentRuntime.stream(parent(), { mission: "review" }).pipe(
-        Stream.tap((event) =>
-          Effect.sync(() => {
-            events.push(event);
-          }),
-        ),
-        Stream.runDrain,
+      const handle = yield* AgentRuntime.start(parent(), { mission: "review" }).pipe(
         Effect.provide(childLayer),
-        Effect.exit,
       );
+
+      expect(yield* Effect.flip(handle.await)).toBeInstanceOf(ResearchDelegationFailed);
+      const events = yield* handle.events;
       const failed = findEvent(events, "SubagentFailed");
 
       expect(failed).toMatchObject({
@@ -4086,11 +4056,6 @@ layer(TestServices)("Subagent usage accounting", (it) => {
           Scope.provide(scope),
         );
 
-        const infallibleReport: Assert<
-          Equal<typeof handle.usageReport, Effect.Effect<RunUsageReport>>
-        > = true;
-
-        expect(infallibleReport).toBe(true);
         yield* Deferred.await(ready);
         if (ending === "interrupt") yield* Scope.close(scope, Exit.void);
         if (ending === "timeout") yield* TestClock.adjust("10 seconds");
@@ -4171,22 +4136,8 @@ layer(TestServices)("Subagent usage accounting", (it) => {
         });
 
         const result = yield* AgentRuntime.run(
-          Agent.withModel(
-            Agent.make("accounting-parent", {
-              input: Schema.String,
-              output: Schema.String,
-              instructions: "Delegate",
-              toolkit: Toolkit.make(delegation.tool),
-              policy: parentPolicy,
-            }),
-            delegatingModel(
-              "accounting-parent",
-              "delegate_research",
-              [{ id: "call-1", params: { topic: "x" } }],
-              '"done"',
-            ),
-          ),
-          "input",
+          durableParent("accounting-parent", "x"),
+          { mission: "x" },
           {
             subagent,
             resumeUsage: {

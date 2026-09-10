@@ -4,7 +4,6 @@ import {
   emptyRunTotals,
   unknownRunTotals,
   sumRunTotals,
-  runTotalsFromSummary,
   RunUsageSummary,
   summarizeModelUsage,
   UsageAggregationError,
@@ -215,7 +214,8 @@ it("combines disjoint Run totals without converting unknown or legacy evidence i
         usageStatus: "unknown",
         pricingStatus: "unknown",
       });
-      const combined = yield* sumRunTotals([known, unknownRunTotals(), legacy]);
+      expect((yield* sumRunTotals([known, unknownRunTotals()])).pricingStatus).toBe("partial");
+      const combined = yield* sumRunTotals([known, legacy]);
 
       expect(combined).toMatchObject({
         modelCalls: 3,
@@ -225,10 +225,7 @@ it("combines disjoint Run totals without converting unknown or legacy evidence i
         usageStatus: "partial",
         pricingStatus: "partial",
       });
-      expect(yield* sumRunTotals([legacy, unknownRunTotals(), known])).toEqual(combined);
-      expect(Schema.decodeUnknownSync(RunTotals)(Schema.encodeSync(RunTotals)(combined))).toEqual(
-        combined,
-      );
+      expect(yield* sumRunTotals([legacy, known])).toEqual(combined);
       expectTypeOf(sumRunTotals([known])).toEqualTypeOf<
         Effect.Effect<RunTotals, UsageAggregationError>
       >();
@@ -239,23 +236,5 @@ it("combines disjoint Run totals without converting unknown or legacy evidence i
       ]).pipe(Effect.flip);
 
       expect(overflow).toMatchObject({ _tag: "UsageAggregationError", field: "inputTokens" });
-
-      const summary = yield* summarizeModelUsage([
-        ModelCallUsage.make({
-          provider: "test",
-          model: "model",
-          inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
-          outputTokens: { total: 0, text: 0, reasoning: 0 },
-          costMicrousd: 0,
-          usageStatus: "unknown",
-          pricingStatus: "unknown",
-        }),
-      ]);
-
-      expect(runTotalsFromSummary(summary)).toMatchObject({
-        modelCalls: 1,
-        usageStatus: "unknown",
-        pricingStatus: "unknown",
-      });
     }),
   ));

@@ -244,31 +244,13 @@ durable Submission with an explicit persisted command. See
 
 ## Provider usage and cost evidence
 
-`AgentRuntime.run` results and `RunCompleted` carry optional `usage` and `delegatedUsage` totals.
-`usage` covers this Run's own model calls, including compaction; `delegatedUsage` covers its
-attached children and their attached descendants. These sets are disjoint. Add them once with
-`Usage.sumRunTotals` when a combined report is needed; do not also add child event totals.
-Background workers have independent lifetimes and are excluded.
+`AgentRuntime` results and `RunCompleted` expose optional `usage` (own calls, including compaction) and
+`delegatedUsage` (all attached descendants). Combine them once with `Usage.sumRunTotals`;
+background workers are excluded. Child events repeat cumulative totals, so deduplicate by Run ID.
 
-Each total retains `usageStatus`, `pricingStatus`, and `unobservedModelCalls`. Missing legacy
-fields mean unknown. A numeric zero is only meaningful alongside its coverage: absent provider
-usage or pricing is not a free call. Costs are host estimates. Flat totals do not retain the
-per-model, cache, or reasoning breakdown; durable `usageSummary` retains that richer evidence.
-
-Expected-failure and suspended Run events include the usage observed at that boundary. For a detached Run,
-`handle.usageReport` provides a snapshot even if `handle.await` fails or is interrupted. Read it
-after execution settles, or after closing its owning Scope, to include finalization accounting:
-
-```ts
-const outcome = yield * Effect.exit(handle.await);
-const report = yield * handle.usageReport;
-```
-
-Reading a live report does not wait for execution. It cannot quantify an in-flight request until
-usage arrives, and interruption without usage leaves an unobserved call. If aggregated descendant
-totals exceed safe-integer capacity, their coverage becomes unknown rather than changing the
-Run's outcome or reporting a rounded value. Reports are observations, not billing receipts:
-retry/recovery and event replay require consumers to deduplicate by logical Run/child identity.
+For failed or interrupted Runs, read `handle.usageReport` after `handle.await` settles or its
+owning Scope closes. Earlier reads are live snapshots and may omit in-flight usage. Durable
+settlements retain their richer per-model `usageSummary` for the Run's own calls.
 
 A cost estimator receives the configured binding name in `request.model` and the actual
 provider-reported identity in `request.response`. Use the latter for response-sensitive pricing.
@@ -276,7 +258,7 @@ provider-reported identity in `request.response`. Use the latter for response-se
 engine never persists provider HTTP details or raw metadata in accounting records. A summarizer
 uses the same estimator with `purpose: "summary"`.
 
-Calls retain `usageStatus` and `pricingStatus`. Missing legacy status is unknown, and a numeric
+Calls and Run totals retain `usageStatus` and `pricingStatus`. Missing legacy status is unknown, and a numeric
 zero without an estimate is not evidence of free execution. Run summaries distinguish complete,
 partial, and unknown coverage; `unobservedModelCalls` counts observed calls without retained accounting,
 which are excluded from numeric token and call totals. A canonical `ModelResponseInterrupted`
