@@ -33,7 +33,7 @@ import { Context, Effect, Layer, Ref, Schema, SchemaGetter, Stream } from "effec
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 describe("WebCapture construction", () => {
-  it("classifies browser JavaScript as uncertain and excludes capture from readonly Code Mode", () => {
+  it("keeps browser JavaScript uncertain when included in Code Mode", () => {
     const definition = WebCapture.make("read_webpage", {
       description: "Read documentation pages.",
       urls: ["docs.example.com", "*.Effect.website"],
@@ -52,7 +52,7 @@ describe("WebCapture construction", () => {
         description: "Read a page through Code Mode",
         tools: { browser: { capture: definition.tool } },
       }),
-    ).toThrow(/uncertain/);
+    ).not.toThrow();
   });
 
   it("snapshots and freezes security-sensitive host and action policies", () => {

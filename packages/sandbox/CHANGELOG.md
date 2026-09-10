@@ -1,5 +1,17 @@
 # @effect-agent/sandbox
 
+## 0.1.0-beta.77
+
+## 0.1.0-beta.76
+
+## 0.1.0-beta.75
+
+### Patch Changes
+
+- [#417](https://github.com/danieljvdm/effect-agent/pull/417) [`230c18a`](https://github.com/danieljvdm/effect-agent/commit/230c18a79fa3941615a6116f5678a1a3bd4b169c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow authorized writes and bounded concurrent tool calls in Code Mode, with individual outcome reports after partial failure or interruption. Classify generated programs as uncertain to prevent automatic replay after ownership loss.
+
+  BEHAVIOR CHANGE: Host Tool authorization now checks inner calls; policies must allow the selected Tools explicitly.
+
 ## 0.1.0-beta.74
 
 ## 0.1.0-beta.73

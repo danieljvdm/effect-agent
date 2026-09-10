@@ -17,3 +17,4 @@ export * as Remembering from "./Remembering.ts";
 export * as ContextTools from "./ContextTools.ts";
 export * as MemoryNotes from "./MemoryNotes.ts";
 export * as Messaging from "./Messaging.ts";
+export * as WebSearch from "./WebSearch.ts";

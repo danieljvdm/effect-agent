@@ -19,6 +19,17 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 /** The engine consumes this successful singleton result after committing its Tool batch. */
 export const NewContext = Tool.make("new_context", {
   description:
+    "Start a new context window. Does not change environment state. Optionally provide a short handoff for the next window. Call this tool alone; it takes effect before your next turn.",
+  parameters: ContextRolloverRequest,
+  success: ContextRolloverRequest,
+})
+  .annotate(ContextRolloverTool, true)
+  .annotate(ToolExecutionClass, "idempotent")
+  .annotate(Tool.Idempotent, true);
+
+/** Frozen beta62 rollover guidance for retained Agent definitions. */
+const LegacyNewContext = Tool.make("new_context", {
+  description:
     "Start a fresh context window. Save durable notes first and optionally provide a short handoff. Call this tool alone; it takes effect before your next turn.",
   parameters: ContextRolloverRequest,
   success: ContextRolloverRequest,
@@ -111,7 +122,7 @@ export const toolkit = Toolkit.make(
 
 /** Frozen beta62 tool contracts for retained definitions; pair with legacyLayer. */
 export const legacyToolkit = Toolkit.make(
-  NewContext,
+  LegacyNewContext,
   GetContextRemaining,
   LegacySearchContextWindows,
   ReadContextWindow,

@@ -112,4 +112,15 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
     expect(response.ok).toBe(true);
     expect(await response.json()).toEqual({ tag: "success" });
   });
+  it("overlaps host calls and releases dependent work without waiting for earlier calls", async () => {
+    const response = await runtime.dispatchFetch("http://placeholder/concurrent-host-calls");
+
+    expect(response.ok).toBe(true);
+    expect(await response.json()).toMatchObject({
+      outcome: { tag: "success", detail: { value: [0, 2] } },
+      completed: [1, 2, 0],
+      peak: 2,
+      active: 0,
+    });
+  }, 30_000);
 });

@@ -430,9 +430,14 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
       }),
     );
 
-    const server = yield* serveHostCalls(host, queue, request.limits, capture, counter).pipe(
-      Effect.forkScoped,
-    );
+    const concurrency = request.limits.maxHostCallConcurrency ?? 4;
+
+    const server = yield* Effect.all(
+      Array.from({ length: concurrency }, () =>
+        serveHostCalls(host, queue, request.limits, capture, counter),
+      ),
+      { concurrency, discard: true },
+    ).pipe(Effect.andThen(Effect.never), Effect.forkScoped);
 
     const program = Effect.tryPromise({
       try: async () => {

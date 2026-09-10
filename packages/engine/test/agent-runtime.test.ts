@@ -889,6 +889,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(1);
       expect(events.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
 
+      expect(events.find((event) => event._tag === "ToolCallFailed")).toMatchObject({
+        failureMode: "return",
+        failureHandling: "returned-to-model",
+      });
+
       const toolSpans = spans
         .filter((span) => span.name.startsWith("execute_tool "))
         .toSorted((left, right) => left.name.localeCompare(right.name));
@@ -927,6 +932,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "gen_ai.conversation.id": "thread-1",
         "effect_agent.tool.execution_class": "uncertain",
         "effect_agent.tool.outcome": "failure",
+        "effect_agent.tool.failure_mode": "return",
+        "effect_agent.tool.failure_handling": "returned-to-model",
         agentId: "tool-observability",
         threadId: "thread-1",
         runId: "run-1",
@@ -1271,6 +1278,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         toolCallId: "fail-early-1",
         toolName: "fail_early",
         providerExecuted: false,
+        failureMode: "return",
+        failureHandling: "returned-to-model",
       });
 
       const terminalLogs = logs.filter(
@@ -1280,6 +1289,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(terminalLogs).toHaveLength(1);
       expect(terminalLogs[0]?.annotations).toMatchObject({
         "effect_agent.tool.outcome": "failure",
+        "effect_agent.tool.failure_mode": "return",
+        "effect_agent.tool.failure_handling": "returned-to-model",
         toolName: "fail_early",
         toolOutcome: "failure",
       });
@@ -1288,6 +1299,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
       expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
         "effect_agent.tool.outcome": "failure",
+        "effect_agent.tool.failure_handling": "returned-to-model",
       });
       if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
         throw new Error("Expected the early-closed returned Tool failure span to end failed");
@@ -1520,6 +1532,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                   annotateToolSpanTerminalOutcome(
                     outcome,
                     outcome === "failure" ? failureMarker : undefined,
+                    outcome === "failure" ? "returned-to-model" : undefined,
+                    "return",
                   ).pipe(
                     Effect.andThen(
                       Effect.flatMap(Effect.currentSpan, (span) =>
@@ -1530,6 +1544,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                             "effect_agent.tool.outcome",
                             outcome === "success" ? "failure" : "success",
                           );
+                          span.attribute("effect_agent.tool.failure_handling", "propagated");
+                          span.attribute("effect_agent.tool.failure_mode", "error");
                         }),
                       ),
                     ),
@@ -1566,7 +1582,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
         expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
           "effect_agent.tool.outcome": outcome,
+          "effect_agent.tool.failure_mode": "return",
         });
+        expect(span?.attributes.get("effect_agent.tool.failure_handling")).toBe(
+          outcome === "failure" ? "returned-to-model" : undefined,
+        );
         if (span?.status._tag !== "Ended") throw new Error("Expected the Tool span to end");
         expect(Exit.isSuccess(span.status.exit)).toBe(outcome === "success");
         if (outcome === "failure") {
@@ -3868,6 +3888,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(observed.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
       const span = spans.find((candidate) => candidate.name === "execute_tool fail");
 
+      expect(observed.find((event) => event._tag === "ToolCallFailed")).toMatchObject({
+        failureMode: "error",
+        failureHandling: "propagated",
+      });
+      expect(span?.attributes.get("effect_agent.tool.failure_mode")).toBe("error");
+      expect(span?.attributes.get("effect_agent.tool.failure_handling")).toBe("propagated");
+
       expect(span?.attributes.get("effect_agent.tool.outcome")).toBe("failure");
       expect(span?.status._tag).toBe("Ended");
       if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
@@ -4832,6 +4859,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const Defect = Tool.make("defect", {
           parameters: Schema.Struct({}),
           success: Schema.String,
+          failureMode: "return",
         });
 
         const tools = Toolkit.make(Defect);
@@ -4886,6 +4914,10 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         expect(Cause.squash(exit.cause)).toBe(defect);
         expect(yield* Deferred.isDone(finalized)).toBe(true);
         expect(observed.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
+        expect(observed.find((event) => event._tag === "ToolCallFailed")).toMatchObject({
+          failureMode: "return",
+          failureHandling: "propagated",
+        });
         expect(observed.some((event) => event._tag === "RunFailed")).toBe(false);
       }),
   );

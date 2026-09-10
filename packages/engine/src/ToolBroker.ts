@@ -24,7 +24,7 @@ export interface ProgrammaticToolInput {
 /** The handler ran and settled with an owned JSON snapshot of its encoded success value. */
 export interface ProgrammaticCallSuccess {
   readonly _tag: "ProgrammaticCallSuccess";
-  /** Broker-owned zero-based index of this call within the pass (RUN-016). */
+  /** Broker-owned invocation index within the pass; rejected calls leave gaps. */
   readonly index: number;
   readonly encodedResult: unknown;
 }
@@ -42,7 +42,7 @@ export interface ProgrammaticCallFailure {
 
 /**
  * The call never produced a settled handler result: a broker preflight
- * rejected it (concurrency, budget, unknown Tool, approval-requiring Tool,
+ * rejected it (authorization, budget, unknown Tool, approval-requiring Tool,
  * invalid parameters), the handler failed in its typed error channel, or the
  * result failed encoding or the broker-owned size bound. `errorTag` and
  * `message` are the same bounded projection the direct path uses for
@@ -67,8 +67,24 @@ export type ProgrammaticCallOutcome =
   | ProgrammaticCallFailure
   | ProgrammaticCallError;
 
+/**
+ * Ephemeral execution evidence, ordered by invocation rather than completion. No arguments or
+ * results are copied into this diagnostic. A started call without a confirmed result is uncertain;
+ * a failed call is a confirmed failure, not a promise that external effects were rolled back.
+ */
+export const ProgrammaticCallRecord = Schema.Struct({
+  sequenceIndex: Schema.Natural,
+  toolName: Schema.String,
+  status: Schema.Literals(["not-started", "succeeded", "failed", "uncertain"]),
+  errorTag: Schema.optionalKey(Schema.String),
+});
+
+export type ProgrammaticCallRecord = typeof ProgrammaticCallRecord.Type;
+
 /** Broker-owned per-pass policy for results crossing back into the sandbox. */
 export interface ToolBrokerPassOptions {
+  /** Maximum active invocations in this pass, from one through 64. Defaults to four. */
+  readonly concurrency?: number | undefined;
   /**
    * Maximum UTF-8 byte size of one encoded success result at the sandbox
    * boundary. The returned value is decoded from the exact JSON representation
@@ -84,12 +100,14 @@ export interface ToolBrokerPassOptions {
 }
 
 /**
- * One open programmatic pass, bound to one outer Tool Call. Calls are
- * strictly sequential: an invocation issued while another from the same pass
- * is unsettled fails with a typed concurrency error outcome.
+ * One open programmatic pass, bound to one outer Tool Call. A finite Effect Semaphore bounds
+ * execution. The caller owns invocation fibers and must join or interrupt them before leaving
+ * its Scope. Results return as soon as they settle, without waiting for unrelated earlier calls.
  */
 export interface ToolBrokerPass {
   readonly invoke: (input: ProgrammaticToolInput) => Effect.Effect<ProgrammaticCallOutcome>;
+  /** Owned snapshot in invocation order, including interrupted and rejected calls. Never replay it. */
+  readonly snapshot: Effect.Effect<ReadonlyArray<ProgrammaticCallRecord>>;
 }
 
 /** The broker was used outside a live Tool batch; there is nothing to bind to. */

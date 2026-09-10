@@ -565,7 +565,12 @@ const makeExecute = (
       }
     });
 
-    const server = yield* serveHostCalls.pipe(Effect.forkScoped);
+    const concurrency = request.limits.maxHostCallConcurrency ?? 4;
+
+    const server = yield* Effect.all(
+      Array.from({ length: concurrency }, () => serveHostCalls),
+      { concurrency, discard: true },
+    ).pipe(Effect.andThen(Effect.never), Effect.forkScoped);
 
     const dispatch = (hostCall: unknown): Promise<unknown> => {
       if (!passOpen) {

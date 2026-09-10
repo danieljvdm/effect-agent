@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/platform-cloudflare",
-  "version": "0.1.0-beta.74",
+  "version": "0.1.0-beta.77",
   "description": "Cloudflare Layer assembly for Effect Agent: Durable Objects and Browser Run adapters.",
   "license": "MIT",
   "repository": {
@@ -30,7 +30,8 @@
     "./InteractiveBrowser": "./src/InteractiveBrowser.ts",
     "./ProtectedBrowser": "./src/ProtectedBrowser.ts",
     "./ThreadObject": "./src/ThreadObject.ts",
-    "./WakeScheduler": "./src/WakeScheduler.ts"
+    "./WakeScheduler": "./src/WakeScheduler.ts",
+    "./CloudflareAiGateway": "./src/CloudflareAiGateway.ts"
   },
   "publishConfig": {
     "access": "public"

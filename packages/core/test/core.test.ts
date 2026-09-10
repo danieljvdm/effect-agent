@@ -405,6 +405,16 @@ describe("core schemas", () => {
       _tag: "ToolCallFailed",
       toolCallId: "search-1",
     });
+    expect(Schema.encodeSync(RunEvent)(Schema.decodeSync(RunEvent)(event))).toEqual(event);
+    const diagnostic = { ...event, failureMode: "return", failureHandling: "propagated" } as const;
+
+    expect(Schema.encodeSync(RunEvent)(Schema.decodeSync(RunEvent)(diagnostic))).toEqual(
+      diagnostic,
+    );
+    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...event, failureMode: "retry" })).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({ ...event, failureHandling: "recoverable" }),
+    ).toThrow();
     expect(() =>
       Schema.decodeUnknownSync(RunEvent)({
         ...event,

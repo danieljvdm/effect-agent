@@ -1,5 +1,23 @@
 # @effect-agent/core
 
+## 0.1.0-beta.77
+
+### Patch Changes
+
+- [#423](https://github.com/danieljvdm/effect-agent/pull/423) [`84d6684`](https://github.com/danieljvdm/effect-agent/commit/84d66844e24e7fbdc5dc3f54a5d3a7a6127cdd99) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose native tool failure modes through `Agent.inspectTools` and distinguish propagated failures from returned results in tool events, spans, and logs. Clarify when declared tool failures end a run and when the model or programmatic caller receives them.
+
+## 0.1.0-beta.76
+
+### Patch Changes
+
+- [#419](https://github.com/danieljvdm/effect-agent/pull/419) [`3eef297`](https://github.com/danieljvdm/effect-agent/commit/3eef297d2343989a830d5d2b88e0b863b54c91fd) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow completion alongside terminal provider tool results during execution and recovery. Preserve hosted results when correcting mixed application completion calls, and keep provider work charged to run budgets.
+
+## 0.1.0-beta.75
+
+### Patch Changes
+
+- [#413](https://github.com/danieljvdm/effect-agent/pull/413) [`71afa3d`](https://github.com/danieljvdm/effect-agent/commit/71afa3d64f1cef889b46bea6a352d4e6f8446e32) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Distinguish durably retained worker input from storage failures with `WorkerError` reason `delivery-pending`. Treat this outcome as pending delivery, preserve the original idempotency key, and wait for a Receipt before reporting destination acceptance.
+
 ## 0.1.0-beta.74
 
 ### Patch Changes

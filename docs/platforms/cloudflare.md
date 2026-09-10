@@ -18,6 +18,81 @@ Also install `effect@4.0.0-rc.112`, `effect-cf@^0.40.0`, `@effect-agent/core@bet
 `@effect-agent/thread@beta`, and `@effect/ai-openai@4.0.0-rc.112` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
+## AI Gateway {#ai-gateway}
+
+The Node-safe `@effect-agent/platform-cloudflare/CloudflareAiGateway` subpath configures
+upstream Effect clients in Workers, Durable Objects, Node, or Bun. `Gateway.provide` supplies
+the client directly in a Layer pipeline; model selection, tools, response decoding, streaming,
+and typed provider errors stay with upstream Effect AI. Use the configured client for primary agents, subagents,
+compaction models, [WebSearch](../guide/tools#web-search), or embeddings supported by its provider.
+
+Two endpoint families have different credentials and model names:
+
+| Helper                                                           | Authentication                                             | Model names                                       |
+| ---------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------- |
+| `Gateway.rest({ accountId, gatewayId, apiToken, protocol })`     | Cloudflare API token with Workers AI Read permission       | Provider-qualified, such as `openai/gpt-4.1-mini` |
+| `Gateway.provider({ accountId, gatewayId, provider, apiToken })` | `cf-aig-authorization`; optionally a separate provider key | Native provider name, such as `gpt-4.1-mini`      |
+
+For provider-native routing with stored keys or Unified Billing, pass the upstream client's
+`layer` factory and your resolved gateway configuration:
+
+```ts twoslash
+import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Layer, Redacted } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const gateway = {
+  accountId: "your-account",
+  gatewayId: "your-gateway",
+  apiToken: Redacted.make("your-cloudflare-token"),
+};
+
+const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
+  Gateway.provide(OpenAiClient.layer, {
+    ...gateway,
+    provider: "openai",
+  }),
+  Layer.provide(FetchHttpClient.layer),
+);
+```
+
+Supply real credentials from your host configuration or secret store. For account REST routing,
+replace `provider` with `protocol: "responses"` and use a provider-qualified model name.
+`Gateway.provide` preserves client initialization errors and remaining dependencies, including
+`HttpClient`. The upstream Layers retain their normal resource lifetimes.
+
+For custom client options, pass a factory such as
+`Gateway.provide((options) => OpenAiClient.layer({ ...options, apiKey }), route)`.
+The lower-level `Gateway.provider` and `Gateway.rest` helpers return `apiUrl` and
+`transformClient` for direct client construction or raw HTTP requests.
+
+Omit the provider `apiKey` when the gateway supplies a stored key. Use `layer` here: provider `layerConfig`
+can load a provider API key from the environment when its `apiKey` option is omitted.
+An unauthenticated provider gateway can omit `apiToken` when sending its own provider key.
+
+`rest` selects `protocol: "responses"` for `OpenAiClient`, `"messages"` for `AnthropicClient`,
+or `"chat-completions"` for a compatible client. It sends `cf-aig-gateway-id` and sets the
+correct base path, including Anthropic's separately appended `/v1`. This uses Cloudflare's
+[account REST API](https://developers.cloudflare.com/ai-gateway/usage/rest-api/).
+The native `provider` helper also accepts other provider path names, including `google-ai-studio`,
+`google-vertex-ai`, `perplexity-ai`, and `parallel`. Supply the provider's matching upstream
+client or Effect HttpClient request format; additional provider path components belong after
+`apiUrl`. Routing does not translate request bodies or make unsupported models compatible.
+
+Cloudflare's [web search support](https://developers.cloudflare.com/ai-gateway/usage/web-search/)
+varies by provider. This repository exercises OpenAI and Anthropic hosted search through their
+pinned Effect clients. xAI uses Responses search; Alibaba requires its own chat request flag;
+Gemini requires native grounding; Perplexity and Parallel use provider-native APIs. Those can
+use the same Gateway transport but are not interchangeable native WebSearch backends here.
+
+Client configuration validates account, gateway, and provider path segments. Requests must stay
+inside that endpoint; Fetch redirects are disabled to prevent credential forwarding. Custom
+HTTP transports must also avoid following redirects internally. Gateway authorization is
+redacted in HTTP telemetry and returned request/error headers, and provider authentication is
+preserved. Gateway logging and caching follow gateway settings or headers supplied by the host;
+no automatic retries, fallback models, or cache overrides are added.
+
 ## Create the thread object
 
 Compose agent registrations and application services as a layer, then pass it to

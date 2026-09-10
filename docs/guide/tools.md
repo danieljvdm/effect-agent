@@ -210,8 +210,68 @@ declaration order. The model never sees a partial batch.
 
 ## Keep tool failures typed {#failure-remains-failure}
 
-The default `failureMode: "error"` keeps a declared tool failure in the Effect error channel. Use
-`failureMode: "return"` when the model should receive that declared failure as a tool result.
+The default `failureMode: "error"` keeps a declared tool failure in the Effect error channel and
+fails the run. Declaring a `failure` Schema does not opt into recovery. Choose `failureMode: "return"`
+when the model should receive the failure as a tool result and decide what to do next:
+
+```ts twoslash
+import { Agent } from "effect-agent";
+import { Effect, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
+
+class SearchUnavailable extends Schema.TaggedError<SearchUnavailable>()("SearchUnavailable", {
+  message: Schema.String,
+}) {}
+
+const Search = Tool.make("search", {
+  parameters: Schema.Struct({ query: Schema.String }),
+  success: Schema.Array(Schema.String),
+  failure: SearchUnavailable,
+  failureMode: "return",
+});
+const tools = Toolkit.make(Search);
+const ToolsLive = tools.toLayer({
+  search: () => Effect.fail(SearchUnavailable.make({ message: "Try another source." })),
+});
+const researcher = Agent.make("researcher", {
+  input: Schema.String,
+  output: Schema.String,
+  instructions: "Search, then answer. Try another source if search is unavailable.",
+  toolkit: tools,
+});
+
+Agent.inspectTools(researcher);
+// [{ name: "search", failureMode: "return", requiresHandler: true }]
+```
+
+`Agent.inspectTools` accepts a Definition or Binding and reads its registered native toolkit without
+starting a run or acquiring services. It includes tools outside the current exposure. Provider-executed
+tools have `requiresHandler: false`; their results do not pass through a local handler's failure mode.
+
+Inspect configuration and execution separately. A handler can catch its own errors, the programmatic
+broker can contain an error-channel failure, and Subagent containment has its own policy. A returned
+failure may still be followed by a run failure from a sibling, a repeated-failure limit, or another budget.
+
+| Failure boundary                              | Behavior                                                                                                       |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Declared handler error, `"error"`             | Propagates the original typed error and fails the model-declared call's run.                                   |
+| Declared handler error, `"return"`            | Encodes a failed tool result for the model; the loop may continue.                                             |
+| Handler defect or interruption                | Stays a defect or interruption under either mode.                                                              |
+| Invalid result encoding                       | Still fails even with `"return"`.                                                                              |
+| Invalid parameters, unknown or unexposed tool | Rejected before handler execution. Effect Agent's model/preflight validation remains strict under either mode. |
+
+`ToolCallFailed.failureMode` reports the native configuration when known. Its `failureHandling` reports
+the actual route: `propagated` or `returned-to-model`. Older events may omit these fields; absence means
+unknown. `returned-to-model` records the result path; delivery still requires the complete batch to
+commit and another model call. A failure event terminates that call, not necessarily the run. Use the
+run's terminal event and Effect exit to determine the overall outcome.
+
+Application tool spans and terminal logs carry `effect_agent.tool.failure_mode` and, on failure,
+`effect_agent.tool.failure_handling`. Programmatic calls use `returned-to-caller` when the broker
+returns a failure outcome, including a captured error-channel failure. A propagated defect is still
+`propagated`. These attributes contain no error payloads. Interruption alone emits no terminal tool
+failure log or failure-handling classification. Returned failures can also be reported through the
+[recovered tool failure observer](./run-agents#observe-recovered-tool-failures).
 
 Represent an expected empty result as success with `Option.none` or an empty collection.
 
@@ -248,7 +308,10 @@ a tool call.
 
 ## Authorize tool calls
 
-Use `RunToolAuthorization` to decide whether a model-declared application tool call may execute.
+Use `RunToolAuthorization` to decide whether a native or programmatic application tool call may execute.
+Code Mode invokes the same policy for each inner call before reserving its budget or starting its
+handler. The request includes `programmatic.parentToolCallId` and `programmatic.sequenceIndex`;
+allowing the outer execution Tool does not grant permission to its inner Tools.
 This policy permits only the `search` tool:
 
 ```ts twoslash
@@ -287,9 +350,10 @@ Omitting both the service and per-run hook allows calls without this additional 
 protected resources. Authenticate callers and authorize runtime operations as described in
 [operations](./operations#authorization-and-isolation).
 
-This hook does not authorize provider-executed calls or [Code Mode](./code-mode)'s inner programmatic calls.
-The Code Mode broker restricts inner calls to its allowlisted toolkit; enforce resource access
-inside those handlers.
+This hook does not authorize provider-executed calls. A denied [Code Mode](./code-mode) inner call
+returns a catchable `ProgrammaticToolAuthorizationDenied` outcome without consuming execution budget;
+other independent calls may already have completed. The broker also restricts calls to the eligible
+allowlist. Keep resource access checks inside handlers as appropriate for the application.
 
 ## Handle uncertain external effects {#durability}
 
@@ -354,6 +418,65 @@ and keep local server commands under application control.
 `Subagent.make` exposes a child agent as a tool with explicit input and result projections.
 The [Subagents guide](./subagents) covers definition, model binding, budgets, authority, failure
 handling, and durable child recovery.
+
+## Search the web {#web-search}
+
+`WebSearch.tool` is an ordinary Effect AI tool with a stable `{ query }` input and a result
+containing `text`, `sources`, and search-model token `usage`. Its handler uses a separately
+supplied LanguageModel and a native hosted search tool. The calling agent can use a different
+model or provider. Include `WebSearch.tool` in its toolkit, then provide this handler Layer:
+
+```ts twoslash
+import * as WebSearch from "effect-agent/WebSearch";
+import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
+import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
+import { Layer, Redacted } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const gateway = {
+  accountId: "your-account",
+  gatewayId: "your-gateway",
+  apiToken: Redacted.make("your-cloudflare-token"),
+};
+
+const SearchLive = WebSearch.layer({
+  tool: OpenAiTool.WebSearch({ search_context_size: "medium" }),
+  timeoutMillis: 30_000,
+  maxOutputBytes: 32 * 1024,
+}).pipe(
+  Layer.provide(
+    OpenAiLanguageModel.model("openai/gpt-4.1-mini", {
+      max_output_tokens: 2_048,
+      store: false,
+    }),
+  ),
+  Gateway.provide(OpenAiClient.layer, { ...gateway, protocol: "responses" }),
+  Layer.provide(FetchHttpClient.layer),
+);
+```
+
+Load real gateway credentials from your host configuration or secret store. For Anthropic,
+select `AnthropicTool.WebSearch_20250305({ maxUses: 3 })`, provide an `AnthropicLanguageModel`
+Layer, and use `Gateway.provide(AnthropicClient.layer, { ...gateway, provider: "anthropic" })`.
+Direct provider clients work too. See the [Cloudflare guide](../platforms/cloudflare#ai-gateway)
+for gateway configuration.
+
+Each invocation makes one model request, without handler retries. The host fixes the backend,
+native search options, deadline (1–300,000 ms), and encoded result limit (1–1,048,576 bytes).
+Queries are bounded to 8,192 characters and results to 64 source citations. A missing completed
+search, provider error, invalid result, or exceeded limit returns `WebSearchFailure`. Defects
+and interruption propagate; timeout interrupts the in-flight request. Search results and source
+URLs remain untrusted, and a citation grants no permission to fetch it. No provider payload or
+credential is included in the tool result. Model-call telemetry remains upstream Effect AI's;
+the wrapper adds the `WebSearch.search` span without logging queries or responses itself.
+
+Search is separately billed. Returned token counts use `null` when unavailable and are **not**
+added to the parent Run's model usage or spending limit. Configure provider output limits and
+host billing controls. For search within the primary model call and its normal Run accounting,
+include the native `OpenAiTool.WebSearch` or `AnthropicTool.WebSearch_20250305` directly in the
+agent's toolkit instead. Both work with [Gateway client configuration](../platforms/cloudflare#ai-gateway).
+The ordinary WebSearch tool remains uncertain for recovery: an unresolved call is not replayed
+automatically after ownership loss.
 
 ## Browse web pages
 

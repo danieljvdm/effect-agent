@@ -50,3 +50,4 @@ export * as ContextWindow from "./ContextWindow.ts";
 export * as ContextHistory from "./ContextHistory.ts";
 export * as ContextTools from "./ContextTools.ts";
 export * as MemoryNotes from "./MemoryNotes.ts";
+export * as WebSearch from "./WebSearch.ts";

@@ -429,6 +429,14 @@ input. `Subagent.followUp` submits more declared parameters to that same Thread.
 Effects; acceptance does not wait for the child to finish. Programmatic calls require an
 explicit, stable `IdempotencyKey`. A model tool derives its key from its actual invocation.
 
+If another delivery attempt owns the claim, `start` and `followUp` can fail with
+`WorkerError` reason `delivery-pending`. This confirms that the exact input is durably retained;
+it does not confirm destination acceptance or that the child started. The host's existing
+delivery recovery owns progress. Preserve the same parameters and idempotency key when
+reconciling instead of launching replacement work. Conclusive refusal retains its specific
+reason, while a recorded retry failure or a storage exception still reports `storage`.
+These operations add no waiting or polling for a competing claim.
+
 ```ts
 const Research = Subagent.make("research", { target: researcher });
 const tools = Subagent.background(Research, {

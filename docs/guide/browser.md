@@ -220,7 +220,8 @@ Use `BrowserTools` as the agent's toolkit and provide `browserToolsLive(credenti
 it. Use `WebCapture.makeScrape` for grouped selector results or `WebCapture.makeExtract` for
 Schema-validated extraction. Extraction also needs the adapter's explicit Workers AI authorization
 and accounting policy. Capture Tools have uncertain external outcomes because page rendering can
-execute JavaScript; they are not eligible for Code Mode's read-only allowlist.
+execute JavaScript. Code Mode can expose them through its authorized Tool allowlist; their resource
+policies still apply.
 
 `CloudflareBrowserRest.layer` accepts the same optional `workersAi` policy as the Worker
 constructor. It preserves schema decoding requirements and leaves `HttpClient` injectable.
@@ -507,8 +508,9 @@ completion, suspension, failure, or interruption. A replacement Attempt builds f
 Keep fallible browser acquisition in `session.get`, not Layer construction. No additional browser
 Durable Object or persisted browser-session record is needed.
 
-Credential Tools are ordinary effectful Tools. Do not mark them readonly/idempotent or expose them
-through the read-only Code Mode bridge. The existing prepared/settled journal governs recovery:
+Credential Tools are ordinary effectful Tools. Do not mark them readonly or idempotent. Host
+resource authorization still applies to brokered calls. The existing prepared/settled journal
+governs recovery; Code Mode treats the entire generated program as uncertain:
 an unresolved mutation is never automatically replayed after ownership loss. Old refs fail in a
 replacement Attempt; the application/operator must reconcile an uncertain external outcome.
 

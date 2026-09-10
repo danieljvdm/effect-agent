@@ -80,7 +80,11 @@ export const WorkerHistoryEntry = Schema.Struct({
 
 export type WorkerHistoryEntry = typeof WorkerHistoryEntry.Type;
 
-/** Closed host-boundary failures. Infrastructure diagnostics remain in host telemetry. */
+/**
+ * Closed host-boundary failures. Infrastructure diagnostics remain in host telemetry.
+ * `delivery-pending` confirms retained input, not destination acceptance or execution.
+ * Keep the same idempotency key and parameters when reconciling; never launch a replacement.
+ */
 export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError", {
   operation: Schema.Literals([
     "context",
@@ -100,6 +104,7 @@ export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError"
     "idempotency-conflict",
     "capacity",
     "not-found",
+    "delivery-pending",
     "storage",
     "corrupt",
     "unavailable",

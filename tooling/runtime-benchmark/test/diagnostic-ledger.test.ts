@@ -23,6 +23,7 @@ const services = DiagnosticLedgerSeeds.layer.pipe(
 const silent = DiagnosticProgress.of({ phase: () => Effect.void, mark: () => Effect.void });
 
 it("retries after a committed seed failure, measures all public workloads, and reuses only the closed successful seed", async () => {
+  // The timeout covers both real SQLite seeds and every workload, including setup.
   await Effect.runPromise(
     Effect.gen(function* () {
       let committed = false;
@@ -103,9 +104,9 @@ it("retries after a committed seed failure, measures all public workloads, and r
       );
 
       expect(second.metrics.find(({ name }) => name === "seedSetup")?.value).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(services), Effect.timeout("100 seconds")),
+    }).pipe(Effect.scoped, Effect.provide(services), Effect.timeout("5 minutes")),
   );
-}, 110_000);
+}, 310_000);
 
 it("rejects modified inventory without creating a seed", async () => {
   const result = await Effect.runPromiseExit(

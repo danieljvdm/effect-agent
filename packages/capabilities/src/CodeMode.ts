@@ -2,13 +2,13 @@ import {
   AdditionalToolCatalog,
   IncludesCatalogDocumentation,
 } from "@effect-agent/core/ToolExposure";
-import { getToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import {
   type ToolBrokerConfigurationError,
   type ToolBrokerUnavailableError,
   ToolBroker,
   type ProgrammaticCallOutcome,
   type ToolBrokerPass,
+  ProgrammaticCallRecord,
 } from "@effect-agent/engine/ToolBroker";
 import { CurrentToolCatalog } from "@effect-agent/engine/ToolExposure";
 import {
@@ -24,7 +24,17 @@ import {
   type CodeHostCallResult,
 } from "@effect-agent/sandbox/CodeExecutor";
 import { NetworkDisabled } from "@effect-agent/sandbox/Sandbox";
-import { type Layer, Context, Duration, Effect, Option, Schema, type Scope } from "effect";
+import {
+  type Layer,
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Schema,
+  type Scope,
+} from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { utf8ByteLength } from "./internal/utf8.ts";
@@ -46,6 +56,14 @@ const BoundedErrorTag = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const BoundedLogLine = Schema.String.check(Schema.isMaxLength(16 * 1024));
 const BoundedLogs = Schema.Array(BoundedLogLine).check(Schema.isMaxLength(4_096));
 const BoundedCode = Schema.NonEmptyString.check(Schema.isMaxLength(512 * 1024));
+
+/** A pass-local report, available to the host even when the caller interrupts execution. */
+export const CodeModePassReport = Schema.Struct({
+  status: Schema.Literals(["completed", "failed", "interrupted", "defect"]),
+  calls: Schema.Array(ProgrammaticCallRecord),
+});
+
+export type CodeModePassReport = typeof CodeModePassReport.Type;
 
 const encodedJsonByteLength = (value: unknown): number | undefined => {
   try {
@@ -85,6 +103,9 @@ export class CodeModeFailure extends Schema.TaggedError<CodeModeFailure>()("Code
   message: BoundedFailureText,
   logs: BoundedLogs,
   thrown: Schema.optionalKey(Schema.Json),
+  /** Invocation-ordered evidence that fits the egress budget. This is not a replay plan. */
+  calls: Schema.optionalKey(Schema.Array(ProgrammaticCallRecord)),
+  omittedCalls: Schema.optionalKey(Schema.Natural),
 }) {}
 
 /** A selective documentation request is invalid or cannot fit its declared byte budget. */
@@ -170,8 +191,7 @@ export interface CodeModeOptions<
   readonly includeDeclarations?: boolean | undefined;
   /**
    * Explicit allowlist: namespace name → method name → native Effect AI
-   * Tool. Every Tool must be annotated `readonly` (`ToolExecutionClass`) and
-   * must not require approval; construction fails closed otherwise.
+   * Tool. Reads and mutations are allowed; calls requiring additional approval fail closed.
    */
   readonly tools: Namespaces;
   /** Executor limits for one pass; a bounded default applies when omitted. */
@@ -181,6 +201,14 @@ export interface CodeModeOptions<
    * result, captured logs, and any thrown value (CAP-016). Default 65536.
    */
   readonly maxEgressBytes?: number | undefined;
+  /**
+   * Host-only ephemeral report after executor resources and invocation fibers close, including
+   * failure, defect, and interruption. It contains no arguments/results and is never a checkpoint.
+   * Keep this total callback bounded; its services are captured with the handler Layer.
+   */
+  readonly onPassExit?:
+    | ((report: CodeModePassReport) => Effect.Effect<void, never, RedactionRequirements>)
+    | undefined;
   /**
    * Optional aggregate redaction pass applied to the model-visible egress
    * before the byte budget. Its services are acquired with the handler Layer;
@@ -572,13 +600,6 @@ const make = <
           `Code Mode method ${namespace}.${method} is not a valid JavaScript identifier`,
         );
       }
-      const executionClass = getToolExecutionClass(tool);
-
-      if (executionClass !== "readonly") {
-        throw new Error(
-          `Code Mode rejects Tool ${tool.name} (${namespace}.${method}): its execution class is ${executionClass}; the first slice accepts only Tools annotated readonly (an unannotated Tool reads as uncertain)`,
-        );
-      }
       const approval = tool.needsApproval;
 
       if (approval !== undefined && approval !== false) {
@@ -674,7 +695,7 @@ const make = <
     options.description,
     "",
     "The `code` argument must be one JavaScript async function expression; the sandbox invokes it exactly once with no arguments. It runs isolated with no ambient network, filesystem, environment, or secrets. Return one JSON value. `console.log` output is captured within a bounded budget and returned alongside the result.",
-    "Namespace methods return Promises. An expected Tool failure rejects with a JSON envelope carrying a stable `_tag`; catch it to branch. Calls are strictly sequential — issue one host call at a time.",
+    "Namespace methods return Promises. An expected Tool failure rejects with a JSON envelope carrying a stable `_tag`; catch it to branch. Use Promise.all for independent calls; the host bounds concurrency. Await every call you need. Writes may complete before a failure: inspect call outcomes and never blindly retry a program.",
     ...(options.includeDeclarations === false
       ? []
       : ["", "Sandbox globals:", "```ts", declarations, "```"]),
@@ -687,8 +708,8 @@ const make = <
     failure: CodeModeFailure,
     failureMode: "return",
   })
-    .annotate(Tool.Readonly, true)
-    .annotate(ToolExecutionClassAnnotation, "readonly")
+    .annotate(Tool.Readonly, false)
+    .annotate(ToolExecutionClassAnnotation, "uncertain")
     .annotate(IncludesCatalogDocumentation, options.includeDeclarations !== false)
     .annotate(
       AdditionalToolCatalog,
@@ -911,18 +932,41 @@ const make = <
                 : [CodeExecutionNamespace.make({ name: namespace.name, methods: allowed })];
             });
 
+      let calls: ReadonlyArray<ProgrammaticCallRecord> = [];
+
       const execution = Effect.gen(function* () {
         const pass = yield* broker.openPass(withHandler, {
           maxResultBytes: limits.maxHostCallResultBytes,
+          concurrency: limits.maxHostCallConcurrency ?? 4,
         });
 
         const host = CodeExecutionHost.of({
           call: (hostCall) => routeHostCall(pass, hostCall, visiblePaths),
         });
 
-        return yield* executor
-          .execute(executionRequest(parameters.code, visibleNamespaces))
-          .pipe(Effect.provideService(CodeExecutionHost, host));
+        return yield* executor.execute(executionRequest(parameters.code, visibleNamespaces)).pipe(
+          Effect.provideService(CodeExecutionHost, host),
+          Effect.scoped,
+          Effect.onExit((exit) =>
+            Effect.gen(function* () {
+              calls = yield* pass.snapshot;
+              if (options.onPassExit !== undefined) {
+                yield* Effect.scoped(
+                  options.onPassExit({
+                    status: Exit.isSuccess(exit)
+                      ? "completed"
+                      : Cause.hasInterrupts(exit.cause)
+                        ? "interrupted"
+                        : Cause.hasDies(exit.cause)
+                          ? "defect"
+                          : "failed",
+                    calls,
+                  }),
+                ).pipe(Effect.provideContext(redactionServices));
+              }
+            }),
+          ),
+        );
       }).pipe(
         Effect.scoped,
         // The live engine broker is re-provided innermost so a Layer built
@@ -940,13 +984,50 @@ const make = <
         CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError
       >;
 
-      const result = yield* execution.pipe(
-        Effect.catch((error) =>
-          failureEgress(error).pipe(Effect.flatMap((failure) => Effect.fail(failure))),
-        ),
-      );
+      return yield* execution.pipe(
+        Effect.catch((error) => failureEgress(error).pipe(Effect.flatMap(Effect.fail))),
+        Effect.flatMap(successEgress),
+        Effect.mapError((failure) => {
+          if (calls.length === 0) return failure;
 
-      return yield* successEgress(result);
+          const complete = CodeModeFailure.make({
+            errorTag: failure.errorTag,
+            message: failure.message,
+            logs: failure.logs,
+            ...(failure.thrown === undefined ? {} : { thrown: failure.thrown }),
+            calls,
+            omittedCalls: 0,
+          });
+
+          if ((encodedJsonByteLength(complete) ?? Infinity) <= maxEgressBytes) return complete;
+
+          // Evidence takes priority over logs and thrown values. Never silently omit calls.
+          const base = {
+            errorTag: failure.errorTag,
+            message: truncateToUtf8Bytes(failure.message, Math.min(256, maxEgressBytes / 4)),
+            logs: [],
+          };
+
+          const kept: Array<ProgrammaticCallRecord> = [];
+
+          for (const call of calls) {
+            const candidate = CodeModeFailure.make({
+              ...base,
+              calls: [...kept, call],
+              omittedCalls: calls.length - kept.length - 1,
+            });
+
+            if ((encodedJsonByteLength(candidate) ?? Infinity) > maxEgressBytes) break;
+            kept.push(call);
+          }
+
+          return CodeModeFailure.make({
+            ...base,
+            calls: kept,
+            omittedCalls: calls.length - kept.length,
+          });
+        }),
+      );
     });
 
     return { [name]: invoke } as unknown as Toolkit.HandlersFrom<CodeModeTools<Name>>;
