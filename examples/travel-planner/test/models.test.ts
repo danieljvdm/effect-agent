@@ -813,10 +813,12 @@ it.effect(
       ]);
       expect(lookedUp).toEqual([alice, alice, alice, bob]);
     }).pipe(
-      Effect.provide(ProgressStore.layer),
       Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromEnvRecord({ OPENAI_API_KEY: "sk-must-never-use-host-key" }),
+        Layer.mergeAll(
+          ProgressStore.layer,
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ OPENAI_API_KEY: "sk-must-never-use-host-key" }),
+          ),
         ),
       ),
     ),
