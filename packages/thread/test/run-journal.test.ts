@@ -1,9 +1,15 @@
+import * as Agent from "@effect-agent/core/Agent";
 import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { Selection, Snapshot } from "@effect-agent/core/ToolExposure";
 import { summarizeModelUsage } from "@effect-agent/core/Usage";
+import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { contextWindowId, contextWindowMessage } from "@effect-agent/engine/Compaction";
+import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
 import {
   BatchId,
+  CanonicalBatch,
   CanonicalRecordEnvelope,
   CanonicalSequence,
   DeploymentId,
@@ -11,7 +17,6 @@ import {
   ProducerId,
   RecordEnvelope,
   RecordId,
-  type CanonicalBatch,
 } from "@effect-agent/thread/Records";
 import {
   childThreadIdFor,
@@ -42,8 +47,8 @@ import {
 } from "@effect-agent/thread/RunJournal";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
-import { DateTime, Effect, Schema, Stream } from "effect";
-import { Prompt } from "effect/unstable/ai";
+import { DateTime, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { JournalCheckpointSeed } from "../src/internal/journal-checkpoint.ts";
 import { makeJournalMetadata } from "../src/internal/journal-metadata.ts";
@@ -200,6 +205,161 @@ const auditRecord = (
 
 describe("run journal batch split (plan §2.1)", () => {
   layer(NodeCrypto.layer)((it) => {
+    it.effect(
+      "journals native provider results after the engine freezes snapshot array prototypes",
+      () =>
+        Effect.gen(function* () {
+          const action = {
+            type: "search",
+            queries: ["Tahoe private hot tub"],
+            sources: [{ type: "url", url: "https://www.tahoegetaways.com/" }],
+          };
+
+          const actionSchema = Schema.Struct({
+            type: Schema.Literal("search"),
+            queries: Schema.Array(Schema.String),
+            sources: Schema.Array(
+              Schema.Struct({ type: Schema.Literal("url"), url: Schema.String }),
+            ),
+          });
+
+          const search = Tool.providerDefined({
+            id: "test.web_search",
+            customName: "HostedSearch",
+            providerName: "web_search",
+            parameters: Schema.Struct({ action: actionSchema }),
+            success: Schema.Struct({ action: actionSchema, status: Schema.String }),
+          })(undefined);
+
+          const definition = Agent.make("journal-provider-search", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Search once and answer as JSON.",
+            toolkit: Toolkit.make(search),
+            policy: { maxTurns: 1, maxToolCalls: 1, maxDuration: "30 seconds", toolConcurrency: 1 },
+          });
+
+          const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+            {
+              type: "tool-call",
+              id: "search-1",
+              name: "HostedSearch",
+              params: { action },
+              providerExecuted: true,
+            },
+            {
+              type: "tool-result",
+              id: "search-1",
+              name: "HostedSearch",
+              result: { action, status: "completed" },
+              providerExecuted: true,
+              isFailure: false,
+            },
+            { type: "text-start", id: "answer" },
+            { type: "text-delta", id: "answer", delta: '"Found a listing."' },
+            { type: "text-end", id: "answer" },
+            { type: "finish", reason: "stop", usage: { inputTokens: {}, outputTokens: {} } },
+          ];
+
+          const model = Model.make(
+            "scripted",
+            "journal-search",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: () => Stream.fromIterable(parts),
+              }),
+            ),
+          );
+
+          const retained = yield* Ref.make(Prompt.empty);
+
+          yield* AgentRuntime.run(Agent.withModel(definition, model), "Find a listing", {
+            onHistory: (history) => Ref.set(retained, history),
+          }).pipe(Effect.provide([IdGenerator.layer, ThreadHistory.layerTransient]));
+          const history = yield* Ref.get(retained);
+
+          const providerResult = history.content.flatMap((message) =>
+            message.role === "assistant"
+              ? message.content.filter((part) => part.type === "tool-result")
+              : [],
+          )[0];
+
+          if (providerResult === undefined)
+            return yield* Effect.die("Expected the staged provider result");
+
+          const frozen = Schema.decodeUnknownSync(
+            Schema.Struct({
+              action: Schema.Struct({ queries: Schema.Unknown, sources: Schema.Unknown }),
+            }),
+          )(providerResult.result);
+
+          for (const array of [frozen.action.queries, frozen.action.sources]) {
+            expect(Array.isArray(array)).toBe(true);
+            expect(Object.getPrototypeOf(array)).toBeNull();
+            expect(Object.isFrozen(array)).toBe(true);
+          }
+          const batch = yield* turnResponseBatch(turnInput(history.content));
+
+          const plainBatch = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(CanonicalBatch),
+          )(JSON.stringify(Schema.encodeSync(CanonicalBatch)(batch)));
+
+          expect(yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, batch)).toBe(
+            yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, plainBatch),
+          );
+          const projected = yield* projectRunJournal(envelopesOf([batch]), RUN_ID);
+          const encoded = Schema.encodeSync(Prompt.Prompt)(projected.prompt);
+
+          expect(JSON.stringify(encoded)).toContain("https://www.tahoegetaways.com/");
+          expect(JSON.stringify(encoded)).toContain("Tahoe private hot tub");
+          const replayed = yield* Ref.make(false);
+
+          const replayModel = Model.make(
+            "scripted",
+            "journal-search-replay",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (request) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const result = request.prompt.content.flatMap((message) =>
+                        message.role === "assistant"
+                          ? message.content.filter((part) => part.type === "tool-result")
+                          : [],
+                      )[0];
+
+                      expect(result).toMatchObject({
+                        providerExecuted: true,
+                        result: { action, status: "completed" },
+                      });
+                      yield* Ref.set(replayed, true);
+
+                      return Stream.fromIterable(
+                        parts.filter(
+                          (part) => part.type !== "tool-call" && part.type !== "tool-result",
+                        ),
+                      );
+                    }),
+                  ),
+              }),
+            ),
+          );
+
+          yield* AgentRuntime.run(
+            Agent.withModel(definition, replayModel),
+            "Use the previous search",
+            {
+              history: projected.prompt,
+            },
+          ).pipe(Effect.provide([IdGenerator.layer, ThreadHistory.layerTransient]));
+          expect(yield* Ref.get(replayed)).toBe(true);
+        }),
+    );
+
     it.effect("splits a tool Turn into response and results batches with stable identities", () =>
       Effect.gen(function* () {
         const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
