@@ -10,6 +10,7 @@ import { WorkerEnvironment } from "effect-cf";
 
 import { PlannerProgress, type ResearchScoutActivity } from "../domain.ts";
 import { plannerActivity } from "../server/activity.ts";
+import { RecordedDiagnostics } from "../server/diagnostics.ts";
 import { emptyProgress } from "../server/progress.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
 import { ScoutFindings, ScoutRequest } from "./contracts.ts";
@@ -90,6 +91,14 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
           Effect.orElseSucceed(() => emptyProgress),
         );
 
+        const diagnostics = yield* Effect.tryPromise({
+          try: () => env.THREADS.getByName(worker.threadId).plannerDiagnostics(),
+          catch: () => "unavailable" as const,
+        }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RecordedDiagnostics))),
+          Effect.orElseSucceed(() => []),
+        );
+
         const settled = history
           .toReversed()
           .find(({ record }) => record.payload._tag === "SubmissionSettled")?.record.payload;
@@ -124,7 +133,7 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
             findings?._tag === "Some"
               ? { ...progress, text: findings.value.summary }
               : progress,
-          activity: plannerActivity(history).slice(-40),
+          activity: plannerActivity(history, diagnostics).slice(-40),
         } satisfies ResearchScoutActivity;
       }).pipe(
         Effect.timeout("3 seconds"),

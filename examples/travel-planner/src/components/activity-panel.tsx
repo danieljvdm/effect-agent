@@ -69,7 +69,7 @@ export function ActivityEvents({ events }: { readonly events: readonly PlannerAc
               <details className="trace-detail" key={entry.label}>
                 <summary>
                   {entry.label}
-                  {entry.truncated && <span> · truncated at 16,384 characters</span>}
+                  {entry.truncated && <span> · bounded excerpt; some data was omitted</span>}
                 </summary>
                 <pre tabIndex={0}>{entry.text}</pre>
               </details>
@@ -100,8 +100,8 @@ export function ActivityPanel({
         </button>
       </div>
       <p>
-        Expand an event for inputs, results, and diagnostics. Times are UTC; T+ is time since the
-        run started.
+        Expand an event for inputs, results, error causes, and provider diagnostics. Times are UTC;
+        T+ is time since the run started.
       </p>
       <dl className="trace-overview">
         <div>
@@ -143,7 +143,8 @@ export function ActivityPanel({
       {!!snapshot?.activity.length && (
         <p>
           Showing the latest {snapshot.activity.length} events in this conversation. Credentials and
-          private provider reasoning are excluded.
+          private provider reasoning are excluded. Failure diagnostics are retained across reloads;
+          older failures may predate detailed recording.
         </p>
       )}
     </aside>

@@ -1,6 +1,7 @@
 import { Clock, Context, Effect, Exit, Layer, Option, Ref } from "effect";
 
 import { type PlannerProgress, type PlannerSettings, type PlannerError } from "../domain.ts";
+import { recordDiagnostic } from "./diagnostics.ts";
 
 export const emptyProgress: PlannerProgress = {
   submissionId: null,
@@ -117,7 +118,9 @@ export const withToolProgress = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   writer.tool(id, label, "running").pipe(
-    Effect.andThen(effect),
+    Effect.andThen(
+      effect.pipe(Effect.tapCause((cause) => recordDiagnostic(label, cause, { toolCallId: id }))),
+    ),
     Effect.onExit((exit) => writer.tool(id, label, Exit.isSuccess(exit) ? "complete" : "failed")),
   );
 

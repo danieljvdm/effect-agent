@@ -22,6 +22,7 @@ import {
   ReadTravelPageParameters,
   ReadTravelPageResult,
 } from "../src/research.ts";
+import { FailureDiagnostics, type FailureDiagnostic } from "../src/server/diagnostics.ts";
 
 const implementation = SandboxImplementation.make({
   isolation: "isolated",
@@ -330,3 +331,65 @@ it("keeps native tool schemas and the capture dependency explicit", () => {
   });
   expect(Schema.is(ReadTravelPageParameters)({ url: parameters.url })).toBe(false);
 });
+
+it.effect(
+  "retains browser request and provider causes separately from the model's bounded failure",
+  () =>
+    Effect.gen(function* () {
+      const captured = yield* Ref.make<FailureDiagnostic[]>([]);
+
+      const diagnostics = Layer.succeed(FailureDiagnostics, {
+        append: (value) => Ref.update(captured, (values) => [...values, value]),
+        list: Effect.succeed([]),
+      });
+
+      const input = { url: "https://www.airbnb.com/rooms/123", focus: "bedrooms" };
+
+      const outcome = yield* read(input).pipe(
+        provideCapture(() =>
+          Effect.fail(
+            PageCaptureNavigationError.make({
+              implementation,
+              message: "The Quick Action answered HTTP 403",
+              cause: new Error(
+                '{"errors":[{"code":1003,"message":"Access denied"}],"apiKey":"PRIVATE"}',
+                {
+                  cause: {
+                    httpStatus: 403,
+                    httpStatusSource: "browser-api",
+                    headers: { "cf-ray": "ray-123", cookie: "PRIVATE" },
+                  },
+                },
+              ),
+            }),
+          ),
+        ),
+        Effect.provide(diagnostics),
+      );
+
+      expect(outcome).toMatchObject({
+        isFailure: true,
+        result: { errorTag: "PageCaptureNavigationError" },
+      });
+      const saved = yield* Ref.get(captured);
+
+      expect(saved).toHaveLength(1);
+      expect(saved[0]?.text).toContain(input.url);
+      expect(saved[0]?.text).toContain("Access denied");
+      expect(saved[0]?.text).toContain("ray-123");
+      expect(saved[0]?.text).toContain("browser-api");
+      expect(saved[0]?.text).not.toContain("PRIVATE");
+      expect(JSON.stringify(outcome)).not.toContain("ray-123");
+      for (const [markdown, category] of [
+        ["", "empty-page"],
+        ["# Page not found", "page-not-found"],
+        ["# Verify you are human", "access-challenge"],
+      ]) {
+        yield* read(input).pipe(
+          provideCapture(() => Effect.succeed(page(markdown))),
+          Effect.provide(diagnostics),
+        );
+        expect((yield* Ref.get(captured)).at(-1)?.operation).toBe(`read_travel_page: ${category}`);
+      }
+    }),
+);

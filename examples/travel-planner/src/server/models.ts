@@ -4,6 +4,7 @@ import { AiError, LanguageModel, Model } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { PlannerError, type PlannerSettings } from "../domain.ts";
+import { recordDiagnostic } from "./diagnostics.ts";
 import { PlannerAttempt, type ProgressWriter } from "./progress.ts";
 import { responseTextPreview } from "./response-stream.ts";
 
@@ -44,12 +45,37 @@ export const observeOpenAi = (
 
       return writer.newResponse.pipe(
         Effect.andThen(client.createResponseStream(request)),
+        Effect.tapCause((cause) =>
+          recordDiagnostic("OpenAI: response request failed", {
+            request: {
+              model: request.model,
+              reasoning: request.reasoning,
+              serviceTier: request.service_tier,
+              maxOutputTokens: request.max_output_tokens,
+              maxToolCalls: request.max_tool_calls,
+            },
+            cause,
+          }),
+        ),
         Effect.map(
           ([response, events]) =>
             [
               response,
               events.pipe(
+                Stream.tapCause((cause) =>
+                  recordDiagnostic("OpenAI: response stream failed", {
+                    model: request.model,
+                    response: { status: response.status, headers: response.headers },
+                    cause,
+                  }),
+                ),
                 Stream.tap((event) => {
+                  if (
+                    event.type === "error" ||
+                    event.type === "response.failed" ||
+                    event.type === "response.incomplete"
+                  )
+                    return recordDiagnostic(`OpenAI: ${event.type}`, event);
                   const decoded = Schema.decodeUnknownOption(PublicProviderEvent)(event);
 
                   if (decoded._tag === "None") return Effect.void;
@@ -81,7 +107,7 @@ export const observeOpenAi = (
                       return Effect.void;
                     }
 
-                    return writer.tool(
+                    const progress = writer.tool(
                       visible.item.id,
                       "Searching the web",
                       visible.type === "response.output_item.added"
@@ -92,6 +118,13 @@ export const observeOpenAi = (
                             ? "failed"
                             : "incomplete",
                     );
+
+                    return visible.type === "response.output_item.done" &&
+                      visible.item.status !== "completed"
+                      ? recordDiagnostic(`OpenAI web search: ${visible.item.status}`, event, {
+                          toolCallId: visible.item.id,
+                        }).pipe(Effect.andThen(progress))
+                      : progress;
                   }
 
                   return Effect.void;

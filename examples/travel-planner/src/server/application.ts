@@ -28,6 +28,7 @@ import { editorSnapshot } from "../trip-app/editor-state.ts";
 import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
 import { completedAnswer, legacyTripMessages, type Messages } from "./conversation.ts";
+import { readDiagnostics } from "./diagnostics.ts";
 import { planner } from "./planner.ts";
 import { requestsPublication } from "./security.ts";
 import { ownerOfThread } from "./tenancy.ts";
@@ -377,7 +378,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     messages: visibleMessages,
     trips,
     conversations: yield* repository.listConversations,
-    activity: plannerActivity(source?.records ?? []),
+    activity: plannerActivity(source?.records ?? [], yield* readDiagnostics),
     pending: pending.length,
     pendingSubmissionIds: pending.map((submission) => submission.submissionId),
     queuedMessages,

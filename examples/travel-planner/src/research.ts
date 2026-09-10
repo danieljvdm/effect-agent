@@ -10,9 +10,10 @@ import {
   PageUrlTarget,
   type PageCaptureError,
 } from "@effect-agent/sandbox/PageCapture";
-import { Effect, Option, Schema } from "effect";
+import { Clock, Effect, Option, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import { recordDiagnostic } from "./server/diagnostics.ts";
 import { pageProgressLabel, trackTool } from "./server/progress.ts";
 import { TravelPhoto, safeTravelUrl } from "./travel-content.ts";
 
@@ -216,14 +217,47 @@ const excerptsFor = (markdown: string, focus: string) => {
 
 const inspect = Effect.fn("TravelResearch.inspect")(function* (
   parameters: typeof ReadTravelPageParameters.Type,
+  toolCallId?: string,
 ) {
+  const started = yield* Clock.currentTimeMillis;
+
+  const report = (category: string, data: unknown) =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      recordDiagnostic(
+        `read_travel_page: ${category}`,
+        {
+          category,
+          request: parameters,
+          browser: {
+            provider: "cloudflare-browser-run",
+            action: "markdown",
+            engine: "chromium",
+            waitUntil: "networkidle2",
+            navigationTimeoutMs: 20_000,
+            overallTimeoutMs: 25_000,
+            maxOutputBytes: 512 * 1_024,
+          },
+          diagnostic: data,
+        },
+        {
+          ...(toolCallId === undefined ? {} : { toolCallId }),
+          durationMs: Math.max(0, now - started),
+        },
+      ),
+    );
+
   const decoded = decodeUrl(parameters.url);
 
-  if (Option.isNone(decoded))
+  if (Option.isNone(decoded)) {
+    yield* report("url-policy", {
+      reason: "The URL is outside the public HTTPS policy; no browser request was sent.",
+    });
+
     return yield* failure(
       "WebCaptureUrlDenied",
       "Use a public HTTPS website without an IP address, local hostname, credentials, or custom port.",
     );
+  }
   const url = decoded.value.href;
 
   if (url.length > 2_048)
@@ -245,12 +279,17 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
       }),
     )
     .pipe(
+      Effect.tapCause((cause) => report("browser-failure", cause)),
       Effect.mapError(captureFailure),
       Effect.timeoutOrElse({
         duration: "25 seconds",
         orElse: () =>
-          Effect.fail(
-            failure("WebCaptureTimeout", "Page inspection timed out. Try another source."),
+          report("timeout", { timeoutMs: 25_000 }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                failure("WebCaptureTimeout", "Page inspection timed out. Try another source."),
+              ),
+            ),
           ),
       }),
     );
@@ -259,11 +298,28 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
     return yield* failure("WebCaptureProtocolMismatch", "The browser did not return page text.");
   const markdown = result.output.markdown.trim();
 
-  if (markdown === "" || Schema.is(BlockedPage)(markdown.slice(0, 2_000)))
+  if (markdown === "" || Schema.is(BlockedPage)(markdown.slice(0, 2_000))) {
+    const category =
+      markdown === ""
+        ? "empty-page"
+        : /(?:page not found|404\s+not found)/i.test(markdown.slice(0, 2_000))
+          ? "page-not-found"
+          : "access-challenge";
+
+    yield* report(category, {
+      evidence: "rendered-page-text",
+      // A page's text is evidence of a challenge, not proof of its HTTP response status.
+      destinationHttpStatus: null,
+      pageText: markdown,
+      resourceUse: result.resourceUse,
+      implementation: result.implementation,
+    });
+
     return yield* failure(
       "WebCapturePageUnavailable",
-      "The page is empty, missing, or shows an access challenge. It was not inspected; use another source.",
+      `The page ${category === "empty-page" ? "returned no text" : category === "page-not-found" ? "shows a not-found message" : "shows an access challenge"}. It was not inspected; use another source.`,
     );
+  }
 
   const title = (markdown.split("\n").find((line) => /^#{1,2}\s/.test(line)) ?? "")
     .replace(/^#{1,2}\s+/, "")
@@ -315,7 +371,7 @@ export const ReadTravelPageLive = Toolkit.make(ReadTravelPage).toLayer(
         trackTool(
           context.toolCallId ?? "read_travel_page",
           pageProgressLabel(parameters.url),
-          inspect(parameters).pipe(Effect.provideService(PageCapture, capture)),
+          inspect(parameters, context.toolCallId).pipe(Effect.provideService(PageCapture, capture)),
         ),
     };
   }),

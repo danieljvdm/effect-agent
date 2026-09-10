@@ -49,6 +49,13 @@ import {
 import { AppToolsLive } from "../trip-app/tools-live.ts";
 import { AccessCommand, AccessReply, manageAccess } from "./access-admin.ts";
 import { PlannerModel, plannerSnapshot, sendMessage } from "./application.ts";
+import {
+  DiagnosticContext,
+  DiagnosticObserverLive,
+  FailureDiagnosticsLive,
+  readDiagnostics,
+  RecordedDiagnostics,
+} from "./diagnostics.ts";
 import { liveModel } from "./models.ts";
 import {
   planner,
@@ -252,6 +259,12 @@ export const plannerApplication = <E, R>(
           }),
         ),
       ),
+      Layer.provideMerge(
+        Layer.succeed(DiagnosticContext, {
+          submissionId: context.submissionId,
+          attemptId: context.attemptId,
+        }),
+      ),
     );
 
   const registered = DurableAgentRuntime.layerRegistered([
@@ -306,7 +319,15 @@ export const plannerApplication = <E, R>(
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(researchScout.toolkit.tools),
       }),
-      attemptLayer: scoutAttemptLayer,
+      attemptLayer: (context) =>
+        scoutAttemptLayer(context).pipe(
+          Layer.provideMerge(
+            Layer.succeed(DiagnosticContext, {
+              submissionId: context.submissionId,
+              attemptId: context.attemptId,
+            }),
+          ),
+        ),
     },
     {
       agent: appEditor,
@@ -316,7 +337,15 @@ export const plannerApplication = <E, R>(
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(appEditor.toolkit.tools),
       }),
-      attemptLayer: editorAttemptLayer,
+      attemptLayer: (context) =>
+        editorAttemptLayer(context).pipe(
+          Layer.provideMerge(
+            Layer.succeed(DiagnosticContext, {
+              submissionId: context.submissionId,
+              attemptId: context.attemptId,
+            }),
+          ),
+        ),
     },
     {
       agent: previousContinuingPlanner,
@@ -382,6 +411,7 @@ export const plannerApplication = <E, R>(
     Layer.provide(browser),
     Layer.provide(EditorHostLive),
     Layer.provide(ResearchAuthorizationLive),
+    Layer.provide(DiagnosticObserverLive),
   );
 
   // Acquire the owner's SQL once, then capture the repository in the registered tools.
@@ -390,6 +420,7 @@ export const plannerApplication = <E, R>(
     OwnerTripRepositoryLive,
     OwnerAppRepositoryLive,
     PlannerSettingsStoreLive,
+    FailureDiagnosticsLive,
     sourceLayer,
   ).pipe(Layer.provideMerge(ThreadObject.layer([])));
 
@@ -443,6 +474,15 @@ export const makeTravelPlannerThread = <E>(
       return this[DurableObject.RunSymbol](
         Effect.flatMap(ProgressStore, (progress) => progress.read).pipe(
           Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerProgress))),
+        ),
+      );
+    }
+
+    /** Private namespace RPC; callers verify worker lineage before reading its diagnostics. */
+    plannerDiagnostics(): Promise<string> {
+      return this[DurableObject.RunSymbol](
+        readDiagnostics.pipe(
+          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(RecordedDiagnostics))),
         ),
       );
     }

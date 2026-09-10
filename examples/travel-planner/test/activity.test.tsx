@@ -7,6 +7,7 @@ import { expect, it } from "vite-plus/test";
 import { ActivityPanel } from "../src/components/activity-panel.tsx";
 import { PlannerActivity, PlannerSnapshot } from "../src/domain.ts";
 import { plannerActivity } from "../src/server/activity.ts";
+import { diagnosticDetail } from "../src/server/diagnostics.ts";
 
 const prompt = (content: Prompt.AssistantMessage["content"]) =>
   Schema.encodeSync(Prompt.Prompt)(Prompt.make([Prompt.makeMessage("assistant", { content })]));
@@ -257,6 +258,53 @@ it("bounds details, excludes provider reasoning and credentials, and keeps legac
   expect(Schema.is(Schema.Array(PlannerActivity))(trace)).toBe(true);
 });
 
+it("does not attach diagnostics to a different run when a provider reuses tool call IDs", () => {
+  const source = records(
+    ["first", "second"].map(
+      (runId, index) =>
+        [
+          index * 1000,
+          {
+            _tag: "ToolCallSettled",
+            runId,
+            toolCallId: "reused",
+            toolName: "read_travel_page",
+            result: { message: "failed" },
+            isFailure: true,
+          },
+        ] as const,
+    ),
+  );
+
+  const trace = plannerActivity(source, [
+    {
+      id: 2,
+      version: 1,
+      timestamp: "1970-01-01T00:00:01.900Z",
+      operation: "ambiguous diagnostic",
+      toolCallId: "reused",
+      ...diagnosticDetail({ message: "Uncorrelated failure" }),
+    },
+    {
+      id: 1,
+      version: 1,
+      timestamp: "1970-01-01T00:00:00.900Z",
+      operation: "first diagnostic",
+      toolCallId: "reused",
+      runId: "first",
+      ...diagnosticDetail({ requestId: "req-first" }),
+    },
+  ]);
+
+  expect(trace.find((event) => event.runId === "first")?.details?.at(-1)?.text).toContain(
+    "req-first",
+  );
+  expect(JSON.stringify(trace.find((event) => event.runId === "second"))).not.toContain(
+    "req-first",
+  );
+  expect(trace.find((event) => event.text === "ambiguous diagnostic")?.id).toBe("diagnostic-2");
+});
+
 it("preserves timeout and interruption diagnostics without inventing model time after recovery", () => {
   const trace = plannerActivity(
     records([
@@ -326,4 +374,70 @@ it("renders expandable trace evidence as escaped text with timestamps and interv
   expect(html).toContain("&lt;script&gt;");
   expect(html).not.toContain("<script>");
   expect(html).toContain("<details");
+});
+
+it("exposes retained RunFailed data and joins browser diagnostics to the original tool call", () => {
+  const trace = plannerActivity(
+    records([
+      [0, runStart],
+      [
+        1000,
+        modelResponse([
+          Prompt.makePart("tool-call", {
+            id: "read",
+            name: "read_travel_page",
+            params: { url: "https://www.airbnb.com/rooms/123", focus: "bedrooms" },
+            providerExecuted: false,
+          }),
+        ]),
+      ],
+      [
+        2000,
+        {
+          _tag: "ToolCallSettled",
+          runId: "run",
+          toolCallId: "read",
+          toolName: "read_travel_page",
+          result: { errorTag: "PageCaptureNavigationError", message: "HTTP 403" },
+          isFailure: true,
+        },
+      ],
+      [
+        3000,
+        {
+          _tag: "RunFailed",
+          runId: "run",
+          failure: {
+            errorTag: "AgentPolicyError",
+            message: "Repeated tool failures",
+            reason: "repeated-tool-failures",
+            cause: { attempts: 3 },
+          },
+        },
+      ],
+    ]),
+    [
+      {
+        id: 1,
+        version: 1,
+        timestamp: "1970-01-01T00:00:01.900Z",
+        operation: "read_travel_page: browser-failure",
+        toolCallId: "read",
+        attemptId: "attempt",
+        ...diagnosticDetail({
+          httpStatus: 403,
+          requestId: "req-airbnb",
+          providerBody: "Access denied",
+        }),
+      },
+    ],
+  );
+
+  const read = trace.find((event) => event.text === "read_travel_page: failed");
+
+  expect(read?.details?.some((entry) => entry.text.includes("req-airbnb"))).toBe(true);
+  expect(trace.find((event) => event.text === "Run failed")?.details?.[0]?.text).toContain(
+    "repeated-tool-failures",
+  );
+  expect(Schema.is(Schema.Array(PlannerActivity))(trace)).toBe(true);
 });

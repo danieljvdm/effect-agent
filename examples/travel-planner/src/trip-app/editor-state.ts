@@ -10,6 +10,7 @@ import { WorkerEnvironment } from "effect-cf";
 
 import { type EditorActivity, PlannerProgress } from "../domain.ts";
 import { plannerActivity } from "../server/activity.ts";
+import { RecordedDiagnostics } from "../server/diagnostics.ts";
 import { emptyProgress } from "../server/progress.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
 import { AppEditor, EditorRequest } from "./editor.ts";
@@ -82,6 +83,14 @@ export const editorSnapshot = Effect.fn("editorSnapshot")(function* (
       Effect.orElseSucceed(() => emptyProgress),
     );
 
+    const diagnostics = yield* Effect.tryPromise({
+      try: () => env.THREADS.getByName(worker.threadId).plannerDiagnostics(),
+      catch: () => "unavailable" as const,
+    }).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RecordedDiagnostics))),
+      Effect.orElseSucceed(() => []),
+    );
+
     const settled = history
       .toReversed()
       .find(({ record }) => record.payload._tag === "SubmissionSettled")?.record.payload;
@@ -95,7 +104,7 @@ export const editorSnapshot = Effect.fn("editorSnapshot")(function* (
           ? "failed"
           : summary.state,
       progress,
-      activity: plannerActivity(history).slice(-40),
+      activity: plannerActivity(history, diagnostics).slice(-40),
     } satisfies EditorActivity;
   }).pipe(
     Effect.timeout("3 seconds"),

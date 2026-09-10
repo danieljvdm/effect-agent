@@ -4,11 +4,11 @@ import { DateTime, Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { PlannerInput, type PlannerActivity } from "../domain.ts";
-
-const redactText = (text: string) =>
-  text
-    .replace(/\bsk-[a-zA-Z0-9_-]{12,}/g, "[redacted]")
-    .replace(/\bBearer\s+[a-zA-Z0-9._~-]+/gi, "Bearer [redacted]");
+import {
+  diagnosticDetail,
+  redactDiagnosticText as redactText,
+  type RecordedDiagnostics,
+} from "./diagnostics.ts";
 
 type PendingDetail = { readonly label: string; readonly value: unknown };
 type PendingActivity = Omit<PlannerActivity, "details"> & { readonly details: PendingDetail[] };
@@ -16,35 +16,32 @@ const detail = (label: string, value: unknown): PendingDetail => ({ label, value
 const SearchResultStatus = Schema.Struct({ status: Schema.String });
 
 /** Serialize only retained events. Credentials and opaque provider state are not diagnostics. */
-const renderDetail = ({ label, value }: PendingDetail) => {
-  const text = redactText(
-    JSON.stringify(
-      value,
-      (key, field: unknown) =>
-        /^(headers|authorization|cookie|set-cookie|password|secret|.*api[_-]?key|access[_-]?token|token|encrypted[_-]?content)$/i.test(
-          key,
-        )
-          ? "[redacted]"
-          : field,
-      2,
-    ) ?? "null",
-  );
+const renderDetail = ({ label, value }: PendingDetail, failure: boolean) => ({
+  label,
+  ...diagnosticDetail(value, failure ? 65_536 : 16_384),
+});
 
-  return { label, text: text.slice(0, 16_384), truncated: text.length > 16_384 };
-};
-
-/** Rebuild from the selected conversation only; no new durable telemetry or provider payloads. */
+/** Combine canonical events and private diagnostics from the selected conversation only. */
 export const plannerActivity = (
   records: ReadonlyArray<{
     readonly record: ThreadExport["records"][number]["record"];
     readonly sequence: number;
   }>,
+  diagnostics: typeof RecordedDiagnostics.Type = [],
 ): PlannerActivity[] => {
   const activity: PendingActivity[] = [];
   const runs = new Map<string, number>();
   const boundaries = new Map<string, number>();
   const submissions = new Map<string, string>();
   const calls = new Map<string, { requestedAt: number; parameters: unknown }>();
+  const callEvents = new Map<string, Array<{ runId: string; eventId: string }>>();
+
+  const trackCall = (toolCallId: string, runId: string, eventId: string) => {
+    const candidates = callEvents.get(toolCallId) ?? [];
+
+    candidates.push({ runId, eventId });
+    callEvents.set(toolCallId, candidates);
+  };
 
   for (const { record } of records)
     if (record.payload._tag === "SubmissionSettled" && record.payload.runId !== undefined)
@@ -182,6 +179,8 @@ export const plannerActivity = (
           ],
         });
         for (const result of providerResults) {
+          trackCall(result.id, payload.runId, `${sequence}-${result.id}`);
+
           const search =
             result.name === "OpenAiWebSearch" || result.name === "OpenAiWebSearchPreview";
 
@@ -220,6 +219,8 @@ export const plannerActivity = (
       }
       case "ToolCallSettled": {
         const call = calls.get(`${payload.runId}:${payload.toolCallId}`);
+
+        trackCall(payload.toolCallId, payload.runId, base.id);
 
         activity.push({
           ...base,
@@ -304,6 +305,14 @@ export const plannerActivity = (
           ],
         });
         break;
+      case "RunFailed":
+        activity.push({
+          ...base,
+          kind: "failure",
+          text: "Run failed",
+          details: [detail("Failure", payload.failure), recordDetails],
+        });
+        break;
       case "SubmissionSettled": {
         const diagnostic = Schema.decodeUnknownOption(SettlementFailureDiagnostic)(payload.result);
 
@@ -338,8 +347,65 @@ export const plannerActivity = (
     }
   }
 
-  return activity.slice(-100).map((event) => ({
+  const events: PlannerActivity[] = activity.map((event) => ({
     ...event,
-    details: event.details.map(renderDetail),
+    details: event.details.map((entry) => renderDetail(entry, event.kind === "failure")),
   }));
+
+  for (const diagnostic of diagnostics.toReversed()) {
+    const runId =
+      diagnostic.runId ??
+      (diagnostic.submissionId === undefined
+        ? undefined
+        : submissions.get(diagnostic.submissionId));
+
+    const entry = {
+      label: `${diagnostic.operation.slice(0, 160)} · ${diagnostic.timestamp.slice(11, 23)}`,
+      text: diagnostic.text,
+      truncated: diagnostic.truncated,
+    };
+
+    const candidates =
+      diagnostic.toolCallId === undefined ? [] : (callEvents.get(diagnostic.toolCallId) ?? []);
+
+    const matches =
+      runId === undefined
+        ? candidates
+        : candidates.filter((candidate) => candidate.runId === runId);
+
+    // Providers can reuse call IDs in later runs. Leave ambiguous evidence standalone.
+    const eventId = matches.length === 1 ? matches[0]?.eventId : undefined;
+
+    const index = events.findIndex((event) => event.id === eventId);
+    const matched = events[index];
+
+    if (matched !== undefined && (matched.details?.length ?? 0) < 8) {
+      events[index] = { ...matched, details: [...(matched.details ?? []), entry] };
+    } else {
+      events.push({
+        id: `diagnostic-${diagnostic.id}`,
+        kind: "failure",
+        text: diagnostic.operation,
+        timestamp: diagnostic.timestamp,
+        ...(runId === undefined ? {} : { runId }),
+        ...(diagnostic.durationMs === undefined
+          ? {}
+          : { durationMs: diagnostic.durationMs, durationLabel: "Observed operation" }),
+        details: [
+          entry,
+          renderDetail(
+            detail("Diagnostic identity", {
+              submissionId: diagnostic.submissionId,
+              attemptId: diagnostic.attemptId,
+              toolCallId: diagnostic.toolCallId,
+              runId,
+            }),
+            true,
+          ),
+        ],
+      });
+    }
+  }
+
+  return events.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "")).slice(-100);
 };

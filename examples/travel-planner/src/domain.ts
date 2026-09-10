@@ -278,7 +278,7 @@ export const PlannerActivity = Schema.Struct({
     Schema.Array(
       Schema.Struct({
         label: ShortText,
-        text: Schema.String.check(Schema.isMaxLength(16_384)),
+        text: Schema.String.check(Schema.isMaxLength(65_536)),
         truncated: Schema.Boolean,
       }),
     ).check(Schema.isMaxLength(8)),

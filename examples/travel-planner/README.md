@@ -257,8 +257,8 @@ non-success statuses; the token is never forwarded to a redirect destination.
   Browser content and model prose cannot grant publication. The explicit UI action
   authorizes only the revision it displays. This example never books or buys travel.
 - The host's native web search finds real travel and lodging links. Cloudflare Browser
-  Run inspects approved listing and destination hosts, including Airbnb, Vrbo, Booking.com,
-  Wikivoyage, and selected direct property managers. It captures at most 512 KiB and returns
+  Run inspects public HTTPS listing and destination hosts, including Airbnb, Vrbo, Booking.com,
+  Wikivoyage, and direct property managers. There is no site allowlist. It captures at most 512 KiB and returns
   at most 12 KiB of focused excerpts and photo references. Up to four image references
   are extracted from the already captured page Markdown, with a 4 KiB metadata cap;
   this adds no browser requests and excludes obvious navigation/profile imagery.
@@ -276,10 +276,29 @@ non-success statuses; the token is never forwarded to a redirect destination.
   the provider reaches its per-response tool allowance; a tool-result event alone does not
   establish that the search succeeded. Canonical activity already persists in Durable Object
   storage, so debugging does not require a duplicate trace database.
-- Activity expands each canonical model turn, tool call, result, request settings, and failure diagnostic, with run/turn/call IDs and token usage. The latest 100 events are shown; individual detail sections are capped at 16,384 characters and marked when truncated. Credentials, raw provider errors, and private provider reasoning are excluded. UTC timestamps and T+ elapsed times come from the journal; recorded step intervals include orchestration and storage, rather than claiming model-only or handler-only latency. Live response and tool timers measure the current attempt and reset after restart. Estimated cost is shown
+- Activity expands each canonical model turn, tool call, result, request settings, `RunFailed` record,
+  and settlement diagnostic, with run/turn/call IDs and token usage. Browser and model failures also
+  record redacted original causes, stack traces, request URLs/options, available provider bodies,
+  HTTP status, request identifiers, and timeout/limit information. Browser API HTTP status is labeled
+  separately from destination-page evidence: challenge text alone does not establish an HTTP 403.
+  Empty pages, not-found text, access challenges, timeouts, and URL-policy rejections are distinguished.
+- Detailed failures are schema-versioned, append-only rows in each Thread Object's SQLite database;
+  they survive reloads, eviction, and model-context compaction. They are operator diagnostics, never
+  model prompt history or execution/recovery authority. Source-owned worker inspection guards scout
+  and editor reads; the planner's Access authentication still applies. No diagnostic data is published
+  into generated trip sites. Canonical tool results remain unchanged. The latest 100 diagnostic rows
+  are considered for each activity view; the view shows the latest 100 events (40 for workers).
+  Older diagnostic rows remain stored. Individual failure details retain up to 65,536 characters,
+  with bounded nesting/collections; ordinary details retain 16,384 characters. Limits are marked.
+  Credentials, cookies, signed URL secrets, and private provider reasoning are removed before storage.
+  Recording is best effort, capped at two seconds, and cannot change the original operation outcome;
+  if storage fails, redacted diagnostic data falls back to Worker logs. A crash can precede recording;
+  replacement attempts may record another observation. Already discarded historical detail cannot
+  be recovered. UTC timestamps and T+ elapsed times come from the journal; recorded step intervals
+  include orchestration and storage. Live response and tool timers reset after restart. Estimated cost is shown
   as unavailable until a pricing policy is configured; it is never presented as travel
   spend. Failed or stopped requests also appear in the conversation so a timeout never
-  silently drops a reply. The app does not log private request bodies or provider error responses.
+  silently drops a reply. The app does not log raw credentials or private provider reasoning.
 
 ## Editable trip apps
 

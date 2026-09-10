@@ -16,6 +16,7 @@ import {
   Trip,
   TripSiteStore,
 } from "../src/domain.ts";
+import { FailureDiagnostics, type FailureDiagnostic } from "../src/server/diagnostics.ts";
 import { liveModel, observeOpenAi, selectableModel } from "../src/server/models.ts";
 // Retain these protocol/legacy-publication regressions against the admitted v5 definition.
 import { previousResponsePlanner as planner } from "../src/server/planner.ts";
@@ -634,5 +635,53 @@ it.effect("streams only deliver-response message arguments through the real SDK 
     expect(frames.at(-1)).toBe('A "quiet" stay\nTahoe 🚀.');
     expect(JSON.stringify(frames)).not.toContain("SECRET");
     expect((yield* store.read).tools).toEqual([]);
+  }).pipe(Effect.provide(ProgressStore.layer)),
+);
+
+it.effect("records provider request failures with causes without changing the returned error", () =>
+  Effect.gen(function* () {
+    const store = yield* ProgressStore;
+    const writer = yield* store.begin("failed-request", "attempt");
+    const captured = yield* Ref.make<FailureDiagnostic[]>([]);
+
+    const fetch: typeof globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Provider unavailable",
+            type: "server_error",
+            code: "service_unavailable",
+          },
+        }),
+        {
+          status: 503,
+          headers: { "content-type": "application/json", "x-request-id": "req-provider-test" },
+        },
+      );
+
+    const client = yield* OpenAiClient.make({ apiKey: Redacted.make("sk-PRIVATE123456789") }).pipe(
+      Effect.provide(FetchHttpClient.layer),
+      Effect.provideService(FetchHttpClient.Fetch, fetch),
+    );
+
+    const result = yield* observeOpenAi(client, writer)
+      .createResponseStream({ model: "gpt-6-astra", input: [] })
+      .pipe(
+        Effect.exit,
+        Effect.provideService(FailureDiagnostics, {
+          append: (value) => Ref.update(captured, (values) => [...values, value]),
+          list: Effect.succeed([]),
+        }),
+      );
+
+    expect(result._tag).toBe("Failure");
+    const saved = yield* Ref.get(captured);
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.operation).toBe("OpenAI: response request failed");
+    expect(saved[0]?.text).toContain("Provider unavailable");
+    expect(saved[0]?.text).toContain("503");
+    expect(saved[0]?.text).toContain("req-provider-test");
+    expect(saved[0]?.text).not.toContain("PRIVATE123456789");
   }).pipe(Effect.provide(ProgressStore.layer)),
 );
