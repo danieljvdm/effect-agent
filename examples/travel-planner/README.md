@@ -46,6 +46,14 @@ the planner must read the saved state before retrying and stop saving if it cann
 The host allows three active workers across research and app editing, and retains at most
 32 workers per conversation. Existing conversations and app editors continue to work.
 
+For a request with several parts, the coordinator must complete or dispatch every part
+before its final reply. A request to build a site and find golf courses and surf breaks
+starts the editor and both research tasks; saving a draft or starting only the editor
+does not fulfill it. Optional questions do not block independent work. The coordinator
+has a cumulative 256,000-token run allowance, a separate 64,000-token context target,
+and visible run limits so an established conversation can still make several tool calls.
+Previously accepted runs and their worker references retain their registered definitions.
+
 Researched options appear as native stay, flight, restaurant/activity, and itinerary cards.
 Stay cards include source photos, a keyboard-accessible gallery, amenities, and listing links.
 Flight cards summarize the route; itinerary cards let you browse days and their activities.
@@ -284,8 +292,9 @@ output must include `dist/web/index.html` and `dist/server/index.js`, with at mo
 4 MiB per file, and 24 MiB total. R2 stores immutable objects and commits the validated
 manifest last. Failed builds retain the last working version and show bounded diagnostics.
 Retry reuses a valid completed build; an obsolete Workflow cannot activate over newer edits.
-Starting a build does not finish the user's other requests. The planner continues research
-and saves findings in the same run while the build proceeds, then delivers its final response.
+Starting a build does not finish the user's other requests. The planner completes or
+delegates the remaining research before replying. Scouts report findings automatically,
+and the planner saves useful results while the build proceeds.
 
 The compact app activity dock stays above the message input. Tap it for an animated dialog
 with editor text, tool progress, expandable trace details, recorded build stages, timestamps,

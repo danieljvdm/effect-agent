@@ -16,6 +16,7 @@ import {
 import { PreviousReadTravelPage, PreviousReadTravelPageResult } from "../src/research.ts";
 import {
   planner,
+  previousResearchPlanner,
   previousEditorPlanner,
   previousAppPlanner,
   previousContinuingPlanner,
@@ -102,10 +103,11 @@ it.effect("rejects unsafe nested URLs and oversize display payloads before retur
 );
 
 it.effect(
-  "requires response delivery while retaining the accepted v8/v7/v6/v5/v4/v3/v2 contracts",
+  "requires response delivery while retaining the accepted v9/v8/v7/v6/v5/v4/v3/v2 contracts",
   () =>
     Effect.gen(function* () {
-      expect(planner.id).toBe("travel-planner-v9");
+      expect(planner.id).toBe("travel-planner-v10");
+      expect(previousResearchPlanner.id).toBe("travel-planner-v9");
       expect(previousEditorPlanner.id).toBe("travel-planner-v8");
       expect(previousEditorPlanner.toolkit.tools).not.toHaveProperty("research_scout_start");
       expect(planner.toolkit.tools).toHaveProperty("research_scout_start");

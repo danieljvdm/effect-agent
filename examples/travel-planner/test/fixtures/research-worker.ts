@@ -10,6 +10,7 @@ import { LanguageModel, Model, type Prompt, type Response as AiResponse } from "
 import {
   PlannerError,
   PlannerInput,
+  PlannerSettings,
   SaveTripRequest,
   Trip,
   TripSiteStore,
@@ -17,7 +18,7 @@ import {
 import { ScoutInput } from "../../src/research/contracts.ts";
 import { ResearchScoutBackground } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
-import { previousEditorPlanner } from "../../src/server/planner.ts";
+import { previousEditorPlanner, previousResearchPlanner } from "../../src/server/planner.ts";
 import { ownerOfThread, storageOwner } from "../../src/server/tenancy.ts";
 import { FixtureBrowserLive } from "./browser.ts";
 import fixtureWorker from "./worker.ts";
@@ -28,7 +29,13 @@ const call = (
   id = name,
 ): ReadonlyArray<AiResponse.StreamPartEncoded> => [
   { type: "tool-call", id, name, params, providerExecuted: false },
-  { type: "finish", reason: "tool-calls", usage: { inputTokens: {}, outputTokens: {} } },
+  // A mature conversation incurs input usage on every model call. The coordinator must
+  // still have room to steer a scout, read/save the trip, and then deliver its reply.
+  {
+    type: "finish",
+    reason: "tool-calls",
+    usage: { inputTokens: { total: 24_000 }, outputTokens: { total: 100 } },
+  },
 ];
 
 const finish = (message: string) => call("deliver_response", { message, content: null });
@@ -287,25 +294,37 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           url.searchParams.get("thread") ?? identity.threadId,
         );
 
-        if (url.pathname === "/__research/seed") {
+        if (url.pathname === "/__research/seed" || url.pathname === "/__research/seed-research") {
           const runtime = yield* DurableAgentRuntime;
           const owner = ownerOfThread(threadId);
+          const research = url.pathname === "/__research/seed-research";
 
-          yield* runtime.submitRegistered(
-            { definition: previousEditorPlanner },
-            {
-              message: "Previous trip conversation",
-              selectedTripId: null,
-              publication: null,
-            },
-            {
-              threadId,
-              principal: Schema.decodeSync(Principal)(
-                owner === storageOwner ? "travel-planner-owner" : owner,
-              ),
-              idempotencyKey: Schema.decodeSync(IdempotencyKey)("previous-planner-input"),
-            },
-          );
+          const input = {
+            message: research ? "start research" : "Previous trip conversation",
+            selectedTripId: null,
+            publication: null,
+            ...(research
+              ? {
+                  settings: yield* Schema.decodeUnknownEffect(
+                    Schema.fromJsonString(PlannerSettings),
+                  )(url.searchParams.get("settings")),
+                }
+              : {}),
+          };
+
+          const options = {
+            threadId,
+            principal: Schema.decodeSync(Principal)(
+              owner === storageOwner ? "travel-planner-owner" : owner,
+            ),
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)(
+              research ? "previous-research-input" : "previous-planner-input",
+            ),
+          };
+
+          yield* research
+            ? runtime.submitRegistered({ definition: previousResearchPlanner }, input, options)
+            : runtime.submitRegistered({ definition: previousEditorPlanner }, input, options);
 
           return Response.json({ accepted: true });
         }
@@ -330,7 +349,7 @@ export default {
         request.headers.get("authorization") !== `Bearer ${env.PLANNER_TOKEN}`
       )
         return new Response("Unauthorized", { status: 401 });
-      if (url.pathname === "/__research/seed")
+      if (url.pathname === "/__research/seed" || url.pathname === "/__research/seed-research")
         return env.THREADS.getByName(ownerOfThread(url.searchParams.get("thread") ?? "")).fetch(
           request,
         );

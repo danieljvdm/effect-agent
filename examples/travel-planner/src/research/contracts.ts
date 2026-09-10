@@ -6,7 +6,8 @@ import { Schema } from "effect";
 import { PlannerInput, PlannerSettings, ShortText, Text } from "../domain.ts";
 import { TravelPhoto, TravelUrl } from "../travel-content.ts";
 
-export const researchCoordinatorId = "travel-planner-v9";
+export const previousResearchCoordinatorId = "travel-planner-v9";
+export const researchCoordinatorId = "travel-planner-v10";
 
 export const ScoutRequest = Schema.Struct({ title: ShortText, message: Text });
 

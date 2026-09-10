@@ -48,6 +48,7 @@ import { PlannerModel, plannerSnapshot, sendMessage } from "./application.ts";
 import { liveModel } from "./models.ts";
 import {
   planner,
+  previousResearchPlanner,
   previousEditorPlanner,
   previousContinuingPlanner,
   previousAppPlanner,
@@ -250,9 +251,20 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v9" },
+        agent: { id: planner.id, version: "travel-planner-v10" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      reporting: [researchScoutReport],
+      attemptLayer,
+    },
+    {
+      agent: previousResearchPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousResearchPlanner.id, version: "travel-planner-v9" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousResearchPlanner.toolkit.tools),
       }),
       reporting: [researchScoutReport],
       attemptLayer,

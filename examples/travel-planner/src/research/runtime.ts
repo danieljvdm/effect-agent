@@ -11,6 +11,7 @@ import { PlannerAttempt, ProgressStore } from "../server/progress.ts";
 import { publicationAuthorization } from "../server/security.ts";
 import {
   CoordinatorInput,
+  previousResearchCoordinatorId,
   researchCoordinatorId,
   ScoutInput,
   ScoutReportInput,
@@ -46,7 +47,7 @@ export const readScoutInput = Effect.fn("readScoutInput")(function* (
     origin.worker.threadId !== submission.threadId ||
     origin.worker.targetAgentId !== researchScout.id ||
     origin.worker.delegationId !== ResearchScout.delegationId ||
-    origin.source.agentId !== researchCoordinatorId ||
+    ![previousResearchCoordinatorId, researchCoordinatorId].includes(origin.source.agentId) ||
     origin.source.threadId !== input.sourceThreadId ||
     origin.depth !== 1
   )

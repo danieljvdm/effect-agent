@@ -11,7 +11,11 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import { PlannerSnapshot, Trip, type PlannerSettings } from "../src/domain.ts";
-import { researchCoordinatorId, ScoutInput, ScoutReportInput } from "../src/research/contracts.ts";
+import {
+  previousResearchCoordinatorId,
+  ScoutInput,
+  ScoutReportInput,
+} from "../src/research/contracts.ts";
 
 const token = "research-worker-fixture";
 const sourceThread = `member-${createHash("sha256").update("research@example.com").digest("hex")}--research`;
@@ -135,7 +139,7 @@ const until = async <A>(read: () => Promise<A>, matches: (value: A) => boolean) 
   throw new Error(`Fixture did not settle: ${JSON.stringify(diagnostic).slice(0, 3_000)}`);
 };
 
-it("upgrades an existing v8 trip, keeps durable scouts across chat and restart, and reports without recursive research", async () => {
+it("upgrades v8 trip history and v9 scouts to the current coordinator across chat and restart", async () => {
   await fixture("seed", { thread: sourceThread }, "POST");
   await until(
     () => snapshot(),
@@ -164,7 +168,13 @@ it("upgrades an existing v8 trip, keeps durable scouts across chat and restart, 
   const trip = Schema.decodeUnknownSync(Trip)(await seedTrip("research", "Lisbon"));
   const otherTrip = Schema.decodeUnknownSync(Trip)(await seedTrip("other-trip", "Tahoe"));
 
-  expect(await send("start research")).toEqual({ accepted: true });
+  expect(
+    await fixture(
+      "seed-research",
+      { thread: sourceThread, settings: JSON.stringify(settings) },
+      "POST",
+    ),
+  ).toEqual({ accepted: true });
 
   const active = await until(
     () => snapshot(),
@@ -191,12 +201,12 @@ it("upgrades an existing v8 trip, keeps durable scouts across chat and restart, 
       state.scouts?.some((scout) => scout.task.includes("budget 200")) === true,
   );
 
+  expect(updated.messages.at(-1)?.text).toBe(`Planner handled: ${followUp}`);
   expect(updated.trips.find((value) => value.id === trip.id)).toMatchObject({
     revision: 2,
     notes: ["Preserve existing preferences", "Budget 200, quiet neighborhood"],
   });
   expect(updated.trips.find((value) => value.id === otherTrip.id)).toMatchObject(otherTrip);
-  expect(updated.messages.at(-1)?.text).toBe(`Planner handled: ${followUp}`);
   expect((await snapshot()).scouts?.map((scout) => scout.id).sort()).toEqual(ids);
   await runtime.dispose();
   runtime = makeRuntime();
@@ -269,7 +279,7 @@ it("upgrades an existing v8 trip, keeps durable scouts across chat and restart, 
       journal.records.some(
         ({ record }) =>
           record.payload._tag === "WorkerOriginRecorded" &&
-          record.payload.origin.source.agentId === researchCoordinatorId,
+          record.payload.origin.source.agentId === previousResearchCoordinatorId,
       ),
     ).toBe(true);
   }

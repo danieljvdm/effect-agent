@@ -12,7 +12,7 @@ import { Toolkit } from "effect/unstable/ai";
 
 import { DeliverResponse } from "../agent.ts";
 import { PlannerError } from "../domain.ts";
-import { researchCoordinatorId } from "../research/contracts.ts";
+import { previousResearchCoordinatorId, researchCoordinatorId } from "../research/contracts.ts";
 import { ResearchScout, researchScout } from "../research/scout.ts";
 import { PlannerAttempt, ProgressStore, withToolProgress } from "../server/progress.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
@@ -69,7 +69,9 @@ export const editorAttemptLayer = (context: {
             origin.worker.threadId !== context.threadId ||
             origin.worker.targetAgentId !== appEditor.id ||
             origin.worker.delegationId !== AppEditor.delegationId ||
-            ![coordinatorId, researchCoordinatorId].includes(origin.source.agentId) ||
+            ![coordinatorId, previousResearchCoordinatorId, researchCoordinatorId].includes(
+              origin.source.agentId,
+            ) ||
             captured.sourceThreadId !== origin.source.threadId ||
             origin.depth !== 1
           )
@@ -205,12 +207,14 @@ export const EditorHostLive = Layer.mergeAll(
   Layer.succeed(WorkerBudgetAuthorizer, {
     authorize: (request) =>
       sourceAllowed(request.source.threadId, request.principal) &&
-      (([coordinatorId, researchCoordinatorId].includes(request.source.agentId) &&
+      (([coordinatorId, previousResearchCoordinatorId, researchCoordinatorId].includes(
+        request.source.agentId,
+      ) &&
         request.worker.delegationId === AppEditor.delegationId &&
         request.worker.targetAgentId === appEditor.id &&
         request.policy.maxTurns <= 16 &&
         request.policy.maxToolCalls <= 24) ||
-        (request.source.agentId === researchCoordinatorId &&
+        ([previousResearchCoordinatorId, researchCoordinatorId].includes(request.source.agentId) &&
           request.worker.delegationId === ResearchScout.delegationId &&
           request.worker.targetAgentId === researchScout.id &&
           request.policy.maxTurns <= 8 &&
