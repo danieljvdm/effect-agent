@@ -9,11 +9,12 @@ permissions: {}
 
 jobs:
   comment:
-    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       actions: read
+      contents: read
       pull-requests: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -35,10 +36,9 @@ jobs:
               if (!stat.isFile() || stat.size > limit) throw new Error('Invalid performance artifact');
               return fs.readFileSync(file, 'utf8');
             };
-            const number = read('pr-number.txt', 20).trim();
-            if (!/^[1-9][0-9]{0,9}$/.test(number)) throw new Error('Invalid PR number');
             const report = JSON.parse(read('report.json', 3000000));
             if (report.fixture !== 'runtime-v3' || report.profile !== 'pr' ||
+                !/^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(report.baselineTag) ||
                 report.activeBatch !== null || report.failure !== null ||
                 report.settings?.batches !== 3 || report.settings?.warmupsPerBatch !== 2 || report.settings?.samplesPerBatch !== 3 ||
                 report.settings?.production !== true || report.settings?.execution !== 'unbundled published ESM' ||
@@ -55,14 +55,33 @@ jobs:
                   !/^[a-f0-9]{64}$/.test(revision(role).builtArtifactsSha256)) throw new Error('Invalid revision');
             }
             const run = context.payload.workflow_run;
-            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(number) });
-            if (pr.state !== 'open' || pr.head.sha !== run.head_sha || pr.head.sha !== revision('head').revision ||
-                pr.head.repo?.id !== run.head_repository.id || pr.base.sha !== revision('base').revision ||
-                pr.base.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) return;
-            const med = values => {
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const { data: main } = await github.rest.git.getRef({ ...context.repo, ref: 'heads/main' });
+            if (run.event !== 'push' || run.head_branch !== 'main' || run.head_repository.full_name !== repository ||
+                run.head_sha !== revision('head').revision || main.object.sha !== revision('head').revision) return;
+            // Re-resolve release identity using trusted API data. A newer release
+            // or moved tag makes the completed comparison stale.
+            const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            const latest = releases.filter(release => !release.draft && release.published_at &&
+              /^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
+              .sort((a, b) => b.published_at.localeCompare(a.published_at) || b.id - a.id)[0];
+            if (!latest || latest.tag_name !== report.baselineTag) return;
+            const { data: tag } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${latest.tag_name}` });
+            let object = tag.object;
+            for (let depth = 0; object.type === 'tag' && depth < 10; depth++) {
+              const { data } = await github.rest.git.getTag({ ...context.repo, tag_sha: object.sha });
+              object = data.object;
+            }
+            if (object.type !== 'commit' || object.sha !== revision('base').revision) return;
+            const identical = revision('base').builtArtifactsSha256 === revision('head').builtArtifactsSha256 &&
+              revision('base').lockfileSha256 === revision('head').lockfileSha256;
+            const summarize = values => {
               values.sort((a, b) => a - b);
-              const i = (values.length - 1) / 2;
-              return (values[Math.floor(i)] + values[Math.ceil(i)]) / 2;
+              const quantile = p => {
+                const i = (values.length - 1) * p, lower = Math.floor(i);
+                return values[lower] + (values[Math.ceil(i)] - values[lower]) * (i - lower);
+              };
+              return { median: quantile(0.5), q1: quantile(0.25), q3: quantile(0.75) };
             };
             const expected = ['small-run', 'small-stream', ...[1,64,1024,4096].map(n => `stream-64k-${n}`),
               'history-65536', 'history-1048576', 'parallel-tools-8', 'tool-rounds-4',
@@ -99,15 +118,28 @@ jobs:
             }
             const rows = expected.map(name => {
               const values = role => samples.filter(s => s.name === name && s.role === role).map(s => s.ms);
-              const base = med(values('base')), head = med(values('head'));
-              const change = before => before === 0 ? 'n/a' : `${((head / before - 1) * 100).toFixed(1)}%`;
-              return `| ${name} | ${base.toFixed(2)} | ${head.toFixed(2)} | ${change(base)} |`;
+              const base = summarize(values('base')), head = summarize(values('head'));
+              const format = value => `${value.median.toFixed(2)} [${value.q1.toFixed(2)}–${value.q3.toFixed(2)}]`;
+              const change = identical || base.median === 0 ? 'n/a' : `${((head.median / base.median - 1) * 100).toFixed(1)}%`;
+              return `| ${name} | ${format(base)} | ${format(head)} | ${change} |`;
             });
             const marker = '<!-- effect-agent:runtime-performance -->';
-            const body = `${marker}\n### Runtime performance\n\n` +
-              'Informational medians in milliseconds, nine samples per workload and revision. Same fixture bytes and Node runtime; separate lockfiles and public builds.\n\n' +
-              '| Workload | Base | Head | Head/base |\n| --- | ---: | ---: | ---: |\n' + rows.join('\n') +
-              `\n\n[Raw samples, spread, cold process totals, failures, environment, and exact revisions](${run.html_url}) for \`${run.head_sha.slice(0,12)}\`. Timing deltas are not a merge threshold.`;
+            const repoUrl = `https://github.com/${repository}`;
+            const body = `${marker}\n### Runtime performance: latest release → main\n\n` +
+              `Release: [\`${report.baselineTag}\`](${repoUrl}/releases/tag/${encodeURIComponent(report.baselineTag)}) (\`${revision('base').revision.slice(0,12)}\`). ` +
+              `Main: [\`${revision('head').revision.slice(0,12)}\`](${repoUrl}/commit/${revision('head').revision}).\n\n` +
+              'Operation median [Q1–Q3] in milliseconds; nine samples per workload and revision across three worker processes. Same fixture bytes and Node runtime; separate lockfiles and public builds.\n\n' +
+              (identical ? '**Identical built JavaScript and lockfiles. Timing differences do not establish a code regression; percentage changes are suppressed.**\n\n' : '') +
+              '| Workload | Latest release | Main | Change |\n| --- | ---: | ---: | ---: |\n' + rows.join('\n') +
+              `\n\n[Raw samples, cold process totals, failures, environment, and exact revisions](${run.html_url}). ` +
+              'Sample spread is not a confidence interval. Timing deltas are observations, not established regressions or a merge threshold; runner and process variability have not been calibrated.';
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              ...context.repo, state: 'open', base: 'main', head: `${context.repo.owner}:changeset-release/main`, per_page: 100,
+            });
+            const pr = pulls.find(pr => pr.state === 'open' && pr.head.ref === 'changeset-release/main' &&
+              pr.head.repo?.full_name === repository && pr.base.ref === 'main' &&
+              pr.base.repo.full_name === repository && pr.base.sha === revision('head').revision);
+            if (!pr) return;
             const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number: pr.number, per_page: 100 });
             const previous = comments.find(comment => comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
             if (previous) await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });

@@ -4,15 +4,18 @@ import { runInNewContext } from "node:vm";
 import { expect, it } from "vite-plus/test";
 
 import type { PerformanceReport } from "../../../scripts/runtime-benchmark.ts";
+import { renderPerformanceReport } from "../../../scripts/runtime-benchmark.ts";
 import { casesFor, FIXTURE_VERSION } from "../src/contracts.ts";
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] extends object ? Mutable<T[K]> : T[K] };
 type Report = Mutable<typeof PerformanceReport.Type>;
 const head = "a".repeat(40);
 const base = "b".repeat(40);
+const baselineTag = "effect-agent@0.1.0-beta.76";
 
 const makeReport = (): Report => ({
   fixture: FIXTURE_VERSION,
+  baselineTag,
   fixtureSha256: "c".repeat(64),
   transpiler: "test",
   profile: "pr",
@@ -40,7 +43,7 @@ const makeReport = (): Report => ({
     revision: role === "base" ? base : head,
     dirty: false,
     lockfileSha256: "d".repeat(64),
-    builtArtifactsSha256: "e".repeat(64),
+    builtArtifactsSha256: (role === "base" ? "e" : "f").repeat(64),
     effect: "test",
   })),
   batches: [0, 1, 2].flatMap((cohort) =>
@@ -95,12 +98,22 @@ const workflow = readFileSync(
 
 const script = workflow.split("          script: |\n")[1]!.replace(/^ {12}/gm, "");
 
-const publish = async (report: unknown, currentHead = head) => {
+const publish = async (
+  report: unknown,
+  options: {
+    currentMain?: string;
+    releaseTag?: string;
+    releaseCommit?: string;
+    runHead?: string;
+    runRepository?: string;
+    annotatedTag?: boolean;
+    releasePr?: boolean;
+  } = {},
+) => {
   const comments: string[] = [];
 
   const files: Record<string, string> = {
     "runtime-performance/report.json": JSON.stringify(report),
-    "runtime-performance/pr-number.txt": "1",
   };
 
   const execution: Promise<unknown> = runInNewContext(`(async () => { ${script} })()`, {
@@ -119,26 +132,38 @@ const publish = async (report: unknown, currentHead = head) => {
       repo: { owner: "owner", repo: "repository" },
       payload: {
         workflow_run: {
-          head_sha: head,
-          head_repository: { id: 1 },
+          event: "push",
+          head_branch: "main",
+          head_sha: options.runHead ?? head,
+          head_repository: { full_name: options.runRepository ?? "owner/repository" },
           html_url: "https://example.test/run",
         },
       },
     },
     github: {
       rest: {
-        pulls: {
-          get: async () => ({
+        repos: { listReleases: "releases" },
+        git: {
+          getRef: async ({ ref }: { ref: string }) => ({
             data: {
-              number: 1,
-              state: "open",
-              head: { sha: currentHead, repo: { id: 1 } },
-              base: { sha: base, repo: { full_name: "owner/repository" } },
+              object: {
+                type: ref === "heads/main" || !options.annotatedTag ? "commit" : "tag",
+                sha:
+                  ref === "heads/main"
+                    ? (options.currentMain ?? head)
+                    : (options.releaseCommit ?? base),
+              },
             },
           }),
+          getTag: async () => ({
+            data: { object: { type: "commit", sha: options.releaseCommit ?? base } },
+          }),
+        },
+        pulls: {
+          list: "pulls",
         },
         issues: {
-          listComments: () => {},
+          listComments: "comments",
           createComment: async (value: { body: string }) => {
             comments.push(value.body);
           },
@@ -147,7 +172,39 @@ const publish = async (report: unknown, currentHead = head) => {
           },
         },
       },
-      paginate: async () => [],
+      paginate: async (endpoint: string) => {
+        if (endpoint === "releases")
+          return [
+            {
+              id: 1,
+              draft: false,
+              prerelease: true,
+              published_at: "2026-09-10T03:17:46Z",
+              tag_name: options.releaseTag ?? baselineTag,
+            },
+          ];
+        if (endpoint === "pulls")
+          return options.releasePr === false
+            ? []
+            : [
+                {
+                  number: 1,
+                  state: "open",
+                  head: {
+                    ref: "changeset-release/main",
+                    sha: "9".repeat(40),
+                    repo: { full_name: "owner/repository" },
+                  },
+                  base: {
+                    ref: "main",
+                    sha: options.currentMain ?? head,
+                    repo: { full_name: "owner/repository" },
+                  },
+                },
+              ];
+        if (endpoint === "comments") return [];
+        throw new Error("Unexpected GitHub endpoint");
+      },
     },
   });
 
@@ -156,17 +213,34 @@ const publish = async (report: unknown, currentHead = head) => {
   return comments;
 };
 
-it("publishes all 12 valid batches and rejects stale PR identity", async () => {
+it("publishes release versus main even though the release PR head is a version-only commit", async () => {
   const comments = await publish(makeReport());
 
   expect(comments).toHaveLength(1);
-  expect(comments[0]).toContain("nine samples per workload and revision");
   expect(comments[0]).toContain(
-    "| Workload | Base | Head | Head/base |\n| --- | ---: | ---: | ---: |\n",
+    "nine samples per workload and revision across three worker processes",
   );
-  expect(comments[0]).toContain("| settled-ledger-2048 | 2.00 | 2.00 | 0.0% |");
+  expect(comments[0]).toContain(baselineTag);
+  expect(comments[0]).toContain(`/commit/${head}`);
+  expect(comments[0]).toContain(
+    "| Workload | Latest release | Main | Change |\n| --- | ---: | ---: | ---: |\n",
+  );
+  expect(comments[0]).toContain(
+    "| settled-ledger-2048 | 2.00 [2.00–2.00] | 2.00 [2.00–2.00] | 0.0% |",
+  );
   expect(comments[0]).not.toMatch(/reference/i);
-  expect(await publish(makeReport(), "f".repeat(40))).toEqual([]);
+  expect(await publish(makeReport(), { annotatedTag: true })).toHaveLength(1);
+});
+
+it.each([
+  { currentMain: "f".repeat(40) },
+  { runHead: "f".repeat(40) },
+  { runRepository: "someone/fork" },
+  { releaseTag: "effect-agent@0.1.0-beta.77" },
+  { releaseCommit: "f".repeat(40) },
+  { releasePr: false },
+])("does not publish stale or unrelated comparison %j", async (options) => {
+  expect(await publish(makeReport(), options)).toEqual([]);
 });
 
 it("computes Head/base from measured warm samples only", async () => {
@@ -187,8 +261,37 @@ it("computes Head/base from measured warm samples only", async () => {
 
   const comments = await publish(report);
 
-  expect(comments[0]).toContain("| small-run | 4.00 | 2.00 | -50.0% |");
-  expect(comments[0]).toContain("| settled-ledger-2048 | 4.00 | 2.00 | -50.0% |");
+  expect(comments[0]).toContain("| small-run | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] | -50.0% |");
+  expect(comments[0]).toContain(
+    "| settled-ledger-2048 | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] | -50.0% |",
+  );
+});
+
+it("preserves slow samples and spread without claiming identical builds regressed", async () => {
+  const report = makeReport();
+
+  report.revisions[1]!.builtArtifactsSha256 = report.revisions[0]!.builtArtifactsSha256;
+  for (const batch of report.batches) {
+    const worker = batch.report!;
+
+    batch.report = {
+      ...worker,
+      samples: worker.samples.map((sample) => ({
+        ...sample,
+        totalMs: batch.role === "base" ? 2 : [2, 2, 3, 4, 100][sample.ordinal]!,
+        attemptMs: 102,
+      })),
+    };
+  }
+  const comments = await publish(report);
+
+  for (const output of [comments[0]!, renderPerformanceReport(report)]) {
+    expect(output).toContain("Identical built JavaScript and lockfiles");
+    expect(output).toContain("| small-run | 2.00 [2.00–2.00] | 4.00 [3.00–100.00] | n/a |");
+    expect(output).not.toContain("100.0%");
+  }
+  report.revisions[1]!.lockfileSha256 = "a".repeat(64);
+  expect((await publish(report))[0]).toContain("| 100.0% |");
 });
 
 it("rejects historical contracts and reference roles before commenting", async () => {
@@ -220,6 +323,12 @@ it("rejects historical contracts and reference roles before commenting", async (
 });
 
 const mutations: ReadonlyArray<readonly [string, (report: Report) => void]> = [
+  [
+    "invalid release tag",
+    (report) => {
+      report.baselineTag = "main";
+    },
+  ],
   [
     "missing revision",
     (report) => {

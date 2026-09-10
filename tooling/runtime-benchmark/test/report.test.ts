@@ -7,6 +7,7 @@ import { FIXTURE_VERSION } from "../src/contracts.ts";
 it("reports and excludes an invalid batch even when its process exited successfully", () => {
   const report: typeof PerformanceReport.Type = {
     fixture: FIXTURE_VERSION,
+    baselineTag: null,
     fixtureSha256: "fixture",
     transpiler: "test",
     profile: "smoke",

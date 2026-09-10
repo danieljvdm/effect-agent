@@ -1,24 +1,21 @@
 name: Runtime performance
 
 on:
-  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       profile:
-        description: Scripted profile (diagnostic runs manual base/head probes)
+        description: Latest published release versus main (diagnostic runs phase probes)
         type: choice
         options: [pr, extended, archive, diagnostic]
-        default: extended
-      base_sha:
-        description: Exact 40-character comparison base SHA
-        type: string
-        required: true
+        default: pr
 
 permissions:
   contents: read
 
 concurrency:
-  group: runtime-performance-${{ github.ref }}
+  group: runtime-performance-main
   cancel-in-progress: true
 
 env:
@@ -29,22 +26,42 @@ jobs:
   compare:
     name: Compare scripted runtime
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ (github.event_name == 'pull_request' || inputs.profile == 'diagnostic') && 30 || 180 }}
+    timeout-minutes: ${{ (github.event_name == 'push' || inputs.profile == 'pr' || inputs.profile == 'diagnostic') && 30 || 180 }}
     steps:
+      - name: Resolve latest published release and main
+        id: comparison
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7
+        with:
+          script: |
+            if (context.ref !== 'refs/heads/main') throw new Error('Run this comparison on main');
+            // /releases/latest excludes prereleases. Use the umbrella package's
+            // publication timestamp, not tag creation order or a sibling package.
+            const releases = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            const latest = releases.filter(release => !release.draft && release.published_at &&
+              /^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.tag_name))
+              .sort((a, b) => b.published_at.localeCompare(a.published_at) || b.id - a.id)[0];
+            if (!latest) throw new Error('No published effect-agent release found');
+            const { data: tag } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${latest.tag_name}` });
+            let object = tag.object;
+            for (let depth = 0; object.type === 'tag' && depth < 10; depth++) {
+              const { data } = await github.rest.git.getTag({ ...context.repo, tag_sha: object.sha });
+              object = data.object;
+            }
+            if (object.type !== 'commit' || !/^[a-f0-9]{40}$/.test(object.sha) ||
+                !/^[a-f0-9]{40}$/.test(context.sha)) throw new Error('Invalid comparison commit');
+            core.setOutput('base_sha', object.sha);
+            core.setOutput('base_tag', latest.tag_name);
+            core.setOutput('head_sha', context.sha);
+            core.info(`Comparing ${latest.tag_name} (${object.sha}) to main (${context.sha})`);
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ steps.comparison.outputs.head_sha }}
           persist-credentials: false
 
-      - name: Validate manual base identity
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          BASE_SHA: ${{ inputs.base_sha }}
-        run: '[[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]'
-
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || inputs.base_sha }}
+          ref: ${{ steps.comparison.outputs.base_sha }}
           path: .performance-base
           persist-credentials: false
 
@@ -77,7 +94,7 @@ jobs:
           ./node_modules/.bin/vp run --no-cache -F './packages/*' build
 
       - name: Compare sequential cohorts
-        timeout-minutes: ${{ (github.event_name == 'pull_request' || inputs.profile == 'diagnostic') && 20 || 165 }}
+        timeout-minutes: ${{ (github.event_name == 'push' || inputs.profile == 'pr' || inputs.profile == 'diagnostic') && 20 || 165 }}
         # The controller stops at 19m (PR) / 160m (larger profiles), leaving time
         # for bounded child termination and atomic failure evidence before this outer limit.
         # Older releases do not ignore these known declaration artifacts emitted
@@ -85,22 +102,24 @@ jobs:
         # The subsequent --require-clean check rejects every other modification.
         shell: bash
         env:
-          PROFILE: ${{ github.event_name == 'pull_request' && 'pr' || inputs.profile }}
+          PROFILE: ${{ github.event_name == 'push' && 'pr' || inputs.profile }}
+          BASE_TAG: ${{ steps.comparison.outputs.base_tag }}
         run: |
           rm -f .performance-base/test/fixtures/checkpoints.d.ts .performance-base/test/fixtures/storage-upgrade.d.ts .performance-base/test/fixtures/storage-v2.d.ts
           if [ "$PROFILE" = diagnostic ]; then
             ./node_modules/.bin/vp run --no-cache perf:diagnose --base-dir .performance-base --require-clean
           else
-            ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --profile "$PROFILE" --require-clean
+            ./node_modules/.bin/vp run --no-cache perf:compare --base-dir .performance-base --base-tag "$BASE_TAG" --profile "$PROFILE" --require-clean
           fi
 
       - name: Preserve run identity and readable evidence
         if: always()
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_TAG: ${{ steps.comparison.outputs.base_tag }}
+          MAIN_SHA: ${{ steps.comparison.outputs.head_sha }}
         run: |
           mkdir -p .performance-report
-          echo "$PR_NUMBER" > .performance-report/pr-number.txt
+          printf 'Latest published release: %s. Main: %s.\n\n' "$BASE_TAG" "$MAIN_SHA" >> "$GITHUB_STEP_SUMMARY"
           if test -f .performance-report/report.md; then cat .performance-report/report.md >> "$GITHUB_STEP_SUMMARY"; fi
 
       - name: Upload all samples and failures
