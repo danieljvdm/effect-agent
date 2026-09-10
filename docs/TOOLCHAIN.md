@@ -46,7 +46,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | ----------------------------------- | ----------------------------------------------------- |
 | `packages/*`                        | Framework and private PR-review integration packages  |
 | `examples/demo`                     | Local browser app                                     |
-| `examples/runtime-benchmark`        | Deterministic public-package runtime comparisons      |
+| `examples/runtime-benchmark`        | Scripted public-package timing diagnostics            |
 | `examples/context-continuity-eval`  | Continuity gates and opt-in deployed performance      |
 | `examples/cloudflare-memory`        | Opt-in deployed Thread-to-Memory latency benchmark    |
 | `examples/providers`                | Provider bindings, persistent history, Workflow host  |
@@ -359,9 +359,47 @@ in [esbuild's analyzer](https://esbuild.github.io/analyze/). CI attaches these a
 and `bundle-analysis` artifacts and updates one PR comment through a separate trusted workflow.
 The comment workflow becomes active after it is merged into the default branch.
 
+## Deterministic performance checks
+
+Ordinary PR CI, `vp run test`, and `vp run ready` gate algorithmic work, not elapsed time.
+The gates reuse the engine tests, adapter read contracts, and retained-history fixture. They
+use local scripted models, real SQLite files where storage matters, and test clocks for the new
+runtime checks. No provider request or separate benchmark job is needed.
+
+| Public operation         | Work budget and evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Fresh durable submission | The shared [history fixture](../test/fixtures/runtime-history-cost.ts) counts canonical records delivered by `ThreadStore.read`. The memory suite and [Node/SQLite suite](../packages/platform-node/test/runtime-work-budget.test.ts) allow at most `2H + 6` records from admission through a one-answer settlement for an uncompacted `H`-record history. The provider must receive every retained input, make one call, and finalize its stream; read scopes and ownership must close. SQLite reopens histories of 1, 1,025, and 8,193 records. Each extra 1,024-record history page permits four SQL statements: two passes, each with a Thread existence read and a range read. Actual query plans must seek by canonical sequence and page queries must be bounded. |
+| Nonterminal ledger scan  | The shared [ledger read contracts](../test/fixtures/ledger-read-contracts.ts), run by SQLite and Durable Object SQLite, cross 0/2,048/8,192 settled rows with 0/16/768 unfinished rows. They require every unfinished row in order, at most `floor(U / 256) + 1` statements for `U` unfinished rows, a partial unfinished-row index, cursor seeks on later pages, and no temporary sort. This permits linear work in unfinished rows, including an empty end page, while excluding scans of retained settlements and offset pagination. The existing interleaved-settlement cases also check cursor correctness.                                                                                                                                                         |
+| Checkpoint recovery      | The Node suite saves a native rollover checkpoint through the public runtime, faults after save, closes the runtime, and reopens the same file. `runRecovery` followed by `processThread` may load at most two checkpoints and read at most `2S` canonical records for the fixture's eligible `S`-record suffix. No canonical record through the checkpoint may be reread. Retired histories grow from 1 to 8,193 records independently of 0/1,025-record suffixes; only suffix pages may add SQL statements. One resumed model call, no repeated completed tool, finalizers, released ownership, exact canonical output, and an unchanged archive remain required.                                                                                                      |
+
+These are workload-specific bounds, not exact SQL snapshots or universal constant-time claims.
+Statement counts are paired with record counts and actual query plans: one statement can still
+scan an entire table. Checkpoint digest validation currently searches a Thread's batch metadata
+by Thread identity and then filters its ending sequence. The gate allows at most two such
+searches; their database work can grow linearly with that Thread's batch count. It does not claim
+constant SQLite VM work, checkpoint byte decoding, or latency independent of retained history.
+
+The existing [history fault tests](../packages/storage-memory/test/runtime-history-cost.test.ts)
+cover gaps, short reads, typed failure, defects, interruption, racing appends, and compaction
+fallback. [Recovery tests](../packages/storage-memory/test/recovery-history.test.ts) retain one
+captured prefix across mixed decisions; [checkpoint tests](../packages/storage-memory/test/recovery-checkpoint.test.ts)
+and the [Node crash suite](../packages/platform-node/test/crash/recovery-checkpoint.test.ts) cover
+missing/incompatible caches and process loss. The [engine suite](../packages/engine/test/agent-runtime.test.ts)
+already gates model/tool calls, bounded concurrency, declaration order, resource finalization,
+and tracing under response fragmentation. The runtime diagnostic policy and fairness suites
+also check call counts, worker/tool bounds, and cleanup. Those guards remain in their owning suites.
+
+Run `vp run -F @effect-agent/platform-node test` and
+`vp run -F @effect-agent/storage-sqlite test` for the SQLite gates; the corresponding memory and
+Cloudflare suites run through ordinary CI as well. Test timeouts detect hangs, not performance
+regressions. Compacted or checkpoint-ineligible fresh histories retain their existing validation
+passes. Checkpoint-only bounds do not establish constant-time fresh admission, and these checks
+do not measure CPU, allocations, disk/scheduler/GC costs, lock contention, or all supported sizes.
+
 ## Runtime performance comparisons
 
-Pull requests run the **Runtime performance** workflow against the exact base and head commits.
+Pushes to `main` run the **Runtime performance** workflow against the latest published release
+and the exact triggering `main` commit.
 The [scripted benchmark](../examples/runtime-benchmark/README.md) runs identical
 fixture bytes against production builds and each revision's own lockfile on the same Node runtime.
 Run `vp run perf:compare --help` for local reproduction. Timing tasks bypass the task cache; keep
@@ -375,11 +413,12 @@ provider callback. A separate subprocess measurement includes startup and fixtur
 Retain raw samples, failures, environment metadata, fixture and artifact hashes, and exact SHAs.
 The trusted comment workflow becomes active after it reaches the default branch.
 
-Latency reports are informational until repeated CI runs establish variance and useful absolute
-and relative thresholds. Deterministic call, concurrency, ownership, tracing, and history-work
-budgets remain correctness gates. The fresh-submission history guard permits two linear scans plus
-fixed work for histories without compaction. Compacted and checkpoint-seeded views keep their
-existing validation passes. Checkpoint recovery bounds do not establish constant-time fresh admission.
+Latency reports remain informational. The automatic release PR comment links the deterministic
+gates and keeps observed medians and spread in a collapsed table without percentage deltas.
+Full diagnostic artifacts retain all samples and percentage comparisons (suppressed for identical
+builds and lockfiles). This makes individual timing changes less prominent in review while
+preserving the evidence needed for a controlled investigation. The timing workflow does not
+report the result of the ordinary CI work-budget gates or establish a latency regression.
 Fairness, lock contention, optional
 memory/MCP publication, and large settled-ledger indexing require their own controlled evidence
 before changing those paths.

@@ -254,7 +254,8 @@ export const renderPerformanceReport = (report: PerformanceReport): string => {
           "",
         ]),
     "Timing is informational. Operation median [Q1–Q3] in milliseconds; every measured sample and outlier is retained. Model-entry timings remain in raw samples.",
-    "Samples share three worker processes per revision in the pr profile; their spread is not a confidence interval or a calibrated regression threshold.",
+    "Deterministic performance gates run in ordinary CI and bound algorithmic work. Wall-clock changes here are diagnostic observations, never pass/fail thresholds.",
+    "Samples share three worker processes per revision in the pr profile; their spread is not a confidence interval and does not establish a latency regression.",
     ...(identical
       ? [
           "Identical built JavaScript and lockfiles. Timing differences do not establish a code regression; percentage changes are suppressed.",
