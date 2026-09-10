@@ -288,7 +288,9 @@ against an expected SHA. Conflicting edits fail without force-pushing. Source is
 Each committed edit starts a deterministic Workflow. The host transfers source into a fresh
 scoped Sandbox, runs `vp install --ignore-scripts`, `vp check --no-fmt`, and `vp run build`,
 then destroys it. The container has no account, model, Access, or Git credentials. Each builder
-uses `standard-3` (2 vCPUs, 8 GiB RAM, 16 GB disk), with capacity capped at four containers.
+uses explicit resources matching `standard-3` (2 vCPUs, 8 GiB RAM, 16 GB disk), with capacity
+capped at four containers. Deployment verification checks the returned resource values;
+the named instance tier alone did not change the allocation through the current provider.
 If all are busy, startup waits with bounded backoff
 and records that it is waiting for a builder. Only the initial directory creation is retried;
 source writes and build commands are not replayed on ambiguous Sandbox errors. Cancellation
