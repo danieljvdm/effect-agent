@@ -1,3 +1,4 @@
+import { DurableAlarmService, ThreadMutationGate } from "@effect-agent/platform-cloudflare/Alarm";
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
 import {
   AbortCommand,
@@ -11,6 +12,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -99,6 +101,66 @@ const maintenanceGeneration = (thread: string) =>
   );
 
 describe("DC alarm semantics", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/78d05490a
+  it("keeps alarm changes independent of an interrupted concurrent SQL transaction", async () => {
+    const thread = lane("sql-alarm-isolation");
+
+    await runInDurableObject(stubFor(thread), (instance, state) =>
+      instance[DurableObject.RunSymbol](
+        Effect.gen(function* () {
+          const sql = yield* SqlClient;
+          const alarm = yield* DurableAlarmService;
+
+          yield* sql`CREATE TABLE alarm_isolation_probe (value INTEGER)`;
+
+          const raceRollback = <A, E>(operation: Effect.Effect<A, E>) =>
+            Effect.gen(function* () {
+              const entered = yield* Deferred.make<void>();
+
+              const transaction = yield* sql
+                .withTransaction(
+                  Effect.gen(function* () {
+                    yield* sql`INSERT INTO alarm_isolation_probe VALUES (1)`;
+                    yield* Deferred.succeed(entered, undefined);
+
+                    return yield* Effect.never;
+                  }),
+                )
+                .pipe(Effect.forkChild);
+
+              yield* Deferred.await(entered);
+              const update = yield* operation.pipe(Effect.forkChild);
+
+              for (let index = 0; index < 20; index++) yield* Effect.yieldNow;
+              yield* Fiber.interrupt(transaction);
+
+              return yield* Fiber.join(update);
+            });
+
+          const later = Date.now() + 172_800_000;
+          const earlier = later - 86_400_000;
+
+          yield* raceRollback(alarm.scheduleAt(later));
+          expect(yield* alarm.scheduled).toMatchObject({ _tag: "Some", value: later });
+          yield* raceRollback(alarm.ensureScheduledBy(earlier));
+          expect(yield* alarm.scheduled).toMatchObject({ _tag: "Some", value: earlier });
+          yield* raceRollback(alarm.cancel);
+          expect(yield* alarm.scheduled).toMatchObject({ _tag: "None" });
+
+          const generations = Effect.promise(() =>
+            state.storage.get<unknown>("effect-agent:thread-maintenance:v1"),
+          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(MaintenanceGenerationProbe)));
+
+          const before = yield* generations;
+
+          yield* raceRollback((yield* ThreadMutationGate).withMutation(Effect.void));
+          expect((yield* generations).dirty).toBe(before.dirty + 1n);
+          expect(yield* sql`SELECT * FROM alarm_isolation_probe`).toEqual([]);
+        }),
+      ),
+    );
+  });
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
   it("returns after one head Attempt and leaves later FIFO work armed for another event", () =>
     Effect.runPromise(
