@@ -390,9 +390,9 @@ export default {
         return Response.json({ entered: (await bucket.head(`${key}/entered`)) !== null });
       }
       if (url.pathname === "/__editor/journal") {
-        const response = await env.THREADS.getByName(url.searchParams.get("thread") ?? "").fetch(
-          request,
-        );
+        const response = await env.ACCOUNT_THREADS.getByName(
+          url.searchParams.get("thread") ?? "",
+        ).fetch(request);
 
         return new Response(await response.arrayBuffer(), response);
       }

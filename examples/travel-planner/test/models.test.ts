@@ -793,7 +793,7 @@ it.effect(
 
       const credentials = credentialSourceLayer({
         BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...encryption)),
-        THREADS: {
+        ACCOUNT_THREADS: {
           getByName: (owner) => ({
             demoAccessAllowed: async () => false,
             modelCredential: async () => {

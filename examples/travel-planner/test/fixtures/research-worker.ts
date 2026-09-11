@@ -576,13 +576,13 @@ export default {
         url.pathname === "/__research/seed-research" ||
         url.pathname === "/__research/seed-progress"
       )
-        return env.THREADS.getByName(ownerOfThread(url.searchParams.get("thread") ?? "")).fetch(
-          request,
-        );
+        return env.ACCOUNT_THREADS.getByName(
+          ownerOfThread(url.searchParams.get("thread") ?? ""),
+        ).fetch(request);
       if (url.pathname === "/__research/journal") {
         const threadId = url.searchParams.get("thread") ?? "";
 
-        return env.THREADS.getByName(
+        return env.ACCOUNT_THREADS.getByName(
           threadId.startsWith("worker:") ? threadId : ownerOfThread(threadId),
         ).fetch(request);
       }

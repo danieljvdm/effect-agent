@@ -118,7 +118,7 @@ export const tripRepositoryForOwner = (
       const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Request))(request);
 
       const reply = yield* Effect.tryPromise({
-        try: () => env.THREADS.getByName(storageOwner).tripRepository(encoded),
+        try: () => env.ACCOUNT_THREADS.getByName(storageOwner).tripRepository(encoded),
         catch: unavailable,
       });
 

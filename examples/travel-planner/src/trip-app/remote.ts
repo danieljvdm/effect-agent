@@ -91,7 +91,7 @@ export const callAppRepository = <A, I>(
     const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(AppCommand))(request);
 
     const response = yield* Effect.tryPromise({
-      try: () => env.THREADS.getByName(owner).tripApp(encoded),
+      try: () => env.ACCOUNT_THREADS.getByName(owner).tripApp(encoded),
       catch: unavailable,
     });
 

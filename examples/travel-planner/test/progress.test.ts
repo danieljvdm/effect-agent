@@ -286,7 +286,7 @@ it("streams HTTP before completion and cancellation disposes the request without
           }) + "\n",
       }),
       {
-        THREADS: {
+        ACCOUNT_THREADS: {
           getByName: (name) => {
             addresses.push(name);
 
@@ -329,7 +329,7 @@ it("streams HTTP before completion and cancellation disposes the request without
           }) + "\n",
       }),
       {
-        THREADS: {
+        ACCOUNT_THREADS: {
           getByName: (name) => {
             deniedAddresses.push(name);
 

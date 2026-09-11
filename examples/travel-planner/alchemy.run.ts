@@ -49,9 +49,12 @@ export default Alchemy.Stack(
       compatibility: { date: "2026-07-01", flags: ["nodejs_compat"] },
       assets: { runWorkerFirst: true },
       env: {
-        // New logical ID AND class: the reviewed clean-start deploy deletes only
-        // this app's old PlannerThread namespace instead of renaming/migrating it.
-        THREADS: Cloudflare.DurableObject("AuthThreadsV1", { className: "AuthPlannerThread" }),
+        // Alchemy keys env-bound Objects by the binding name, overriding the
+        // declaration ID. Change both binding and class for this clean start.
+        // Keep both stable after release; changing them deletes account data.
+        ACCOUNT_THREADS: Cloudflare.DurableObject("AccountThreadsV1", {
+          className: "AccountPlannerThread",
+        }),
         AUTH: Cloudflare.DurableObject("AuthV1", { className: "PlannerAuth" }),
         AUTH_EMAIL: Cloudflare.Email.SendEmail("AuthEmail", {
           allowedSenderAddresses: [yield* Config.nonEmptyString("AUTH_EMAIL_FROM")],

@@ -81,7 +81,7 @@ export class OwnerFixture extends DurableObject {
 export default {async fetch(request,env,ctx){
  const url=new URL(request.url);
  if(url.pathname==="/__seed"){
-   const input=await request.json();await env.THREADS.getByName(input.owner).seed(input.app,input.data);
+   const input=await request.json();await env.ACCOUNT_THREADS.getByName(input.owner).seed(input.app,input.data);
    if(input.register!==false)await Effect.runPromise(publishTripAppAddress(input.owner,input.app,"effect-agent.com").pipe(Effect.provide(AppBuildBucketLive),Effect.provideService(WorkerEnvironment,env)));
    if(input.app.activeCommit!==null){
      const prefix=buildPrefix(input.app.id,input.app.activeCommit);
@@ -136,7 +136,7 @@ export default {async fetch(request,env,ctx){
       modulesRoot: "/",
       compatibilityDate: "2026-07-01",
       compatibilityFlags: ["nodejs_compat"],
-      durableObjects: { THREADS: { className: "OwnerFixture", useSQLite: true } },
+      durableObjects: { ACCOUNT_THREADS: { className: "OwnerFixture", useSQLite: true } },
       r2Buckets: ["APP_BUILDS"],
       workerLoaders: { APP_LOADER: {} },
       bindings: {

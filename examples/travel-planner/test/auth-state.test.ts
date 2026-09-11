@@ -74,7 +74,12 @@ it("retires app registries and pending requests on signout/account switch while 
           (await request.text()).trim(),
         );
 
-        request.signal.addEventListener(
+        // Observe the signal given to fetch. A copied Request's dependent signal
+        // can be garbage-collected while this fixture keeps its response pending.
+        const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+
+        if (!signal) throw new Error("Expected an abortable account request");
+        signal.addEventListener(
           "abort",
           () => {
             cancelled = true;

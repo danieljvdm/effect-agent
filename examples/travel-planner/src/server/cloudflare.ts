@@ -185,7 +185,7 @@ export const plannerHandlers = PlannerRpcs.toLayer({
         const env = yield* WorkerEnvironment;
 
         const reply = yield* Effect.tryPromise({
-          try: () => env.THREADS.getByName(privateId).plannerState(),
+          try: () => env.ACCOUNT_THREADS.getByName(privateId).plannerState(),
           catch: () =>
             new PlannerError({
               code: "unavailable",
@@ -626,7 +626,7 @@ export const makeTravelPlannerThread = <E>(
   application = PlannerLive,
 ) => {
   return class extends ThreadObject.make(application.pipe(Layer.provideMerge(sites)), {
-    namespaceBinding: "THREADS",
+    namespaceBinding: "ACCOUNT_THREADS",
     deploymentId: "travel-planner-v1",
     producerPrefix: "travel-planner",
     wakeScanInterval: 250,

@@ -89,7 +89,7 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
         const env = yield* WorkerEnvironment;
 
         const progress = yield* Effect.tryPromise({
-          try: () => env.THREADS.getByName(worker.threadId).plannerProgress(),
+          try: () => env.ACCOUNT_THREADS.getByName(worker.threadId).plannerProgress(),
           catch: () => "unavailable" as const,
         }).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PlannerProgress))),
@@ -97,7 +97,7 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
         );
 
         const diagnostics = yield* Effect.tryPromise({
-          try: () => env.THREADS.getByName(worker.threadId).plannerDiagnostics(),
+          try: () => env.ACCOUNT_THREADS.getByName(worker.threadId).plannerDiagnostics(),
           catch: () => "unavailable" as const,
         }).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RecordedDiagnostics))),
