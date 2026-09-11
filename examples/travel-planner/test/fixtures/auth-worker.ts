@@ -37,6 +37,10 @@ export class AuthFixture extends DurableObject {
     const url = new URL(request.url);
 
     if (url.pathname === "/_fixture/rejections") return Response.json(this.rejections);
+    if (url.pathname === "/_fixture/subjects")
+      return Response.json(
+        this.ctx.storage.sql.exec("select id, displayName from auth_subject").toArray(),
+      );
     if (url.pathname === "/_fixture/reporter") {
       this.reporterMode = url.searchParams.get("mode");
 

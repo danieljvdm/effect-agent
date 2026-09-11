@@ -208,7 +208,7 @@ vp install
 cp examples/travel-planner/.env.example examples/travel-planner/.env
 ```
 
-Fill the ignored `.env` using `.env.example`. The app pins `@yielded/auth@0.1.0-beta.4`
+Fill the ignored `.env` using `.env.example`. The app pins `@yielded/auth@0.1.0-beta.5`
 and the existing Effect `4.0.0-rc.112` catalog. It uses one `Auth.make` service for
 email codes and GitHub, with the published SQLite Durable Object adapters. Auth owns
 proofs, request binding, credential/session authority and OAuth exchanges; application
@@ -224,6 +224,13 @@ GitHub automatically provisions a new local account when registration is require
 starts a fresh authorization to establish its session. Denied or failed exchanges offer
 an explicit new attempt. Email and GitHub are separate credentials/accounts even if their
 profile emails match. There is no automatic linking, admin bootstrap or invitation gate.
+
+GitHub accounts display the authenticated profile name, falling back to the GitHub username.
+Registration saves that name, and each fresh GitHub sign-in refreshes the session's display
+name without changing the local account or its stored data. After upgrading an existing
+session that shows **GitHub traveler**, sign out and sign in again. The app exposes only the
+display name in session claims; provider profile fields do not grant local authority or link
+accounts. No new GitHub scopes, provider configuration or data reset are needed for this update.
 
 GitHub callbacks must retain the provider's `iss` value as `response.issuer`. The
 provider requires `https://github.com/login/oauth` and rejects missing or mismatched

@@ -19,6 +19,7 @@ import { defaultPlannerSettings } from "../src/domain";
 let mf: Miniflare;
 let directory: string;
 let githubExchanges = 0;
+let githubName: string | null = "River Traveler";
 const githubIssuer = "https://github.com/login/oauth";
 
 beforeAll(async () => {
@@ -71,7 +72,9 @@ beforeAll(async () => {
           return Response.json({
             id: 424242,
             login: "fixture-traveler",
+            name: githubName,
             email: "reader@example.com",
+            site_admin: true,
           });
 
         return new Response("Unexpected provider request", { status: 500 });
@@ -312,19 +315,48 @@ it("registers and signs in new and returning email and GitHub accounts through d
   ).toMatchObject({ _tag: "RegistrationAccepted" });
   expect(await call("getSession")).toBeNull();
   expect(await call("completeSignIn", await githubStart("github-signin"))).toMatchObject({
-    completion: { _tag: "Authenticated", session: { claims: { displayName: "GitHub traveler" } } },
+    completion: { _tag: "Authenticated", session: { claims: { displayName: "River Traveler" } } },
   });
-  expect(await call("getSession")).toMatchObject({ claims: { displayName: "GitHub traveler" } });
+  expect(await call("getSession")).toMatchObject({ claims: { displayName: "River Traveler" } });
 
   const githubAccount = Schema.decodeUnknownSync(Schema.Struct({ subjectId: Schema.String }))(
     await call("getSession"),
   );
 
   expect(githubAccount.subjectId).not.toBe(emailAccount.subjectId);
+  expect(
+    await (await mf.dispatchFetch("https://planner.test/_fixture/subjects")).json(),
+  ).toContainEqual({ id: githubAccount.subjectId, displayName: "River Traveler" });
   expect(await privateRpc(githubAccount.subjectId, "GetPlannerSettings")).toEqual(
     defaultPlannerSettings,
   );
-  await call("signOut", {});
+  expect(await privateRpc(githubAccount.subjectId, "SavePlannerSettings", preferences)).toEqual(
+    preferences,
+  );
+
+  try {
+    for (const [name, displayName] of [
+      ["River Explorer", "River Explorer"],
+      [null, "fixture-traveler"],
+    ] as const) {
+      await call("signOut", {});
+      expect(await call("getSession")).toBeNull();
+      githubName = name;
+      expect(await call("completeSignIn", await githubStart(crypto.randomUUID()))).toMatchObject({
+        completion: { _tag: "Authenticated" },
+      });
+
+      const session = Schema.decodeUnknownSync(
+        Schema.Struct({ subjectId: Schema.String, claims: Schema.Unknown }),
+      )(await call("getSession"));
+
+      expect(session).toEqual({ subjectId: githubAccount.subjectId, claims: { displayName } });
+      expect(await privateRpc(githubAccount.subjectId, "GetPlannerSettings")).toEqual(preferences);
+    }
+  } finally {
+    githubName = "River Traveler";
+    await call("signOut", {});
+  }
   expect(await call("getSession")).toBeNull();
 }, 30_000);
 
