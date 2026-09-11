@@ -33,6 +33,7 @@ import {
   conversationScoutReport,
   scoutAttemptLayer,
   liveScoutReport,
+  recoverableScoutReport,
   editorReport,
   ScoutMessagingLive,
 } from "../research/runtime.ts";
@@ -41,6 +42,9 @@ import {
   ResearchScoutBackground,
   researchScout,
   progressResearchScout,
+  recoverableResearchScout,
+  RecoverableResearchScoutBackground,
+  PreviousProgressResearchScoutBackground,
   ProgressResearchScoutBackground,
   PreviousResearchScoutBackground,
 } from "../research/scout.ts";
@@ -82,6 +86,7 @@ import {
   planner,
   previousVoicePlanner,
   previousProgressPlanner,
+  previousDelegatingPlanner,
   previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
@@ -279,18 +284,21 @@ export const plannerApplication = <E, R>(
       readonly submissionId: SubmissionLookupById["submissionId"];
       readonly attemptId: string;
     },
-    expandedResearch: boolean | "progress" = false,
+    expandedResearch: boolean | "progress" | "recoverable" = false,
   ) =>
     Layer.mergeAll(
       TripToolsLive(context.threadId),
       AppToolsLive,
       AppEditorBackground.layer,
       PreviousResearchScoutBackground.layer,
-      expandedResearch === "progress"
-        ? ProgressResearchScoutBackground.layer
-        : expandedResearch
-          ? ExpandedResearchScoutBackground.layer
-          : ResearchScoutBackground.layer,
+      PreviousProgressResearchScoutBackground.layer,
+      expandedResearch === "recoverable"
+        ? RecoverableResearchScoutBackground.layer
+        : expandedResearch === "progress"
+          ? ProgressResearchScoutBackground.layer
+          : expandedResearch
+            ? ExpandedResearchScoutBackground.layer
+            : ResearchScoutBackground.layer,
     ).pipe(
       Layer.provideMerge(
         Layer.effect(
@@ -347,9 +355,20 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v14" },
+        agent: { id: planner.id, version: "travel-planner-v15" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      reporting: [recoverableScoutReport, editorReport],
+      attemptLayer: (context) => attemptLayer(context, "recoverable"),
+    },
+    {
+      agent: previousDelegatingPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousDelegatingPlanner.id, version: "travel-planner-v14" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousDelegatingPlanner.toolkit.tools),
       }),
       reporting: [liveScoutReport, editorReport],
       attemptLayer: (context) => attemptLayer(context, "progress"),
@@ -418,6 +437,24 @@ export const plannerApplication = <E, R>(
         tools: Object.keys(previousEditorPlanner.toolkit.tools),
       }),
       attemptLayer,
+    },
+    {
+      agent: recoverableResearchScout,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: recoverableResearchScout.id, version: "travel-research-scout-v3" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(recoverableResearchScout.toolkit.tools),
+      }),
+      attemptLayer: (context) =>
+        scoutAttemptLayer(context, true).pipe(
+          Layer.provideMerge(
+            Layer.succeed(DiagnosticContext, {
+              submissionId: context.submissionId,
+              attemptId: context.attemptId,
+            }),
+          ),
+        ),
     },
     {
       agent: progressResearchScout,

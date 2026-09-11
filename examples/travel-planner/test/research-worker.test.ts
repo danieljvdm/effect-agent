@@ -338,15 +338,19 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
   ).toBe(true);
 }, 90_000);
 
-it.each(["current", "retained"])(
+it.each(["current", "retained", "delegating"])(
   "delivers a %s sourced milestone before worker completion and accepts a correction on that active worker",
   async (version) => {
     const email = `progress-${version}@example.com`;
     const thread = `member-${createHash("sha256").update(email).digest("hex")}--research`;
 
     await fixture("gate", { name: "Live progress" }, "DELETE");
-    if (version === "retained")
-      await fixture("seed-progress", { thread, settings: JSON.stringify(settings) }, "POST");
+    if (version !== "current")
+      await fixture(
+        "seed-progress",
+        { thread, version, settings: JSON.stringify(settings) },
+        "POST",
+      );
     else await send("start live progress", email);
 
     const active = await until(
@@ -397,6 +401,37 @@ it.each(["current", "retained"])(
     );
 
     expect(completed.scouts?.[0]?.finding?.text).toContain("Experienced at 50 km");
+    if (!id) throw new Error("Missing completed scout identity");
+    const child = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread: id }));
+
+    const failed = child.records.flatMap(({ record }) =>
+      record.payload._tag === "ToolCallSettled" &&
+      record.payload.toolName === "finish_research" &&
+      record.payload.isFailure
+        ? [record.payload]
+        : [],
+    );
+
+    expect(failed).toHaveLength(version === "current" ? 1 : 0);
+    expect(
+      child.records.filter(({ record }) => record.payload._tag === "RunCompleted"),
+    ).toHaveLength(1);
+
+    const completionStarted = child.records.findIndex(
+      ({ record }) =>
+        record.payload._tag === "ToolCallSettled" && record.payload.toolName === "finish_research",
+    );
+
+    expect(completionStarted).toBeGreaterThanOrEqual(0);
+    expect(
+      child.records
+        .slice(completionStarted)
+        .filter(
+          ({ record }) =>
+            record.payload._tag === "ToolCallSettled" &&
+            record.payload.toolName === "read_travel_page",
+        ),
+    ).toHaveLength(0);
   },
   90_000,
 );

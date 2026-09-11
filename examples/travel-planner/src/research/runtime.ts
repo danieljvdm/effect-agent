@@ -11,11 +11,12 @@ import { Effect, Layer, Option, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 
 import { PlannerError, PlannerInput } from "../domain.ts";
-import { planner, previousProgressPlanner } from "../server/planner.ts";
+import { planner, previousProgressPlanner, previousDelegatingPlanner } from "../server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../server/progress.ts";
 import { publicationAuthorization } from "../server/security.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
 import { AppEditor, EditorInput } from "../trip-app/editor.ts";
+import { CheckedFinishResearchLive } from "./completion.ts";
 import type { ScoutFindings } from "./contracts.ts";
 import {
   CoordinatorInput,
@@ -35,6 +36,8 @@ import {
   ProgressResearchScout,
   ReportResearchProgress,
   progressResearchScout,
+  recoverableResearchScout,
+  RecoverableResearchScout,
 } from "./scout.ts";
 
 const unavailable = () =>
@@ -64,7 +67,9 @@ export const readScoutInput = Effect.fn("readScoutInput")(function* (
   if (
     origin === undefined ||
     origin.worker.threadId !== submission.threadId ||
-    ![researchScout.id, progressResearchScout.id].includes(origin.worker.targetAgentId) ||
+    ![researchScout.id, progressResearchScout.id, recoverableResearchScout.id].includes(
+      origin.worker.targetAgentId,
+    ) ||
     origin.worker.delegationId !== ResearchScout.delegationId ||
     !researchCoordinatorIds.includes(origin.source.agentId) ||
     origin.source.threadId !== input.sourceThreadId ||
@@ -117,6 +122,12 @@ export const liveScoutReport = Subagent.reporting(ProgressResearchScout, {
   prepare: prepareResearchScoutReport,
 });
 
+export const recoverableScoutReport = Subagent.reporting(RecoverableResearchScout, {
+  input: LiveConversationInput,
+  failure: PlannerError,
+  prepare: prepareResearchScoutReport,
+});
+
 export const editorReport = Subagent.reporting(AppEditor, {
   input: LiveConversationInput,
   failure: PlannerError,
@@ -159,6 +170,10 @@ const previousConversationPeer = Messaging.peer("travel_conversation", {
   target: previousProgressPlanner,
 });
 
+const previousDelegatingConversationPeer = Messaging.peer("travel_conversation", {
+  target: previousDelegatingPlanner,
+});
+
 /** Only the canonical scout origin can select the receiving conversation and account. */
 export const ScoutMessagingLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -180,7 +195,8 @@ export const ScoutMessagingLive = Layer.unwrap(
 
       if (
         origin?._tag !== "WorkerOriginRecorded" ||
-        source.agentId !== progressResearchScout.id ||
+        (source.agentId !== progressResearchScout.id &&
+          source.agentId !== recoverableResearchScout.id) ||
         origin.origin.worker.threadId !== source.threadId ||
         origin.origin.worker.targetAgentId !== source.agentId ||
         origin.origin.worker.delegationId !== ResearchScout.delegationId ||
@@ -232,11 +248,14 @@ export const ScoutMessagingLive = Layer.unwrap(
   }),
 );
 
-export const scoutAttemptLayer = (context: {
-  readonly threadId: string;
-  readonly submissionId: SubmissionLookupById["submissionId"];
-  readonly attemptId: string;
-}) =>
+export const scoutAttemptLayer = (
+  context: {
+    readonly threadId: string;
+    readonly submissionId: SubmissionLookupById["submissionId"];
+    readonly attemptId: string;
+  },
+  recoverable = false,
+) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const progress = yield* ProgressStore;
@@ -278,7 +297,9 @@ export const scoutAttemptLayer = (context: {
               return yield* Messaging.send(
                 captured.origin.source.agentId === previousProgressPlanner.id
                   ? previousConversationPeer
-                  : conversationPeer,
+                  : captured.origin.source.agentId === previousDelegatingPlanner.id
+                    ? previousDelegatingConversationPeer
+                    : conversationPeer,
                 {
                   _tag: "ResearchScoutProgress",
                   worker: captured.origin.worker,
@@ -290,9 +311,11 @@ export const scoutAttemptLayer = (context: {
               );
             }),
         }),
-        Toolkit.make(FinishResearch).toLayer({
-          finish_research: (findings) => Effect.succeed(findings),
-        }),
+        recoverable
+          ? CheckedFinishResearchLive
+          : Toolkit.make(FinishResearch).toLayer({
+              finish_research: (findings) => Effect.succeed(findings),
+            }),
         Layer.succeed(PlannerAttempt, {
           billingOwner: Effect.map(input, (input) => ownerOfThread(input.sourceThreadId)),
           settings: Effect.map(input, (input) => input.settings),
@@ -320,6 +343,7 @@ export const ResearchAuthorizationLive = Layer.effect(
             "research_scout_start",
             "research_scout_follow_up",
             "previous_research_scout_follow_up",
+            "previous_progress_research_scout_follow_up",
             "app_editor_start",
             "app_editor_follow_up",
           ].includes(request.call.toolName)

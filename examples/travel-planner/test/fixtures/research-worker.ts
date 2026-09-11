@@ -26,12 +26,15 @@ import { ScoutInput } from "../../src/research/contracts.ts";
 import {
   ResearchScoutBackground,
   ProgressResearchScoutBackground,
+  RecoverableResearchScoutBackground,
+  PreviousProgressResearchScoutBackground,
 } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import {
   previousEditorPlanner,
   previousResearchPlanner,
   previousProgressPlanner,
+  previousDelegatingPlanner,
 } from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread, storageOwner } from "../../src/server/tenancy.ts";
@@ -197,6 +200,24 @@ const model = Model.make(
                   ),
                 );
 
+              if (
+                scout.input.title === "Live progress" &&
+                tools.some(
+                  (tool) => tool.name === "finish_research" && tool.failureMode === "return",
+                ) &&
+                !results(prompt, scout.index).some((result) => result.name === "finish_research")
+              )
+                return Stream.fromIterable(
+                  call(
+                    "finish_research",
+                    {
+                      summary: "Evidence that must be shortened. ".repeat(150),
+                      sources: [],
+                    },
+                    `oversized-${scout.index}`,
+                  ),
+                );
+
               return Stream.fromIterable(
                 call(
                   "finish_research",
@@ -283,18 +304,32 @@ const model = Model.make(
 
               if (!started) return yield* Effect.die("Missing live scout");
 
-              const accepted = yield* Schema.decodeUnknownEffect(
-                ProgressResearchScoutBackground.tools.research_scout_start.successSchema,
-              )(started.result).pipe(Effect.orDie);
+              const previous = Option.isSome(
+                Schema.decodeUnknownOption(
+                  ProgressResearchScoutBackground.tools.research_scout_start.successSchema,
+                )(started.result),
+              );
+
+              const start = previous
+                ? ProgressResearchScoutBackground.tools.research_scout_start
+                : RecoverableResearchScoutBackground.tools.research_scout_start;
+
+              const follow = previous
+                ? PreviousProgressResearchScoutBackground.tools
+                    .previous_progress_research_scout_follow_up
+                : RecoverableResearchScoutBackground.tools.research_scout_follow_up;
+
+              const accepted = yield* Schema.decodeUnknownEffect(start.successSchema)(
+                started.result,
+              ).pipe(Effect.orDie);
 
               return Stream.fromIterable(
-                current.some((result) => result.name === "research_scout_follow_up")
+                current.some((result) => result.name === follow.name)
                   ? finish("50 km correction accepted.")
-                  : call("research_scout_follow_up", {
-                      worker: Schema.encodeSync(
-                        ProgressResearchScoutBackground.tools.research_scout_follow_up
-                          .parametersSchema.fields.worker,
-                      )(accepted.worker),
+                  : call(follow.name, {
+                      worker: Schema.encodeSync(follow.parametersSchema.fields.worker)(
+                        accepted.worker,
+                      ),
                       parameters: {
                         title: "Live progress",
                         message: "Experienced at 50 km; include ultra distances",
@@ -501,7 +536,16 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           };
 
           yield* progress
-            ? runtime.submitRegistered({ definition: previousProgressPlanner }, input, options)
+            ? runtime.submitRegistered(
+                {
+                  definition:
+                    url.searchParams.get("version") === "delegating"
+                      ? previousDelegatingPlanner
+                      : previousProgressPlanner,
+                },
+                input,
+                options,
+              )
             : research
               ? runtime.submitRegistered({ definition: previousResearchPlanner }, input, options)
               : runtime.submitRegistered({ definition: previousEditorPlanner }, input, options);

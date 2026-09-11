@@ -14,7 +14,7 @@ import { RecordedDiagnostics } from "../server/diagnostics.ts";
 import { emptyProgress } from "../server/progress.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
 import { ScoutFindings, ScoutRequest } from "./contracts.ts";
-import { ResearchScout, ProgressResearchScout } from "./scout.ts";
+import { ResearchScout, ProgressResearchScout, RecoverableResearchScout } from "./scout.ts";
 
 /** Discover only source-owned native workers; opaque worker IDs never grant cross-account access. */
 export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
@@ -56,9 +56,11 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
 
       return Effect.gen(function* () {
         const declaration =
-          reference.targetAgentId === ProgressResearchScout.target.id
-            ? ProgressResearchScout
-            : ResearchScout;
+          reference.targetAgentId === RecoverableResearchScout.target.id
+            ? RecoverableResearchScout
+            : reference.targetAgentId === ProgressResearchScout.target.id
+              ? ProgressResearchScout
+              : ResearchScout;
 
         const worker = yield* Schema.decodeUnknownEffect(Subagent.Worker(declaration))(reference);
         const runtime = yield* DurableAgentRuntime;

@@ -17,6 +17,7 @@ import { PreviousReadTravelPage, PreviousReadTravelPageResult } from "../src/res
 import {
   planner,
   previousProgressPlanner,
+  previousDelegatingPlanner,
   previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
@@ -109,7 +110,8 @@ it.effect(
   "requires response delivery while retaining the accepted v11/v10/v9/v8/v7/v6/v5/v4/v3/v2 contracts",
   () =>
     Effect.gen(function* () {
-      expect(planner.id).toBe("travel-planner-v14");
+      expect(planner.id).toBe("travel-planner-v15");
+      expect(previousDelegatingPlanner.id).toBe("travel-planner-v14");
       expect(previousProgressPlanner.id).toBe("travel-planner-v13");
       expect(previousProgressPlanner.toolkit.tools).toHaveProperty("OpenAiWebSearch");
       expect(previousProgressPlanner.toolkit.tools).toHaveProperty("read_travel_page");

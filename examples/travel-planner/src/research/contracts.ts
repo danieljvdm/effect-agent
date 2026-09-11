@@ -11,9 +11,14 @@ export const previousBudgetCoordinatorId = "travel-planner-v10";
 export const previousTextCoordinatorId = "travel-planner-v11";
 export const previousVoiceCoordinatorId = "travel-planner-v12";
 export const previousProgressCoordinatorId = "travel-planner-v13";
-export const researchCoordinatorId = "travel-planner-v14";
+export const previousDelegatingCoordinatorId = "travel-planner-v14";
+export const researchCoordinatorId = "travel-planner-v15";
 
-export const progressCoordinatorIds = [previousProgressCoordinatorId, researchCoordinatorId];
+export const progressCoordinatorIds = [
+  previousProgressCoordinatorId,
+  previousDelegatingCoordinatorId,
+  researchCoordinatorId,
+];
 
 export const researchCoordinatorIds = [
   previousResearchCoordinatorId,
@@ -21,6 +26,7 @@ export const researchCoordinatorIds = [
   previousTextCoordinatorId,
   previousVoiceCoordinatorId,
   previousProgressCoordinatorId,
+  previousDelegatingCoordinatorId,
   researchCoordinatorId,
 ];
 
@@ -101,5 +107,6 @@ export const expandedCoordinatorIds = [
   previousTextCoordinatorId,
   previousVoiceCoordinatorId,
   previousProgressCoordinatorId,
+  previousDelegatingCoordinatorId,
   researchCoordinatorId,
 ];

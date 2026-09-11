@@ -12,6 +12,7 @@ import { PlannerError } from "../domain.ts";
 import { ReadTravelPage } from "../research.ts";
 import { researchScoutLimit, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt } from "../server/progress.ts";
+import { CheckedFinishResearch } from "./completion.ts";
 import { ScoutFindings, ScoutInput, ScoutRequest, ScoutProgress } from "./contracts.ts";
 
 export const FinishResearch = Tool.make("finish_research", {
@@ -151,6 +152,50 @@ export const ProgressResearchScoutBackground = Subagent.background(ProgressResea
   cancel: true,
   budgetScope: "worker-run",
 });
+
+/** New workers can correct invalid findings without discarding their researched context. */
+export const recoverableResearchScout = Agent.make("travel-research-scout-v3", {
+  input: ScoutInput,
+  output: ScoutFindings,
+  policy: progressResearchScout.policy,
+  toolkit: Toolkit.make(
+    CheckedFinishResearch,
+    ReadTravelPage,
+    OpenAiTool.WebSearch({ search_context_size: "low" }),
+    ReportResearchProgress,
+  ),
+  instructions:
+    progressResearchScout.instructions +
+    " Keep the finish_research summary below 4000 characters and the complete findings JSON below 8 KiB. Put source-specific evidence in source notes instead of repeating it in the summary. A rejected finish_research draft is not completion: correct it using the tool's feedback and submit again in this same pass. Preserve uncertainty and useful source links; do not restart research merely to shorten the answer.",
+  completion: { tool: "finish_research", required: true, project: ({ result }) => result },
+});
+
+export const RecoverableResearchScout = Subagent.make("research_scout", {
+  ...ProgressResearchScout,
+  target: recoverableResearchScout,
+});
+
+export const RecoverableResearchScoutBackground = Subagent.background(RecoverableResearchScout, {
+  start: true,
+  followUp: true,
+  summary: true,
+  inspect: true,
+  list: true,
+  cancel: true,
+  budgetScope: "worker-run",
+});
+
+export const PreviousProgressResearchScoutBackground = Subagent.background(
+  { ...ProgressResearchScout, name: "previous_progress_research_scout" as const },
+  {
+    followUp: true,
+    summary: true,
+    inspect: true,
+    list: true,
+    cancel: true,
+    budgetScope: "worker-run",
+  },
+);
 
 /** Existing worker references keep their original target and grant; only their tool labels differ. */
 export const PreviousResearchScoutBackground = Subagent.background(

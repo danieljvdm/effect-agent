@@ -1,3 +1,4 @@
+import * as Agent from "@effect-agent/core/Agent";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
@@ -16,6 +17,8 @@ import {
   Trip,
   TripSiteStore,
 } from "../src/domain.ts";
+import { CheckedFinishResearch, CheckedFinishResearchLive } from "../src/research/completion.ts";
+import { ScoutFindings } from "../src/research/contracts.ts";
 import { FailureDiagnostics, type FailureDiagnostic } from "../src/server/diagnostics.ts";
 import { liveModel, observeOpenAi, selectableModel } from "../src/server/models.ts";
 // Retain these protocol/legacy-publication regressions against the admitted v5 definition.
@@ -853,4 +856,92 @@ it.effect(
         ),
       ),
     ),
+);
+
+it.effect(
+  "lets the scout correct oversized findings through OpenAI and the agent loop before completing",
+  () =>
+    Effect.gen(function* () {
+      const evidence = {
+        summary:
+          "Ferry Building food stops and Golden Gate Park suit a balanced San Francisco week. October dates and hotel prices remain unverified.",
+        sources: [
+          {
+            title: "San Francisco",
+            url: "https://www.sftravel.com/",
+            notes: "Destination reference; no hotel availability confirmed.",
+            photos: [],
+          },
+        ],
+      };
+
+      const oversized = { ...evidence, summary: "Research detail. ".repeat(300) };
+
+      const oversizedBytes = {
+        ...evidence,
+        summary: "😀".repeat(1900),
+        sources: Array.from({ length: 6 }, () => evidence.sources[0]),
+      };
+
+      const invalidUrl = {
+        ...evidence,
+        sources: [{ ...evidence.sources[0], url: "https://localhost/secret" }],
+      };
+
+      for (const rejected of [oversized, oversizedBytes, invalidUrl]) {
+        const drafts = [rejected, evidence];
+        const requests: string[] = [];
+
+        const scout = Agent.make("research-validation-fixture", {
+          input: Schema.String,
+          output: ScoutFindings,
+          toolkit: Toolkit.make(CheckedFinishResearch),
+          policy: { maxTurns: 5, maxToolCalls: 5 },
+          instructions:
+            "Finish the existing research. Correct rejected drafts without starting over.",
+          completion: { tool: "finish_research", required: true, project: ({ result }) => result },
+        });
+
+        const fetch: typeof globalThis.fetch = async (_url, init) => {
+          requests.push(await new Response(init?.body).text());
+          const draft = drafts[requests.length - 1];
+
+          if (!draft) throw new Error("Unexpected additional research turn");
+
+          return functionAnswer([{ name: "finish_research", params: draft }], requests.length);
+        };
+
+        const client = OpenAiClient.layer({ apiKey: Redacted.make("fake-api-key") }).pipe(
+          Layer.provide(FetchHttpClient.layer),
+        );
+
+        const events = yield* AgentRuntime.stream(
+          scout,
+          "Plan one week in San Francisco from Louisville; preserve the research already gathered.",
+        ).pipe(
+          Stream.runCollect,
+          Effect.provide([
+            OpenAiLanguageModel.model("gpt-6-astra").pipe(Layer.provide(client)),
+            CheckedFinishResearchLive,
+            IdGenerator.layer,
+            ThreadHistory.layerTransient,
+          ]),
+          Effect.provideService(FetchHttpClient.Fetch, fetch),
+        );
+
+        expect(requests).toHaveLength(2);
+        for (const request of requests.slice(1)) {
+          expect(request).toContain("Findings were not accepted");
+          expect(request).toContain("8192 bytes");
+          expect(request).toContain("Louisville");
+        }
+        expect(events.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
+        expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(1);
+        const completed = events.find((event) => event._tag === "RunCompleted");
+
+        expect(completed?.output).toEqual(evidence);
+      }
+      expectTypeOf<Layer.Services<typeof CheckedFinishResearchLive>>().toEqualTypeOf<never>();
+      expectTypeOf<Layer.Error<typeof CheckedFinishResearchLive>>().toEqualTypeOf<never>();
+    }),
 );

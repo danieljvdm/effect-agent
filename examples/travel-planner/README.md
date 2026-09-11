@@ -64,6 +64,13 @@ scouts and an editor, and retains at most 100 workers per conversation. Each wor
 up to 256 total inputs and 16 pending inputs; its reference lasts seven days. Existing
 conversations and app editors continue to work.
 
+New research scouts validate completion drafts inside the `finish_research` handler. A rejected
+draft returns corrective feedback to the same running scout, preserving its research context.
+Accepted findings still require a summary of at most 4,000 characters, at most six sources, valid
+public HTTPS links, and a complete encoded result of at most 8 KiB. Nothing is silently truncated.
+Corrections use the existing turn, tool, and duration budgets; structural provider errors and
+exhausted budgets can still fail a run. Previously accepted scouts retain their original contracts.
+
 For a request with several parts, the coordinator must complete or dispatch every part
 before its final reply. A request to build a site and find golf courses and surf breaks
 starts the editor and both research tasks; saving a draft or starting only the editor
