@@ -61,6 +61,7 @@
     "capped-review-turns",
     "captured-worker-policy",
     "clear-addressed-pr-reviews",
+    "clear-durable-run-failures",
     "clear-export-ownership",
     "clear-rollover-guidance",
     "clear-tool-failure-routing",

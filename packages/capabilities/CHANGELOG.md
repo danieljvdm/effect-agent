@@ -1,5 +1,14 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.83
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.83
+  - @effect-agent/engine@0.1.0-beta.83
+  - @effect-agent/sandbox@0.1.0-beta.83
+
 ## 0.1.0-beta.82
 
 ### Patch Changes

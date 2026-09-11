@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.83
+
+### Patch Changes
+
+- [#454](https://github.com/danieljvdm/effect-agent/pull/454) [`d349fa1`](https://github.com/danieljvdm/effect-agent/commit/d349fa181bb3ecc88823aeef4ae9075a12d21f1f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Report terminal durable Agent failures with their original cause and execution identity before storing the bounded settlement diagnostic.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.83
+  - @effect-agent/engine@0.1.0-beta.83
+
 ## 0.1.0-beta.82
 
 ### Patch Changes
