@@ -49,7 +49,6 @@
     },
     "examples/travel-planner": {
       "name": "@effect-agent/example-travel-planner",
-      "version": "0.0.0",
       "dependencies": {
         "@base-ui/react": "catalog:",
         "@cloudflare/sandbox": "catalog:",
