@@ -165,7 +165,7 @@ export const handleRequest = (verify = authenticate) =>
     if ((url.pathname.startsWith("/assets/") || url.pathname === "/favicon.svg") && env.ASSETS)
       return yield* Effect.promise(() => env.ASSETS!.fetch(request));
 
-    const identity = yield* verify(request, env).pipe(
+    const identity = yield* verify(request).pipe(
       Effect.match({
         onSuccess: (session) => ({ _tag: "Granted" as const, session }),
         onFailure: (error) => ({ _tag: "Denied" as const, error }),
@@ -268,7 +268,9 @@ export const handleRequest = (verify = authenticate) =>
 // Test fixtures may substitute session verification; production always uses authenticate.
 export const makeWorker = (verify = authenticate) => ({
   fetch: (request: Request, env: Cloudflare.Env, ctx?: ExecutionContext) =>
-    Effect.runPromise(handleRequest(verify)(request, env, ctx)),
+    Effect.runPromise(
+      handleRequest(verify)(request, env, ctx).pipe(Effect.provideService(WorkerEnvironment, env)),
+    ),
 });
 
 export default Worker.make(Layer.empty, {

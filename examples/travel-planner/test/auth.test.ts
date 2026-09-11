@@ -4,11 +4,14 @@ import { join } from "node:path";
 
 import { OAuthSignInAuthorization, OAuthRegistrationRequired } from "@yielded/auth/OAuth";
 import { ProofRequestReceipt, ProofContinuation } from "@yielded/auth/Proofs";
-import { Redacted, Schema } from "effect";
+import { type Effect, Redacted, Schema } from "effect";
+import type { WorkerEnvironment } from "effect-cf";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
-import { afterAll, beforeAll, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 
+import type { AccountError } from "../src/auth/account";
+import type { authenticate } from "../src/auth/worker";
 import type { PlannerSettings } from "../src/domain";
 import { defaultPlannerSettings } from "../src/domain";
 
@@ -143,6 +146,10 @@ const mail = async () =>
   )(await (await mf.dispatchFetch("https://planner.test/_fixture/delivery")).json());
 
 it("registers and signs in new and returning email and GitHub accounts through durable Auth HTTP actions", async () => {
+  expectTypeOf<
+    Effect.Services<ReturnType<typeof authenticate>>
+  >().toEqualTypeOf<WorkerEnvironment>();
+  expectTypeOf<Effect.Error<ReturnType<typeof authenticate>>>().toEqualTypeOf<AccountError>();
   const client = makeClient();
   const { call } = client;
 

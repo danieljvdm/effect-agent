@@ -108,7 +108,7 @@ export default {async fetch(request,env,ctx){
    if(input.value!==undefined)await env.APP_BUILDS.put(appAddressKey(input.hostname),JSON.stringify(input.value));
    const value=await env.APP_BUILDS.get(appAddressKey(input.hostname));return Response.json(value?await value.json():null);
  }
- return Effect.runPromise(handleRequest()(request,env,ctx));
+ return Effect.runPromise(handleRequest()(request,env,ctx).pipe(Effect.provideService(WorkerEnvironment,env)));
 }};
 `,
     },

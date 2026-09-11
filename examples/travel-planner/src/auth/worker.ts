@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
+import { WorkerEnvironment } from "effect-cf";
 
 import { AccountError, AccountSession } from "./account";
 import { emailDeliveryLayer } from "./email-delivery";
@@ -33,10 +34,7 @@ export class PlannerAuth extends DurableObject<Cloudflare.Env> {
   }
 }
 
-export const authenticate = Effect.fn("Planner.requireSession")(function* (
-  request: Request,
-  env: Cloudflare.Env,
-) {
+export const authenticate = Effect.fn("Planner.requireSession")(function* (request: Request) {
   if (!request.headers.get("cookie"))
     return yield* new AccountError({ code: "unauthorized", message: "Sign in to continue." });
 
@@ -50,6 +48,8 @@ export const authenticate = Effect.fn("Planner.requireSession")(function* (
 
   url.pathname = "/_internal/session";
   url.search = "";
+
+  const env = yield* WorkerEnvironment;
 
   const response = yield* Effect.tryPromise({
     try: () =>

@@ -1,4 +1,5 @@
 import { Effect, Layer, Schema } from "effect";
+import { WorkerEnvironment } from "effect-cf";
 
 import { AccountError } from "../../src/auth/account.ts";
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
@@ -19,7 +20,9 @@ const fixtureAuthorized = (request: Request, env: TestEnvironment) =>
 
 // Only this bundled test entrypoint accepts a bearer fixture and caller-selected identity.
 const worker = makeWorker(
-  Effect.fn("Fixture.authenticate")(function* (request: Request, env: TestEnvironment) {
+  Effect.fn("Fixture.authenticate")(function* (request: Request) {
+    const env = yield* WorkerEnvironment;
+
     if (!fixtureAuthorized(request, env))
       return yield* new AccountError({
         code: "unauthorized",

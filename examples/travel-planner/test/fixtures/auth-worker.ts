@@ -1,6 +1,7 @@
 import { EmailProofDelivery } from "@yielded/auth/Proofs";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Redacted } from "effect";
+import { WorkerEnvironment } from "effect-cf";
 
 import { handleRequest } from "../../src/worker";
 export { TravelPlannerThread } from "./worker";
@@ -116,5 +117,7 @@ export default {
         )
       : new URL(request.url).pathname.startsWith("/_fixture/")
         ? env.AUTH.getByName("auth-v1").fetch(request)
-        : Effect.runPromise(handleRequest()(request, env, ctx)),
+        : Effect.runPromise(
+            handleRequest()(request, env, ctx).pipe(Effect.provideService(WorkerEnvironment, env)),
+          ),
 };
