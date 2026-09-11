@@ -65,8 +65,7 @@ it.effect(
 
       for (const status of [201, 302, 401, 429]) {
         const result = yield* createVoiceSession(offer, session).pipe(
-          Effect.provide(credentialSourceLayer(env)),
-          Effect.provide(FetchHttpClient.layer),
+          Effect.provide([credentialSourceLayer(env), FetchHttpClient.layer]),
           Effect.provideService(FetchHttpClient.Fetch, async (url, init) => {
             expect(String(url)).toBe("https://api.openai.com/v1/live/sessions");
             expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sk-voice-PRIVATE");
@@ -109,8 +108,7 @@ it.effect("times out session creation, aborts transport, and retains no provider
     let signal: AbortSignal | undefined;
 
     const fiber = yield* createVoiceSession(offer, session).pipe(
-      Effect.provide(credentialSourceLayer(env)),
-      Effect.provide(FetchHttpClient.layer),
+      Effect.provide([credentialSourceLayer(env), FetchHttpClient.layer]),
       Effect.provideService(FetchHttpClient.Fetch, async (_url, init) => {
         signal = init?.signal ?? undefined;
         Deferred.doneUnsafe(entered, Effect.void);
@@ -172,8 +170,7 @@ it.effect(
       };
 
       const run = createVoiceSession(offer, session).pipe(
-        Effect.provide(credentialSourceLayer(env)),
-        Effect.provide(FetchHttpClient.layer),
+        Effect.provide([credentialSourceLayer(env), FetchHttpClient.layer]),
         Effect.provideService(FetchHttpClient.Fetch, fetch),
         Effect.result,
       );
